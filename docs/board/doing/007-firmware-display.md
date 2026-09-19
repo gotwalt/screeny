@@ -4,8 +4,8 @@ title: firmware/ - display pipeline on real hardware (gamma, ghosting, brightnes
 type: build
 hardware: yes
 depends: [001, 004]
-owner:
-branch:
+owner: claude-fable-5.1 (bench worker)
+branch: card/007-firmware-display
 ---
 
 ## Goal
