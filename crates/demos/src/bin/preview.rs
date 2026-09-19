@@ -3,8 +3,13 @@
 //!
 //!     cargo run --release -p screeny-demos --bin preview -- <piece> [options]
 //!
-//! Pieces: `fractal`, `clock`, `testcard`, `targets` (a sheet of the fractal
-//! tour's deepest view per target).
+//! Pieces:
+//!     fractal     the endless zoom
+//!     clock       the word clock
+//!     testcard    hue sweep, ramps, lines and type, for judging the preview
+//!     targets     every fractal tour target at several depths (curation check)
+//!     phrases     the word clock's awkward layouts on one sheet
+//!     probe       what iteration budget each depth needs (prints, writes nothing)
 //!
 //! Options:
 //!     --seconds N     span of time covered by the sheet (default 4)
@@ -18,11 +23,18 @@
 //!     --squint        render the blurred "across the room" view instead
 //!     --indexed       render through the piece's <= 32-colour indexed path
 //!     --ss N          fractal supersampling per axis (default 4)
+//!     --band N        fractal palette cycle, in sqrt(iterations) (default 11)
 //!     --seed N        fractal seed
+//!     --slide         clock: slide words sideways instead of rolling them
 //!     --cols N        sheet columns (default 2)
 //!     --single        one big frame instead of a sheet
+//!     --bloom F       halo strength (default 0.20; 0 for small PNGs)
+//!     --mask F        light level of an unlit LED (default 0.01)
 //!     --bench N       render N frames and report ms/frame, write nothing
 //!     --out PATH      output PNG (default /tmp/preview-<piece>.png)
+//!
+//! Judge pieces at something near actual size: the panel is 19 x 10 cm, so a
+//! `--scale 12` preview at 100% on a typical laptop screen is about right.
 
 use chrono::{Local, NaiveDateTime, NaiveTime};
 use screeny_demos::clock::{Transition, WordClock};
@@ -50,6 +62,8 @@ struct Args {
     ss: usize,
     seed: u64,
     band: f32,
+    bloom: f32,
+    mask: f32,
     cols: usize,
     single: bool,
     bench: usize,
@@ -73,6 +87,8 @@ fn parse_args() -> Args {
         ss: 4,
         seed: 1,
         band: 0.0,
+        bloom: -1.0,
+        mask: -1.0,
         cols: 2,
         single: false,
         bench: 0,
@@ -97,6 +113,8 @@ fn parse_args() -> Args {
             "--ss" => a.ss = val().parse().unwrap(),
             "--seed" => a.seed = val().parse().unwrap(),
             "--band" => a.band = val().parse().unwrap(),
+            "--bloom" => a.bloom = val().parse().unwrap(),
+            "--mask" => a.mask = val().parse().unwrap(),
             "--cols" => a.cols = val().parse().unwrap(),
             "--single" => a.single = true,
             "--bench" => a.bench = val().parse().unwrap(),
@@ -175,7 +193,13 @@ fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
             fractal::render_target(&mut z, t, *age, &mut f);
             let s = stats::frame_stats(&f, &opts.panel);
             tiles.push(Tile {
-                label: format!("{} {:.0}S {}", t.name.to_uppercase(), age, s.label()),
+                label: format!(
+                    "{} {:.0}S {} COLORS APL {:.0}%",
+                    t.name.to_uppercase(),
+                    age,
+                    s.colors,
+                    s.apl * 100.0
+                ),
                 img: preview::render(&f, opts),
             });
         }
@@ -268,22 +292,31 @@ fn main() {
         probe(&a);
         return;
     }
-    let opts = PreviewOpts {
+    let mut opts = PreviewOpts {
         panel: Panel::new(a.levels),
         scale: a.scale,
         ..Default::default()
     };
+    if a.bloom >= 0.0 {
+        opts.bloom = a.bloom;
+    }
+    if a.mask >= 0.0 {
+        opts.mask = a.mask;
+    }
 
     if a.bench > 0 {
         let mut piece = make_piece(&a);
         let mut f = Frame::black();
         let mut times = Vec::new();
         // One warm-up frame, then the measurement.
-        render_at(piece.as_mut(), Duration::from_secs_f64(a.start), a.indexed, &mut f);
+        render_at(
+            piece.as_mut(),
+            Duration::from_secs_f64(a.start),
+            a.indexed,
+            &mut f,
+        );
         for i in 0..a.bench {
-            let t = Duration::from_secs_f64(
-                a.start + a.seconds * i as f64 / a.bench.max(1) as f64,
-            );
+            let t = Duration::from_secs_f64(a.start + a.seconds * i as f64 / a.bench.max(1) as f64);
             let t0 = Instant::now();
             render_at(piece.as_mut(), t, a.indexed, &mut f);
             times.push(t0.elapsed().as_secs_f64() * 1000.0);
@@ -303,9 +336,10 @@ fn main() {
         return;
     }
 
-    let out = a.out.clone().unwrap_or_else(|| {
-        PathBuf::from(format!("/tmp/preview-{}.png", a.piece))
-    });
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/preview-{}.png", a.piece)));
 
     if a.piece == "phrases" {
         let img = phrases_sheet(&a, &opts);

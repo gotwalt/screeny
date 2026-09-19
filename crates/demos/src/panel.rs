@@ -42,11 +42,7 @@ impl Panel {
     /// the transform the preview applies before drawing dots.
     pub fn round_trip(&self, c: [u8; 3]) -> [u8; 3] {
         let e = self.emit(c);
-        [
-            lin_to_srgb8(e[0]),
-            lin_to_srgb8(e[1]),
-            lin_to_srgb8(e[2]),
-        ]
+        [lin_to_srgb8(e[0]), lin_to_srgb8(e[1]), lin_to_srgb8(e[2])]
     }
 
     /// Snap an sRGB8 colour to one the panel can show exactly. Palette design

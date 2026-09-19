@@ -38,11 +38,7 @@ pub fn lin_to_srgb8(v: f32) -> u8 {
 
 pub fn srgb8_to_lin(c: [u8; 3]) -> [f32; 3] {
     let t = &*SRGB_TO_LIN;
-    [
-        t[c[0] as usize],
-        t[c[1] as usize],
-        t[c[2] as usize],
-    ]
+    [t[c[0] as usize], t[c[1] as usize], t[c[2] as usize]]
 }
 
 pub fn lin_to_srgb8_3(c: [f32; 3]) -> [u8; 3] {

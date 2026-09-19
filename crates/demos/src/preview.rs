@@ -156,7 +156,11 @@ impl LinImg {
     }
 
     fn blur1(&mut self, r: usize, horiz: bool) {
-        let (n, m) = if horiz { (self.w, self.h) } else { (self.h, self.w) };
+        let (n, m) = if horiz {
+            (self.w, self.h)
+        } else {
+            (self.h, self.w)
+        };
         let mut line = vec![[0f32; 3]; n];
         for j in 0..m {
             for i in 0..n {
@@ -220,7 +224,10 @@ fn composite(frame: &Frame, o: &PreviewOpts) -> LinImg {
                     // own output (bright dots bloom, dim ones barely do).
                     let cov = (r + 0.5 - d).clamp(0.0, 1.0);
                     let halo = o.bloom * (-(d * d) / (2.0 * sigma * sigma)).exp();
-                    if cov + halo <= 0.0008 {
+                    // Truncate the invisible tail of the halo: it is below
+                    // one sRGB code everywhere out there, and carrying it
+                    // triples the size of a saved PNG.
+                    if cov + halo <= 0.004 {
                         continue;
                     }
                     let p = &mut img.px[py as usize * img.w + px as usize];
@@ -298,7 +305,13 @@ pub fn sheet(title: &str, tiles: Vec<Tile>, cols: usize) -> Img {
         let x = PAD + col * cw;
         let y = PAD + 22 + row * ch;
         c.text(&t.label, x, y, 1, [170, 178, 195]);
-        c.rect(x - 1, y + LBL - 1, t.img.w as i32 + 2, t.img.h as i32 + 2, [60, 60, 70]);
+        c.rect(
+            x - 1,
+            y + LBL - 1,
+            t.img.w as i32 + 2,
+            t.img.h as i32 + 2,
+            [60, 60, 70],
+        );
         c.blit(&t.img, x, y + LBL);
     }
     c

@@ -241,11 +241,7 @@ pub fn build_ramp(keys: &[(f32, f32, f32)], n: usize, panel: &Panel) -> Vec<[f32
             let t = t * t * (3.0 - 2.0 * t);
             let (l0, c0, h0) = keys[i0];
             let (l1, c1, h1) = keys[i1];
-            let lin = oklch_to_lin(
-                l0 + (l1 - l0) * t,
-                c0 + (c1 - c0) * t,
-                lerp_hue(h0, h1, t),
-            );
+            let lin = oklch_to_lin(l0 + (l1 - l0) * t, c0 + (c1 - c0) * t, lerp_hue(h0, h1, t));
             // Snap through the panel model so the ramp has no steps the panel
             // cannot show and no per-channel rounding casts.
             let snapped = panel.emit(lin_to_srgb8_3(lin));
@@ -328,7 +324,7 @@ impl FractalZoom {
             band_period: 11.0,
             rot_rate: 0.035,
             iter_base: 350.0,
-            iter_per_octave: 120.0,
+            iter_per_octave: 100.0,
             targets: REGIONS.iter().map(resolve).collect(),
             panel,
             ramps,
@@ -377,12 +373,11 @@ impl FractalZoom {
         (self.iter_base + self.iter_per_octave * depth) as u32
     }
 
-    /// Render one leg into 64x32 linear-light colours.
-    fn render_leg(&self, leg: &Leg, t: f64, out: &mut [[f32; 3]]) {
+    /// Render one leg into 64x32 linear-light colours at `ss` samples per axis.
+    fn render_leg_ss(&self, leg: &Leg, t: f64, ss: usize, out: &mut [[f32; 3]]) {
         let scale = leg.scale(self.rate());
         let max_iter = self.max_iter(scale);
         let ramp = &self.ramps[leg.target.palette % self.ramps.len()];
-        let ss = self.ss;
         let inv_ss2 = 1.0 / (ss * ss) as f32;
         // The view is 2:1, so `scale` is the half-width; half-height is half of it.
         let half_w = scale;
@@ -409,10 +404,8 @@ impl FractalZoom {
                                 for i in 0..ss {
                                     let cr = x0 + ((x * ss + i) as f64 + 0.5) * dx;
                                     if let Some(nu) = escape(cr, ci, max_iter) {
-                                        let u = (band_coord(nu) * inv_period + rot)
-                                            .rem_euclid(1.0);
-                                        let e = ramp[(u * ramp.len() as f64) as usize
-                                            % ramp.len()];
+                                        let u = (band_coord(nu) * inv_period + rot).rem_euclid(1.0);
+                                        let e = ramp[(u * ramp.len() as f64) as usize % ramp.len()];
                                         // Fade the last stretch of the budget
                                         // into the black interior, so the
                                         // iteration ceiling reads as a dark
@@ -440,17 +433,49 @@ impl FractalZoom {
         });
     }
 
+    fn render_leg(&self, leg: &Leg, t: f64, out: &mut [[f32; 3]]) {
+        self.render_leg_ss(leg, t, self.ss_for(leg), out);
+    }
+
+    /// Samples per axis for this leg.
+    ///
+    /// Per-sample cost climbs with depth while the picture gets *smoother* -
+    /// bands widen in the sqrt coordinate as the escape counts grow - so the
+    /// shallow half of a leg, where fine bands can alias and samples are
+    /// cheap, gets 16 samples a pixel and the deep half gets 9. Side by side
+    /// at full depth the two are indistinguishable; the peak frame time drops
+    /// by a third.
+    fn ss_for(&self, leg: &Leg) -> usize {
+        let depth = (START_SCALE / leg.scale(self.rate())).log2();
+        if depth > 5.0 {
+            (self.ss - 1).max(2)
+        } else {
+            self.ss
+        }
+    }
+
     /// The frame as linear-light colours, legs already mixed.
+    ///
+    /// A dissolve renders two legs, and the outgoing one is at full depth -
+    /// the most expensive frame in the piece, twice. It is also the moment
+    /// nobody can see detail in, because two pictures are superimposed, so the
+    /// dissolve drops to half the supersampling and stays inside the same
+    /// per-frame budget as the rest of the tour.
     fn render_lin(&mut self, t: Duration, out: &mut [[f32; 3]]) {
         let ts = t.as_secs_f64();
         let (a, b) = self.legs(ts);
+        let ss = if b.is_some() {
+            (self.ss / 2).max(2)
+        } else {
+            self.ss_for(&a)
+        };
         let mut buf_a = std::mem::take(&mut self.buf_a);
-        self.render_leg(&a, ts, &mut buf_a);
+        self.render_leg_ss(&a, ts, ss, &mut buf_a);
         match b {
             None => out.copy_from_slice(&buf_a),
             Some((leg_b, w)) => {
                 let mut buf_b = std::mem::take(&mut self.buf_b);
-                self.render_leg(&leg_b, ts, &mut buf_b);
+                self.render_leg_ss(&leg_b, ts, ss, &mut buf_b);
                 for i in 0..NPIX {
                     for k in 0..3 {
                         out[i][k] = buf_a[i][k] * (1.0 - w) + buf_b[i][k] * w;
@@ -519,11 +544,7 @@ impl Piece for FractalZoom {
         out.palette.clear();
         out.palette.push([0, 0, 0]);
         out.palette.extend_from_slice(pal);
-        let pal_lin: Vec<[f32; 3]> = out
-            .palette
-            .iter()
-            .map(|c| self.panel.emit(*c))
-            .collect();
+        let pal_lin: Vec<[f32; 3]> = out.palette.iter().map(|c| self.panel.emit(*c)).collect();
         for y in 0..H {
             for x in 0..W {
                 let c = lin[y * W + x];
@@ -639,10 +660,7 @@ pub fn interior_fraction(z: &FractalZoom, leg_age: f64, target: Target) -> f32 {
     };
     let mut out = vec![[0f32; 3]; NPIX];
     z.render_leg(&leg, 0.0, &mut out);
-    let black = out
-        .iter()
-        .filter(|p| p[0] + p[1] + p[2] < 1e-6)
-        .count();
+    let black = out.iter().filter(|p| p[0] + p[1] + p[2] < 1e-6).count();
     black as f32 / NPIX as f32
 }
 
