@@ -1,0 +1,13 @@
+[package]
+name = "screeny-proto"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "screeny protocol v1: no_std wire types, packet parse/build, control ops, DNS-SD TXT, and the five v1 frame decoders"
+
+# No dependencies, on purpose. This crate is compiled for xtensa-esp32-none-elf
+# by the firmware and for the host by every tool; anything it pulls in, they
+# both pull in.
+[dependencies]
+
+[dev-dependencies]
