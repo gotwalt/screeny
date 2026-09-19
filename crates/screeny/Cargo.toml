@@ -9,6 +9,8 @@ autobenches = false
 
 [dependencies]
 screeny-proto = { path = "../proto" }
+screeny-panel = { path = "../panel" }
+screeny-encode = { path = "../encode" }
 screeny-demos = { path = "../demos" }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 mdns-sd = "0.21.3"

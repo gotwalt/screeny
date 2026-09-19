@@ -28,7 +28,7 @@
 //! previous frame's flickers less. The exception is a fast zoom, where the
 //! seed is genuinely stale; that is what [`RESEED_EVERY`] bounds.
 
-use crate::color::{d2, lin, lin_to_srgb8, oklab_inv, oklab_srgb8};
+use screeny_panel::color::{d2, lin, lin_to_srgb8, oklab_inv, oklab_srgb8};
 
 use super::hist::Hist;
 use super::nn::NnIndex;

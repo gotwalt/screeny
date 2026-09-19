@@ -16,7 +16,7 @@
 use screeny_proto::dec::{lerp8, x5, x6, BC1_DUAL_LEN, W4, W8};
 use screeny_proto::{Rgb888Frame, H, W};
 
-use crate::color::d2;
+use screeny_panel::color::d2;
 
 use super::hist::Hist;
 
@@ -189,7 +189,7 @@ fn fit_ramp(
     ramp(qa, qb, levels, &mut tab);
     let mut tabl = [[0f32; 3]; 8];
     for k in 0..levels {
-        tabl[k] = crate::color::oklab_srgb8(tab[k]);
+        tabl[k] = screeny_panel::color::oklab_srgb8(tab[k]);
     }
     let mut err = 0f64;
     for (j, pl) in lab.iter().enumerate() {

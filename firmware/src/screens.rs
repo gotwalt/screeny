@@ -182,7 +182,10 @@ pub fn identify(frame: &mut Frame, name: &str, net: Net, phase: u32) {
     }
 
     let s = MonoTextStyle::new(&FONT_4X6, Rgb888::new(0xff, 0xff, 0xff));
-    let _ = Text::with_baseline(cut(name, 13), Point::new(4, 9), s, Baseline::Top).draw(frame);
+    // Fourteen characters fit: the text starts at x=4, the 4x6 font is four
+    // pixels wide, and the right-hand chevron border begins at x=62. Card 008
+    // shipped 13 and said so.
+    let _ = Text::with_baseline(cut(name, 14), Point::new(4, 9), s, Baseline::Top).draw(frame);
     if let Net::Address(ip) = net {
         let mut line = heapless::String::<16>::new();
         let _ = write!(line, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);

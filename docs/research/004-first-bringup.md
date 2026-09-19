@@ -3,6 +3,9 @@
 `spike/fw-skeleton` (card 001) flashed to the Tidbyt. Result: **the whole stack works
 on real hardware on the first day** - panel, WiFi, DHCP, mDNS, UDP receive, display.
 
+(The spike directory itself was deleted by card 016 once `firmware/` had superseded
+it; git history keeps it. What it proved is still true.)
+
 ## Results
 
 | Item | Result |

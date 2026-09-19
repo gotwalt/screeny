@@ -16,7 +16,7 @@
 
 use screeny_proto::{Rgb888Frame, NPIX};
 
-use crate::color::{oklab_srgb8, pack, unpack};
+use screeny_panel::color::{oklab_srgb8, pack, unpack};
 
 /// One distinct colour of a frame.
 #[derive(Clone, Copy, Debug)]
@@ -31,7 +31,7 @@ pub struct Bin {
 ///
 /// Reusable: [`Hist::rebuild`] keeps the allocations from the previous frame.
 pub struct Hist {
-    /// Distinct colours, sorted by [`crate::color::pack`].
+    /// Distinct colours, sorted by [`screeny_panel::color::pack`].
     pub bins: Vec<Bin>,
     /// Oklab of each bin, or empty until [`Hist::ensure_lab`] is called.
     lab: Vec<[f32; 3]>,

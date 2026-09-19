@@ -176,8 +176,9 @@ pub fn lz_compress(src: &[u8]) -> Vec<u8> {
             }
             if run >= 3 {
                 // offset = 1, length = run: eighteen copies of the previous
-                // byte at most.
-                let off = 1u16 - 1;
+                // byte at most. The offset is stored biased by one, so "one
+                // byte back" is a zero on the wire.
+                let off = 0u16;
                 out.push((off >> 4) as u8);
                 out.push((((off & 0xF) << 4) as u8) | (run as u8 - 3));
                 i += run;

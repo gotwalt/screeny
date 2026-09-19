@@ -1507,6 +1507,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1530,6 +1539,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash",
+]
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -3245,6 +3264,8 @@ dependencies = [
  "libc",
  "mdns-sd",
  "screeny-demos",
+ "screeny-encode",
+ "screeny-panel",
  "screeny-proto",
  "screeny-sim",
  "thiserror 2.0.20",
@@ -3267,7 +3288,25 @@ name = "screeny-demos"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "png 0.17.16",
+ "png 0.18.1",
+ "screeny-encode",
+ "screeny-panel",
+ "screeny-proto",
+]
+
+[[package]]
+name = "screeny-encode"
+version = "0.1.0"
+dependencies = [
+ "screeny-panel",
+ "screeny-proto",
+]
+
+[[package]]
+name = "screeny-panel"
+version = "0.1.0"
+dependencies = [
+ "screeny-proto",
 ]
 
 [[package]]
@@ -3282,13 +3321,23 @@ name = "screeny-proto"
 version = "0.1.0"
 
 [[package]]
+name = "screeny-receiver"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "screeny-proto",
+]
+
+[[package]]
 name = "screeny-sim"
 version = "0.1.0"
 dependencies = [
  "mdns-sd",
  "minifb",
  "png 0.18.1",
+ "screeny-panel",
  "screeny-proto",
+ "screeny-receiver",
 ]
 
 [[package]]

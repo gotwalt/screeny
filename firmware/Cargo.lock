@@ -1820,7 +1820,6 @@ name = "screeny-fw"
 version = "0.1.0"
 dependencies = [
  "edge-mdns",
- "edge-nal",
  "edge-nal-embassy",
  "embassy-executor",
  "embassy-futures",
@@ -1840,12 +1839,21 @@ dependencies = [
  "log",
  "rand_core 0.10.1",
  "screeny-proto",
+ "screeny-receiver",
  "static_cell",
 ]
 
 [[package]]
 name = "screeny-proto"
 version = "0.1.0"
+
+[[package]]
+name = "screeny-receiver"
+version = "0.1.0"
+dependencies = [
+ "heapless 0.9.3",
+ "screeny-proto",
+]
 
 [[package]]
 name = "sdio"

@@ -8,11 +8,13 @@
 //! nothing and needs no negotiation (spec 4.7, 4.8).
 //!
 //! ```no_run
-//! use screeny::encode::{EncodeConfig, Encoder};
-//! use screeny::Frame;
+//! use screeny_encode::{EncodeConfig, Encoder};
 //!
 //! let mut enc = Encoder::new(EncodeConfig::default());
-//! let frame = Frame::solid([10, 20, 30]);
+//! let mut frame = [0u8; screeny_proto::NBYTES];
+//! for px in frame.chunks_exact_mut(3) {
+//!     px.copy_from_slice(&[10, 20, 30]);
+//! }
 //! let out = enc.encode(&frame, 1464);
 //! assert_eq!(out.codec, screeny_proto::dec::codec::SOLID);
 //! ```
@@ -33,6 +35,14 @@
 //! magnitude is identical. A challenger has to be
 //! [`EncodeConfig::hysteresis`] times the incumbent's score to take over.
 
+#![forbid(unsafe_code)]
+#![allow(
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::inline_always,
+    clippy::needless_range_loop
+)]
+
 pub mod block;
 pub mod hist;
 pub mod lz;
@@ -46,13 +56,26 @@ use std::time::{Duration, Instant};
 use screeny_proto::dec::{codec, BC1_DUAL_LEN, PAL5_LEN, SOLID_LEN, SUPPORTED_CODECS};
 use screeny_proto::{DecodeError, IndexedFrame, Rgb888Frame, NPIX};
 
-use crate::panel::{Panel, TEMPORAL};
+use screeny_panel::model::{Panel, TEMPORAL};
 
 use hist::Hist;
 use lz::{LzScratch, CHAIN_FAST, CHAIN_FULL};
 use pal::Dither;
 use quant::{Palette, QuantEffort};
 use score::Scorer;
+
+/// A short name for a codec id, for logs and stats.
+#[must_use]
+pub fn codec_name(id: u8) -> &'static str {
+    match id {
+        codec::PAL5 => "pal5",
+        codec::PAL8_LZ => "pal8-lz",
+        codec::PAL4_LZ => "pal4-lz",
+        codec::BC1_DUAL => "bc1-dual",
+        codec::SOLID => "solid",
+        _ => "?",
+    }
+}
 
 /// The smallest budget the palette ladder can always satisfy: a `PAL5`
 /// payload. Below this the encoder falls back to `BC1_DUAL` (1296) and then

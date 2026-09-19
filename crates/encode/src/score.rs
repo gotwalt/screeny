@@ -3,9 +3,11 @@
 //!
 //! Both sides go through [`Panel::emit`] before Oklab, because error the panel
 //! cannot show is not error (card 002, `lab/src/metrics.rs`). Selection scores
-//! against [`crate::panel::TEMPORAL`] - the panel we are going to have, not
-//! the one we have today - so that a codec cannot win by hiding behind the
-//! current driver's coarseness and then look worse when card 030 lands.
+//! against [`screeny_panel::TEMPORAL`], which was written as "the panel we are
+//! going to have, not the one we have today" so that a codec could not win by
+//! hiding behind the driver's coarseness and then look worse when temporal
+//! dithering landed. Card 030 landed it: `TEMPORAL` is now what the device
+//! does, and the scoring was right in advance.
 //!
 //! Card 031's three changes, in order of how much they bought:
 //!
@@ -19,8 +21,8 @@
 
 use screeny_proto::{Rgb888Frame, H, NPIX, W};
 
-use crate::color::{d2, oklab, LabCache};
-use crate::panel::Panel;
+use screeny_panel::color::{d2, oklab, LabCache};
+use screeny_panel::model::Panel;
 
 /// Scores decoded candidates against a source frame.
 pub struct Scorer {

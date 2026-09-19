@@ -146,7 +146,7 @@ fn make_piece(a: &Args) -> Box<dyn Piece> {
         "fractal" => {
             let mut f = FractalZoom::new(a.seed);
             f.ss = a.ss;
-            f.panel = Panel::new(a.levels);
+            f.panel = Panel::levels(a.levels);
             if a.band > 0.0 {
                 f.band_period = a.band;
             }
@@ -154,7 +154,7 @@ fn make_piece(a: &Args) -> Box<dyn Piece> {
         }
         "clock" => {
             let mut c = WordClock::at(base_time(&a.at));
-            c.panel = Panel::new(a.levels);
+            c.panel = Panel::levels(a.levels);
             c.transition = a.transition;
             Box::new(c)
         }
@@ -229,7 +229,7 @@ fn phrases_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
             .date()
             .and_time(NaiveTime::from_hms_opt(*h, *m, 0).unwrap());
         let mut c = WordClock::at(base);
-        c.panel = Panel::new(a.levels);
+        c.panel = Panel::levels(a.levels);
         let mut f = Frame::black();
         render_at(&mut c, Duration::from_secs_f64(120.0), a.indexed, &mut f);
         let s = stats::frame_stats(&f, &opts.panel);
@@ -293,7 +293,7 @@ fn main() {
         return;
     }
     let mut opts = PreviewOpts {
-        panel: Panel::new(a.levels),
+        panel: Panel::levels(a.levels),
         scale: a.scale,
         ..Default::default()
     };

@@ -1,11 +1,11 @@
 //! Telemetry counters and the two EWMAs of spec section 6.8.
 //!
-//! A `no_std` copy of `crates/sim/src/stats.rs` (card 006), which was written
-//! integer-only and wrapping *specifically* so that the device and the
-//! simulator would agree in the last digit. Copying rather than sharing is
-//! what card 008 was told to do: lifting it into `crates/proto` would mean
-//! changing `crates/sim` in the same breath, and card 009 is in flight there.
-//! The two files should be diffed if either changes.
+//! Everything here is integer-only and wrapping: the counters are `u32` and
+//! wrap, and the EWMAs are `u16` and saturate. A host has no trouble with
+//! `f64`, but the simulator exists to be indistinguishable from the device,
+//! and a float would quietly disagree with it in the last digit. One copy of
+//! this arithmetic is the only way that promise holds (card 016; cards 006 and
+//! 008 each had their own).
 
 use screeny_proto::control::Telemetry;
 
@@ -36,23 +36,30 @@ impl Counters {
 }
 
 /// The RFC 3550 section 6.4.1 smoothing of spec section 6.8, in `u16`.
+///
+/// `interarrival_us` and `jitter_us` are both EWMAs with a shift of 4. The
+/// spec gives the update rule but not the seed; this seeds from the first
+/// sample rather than easing up from zero, which is what RFC 3550 does and
+/// what the amended section 6.8 now says.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Arrival {
+    /// Arrival time of the previous accepted frame, microseconds.
     prev_us: Option<u64>,
     /// EWMA of per-frame inter-arrival time.
     pub interarrival_us: u16,
     /// EWMA of `|d_i - interarrival_us|`.
     pub jitter_us: u16,
-    /// Max `d_i` since `RESET_STATS`.
+    /// Max `d_i` since reset.
     pub interarrival_max_us: u16,
     seeded: bool,
 }
 
 impl Arrival {
-    /// Forget the previous arrival and both EWMAs, as a source change must.
+    /// Forget the previous arrival and both EWMAs. Spec section 6.8 requires
+    /// this whenever the active source changes.
     ///
-    /// `interarrival_max_us` is deliberately *not* cleared: section 6.8 makes
-    /// it "max since reset", and the reset it means is `RESET_STATS`.
+    /// `interarrival_max_us` is *not* cleared here: it is "max since reset",
+    /// and only `RESET_STATS` resets it.
     pub fn on_source_change(&mut self) {
         self.prev_us = None;
         self.interarrival_us = 0;
@@ -60,8 +67,15 @@ impl Arrival {
         self.seeded = false;
     }
 
-    /// Record the arrival of an accepted frame. `n` is `seq_i - seq_{i-1}`,
-    /// so a lost frame widens the interval rather than counting as jitter.
+    /// Clear everything, as `RESET_STATS` does.
+    pub fn reset(&mut self) {
+        *self = Arrival::default();
+    }
+
+    /// Record the arrival of an accepted frame.
+    ///
+    /// `n` is `seq_i - seq_{i-1}`, so a lost frame widens the interval instead
+    /// of counting as jitter. It is at least 1 for any accepted frame.
     pub fn record(&mut self, arrival_us: u64, n: u32) {
         let prev = match self.prev_us.replace(arrival_us) {
             Some(p) => p,
@@ -93,7 +107,7 @@ fn ewma(v: u16, sample: u16) -> u16 {
     }
 }
 
-/// The same EWMA over decode time, plus the two maxima.
+/// The same EWMA over decode and render times, plus their maxima.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Timings {
     /// EWMA of decode time.
@@ -117,6 +131,16 @@ impl Timings {
             us
         };
     }
+
+    /// Record one push to the panel buffer.
+    ///
+    /// The firmware does its pushing on the other core and reports byte 42
+    /// from an atomic instead (see `Host::adjust_telemetry`); this is the
+    /// simulator's path.
+    pub fn render(&mut self, us: u32) {
+        let us = us.min(u16::MAX as u32) as u16;
+        self.render_us_max = self.render_us_max.max(us);
+    }
 }
 
 /// Everything the `TELEMETRY` body needs, assembled from the pieces above.
@@ -131,17 +155,20 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// Zero every counter, as `RESET_STATS` does. The stream state, the source
-    /// lock and `last_seq` are deliberately left alone: it is a measurement
-    /// control, not a stream control (section 6.8).
+    /// Zero every counter, as `RESET_STATS` does.
+    ///
+    /// The stream state, the source lock and `last_seq` are deliberately left
+    /// alone: `RESET_STATS` is a measurement control, not a stream control.
     pub fn reset(&mut self) {
         let prev = self.arrival.prev_us;
         *self = Stats::default();
+        // Keep the previous arrival timestamp so the next frame still produces
+        // a sane interval rather than a 0.
         self.arrival.prev_us = prev;
     }
 
     /// Build the 48-byte struct of section 6.7.
-    #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn telemetry(
         &self,
         uptime_ms: u32,
@@ -170,5 +197,71 @@ impl Stats {
             state,
             last_codec,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ewma_converges_and_never_overflows() {
+        let mut v = 0u16;
+        for _ in 0..500 {
+            v = ewma(v, 33_333);
+        }
+        assert!((33_000..=33_333).contains(&v), "converged to {v}");
+        for _ in 0..500 {
+            v = ewma(v, 0);
+        }
+        assert!(v < 100, "decayed to {v}");
+        assert_eq!(ewma(u16::MAX, u16::MAX), u16::MAX);
+    }
+
+    #[test]
+    fn arrival_seeds_from_the_first_interval() {
+        let mut a = Arrival::default();
+        a.record(0, 1);
+        assert_eq!(a.interarrival_us, 0, "no interval from one sample");
+        a.record(33_333, 1);
+        assert_eq!(a.interarrival_us, 33_333, "seeded, not eased up from zero");
+        assert_eq!(a.jitter_us, 0);
+        assert_eq!(a.interarrival_max_us, 33_333);
+    }
+
+    #[test]
+    fn a_lost_frame_widens_the_interval_instead_of_being_jitter() {
+        let mut a = Arrival::default();
+        a.record(0, 1);
+        a.record(33_000, 1);
+        // Two frame times later, but seq advanced by 2: d stays ~33 ms.
+        a.record(99_000, 2);
+        assert_eq!(a.interarrival_us, 33_000);
+        assert_eq!(a.jitter_us, 0);
+    }
+
+    #[test]
+    fn interarrival_saturates_rather_than_wrapping() {
+        let mut a = Arrival::default();
+        a.record(0, 1);
+        a.record(10_000_000, 1);
+        assert_eq!(a.interarrival_us, u16::MAX);
+        assert_eq!(a.interarrival_max_us, u16::MAX);
+    }
+
+    #[test]
+    fn source_change_clears_the_ewmas_but_not_the_max() {
+        let mut a = Arrival::default();
+        a.record(0, 1);
+        a.record(33_333, 1);
+        a.on_source_change();
+        assert_eq!(a.interarrival_us, 0);
+        assert_eq!(a.jitter_us, 0);
+        assert_eq!(a.interarrival_max_us, 33_333);
+        // And the next stream seeds afresh rather than measuring the gap
+        // between two unrelated senders.
+        a.record(5_000_000, 1);
+        a.record(5_033_333, 1);
+        assert_eq!(a.interarrival_us, 33_333);
     }
 }

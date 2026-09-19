@@ -42,7 +42,6 @@ mod net;
 mod panel_init;
 mod patterns;
 mod receiver;
-mod rxstats;
 mod screens;
 mod tidbyt;
 

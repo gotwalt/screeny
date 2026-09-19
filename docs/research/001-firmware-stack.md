@@ -1,7 +1,10 @@
 # 001 - Firmware stack for the Tidbyt Gen 1
 
 Status: research complete, nothing run on hardware.
-Spike: `spike/fw-skeleton/` (compiles, never flashed).
+Spike: `spike/fw-skeleton/` (compiles, never flashed). **Card 016 deleted that
+directory**: everything in it that was right now lives in `firmware/`, and git
+history keeps the rest. Read the findings below as the reasoning that produced
+`firmware/`, not as a description of code you can open.
 
 ## Conclusion
 

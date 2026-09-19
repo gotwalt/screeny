@@ -1,18 +1,18 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-# firmware/ uses the esp toolchain and an Xtensa target; lab/ and spike/ are frozen
-# reference material. None of them belong in the host workspace.
 # Everything host-side lives under crates/ (card 017). `cargo build`/`cargo test` with
 # no -p use default-members: every crate except the studio, which is still a Tauri
 # app until card 105 turns it into a plain server, and Tauri needs GUI system
 # libraries that a headless box or a container does not have. Build it explicitly:
 # `cargo run -p screeny-studio`.
 default-members = [
-  "crates/proto", "crates/screeny", "crates/demos", "crates/sim", "crates/probe",
-  "crates/art",
+  "crates/proto", "crates/receiver", "crates/panel", "crates/encode",
+  "crates/screeny", "crates/demos", "crates/sim", "crates/probe", "crates/art",
 ]
-exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check", "spike/fw-skeleton"]
+# firmware/ uses the esp toolchain and an Xtensa target; lab/ is card 002's frozen
+# codec reference. Neither belongs in the host workspace.
+exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check"]
 
 [workspace.package]
 edition = "2021"

@@ -6,7 +6,10 @@ license.workspace = true
 description = "Pure renderers for the screeny panel: endless fractal zoom, word clock, and a panel-model preview"
 
 [dependencies]
-png = "0.17"
+screeny-proto = { path = "../proto" }
+screeny-panel = { path = "../panel" }
+screeny-encode = { path = "../encode" }
+png = "0.18.1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [[bin]]
