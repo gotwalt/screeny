@@ -450,3 +450,139 @@ DHCP - and then picked the stream straight back up with no action from the
 sender. That is what the design intends: the sender keeps its socket and its
 sequence, the device comes back with no `active_source`, adopts the first
 frame it sees and resumes. Nothing had to be restarted and nothing wedged.
+
+### Deliverable 3 - `screeny-probe`
+
+A new crate, `crates/probe`, rather than a second binary in `crates/sim`: card
+009 is in flight in the same workspace and a crate of its own is the narrowest
+thing that could work. It depends on `screeny-proto` and nothing else.
+
+```
+screeny-probe [--addr HOST[:PORT]] [--ctrl PORT] [--vectors DIR] <command>
+  info | ping N | stats | reset-stats | brightness N | identify MS | idle MODE |
+  name NAME | release | wifi | reboot | bench CMD ARG |
+  stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final] |
+  lock-test | conformance
+```
+
+`stream` sends the checked-in vectors for a codec (or all of them, or a
+generated moving pattern), paced per section 9.1 - absolute deadlines, spin the
+last millisecond, skip rather than burst - with `STATS_REQ` on every 30th frame,
+and prints what it sent against the device's own counters plus the section 3.3
+identity. The generated pattern is diagonal bars plus a bouncing block as
+`PAL4_LZ`, with a `SOLID` colour cycle every eighth frame so a codec switch
+happens mid-stream; its LZ encoder is a deliberately stupid run-length-only one,
+which is enough to make a legal payload and does exercise the device's
+overlapping-match path (`offset = 1` is section 4.4's only run-length encoding).
+
+It was proven against `screeny-sim` on ports 59374/59375 before it was pointed
+at hardware, and the simulator passes everything the device does: conformance
+22/22, lock-test 10/10, six stream sources at 30 fps with zero loss.
+
+**Two of the probe's own checks were wrong before they were right**, and both
+are the kind of wrong that would have been read as a firmware bug:
+
+- Five malformed frames sent back to back are *one drain*, so four are
+  superseded before anything tries to decode them. Correct behaviour, useless
+  test. They are sent one per drain now.
+- `RESET_STATS` deliberately does not clear `last_seq` (section 6.8), so the
+  first frame after a reset carries whatever gap the previous test left. The
+  `seq_gaps` check reads a delta.
+
+### Deliverable 5 - `docs/design/architecture.md`
+
+Updated: the task table is now per core, `fb.rs` and its invariant are
+described, the `status` task is gone and why, the memory budget records that
+`.bss` and core 0's stack share a pocket, `crates/probe` is in the layout, and
+the bench opcode is explained where someone will look for it.
+
+### Spec problems found
+
+**None that needed fixing.** This is worth saying explicitly, because card 005
+found two, card 006 found seventeen, and a third implementation finding zero is
+evidence that sections 3, 4, 6 and 7 have converged. Everything ambiguous had
+already been settled in section 11's items 14-30, and the firmware could be
+written straight from the text.
+
+Two places where the spec is right and the *code* had to give:
+
+- Section 6.3's note that `SET_WIFI` returns an error until card 014 - the card
+  says "`ERR_UNSUPPORTED`", and there is no such code. Section 6.5 has nine, and
+  the one that fits is `ERR_NOT_PERMITTED` (0x08), "op disabled in this build".
+  Inventing a tenth would have put a byte on the wire no sender could read. The
+  firmware returns 0x08; the card's wording is what is loose, not the spec's.
+- Section 6.3 says `SET_BRIGHTNESS`'s `applied` is "how a sender learns the
+  cap". With the power cap expressed in output-enable slots (card 007's
+  `MAX_OE_SLOTS = 25`), a 0..=255 brightness is *already* inside budget at 255,
+  so `applied` would always equal the request and the sender would learn
+  nothing. The firmware therefore carries a second, softer runtime cap,
+  `BRIGHTNESS_CAP = 160` (25% duty), so that a sender on the LAN cannot drive a
+  USB-powered panel to its ceiling unattended and `applied` means something. A
+  later card may raise it; the mechanism is what matters.
+
+### Changes to `crates/proto` and `crates/sim`
+
+**`crates/proto`: none.** Not one line. It was used exactly as card 005 shipped
+it, on the device, for every byte in and out. The README's warnings were all
+accurate, including the 768-byte stack note for `decode_pal8_lz`.
+
+**`crates/sim`: none.** `crates/sim/src/core.rs` was ported into
+`firmware/src/receiver.rs` and `crates/sim/src/stats.rs` copied into
+`firmware/src/rxstats.rs`, both by hand and both with attribution in the module
+docs, exactly as the card allowed. The simulator was run unmodified as the
+probe's proving ground. If either file changes, diff it against its copy.
+
+**`crates/probe`: new**, and additive to the workspace (`members = ["crates/*"]`
+picks it up).
+
+### Hardware surprises
+
+1. **`.bss` and core 0's main stack come out of the same pocket.** Adding 40 KB
+   of buffers cost 16 KB of stack and two flash cycles to find out. Written up
+   above and in `architecture.md`.
+2. **A 12 KB value on the stack on the way into a `StaticCell`.**
+   `FrameBuffer::new()` is not const, so `mk_static!` materialises the whole
+   framebuffer on the stack before moving it. Two of them will not fit in an
+   8 KB core-1 stack, and only just fit in a 21 KB core-0 one.
+3. **A four-datagram burst over WiFi is not four datagrams.** One of four was
+   lost on two runs in three. Any conformance check that counts a burst is
+   measuring the air, not the firmware.
+4. **The core split is measurably neutral at 30 fps**, because the lock was the
+   problem. The full argument is under deliverable 2.
+5. **`esp_rtos` reports stack overflow properly**, with the guard address and
+   the task's stack range, on both cores. That turned what could have been a
+   silent corruption into a two-minute diagnosis, twice.
+
+### What is left undone
+
+- **The `IDENTIFY` overlay truncates the name one character early.**
+  `screens::identify` calls `cut(name, 13)` where 14 characters fit inside the
+  border (`4 + 14*4 = 60 < 62`), so the default `screeny-4a00a4` shows as
+  `screeny-4a00a`. Cosmetic, one character, and deliberately **not** fixed here:
+  changing the firmware after the evidence runs would have meant re-taking the
+  whole per-codec table for a glyph. The fix is `cut(name, 14)`.
+- **Settings do not persist across reboot** (brightness, idle mode, name).
+  Card 008 was told persistence was optional; the spec says section 6.3's three
+  settings persist. **Card 063.**
+- **mDNS goodbye, multicast re-join and TTL 255** are not implemented.
+  **Card 062.**
+- **`screeny.local` no longer resolves**; the device is `screeny-4a00a4.local`
+  per section 5.1. Every doc that says otherwise needs a pass. **Card 064.**
+- **Decoder throughput**: `SOLID` costs 224 us to fill 6144 bytes, about 9
+  cycles a byte, and every codec pays it. Not a problem at 30 fps; worth
+  understanding before anyone wants more. **Card 065.**
+- **The Wi-Fi *reconnect* path is exercised but not instrumented.** The card
+  asked whether card 007's boot stall can recur on reconnect. The boot case is
+  answered - worst render across five boots is 3.4-10.1 ms, against 641,616 us -
+  and a full reboot mid-stream recovers in 11.4 s with the panel never freezing.
+  What was not done is dropping the AP out from under an associated device,
+  which needs either AP access or a card 013-style harness.
+- **The compile-time one-frame playout toggle** of section 11 item 3 is not
+  built. Card 013 owns the measurement it exists for.
+
+### Final state
+
+Device left running `firmware/target/xtensa-esp32-none-elf/release/screeny-fw`
+(the default feature set, display on core 1), at 192.168.7.221, brightness 96,
+showing its status screen. `captures/c008-final-boot.log`,
+`captures/c008-idle.jpg`.
