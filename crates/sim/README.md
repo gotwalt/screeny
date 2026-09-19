@@ -70,7 +70,7 @@ ways, and it is the main reason this crate has fault injection at all.
 It advertises `_screeny._udp` as **`screeny-sim`**, never `screeny`. The real
 device on this bench answers to `screeny`, and a second responder claiming that
 name would make discovery a coin toss. `instance_is_reserved` refuses
-`screeny`, `screeny.local` and `screeny-<six hex digits>` before a socket is
+`screeny`, `screeny-4a00a4.local` and `screeny-<six hex digits>` before a socket is
 opened, so the mistake is a startup error rather than an afternoon.
 
 ```
