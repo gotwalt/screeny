@@ -41,7 +41,7 @@ fn run(argv: Vec<String>) -> Result<(), String> {
     match it.next().as_deref() {
         Some("list") => {
             for d in pieces::ALL {
-                println!("{:<12} {}", d.id, d.blurb);
+                println!("{:<16} {}", d.id, d.blurb);
                 for p in d.params {
                     println!("    {:<10} {:>7} .. {:<7} default {:<7} {}", p.id, p.min, p.max, p.default, p.label);
                 }

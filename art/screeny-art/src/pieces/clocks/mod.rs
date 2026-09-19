@@ -15,6 +15,7 @@
 
 pub(crate) mod ambient;
 pub(crate) mod dance;
+pub(crate) mod dials;
 pub(crate) mod draw;
 
 use crate::frame::Frame;
@@ -23,9 +24,9 @@ use crate::rng::Rng;
 use dance::Motor;
 
 pub const DEF: PieceDef = PieceDef {
-    id: "clocks",
-    name: "Twenty-four clocks",
-    blurb: "Kinetic choreography after ClockClock 24: clock hands draw the time, moved like stepper motors. 16 colours, exact.",
+    id: "clocks-numerals",
+    name: "Clocks: numerals",
+    blurb: "After ClockClock 24: 24 small dials whose hands draw the time in digits, and dance to the next minute. For a clock you read from across the room.",
     params: PARAMS,
     make,
 };
@@ -200,7 +201,7 @@ impl Clocks {
     fn perform(&mut self, ctx: &Ctx, composition: dance::Composition, to: [Hands; CLOCKS], minute: i64, motor: Motor) {
         let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
         eprintln!(
-            "clocks: t={:.1} {:02}:{:02} by {}, {total:.1} s",
+            "numerals: t={:.1} {:02}:{:02} by {}, {total:.1} s",
             ctx.t,
             minute.div_euclid(60).rem_euclid(24),
             minute.rem_euclid(60),
@@ -296,7 +297,7 @@ impl Clocks {
                 let mood = self.variety.freshest(&moods, || rng.f32()).and_then(|n| moods.iter().position(|m| m == n)).unwrap_or(0);
                 self.variety.note("", std::slice::from_ref(&moods[mood]));
                 let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
-                eprintln!("clocks: t={:.1} ambient {}", ctx.t, ambient.name());
+                eprintln!("numerals: t={:.1} ambient {}", ctx.t, ambient.name());
                 self.ambient = Some(ambient);
             }
             None => {}
@@ -337,6 +338,7 @@ impl Piece for Clocks {
             half,
             tints: [tint("hue", "chroma"), tint("hue2", "chroma2")],
             ring: ctx.get("dials"),
+            mark: 0.0,
         }
         .draw()
     }

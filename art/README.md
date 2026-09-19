@@ -59,7 +59,7 @@ Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive
 everything from `ctx.t`. State between frames is fine; keep it in the piece.
 
-## Twenty-four clocks (`pieces/clocks/`)
+## Clocks: numerals (`pieces/clocks/`, id `clocks-numerals`)
 
 Kinetic choreography after Humans since 1982's ClockClock 24: a 3 x 8 grid of
 two-handed clocks whose hands draw the time. 8 x 8 LED cells fit the panel
@@ -113,7 +113,7 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   performing (`Piece::playing`) and offer a control or two (`Piece::act`); the
   studio shows this in its inspector. The clock names its dance ("rings > morph
   > split, point") and offers "Play it again" and "Compose another", which
-  perform at once to the time already showing. Hands names its mood and offers
+  perform at once to the time already showing. The dials piece names its mood and offers
   "Move on". (A ratings mechanism was tried and removed: the owner likes nearly
   every dance, so the composer is steered by variety, not taste.)
 - **A minute has a shape**: the dance lands as the minute turns, the time is
@@ -135,9 +135,12 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   stderr with their start times. At 60 it is a real clock on local time. Set
   "Seconds the time is held" to 60 for a clock that only moves on the minute.
 
-## Hands (`pieces/hands.rs`)
+## Clocks: dials (`pieces/clocks/dials.rs`, id `clocks-dials`)
 
-The clocks without the time: the spirit of the original rather than its
+The same instrument as the numerals piece, with the other face. The two are a
+pair, not rivals: numerals need eight columns, so 8-LED dials, and can be read
+across a room; larger dials can only tell the time as analog hands, and are a
+moving field first. This one is the spirit of the original rather than its
 letter, adapted to the panel. A grid of two-handed dials filling all 64 x 32
 (4x2, 6x3 or 8x4; 6x3 by default), in continuous motion driven by the clocks'
 ambient engine. Moods never switch: their numbers glide into one another while
@@ -156,8 +159,18 @@ LEDs (the `clocks` piece is the numeral version). But the dials are clocks, so
 as each minute turns (`tell`), the flow gathers until every dial reads the time
 as an analog clock, holds, and lets go: `Ambient::step_holding` draws every
 hand to a pose exactly, under the same motor limits, and releases it back into
-the field. While held, the hour hand shortens and, by palette alone, deepens to
-amber while the minute hand pales to white. Legible on 4x2, readable on 6x3.
+the field. So that the moment is not missed, while the time is held the hour
+hand shortens and takes a highlight, the minute hand goes to clean white, and a
+mark appears at 12 on every dial, all by palette alone. The highlight's hue is
+set relative to the hands' own (`contrast`, by default the complement), because
+the hands' hue drifts round the wheel and any fixed colour would sometimes be
+the one they already are. Legible on 4x2, readable on 6x3.
+
+Hands are drawn by `draw.rs`, shared with the numerals piece. Each hand's
+anti-aliasing ramp is its ink scaled in linear light, which is what partial
+coverage is; a ramp at constant OKLCH chroma is a different colour from the ink
+dimmed (light blue cannot hold much chroma), and edge pixels used to fall onto
+the other hand's ramp. There is a regression test.
 
 ## GPU and 3D pieces
 

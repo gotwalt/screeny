@@ -1,4 +1,6 @@
-//! Hands: the clocks without the time.
+//! Clocks: dials. The same instrument as the numerals piece (`super`), with
+//! the other face: larger dials in continuous motion, which tell the time as
+//! analog clocks rather than by drawing digits.
 //!
 //! The spirit of ClockClock rather than its letter: a grid of two-handed dials
 //! in continuous, unhurried motion, order gathering and dissolving. Built for
@@ -16,23 +18,25 @@
 //!   and large dials cannot both fit in 64 LEDs. But the dials *are* clocks. As
 //!   each minute turns, the flow gathers until every dial reads the time, hour
 //!   hand drawn in short, holds, and lets go. Order out of disarray, and the
-//!   order is the time.
+//!   order is the time. So that the moment is not missed, the hour hand takes a
+//!   highlight complementary to the hands' own colour, the minute hand goes
+//!   white, and a mark appears at 12 on every dial.
 //!
 //! Motion is the clocks' ambient engine (`clocks/ambient.rs`): every hand a
 //! servo under one motor's speed and acceleration.
 
 use crate::frame::{Frame, W};
 use crate::piece::{param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
-use crate::pieces::clocks::ambient::{Ambient, MOODS};
-use crate::pieces::clocks::dance::Motor;
-use crate::pieces::clocks::draw::{Dials, Tint};
-use crate::pieces::clocks::Hands as Pair;
+use super::ambient::{Ambient, Mood, MOODS};
+use super::dance::Motor;
+use super::draw::{Dials, Tint};
+use super::Hands as Pair;
 use crate::rng::Rng;
 
 pub const DEF: PieceDef = PieceDef {
-    id: "hands",
-    name: "Hands",
-    blurb: "The clocks without the time: dials in continuous motion, order gathering and dissolving. 31 colours, exact.",
+    id: "clocks-dials",
+    name: "Clocks: dials",
+    blurb: "Larger dials in continuous, flowing motion; each minute they gather to read the time as analog clocks, then let go. For a moving field that knows the time.",
     params: PARAMS,
     make,
 };
@@ -52,7 +56,9 @@ const PARAMS: &[ParamSpec] = &[
     param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.09),
     param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.92),
     param("wheel", "Hue drift (deg/min)", 0.0, 120.0, 1.0, 25.0),
-    param("accent", "Amber hour hand while telling", 0.0, 1.0, 1.0, 1.0),
+    param("highlight", "Highlight while telling the time", 0.0, 1.0, 0.01, 1.0),
+    param("contrast", "Highlight hue, relative to the hands", -180.0, 180.0, 1.0, 180.0),
+    param("mark", "12 o'clock mark while telling", 0.0, 1.0, 0.01, 1.0),
 ];
 
 /// All three fill the panel edge to edge: 16, 10.7 and 8 LEDs per dial. 6x3 is
@@ -73,7 +79,7 @@ const HOUR_HAND: f32 = 0.6;
 /// 4 unison, 3 corners, 0 drift, 1 sway.)
 const REPERTOIRE: [usize; 12] = [7, 5, 2, 6, 7, 5, 4, 3, 2, 6, 0, 1];
 
-struct Hands {
+struct Flow {
     rng: Rng,
     grid: usize,
     angles: Vec<Pair>,
@@ -97,8 +103,8 @@ fn make(seed: u64) -> Box<dyn Piece> {
     let mood = REPERTOIRE[(rng.u64() % REPERTOIRE.len() as u64) as usize];
     let grid = 1;
     let field = Ambient::new(&mut rng, mood, GRIDS[grid].0, GRIDS[grid].1, W as f32 / GRIDS[grid].0 as f32);
-    eprintln!("hands: t=0 {}", field.name());
-    Box::new(Hands { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default(), tinge: None, doing: String::new(), move_on: false })
+    eprintln!("dials: t=0 {}", field.name());
+    Box::new(Flow { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default(), tinge: None, doing: String::new(), move_on: false })
 }
 
 /// Every dial starts with both hands at 7:30, as an idle ClockClock does.
@@ -106,7 +112,7 @@ fn rest((cols, rows): (usize, usize)) -> Vec<Pair> {
     vec![[225.0; 2]; cols * rows]
 }
 
-impl Hands {
+impl Flow {
     fn cell(&self) -> f32 {
         W as f32 / GRIDS[self.grid].0 as f32
     }
@@ -155,11 +161,11 @@ impl Hands {
                 let tinge = self.rng.range(0.0, 0.45);
                 self.field.drift_to_blend(next, other, tinge, &mut self.rng);
                 if tinge > 0.15 && other != next {
-                    self.tinge = Some(crate::pieces::clocks::ambient::Mood::new(other, &mut Rng::new(0)).name);
+                    self.tinge = Some(Mood::new(other, &mut Rng::new(0)).name);
                 }
             }
             self.change_at = ctx.t + ctx.get("dwell") as f64 * self.rng.range(0.7, 1.3) as f64;
-            eprintln!("hands: t={:.0} {}", ctx.t, self.field.name());
+            eprintln!("dials: t={:.0} {}", ctx.t, self.field.name());
         }
 
         // Telling the time: for a few seconds around each mark, every dial is
@@ -191,7 +197,7 @@ impl Hands {
     }
 }
 
-impl Piece for Hands {
+impl Piece for Flow {
     fn playing(&self) -> Option<Playing> {
         let title = match self.tinge {
             Some(other) => format!("{}, tinged with {other}", self.field.name()),
@@ -223,18 +229,24 @@ impl Piece for Hands {
         let lens = [len * (1.0 - (1.0 - HOUR_HAND) * grip), len];
 
         // Each hand has its own colour, and both drift slowly round the wheel.
-        // While the time is held they can also part company so the hands are
-        // told apart at a glance: the hour hand deepens to a saturated amber
-        // (which needs a lower lightness to have any chroma) and the minute
-        // hand pales towards white. All of it is palette animation.
+        // While the time is held the grid has to say so at a glance, so the
+        // hands part company: the hour hand takes a saturated highlight (which
+        // needs a lower lightness to have any chroma) and the minute hand goes
+        // to clean white. The highlight's hue is set *relative* to the hands',
+        // by default the complement, because the hands' own hue drifts: any
+        // fixed colour would sooner or later be the one they already are.
+        // All of it is palette animation.
         let wheel = ctx.get("wheel") * (ctx.t / 60.0) as f32;
-        let accent = grip * ctx.get("accent").round();
-        let mix = |a: f32, b: f32| a + (b - a) * accent;
-        let turn_to = |from: f32, to: f32| from + ((to - from + 540.0).rem_euclid(360.0) - 180.0) * accent;
+        let lit = grip * ctx.get("highlight");
+        let mix = |a: f32, b: f32| a + (b - a) * lit;
+        let hue = ctx.get("hue") + wheel;
         let tints = [
-            Tint { hue: turn_to(ctx.get("hue") + wheel, 58.0), chroma: mix(ctx.get("chroma"), 0.18), light: mix(ctx.get("light"), 0.74) },
-            Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.02), light: mix(ctx.get("light"), 0.95) },
+            // Light enough to stay legible when the highlight falls on blue,
+            // the panel's weakest primary.
+            Tint { hue: hue + ctx.get("contrast") * lit, chroma: mix(ctx.get("chroma"), 0.15), light: mix(ctx.get("light"), 0.82) },
+            Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.01), light: mix(ctx.get("light"), 0.97) },
         ];
-        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, ring: 0.0 }.draw()
+        let mark = grip * ctx.get("mark");
+        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, ring: 0.0, mark }.draw()
     }
 }
