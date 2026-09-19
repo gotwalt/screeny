@@ -27,8 +27,8 @@ before the art session starts card 101, so nothing new is built on the old layou
   `art/Cargo.toml`, `art/Cargo.lock`; move `[profile.dev] opt-level = 2` (pieces need
   it) into the root as a per-package profile override for `screeny-art`.
 - Root `Cargo.toml`: members `crates/*`; `default-members` = everything except
-  `studio` (Tauri needs GUI system libs; keep `cargo test` at the root fast and
-  portable); drop the `art` exclude; hoist shared deps into `[workspace.dependencies]`
+  `studio` for now (it is still a Tauri app until card 105 removes Tauri; GUI system
+  libs must not be needed for a plain `cargo test`); drop the `art` exclude; hoist shared deps into `[workspace.dependencies]`
   where it is free.
 - One `Cargo.lock`. Check that unifying dependency versions does not change
   behaviour: root tests (209+), art tests (31), `cargo build -p screeny-studio`.

@@ -55,6 +55,11 @@ measurement are deferred.
 - 102 reconcile art's panel model and colour rules with the measured device - art session
 - 104 piece runner / scheduler (design with the owner) - art session
 
+Studio track (`docs/design/studio-vision.md`), in order: 017 one `crates/` workspace
+(after 011 + 016) -> 101 Studio streams to the panel -> 105 server-first Studio, Tauri
+removed -> 106 players/devices/state, built to be forgotten -> 107 docker-compose on
+`workbench.local` -> 104 scheduler, 102 panel-model reconcile, demos ported into art.
+
 Then, small and optional:
 - 062 mDNS lifecycle (goodbye, re-announce, TTL)
 - 080 wire conformance suite that can target sim and firmware (grow it from `screeny-probe`)

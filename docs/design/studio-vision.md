@@ -1,7 +1,7 @@
 # Screeny Studio: from design tool to the thing that runs the panels
 
-Status: **draft for the owner's review** (2026-09-19). Owner's vision, orchestrator's
-plan. Open questions are at the end.
+Status: **accepted** (2026-09-19). Owner's vision, orchestrator's plan; the owner's
+answers to the open questions are recorded at the end and folded in throughout.
 
 ## Vision (owner)
 
@@ -36,9 +36,11 @@ First milestone: the Studio streams to the real hardware. Then keep going.
 HTTP + WebSocket server (axum) embedding the static UI. Everything the UI does is an
 HTTP/WS call. The two ways of running it are then the same program:
 
-- *local*: `screeny-studio` on localhost, browser tab (or an optional thin Tauri shell
-  whose webview points at the local server - a launcher, not a second interface);
-- *docker*: the same binary in a container, bound to the LAN.
+- *local*: `screeny-studio` on localhost, opened in a browser tab;
+- *docker*: the same binary in a container on `workbench.local`, bound to the LAN.
+
+**There is no desktop window.** The Tauri shell is dropped (owner's decision): it is
+a heavy dependency, and the real deployment is a server nobody looks at.
 
 This is cheap because of how the Studio was built: the 11 commands become 11 routes,
 the UI's single `invoke()` wrapper becomes `fetch()`, and frame polling becomes a
@@ -70,23 +72,62 @@ Properties that matter:
   *preview* player that can be pointed at a device ("send this to the desk panel") or
   not. Promoting a tuned piece to "what plays on panel X" is an explicit action.
 
-## Docker: the two things that bite
+## Built to be forgotten
 
-1. **mDNS and LAN UDP.** On **Linux with `--network host`** the container sees the
-   LAN: discovery works, unicast UDP works. On **macOS (Docker Desktop / Colima) the
-   container is inside a VM**: no multicast, so no discovery; outbound unicast UDP
-   through NAT does work, including telemetry replies to the same socket. So the
-   server must always accept manually configured device addresses, and discovery is a
-   convenience on top. The real deployment target is a Linux box.
-2. **GPU.** wgpu pieces need Vulkan in the container: NVIDIA container toolkit on a
-   GPU box, or Mesa lavapipe (CPU Vulkan) as a slow fallback; `--no-default-features`
-   drops GPU pieces entirely. There is no GPU passthrough in Docker on macOS at all.
-   CPU pieces (the clocks, plasma) are unaffected. The server should report which
-   pieces are available in its environment rather than fail.
+The owner expects this to run **for months without anyone opening the dashboard**.
+That is a design requirement, not an afterthought:
 
-Also: the web UI has no authentication today and neither does the device control
-channel (parked card 041). Fine on a home LAN; do not expose the port to the
-internet without a reverse proxy or a tailnet in front.
+- The sender reconnects by itself across panel reboots, WiFi drops and DHCP changes
+  (card 011), re-resolving by mDNS name with backoff. While a panel is away, players
+  keep rendering (cheaply) or idle; nothing errors out, nothing piles up.
+- Players never stop on their own. A piece that panics is caught, logged, and replaced
+  by the next piece / a safe fallback; the process does not die with it.
+- State (what plays where, schedules, brightness policy) lives in a small file on a
+  volume, written atomically; the container resumes exactly where it was after a
+  restart, a host reboot or an image update. `restart: unless-stopped`.
+- Bounded everything: log rotation in compose, no unbounded queues, fixed memory.
+  Soak-test for leaks (hours, in CI-style tests against the simulator, not by eye).
+- A `/healthz` endpoint reporting per-device `last frame sent`, `last telemetry
+  heard`, fps and drops, wired to the compose healthcheck; the device's own telemetry
+  (uptime, RSSI, drops by cause) is exposed so a glance answers "is it fine".
+- Wall-clock pieces (the clocks) need correct time and time zone in the container
+  (`TZ`, host clock via NTP).
+- Quiet hours / brightness schedule belong here eventually (a panel that runs for
+  months lives in a room at night).
+
+## Deployment target: `workbench.local` (surveyed 2026-09-19)
+
+| | |
+|---|---|
+| OS | Ubuntu 24.04, x86_64, 12 cores, 30 GB RAM; Docker 29 + compose v5; Portainer on :9000/:9443 |
+| Network | wired, `192.168.7.6/24` - same subnet as the panel. Host avahi already resolves `screeny-4a00a4.local -> 192.168.7.221:49374`; ARP reachable. Only one WiFi hop (AP -> panel) |
+| GPU | **Intel Raptor Lake-P UHD (integrated)**, `/dev/dri/renderD128`. No NVIDIA driver/runtime. More than enough for 64x32 |
+| Access | SSH with keys from the bench Mac; the login user is in `docker`, `render`, `video` |
+
+So the compose service uses `network_mode: host` (mDNS + unicast UDP just work),
+passes `/dev/dri` with `group_add` for the host's `render` gid (993), and the image
+carries Mesa's Vulkan driver (`mesa-vulkan-drivers`, ANV) for wgpu. No NVIDIA toolkit.
+`WGPU_BACKEND=vulkan`; fall back to CPU pieces if no adapter is found and say so in
+the UI. The web port must avoid what is already listening there (8000, 8443, 9000,
+9443, 3002, 5002, 1080, ... ); default **8787**.
+
+Described by a `docker-compose.yml` in the repo, deployable as a Portainer stack.
+Building the image (Rust + wgpu) is slow; build on workbench over SSH
+(`docker compose build`) or publish an image, rather than building inside Portainer.
+
+## Docker: what still bites
+
+1. **Host networking is Linux-only.** On macOS (Docker Desktop / Colima) a container
+   is inside a VM: no multicast, so no discovery; outbound unicast UDP through NAT
+   does work. So the server always accepts manually configured device addresses, and
+   discovery is a convenience on top. That also keeps a Mac-hosted container possible
+   for other people.
+2. **avahi owns UDP 5353 on the host.** The `mdns-sd` crate shares the port with
+   `SO_REUSEPORT`; verify in the container early. If it fights, browse through the
+   host's avahi over D-Bus instead, or rely on configured addresses.
+3. No authentication on the web UI or the device control channel (parked card 041).
+   Fine on the home LAN and over the tailnet workbench is already on; do not publish
+   the port to the internet.
 
 ## Repository shape
 
@@ -100,13 +141,13 @@ crates/
   screeny/    sender library + `screeny` CLI
   sim/        fake panel          probe/   bench instrument
   art/        was art/screeny-art: pieces, pipeline, headless bin   (pkg screeny-art)
-  studio/     was art/studio: the server + embedded UI              (pkg screeny-studio)
+  studio/     was art/studio: the server + embedded UI, no Tauri    (pkg screeny-studio)
   demos/      fractal + word clock - to be ported into art as pieces, then retired
 firmware/  lab/  docs/  tools/
 ```
 
-`default-members` excludes `studio` (and any Tauri shell) so that `cargo test` at the
-root stays fast and does not need GUI system libraries; heavy crates build with `-p`.
+With Tauri gone the studio is an ordinary server crate; `default-members` may still
+leave out anything that needs wgpu so a plain `cargo test` stays fast and portable.
 One `Cargo.lock`, one `target/` (the separate target dirs currently cost gigabytes).
 
 ## Sequence
@@ -120,19 +161,23 @@ One `Cargo.lock`, one `target/` (the separate target dirs currently cost gigabyt
    gets a device target (picker: discovered + manual); real encoder stats replace the
    estimates. Milestone: design a piece in the Studio, watch it on the panel.
 4. **105 server-first Studio**: axum server + embedded UI, routes replacing Tauri
-   IPC, WS preview; Tauri kept only as an optional shell (or dropped - open question).
-5. **106 players and devices**: device registry, one player per device, state store,
-   resume on restart; device controls in the UI.
-6. **107 Dockerfile + compose**: Linux host-network profile, macOS/NAT profile with
-   manual addresses, CPU-only and GPU variants.
-7. **104 runner/scheduler**, 102 (panel model reconcile), porting the demos into art.
+   IPC, WS preview, Tauri removed.
+5. **106 players, devices, state - built to be forgotten**: device registry (mDNS +
+   manual), a player per device, atomic state store, resume on restart, panic
+   containment, `/healthz`, device controls in the UI. The data model is a *list* of
+   devices from day one; the UI is designed around one.
+6. **107 `docker-compose.yml` for workbench**: host network, `/dev/dri`, Mesa Vulkan,
+   volume, healthcheck, log rotation, `TZ`; deploy over SSH; Portainer stack notes.
+7. **104 runner/scheduler** (incl. quiet hours), 102 (panel model reconcile), porting
+   the demos into art.
 
-## Open questions for the owner
+## Decisions (owner, 2026-09-19)
 
-1. **Where will the container actually run?** A Linux box (then host networking +
-   discovery + optional GPU all work), or Docker/Colima on the Mac (then manual
-   addresses, CPU pieces only)? It decides which profile is the real one.
-2. **Keep a Tauri desktop shell at all?** Server + browser tab is simpler and one
-   fewer heavy dependency; a shell gives a dock icon and a window. Either works with
-   the server-first design.
-3. **Will more panels exist soon?** It sets how early multi-device (106) matters.
+1. **Runs on `workbench.local`**, described by `docker-compose.yml`, managed through
+   Portainer. It has a usable GPU (Intel integrated, see above).
+2. **No desktop window.** Server + browser only.
+3. **One panel is the expected case; several must not be precluded.** Other people may
+   run this someday. So: devices and players are collections in the data model, the
+   API and the state file; nothing assumes a single global device; manual addresses
+   and non-host-network Docker keep working. But no multi-panel UI, synchronisation
+   or fan-out optimisation is built until someone needs it (card 091 stays parked).
