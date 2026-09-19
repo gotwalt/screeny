@@ -4,8 +4,8 @@ title: firmware/ - display pipeline on real hardware (gamma, ghosting, brightnes
 type: build
 hardware: yes
 depends: [001, 004]
-owner: claude-fable-5.1 (bench worker)
-branch: card/007-firmware-display
+owner: claude-fable-5.1 (bench worker, second shift)
+branch: card/007b-firmware-display
 ---
 
 ## Goal
@@ -88,3 +88,84 @@ brightness levels with all ramp steps still distinguishable at the lower one. Th
 device is left running this firmware.
 
 ## Log
+
+### Handover: what the first shift built (reconstructed, not written by it)
+
+The first worker on this card was stopped mid-session and wrote no log. This
+section is reconstructed from its three commits, the source it left, and its
+`captures/c007-*` stills; everything in it was re-verified on the bench by the
+second shift unless marked otherwise. Branch `card/007-firmware-display` is
+abandoned at `189a430`; work continues on `card/007b-firmware-display` from the
+same commit.
+
+**What it did.**
+
+1. `6f5a892` — `spike/fw-skeleton` copied verbatim to `firmware/` as
+   `screeny-fw`. Spike left frozen. Deliverable 1's starting point.
+2. `075cbcc` — the real display pipeline:
+   - `firmware/vendor/hub75-framebuffer` (0.12.0 from crates.io, wired in with
+     `[patch.crates-io]` so `esp-hub75` uses the same copy), with **output-enable
+     duty brightness** added. This is the important find of the whole card and it
+     overturns card 001's and card 020's conclusion. See below.
+   - `src/gamma.rs` — a generated 256-entry sRGB EOTF table carrying 4 fractional
+     bits below a panel level (`0..=63*16`), so the remainder is available to a
+     ditherer instead of being truncated away.
+   - `src/display.rs` — the sRGB `Frame`, the orientation contract, `render()`,
+     the brightness scale and the `MAX_OE_SLOTS = 25` power cap.
+   - `src/patterns.rs`, `src/status.rs`, `src/testcmd.rs`.
+3. `189a430` — WIP: `set_oe_window(start, lit)` in the vendored framebuffer and
+   a `'W'` test command, to sweep where the lit window starts. Unfinished; its
+   note was "now let me sweep the anti-ghosting window start on the bench".
+
+**The brightness find, which is the part worth keeping.** Card 001 and card 020
+both say `esp-hub75` has no brightness control and that our only lever is scaling
+pixel values, at a cost of ~3 of 6 bits. That is wrong. In
+`hub75-framebuffer`'s bitplane/plain layout the **output-enable line is bit 8 of
+every 16-bit framebuffer entry**, written once by `make_data_template()` and
+never touched again — `set_pixel` and `erase` both mask bits 9..14 only. So the
+lit window inside each 64-slot scan row can be rewritten at run time, per buffer,
+without disturbing colour data, the row address or the latch. That is exactly
+the mechanism Tidbyt's `setBrightness8()` uses. It costs **no bit depth** (all
+six planes keep their weights) and **no refresh rate** (the DMA stream is the
+same length). `vendor/README.md` documents the patch.
+
+**Numbers it left in its commit message and logs** (`captures/c007-v1-status.log`,
+`c007-v2-boot.log`), all reproduced by the second shift:
+
+| | first shift | re-measured |
+|---|---|---|
+| refresh (driver's compile-time figure) | 154 Hz | 154 Hz |
+| swaps/s actually achieved | 134-154 | see below |
+| render (sRGB888 -> DMA), typical | 3.1 ms | see below |
+| heap used / free | 45416 / 69272 | 45416 / 69272 |
+
+One trap it had already hit and fixed, visible in a comment in `display_task`:
+the first version timed the render *including* the wait for `FRAME`'s mutex,
+which reported a 641 ms "conversion" during WiFi association. The clock now
+starts after the lock. `RENDER_US_MAX` in the v1/v2 logs still carries that
+poisoned 641616 us maximum from before the fix; ignore it.
+
+**What its captures establish** (all at the bench framing of
+`docs/research/000-bench-notes.md`):
+
+- `c007-orient.jpg` — the `Orientation` pattern. Corner markers and the F glyph
+  land where the code puts them, so origin top-left / x right / y down, no
+  mirroring. Re-shot as `c007b-orient.jpg`; see deliverable 2.
+- `c007-ramp-gamma.jpg` vs `c007-ramp-nogamma.jpg` — gamma on/off on the full
+  ramp. The difference is the right shape (gamma-on holds the bottom of the ramp
+  dark and spreads the rest; gamma-off is lit almost everywhere) but **both are
+  badly clipped by the camera's auto-exposure**, so neither is usable as
+  evidence. Re-shot dim; see deliverable 4.
+- `c007-ghost-oe9.jpg` / `c007-ghost-oe55.jpg` — the `Ghost` pattern at 9 and 55
+  output-enable slots.
+- `c007-bar-*.jpg` — a sweep of the OE window start (`w0`..`w16`), of brightness
+  (`b24`, `b48`) and of a build with `trail-blank-8` removed entirely
+  (`notb`, which raises `OE_SLOTS` from 55 to 63 — see `c007-notb-boot.log`).
+  This is the experiment it was in the middle of.
+
+**The camera auto-exposes, and that invalidates every cross-capture brightness
+comparison in the first shift's stills.** Two captures of the same pattern at
+different panel brightness come back at nearly the same image brightness; the
+camera has simply opened up. Only *within-frame* structure (is this step
+distinguishable from that one, is there a faint copy under this block) can be
+read off a still. Everything below is judged that way.
