@@ -246,8 +246,10 @@ mod tests {
     /// Card 016 made that true by construction; this keeps it true.
     #[test]
     fn the_owned_and_borrowed_indexed_frames_agree() {
-        let mut idx = Indexed::default();
-        idx.palette = vec![[0, 0, 0], [255, 0, 0], [7, 8, 9]];
+        let mut idx = Indexed {
+            palette: vec![[0, 0, 0], [255, 0, 0], [7, 8, 9]],
+            ..Indexed::default()
+        };
         for p in 0..NPIX {
             idx.indices[p] = (p % 3) as u8;
         }

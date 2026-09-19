@@ -269,3 +269,42 @@ encoder's fast profile beats the hand-rolled LZSS estimate it replaced
 `cargo test --workspace`: **213 passed, 0 failed** (209 before this card; the
 four new ones are the panel model's bitplanes-are-levels test, the two that
 replaced sim's five moved panel tests, and demos' frame-type test).
+
+### 2026-09-19 - step 4: dead weight
+
+* **`spike/fw-skeleton/` deleted** (469 lines of `main.rs` plus its panel
+  init, Cargo.toml and lock). `firmware/` superseded it and history keeps it.
+  References fixed: the root `Cargo.toml` exclude list, and a line at the top
+  of `docs/research/001-firmware-stack.md` and `004-first-bringup.md` telling
+  a reader that the directory those findings describe is gone and what
+  replaced it. Card 001 in `done/` is left as written - a finished card is a
+  record of what happened.
+* **Unused dependency**: `edge-nal` in `firmware/Cargo.toml` (removed in the
+  step 1b commit, before flashing). Checked every other dependency of every
+  crate by hand against grep: all of them are used.
+* **Duplicate dependency**: `crates/demos` pinned `png = "0.17"` while
+  `crates/sim` had `0.18.1`, so the workspace built both. Demos is on 0.18.1
+  too now; the one API change is `Compression::Best` -> `Compression::High`,
+  the same setting renamed.
+* **Stale comments**: `encode/score.rs` said a codec might "look worse when
+  card 030 lands" - card 030 has landed, so it now says the scoring was right
+  in advance. `demos/frame.rs`'s "card 009 reconciles them", `demos/panel.rs`'s
+  "card 020 may change how dimming works" and `screeny/color.rs`'s
+  "crates/screeny will eventually own one copy" went with the files they were
+  in.
+* **`crates/probe/src/vectors.rs` had `let off = 1u16 - 1;`**, which is
+  `clippy::eq_op`, a **deny**-level lint: `cargo clippy --workspace
+  --all-targets` did not merely warn on main, it failed. It is now `0u16` with
+  the bias explained in the comment.
+
+Clippy, `--workspace --all-targets`, before and after this card:
+
+| | errors | warnings |
+|---|---|---|
+| before (main) | 1 (eq_op in probe) | 7 |
+| after | **0** | **7, the identical set** |
+
+The seven are pre-existing style lints in `crates/demos`' renderers and in
+`crates/probe`, in code this card did not rewrite. Nothing new was introduced:
+the one warning the new code did produce (a `Default::default()` field
+assignment in the new frame-type test) is fixed.

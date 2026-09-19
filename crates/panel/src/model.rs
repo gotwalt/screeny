@@ -160,12 +160,11 @@ pub const DEEP: Panel = Panel::new(8);
 /// `docs/design/generative-art-brief.md` section 5, with brightness applied in
 /// linear light because that is where a duty cycle lives.
 ///
-/// One per brightness value, rebuilt whenever brightness or the panel changes
-/// - which, on a real device, is only when someone sends `SET_BRIGHTNESS`.
-/// The firmware does the same thing with an integer gamma/brightness LUT, and
-/// does it with the same loss: scaling before quantising is what card 020
-/// changed on the device, so this models the panel as `crates/sim` has always
-/// shown it.
+/// One per brightness value, rebuilt whenever brightness or the panel changes,
+/// which on a real device is only when someone sends `SET_BRIGHTNESS`. The
+/// firmware does the same thing with an integer gamma/brightness LUT, and does
+/// it with the same loss: scaling before quantising is what card 020 changed
+/// on the device, so this models the panel as `crates/sim` has always shown it.
 #[derive(Debug, Clone)]
 pub struct Lut {
     table: [u8; 256],

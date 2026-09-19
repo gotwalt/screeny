@@ -114,7 +114,9 @@ impl Img {
         let mut enc = png::Encoder::new(w, self.w as u32, self.h as u32);
         enc.set_color(png::ColorType::Rgb);
         enc.set_depth(png::BitDepth::Eight);
-        enc.set_compression(png::Compression::Best);
+        // png 0.18 renamed the levels; High is what Best meant (card 016 put the
+        // whole workspace on one png version).
+        enc.set_compression(png::Compression::High);
         let mut writer = enc
             .write_header()
             .map_err(|e| std::io::Error::other(e.to_string()))?;
