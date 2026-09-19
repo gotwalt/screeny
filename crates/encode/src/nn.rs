@@ -13,7 +13,7 @@
 //! scan's strict `<` does, so swapping this in cannot change a single output
 //! byte - only the time taken to produce it.
 
-use crate::color::d2;
+use screeny_panel::color::d2;
 
 /// Points per leaf. Small enough that the tree prunes, large enough that the
 /// leaf scan is a tight loop over contiguous memory.

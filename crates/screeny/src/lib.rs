@@ -61,8 +61,14 @@ pub mod color;
 pub mod control;
 pub mod device;
 pub mod discover;
-pub mod encode;
 pub mod error;
+
+/// Encoders and the per-frame codec chooser.
+///
+/// Card 016 moved these into [`screeny_encode`] so that `crates/demos` can
+/// measure what a piece really costs on the wire; this is the path the sender
+/// and the CLI have always used.
+pub use screeny_encode as encode;
 pub mod frame;
 pub mod net;
 pub mod panel;
@@ -82,16 +88,7 @@ pub use sender::{SendStats, Sender, SenderConfig};
 /// Re-exported so callers do not have to depend on the wire crate directly.
 pub use screeny_proto as proto;
 
-/// A short name for a codec id, for logs and stats.
-#[must_use]
-pub fn codec_name(id: u8) -> &'static str {
-    use screeny_proto::dec::codec;
-    match id {
-        codec::PAL5 => "pal5",
-        codec::PAL8_LZ => "pal8-lz",
-        codec::PAL4_LZ => "pal4-lz",
-        codec::BC1_DUAL => "bc1-dual",
-        codec::SOLID => "solid",
-        _ => "?",
-    }
-}
+/// A short name for a codec id, for logs and stats. Lives next to the
+/// encoders since card 016, so the demos can label a frame without depending
+/// on the sender.
+pub use screeny_encode::codec_name;

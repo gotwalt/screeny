@@ -21,7 +21,7 @@
 
 use screeny_proto::{H, NPIX, W};
 
-use crate::color::oklab;
+use screeny_panel::color::oklab;
 
 use super::hist::Hist;
 use super::nn::NnIndex;
@@ -102,7 +102,7 @@ impl DitherPlan {
         let index = NnIndex::build(&pal.lab);
         let mut per_bin = Vec::with_capacity(hist.len());
         for (i, b) in hist.bins.iter().enumerate() {
-            let cl = crate::color::lin(b.srgb);
+            let cl = screeny_panel::color::lin(b.srgb);
             let i0 = index.nearest(hist.lab()[i]).0;
             // Overshoot past the nearest entry: whatever lies on the far side
             // brackets the true colour together with `i0`.

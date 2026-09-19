@@ -3,7 +3,7 @@
 //!
 //! Both sides go through [`Panel::emit`] before Oklab, because error the panel
 //! cannot show is not error (card 002, `lab/src/metrics.rs`). Selection scores
-//! against [`crate::panel::TEMPORAL`] - the panel we are going to have, not
+//! against [`screeny_panel::TEMPORAL`] - the panel we are going to have, not
 //! the one we have today - so that a codec cannot win by hiding behind the
 //! current driver's coarseness and then look worse when card 030 lands.
 //!
@@ -19,8 +19,8 @@
 
 use screeny_proto::{Rgb888Frame, H, NPIX, W};
 
-use crate::color::{d2, oklab, LabCache};
-use crate::panel::Panel;
+use screeny_panel::color::{d2, oklab, LabCache};
+use screeny_panel::model::Panel;
 
 /// Scores decoded candidates against a source frame.
 pub struct Scorer {

@@ -202,3 +202,70 @@ verdict PASS (no decode drops, <1% loss, nothing rejected)
 Zero decode drops, as the card requires. The four superseded frames are
 section 3.3 doing its job. Card 008's 30 fps row was 1801/1797-1800 with 0-4
 superseded, so this is the same device behaving the same way.
+
+### 2026-09-19 - steps 2 and 3: frame types, panel/colour, and card 071
+
+**Frame types.** `crates/demos` now depends on `screeny-proto`: `Frame` is a
+`Box<Rgb888Frame>`, `W`/`H`/`NPIX` are proto's constants re-exported, and
+`Indexed::as_proto()` hands out proto's borrowed `IndexedFrame` with no copy.
+A unit test in `demos/src/frame.rs` pins the owned and borrowed forms to the
+same pixels.
+
+**Panel and colour.** New crate `crates/panel` (`screeny-panel`), std, depends
+on proto only. It owns `color` (sRGB EOTF and inverse, Oklab, OKLCH,
+`cbrt_fast`, the packed-colour key, `LabCache`) and `model` (the `Panel`
+transfer function and the brightness `Lut`). `crates/screeny/src/color.rs`,
+`panel.rs`, `crates/demos/src/color.rs`, `panel.rs` and `crates/sim/src/panel.rs`
+are now re-export shims, so every public path that existed still exists - which
+matters because card 011's branch and the art system both build on
+`screeny::panel` and `screeny::color`.
+
+Why a new crate and not "demos depends on screeny's lib", which the card
+offered as the other option: **it would be a dependency cycle.** `crates/screeny`
+depends on `crates/demos` for the `fractal` and `clock` subcommands, so demos
+cannot depend on screeny. The shared code has to go *below* both.
+
+The three `Panel` models were the same function wearing different clothes:
+screeny counted bitplanes (`steps = (2^bits - 1) * subframes`), demos counted
+levels (`max = levels - 1`), and sim's `Lut` quantised against `levels - 1`
+with brightness applied in linear light first. One `Panel { steps }` covers
+all three - `Panel::new(6)`, `Panel::levels(64)` and `Panel::dithered(6, 1)`
+are now literally equal, and a unit test says so. Verified bit-identical:
+`(x + 0.5).floor()` and `.round()` agree for x >= 0, the clamps were no-ops
+because `lin * scale` is already in 0..=1, and `SRGB_TO_LIN[v]` is built from
+the same expression sim computed inline.
+
+**Card 071 is closed.** The estimator is gone; `demos::stats::frame_stats`
+runs `screeny_encode` - the code that will really encode the frame - and
+reports its payload size and whether it is bit-exact. To make that possible
+without the cycle, the encoders moved out of `crates/screeny/src/encode/` into
+`crates/encode` (`screeny-encode`), which `screeny` re-exports as
+`screeny::encode`, so the sender, the CLI, the benches and card 011's branch
+see no change at all. `codec_name` moved with them, since a codec's name
+belongs next to the codecs.
+
+Card 010's open question is answered. Its note said the estimator "calls half
+the full-colour fractal frames over budget; the lab saw 98-100% go out
+exactly. One of us is wrong." The estimator was: it modelled a generic
+byte-oriented LZSS rather than `PAL4_LZ`/`PAL8_LZ`, and it never tried the
+block codec or the palette ladder. With the real encoder, *nothing* is ever
+over budget - the encoder is not allowed to overrun - and the fractal's
+full-colour path reports 398 colours mean with 3 of 24 sampled frames bit
+exact, the rest fitting the budget by reducing the palette, which is exactly
+what the sender does at 30 fps. The clock's indexed path is `pal4-lz` and
+exact at every one of the 1440 slot/age combinations the test sweeps.
+
+**One test changed, and here is why.** `demos/tests/clock.rs` asserted
+`Wire::Exact("PAL4_LZ")`. The real encoder picks the same codec - `PAL4_LZ`,
+exact - but labels it with the sender's own `codec_name` spelling,
+`"pal4-lz"`. The assertion's meaning is unchanged; only the spelling of the
+label is, and having two spellings of a codec name in one workspace is the
+sort of thing this card exists to remove. Nothing else in any test moved.
+
+Unexpected bonus: the demos' test suite got *faster*, because the real
+encoder's fast profile beats the hand-rolled LZSS estimate it replaced
+(clock 3.97 s -> 1.41 s in debug).
+
+`cargo test --workspace`: **213 passed, 0 failed** (209 before this card; the
+four new ones are the panel model's bitplanes-are-levels test, the two that
+replaced sim's five moved panel tests, and demos' frame-type test).

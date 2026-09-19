@@ -236,3 +236,24 @@ impl LinBuf {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Indexed` and proto's `IndexedFrame` are the owned and the borrowed
+    /// form of one thing, so expanding either has to give the same pixels.
+    /// Card 016 made that true by construction; this keeps it true.
+    #[test]
+    fn the_owned_and_borrowed_indexed_frames_agree() {
+        let mut idx = Indexed::default();
+        idx.palette = vec![[0, 0, 0], [255, 0, 0], [7, 8, 9]];
+        for p in 0..NPIX {
+            idx.indices[p] = (p % 3) as u8;
+        }
+        let mine = idx.to_frame();
+        let mut theirs = [0u8; screeny_proto::NBYTES];
+        idx.as_proto().expand(&mut theirs).unwrap();
+        assert_eq!(mine.as_bytes(), &theirs);
+    }
+}

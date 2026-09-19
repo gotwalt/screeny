@@ -142,7 +142,9 @@ fn stays_within_sixteen_colours_including_mid_transition() {
             );
             assert_eq!(
                 s.wire,
-                stats::Wire::Exact("PAL4_LZ"),
+                // The name is the sender's own `codec_name` spelling since
+                // card 016; the codec it names is the one card 010 asserted.
+                stats::Wire::Exact("pal4-lz"),
                 "at {h:02}:{m:02}+{age_ms}ms ({} colours, ~{} B)",
                 s.colors,
                 s.est_bytes
