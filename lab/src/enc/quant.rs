@@ -27,7 +27,7 @@ pub fn histogram(f: &Frame) -> Hist {
         .map(|(c, n)| (c, oklab_srgb8(c), n))
         .collect();
     // Deterministic order so runs are reproducible.
-    bins.sort_by(|a, b| a.0.cmp(&b.0));
+    bins.sort_by_key(|a| a.0);
     Hist { bins }
 }
 

@@ -13,7 +13,7 @@
 //! once we are squeezing, undithered compresses much better.
 
 use super::pal::{emit_pal5, map, pack_nibbles};
-use super::quant::{self, Palette};
+use super::quant;
 use super::{Codec, Dither, EncCtx};
 use crate::color::oklab_srgb8;
 use crate::dec::mode;
@@ -270,14 +270,3 @@ impl Codec for PalLzCodec {
         ladder(f, budget, ctx.frame_idx)
     }
 }
-
-/// Exposed so the harness can report how lossless the ladder managed to be.
-pub fn is_lossless(f: &Frame, payload: &[u8]) -> bool {
-    let mut dst = Box::new([0u8; crate::frame::NBYTES]);
-    if crate::dec::decode(payload, &mut dst).is_err() {
-        return false;
-    }
-    dst.as_ref() == f.px.as_ref()
-}
-
-pub fn unused(_: &Palette) {}

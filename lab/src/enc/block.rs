@@ -181,7 +181,7 @@ fn pack565(c: [u8; 3]) -> [u8; 2] {
     [(v & 0xff) as u8, (v >> 8) as u8]
 }
 fn pack444_pair(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
-    let n = |v: u8| (v >> 4) as u8;
+    let n = |v: u8| v >> 4;
     [
         (n(a[0]) << 4) | n(a[1]),
         (n(a[2]) << 4) | n(b[0]),

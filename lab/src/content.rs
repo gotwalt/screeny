@@ -150,7 +150,7 @@ pub fn textui() -> Clip {
             let mut f = Frame::black();
             for y in 0..H {
                 for x in 0..W {
-                    f.set(x, y, if y >= 8 && y < 22 { PANEL } else { BG });
+                    f.set(x, y, if (8..22).contains(&y) { PANEL } else { BG });
                 }
             }
             // Header: icon block + title.
@@ -214,7 +214,7 @@ pub fn textui() -> Clip {
 
             // Bottom marquee, 1 px per frame.
             let tw = font::text_width(MARQUEE) as i32;
-            let off = -(i as i32 * 1) % tw;
+            let off = -(i as i32) % tw;
             for rep in 0..2 {
                 font::draw_text(MARQUEE, off + rep * tw, 24, |x, y| {
                     if x >= 0 && (x as usize) < W && y >= 0 && (y as usize) < H {
@@ -333,9 +333,9 @@ pub fn darkfade() -> Clip {
             supersample(|x, y| {
                 let g = (1.0 - (y / H as f32)) * level;
                 let n = fbm(x * 0.13 + 3.0, y * 0.13, 5, 3);
-                let mut r = (g * 90.0 + n * 14.0 * level * 4.0) as f32;
-                let mut gg = (g * 60.0 + n * 10.0 * level * 4.0) as f32;
-                let mut b = (g * 200.0 + n * 26.0 * level * 4.0) as f32;
+                let mut r = g * 90.0 + n * 14.0 * level * 4.0;
+                let mut gg = g * 60.0 + n * 10.0 * level * 4.0;
+                let mut b = g * 200.0 + n * 26.0 * level * 4.0;
                 // A handful of bright stars: the contrast case that makes
                 // dark-end quantisation obvious.
                 let sx = (x * 0.5).floor() as i32;
