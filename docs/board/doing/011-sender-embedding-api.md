@@ -133,3 +133,73 @@ Not my change, but found while running the suite: `SCREENY_PACING_SECS=2`
 fails `holds_thirty_fps_within_one_percent`, because one frame is 1.6% of a
 two-second window and the tolerance is 1%. The default ten-second run passes
 (18.4 s wall). Written up as card 093.
+
+### The push API and auto-reconnect (gaps 2, 3, 5)
+
+`crates/screeny/src/embed.rs`. `Sender` stays exactly what it was - one
+socket, one session, every failure handed back - and `Link` is the wrapper a
+long-running embedder gets:
+
+```rust
+Link::open(Target, LinkConfig) -> Result<Link>     // blocking; fails if absent
+Link::open_deferred(Target, LinkConfig) -> Link    // never fails
+Link::send(Pixels) -> Result<Sent>                 // network cannot make this fail
+Link::poll() / close() / retarget(Target)
+Link::state() -> LinkState { Up, Connecting, Waiting, Closed }
+Link::stats() -> &LinkStats      // lifetime, across sessions
+Link::session() -> Option<&SendStats>   // this socket's detail
+Link::limits() -> Limits         // fps, budget, exact_palette, codecs, panel
+Link::fps() / pacer() -> Pace
+```
+
+Decisions, and why:
+
+- **Pacing is the caller's.** `Link` never sleeps. The art system has its own
+  clock, limiter and reasons to render; a library sleeping on its behalf would
+  fight it. `Pace` (spec 9.1's absolute schedule, skip-never-burst) is offered
+  and entirely opt-in - `link.pacer()` hands one back at the current rate.
+- **Pushing too fast is answered by decimating, not by sending.** `Cadence::
+  Limit` (the default) keeps an absolute schedule at the rate the sender is
+  targeting and returns `Sent::Coalesced` for frames that arrive early. The
+  device shows newest-wins and queues ~5 frames, so a surplus buys nothing and
+  costs latency - and spec 6.9 reads `frames_dropped_superseded` as "cannot
+  decode fast enough" and switches to *cheaper codecs*, which is the wrong
+  repair for "the sender is too eager". Measured: a 60 fps producer sends
+  ~30 fps and the simulator's superseded counter stays at **0**. `Cadence::Free`
+  hands it all back.
+- **The rate is the device's, not a constant.** The ceiling follows
+  `Sender::fps()`, which is `SenderConfig::fps` (default 30) stepped by spec
+  6.9's ladder. `Limits` makes that, the budget, the codec set and the
+  guaranteed-exact palette size visible, and every field can change under a
+  running link.
+- **The watchdog is the interesting part of reconnection.** UDP to a dead host
+  succeeds, so a rebooted panel looks exactly like a working one. `Sender`
+  now records `last_feedback()` - *any* datagram from the device, telemetry or
+  `BUSY` - and `Link` declares the link down after `LinkConfig::silence`
+  (default 5 s) of nothing heard *while actively sending*. Socket errors
+  (ICMP coming home) do it immediately.
+- **Reconnecting happens on a background thread**, because resolve + handshake
+  blocks for up to 3 s + 750 ms and a render loop must not. Measured: 200
+  `send`s into a black hole (TEST-NET-3) take under 500 ms. Backoff is
+  immediate, then 250 ms doubling to 10 s.
+- **`FINAL` on drop**, via `Drop for Link`. Test: the simulator's
+  `active_source` clears at once instead of waiting `STREAM_TIMEOUT_MS`.
+- `Link::retarget` moves a live link to a different device, keeping lifetime
+  statistics. A `Target` naming an *instance* needs no retargeting: each
+  reconnect re-browses and picks up the new address. That mDNS path is not
+  covered by a test, because these tests run with mDNS off by rule.
+
+`crates/screeny/tests/embed.rs`: 13 tests, 1.0 s. Reboot on the same ports
+(sim dropped and restarted mid-stream), migration to a *different* port pair
+through `retarget`, silence alone bringing the link down, reconnection turned
+off, a deferred link connecting when the panel appears, `FINAL` on drop, the
+60 fps decimation, and the malformed-frame errors still being the caller's.
+Throughout, the invariant asserted is
+`frames_offered == frames_sent + frames_coalesced + frames_dropped`: not one
+frame ever became an error the embedder had to handle.
+
+Two test-fixture notes worth keeping: `sim_anywhere()` retries the
+port-pair choice, because tests run in parallel and a pair chosen and then
+bound has a race; and the sim must be started with `control = frame + 1` for a
+bare `Target { addr }` to find both halves, which is what an embedder on the
+bench actually has.

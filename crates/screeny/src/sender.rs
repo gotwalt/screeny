@@ -568,6 +568,14 @@ impl Sender {
         self.stats.fps
     }
 
+    /// The configuration this sender was connected with. `cfg.fps` is the
+    /// rate that was *asked for*; [`Sender::fps`] is the one in force after
+    /// spec 6.9's adaptation.
+    #[must_use]
+    pub fn config(&self) -> &SenderConfig {
+        &self.cfg
+    }
+
     /// The codec ids in play, after the device's list and any decode-limited
     /// withdrawal.
     #[must_use]
