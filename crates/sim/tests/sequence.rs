@@ -34,7 +34,7 @@ fn a_sequence_that_wraps_keeps_going() {
         let (p, e) = marker(i as u8 + 1);
         tx.send_seq(codec::SOLID, F_KEY, *seq, &p);
         let s = sim
-            .wait_until(T, |s| s.telemetry.frames_shown >= i as u32 + 1)
+            .wait_until(T, |s| s.telemetry.frames_shown > i as u32)
             .unwrap_or_else(|| panic!("seq {seq:#06x} never displayed"));
         assert_frames_eq(&s.decoded[..], &e, &format!("seq {seq:#06x}"));
         assert_eq!(s.shown.unwrap().seq, *seq);

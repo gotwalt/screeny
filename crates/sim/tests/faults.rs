@@ -180,7 +180,8 @@ fn faults_can_be_turned_on_and_off_while_it_runs() {
 fn the_frame_sink_sees_exactly_the_frames_that_reach_the_panel() {
     // This is what --dump-dir is built on: a callback on the frame thread
     // rather than a poll, so "every Nth displayed frame" means every Nth.
-    let seen: Arc<Mutex<Vec<(u16, Vec<u8>)>>> = Arc::new(Mutex::new(Vec::new()));
+    type Seen = Arc<Mutex<Vec<(u16, Vec<u8>)>>>;
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let sink = {
         let seen = Arc::clone(&seen);
         Box::new(move |frame: &Rgb888Frame, meta: &screeny_sim::FrameMeta| {

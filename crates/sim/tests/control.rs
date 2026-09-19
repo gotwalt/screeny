@@ -267,7 +267,7 @@ fn every_error_code_a_request_can_earn() {
         (op::SET_IDLE, &[4], "an idle mode v1 does not define"),
         (op::SET_IDLE, &[255], "and another"),
         (op::REBOOT, &[0, 0, 0, 0], "REBOOT without the magic"),
-        (op::REBOOT, &[b'R', b'B', b'O', b'X'], "REBOOT mistyped"),
+        (op::REBOOT, b"RBOX", "REBOOT mistyped"),
         (op::SET_NAME, &long_name, "a name over 32 bytes"),
         (op::SET_NAME, &[2, 0xFF, 0xFE], "a name that is not UTF-8"),
         (op::SET_WIFI, &[0, 0, 0], "SET_WIFI with an empty SSID"),

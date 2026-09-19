@@ -69,6 +69,8 @@ pub mod net;
 pub mod panel;
 pub mod screens;
 pub mod stats;
+#[cfg(feature = "window")]
+pub mod window;
 
 pub use config::{Config, Faults, PanelModel, Timing};
 pub use core::{Core, FrameMeta, Outbox};

@@ -27,10 +27,9 @@ fn every_checked_in_vector_arrives_bit_exact() {
     let mut tx = Sender::new(dev.frame_addr());
 
     let vectors = vectors();
-    let mut shown = 0u32;
-    for v in &vectors {
+    for (i, v) in vectors.iter().enumerate() {
         tx.send(v.codec, F_KEY, &v.payload);
-        shown += 1;
+        let shown = i as u32 + 1;
         let s = sim
             .wait_until(T, |s| s.telemetry.frames_shown >= shown)
             .unwrap_or_else(|| panic!("{}: never displayed", v.name));
