@@ -13,9 +13,9 @@ Every statement carries a status:
 - **[provisional]** our current best understanding; expect revision. Design so that
   a change here does not break you.
 
-Source of truth as the project moves: `docs/design/protocol-v1-draft.md` (wire
+Source of truth as the project moves: `docs/design/protocol-v1.md` (wire
 protocol), `docs/research/001-firmware-stack.md` (hardware), `docs/research/002-*`
-(frame encoding; not finished at the time of writing), `docs/research/004-first-bringup.md`.
+(frame encoding lab and codec measurements), `docs/research/004-first-bringup.md`.
 If this brief disagrees with those, they win; tell your user so this file gets fixed.
 
 ---
@@ -27,26 +27,27 @@ If this brief disagrees with those, they win; tell your user so this file gets f
 | Resolution | 64 x 32, 2048 pixels, 2:1 | measured |
 | Pixel | discrete round RGB LEDs on a black mask, roughly 3 mm pitch, dark gaps between them, no diffuser | measured |
 | Black | LED off. True black, effectively infinite contrast | measured |
-| Colour depth | **6 bits per channel, linear light** (64 PWM levels), 154 Hz refresh | measured |
-| Frame rate | 30 fps ceiling; ~29 fps sustained with zero drops in testing | measured |
+| Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** across the 154 Hz refresh: darkest visible level is about sRGB 6 (it was 34 without dithering) | measured |
+| Brightness | runtime 0-255 via LED on-time, **does not cost colour depth**; 25 real steps; firmware cap 160, default 96 | measured |
+| Frame rate | **30 fps is the design rate**: every codec ran 60 s with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so 60 fps is plausible, but WiFi loss and jitter, not the device, set the ceiling | measured |
 | Transport | one frame = one UDP datagram, **1464 bytes** for all 2048 pixels (~5.7 bits/pixel) | decided |
 | Delivery | unreliable, newest frame wins, a lost frame is simply skipped; the panel holds the last frame | decided |
-| Latency | tens of ms end to end; jitter ~10-25 ms | provisional |
+| Latency | ping RTT median 5 ms, p99 21 ms, max 37 ms; decode 0.2-0.8 ms; inter-arrival jitter 2-5 ms | measured |
 | Device state | none. Every frame is a complete picture. No blending, trails or accumulation on the device | decided |
 
-The three facts that should shape everything you do: **it is tiny, it is 6-bit
-linear, and a frame has to fit in 1464 bytes.**
+The three facts that should shape everything you do: **it is tiny, its dark end is
+coarse, and a frame has to fit in 1464 bytes.**
 
 ---
 
 ## 2. Colour: what the panel can actually show
 
-### 2.1 Sixty-four linear levels per channel
+### 2.1 Linear light, 64 hardware levels, dithered in time
 
-The panel modulates each LED in linear light with 64 levels. You will author in
-sRGB like everyone else, and the pipeline converts, but you must know where the
-levels fall, because they are very unevenly spaced in sRGB terms. The sRGB value
-(0-255) of each linear level, from dark to bright:
+The panel modulates each LED in linear light with 64 hardware levels per channel.
+You author in sRGB like everyone else; the firmware converts with a gamma table.
+The levels are very unevenly spaced in sRGB terms. The sRGB value (0-255) of each
+hardware level, dark to bright:
 
 ```
 0 34 50 62 71 80 87 94 100 106 111 116 121 125 130 134 138 142 146 149 153 156
@@ -55,25 +56,31 @@ levels fall, because they are very unevenly spaced in sRGB terms. The sRGB value
 253 255
 ```
 
-Consequences **[measured arithmetic, provisional on the final gamma curve]**:
+On its own that would mean anything under sRGB ~22 is off and the darker half of
+sRGB is only 14 levels. **The firmware now fills those gaps by temporal dithering**:
+it carries the sub-level remainder across panel refreshes (154 Hz, about 5 per 30 fps
+frame), so in-between values are shown as a time average. **[measured, card 007]**:
+the darkest visible value moved from sRGB 34 to about 6, mean luminance wobble is
+1.7% with no periodic structure, and nothing is visible as flicker to the eye.
 
-- Any channel value below sRGB ~22 is **off**. sRGB 0-63 collapses to 4 levels;
-  0-127, the entire darker half of what you are used to, is only 14 levels.
-- The top end is the opposite: above sRGB ~180 there is a panel level every 2-3 sRGB
-  steps. Bright gradients are smooth. Dark gradients band hard.
-- So: **do not build pieces that live in the shadows.** A slow fade to black will
-  visibly stair-step and then snap off. Moody low-key palettes turn into posterised
-  mud. Put your tonal detail in the middle and upper range, and use true black as a
-  shape, not as the bottom of a gradient.
-- Fades: fade through a dither (section 2.4) or make them fast (under ~300 ms) so the
-  steps are not individually seen. Or fade by shrinking/eroding shapes instead of
-  dimming them.
+What that changes for you, and what it does not:
 
-Brightness makes this worse **[provisional]**: today the only way the firmware can
-dim the panel is to scale values, which throws levels away (50% brightness leaves
-~33 levels, 25% leaves ~17). Fixing that is on our board (card 020). Until it is
-fixed, assume you may be running with as few as ~32 levels per channel in a dim
-room. Art that survives 5 bits per channel is safe.
+- Dark gradients are **much better than the table suggests, but still the panel's
+  weakest range.** The time average is built from few refreshes, so very dark values
+  (under sRGB ~30) are a sparse sparkle of single-level blinks rather than a steady
+  dim glow; large dark areas can look faintly alive. Slow fades to black are now
+  usable; long-held near-black detail is still not where to put your subtlety.
+- Put tonal detail in the middle and upper range, use true black as a shape, and
+  prefer fades that are either reasonably quick or that also shrink/erode the shape.
+- **You do not need to dither in time yourself** to gain levels, and should not: the
+  device does it at 154 Hz, which is invisible; anything you do at 30 fps is 15 Hz
+  and visible. Spatial (ordered) dither is still yours to use as texture (2.4).
+- **Brightness no longer costs depth.** It is set by LED on-time per scan line, not
+  by scaling values, so the full level structure survives at any brightness. It is a
+  runtime control (`screeny brightness N`), 25 real steps, capped in firmware.
+- A camera cannot photograph the dithered panel honestly (a 1/30 s exposure against
+  a ~100 ms dither cycle), and the bench camera's colour response is unknown. Judge
+  by eye on the device; do not tune art to camera captures.
 
 ### 2.2 The primaries are not sRGB
 
@@ -97,43 +104,56 @@ through a camera, not with a colorimeter]**:
 ### 2.3 The byte budget is really a palette budget
 
 2048 pixels in 1464 bytes. Raw RGB888 would be 6144 bytes, so every frame is
-compressed, and the codec is chosen per frame. The exact codec set is being
-finalised (card 002) **[provisional]**, but the shape of the constraint will not
-change, so design to the shape:
+compressed. The sender picks a codec per frame (spec: `docs/design/protocol-v1.md`
+section 4; measurements: `docs/research/002-frame-encoding.md`). **[decided]** What
+that means for you:
 
-- **A frame with at most 16 distinct colours always fits, exactly**, with room to
-  spare (4 bits/pixel = 1024 bytes + a 48-byte palette).
-- **A frame with at most 32 distinct colours fits exactly** (5 bits/pixel = 1280 +
-  96 bytes).
-- A frame with more colours than that is encoded **lossily** (adaptive palette with
-  dithering, or a block codec, whichever the sender judges best). How good it looks
-  depends on content. Smooth full-frame multi-hue gradients are the hardest case;
-  flat regions, limited hue ranges and hard edges are the easiest.
-- The palette is per frame. It can be any 16/32 colours out of the panel's
-  64x64x64, and it can change completely on every frame at negligible cost.
+- **A frame with at most 16 distinct colours is always exact.** Text/UI-like frames
+  land around 400 bytes.
+- **A frame with at most 32 distinct colours is always exact** (the fixed-size
+  `PAL5` floor, 1376 bytes).
+- **A frame with up to 256 distinct colours is exact *if its index image compresses*
+  into the budget** (`PAL8_LZ`: palette + LZ-compressed indices). Smooth, coherent
+  images compress well: in the lab a plasma and a Mandelbrot zoom went out this way
+  on 98-100% of frames. Noise, fine dither and high-frequency texture do not
+  compress, and the sender then reduces the palette (256 -> 128 -> 64 -> 32) until
+  it fits.
+- Anything else is sent lossy, either as a reduced adaptive palette or as a 4x4
+  block codec (`BC1_DUAL`) which suits photographic content. The sender scores the
+  candidates perceptually and picks the best; you do not choose.
+- The palette is per frame. It can be any colours at all, and it can change
+  completely on every frame at negligible cost.
 
-That last point is the single most useful creative fact here. **Think like an
-indexed-colour artist.** This target rewards the whole family of palette techniques:
+Two consequences worth internalising:
 
-- *Palette animation*: keep the index image fixed or slow-moving and animate the
-  palette (colour cycling, palette rotation through a fractal, day/night shifts).
-  Costs 48-96 bytes per frame and is perfectly lossless.
-- *Deliberate palettes*: choose 8-32 colours per piece or per scene, as a design
-  decision, in a perceptual space, snapped to panel levels (section 2.1). Then
-  render directly into indices. You control quantisation instead of a generic
-  quantiser guessing, and the result is exact on the wire.
-- *Ramps*: a 32-entry palette is, for example, one 32-step ramp, or four 8-step
-  ramps in different hues, or a 2D ramp of 8 hues x 4 brightnesses. Pick the
-  structure that matches the piece.
+1. **Spatial coherence is your compression.** Large flat or smoothly varying regions
+   are nearly free; per-pixel noise is the most expensive thing you can draw. This is
+   the opposite of the intuition from the colour-count rules alone: a 200-colour
+   smooth gradient fits exactly, while a 40-colour field of random confetti may not.
+   Ordered dither (section 2.4) is a regular pattern and compresses far better than
+   random or error-diffusion dither.
+2. **Think like an indexed-colour artist.** This target rewards the whole family of
+   palette techniques:
+   - *Palette animation*: keep the index image fixed or slow-moving and animate the
+     palette (colour cycling, palette rotation through a fractal, day/night shifts).
+     Perfectly lossless and nearly free.
+   - *Deliberate palettes*: choose 8-32 colours per piece or per scene, as a design
+     decision, in a perceptual space, snapped to panel levels (section 2.1). Render
+     directly into indices. You control quantisation instead of a generic quantiser
+     guessing, and the result is exact on the wire.
+   - *Ramps*: a 32-entry palette is one 32-step ramp, or four 8-step ramps in
+     different hues, or 8 hues x 4 brightnesses. Pick the structure the piece needs.
 
 If a piece genuinely needs continuous colour (a photographic source, a many-hue
-plasma), it will still work, lossy. But prefer designing within a palette: it will
-look better *and* be exact.
+field), it will still work, lossy, at a quality the lab measured as good (SSIM
+~0.98). But prefer designing within a palette: it will look better *and* be exact.
 
-**Palette stability** **[provisional]**: when a lossy adaptive palette is recomputed
-every frame, colours of static regions can shimmer as the palette shifts under them.
-If you own the palette, this cannot happen. If you hand over full-colour frames,
-expect some shimmer in slow-moving gradients and keep them moving or textured.
+**Palette stability** **[measured in the lab]**: when the sender has to build a
+reduced palette, it seeds it from the previous frame's and applies hysteresis to
+codec switching, because both palette drift and a change in the *character* of the
+error (block edges vs dither noise) are visible as shimmer. If you own the palette,
+neither can happen. If you hand over full-colour frames, keep slow gradients moving
+or textured rather than nearly static.
 
 ### 2.4 Dithering
 
@@ -148,10 +168,9 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
 - Temporal dithering (alternating two adjacent levels on successive frames) works,
   but at 30 fps the alternation is 15 Hz, which is visible as flicker on bright
   LEDs, especially in peripheral vision. Keep it to one quantisation step of
-  amplitude, prefer it in dark/mid tones, and vary the phase per pixel with a
-  blue-noise mask so the whole field never flickers in unison. **[provisional: the
-  firmware may later do sub-frame temporal dithering itself at the 154 Hz refresh
-  rate, which would be invisible. Do not depend on it.]**
+  amplitude, and vary the phase per pixel with a blue-noise mask so the whole field
+  never flickers in unison. **You should rarely need it: the firmware already
+  dithers in time at the 154 Hz refresh rate, invisibly (section 2.1).**
 - Dither in linear light, against the real panel levels, not against 8-bit sRGB.
 
 ---
@@ -242,8 +261,10 @@ Your most important tool is a simulator that shows what the panel will show, not
 what your framebuffer contains. It should:
 
 1. Take your frame (RGB or indexed).
-2. Apply the **panel model**: sRGB -> linear -> quantise each channel to 64 levels
-   (make the level count a parameter, and test at 32) -> back to sRGB for display.
+2. Apply the **panel model**: sRGB -> linear -> quantise each channel -> back to sRGB
+   for display. With device-side temporal dithering the effective level count is
+   about 190 rather than 64 (card 002 measured ~195); make it a parameter and look at
+   both, because the dark end behaves like the coarser number.
    Optionally apply the 32-colour / lossy path so you see codec damage too.
 3. Draw each pixel as a **round dot on black with gaps** (dot diameter ~60-70% of
    pitch), upscaled at least 12x. A plain nearest-neighbour upscale lies to you: it

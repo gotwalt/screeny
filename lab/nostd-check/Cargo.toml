@@ -1,0 +1,7 @@
+[package]
+name = "nostd-check"
+version = "0.1.0"
+edition = "2021"
+description = "Compiles the lab's decode paths as #![no_std] with no allocator, proving they can be lifted into the firmware `proto` crate."
+
+[dependencies]

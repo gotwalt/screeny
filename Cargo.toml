@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# firmware/ uses the esp toolchain and an Xtensa target; lab/ and spike/ are frozen
+# reference material. None of them belong in the host workspace.
+# art/ is the generative art system: its own workspace (Tauri + wgpu), merged from
+# its own branch. It depends on crates/screeny by path; it is not a member here.
+exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check", "spike/fw-skeleton", "art"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+debug = 1

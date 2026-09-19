@@ -1,0 +1,16 @@
+[workspace]
+members = ["nostd-check"]
+exclude = ["xtensa-bench"]
+
+[package]
+name = "lab"
+version = "0.1.0"
+edition = "2021"
+description = "Frame-encoding lab for screeny: measure candidate codecs for a 64x32 LED panel in one UDP datagram"
+
+[dependencies]
+png = "0.17"
+
+[profile.release]
+opt-level = 3
+debug = true

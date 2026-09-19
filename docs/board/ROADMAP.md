@@ -16,31 +16,55 @@ the phase before them has produced what they depend on.
 - 002 frame encoding lab
 - 003 protocol / discovery / transport
 
-## Phase 2 - design (orchestrator)
+## Phase 2 - design (orchestrator) - done
 
-- 004 finalise `docs/design/protocol-v1.md` and `docs/design/architecture.md`
-- workspace layout: `crates/proto` (no_std codec + packet types, shared),
-  `firmware/`, `crates/screeny` (sender lib + CLI), `crates/sim`
+- [x] 004 `docs/design/protocol-v1.md` accepted, `docs/design/architecture.md`,
+  host workspace skeleton
 
-## Phase 3 - build (parallel where possible)
+## Phase 3 - build - done
 
-- 005 `proto` crate: packet types + codecs, no_std, property-tested against the lab
-- 006 host simulator: receives the protocol, renders the panel in a window/terminal
-- 007 firmware bring-up on hardware: panel test pattern, brightness cap (hardware)
-- 008 firmware networking: WiFi, UDP receive, decode, display, telemetry, mDNS (hardware)
-- 009 sender library + CLI: discovery, pacing, stats, test patterns
-- 010 fractal zoom sender
-- 011 word clock sender: spells out the current time, animated transitions
-- 012 camera measurement harness: capture, locate panel, compare with sent frames (hardware)
-- 015 macOS code signing + Local Network permission for the sender binaries
+Everything below is merged and verified on the real panel
+(`docs/research/005-end-to-end.md`):
 
-## Phase 4 - tune
+- 005 `crates/proto` - no_std wire types + five decoders, hardened against bad input
+- 006 `crates/sim` - fake panel speaking the full protocol (found 17 spec ambiguities)
+- 007 firmware display - gamma, depth-preserving brightness (020), temporal dither (030),
+  status screen; ghosting turned out to be a camera artefact
+- 008 firmware networking - protocol v1 on the device, display on core 1, `screeny-probe`
+- 009 `crates/screeny` - encoders + chooser, discovery, paced sender, CLI (absorbed 031)
+- 010 `crates/demos` - fractal zoom tour + word clock, wired in as `screeny fractal|clock`
+- 015 macOS Developer ID signing + embedded Info.plist for Local Network permission
+- 090 spec pacing fix
 
-- 013 end-to-end fps / latency / loss measurement and codec trade-offs on real hardware
-- 014 runtime WiFi provisioning
+## Phase 4 - cleanup and hand-over (current)
 
-## Parked - not scheduled, only on the owner's say-so
+The generative art system (`art/`, developed on its own branch) becomes the primary
+sender. Owner's direction, 2026-09-19: cleanup first; WiFi setup and camera-based
+measurement are deferred.
 
-- 040 DDP proxy in the sender (LedFx/xLights -> native frames; host-side only, the
-  firmware never speaks DDP). Owner is unsure it will be wanted.
-- 041 control channel authentication (only matters on an untrusted LAN)
+- 011 sender embedding API: exact indexed frames through `Sender`, push API,
+  auto-reconnect for a long-running daemon, Linux build check, examples, brief section 5
+- 016 consolidate duplicated code: one receiver core for sim + firmware, one set of
+  frame types, one panel/colour model; delete `spike/`; (hardware, for re-verification)
+- orchestrator: root README, CLAUDE.md, this roadmap, art brief refresh, stale
+  worktrees/branches, merge of `art/` when that instance is ready
+
+Then, small and optional:
+- 062 mDNS lifecycle (goodbye, re-announce, TTL)
+- 080 wire conformance suite that can target sim and firmware (grow it from `screeny-probe`)
+- 065 decoder throughput nit (`SOLID`); 082 sim squint view
+
+## Deferred by the owner
+
+- **WiFi setup**: eventually a captive-portal flow with an HTTP settings UI on the
+  device. Until then credentials are compiled in. Supersedes the serial/`SET_WIFI`
+  plan (old card 014) and parks 063 (persist settings) and 081 (sim WiFi states).
+- **Camera measurement** (old cards 012, 013, 061): the bench camera's colour
+  accuracy is unknown; the owner will give visual feedback directly instead.
+
+## Parked - `docs/board/parked/`, only on the owner's say-so
+
+021 board revision detection, 032 real-content codec corpus, 040 DDP proxy,
+041 control-channel auth, 060 upstream the brightness patch, 061 fixed-exposure
+capture, 063 persist settings, 070 deeper fractal zoom, 081 sim WiFi states,
+091 multi-device sender.
