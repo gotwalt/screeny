@@ -203,3 +203,54 @@ port-pair choice, because tests run in parallel and a pair chosen and then
 bound has a race; and the sim must be started with `control = frame + 1` for a
 bare `Target { addr }` to find both halves, which is what an embedder on the
 bench actually has.
+
+### The examples
+
+`crates/screeny/examples/embed.rs` - the ten-line embedding is one function:
+
+```rust
+fn stream(target: Target, art: &mut impl FnMut(f64) -> (Vec<[u8; 3]>, Vec<u8>)) -> screeny::Result<()> {
+    let mut link = Link::open(target, LinkConfig::default())?;
+    let mut pace = link.pacer();
+    loop {
+        let t = pace.tick();
+        let (palette, indices) = art(t.secs());
+        link.send(Pixels::indexed(&palette, &indices))?;
+    }
+}
+```
+
+The rest of the file is argument parsing and a stripe pattern to look at.
+Run against a simulator on loopback (`--frame-port 49400`, mDNS off):
+**29.6-30.5 fps, `PAL4_LZ`, 213 B/frame, gaps 0, superseded 0, decode
+failures 0, rejected 0.**
+
+`crates/screeny/examples/art_output.rs` - the art system's `Output` impl,
+with their `Output` trait and `WireFrame` restated locally as stand-ins so it
+compiles here and `art/` is untouched. The impl is fifteen lines:
+
+```rust
+impl Output for SenderOutput {
+    fn send(&mut self, frame: &WireFrame) -> io::Result<()> {
+        let px = match &frame.indexed {
+            Some((palette, indices)) => Pixels::indexed(palette, indices),
+            None => Pixels::rgb(&frame.rgb),
+        };
+        self.link.send(px)?;
+        Ok(())
+    }
+}
+```
+
+Run at their 60 fps against the simulator: **360 offered / 180 sent / 179
+coalesced / 1 dropped, 180 exact, `PAL8_LZ` 575 B, superseded 0.** The one
+dropped frame is the first, pushed while the deferred link was still
+connecting. That is the whole design working: their loop stays at 60, the
+panel gets a clean 30, nothing is superseded, and every frame is exact.
+
+Worth knowing, and now in the README: `Drop` sends `FINAL` on a normal return
+or an unwind, but **not** on `SIGTERM` or ctrl-c, which terminate without
+running destructors. An embedder that wants the lock released promptly on a
+signal needs its own handler, the way the CLI does. In the runs above the
+simulator logged `lock released by ...: Timeout` for exactly that reason,
+because `timeout(1)` killed the example.
