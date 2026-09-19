@@ -240,9 +240,12 @@ Measured on an M-series laptop, release, over the five card 002 clips
 
 | profile | mean | p95 | worst frame | mean dE |
 |---|---|---|---|---|
-| lab hybrid (card 002) | 6.03 ms | 12.75 ms | 16.11 ms | 6.14 |
-| `Full` | **2.08 ms** | 4.92 ms | 9.44 ms | **6.08** |
-| `Fast` | **1.16 ms** | 2.70 ms | 3.92 ms | 7.19 |
+| lab hybrid (card 002) | 3.7 ms | 7.1 ms | 9.2 ms | 6.14 |
+| `Full` | **1.45 ms** | 3.3 ms | 6.0 ms | **6.08** |
+| `Fast` | **0.78 ms** | 1.9 ms | 2.9 ms | 7.19 |
+
+The absolute figures move with whatever else the machine is doing - a busy
+laptop measured 6.0 / 2.1 / 1.2 ms - but the ratios hold: 2.5x and 4.7x.
 
 `Full` is the default and is what card 002 measured, only faster; `Fast`
 shortens the LZ chains, cuts the Lloyd iterations and scores one pixel in
