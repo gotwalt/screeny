@@ -150,7 +150,7 @@ impl Default for Config {
             timing: Timing::SPEC,
             faults: Faults::default(),
             panel: PanelModel::default(),
-            fault_seed: 0x5EED_5C_EE,
+            fault_seed: 0x5EED_5CEE,
         }
     }
 }
