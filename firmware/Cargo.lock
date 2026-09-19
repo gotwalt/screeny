@@ -1823,6 +1823,7 @@ dependencies = [
  "edge-nal",
  "edge-nal-embassy",
  "embassy-executor",
+ "embassy-futures",
  "embassy-net",
  "embassy-sync 0.8.0",
  "embassy-time",
@@ -1838,8 +1839,13 @@ dependencies = [
  "heapless 0.9.3",
  "log",
  "rand_core 0.10.1",
+ "screeny-proto",
  "static_cell",
 ]
+
+[[package]]
+name = "screeny-proto"
+version = "0.1.0"
 
 [[package]]
 name = "sdio"

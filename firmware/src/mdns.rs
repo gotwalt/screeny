@@ -1,13 +1,16 @@
-//! DNS-SD responder, so senders find the panel by name instead of by IP.
+//! DNS-SD responder: spec section 5.
 //!
-//! Card 003 owns the service definition; this exists to prove that the crates
-//! resolve and compile together on this target, because `edge-mdns` ships no
-//! `no_std` example and the question "does mDNS work here" would otherwise
-//! stay open until someone had hardware in hand.
+//! The service is `_screeny._udp.local.`, the `SRV` target is
+//! `screeny-<id>.local.` with the **frame** port, and the TXT record is built
+//! by *parsing the `GET_INFO` body back out again*. That is not a roundabout
+//! way of writing the keys twice: it is the point of section 6.6. One table
+//! in the firmware, one parser in the sender, and a sender that browsed mDNS
+//! is guaranteed identical metadata to one that was handed a bare IP, because
+//! the two came from the same bytes.
 //!
-//! Untested against a real network. The two things most likely to be wrong
-//! are whether multicast frames reach us through esp-radio at all, and
-//! whether the buffers below are big enough for a real query.
+//! `SET_NAME` changes those bytes, so the responder is restarted on
+//! [`crate::net::INFO_CHANGED`], which also re-announces (RFC 6762 section
+//! 8.3) from the new record.
 
 use core::convert::Infallible;
 use core::net::{Ipv4Addr, Ipv6Addr};
@@ -18,14 +21,16 @@ use edge_mdns::host::{Host, Service, ServiceAnswers};
 use edge_mdns::io::{self, IPV4_DEFAULT_SOCKET};
 use edge_mdns::HostAnswersMdnsHandler;
 use edge_nal_embassy::{Udp, UdpBuffers};
+use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::signal::Signal;
 use log::{info, warn};
+use screeny_proto::txt;
 
-use crate::{mk_static, CONTROL_PORT, COLS, FRAME_PORT, ROWS};
+use crate::net::{CORE, INFO_CHANGED};
+use crate::receiver::INFO_MAX;
+use crate::{mk_static, FRAME_PORT};
 
-/// The name the panel answers to: `screeny.local`, service `_screeny._udp`.
-const HOSTNAME: &str = "screeny";
 const SERVICE: &str = "_screeny";
 const PROTOCOL: &str = "_udp";
 
@@ -33,9 +38,7 @@ const PROTOCOL: &str = "_udp";
 /// the honest ceiling and costs 3 KB of the two buffers together.
 const MDNS_BUF: usize = 1500;
 
-/// `esp_hal::rng::Rng` in the shape `edge-mdns` wants. Implementing the
-/// fallible trait is enough: `rand_core` blankets `Rng` over anything whose
-/// error is `Infallible`.
+/// `esp_hal::rng::Rng` in the shape `edge-mdns` wants.
 struct HwRng(esp_hal::rng::Rng);
 
 impl rand_core::TryRng for HwRng {
@@ -59,7 +62,7 @@ impl rand_core::TryRng for HwRng {
 }
 
 #[embassy_executor::task]
-pub async fn mdns_task(stack: embassy_net::Stack<'static>) {
+pub async fn mdns_task(stack: embassy_net::Stack<'static>, hostname: &'static str) {
     stack.wait_config_up().await;
     let Some(config) = stack.config_v4() else {
         warn!("mdns: no IPv4 address, giving up");
@@ -67,7 +70,6 @@ pub async fn mdns_task(stack: embassy_net::Stack<'static>) {
     };
     let ipv4: Ipv4Addr = config.address.address();
 
-    // One socket, and buffers big enough for the largest query we might see.
     let buffers = mk_static!(UdpBuffers<1, MDNS_BUF, MDNS_BUF, 2>, UdpBuffers::new());
     let udp = Udp::new(stack, buffers);
 
@@ -77,8 +79,6 @@ pub async fn mdns_task(stack: embassy_net::Stack<'static>) {
     let socket = match io::bind(&udp, IPV4_DEFAULT_SOCKET, Some(ipv4), None).await {
         Ok(s) => s,
         Err(e) => {
-            // The most likely cause is that joining the multicast group
-            // failed, which would sink the whole discovery design.
             warn!("mdns: bind failed: {:?}", e);
             return;
         }
@@ -100,43 +100,76 @@ pub async fn mdns_task(stack: embassy_net::Stack<'static>) {
     );
 
     let host = Host {
-        hostname: HOSTNAME,
+        hostname,
         ipv4,
         ipv6: Ipv6Addr::UNSPECIFIED,
-        ttl: Ttl::from_secs(60),
+        // Section 5.1: 120 s for SRV/TXT/A, per RFC 6762 section 10.
+        ttl: Ttl::from_secs(120),
     };
 
-    // TXT records let a sender decide whether it can talk to us before it
-    // sends a single frame. Card 003 fixes the real key set; the codec list
-    // is a placeholder until card 002 lands.
-    let service = Service {
-        name: HOSTNAME,
-        priority: 0,
-        weight: 0,
-        service: SERVICE,
-        protocol: PROTOCOL,
-        port: FRAME_PORT,
-        service_subtypes: &[],
-        txt_kvs: &[
-            ("proto", "1"),
-            ("w", "64"),
-            ("h", "32"),
-            ("ctrl", "49375"),
-            ("codecs", "raw"),
-        ],
-    };
+    loop {
+        // Take a private copy of the GET_INFO body. The `Service` below
+        // borrows from it, so it has to outlive the responder run, and the
+        // core's copy is behind a mutex two other tasks need.
+        let mut info = [0u8; INFO_MAX];
+        let n;
+        let mut instance = heapless::String::<32>::new();
+        {
+            let guard = CORE.lock().await;
+            let core = guard.as_ref().expect("core exists");
+            let b = core.info_bytes();
+            n = b.len().min(INFO_MAX);
+            info[..n].copy_from_slice(&b[..n]);
+            let _ = instance.push_str(core.name());
+        }
 
-    // Keep the compiler honest about the control port until card 008 binds it.
-    debug_assert_eq!(CONTROL_PORT, 49375);
-    debug_assert_eq!((COLS, ROWS), (64, 32));
+        // Section 6.6's bytes, read back as section 5.2's keys. Order is
+        // preserved by the iterator, so `txtvers` stays first as RFC 6763
+        // section 6.5 requires.
+        let mut kvs: heapless::Vec<(&str, &str), 12> = heapless::Vec::new();
+        for e in txt::iter(&info[..n]) {
+            let (Ok(k), Some(Ok(v))) = (
+                core::str::from_utf8(e.key),
+                e.value.map(core::str::from_utf8),
+            ) else {
+                continue;
+            };
+            let _ = kvs.push((k, v));
+        }
 
-    info!(
-        "mdns: announcing {}.local as {}.{}.{}.local on port {}",
-        HOSTNAME, HOSTNAME, SERVICE, PROTOCOL, FRAME_PORT
-    );
+        let service = Service {
+            name: &instance,
+            priority: 0,
+            weight: 0,
+            service: SERVICE,
+            protocol: PROTOCOL,
+            // Section 5.1: the SRV record carries the *frame* port; the
+            // control port is the `ctrl=` TXT key, which is already in `kvs`.
+            port: FRAME_PORT,
+            service_subtypes: &[],
+            txt_kvs: &kvs,
+        };
 
-    let handler = HostAnswersMdnsHandler::new(ServiceAnswers::new(&host, &service));
-    if let Err(e) = mdns.run(handler).await {
-        warn!("mdns: responder stopped: {:?}", e);
+        info!(
+            "mdns: {}.local -> {} as {}.{}.{}.local port {} ({} txt keys)",
+            hostname,
+            ipv4,
+            instance.as_str(),
+            SERVICE,
+            PROTOCOL,
+            FRAME_PORT,
+            kvs.len()
+        );
+
+        let handler = HostAnswersMdnsHandler::new(ServiceAnswers::new(&host, &service));
+        match select(mdns.run(handler), INFO_CHANGED.wait()).await {
+            Either::First(Err(e)) => {
+                warn!("mdns: responder stopped: {:?}", e);
+                return;
+            }
+            Either::First(Ok(())) => return,
+            // SET_NAME changed the record: rebuild and re-announce.
+            Either::Second(()) => info!("mdns: record changed, re-announcing"),
+        }
     }
 }
