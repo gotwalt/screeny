@@ -219,23 +219,25 @@ run, taken with `RESET_STATS` before and a `TELEMETRY` request after.
 
 | codec | sent | rx | shown | stale | superseded | decode drops | rejected | loss | decode us (ewma / max) | jitter us |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `PAL5` (2) | 1801 | 1800 | 1800 | 0 | 0 | **0** | 0 | 0.06% | 444 / 2743 | 2844 |
-| `PAL8_LZ` (16) | 1801 | 1799 | 1799 | 0 | 0 | **0** | 0 | 0.11% | 562 / 2398 | 2924 |
-| `PAL4_LZ` (17) | 1801 | 1801 | 1801 | 0 | 0 | **0** | 0 | 0.00% | 411 / 2872 | 1992 |
-| `BC1_DUAL` (40) | 1801 | 1800 | 1800 | 0 | 0 | **0** | 0 | 0.06% | 745 / 2791 | 4413 |
-| `SOLID` (127) | 1801 | 1801 | 1801 | 0 | 0 | **0** | 0 | 0.00% | 237 / 1140 | 4069 |
-| generated pattern | 1801 | 1801 | 1801 | 0 | 0 | **0** | 0 | 0.00% | 429 / 2326 | 2536 |
+| `PAL5` (2) | 1801 | 1796 | 1796 | 0 | 0 | **0** | 0 | 0.28% | 464 / 2694 | 2017 |
+| `PAL8_LZ` (16) | 1801 | 1794 | 1794 | 0 | 0 | **0** | 0 | 0.39% | 636 / 3560 | 2734 |
+| `PAL4_LZ` (17) | 1801 | 1784 | 1784 | 0 | 0 | **0** | 0 | 0.94% | 437 / 2471 | 5251 |
+| `BC1_DUAL` (40) | 1801 | 1796 | 1793 | 0 | 3 | **0** | 0 | 0.28% | 790 / 3150 | 1777 |
+| `SOLID` (127) | 1801 | 1797 | 1797 | 0 | 0 | **0** | 0 | 0.22% | 224 / 2635 | 2324 |
+| generated pattern | 1801 | 1795 | 1788 | 0 | 7 | **0** | 0 | 0.33% | 458 / 3181 | 2870 |
 
-Zero decode drops and zero rejections everywhere; worst loss 0.11%, against
-the card's 1% budget. `frames_rx = frames_shown + superseded + decode` held in
-every run, which is the section 3.3 identity the whole of section 6.9's
-diagnosis table rests on.
+Zero decode drops and zero rejections everywhere; worst loss 0.94%, inside the
+card's 1% budget but only just, and that run (`PAL4_LZ`) also has the worst
+jitter - 5251 us against 1777-2870 elsewhere - so it is the air, not the
+device. `frames_rx = frames_shown + superseded + decode` held in every run,
+which is the section 3.3 identity the whole of section 6.9's diagnosis table
+rests on.
 
-Two things the decode column says. First, `SOLID` costs 237 us to paint 6144
+Two things the decode column says. First, `SOLID` costs 224 us to paint 6144
 bytes - about 9 cycles a byte at 240 MHz - because the decoder writes
 bounds-checked bytes one at a time and the build is `opt-level = "s"`. That is
 the floor for every codec: they all end in a per-pixel write. Second, even
-`BC1_DUAL`, the dearest, is 745 us of a 33,333 us frame period - **2.2%**. The
+`BC1_DUAL`, the dearest, is 790 us of a 33,333 us frame period - **2.4%**. The
 decode path is nowhere near being the constraint, which matters for reading
 the core-split result below.
 
@@ -265,3 +267,186 @@ to run while one was in flight; its log warned that the zero in its counters
 should not be read as evidence that the path worked. It fires now, nine times
 in ten minutes, and each time the older frame was dropped rather than queued.
 
+
+#### Which build the table above was taken from
+
+The per-codec table and the soak are one run per codec on the **final**
+binary, the one the device is left running. Earlier passes on intermediate
+builds are not reported.
+
+#### Lock and idle: spec section 7.4 as a test
+
+`screeny-probe lock-test`, two sockets from this Mac, against the device:
+
+```
+lock-test: A=192.168.7.203:56333 B=192.168.7.203:53368
+  1. A streaming -> state LIVE, frames shown            PASS  state LIVE shown 10
+  2. B locked out -> BUSY on B's frame socket           PASS  reason 0 remaining 500 ms
+  2b. B's frames counted in frames_rejected             PASS  0 -> 6
+  2d. BUSY count over 2.1 s of knocking is <= 3         PASS  2 BUSY for ~63 rejected frames
+  3. after LOCK_MS of silence, B takes over             PASS  shown 16 -> 80, 0 late BUSY
+  4. a displayed FINAL releases the lock (state HOLD)   PASS  state HOLD
+  4b. A takes over instantly after FINAL, no BUSY       PASS  state LIVE (0 BUSY)
+  5. RELEASE from the same IP releases the lock         PASS  state HOLD
+  6. STREAM_TIMEOUT_MS with no frames -> HOLD           PASS  LIVE -> HOLD
+lock-test: all PASS
+```
+
+`BUSY` arrives on **B's frame socket**, which is section 6.2's rule and the
+thing a sender is most likely to get wrong; `lock_holder_ms_remaining` reads
+500 ms, i.e. `LOCK_MS` with the holder still sending, exactly as section 6.2
+defines it. Two `BUSY` packets for 63 refused frames is the one-per-second
+limit working.
+
+#### Conformance: 22 checks only a device can fail
+
+`screeny-probe conformance` passes all 22 on the device and all 22 on the
+simulator. It covers `ERR_BAD_LENGTH` built from a header the datagram does
+not back up, `ERR_VERSION`, `ERR_UNKNOWN_OP`, `req_id == 0` buying silence
+*including* for errors, a `CONTROL` with `REPLY` set being discarded, guarded
+`REBOOT`, `SET_IDLE` range, section 5.5's `GET_INFO` limit **and its
+retransmission exemption**, which counter moves for which fault, and the
+section 3.3 identity.
+
+One check was flaky before it was right, and the fix is a bench lesson rather
+than a firmware one. Sending four junk datagrams back to back and then reading
+`frames_rejected` gave 4, 3, 3 over three runs. The device was fine: this is
+UDP over WiFi and one datagram of a four-packet burst was lost on the air. The
+check now sends them **one at a time** with the counter read in between, and
+retries up to three times - after which all four pass on the first attempt,
+every time. A burst cannot tell "the firmware ignored one" from "the air ate
+one", which is the only question worth asking.
+
+### Deliverable 2 - the display on core 1, and what it actually bought
+
+This is the deliverable that changed shape under measurement, so the
+measurement comes first.
+
+`--features display-on-core0` builds the identical firmware with the display
+task on core 0's executor. Both builds, `BC1_DUAL`, 12 s per rate, taken
+within half an hour of each other:
+
+| offered rate | core 1: rx / shown / superseded | core 0: rx / shown / superseded |
+|---|---|---|
+| 30 fps | 361 / 361 / **0** | 358 / 356 / 2 |
+| 60 fps | 713 / 713 / **0** | 721 / 720 / 1 |
+| 90 fps | 1076 / 1056 / 20 | 1071 / 1062 / 9 |
+| 120 fps | 1436 / 1383 / 53 | 1421 / 1378 / 43 |
+
+and over 60 s at 30 fps, six sources each: decode 224-795 us either way,
+`render_us_max` 6.5-7.8 ms either way, loss 0.2-0.9% either way, refresh
+152-154 swaps/s either way.
+
+**The two configurations are indistinguishable at every rate this bench can
+drive them at**, including four times the design frame rate. That is not the
+result the card expected, and the reason is worth stating plainly:
+
+> Card 007's problem was **the lock, not the core.** Its display task held the
+> frame mutex across a synchronous 3 ms render, 154 times a second, so the
+> frame task could not run while one was in flight. Card 008 replaced that
+> mutex with `fb.rs`'s lock-free triple buffer *before* moving anything to
+> core 1 - and the triple buffer alone fixes it. The `display-on-core0` build
+> is not card 007's firmware; it is card 008's firmware with one task moved,
+> and it already has the fix.
+
+So the honest accounting of the core split:
+
+- It does **not** improve throughput, loss, jitter or decode time at 30 fps,
+  because at 30 fps the device is nowhere near its limit: decode is 2.2% of a
+  frame period and a drain finds one frame almost every time.
+- It **does** move card 007's measured ~48% of a core - the cost of rewriting
+  the DMA buffer every refresh for temporal dithering - off the core that runs
+  WiFi, the network stack, decode, control and mDNS. Core 0's display cost at
+  30 fps goes from ~48% to ~2% (one 6 KB copy per published frame). Nothing on
+  this card needs that headroom; card 013's latency work and any future
+  stateful codec will.
+- It is what makes the "newest wins" path of section 3.3 *provably* live: the
+  soak drained two frames in one wake nine times. Card 007 could not do that
+  once, and said so.
+
+**The 640 ms stall is gone.** Card 007 saw one ~640,000 us render per boot,
+during WiFi association, and asked whether it recurs. On the card 008 firmware
+the worst render since boot is **3.4 to 10.1 ms** across five boots, and the
+worst inside any 5 s window in steady state is 5-8 ms. At 154 Hz that is one
+or two refreshes of delay - not a freeze, and not visible. Both configurations
+show it, which points at the lock again: card 007's 640 ms was esp-radio
+preempting a task that was *holding the frame mutex*, and there is no longer a
+mutex to hold.
+
+| | card 007 | card 008, core 0 | card 008, core 1 (shipping) |
+|---|---|---|---|
+| worst render since boot | **641,616 us** | 9,470-10,080 us | 3,401-10,058 us |
+| worst render, 5 s window, steady state | 5,000-6,600 us | 5,373-7,535 us | 5,063-7,491 us |
+| refresh while streaming | 154/s | 152/s | 152-153/s |
+| "newest wins" ever fires | **never; cannot** | yes | yes |
+| display cost on the core that also does WiFi | ~48% | ~48% | **~2%** |
+
+### Camera evidence
+
+All at brightness 96, the bench framing of `docs/research/000-bench-notes.md`.
+
+**Streaming, then `HOLD`, then the idle screen.** The generated moving pattern
+at 30 fps (`captures/c008-stream-clip.mp4`, `c008-stream-still.jpg`), the
+stream stopped, and the panel photographed 4 s later and 13 s later:
+
+![last frame held](../../research/img/c008-hold.jpg)
+![idle status screen](../../research/img/c008-idle-screen.jpg)
+
+The first is `HOLD`: the last streamed frame still lit, unchanged, seconds
+after the sender stopped. The second is `IDLE`, after `HOLD_MS` and the 500 ms
+cross-fade - name, state, RSSI bars, address, mDNS host name, and the ambient
+sweep pixel on the bottom row. **It never blanks to black**, which is the
+point of section 7.5's default.
+
+**`IDENTIFY`:**
+
+![identify overlay](../../research/img/c008-identify.jpg)
+
+The chevron border alternates at about 1.7 Hz, under the bench's 3 Hz limit.
+
+**Flicker, on static content, on the final firmware:** a 3 s clip of the idle
+screen, panel mean luminance per camera frame, 91 frames.
+
+| | value |
+|---|---|
+| mean | 80.5 |
+| standard deviation, trimmed 2 frames each end | **0.31, i.e. 0.39%** |
+| autocorrelation at lags 1-8 | all under 0.06 in magnitude |
+
+No periodic structure at any lag, so no beating from the temporal dither.
+Card 030 measured 1.7% on the single-core firmware; this is 0.39%. (The two
+frames trimmed at the bottom are one camera auto-exposure excursion to 62,
+exactly the artefact card 007 warned about.)
+
+**Tearing: the camera cannot answer this, and it does not need to.** The panel
+refreshes at 154 Hz and the camera integrates about five refreshes per frame,
+so a torn *refresh* would be averaged away before it reached the sensor. What
+rules tearing out is structural, and it is the whole reason `fb.rs` exists:
+the DMA engine reads a complete framebuffer and `swap()` changes which one it
+reads at a frame boundary; the decoder writes into a third sRGB slot the DMA
+never sees; and the triple buffer's invariant is that the producer's index and
+the consumer's index are never equal. There is no window in which a
+half-written frame is reachable by the scan-out. The clip shows a coherent
+moving picture with no seam, which is consistent with that and is as much as
+the optics can say.
+
+### Behaviour across a `REBOOT` mid-stream
+
+The safe way to provoke a link loss without touching the AP. A 45 s stream of
+the moving pattern, `REBOOT` on the control port at t = 10 s, sender left
+running throughout:
+
+| | |
+|---|---|
+| uptime before | 587,728 ms |
+| `REBOOT` reply | received **before** the device went down (section 6.3) |
+| sent / received over the whole 45 s | 1351 / 708 |
+| uptime after | 34,998 ms |
+| state after | `LIVE`, still receiving from the same socket |
+
+708 frames at 30 fps is 23.6 s of the 35 s that remained after the reboot, so
+the device was unreachable for about **11.4 s** - reset, WiFi association and
+DHCP - and then picked the stream straight back up with no action from the
+sender. That is what the design intends: the sender keeps its socket and its
+sequence, the device comes back with no `active_source`, adopts the first
+frame it sees and resumes. Nothing had to be restarted and nothing wedged.
