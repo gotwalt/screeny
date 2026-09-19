@@ -42,6 +42,13 @@ so that an over-budget datagram fails locally rather than being fragmented. The
 device does not reassemble IP fragments: embassy-net's `ipv4-reassembly` feature
 is off unless explicitly enabled, so a fragmented datagram is silently dropped.
 
+A receiver's frame buffer is 1472 bytes, so a datagram longer than that cannot
+be read whole. A receiver MUST discard such a datagram and count it in
+`frames_rejected` rather than parse the truncated prefix it managed to read:
+the bytes it has are not the bytes that were sent, and a `len` that happens to
+fit the truncation would be a lie. (Card 006: a receiver that simply passes the
+short read to the parser reports `ERR_BAD_LENGTH`-shaped nonsense instead.)
+
 A sender MUST NOT send frame data to a broadcast or multicast address. Unicast
 only. (802.11 sends multicast unacknowledged, at the lowest basic rate, buffered
 to the DTIM beacon - see RFC 9119.) Multicast is used only for mDNS.
@@ -97,6 +104,13 @@ A receiver MUST discard a `FRAME` received on the control port and a `CONTROL`
 received on the frame port, **except** for the device's own replies described in
 §6.4.
 
+`frames_rejected` counts the **frame port only**. A `CONTROL` discarded on the
+frame port is counted in it, along with everything else this section rejects
+there. A datagram discarded on the control port is counted nowhere: the control
+channel answers rather than counts (§6.5), and folding control-port noise into
+a counter a sender reads to diagnose its *video* stream (§6.9) would make that
+counter useless.
+
 ### 2.3 `len` (offset 6..8)
 
 Number of bytes of payload/body following the 8-byte header. A receiver MUST
@@ -140,11 +154,31 @@ exists so latency instrumentation can be added without a version bump.
 | 3 | `0x08` | `HAS_TS` | A 4-byte `u32le` sender timestamp (us) precedes the pixel payload. |
 | 4-7 | | reserved | MUST be 0. A receiver MUST ignore bits it does not know. |
 
+`STATS_REQ` says "after processing this frame", and *processing* begins at the
+admission rule of §7.4. A frame from the source that holds the lock is answered
+whether or not its pixels reach the panel: a duplicate, a reordered frame and
+one whose payload does not decode all still get their `TELEMETRY`. This is
+deliberate. The one frame a second a sender marks (§6.4) is exactly the frame
+it cannot afford to lose track of, and withholding the reply precisely when
+something has gone wrong would hide the failure the sender is asking about. A
+frame that admission *rejects* - one from a source that does not hold the lock
+- gets a `BUSY` instead (§6.2) and no telemetry: its sender is not entitled to
+the counters of a stream that is not its own.
+
 ### 3.2 Sequence numbers
 
 `seq` increments by one per frame *sent* and wraps mod 2^16 (36.4 minutes at
-30 fps). It MUST NOT be reset except when the sender restarts a stream; it MAY
-start at any value.
+30 fps). It MAY start at any value.
+
+A sender MUST NOT reset `seq` while continuing to send from the same socket,
+including when it restarts a stream. A receiver keeps `last_seq` per source and
+a source is a UDP 4-tuple (§7.1), so a sender that restarted at 0 from the same
+port would have every frame rejected as stale until the sequence caught up, or
+until `STREAM_TIMEOUT_MS` released the lock. A sender that wants a fresh
+sequence MUST rebind its socket, which makes it a new source and resets
+`last_seq` on the device for free. (Card 006 found the earlier wording -
+"MUST NOT be reset except when the sender restarts a stream" - permitted
+exactly the case that cannot work.)
 
 Comparison is RFC 1982 serial-number arithmetic:
 
@@ -184,6 +218,21 @@ already queues up to `rx_queue_size` (default 5) frames below this.
 The device MUST NOT delay display to smooth jitter. No playout buffer, no
 reordering window beyond the `newer()` test. Rationale in the research report
 §1.5.
+
+Every frame that survives step 1 is an *accepted* frame in the sense of §7.4,
+including the ones step 1 then throws away: each of them increments
+`frames_rx`, re-arms `last_frame_at`, advances `last_seq` and feeds §6.8's
+inter-arrival EWMAs, and only then may be counted in
+`frames_dropped_superseded`. So for a single source and over any interval,
+
+```
+d(frames_rx) = d(frames_shown) + d(frames_dropped_superseded)
+             + d(frames_dropped_decode)
+```
+
+which is the identity §6.9's table relies on: `frames_rx` has to mean "arrived
+and was mine", not "was drawn", or a sender cannot tell a lossy network from a
+device that cannot keep up.
 
 ---
 
@@ -451,8 +500,23 @@ Senders MUST:
 A device MUST also answer a `GET_INFO` control packet sent to the **subnet
 broadcast address** on the control port, replying by unicast. This is the
 "mDNS is broken on this machine today" escape hatch and the basis of
-`screeny discover --broadcast`. It MUST be rate-limited to one reply per source
-address per second. Frame data is still never broadcast.
+`screeny discover --broadcast`. Frame data is still never broadcast.
+
+`GET_INFO` MUST be rate-limited to one reply per source address per second,
+**except** that a request repeating a `req_id` the device has already answered
+inside that window is §6.1's retransmission and MUST be answered again. Without
+the exemption the rate limit and the retry rule contradict each other: a sender
+whose first reply is lost retries with the same `req_id` and would be
+stonewalled for a second, having no way to tell that from a device that is not
+there.
+
+The limit is written as applying to `GET_INFO` however it arrived, rather than
+to broadcast `GET_INFO` only, because a receiver generally cannot tell which
+address a datagram was sent to without `IP_RECVDSTADDR` or its equivalent, and
+a rule two implementations read differently is worse than a rule that is very
+slightly too strict. One new `GET_INFO` per source per second is ample for
+§9.4's discovery sequence, and it bounds what a broadcast probe can amplify.
+(Card 006.)
 
 ---
 
@@ -475,7 +539,14 @@ address per second. Frame data is still never broadcast.
 - An error reply has `REPLY|ERROR` set and a 1-byte body containing an error
   code from §6.5.
 - `req_id` 0 means "no reply wanted"; the device MUST NOT reply to a request
-  with `req_id == 0` except where an opcode says otherwise.
+  with `req_id == 0` except where an opcode says otherwise. This covers error
+  replies: a requester that said it did not want an answer does not get one
+  even when its request was malformed. The request itself is still carried out
+  if it is valid.
+- A device MUST discard a `CONTROL` packet that arrives with `REPLY` set.
+  Requests and replies are told apart by that bit and by nothing else, so a
+  device that answered replies would answer its own, and two of them on one
+  LAN would talk to each other indefinitely.
 - The device MUST reply to the source address and port of the request.
 - Requests are idempotent or explicitly guarded (`REBOOT`). There is no
   retransmission in the protocol: a sender that gets no reply within 250 ms
@@ -491,6 +562,22 @@ The device sends two packets nobody asked for, both with `REPLY` set and
   per source.
 - `BUSY` (`op = 0x0C`), to a source whose frames are being rejected because
   another sender holds the lock (§7). Rate-limited to one per second per source.
+
+Both leave by the **frame** socket, addressed to the frame datagram's source
+address and port. §6.4 says so for `TELEMETRY`; `BUSY` answers a frame too, and
+the source it answers is a frame-port source, so it takes the same path. These
+two are the whole of the exception in §2.2 to "a receiver MUST discard a
+`CONTROL` received on the frame port": a sender MUST accept both there.
+
+The 100 ms limit governs the **unsolicited** `TELEMETRY` of this section, which
+is per source and nothing to do with the control port. A `TELEMETRY` *request*
+(§6.3, `op = 0x03`) on the control port is solicited and is answered every
+time.
+
+`BUSY`'s `lock_holder_ms_remaining` is `LOCK_MS - (now - last_frame_at)` in
+milliseconds, clamped at 0: how much longer the current holder keeps the panel
+if it stops sending this instant. A sender that waits that long and retries is
+guaranteed the takeover branch of §7.4.
 
 ### 6.3 Opcodes
 
@@ -517,7 +604,12 @@ Notes:
 - `IDENTIFY` overrides the display for `duration_ms` with a high-contrast
   pattern plus the device name and IP. It is the "which one is this?" button and
   MUST work in any state, including while another sender holds the lock.
-- `RELEASE` clears the source lock only if the requester currently holds it.
+- `RELEASE` clears the source lock only if the requester's **IP address**
+  matches the active source's, as §7.4 says: it arrives on the control port, so
+  its source *port* is never the frame stream's and a 4-tuple comparison would
+  make the opcode impossible to use. A `RELEASE` from anyone else is answered
+  with an ordinary acknowledgement and changes nothing - it is idempotent, and
+  there is nothing for the requester to retry - not `ERR_BUSY`.
 - `SET_BRIGHTNESS`, `SET_IDLE` and `SET_NAME` persist across reboot.
   `SET_BRIGHTNESS` is always clamped by the compile-time firmware cap (the panel
   runs off laptop USB); `applied` in the reply is the value actually in effect,
@@ -555,6 +647,16 @@ A sender SHOULD set `STATS_REQ` on about one frame per second (e.g. whenever
 | `0x07` | `ERR_WIFI` | Wi-Fi operation failed (see §8) |
 | `0x08` | `ERR_NOT_PERMITTED` | op disabled in this build or requires auth |
 | `0x09` | `ERR_RATE_LIMITED` | too many requests |
+
+`ERR_BAD_LENGTH` covers both halves of its definition, and the second half is
+worth spelling out: a `CONTROL` whose `len` the datagram does not back up is
+answered with `ERR_BAD_LENGTH` rather than discarded in silence. The reply is
+built from bytes 2 and 4-5, which are present in any datagram long enough to
+have a header at all, so it echoes the right opcode and `req_id` even though
+nothing after the header can be trusted. The same two bytes are what §2.2's
+optional `ERR_VERSION` reply is built from. A datagram with fewer than eight
+bytes, or with the wrong magic, has no header to read and is discarded
+(§2.1), as is one whose `req_id` is 0 (§6.1). (Card 006.)
 
 ### 6.6 `GET_INFO` reply body
 
@@ -619,6 +721,24 @@ jitter_us       += (|d_i - interarrival_us| - jitter_us) / 16
 
 Integer arithmetic throughout; both EWMAs use a shift of 4. Reset both, and
 `last_seq`, whenever the active source changes.
+
+Two details the formulae leave open, both settled by card 006:
+
+- **Seeding.** There is no `d_i` for the first frame of a stream, because there
+  is no previous arrival. On the second frame a receiver MUST set
+  `interarrival_us = d_1` and `jitter_us = 0` outright rather than running the
+  EWMA up from zero, which is what RFC 3550 does and which stops the first
+  second of every stream reporting an interval that is far too short and a
+  jitter that is far too large.
+- **`interarrival_max_us` is "max since reset"**, and the reset it means is
+  `RESET_STATS`, not a change of source. It sits among the counters in §6.7 and
+  behaves like one. `interarrival_us` and `jitter_us` are the two things a
+  source change clears.
+
+`RESET_STATS` zeroes the counters of §6.7 and these three, and nothing else: it
+is a measurement control, not a stream control. It does not release the lock,
+change the state, clear `last_seq`, or blank the panel, so `state` and
+`last_codec` in the next telemetry reply still describe the frame that is lit.
 
 This is the RFC 3550 §6.4.1 smoothing applied to inter-arrival differences
 rather than to sender/receiver timestamp deltas, because we have no synchronised
@@ -713,7 +833,10 @@ On accepting a frame: `last_frame_at = now`, `frames_rx += 1`.
 The lock is released immediately - `active_source = None` - when any of these
 happen:
 
-- a frame with `FINAL` set is displayed;
+- a frame with `FINAL` set is **displayed** - a `FINAL` frame that failed to
+  decode was never displayed and releases nothing, so one damaged packet cannot
+  hand the panel to a stranger; the stream timeout below will release it a
+  second later if the sender really has finished;
 - the active source sends `RELEASE` (from any port on the same IP);
 - `STREAM_TIMEOUT_MS` passes with no accepted frame (state becomes `HOLD`).
 
@@ -735,6 +858,14 @@ Idle modes, settable with `SET_IDLE` and persisted:
 The default is `STATUS` and not `BLACK` on purpose: a black panel is
 indistinguishable from a broken one, and the status screen answers "what is this
 thing called and where is it" without a serial cable.
+
+The mode changes what the panel shows and, for mode 1 only, the state machine.
+`HOLD_FOREVER` means the `HOLD -> IDLE` transition never fires, so the `state`
+byte of §6.7 stays `HOLD` indefinitely and the lock is still released on the
+stream timeout as usual. `DIM` and `BLACK` take the transition like `STATUS`
+does - the state byte becomes `IDLE` after `HOLD_MS` and the cross-fade runs
+over `FADE_MS` - and differ from it only in what is drawn at the far end. The
+`IDLE` state is "no active source", not "showing the status screen". (Card 006.)
 
 On Wi-Fi disconnection the device goes to `HOLD` immediately and, after
 `HOLD_MS`, to an idle screen that says the network is down.
@@ -977,6 +1108,49 @@ Closed by card 005 (2026-09-19), while lifting the decoders into
     over-long is a reject, not padding (section 4).
 13. **`GET_WIFI` `state` and `BUSY` `reason`** - both bytes were undefined;
     values assigned in section 6.3.
+
+Closed by card 006 (2026-09-19), while writing `crates/sim` - a second,
+independent implementation of the receive side. Each of these was a place where
+two readings of the text were both defensible, which is exactly what a second
+implementation is for. None of them changes a byte on the wire.
+
+14. **What `frames_rx` counts** - every *accepted* frame, including the ones
+    the same drain then supersedes, so that the identity in section 3.3 holds
+    and section 6.9's diagnosis works.
+15. **Restarting a sequence** - a sender must rebind rather than reset `seq`
+    from the same socket; the old wording allowed a case that could not work
+    (section 3.2).
+16. **`STATS_REQ` on a frame that is not shown** - answered anyway, for any
+    frame that passes admission; a locked-out sender gets `BUSY` instead
+    (sections 3.1 and 6.2).
+17. **Which socket `BUSY` leaves by** - the frame socket, like `TELEMETRY`
+    (section 6.2).
+18. **Whether the 100 ms telemetry limit covers a `TELEMETRY` request** - no,
+    only the unsolicited reply to a `STATS_REQ` frame (section 6.2).
+19. **`BUSY`'s `lock_holder_ms_remaining`** - defined (section 6.2).
+20. **`GET_INFO` rate limiting versus retries** - the limit counts new
+    requests; a repeat of an answered `req_id` is a retransmission and is
+    answered (section 5.5).
+21. **`req_id == 0` and error replies** - silence covers errors too
+    (section 6.1).
+22. **A `CONTROL` with `REPLY` set arriving at a device** - discarded
+    (section 6.1).
+23. **Who may `RELEASE`** - matched on the IP address, since the control port
+    is never the frame stream's port (sections 6.3 and 7.4).
+24. **`ERR_BAD_LENGTH` for a header the datagram does not back up** - answered,
+    from the two header fields that are certainly present (section 6.5).
+    `crates/proto` grew `packet::peek` for it.
+25. **Seeding the section 6.8 EWMAs, and what a source change clears** -
+    defined (section 6.8).
+26. **What `RESET_STATS` does not touch** - the lock, the state, `last_seq` and
+    the panel (section 6.8).
+27. **A `FINAL` frame that fails to decode** - releases nothing; only a
+    *displayed* `FINAL` does (section 7.4).
+28. **The `state` byte under each idle mode** - `HOLD_FOREVER` stays `HOLD`;
+    `DIM` and `BLACK` reach `IDLE` like `STATUS` (section 7.5).
+29. **A datagram larger than 1472 bytes** - discarded and counted, not parsed
+    from its truncated prefix (section 1).
+30. **What `frames_rejected` counts** - the frame port only (section 2.2).
 
 Still open (do not block implementation):
 
