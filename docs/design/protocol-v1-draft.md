@@ -197,7 +197,7 @@ this document is promoted out of draft.**
 | Id | Name | Stateless | Notes |
 |---|---|---|---|
 | `0x00` | reserved | - | MUST be rejected |
-| `0x01` | `RGB888_RAW` | yes | Only legal for `len <= 1464`, i.e. a partial frame; reserved for test patterns and the DDP bridge. |
+| `0x01` | `RGB888_RAW` | yes | Only legal for `len <= 1464`, i.e. a partial frame; reserved for test patterns. |
 | `0x02`.. | TBD from card 002 | | |
 | `0xF0`-`0xFE` | experimental / private | | Devices MAY reject. |
 | `0xFF` | reserved | - | MUST be rejected |
@@ -798,8 +798,9 @@ these in card 004.
    state it; the sender needs a `--mtu` override regardless.
 3. **Playout buffer** - §3.3 says none. Should it be a runtime toggle so card
    013 can measure hold-immediately against a 1-frame buffer on real hardware?
-4. **DDP secondary receive mode** - card 040. In or out for v1.1, gated on card
-   001's SRAM budget (needs a 6144-byte RGB888 reassembly buffer).
+4. ~~DDP secondary receive mode~~ - **resolved 2026-09-19: out.** The device never
+   speaks DDP. DDP compatibility is a host-side proxy in the sender that reassembles
+   DDP on loopback/LAN and forwards native frames (card 040).
 5. **`HAS_TS`** - is round-trip/2 from `PING` good enough for card 013's latency
    numbers, or does that card need SNTP on the device and a real one-way
    measurement?

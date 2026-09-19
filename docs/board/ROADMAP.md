@@ -32,6 +32,7 @@ the phase before them has produced what they depend on.
 - 010 fractal zoom sender
 - 011 word clock sender: spells out the current time, animated transitions
 - 012 camera measurement harness: capture, locate panel, compare with sent frames (hardware)
+- 040 DDP proxy in the sender: LedFx/xLights -> native frames (host-side only; firmware never speaks DDP)
 
 ## Phase 4 - tune
 
