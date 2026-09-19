@@ -104,6 +104,7 @@ field of it can change under a running link.
 enum Pixels<'a> { Rgb(&'a [u8]),                                  // 6144 bytes
                   Indexed { palette: &'a [[u8; 3]], indices: &'a [u8] } }
     Pixels::rgb(&[u8]) / indexed(&[[u8;3]], &[u8]) / is_indexed() / palette_len()
+    validate()            // shape + every index in range; check() is shape alone
     From<&Frame>, From<&Rgb888Frame>
 
 enum Sent { Frame { codec, bytes, exact, seq }, Coalesced, Dropped }

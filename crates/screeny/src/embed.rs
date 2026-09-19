@@ -334,7 +334,10 @@ impl Link {
     ///
     /// [`Error::Frame`], [`Error::BadIndex`].
     pub fn send(&mut self, px: Pixels<'_>) -> Result<Sent> {
-        px.check()?;
+        // The whole check, before the cadence ceiling can discard the frame:
+        // an error the caller can fix must not depend on whether this frame
+        // happened to be the one that was kept.
+        px.validate()?;
         self.stats.frames_offered += 1;
         self.poll();
 
@@ -376,8 +379,14 @@ impl Link {
                 self.sender.as_mut().expect("still connected").poll_feedback();
                 Ok(sent)
             }
-            // The caller's own mistake: the socket is fine, the frame is not.
-            Err(e @ (Error::Frame { .. } | Error::BadIndex { .. })) => Err(e),
+            // Unreachable: `validate` above rejects both before a frame is
+            // ever counted as offered. Kept so that the accounting invariant
+            // `offered == sent + coalesced + dropped` cannot be broken later
+            // by a new validation the encoder learns to do.
+            Err(e @ (Error::Frame { .. } | Error::BadIndex { .. })) => {
+                self.stats.frames_offered -= 1;
+                Err(e)
+            }
             Err(e) => {
                 // A socket error on a connected UDP socket is an ICMP report
                 // coming home: the device is gone, or the route is. Tear the
@@ -403,7 +412,7 @@ impl Link {
             self.pump();
         }
         if let Some(s) = self.sender.as_ref() {
-            let fresh = limits_of(s, true);
+            let fresh = limits_of(s);
             self.last_limits = fresh;
         }
     }
@@ -417,9 +426,12 @@ impl Link {
         let Some(s) = self.sender.as_ref() else { return };
         // Only meaningful while we are actually sending: `STATS_REQ` rides on
         // frames, so a link nobody is pushing to is silent for good reason.
+        // "Still streaming" means a frame went out inside the same window we
+        // are judging the silence over - so a producer pushing every few
+        // seconds is covered too, not just one at 30 fps.
         let streaming = self
             .last_tx
-            .is_some_and(|t| t.elapsed() < self.cfg.stats_window());
+            .is_some_and(|t| t.elapsed() < self.cfg.silence);
         if streaming && s.stats().frames_sent > 0 && s.silence() > self.cfg.silence {
             let silence = s.silence();
             self.lose(format!(
@@ -511,7 +523,7 @@ impl Link {
         self.attempt = 0;
         self.next_due = None;
         self.last_tx = None;
-        self.last_limits = limits_of(&sender, true);
+        self.last_limits = limits_of(&sender);
         self.sender = Some(sender);
     }
 
@@ -621,7 +633,7 @@ impl Link {
     #[must_use]
     pub fn limits(&self) -> Limits {
         match self.sender.as_ref() {
-            Some(s) => limits_of(s, true),
+            Some(s) => limits_of(s),
             None => self.last_limits.clone(),
         }
     }
@@ -651,14 +663,6 @@ impl Link {
     }
 }
 
-impl LinkConfig {
-    /// How recently a frame must have gone out for the silence watchdog to
-    /// believe we are streaming: two `STATS_REQ` intervals.
-    fn stats_window(&self) -> Duration {
-        self.sender.stats_interval.saturating_mul(2)
-    }
-}
-
 impl Drop for Link {
     fn drop(&mut self) {
         self.close();
@@ -679,11 +683,11 @@ impl std::fmt::Debug for Link {
     }
 }
 
-fn limits_of(s: &Sender, connected: bool) -> Limits {
+fn limits_of(s: &Sender) -> Limits {
     let info = s.device().info.as_ref();
     let codecs = s.codecs().to_vec();
     Limits {
-        connected,
+        connected: true,
         fps: s.fps(),
         configured_fps: s.config().fps,
         budget: s.budget(),

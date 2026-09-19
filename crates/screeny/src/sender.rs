@@ -451,7 +451,7 @@ impl Sender {
     /// [`Error::Frame`] or [`Error::BadIndex`] if the frame is malformed -
     /// the caller's bug - and [`Error::Io`] if the datagram could not be sent.
     pub fn send(&mut self, px: Pixels<'_>) -> Result<Sent> {
-        px.check()?;
+        px.check()?;  // the index check belongs to the indexed arm below
         match px {
             Pixels::Rgb(bytes) => {
                 // `check` has already pinned the length; this is the cast.
@@ -489,18 +489,7 @@ impl Sender {
     /// outside the palette, and [`Error::Io`] if the datagram could not be
     /// sent.
     pub fn send_indexed(&mut self, palette: &[[u8; 3]], indices: &[u8]) -> Result<Sent> {
-        Pixels::indexed(palette, indices).check()?;
-        if let Some((pixel, &index)) = indices
-            .iter()
-            .enumerate()
-            .find(|(_, i)| **i as usize >= palette.len())
-        {
-            return Err(Error::BadIndex {
-                index,
-                pixel,
-                palette: palette.len(),
-            });
-        }
+        Pixels::indexed(palette, indices).validate()?;
         self.idx.copy_from_slice(indices);
         let f = IndexedFrame {
             palette,

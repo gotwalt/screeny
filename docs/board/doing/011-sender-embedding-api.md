@@ -327,3 +327,33 @@ the panel going away is not their problem; and let the link drop to send
 `FINAL`. The single-owner hardware rule is restated, because linking the sender
 is exactly the moment someone might think it no longer applies. The "Build a
 faithful preview first" subsection is kept as it was.
+
+### Review pass
+
+Three things found reading my own diff back, all fixed:
+
+- `Backoff::delay` used `i32::try_from(attempt - 1).unwrap_or(0)`, which turned
+  a week-long outage back into a 250 ms retry; the obvious repair,
+  `Duration::mul_f64`, panics on overflow instead. Computed in `f64` seconds
+  and clamped to `max`, which also makes a zero or NaN factor harmless. Tested
+  at `u32::MAX` and for both degenerate configurations.
+- **An out-of-range index was reported only if the cadence ceiling happened to
+  keep that frame.** A caller's bug that shows up non-deterministically is
+  worse than no check at all. `Pixels::validate()` (shape *and* every index in
+  range, one pass over 2048 bytes) now runs at the top of `Link::send`, before
+  anything can discard the frame; `Pixels::check()` remains the cheap
+  shape-only form. This also makes the accounting invariant hold for free,
+  because a malformed frame is never counted as offered.
+- The silence watchdog required a frame within two `STATS_REQ` intervals to
+  believe we were streaming, so a producer pushing every few seconds could
+  never trigger it. The window is now the silence period itself, which is the
+  condition that actually matters: we sent inside the window we are judging the
+  silence over.
+
+Also removed a `connected: bool` parameter that was `true` at both call sites.
+
+Final state: `cargo test -p screeny` is 109 tests green (the 18.6 s is
+`tests/pacing.rs`, unchanged and pre-existing); `cargo clippy -p screeny
+--all-targets` clean on macOS and on both Linux targets; `cargo doc` clean
+apart from the four pre-existing `quant.rs` warnings now filed as card 092.
+`pgrep -lf screeny` shows nothing of mine.

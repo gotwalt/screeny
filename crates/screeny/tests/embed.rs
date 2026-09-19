@@ -453,6 +453,40 @@ fn a_malformed_frame_is_still_the_callers_error_even_when_the_link_is_down() {
     assert!(matches!(err, screeny::Error::Frame { got: 10, .. }), "{err:?}");
     // And it is not counted as a frame that went anywhere.
     assert_eq!(link.stats().frames_sent, 0);
+    assert_eq!(link.stats().frames_offered, 0);
+}
+
+/// An out-of-range index is only caught inside the encoder, after the frame
+/// has been counted as offered. It must still not break the accounting - the
+/// invariant is about frames, and that was never one.
+#[test]
+fn a_bad_index_does_not_break_the_accounting() {
+    let (dev, _sim, _port) = sim_anywhere();
+    let mut link = Link::open(target_at(dev.frame_addr()), brisk()).expect("opens");
+    push(&mut link, 0);
+
+    let mut idx = indices(0);
+    idx[7] = 99;
+    let err = link.send(Pixels::indexed(&PAL, &idx)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            screeny::Error::BadIndex {
+                index: 99,
+                pixel: 7,
+                palette: 4
+            }
+        ),
+        "{err:?}"
+    );
+    let s = link.stats();
+    assert_eq!(
+        s.frames_offered,
+        s.frames_sent + s.frames_coalesced + s.frames_dropped
+    );
+    assert_eq!(s.frames_offered, 1);
+    drop(link);
+    drop(dev);
 }
 
 /// The fixture's own promise: the `Device` a test builds points at the

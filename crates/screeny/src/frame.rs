@@ -205,12 +205,42 @@ impl<'a> Pixels<'a> {
         }
     }
 
-    /// Check the shape without encoding anything.
+    /// Check the shape **and**, for an indexed frame, that every index is
+    /// inside the palette.
+    ///
+    /// One pass over 2048 bytes, so it is worth doing before anything that
+    /// might discard the frame: an error the caller can fix should not depend
+    /// on whether the pacing happened to keep that frame.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::Frame`] with the sizes involved, which is the one
-    /// failure a caller of [`crate::Sender::send`] can actually cause.
+    /// [`crate::Error::Frame`] or [`crate::Error::BadIndex`] - between them,
+    /// every way a caller of [`crate::Sender::send`] can get a frame wrong.
+    pub fn validate(&self) -> crate::Result<()> {
+        self.check()?;
+        if let Pixels::Indexed { palette, indices } = self {
+            if let Some((pixel, &index)) = indices
+                .iter()
+                .enumerate()
+                .find(|(_, i)| **i as usize >= palette.len())
+            {
+                return Err(crate::Error::BadIndex {
+                    index,
+                    pixel,
+                    palette: palette.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the shape alone: the lengths, and that the palette is a legal
+    /// size. Cheap, and does not look at the indices; [`Pixels::validate`] is
+    /// the complete check.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Frame`] with the sizes involved.
     pub fn check(&self) -> crate::Result<()> {
         use crate::Error;
         match self {
