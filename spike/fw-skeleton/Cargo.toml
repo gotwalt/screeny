@@ -44,6 +44,12 @@ esp-hub75 = { version = "=0.17.0", default-features = false, features = [
 ] }
 embedded-graphics = { version = "0.8.2" }
 
+# --- discovery ------------------------------------------------------------
+edge-mdns = { version = "=0.8.0", default-features = false, features = ["io"] }
+edge-nal = "=0.7.0"
+edge-nal-embassy = "=0.9.0"
+rand_core = { version = "0.10", default-features = false }
+
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }
 static_cell = { version = "2.1.1" }
@@ -52,6 +58,12 @@ log = { version = "0.4.30" }
 [profile.dev]
 debug = true
 opt-level = "s"
+
+# "The radio blobs require optimization level 2 or 3 to function correctly."
+# — esp-radio's own documentation. The release profile is fine; a debug build
+# without this silently misbehaves.
+[profile.dev.package.esp-radio]
+opt-level = 3
 
 [profile.release]
 debug = true      # symbols do not cost flash space

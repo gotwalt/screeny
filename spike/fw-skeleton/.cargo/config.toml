@@ -13,3 +13,14 @@ build-std = ["alloc", "core"]
 
 [env]
 ESP_LOG = "info"
+
+# esp-radio advertises this to embassy-net as the interface MTU, and defaults
+# it to 1492 — which would cap a UDP payload at 1464 and quietly shrink the
+# frame budget card 003 is designing against. WiFi carries a 2304-byte MSDU,
+# so the standard 1500 is safe on a local link and keeps the payload at 1472.
+ESP_RADIO_CONFIG_WIFI_MTU = "1500"
+
+# The esp-rtos tick is what quantises every `Timer::after`. The default of
+# 100 Hz gives a 10 ms quantum against a 33 ms frame period, which is enough
+# to visibly beat against the stream.
+ESP_RTOS_CONFIG_TICK_RATE_HZ = "1000"

@@ -5,8 +5,9 @@
 //!   * the embassy executor on top of `esp-rtos`,
 //!   * `esp-radio` WiFi in station mode with `embassy-net` (DHCP),
 //!   * a UDP socket bound to the frame port,
+//!   * an `edge-mdns` DNS-SD responder advertising `_screeny._udp`,
 //!   * `esp-hub75` driving the 64x32 panel over I2S0 parallel DMA with the
-//!     Tidbyt Gen 1 pin map,
+//!     Tidbyt Gen 1 pin map, including the FM6124 driver-chip init,
 //!
 //! and that the RAM they want together fits. It has never been run on
 //! hardware: see `docs/research/001-firmware-stack.md` for what that leaves
@@ -15,6 +16,7 @@
 #![no_std]
 #![no_main]
 
+mod mdns;
 mod panel_init;
 mod tidbyt;
 
@@ -43,7 +45,6 @@ use esp_radio::wifi::{
     WifiController,
 };
 use log::{info, warn};
-use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -54,10 +55,15 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const SSID: &str = "example-wifi1";
 const PASSWORD: &str = "password9";
 
-/// Provisional frame port. Card 003 owns the real protocol.
-const FRAME_PORT: u16 = 33550;
+/// Ports from card 003. The control port is not implemented here; it is named
+/// so that nobody else claims it.
+const FRAME_PORT: u16 = 49374;
+const CONTROL_PORT: u16 = 49375;
 
 /// One frame per datagram, at most one Ethernet MTU of payload.
+///
+/// This only holds because `.cargo/config.toml` raises esp-radio's MTU to
+/// 1500. Its default is 1492, which would cap the payload at 1464.
 const MAX_DATAGRAM: usize = 1472;
 
 const COLS: usize = tidbyt::PANEL_COLS;
@@ -117,10 +123,11 @@ static FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
-        static CELL: StaticCell<$t> = StaticCell::new();
+        static CELL: ::static_cell::StaticCell<$t> = ::static_cell::StaticCell::new();
         CELL.uninit().write($val)
     }};
 }
+pub(crate) use mk_static;
 
 // ---------------------------------------------------------------------------
 // Tasks
@@ -378,7 +385,14 @@ async fn main(spawner: Spawner) {
 
     let mut controller = WifiController::new(
         peripherals.WIFI,
-        ControllerConfig::default().with_initial_config(station),
+        ControllerConfig::default()
+            .with_initial_config(station)
+            // We drain to the newest frame and throw the rest away, so a deep
+            // driver queue only buys us stale frames and latency. Three is a
+            // starting point, not a measured optimum.
+            .with_rx_queue_size(3)
+            // The default is "CN", which is the wrong channel set here.
+            .with_country_info(*b"US"),
     )
     .expect("wifi init failed");
 
@@ -405,6 +419,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(wifi_task(controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(frame_task(stack).unwrap());
+    spawner.spawn(mdns::mdns_task(stack).unwrap());
     spawner.spawn(telemetry_task().unwrap());
 
     // Until the first datagram arrives, show something so a human can tell the
