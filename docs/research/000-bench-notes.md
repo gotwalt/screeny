@@ -26,11 +26,19 @@ ffmpeg quirks: the camera advertises exactly 30.000030 fps and `-framerate 30` f
 with "Could not lock device for configuration"; pixel format must be one of
 uyvy422/yuyv422/nv12; pass `-nostdin`. Modes: 320x240 up to 2560x1440, all 30 fps.
 
-In the 1920x1080 frame the panel spans roughly x 570-1420, y 380-770, viewed from
-slightly above (mild keystone). The room is daylit and the camera auto-exposes for
-the room, so lit LEDs clip to near-white: colour accuracy checks will need exposure
-control (UVC) or a darker scene. The glossy table mirrors the panel below it; crop
-it out before any image analysis.
+### Framing (as of 2026-09-19, after the camera was repositioned)
+
+![bench camera reference](img/bench-camera-ref.jpg)
+
+Panel is square-on with a dark backdrop. In the 1920x1080 frame the LED grid spans
+roughly x 405-1560, y 210-805 (about 18 camera px per LED pitch), with a slight
+keystone: the right edge sits a few pixels lower than the left. These numbers are
+eyeballed; the precise homography comes from card 012, which lights the four corner
+pixels from our own firmware and locates them in a capture. Redo it if the camera
+or panel is bumped.
+
+Fully lit white-blue LEDs still clip in the camera at stock brightness. Dim the
+panel from firmware for any colour measurement.
 
 ## Stock word clock (reference for the word-clock sender)
 
