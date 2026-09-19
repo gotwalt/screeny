@@ -505,7 +505,10 @@ fn frame_loop(
     sink: &mut Option<FrameSink>,
     seed: u64,
 ) {
-    let mut buf = vec![0u8; MAX_UDP_PAYLOAD + 64];
+    // One byte more than the protocol's ceiling, so an over-budget datagram
+    // arrives long enough to be recognised as one rather than silently
+    // truncated into a length error (spec section 1).
+    let mut buf = vec![0u8; MAX_UDP_PAYLOAD + 1];
     let mut out = Outbox::default();
     let mut held: VecDeque<Held> = VecDeque::new();
     let mut rng = Rng::new(seed);
@@ -599,7 +602,7 @@ fn frame_loop(
 }
 
 fn control_loop(shared: &Arc<Shared>, frame_sock: &UdpSocket, control_sock: &UdpSocket) {
-    let mut buf = vec![0u8; MAX_UDP_PAYLOAD + 64];
+    let mut buf = vec![0u8; MAX_UDP_PAYLOAD + 1];
     let mut out = Outbox::default();
 
     while !shared.stop.load(Ordering::SeqCst) {

@@ -326,6 +326,18 @@ impl Core {
     /// survivor, superseding any earlier one (section 3.3). Nothing is
     /// decoded or displayed until [`Core::flush_frames`].
     pub fn offer_frame(&mut self, now_us: u64, from: SocketAddr, data: &[u8], out: &mut Outbox) {
+        // Section 1: "A sender MUST NOT emit a datagram whose UDP payload
+        // exceeds 1472 bytes." One that does is a protocol violation before
+        // it is anything else, and the device's receive buffer is that size,
+        // so a longer one arrives truncated and could not be trusted anyway.
+        if data.len() > MAX_UDP_PAYLOAD {
+            Counters::bump(&mut self.stats.counters.frames_rejected);
+            out.events.push(Event::Rejected {
+                from,
+                reason: Some(screeny_proto::Reject::TooLong),
+            });
+            return;
+        }
         let pkt = match FramePacket::parse(data) {
             Ok(p) => p,
             Err(reason) => {
