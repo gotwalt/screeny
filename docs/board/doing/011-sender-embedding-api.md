@@ -294,3 +294,36 @@ a container on Docker's default bridge network sees no multicast at all. Both
 fail the same survivable way an empty browse always does - and `--addr` and
 `--broadcast` both work regardless, which is why discovery is never the only
 route to a device.
+
+### Documentation
+
+`crates/screeny/README.md` gains an **Embedding** section immediately after the
+intro: the toml line, the ten-line loop, "the five things worth knowing"
+(exactness and the fallback, the network cannot fail `send`, reconnection is
+automatic and off-thread, pacing is yours and overrunning is handled, the frame
+rate is a choice that moves), the API at a glance, and the two sharp edges that
+are genuinely left (`Drop` does not run on a signal; one panel, one sender).
+The "library in one screen" block and the test table are updated to match, and
+the testing preamble now says that `tests/simfix` drives a real `screeny-sim` -
+which is the point, because an exactness claim checked by the encoders' own
+crate is worth nothing.
+
+`#![warn(missing_docs)]` and `#![warn(clippy::pedantic)]` were already on the
+library and still pass; `cargo doc -p screeny --no-deps` produces no warning
+from any new code. It does produce four pre-existing ones in
+`encode/quant.rs` (public docs linking to private `SEED_DRIFT` /
+`RESEED_EVERY`); left alone as out of scope, written up as card 092.
+
+`docs/design/generative-art-brief.md` section 5 is rewritten. It was
+"[provisional], two hand-over formats are planned, build a trait so either can
+be plugged in". It is now "[decided], the sender exists, link it", the five-line
+`Output` body, and seven points chosen for what should actually change in their
+code: exactness is measured rather than hoped for; 256 colours are exact when
+they compress, so the 32 in section 2.3 is the guaranteed size and not the
+limit; the fallback is visible and belongs on the studio's stats strip;
+`Sent::bytes()`/`codec()` replace `budget.rs`'s estimates with real numbers;
+**keep the 60 fps loop** and let the link decimate rather than dropping to 30;
+the panel going away is not their problem; and let the link drop to send
+`FINAL`. The single-owner hardware rule is restated, because linking the sender
+is exactly the moment someone might think it no longer applies. The "Build a
+faithful preview first" subsection is kept as it was.
