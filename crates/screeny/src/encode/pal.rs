@@ -24,6 +24,7 @@ use screeny_proto::{H, NPIX, W};
 use crate::color::oklab;
 
 use super::hist::Hist;
+use super::nn::NnIndex;
 use super::quant::{nearest_per_bin, Palette};
 
 /// Spatial dither strategy.
@@ -98,10 +99,11 @@ impl DitherPlan {
     /// Requires [`Hist::ensure_lab`].
     #[must_use]
     pub fn build(hist: &Hist, pal: &Palette) -> Self {
+        let index = NnIndex::build(&pal.lab);
         let mut per_bin = Vec::with_capacity(hist.len());
         for (i, b) in hist.bins.iter().enumerate() {
             let cl = crate::color::lin(b.srgb);
-            let i0 = pal.nearest(hist.lab()[i]);
+            let i0 = index.nearest(hist.lab()[i]).0;
             // Overshoot past the nearest entry: whatever lies on the far side
             // brackets the true colour together with `i0`.
             let p0 = pal.lin[i0];
@@ -110,7 +112,7 @@ impl DitherPlan {
                 (2.0 * cl[1] - p0[1]).clamp(0.0, 1.0),
                 (2.0 * cl[2] - p0[2]).clamp(0.0, 1.0),
             ];
-            let i1 = pal.nearest(oklab(over));
+            let i1 = index.nearest(oklab(over)).0;
             if i1 == i0 {
                 per_bin.push(Bracket {
                     lo: i0 as u8,

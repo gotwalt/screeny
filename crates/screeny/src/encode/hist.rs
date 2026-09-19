@@ -16,7 +16,7 @@
 
 use screeny_proto::{Rgb888Frame, NPIX};
 
-use crate::color::{d2, oklab_srgb8, pack, unpack};
+use crate::color::{oklab_srgb8, pack, unpack};
 
 /// One distinct colour of a frame.
 #[derive(Clone, Copy, Debug)]
@@ -190,17 +190,10 @@ impl Hist {
     /// Total weighted squared Oklab error of a palette on this histogram.
     /// Requires [`Hist::ensure_lab`].
     #[must_use]
-    pub fn palette_cost(&self, pal: &[[f32; 3]]) -> f64 {
+    pub fn palette_cost(&self, pal: &super::nn::NnIndex) -> f64 {
         let mut e = 0f64;
         for (lab, b) in self.lab.iter().zip(&self.bins) {
-            let mut bd = f32::MAX;
-            for c in pal {
-                let d = d2(*lab, *c);
-                if d < bd {
-                    bd = d;
-                }
-            }
-            e += bd as f64 * b.count as f64;
+            e += f64::from(pal.nearest(*lab).1) * f64::from(b.count);
         }
         e
     }

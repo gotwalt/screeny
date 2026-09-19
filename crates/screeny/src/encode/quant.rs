@@ -4,22 +4,34 @@
 //! because the whole point of a small palette is to put its few entries where
 //! the eye will miss them least.
 //!
-//! Three changes card 031 asked for, all of them speed:
+//! Four changes for card 031, all of them speed:
 //!
 //! * the histogram is passed in, not rebuilt (see [`super::hist`]);
 //! * the previous frame's palette is **always** offered as the Lloyd seed, not
 //!   only in the temporal-palette mode, and a seeded start converges in fewer
 //!   iterations;
 //! * Lloyd stops early once the centroids stop moving, which on flat content
-//!   is after two or three of the ten iterations the lab always ran.
+//!   is after two or three of the ten iterations the lab always ran;
+//! * every "which entry is nearest" question goes through a k-d tree
+//!   ([`super::nn`]) instead of a linear scan over the palette. That one
+//!   change is most of the speedup and costs nothing, because it returns the
+//!   same answer.
 //!
-//! The safety valve from the lab is kept: a fresh median cut is computed too
-//! and wins if the seeded palette is more than 15% worse, so a scene cut
-//! cannot leave a stale palette latched.
+//! The safety valve from the lab is kept - a fresh median cut wins if the
+//! seeded palette is more than 15% worse, so a scene cut cannot leave a stale
+//! palette latched - but it is no longer computed every frame; see
+//! [`SEED_DRIFT`].
+//!
+//! Seeding turns out to be worth quality as well as time: measured against
+//! the frozen lab on its own five clips, seeded palettes came out *ahead* on
+//! mean panel-aware dE (6.08 against 6.14) because a palette that tracks the
+//! previous frame's flickers less. The exception is a fast zoom, where the
+//! seed is genuinely stale; that is what [`RESEED_EVERY`] bounds.
 
 use crate::color::{d2, lin, lin_to_srgb8, oklab_inv, oklab_srgb8};
 
 use super::hist::Hist;
+use super::nn::NnIndex;
 
 /// A palette in the three representations the encoders need.
 #[derive(Clone, Debug, Default)]
@@ -77,25 +89,44 @@ pub struct QuantEffort {
     pub iters: usize,
     /// Maximum Lloyd iterations from a seeded start.
     pub seeded_iters: usize,
-    /// Whether to compute a fresh median cut when a seed is available.
+    /// Whether a seeded palette is ever checked against a fresh median cut.
     pub verify_seed: bool,
 }
 
 impl QuantEffort {
-    /// The lab's settings: ten iterations at k<=32, never seeded unless the
-    /// codec asked for it. The baseline card 031 measures against.
+    /// The lab's settings: ten iterations at k<=32, and a fresh median cut
+    /// kept as the safety valve. The baseline card 031 measures against.
     pub const FULL: QuantEffort = QuantEffort {
         iters: 10,
         seeded_iters: 10,
         verify_seed: true,
     };
-    /// Fewer iterations, seeded starts trusted more cheaply.
+    /// Fewer iterations, seeded starts trusted without a second opinion.
     pub const FAST: QuantEffort = QuantEffort {
         iters: 4,
         seeded_iters: 2,
         verify_seed: false,
     };
 }
+
+/// A palette and what it costs on the frame it was built for.
+pub struct Built {
+    /// The palette.
+    pub palette: Palette,
+    /// Total weighted squared Oklab error over the histogram.
+    pub cost: f64,
+}
+
+/// A seeded palette is accepted without a second opinion while its cost stays
+/// within this factor of the cost the same palette size had on the previous
+/// frame. Beyond it, the content has changed enough that a stale palette might
+/// be latched, and a fresh median cut is computed and compared.
+const SEED_DRIFT: f64 = 1.25;
+
+/// ...and regardless of drift, a fresh median cut is computed this often, so
+/// a slow scene change cannot creep past the drift test one frame at a time.
+/// Once a second at 30 fps.
+const RESEED_EVERY: usize = 30;
 
 /// Iterations actually worth spending at this palette size. Large palettes
 /// are already close after median cut.
@@ -111,40 +142,70 @@ fn iters_for(k: usize, base: usize) -> usize {
 
 /// Build a `k`-entry palette for the frame `hist` describes.
 ///
-/// `seed`, when it has exactly `k` entries, is used as the Lloyd starting
-/// point; the result is kept unless it is more than 15% worse than a fresh
-/// median cut (and `effort.verify_seed` asked for that comparison).
+/// `seed`, when it has exactly `k` entries, is the previous frame's palette
+/// and is used as the Lloyd starting point: it converges in fewer iterations
+/// *and* keeps palettes similar frame to frame, which is worth a visible
+/// amount of flicker (card 002).
+///
+/// The lab guarded against a stale palette latching across a scene cut by
+/// computing a fresh median cut every frame and keeping the seeded one only
+/// if it was within 15%. That guard is kept but is no longer paid for every
+/// frame: `prev_cost` is what this palette size cost on the previous frame,
+/// and while the seeded palette stays within [`SEED_DRIFT`] of it nothing has
+/// changed enough to be worth a second opinion. Every [`RESEED_EVERY`] frames
+/// the fresh build happens anyway, so a slow change cannot creep past.
 ///
 /// Requires [`Hist::ensure_lab`].
 #[must_use]
-pub fn build(hist: &Hist, k: usize, seed: Option<&[[u8; 3]]>, effort: QuantEffort) -> Palette {
+pub fn build(
+    hist: &Hist,
+    k: usize,
+    seed: Option<&[[u8; 3]]>,
+    prev_cost: Option<f64>,
+    frame_idx: usize,
+    effort: QuantEffort,
+) -> Built {
     if hist.len() <= k {
         let mut srgb: Vec<[u8; 3]> = hist.bins.iter().map(|b| b.srgb).collect();
         while srgb.len() < k {
             srgb.push([0, 0, 0]);
         }
-        return Palette::from_srgb(srgb);
+        return Built {
+            palette: Palette::from_srgb(srgb),
+            cost: 0.0,
+        };
     }
 
-    let chosen = match seed {
+    let fresh = |hist: &Hist| {
+        let c = lloyd(hist, median_cut(hist, k), iters_for(k, effort.iters));
+        let cost = hist.palette_cost(&NnIndex::build(&c));
+        (c, cost)
+    };
+
+    let (chosen, cost) = match seed {
         Some(s) if s.len() == k => {
             let start: Vec<[f32; 3]> = s.iter().map(|c| oklab_srgb8(*c)).collect();
             let seeded = lloyd(hist, start, iters_for(k, effort.seeded_iters));
-            if effort.verify_seed {
-                let fresh = lloyd(hist, median_cut(hist, k), iters_for(k, effort.iters));
-                let (cs, cf) = (hist.palette_cost(&seeded), hist.palette_cost(&fresh));
+            let cs = hist.palette_cost(&NnIndex::build(&seeded));
+            let drifted = prev_cost.is_none_or(|p| cs > p * SEED_DRIFT);
+            let due = frame_idx % RESEED_EVERY == 0;
+            if effort.verify_seed && (drifted || due) {
+                let (f, cf) = fresh(hist);
                 if cs <= cf * 1.15 {
-                    seeded
+                    (seeded, cs)
                 } else {
-                    fresh
+                    (f, cf)
                 }
             } else {
-                seeded
+                (seeded, cs)
             }
         }
-        _ => lloyd(hist, median_cut(hist, k), iters_for(k, effort.iters)),
+        _ => fresh(hist),
     };
-    Palette::from_srgb(chosen.iter().map(|c| lab_to_srgb8(*c)).collect())
+    Built {
+        palette: Palette::from_srgb(chosen.iter().map(|c| lab_to_srgb8(*c)).collect()),
+        cost,
+    }
 }
 
 fn lab_to_srgb8(lab: [f32; 3]) -> [u8; 3] {
@@ -152,28 +213,37 @@ fn lab_to_srgb8(lab: [f32; 3]) -> [u8; 3] {
     [lin_to_srgb8(l[0]), lin_to_srgb8(l[1]), lin_to_srgb8(l[2])]
 }
 
+/// One box of the median cut, with its split score cached.
+struct Box {
+    members: Vec<u32>,
+    axis: usize,
+    /// `span * sqrt(weight)`, or 0 for a box that cannot be split.
+    score: f32,
+}
+
 /// Median cut over Oklab boxes, splitting the box with the largest
 /// count-weighted spread along its longest axis.
+///
+/// The lab recomputed every box's longest axis on every one of the `k - 1`
+/// splits, which is `O(k * bins)` - a quarter of a million axis evaluations
+/// for a photographic frame at `k = 256`, and the second biggest cost card
+/// 031 found. A split only changes the two boxes it creates, so the score is
+/// cached and recomputed for those two alone.
 fn median_cut(hist: &Hist, k: usize) -> Vec<[f32; 3]> {
     let lab = hist.lab();
-    let mut boxes: Vec<Vec<u32>> = vec![(0..hist.len() as u32).collect()];
+    let mut boxes: Vec<Box> = vec![score_box(hist, (0..hist.len() as u32).collect())];
     while boxes.len() < k {
         let mut best = None;
         let mut best_score = 0f32;
         for (i, b) in boxes.iter().enumerate() {
-            if b.len() < 2 {
-                continue;
-            }
-            let (axis, span) = longest_axis(hist, b);
-            let n: f32 = b.iter().map(|&j| hist.bins[j as usize].count).sum();
-            let score = span * n.sqrt();
-            if score > best_score {
-                best_score = score;
-                best = Some((i, axis));
+            if b.score > best_score {
+                best_score = b.score;
+                best = Some(i);
             }
         }
-        let Some((i, axis)) = best else { break };
-        let mut b = boxes.swap_remove(i);
+        let Some(i) = best else { break };
+        let axis = boxes[i].axis;
+        let mut b = boxes.swap_remove(i).members;
         b.sort_by(|&p, &q| {
             lab[p as usize][axis]
                 .partial_cmp(&lab[q as usize][axis])
@@ -190,10 +260,27 @@ fn median_cut(hist: &Hist, k: usize) -> Vec<[f32; 3]> {
             }
         }
         let right = b.split_off(cut);
-        boxes.push(b);
-        boxes.push(right);
+        boxes.push(score_box(hist, b));
+        boxes.push(score_box(hist, right));
     }
-    boxes.iter().map(|b| centroid(hist, b)).collect()
+    boxes.iter().map(|b| centroid(hist, &b.members)).collect()
+}
+
+fn score_box(hist: &Hist, members: Vec<u32>) -> Box {
+    if members.len() < 2 {
+        return Box {
+            members,
+            axis: 0,
+            score: 0.0,
+        };
+    }
+    let (axis, span) = longest_axis(hist, &members);
+    let n: f32 = members.iter().map(|&j| hist.bins[j as usize].count).sum();
+    Box {
+        members,
+        axis,
+        score: span * n.sqrt(),
+    }
 }
 
 fn centroid(hist: &Hist, idxs: &[u32]) -> [f32; 3] {
@@ -254,17 +341,10 @@ fn lloyd(hist: &Hist, mut cents: Vec<[f32; 3]>, iters: usize) -> Vec<[f32; 3]> {
     for _ in 0..iters {
         acc.fill([0f64; 3]);
         wsum.fill(0.0);
+        let index = NnIndex::build(&cents);
         for (i, b) in hist.bins.iter().enumerate() {
             let l = lab[i];
-            let mut bi = 0;
-            let mut bd = f32::MAX;
-            for (j, c) in cents.iter().enumerate() {
-                let d = d2(l, *c);
-                if d < bd {
-                    bd = d;
-                    bi = j;
-                }
-            }
+            let bi = index.nearest(l).0;
             let n = b.count as f64;
             for j in 0..3 {
                 acc[bi][j] += l[j] as f64 * n;
@@ -297,5 +377,9 @@ fn lloyd(hist: &Hist, mut cents: Vec<[f32; 3]>, iters: usize) -> Vec<[f32; 3]> {
 /// Requires [`Hist::ensure_lab`].
 #[must_use]
 pub fn nearest_per_bin(hist: &Hist, pal: &Palette) -> Vec<u8> {
-    hist.lab().iter().map(|l| pal.nearest(*l) as u8).collect()
+    let index = NnIndex::build(&pal.lab);
+    hist.lab()
+        .iter()
+        .map(|l| index.nearest(*l).0 as u8)
+        .collect()
 }

@@ -36,6 +36,7 @@
 pub mod block;
 pub mod hist;
 pub mod lz;
+pub mod nn;
 pub mod pal;
 pub mod quant;
 pub mod score;
@@ -237,6 +238,7 @@ pub struct Encoder {
     idx: Box<[u8; NPIX]>,
     dec: Box<Rgb888Frame>,
     prev_pal: [Option<Vec<[u8; 3]>>; 5],
+    prev_cost: [Option<f64>; 5],
     prev_codec: Option<u8>,
     frame_idx: usize,
     stats: FrameStats,
@@ -261,6 +263,7 @@ impl Encoder {
             idx: Box::new([0u8; NPIX]),
             dec: Box::new([0u8; screeny_proto::NBYTES]),
             prev_pal: [None, None, None, None, None],
+            prev_cost: [None; 5],
             prev_codec: None,
             frame_idx: 0,
             stats: FrameStats::default(),
@@ -304,6 +307,7 @@ impl Encoder {
     /// Forget the previous frame: palettes, codec, and the dither phase.
     pub fn reset(&mut self) {
         self.prev_pal = [None, None, None, None, None];
+        self.prev_cost = [None; 5];
         self.prev_codec = None;
         self.frame_idx = 0;
     }
@@ -362,12 +366,19 @@ impl Encoder {
 
         if self.allows(codec::PAL5) && budget >= PAL5_LEN {
             clock.mark();
-            let seed = self.prev_pal[pal_slot(32).unwrap()].clone();
-            let pal = quant::build(&self.hist, 32, seed.as_deref(), self.cfg.profile.quant());
+            let (seed, prev) = self.seed_for(32);
+            let built = quant::build(
+                &self.hist,
+                32,
+                seed.as_deref(),
+                prev,
+                self.frame_idx,
+                self.cfg.profile.quant(),
+            );
             clock.lap(&mut self.stats.stages.quantise);
             pal::map(
                 &self.hist,
-                &pal,
+                &built.palette,
                 self.cfg.dither,
                 self.frame_idx,
                 &mut self.idx,
@@ -375,9 +386,9 @@ impl Encoder {
             clock.lap(&mut self.stats.stages.map);
             cands.push(Encoded {
                 codec: codec::PAL5,
-                payload: pal::emit_pal5(&pal, &self.idx),
+                payload: pal::emit_pal5(&built.palette, &self.idx),
             });
-            self.remember(32, &pal);
+            self.remember(32, &built);
         }
 
         if self.allows(codec::BC1_DUAL) && budget >= BC1_DUAL_LEN {
@@ -506,9 +517,19 @@ impl Encoder {
         Ok(self.encode(&px, budget))
     }
 
-    fn remember(&mut self, k: usize, pal: &Palette) {
+    /// Keep a palette as the next frame's Lloyd seed, with what it cost.
+    fn remember(&mut self, k: usize, built: &quant::Built) {
         if let Some(s) = pal_slot(k) {
-            self.prev_pal[s] = Some(pal.srgb.clone());
+            self.prev_pal[s] = Some(built.palette.srgb.clone());
+            self.prev_cost[s] = Some(built.cost);
+        }
+    }
+
+    /// The seed and previous cost for a palette size.
+    fn seed_for(&self, k: usize) -> (Option<Vec<[u8; 3]>>, Option<f64>) {
+        match pal_slot(k) {
+            Some(s) => (self.prev_pal[s].clone(), self.prev_cost[s]),
+            None => (None, None),
         }
     }
 
@@ -601,17 +622,24 @@ impl Encoder {
                 continue;
             }
             clock.mark();
-            let seed = self.prev_pal[pal_slot(k).unwrap()].clone();
-            let pal = quant::build(&self.hist, k, seed.as_deref(), self.cfg.profile.quant());
+            let (seed, prev) = self.seed_for(k);
+            let built = quant::build(
+                &self.hist,
+                k,
+                seed.as_deref(),
+                prev,
+                self.frame_idx,
+                self.cfg.profile.quant(),
+            );
             clock.lap(&mut self.stats.stages.quantise);
-            let per_bin = quant::nearest_per_bin(&self.hist, &pal);
+            let per_bin = quant::nearest_per_bin(&self.hist, &built.palette);
             for p in 0..NPIX {
                 self.idx[p] = per_bin[self.hist.bin_of()[p] as usize];
             }
             clock.lap(&mut self.stats.stages.map);
-            let v = lz::emit_pal8_lz(&pal.srgb, &self.idx, &mut self.lz, chain);
+            let v = lz::emit_pal8_lz(&built.palette.srgb, &self.idx, &mut self.lz, chain);
             clock.lap(&mut self.stats.stages.lz);
-            self.remember(k, &pal);
+            self.remember(k, &built);
             if v.len() <= budget {
                 return (
                     Encoded {
@@ -626,17 +654,24 @@ impl Encoder {
         // Rung 8: 16 colours in a nibble plane.
         if self.allows(codec::PAL4_LZ) {
             clock.mark();
-            let seed = self.prev_pal[pal_slot(16).unwrap()].clone();
-            let pal = quant::build(&self.hist, 16, seed.as_deref(), self.cfg.profile.quant());
+            let (seed, prev) = self.seed_for(16);
+            let built = quant::build(
+                &self.hist,
+                16,
+                seed.as_deref(),
+                prev,
+                self.frame_idx,
+                self.cfg.profile.quant(),
+            );
             clock.lap(&mut self.stats.stages.quantise);
-            let per_bin = quant::nearest_per_bin(&self.hist, &pal);
+            let per_bin = quant::nearest_per_bin(&self.hist, &built.palette);
             for p in 0..NPIX {
                 self.idx[p] = per_bin[self.hist.bin_of()[p] as usize];
             }
             clock.lap(&mut self.stats.stages.map);
-            let v = lz::emit_pal4_lz(&pal.srgb, &self.idx, &mut self.lz, chain);
+            let v = lz::emit_pal4_lz(&built.palette.srgb, &self.idx, &mut self.lz, chain);
             clock.lap(&mut self.stats.stages.lz);
-            self.remember(16, &pal);
+            self.remember(16, &built);
             if v.len() <= budget {
                 return (
                     Encoded {
@@ -651,19 +686,26 @@ impl Encoder {
         // Floor: a fixed-rate payload, so this rung cannot fail.
         if self.allows(codec::PAL5) && budget >= PAL5_LEN {
             clock.mark();
-            let seed = self.prev_pal[pal_slot(32).unwrap()].clone();
-            let pal = quant::build(&self.hist, 32, seed.as_deref(), self.cfg.profile.quant());
+            let (seed, prev) = self.seed_for(32);
+            let built = quant::build(
+                &self.hist,
+                32,
+                seed.as_deref(),
+                prev,
+                self.frame_idx,
+                self.cfg.profile.quant(),
+            );
             clock.lap(&mut self.stats.stages.quantise);
             pal::map(
                 &self.hist,
-                &pal,
+                &built.palette,
                 self.cfg.dither,
                 self.frame_idx,
                 &mut self.idx,
             );
             clock.lap(&mut self.stats.stages.map);
-            let payload = pal::emit_pal5(&pal, &self.idx);
-            self.remember(32, &pal);
+            let payload = pal::emit_pal5(&built.palette, &self.idx);
+            self.remember(32, &built);
             return (
                 Encoded {
                     codec: codec::PAL5,
