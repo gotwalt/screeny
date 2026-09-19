@@ -7,7 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use screeny_art::budget::{Encoding, PAYLOAD_BYTES};
-use screeny_art::piece::{Ctx, Params, PieceDef};
+use screeny_art::piece::{local_now, Ctx, Params, PieceDef};
 use screeny_art::{pieces, Piece, Pipeline, Settings, N};
 use serde::Serialize;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -69,7 +69,7 @@ impl Engine {
         let dt = if self.paused { 0.0 } else { wall * self.speed };
         self.t += dt;
 
-        let frame = self.piece.render(&Ctx { t: self.t, dt, params: &self.params });
+        let frame = self.piece.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
         let out = self.pipeline.process(frame, wall);
 
         if wall > 0.0 {

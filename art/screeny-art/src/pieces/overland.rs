@@ -163,7 +163,7 @@ mod tests {
         let mut params = Params::defaults(PARAMS);
         for step in 0..48 {
             params.set(PARAMS, "hour", step as f32 / 48.0);
-            let s = scene(&Ctx { t: 0.0, dt: 0.0, params: &params }, 0.5);
+            let s = scene(&Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &params }, 0.5);
             for c in s.palette.expect("overland has a palette").colours() {
                 let l = crate::color::to_oklab(*c)[0];
                 assert!(*c == Rgb::BLACK || l > 0.28, "hour {step}/48: L {l}");

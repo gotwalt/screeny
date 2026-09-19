@@ -13,8 +13,8 @@
 //! simply takes longer. Each choreography is a plan of such moves, timed to land
 //! on the new time exactly as the minute turns.
 
-mod ambient;
-mod dance;
+pub(crate) mod ambient;
+pub(crate) mod dance;
 
 use crate::color::Rgb;
 use crate::dither::Dither;
@@ -111,9 +111,9 @@ struct Plan {
 
 struct Clocks {
     seed: u64,
-    /// Local wall-clock seconds when the piece was made; the simulated clock
-    /// (pace < 60) runs on from here.
-    born: f64,
+    /// The time of day on the first frame; a sped-up clock (pace < 60) runs on
+    /// from here.
+    born: Option<f64>,
     angles: [Hands; CLOCKS],
     /// The minute the hands currently show, or are moving towards.
     minute: Option<i64>,
@@ -125,25 +125,7 @@ struct Clocks {
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
-    Box::new(Clocks { seed, born: local_seconds(), angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None })
-}
-
-/// Seconds since the epoch, shifted into the local time zone.
-fn local_seconds() -> f64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-    #[cfg(unix)]
-    {
-        let secs = now as libc::time_t;
-        // SAFETY: `tm` is plain data and localtime_r writes all of it.
-        let offset = unsafe {
-            let mut tm: libc::tm = std::mem::zeroed();
-            libc::localtime_r(&secs, &mut tm);
-            tm.tm_gmtoff
-        };
-        now + offset as f64
-    }
-    #[cfg(not(unix))]
-    now
+    Box::new(Clocks { seed, born: None, angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None })
 }
 
 impl Clocks {
@@ -171,7 +153,8 @@ impl Clocks {
         // Display seconds per engine second. At pace 60 the wall clock is used
         // directly, so the time is right however long the piece has run.
         let rate = 60.0 / pace as f64;
-        let clock = if pace >= 59.5 { local_seconds() } else { self.born + ctx.t * rate } + ctx.get("offset") as f64 * 60.0;
+        let born = *self.born.get_or_insert(ctx.now - ctx.t);
+        let clock = if pace >= 59.5 { ctx.now } else { born + ctx.t * rate } + ctx.get("offset") as f64 * 60.0;
         let motor = Motor { speed: ctx.get("speed"), acc: ctx.get("speed") * 1.6 };
         let hours24 = ctx.get("hours24") >= 0.5;
 
@@ -224,7 +207,9 @@ impl Clocks {
         match &mut self.ambient {
             Some(ambient) => ambient.step(&mut self.angles, motor, ctx.dt as f32, slack < SETTLE),
             None if ctx.t - self.landed >= held && slack > SETTLE + 6.0 => {
-                let ambient = ambient::Ambient::new(&mut Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b)));
+                let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
+                let mood = (rng.u64() % ambient::MOODS as u64) as usize;
+                let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
                 eprintln!("clocks: t={:.1} ambient {}", ctx.t, ambient.name());
                 self.ambient = Some(ambient);
             }

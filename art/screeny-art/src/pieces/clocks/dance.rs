@@ -295,7 +295,7 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
         base: if flip { 90.0 } else { 270.0 },
         amp: rng.range(15.0, 30.0),
         k: (rng.range(0.4, 0.8), rng.range(0.3, 0.9) * rng.sign()),
-        phase: rng.range(0.0, 6.28),
+        phase: rng.range(0.0, std::f32::consts::TAU),
         bow: rng.range(-25.0, 25.0),
     };
 

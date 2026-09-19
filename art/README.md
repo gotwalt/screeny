@@ -43,6 +43,10 @@ piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> ou
   luminance (and mean red) may rise, so no piece can strobe the panel.
 - The studio's four meters are the four numbers from brief section 5.
 
+Pieces that tell the time read `ctx.now` (local time of day), not the system
+clock: the studio and `pipe` pass the real time, `snapshot` simulates it, so
+clock pieces can be run faster than real time and tested.
+
 ## Adding a piece
 
 1. Copy `screeny-art/src/pieces/metaballs.rs` (continuous colour) or
@@ -91,6 +95,28 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   quickly, and "Choreography" to pick a dance; dances and moods are logged to
   stderr with their start times. At 60 it is a real clock on local time. Set
   "Seconds the time is held" to 60 for a clock that only moves on the minute.
+
+## Hands (`pieces/hands.rs`)
+
+The clocks without the time: the spirit of the original rather than its
+letter, adapted to the panel. A grid of two-handed dials filling all 64 x 32
+(4x2, 6x3 or 8x4; 6x3 by default), in continuous motion driven by the clocks'
+ambient engine. Moods never switch: their numbers glide into one another while
+every oscillator keeps its own phase, so nothing ever jumps or repeats. Eight
+moods (drift, sway, breathe, corners, unison, tide, rings, streamlines); wander
+mode favours the open-handed ones, because hands reach their cell edge and,
+when the field is gentle, neighbouring dials link into long curves across the
+whole panel. The two hands take two related tints, 15 steps each (31 colours,
+exact), which drift slowly by palette animation.
+
+It is still a clock. Drawn digits need two dials side by side per digit, so
+eight columns, so 8-LED dials: numerals and large dials cannot both fit in 64
+LEDs (the `clocks` piece is the numeral version). But the dials are clocks, so
+as each minute turns (`tell`), the flow gathers until every dial reads the time
+as an analog clock, holds, and lets go: `Ambient::step_holding` draws every
+hand to a pose exactly, under the same motor limits, and releases it back into
+the field. While held, the hour hand shortens and, by palette alone, deepens to
+amber while the minute hand pales to white. Legible on 4x2, readable on 6x3.
 
 ## GPU and 3D pieces
 

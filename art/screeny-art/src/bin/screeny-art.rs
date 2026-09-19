@@ -3,7 +3,7 @@
 //! PNG of what the panel should look like.
 
 use screeny_art::output::{Output, PipeOutput};
-use screeny_art::piece::{self, Ctx, Params};
+use screeny_art::piece::{self, local_now, Ctx, Params};
 use screeny_art::{pieces, preview, Pipeline, Settings};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -110,7 +110,7 @@ fn pipe(a: Args) -> Result<(), String> {
         if a.seconds.is_some_and(|s| t >= s) {
             return Ok(());
         }
-        let frame = piece.render(&Ctx { t, dt: t - last_t, params: &a.params });
+        let frame = piece.render(&Ctx { t, dt: t - last_t, now: local_now(), params: &a.params });
         let result = pipeline.process(frame, t - last_t);
         last_t = t;
         match out.send(&result.wire) {
@@ -138,10 +138,13 @@ fn snapshot(a: Args) -> Result<(), String> {
     let dt = 1.0 / 30.0;
     let first = (a.at - a.warmup).max(0.0);
     let steps = ((a.at - first) / dt).round() as usize;
+    // The time of day is simulated too, starting from the real one, so pieces
+    // that tell the time see a consistent clock however fast this runs.
+    let began = local_now();
     let mut result = None;
     for i in 0..=steps {
         let t = first + i as f64 * dt;
-        let frame = piece.render(&Ctx { t, dt, params: &a.params });
+        let frame = piece.render(&Ctx { t, dt, now: began + (t - first), params: &a.params });
         result = Some(pipeline.process(frame, dt));
     }
     let result = result.expect("at least one frame");

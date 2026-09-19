@@ -11,6 +11,10 @@ pub struct Ctx<'a> {
     /// Seconds since the previous `render`; 0 while paused. For pieces that
     /// integrate state (feedback, simulations).
     pub dt: f64,
+    /// The time of day: seconds since the epoch, shifted into the local time
+    /// zone (see [`local_now`]). Pieces that tell the time read this rather
+    /// than the system clock, so a run can be simulated faster than real time.
+    pub now: f64,
     pub params: &'a Params,
 }
 
@@ -18,6 +22,24 @@ impl Ctx<'_> {
     pub fn get(&self, id: &str) -> f32 {
         self.params.get(id)
     }
+}
+
+/// The real time of day, for [`Ctx::now`].
+pub fn local_now() -> f64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    #[cfg(unix)]
+    {
+        let secs = now as libc::time_t;
+        // SAFETY: `tm` is plain data and localtime_r writes all of it.
+        let offset = unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            libc::localtime_r(&secs, &mut tm);
+            tm.tm_gmtoff
+        };
+        now + offset as f64
+    }
+    #[cfg(not(unix))]
+    now
 }
 
 /// Pieces may keep state between frames (trails, automata, simulations); the
