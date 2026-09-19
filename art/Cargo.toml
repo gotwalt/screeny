@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["screeny-art", "studio"]
+
+[profile.dev]
+# Pieces are per-pixel float maths; unoptimised builds cannot hold 30 fps at 16 spp.
+opt-level = 2

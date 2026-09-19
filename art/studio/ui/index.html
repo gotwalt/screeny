@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screeny Studio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="bench">
+    <header class="titleblock">
+      <div class="titleblock__piece">
+        <h1 id="piece-name">&nbsp;</h1>
+        <p id="piece-blurb"></p>
+      </div>
+      <dl class="readouts" aria-label="Run">
+        <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
+        <div><dt>Time</dt><dd id="ro-time">–</dd></div>
+        <div><dt>Engine</dt><dd id="ro-fps">–</dd></div>
+      </dl>
+    </header>
+
+    <section class="stage" id="stage" aria-label="Panel preview">
+      <div class="device" id="device">
+        <div class="device__face">
+          <canvas id="panel" width="768" height="384" aria-label="64 by 32 LED panel preview"></canvas>
+        </div>
+      </div>
+      <p class="stage__notice" id="notice" role="status" hidden></p>
+    </section>
+
+    <section class="meters" aria-label="Frame statistics">
+      <div class="meter" id="m-colours">
+        <h2>Colours</h2>
+        <p class="meter__value"><output></output><span class="meter__of">of 32 exact</span></p>
+        <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:25%"></i><i class="tick" style="left:50%"></i></div>
+        <p class="meter__note"></p>
+      </div>
+      <div class="meter" id="m-bytes">
+        <h2>Frame size</h2>
+        <p class="meter__value"><output></output><span class="meter__of"></span></p>
+        <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:100%"></i></div>
+        <p class="meter__note">Estimate. The codec is not final.</p>
+      </div>
+      <div class="meter" id="m-apl">
+        <h2>Average level</h2>
+        <p class="meter__value"><output></output><span class="meter__of"></span></p>
+        <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
+        <p class="meter__note"></p>
+      </div>
+      <div class="meter" id="m-dluma">
+        <h2>Luminance change</h2>
+        <p class="meter__value"><output></output><span class="meter__of">per frame</span></p>
+        <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
+        <p class="meter__note"></p>
+      </div>
+    </section>
+  </main>
+
+  <aside class="inspector" aria-label="Controls">
+    <section>
+      <h2>Piece</h2>
+      <div class="pieces" id="pieces" role="radiogroup" aria-label="Piece"></div>
+      <div class="row row--seed">
+        <label for="seed">Seed</label>
+        <input id="seed" type="number" min="0" max="4294967295" step="1" inputmode="numeric">
+        <button type="button" id="new-seed" title="N">New seed</button>
+      </div>
+    </section>
+
+    <section id="playing" hidden>
+      <h2>Now playing</h2>
+      <p class="playing__title" id="playing-title"></p>
+      <p class="playing__detail" id="playing-detail"></p>
+      <div class="playing__actions" id="playing-actions"></div>
+      <ul class="playing__notes" id="playing-notes"></ul>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Parameters</h2>
+        <button type="button" class="quiet" id="reset-params">Reset</button>
+      </div>
+      <div id="params"></div>
+    </section>
+
+    <section>
+      <h2>Time</h2>
+      <div class="row">
+        <button type="button" id="pause" title="Space">Pause</button>
+        <button type="button" id="restart" title="R">Restart</button>
+      </div>
+      <fieldset class="seg" id="fps">
+        <legend>Frames per second</legend>
+        <label><input type="radio" name="fps" value="30"><span>30</span></label>
+        <label><input type="radio" name="fps" value="60"><span>60</span></label>
+      </fieldset>
+      <div class="slider" id="speed-slider">
+        <label for="speed">Speed</label><output></output>
+        <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1">
+      </div>
+    </section>
+
+    <section>
+      <h2>Panel model</h2>
+      <fieldset class="seg" id="levels">
+        <legend>Levels per channel</legend>
+        <label><input type="radio" name="levels" value="64"><span>64</span></label>
+        <label><input type="radio" name="levels" value="32"><span>32</span></label>
+        <label><input type="radio" name="levels" value="16"><span>16</span></label>
+      </fieldset>
+      <fieldset class="seg" id="dither">
+        <legend>Dither</legend>
+        <label><input type="radio" name="dither" value="none"><span>None</span></label>
+        <label><input type="radio" name="dither" value="bayer4"><span>Bayer 4</span></label>
+        <label><input type="radio" name="dither" value="bayer8"><span>Bayer 8</span></label>
+        <label><input type="radio" name="dither" value="blue_noise"><span>Blue noise</span></label>
+      </fieldset>
+      <label class="switch"><input type="checkbox" id="panel-model"><span>Quantise to panel levels</span></label>
+      <label class="switch"><input type="checkbox" id="lossy-sim"><span>Show lossy encode above 32 colours</span></label>
+    </section>
+
+    <section>
+      <h2>Limiter</h2>
+      <label class="switch"><input type="checkbox" id="limiter-on"><span>Limit brightness and flashing</span></label>
+      <div class="slider" id="apl-slider">
+        <label for="apl-cap">Average level cap</label><output></output>
+        <input id="apl-cap" type="range" min="0.1" max="1" step="0.01">
+      </div>
+      <div class="slider" id="rise-slider">
+        <label for="rise">Fastest rise</label><output></output>
+        <input id="rise" type="range" min="0.5" max="10" step="0.1">
+      </div>
+    </section>
+
+    <section>
+      <h2>View</h2>
+      <fieldset class="seg" id="view-mode">
+        <legend>Show as</legend>
+        <label title="1"><input type="radio" name="mode" value="dots"><span>LEDs</span></label>
+        <label title="2"><input type="radio" name="mode" value="squint"><span>Squint</span></label>
+        <label title="3"><input type="radio" name="mode" value="raw"><span>Pixels</span></label>
+      </fieldset>
+      <fieldset class="seg" id="view-size">
+        <legend>Size</legend>
+        <label><input type="radio" name="size" value="fit"><span>Fit</span></label>
+        <label><input type="radio" name="size" value="actual"><span>Actual</span></label>
+        <label><input type="radio" name="size" value="12"><span>12×</span></label>
+      </fieldset>
+      <div class="row row--density" id="density-row">
+        <label for="density">Screen density</label>
+        <input id="density" type="number" min="2" max="12" step="0.01">
+        <span class="unit">px/mm</span>
+      </div>
+      <p class="hint" id="density-hint">Hold a ruler to the bezel: the lit area should be 192 mm wide.</p>
+      <div class="slider" id="dot-slider">
+        <label for="dot">LED size</label><output></output>
+        <input id="dot" type="range" min="0.4" max="1" step="0.01">
+      </div>
+      <div class="slider" id="bloom-slider">
+        <label for="bloom">Bloom</label><output></output>
+        <input id="bloom" type="range" min="0" max="1" step="0.01">
+      </div>
+    </section>
+  </aside>
+
+  <script src="main.js"></script>
+</body>
+</html>
