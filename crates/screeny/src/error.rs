@@ -68,6 +68,32 @@ pub enum Error {
     #[error("device advertises codecs [{0}], none of which this sender produces")]
     NoCommonCodec(String),
 
+    /// A frame handed to the sender was the wrong shape.
+    ///
+    /// The one failure an embedder can cause by itself, and deliberately its
+    /// own variant: everything else in this enum is the network's fault and
+    /// [`crate::Link`] handles it without telling the caller.
+    #[error("{what} is {got} bytes, expected {want}")]
+    Frame {
+        /// Which part was wrong, as a noun phrase.
+        what: &'static str,
+        /// What the caller passed.
+        got: usize,
+        /// What it should have been.
+        want: usize,
+    },
+
+    /// An indexed frame had an index outside its palette.
+    #[error("index {index} at pixel {pixel} is outside a palette of {palette}")]
+    BadIndex {
+        /// The offending index.
+        index: u8,
+        /// Where it was.
+        pixel: usize,
+        /// How many colours the palette has.
+        palette: usize,
+    },
+
     /// The caller asked for a payload budget that cannot work.
     #[error("payload budget {got} is outside 3..={max}")]
     Budget {
@@ -80,6 +106,21 @@ pub enum Error {
 
 /// Convenient alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// So an embedder whose own trait returns [`std::io::Result`] - the generative
+/// art system's `Output::send` is exactly that - can write `?` and stop.
+///
+/// An [`Error::Io`] keeps its original kind and `errno`; everything else
+/// becomes [`std::io::ErrorKind::Other`] carrying this error, so
+/// [`Error::hint`] survives a round trip through `io::Error::downcast_ref`.
+impl From<Error> for std::io::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Io(io) => io,
+            other => std::io::Error::other(other),
+        }
+    }
+}
 
 impl Error {
     /// A human-readable next step, when there is an obvious one.

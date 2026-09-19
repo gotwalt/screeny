@@ -19,6 +19,9 @@ anyhow = "1"
 ctrlc = "3"
 
 [dev-dependencies]
+# The reference receiver (card 006). `window` off: the tests are headless and
+# have no business pulling minifb into the dependency tree.
+screeny-sim = { path = "../sim", default-features = false }
 
 [[bench]]
 name = "encode"

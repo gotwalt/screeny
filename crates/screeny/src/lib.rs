@@ -74,10 +74,10 @@ pub use device::{Device, DeviceInfo};
 pub use discover::Target;
 pub use encode::{EncodeConfig, Encoded, Encoder, Profile};
 pub use error::{Error, Result};
-pub use frame::{FnSource, Frame, FrameSource, FrameTime, RawReader};
+pub use frame::{FnSource, Frame, FrameSource, FrameTime, Pixels, RawReader};
 pub use panel::Panel;
 pub use patterns::Pattern;
-pub use sender::{SendStats, Sender, SenderConfig};
+pub use sender::{SendStats, Sender, SenderConfig, Sent};
 
 /// Re-exported so callers do not have to depend on the wire crate directly.
 pub use screeny_proto as proto;

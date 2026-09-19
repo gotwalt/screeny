@@ -23,14 +23,77 @@ use std::time::{Duration, Instant};
 use screeny_proto::control::Telemetry;
 use screeny_proto::dec::codec;
 use screeny_proto::{
-    FramePacket, Packet, F_FINAL, F_KEY, F_STATS_REQ, MAX_PIXEL_PAYLOAD, MAX_UDP_PAYLOAD,
+    FramePacket, IndexedFrame, Packet, Rgb888Frame, F_FINAL, F_KEY, F_STATS_REQ, MAX_PIXEL_PAYLOAD,
+    MAX_UDP_PAYLOAD, NPIX,
 };
 
 use crate::device::Device;
 use crate::encode::{EncodeConfig, Encoder, Profile, MIN_BUDGET};
 use crate::error::{Error, Result};
-use crate::frame::{Frame, FrameSource, FrameTime};
+use crate::frame::{Frame, FrameSource, FrameTime, Pixels};
 use crate::net;
+
+/// What became of a frame handed to [`Sender::send`] or [`crate::Link::send`].
+///
+/// Returned rather than logged, because the two ways a frame can *not* reach
+/// the panel - the cadence ceiling and a link that is down - are both normal
+/// and both worth a producer knowing about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sent {
+    /// On the wire.
+    Frame {
+        /// Codec id in the header (spec 4).
+        codec: u8,
+        /// Pixel payload bytes, not counting the 8-byte header.
+        bytes: usize,
+        /// True if the panel will show exactly these pixels. False means the
+        /// chooser had to quantise: see [`Sender::send_indexed`].
+        exact: bool,
+        /// Sequence number this frame went out with.
+        seq: u16,
+    },
+    /// Dropped by the cadence ceiling: it arrived sooner after the previous
+    /// one than the device's current frame rate allows, and the device would
+    /// only have superseded it. See [`crate::Cadence`].
+    Coalesced,
+    /// Dropped because the link is down and reconnecting. Not an error: a
+    /// sender that runs for weeks spends some of them with nowhere to send
+    /// (see [`crate::Link`]).
+    Dropped,
+}
+
+impl Sent {
+    /// True if the frame reached the wire.
+    #[must_use]
+    pub fn is_sent(&self) -> bool {
+        matches!(self, Sent::Frame { .. })
+    }
+
+    /// The codec, if it was sent.
+    #[must_use]
+    pub fn codec(&self) -> Option<u8> {
+        match self {
+            Sent::Frame { codec, .. } => Some(*codec),
+            _ => None,
+        }
+    }
+
+    /// True if the panel will show exactly the pixels that were handed over.
+    /// A frame that never left is not exact.
+    #[must_use]
+    pub fn exact(&self) -> bool {
+        matches!(self, Sent::Frame { exact: true, .. })
+    }
+
+    /// Payload bytes, zero for a frame that never left.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        match self {
+            Sent::Frame { bytes, .. } => *bytes,
+            _ => 0,
+        }
+    }
+}
 
 /// Frame rates the adaptation ladder steps through, as fractions of the
 /// requested rate: 30 -> 24 -> 20 -> 15 fps (spec 6.9).
@@ -124,6 +187,16 @@ pub struct SendStats {
     /// True while the codec set is reduced because the device is
     /// decode-limited.
     pub codec_limited: bool,
+    /// Indexed frames that went on the wire exactly, palette and all.
+    pub indexed_exact: u64,
+    /// Indexed frames that could **not** be encoded exactly inside the budget
+    /// and were expanded and run through the lossy chooser instead. Spec 4.8
+    /// allows it; an art system that sees this rise is sending more than 32
+    /// colours, or index noise its palette cannot compress.
+    pub indexed_fallback: u64,
+    /// Colour count of the most recent frame that took that fallback, so a
+    /// log line can say *why* without keeping every frame.
+    pub last_fallback_colours: usize,
     /// When the stream started.
     pub started: Option<Instant>,
 }
@@ -220,6 +293,8 @@ pub struct Sender {
     last_payload: Option<(u8, Vec<u8>)>,
     last_send: Option<Instant>,
     last_stats_req: Option<Instant>,
+    last_rx: Instant,
+    idx: Box<[u8; NPIX]>,
 }
 
 impl Sender {
@@ -304,6 +379,11 @@ impl Sender {
             last_payload: None,
             last_send: None,
             last_stats_req: None,
+            // The handshake, if there was one, is itself proof of liveness;
+            // without one, give the device the benefit of the doubt until the
+            // first `STATS_REQ` has had time to come back.
+            last_rx: Instant::now(),
+            idx: Box::new([0u8; NPIX]),
             cfg,
         })
     }
@@ -354,6 +434,145 @@ impl Sender {
         self.transmit(out.codec, &out.payload, final_frame)?;
         self.last_payload = Some((out.codec, out.payload));
         Ok(out.codec)
+    }
+
+    /// Encode and send one frame, in whichever form the caller has it.
+    ///
+    /// This is the push API's one door: a caller that owns its own loop calls
+    /// it whenever it has a frame, and this handles sequence numbers, the
+    /// `STATS_REQ` cadence and the header flags. It does **not** pace - see
+    /// [`crate::Link`] for that, and for reconnection.
+    ///
+    /// An indexed frame of 32 colours or fewer is put on the wire exactly.
+    /// See [`Sender::send_indexed`] for what happens when it cannot be.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Frame`] or [`Error::BadIndex`] if the frame is malformed -
+    /// the caller's bug - and [`Error::Io`] if the datagram could not be sent.
+    pub fn send(&mut self, px: Pixels<'_>) -> Result<Sent> {
+        px.check()?;
+        match px {
+            Pixels::Rgb(bytes) => {
+                // `check` has already pinned the length; this is the cast.
+                let f: &Rgb888Frame = bytes.try_into().expect("checked above");
+                let out = self.enc.encode(f, self.budget);
+                let st = self.enc.last_stats();
+                self.deliver(out, st.elapsed, st.exact, false)
+            }
+            Pixels::Indexed { palette, indices } => self.send_indexed(palette, indices),
+        }
+    }
+
+    /// Send a palette and an index plane.
+    ///
+    /// **Exactness.** A palette of 32 colours or fewer is always carried
+    /// exactly at the default budget: `PAL4_LZ` (<= 16 colours) or `PAL8_LZ`
+    /// first, and if the indices are too incompressible for either, raw
+    /// `PAL5`, which is fixed-rate at 1376 bytes and therefore cannot
+    /// overflow. Every pixel the panel lights is `palette[index]`, with no
+    /// requantisation. 33 to 256 colours are exact too *when they compress*,
+    /// because only the variable-rate `PAL8_LZ` can carry them.
+    ///
+    /// **The fallback.** If no exact encoding fits the budget - more than 32
+    /// colours and incompressible, or a budget below `PAL5`'s 1376 bytes -
+    /// the frame is expanded to RGB and run through the ordinary lossy
+    /// chooser, because a requantised frame beats a dropped one. That is
+    /// counted in [`SendStats::indexed_fallback`] and flagged in the returned
+    /// [`Sent::exact`], so a producer can see it happening and tighten its
+    /// palette. Nothing about it is silent.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Frame`] if the index plane is not [`NPIX`] long or the
+    /// palette is empty or over 256, [`Error::BadIndex`] if an index falls
+    /// outside the palette, and [`Error::Io`] if the datagram could not be
+    /// sent.
+    pub fn send_indexed(&mut self, palette: &[[u8; 3]], indices: &[u8]) -> Result<Sent> {
+        Pixels::indexed(palette, indices).check()?;
+        if let Some((pixel, &index)) = indices
+            .iter()
+            .enumerate()
+            .find(|(_, i)| **i as usize >= palette.len())
+        {
+            return Err(Error::BadIndex {
+                index,
+                pixel,
+                palette: palette.len(),
+            });
+        }
+        self.idx.copy_from_slice(indices);
+        let f = IndexedFrame {
+            palette,
+            indices: &self.idx,
+        };
+        // Infallible now: the two things `encode_indexed` rejects - a palette
+        // outside 1..=256, and an out-of-range index - were both just checked,
+        // with a better error than `Corrupt` for each.
+        let out = self
+            .enc
+            .encode_indexed(&f, self.budget)
+            .map_err(|e| Error::Metadata(format!("{e:?} encoding an indexed frame")))?;
+        let st = self.enc.last_stats();
+        if st.exact {
+            self.stats.indexed_exact += 1;
+        } else {
+            self.stats.indexed_fallback += 1;
+            self.stats.last_fallback_colours = palette.len();
+        }
+        self.deliver(out, st.elapsed, st.exact, false)
+    }
+
+    /// Put an [`Encoded`] on the wire and account for it.
+    fn deliver(
+        &mut self,
+        out: crate::encode::Encoded,
+        encode: Duration,
+        exact: bool,
+        final_frame: bool,
+    ) -> Result<Sent> {
+        self.stats.record_encode(encode);
+        let seq = self.seq;
+        let bytes = out.payload.len();
+        self.transmit(out.codec, &out.payload, final_frame)?;
+        self.last_payload = Some((out.codec, out.payload));
+        Ok(Sent::Frame {
+            codec: out.codec,
+            bytes,
+            exact,
+            seq,
+        })
+    }
+
+    /// When the device was last heard from on the frame socket: a `TELEMETRY`
+    /// reply, or a `BUSY`.
+    ///
+    /// UDP has no connection to lose, so this is the only evidence a sender
+    /// has that the device is still there. [`crate::Link`] uses it as a
+    /// watchdog; anyone driving [`Sender`] directly gets to decide for
+    /// themselves.
+    #[must_use]
+    pub fn last_feedback(&self) -> Instant {
+        self.last_rx
+    }
+
+    /// How long the device has been silent.
+    #[must_use]
+    pub fn silence(&self) -> Duration {
+        self.last_rx.elapsed()
+    }
+
+    /// The frame rate the sender is targeting now, after spec 6.9 adaptation.
+    #[must_use]
+    pub fn fps(&self) -> f64 {
+        self.stats.fps
+    }
+
+    /// The codec ids in play, after the device's list and any decode-limited
+    /// withdrawal.
+    #[must_use]
+    pub fn codecs(&self) -> &[u8] {
+        &self.my_codecs
     }
 
     /// Put an already-encoded payload on the wire.
@@ -430,6 +649,10 @@ impl Sender {
             let Ok(n) = self.sock.recv(&mut self.rx) else {
                 return;
             };
+            // Anything at all from the device is proof it is still there -
+            // even a packet we go on to ignore. This is the reconnect
+            // watchdog's only input.
+            self.last_rx = Instant::now();
             let Ok(pkt) = Packet::parse(&self.rx[..n]) else {
                 continue;
             };

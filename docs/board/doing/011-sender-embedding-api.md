@@ -87,3 +87,49 @@ check clean; an embedder can stream exact indexed frames with auto-reconnect usi
 only what the README's Embedding section shows.
 
 ## Log
+
+### Indexed frames through the `Sender` (gap 1)
+
+`Pixels<'a>` (in `frame.rs`) is the frame type the push API takes: `Rgb(&[u8])`
+or `Indexed { palette: &[[u8;3]], indices: &[u8] }`. **Slices, not arrays**,
+because the art system keeps `WireFrame.rgb` and its indices in `Vec`s and
+`&Vec<u8> -> &[u8; 6144]` at every call site is exactly the sharp edge this
+card exists to file off. `From<&Frame>` and `From<&Rgb888Frame>` are there too.
+
+- `Sender::send(Pixels) -> Result<Sent>` is the one door; `Sender::send_indexed
+  (&[[u8;3]], &[u8])` is the direct form. `send_frame` is untouched, so `run`
+  and the CLI are unaffected.
+- `Sent` is an enum, not a codec byte: `Frame { codec, bytes, exact, seq }`,
+  `Coalesced`, `Dropped`. A producer can see that a frame did not reach the
+  panel without the library having to log anything.
+- Exactness is `Encoder::encode_indexed`'s existing ladder; what was missing
+  was a way to reach it from the sender. <= 16 colours -> `PAL4_LZ`, else
+  `PAL8_LZ`, else (<= 32 colours) raw `PAL5`, which is fixed-rate at 1376
+  bytes and so cannot overflow. That is why "up to 32 colours is exact" holds
+  for *any* index plane, including noise.
+- The over-budget fallback (> 32 colours and incompressible, or a budget under
+  1376) expands to RGB and runs the lossy chooser - a requantised frame beats a
+  dropped one - and says so three ways: `Sent::exact` false,
+  `SendStats::indexed_fallback`, `SendStats::last_fallback_colours`.
+- `Error::Frame` and `Error::BadIndex` name the caller's own mistakes, and
+  `impl From<Error> for std::io::Error` exists so the art system's
+  `Output::send(&mut self, &WireFrame) -> io::Result<()>` is a `?` away. An
+  `Error::Io` keeps its kind and errno through that conversion.
+
+`crates/screeny/tests/indexed.rs`: 16 tests, 0.16 s, all against
+`screeny_sim::SimDevice` on loopback with ephemeral ports and mDNS off
+(`tests/simfix/mod.rs` is the fixture). Palettes of 2, 16, 17, 32 colours with
+structured indices *and* with LCG index noise; a 30-frame stream; 200 colours
+compressible (exact, `PAL8_LZ`) and incompressible (falls back); a budget below
+`MIN_BUDGET`. The assertion is always `decoded == palette[index]` for all 2048
+pixels, checked by the *second* implementation of the protocol.
+
+Surprising, and worth knowing: with 17-32 colours and incompressible indices,
+`PAL8_LZ` is tried before `PAL5` and *expands* to ~2100 bytes, so the frame
+lands on `PAL5` at 1376. Correct, and it means the exact path's worst case is
+1376 bytes, not the LZ rungs' average ~300.
+
+Not my change, but found while running the suite: `SCREENY_PACING_SECS=2`
+fails `holds_thirty_fps_within_one_percent`, because one frame is 1.6% of a
+two-second window and the tolerance is 1%. The default ten-second run passes
+(18.4 s wall). Written up as card 093.
