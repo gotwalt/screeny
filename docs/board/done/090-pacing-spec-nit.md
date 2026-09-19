@@ -52,3 +52,8 @@ The spec's loop, transcribed literally, passes `crates/screeny`'s pacing
 tests.
 
 ## Log
+
+## Log
+
+2026-09-19, orchestrator: section 9.1 snippet changed to `n = should_be + 1` with the
+reason and a cross-reference to `crates/screeny/src/sender.rs`. No wire change.

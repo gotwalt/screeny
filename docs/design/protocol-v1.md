@@ -968,7 +968,13 @@ loop {
     // than bursting. Skipping is correct here: the device shows newest-wins.
     let behind = Instant::now().saturating_duration_since(start);
     let should_be = behind.as_nanos() / period.as_nanos();
-    if should_be as u64 > n + 1 { n = should_be as u64; }
+    // Resume at the NEXT whole slot, not the current one: `n = should_be` would put
+    // the next deadline at about "now", so the frame after a stall would leave
+    // microseconds behind the stalled one - the two-frame burst this section
+    // forbids (measured in card 009: 55 us apart after a 300 ms stall). One extra
+    // skipped frame keeps the stream strictly paced. Same logic, same comment, in
+    // `crates/screeny/src/sender.rs`.
+    if should_be as u64 > n + 1 { n = should_be as u64 + 1; }
 }
 ```
 

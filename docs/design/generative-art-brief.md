@@ -27,26 +27,27 @@ If this brief disagrees with those, they win; tell your user so this file gets f
 | Resolution | 64 x 32, 2048 pixels, 2:1 | measured |
 | Pixel | discrete round RGB LEDs on a black mask, roughly 3 mm pitch, dark gaps between them, no diffuser | measured |
 | Black | LED off. True black, effectively infinite contrast | measured |
-| Colour depth | **6 bits per channel, linear light** (64 PWM levels), 154 Hz refresh | measured |
-| Frame rate | 30 fps ceiling; ~29 fps sustained with zero drops in testing | measured |
+| Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** across the 154 Hz refresh: darkest visible level is about sRGB 6 (it was 34 without dithering) | measured |
+| Brightness | runtime 0-255 via LED on-time, **does not cost colour depth**; 25 real steps; firmware cap 160, default 96 | measured |
+| Frame rate | **30 fps is the design rate**: every codec ran 60 s with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so 60 fps is plausible, but WiFi loss and jitter, not the device, set the ceiling | measured |
 | Transport | one frame = one UDP datagram, **1464 bytes** for all 2048 pixels (~5.7 bits/pixel) | decided |
 | Delivery | unreliable, newest frame wins, a lost frame is simply skipped; the panel holds the last frame | decided |
-| Latency | tens of ms end to end; jitter ~10-25 ms | provisional |
+| Latency | ping RTT median 5 ms, p99 21 ms, max 37 ms; decode 0.2-0.8 ms; inter-arrival jitter 2-5 ms | measured |
 | Device state | none. Every frame is a complete picture. No blending, trails or accumulation on the device | decided |
 
-The three facts that should shape everything you do: **it is tiny, it is 6-bit
-linear, and a frame has to fit in 1464 bytes.**
+The three facts that should shape everything you do: **it is tiny, its dark end is
+coarse, and a frame has to fit in 1464 bytes.**
 
 ---
 
 ## 2. Colour: what the panel can actually show
 
-### 2.1 Sixty-four linear levels per channel
+### 2.1 Linear light, 64 hardware levels, dithered in time
 
-The panel modulates each LED in linear light with 64 levels. You will author in
-sRGB like everyone else, and the pipeline converts, but you must know where the
-levels fall, because they are very unevenly spaced in sRGB terms. The sRGB value
-(0-255) of each linear level, from dark to bright:
+The panel modulates each LED in linear light with 64 hardware levels per channel.
+You author in sRGB like everyone else; the firmware converts with a gamma table.
+The levels are very unevenly spaced in sRGB terms. The sRGB value (0-255) of each
+hardware level, dark to bright:
 
 ```
 0 34 50 62 71 80 87 94 100 106 111 116 121 125 130 134 138 142 146 149 153 156
@@ -55,25 +56,31 @@ levels fall, because they are very unevenly spaced in sRGB terms. The sRGB value
 253 255
 ```
 
-Consequences **[measured arithmetic, provisional on the final gamma curve]**:
+On its own that would mean anything under sRGB ~22 is off and the darker half of
+sRGB is only 14 levels. **The firmware now fills those gaps by temporal dithering**:
+it carries the sub-level remainder across panel refreshes (154 Hz, about 5 per 30 fps
+frame), so in-between values are shown as a time average. **[measured, card 007]**:
+the darkest visible value moved from sRGB 34 to about 6, mean luminance wobble is
+1.7% with no periodic structure, and nothing is visible as flicker to the eye.
 
-- Any channel value below sRGB ~22 is **off**. sRGB 0-63 collapses to 4 levels;
-  0-127, the entire darker half of what you are used to, is only 14 levels.
-- The top end is the opposite: above sRGB ~180 there is a panel level every 2-3 sRGB
-  steps. Bright gradients are smooth. Dark gradients band hard.
-- So: **do not build pieces that live in the shadows.** A slow fade to black will
-  visibly stair-step and then snap off. Moody low-key palettes turn into posterised
-  mud. Put your tonal detail in the middle and upper range, and use true black as a
-  shape, not as the bottom of a gradient.
-- Fades: fade through a dither (section 2.4) or make them fast (under ~300 ms) so the
-  steps are not individually seen. Or fade by shrinking/eroding shapes instead of
-  dimming them.
+What that changes for you, and what it does not:
 
-Brightness makes this worse **[provisional]**: today the only way the firmware can
-dim the panel is to scale values, which throws levels away (50% brightness leaves
-~33 levels, 25% leaves ~17). Fixing that is on our board (card 020). Until it is
-fixed, assume you may be running with as few as ~32 levels per channel in a dim
-room. Art that survives 5 bits per channel is safe.
+- Dark gradients are **much better than the table suggests, but still the panel's
+  weakest range.** The time average is built from few refreshes, so very dark values
+  (under sRGB ~30) are a sparse sparkle of single-level blinks rather than a steady
+  dim glow; large dark areas can look faintly alive. Slow fades to black are now
+  usable; long-held near-black detail is still not where to put your subtlety.
+- Put tonal detail in the middle and upper range, use true black as a shape, and
+  prefer fades that are either reasonably quick or that also shrink/erode the shape.
+- **You do not need to dither in time yourself** to gain levels, and should not: the
+  device does it at 154 Hz, which is invisible; anything you do at 30 fps is 15 Hz
+  and visible. Spatial (ordered) dither is still yours to use as texture (2.4).
+- **Brightness no longer costs depth.** It is set by LED on-time per scan line, not
+  by scaling values, so the full level structure survives at any brightness. It is a
+  runtime control (`screeny brightness N`), 25 real steps, capped in firmware.
+- A camera cannot photograph the dithered panel honestly (a 1/30 s exposure against
+  a ~100 ms dither cycle), and the bench camera's colour response is unknown. Judge
+  by eye on the device; do not tune art to camera captures.
 
 ### 2.2 The primaries are not sRGB
 
@@ -161,10 +168,9 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
 - Temporal dithering (alternating two adjacent levels on successive frames) works,
   but at 30 fps the alternation is 15 Hz, which is visible as flicker on bright
   LEDs, especially in peripheral vision. Keep it to one quantisation step of
-  amplitude, prefer it in dark/mid tones, and vary the phase per pixel with a
-  blue-noise mask so the whole field never flickers in unison. **[provisional: the
-  firmware may later do sub-frame temporal dithering itself at the 154 Hz refresh
-  rate, which would be invisible. Do not depend on it.]**
+  amplitude, and vary the phase per pixel with a blue-noise mask so the whole field
+  never flickers in unison. **You should rarely need it: the firmware already
+  dithers in time at the 154 Hz refresh rate, invisibly (section 2.1).**
 - Dither in linear light, against the real panel levels, not against 8-bit sRGB.
 
 ---
@@ -255,8 +261,10 @@ Your most important tool is a simulator that shows what the panel will show, not
 what your framebuffer contains. It should:
 
 1. Take your frame (RGB or indexed).
-2. Apply the **panel model**: sRGB -> linear -> quantise each channel to 64 levels
-   (make the level count a parameter, and test at 32) -> back to sRGB for display.
+2. Apply the **panel model**: sRGB -> linear -> quantise each channel -> back to sRGB
+   for display. With device-side temporal dithering the effective level count is
+   about 190 rather than 64 (card 002 measured ~195); make it a parameter and look at
+   both, because the dark end behaves like the coarser number.
    Optionally apply the 32-colour / lossy path so you see codec damage too.
 3. Draw each pixel as a **round dot on black with gaps** (dot diameter ~60-70% of
    pitch), upscaled at least 12x. A plain nearest-neighbour upscale lies to you: it
