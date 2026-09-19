@@ -4,6 +4,7 @@ title: Authenticate mutating control ops for untrusted networks
 type: design
 hardware: no
 depends: [004, 008, 014]
+status: parked        # do not pick up without the owner asking for it
 owner:
 branch:
 ---

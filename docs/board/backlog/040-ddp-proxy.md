@@ -4,6 +4,7 @@ title: DDP proxy in the sender (host-side DDP -> native bridge)
 type: build
 hardware: no
 depends: [009]
+status: parked        # do not pick up without the owner asking for it
 owner:
 branch:
 ---

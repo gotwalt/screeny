@@ -24,6 +24,7 @@ title: Short imperative title
 type: research | design | build | test
 hardware: no | yes        # yes = may touch serial port / camera / flash
 depends: [003, 004]
+status: parked             # optional; parked cards stay in backlog/ and are not picked up
 owner:                    # filled in when claimed
 branch:                   # filled in when claimed
 ---

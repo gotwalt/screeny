@@ -32,9 +32,14 @@ the phase before them has produced what they depend on.
 - 010 fractal zoom sender
 - 011 word clock sender: spells out the current time, animated transitions
 - 012 camera measurement harness: capture, locate panel, compare with sent frames (hardware)
-- 040 DDP proxy in the sender: LedFx/xLights -> native frames (host-side only; firmware never speaks DDP)
 
 ## Phase 4 - tune
 
 - 013 end-to-end fps / latency / loss measurement and codec trade-offs on real hardware
 - 014 runtime WiFi provisioning
+
+## Parked - not scheduled, only on the owner's say-so
+
+- 040 DDP proxy in the sender (LedFx/xLights -> native frames; host-side only, the
+  firmware never speaks DDP). Owner is unsure it will be wanted.
+- 041 control channel authentication (only matters on an untrusted LAN)
