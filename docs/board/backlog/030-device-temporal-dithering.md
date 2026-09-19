@@ -4,8 +4,8 @@ title: Temporal dithering in the panel driver to recover ~2 bits of depth
 type: build
 hardware: yes
 depends: [007]
-owner:
-branch:
+owner: claude-fable-5.1 (done inside card 007)
+branch: card/007b-firmware-display
 ---
 
 ## Goal
@@ -60,3 +60,59 @@ steps than the undithered driver, with no visible flicker or beating at normal
 viewing distance.
 
 ## Log
+
+### Done inside card 007, on hardware (2026-09-19)
+
+Card 007 took this as its stretch. Acceptance met; moving to `review/`.
+
+**Where it lives.** `firmware/src/display.rs` (`render`'s `phase` argument,
+`quantise_dither`, `BAYER4`) and `firmware/src/gamma.rs`. Not in the
+framebuffer crate: the sub-level remainder lives in our gamma table and never
+needs to reach the DMA layer, so the driver did not have to change at all.
+
+**How.** `SRGB_TO_Q` maps each sRGB code to duty in **sixteenths of a level**
+(`0..=63*16`) rather than to a level, which is the "sRGB8 -> (integer duty,
+fractional remainder)" the card asked for, kept as one table and with no float
+on the device. Each refresh, `quantise_dither` emits `floor(q/16)` or one more
+according to whether the remainder exceeds a threshold that advances by one per
+refresh. The threshold is offset per pixel by a 4x4 Bayer matrix — **not** as
+spatial dithering, but so that pixels sharing a remainder do not all toggle on
+the same refresh, which would beat the whole panel at refresh/16, about 10 Hz
+and very visible.
+
+**Results.**
+
+| | |
+|---|---|
+| refresh rate, dithering on | **154/s measured**, unchanged from undithered |
+| ... with WiFi associated and 30 fps streaming | **154/s**, 30 fps in, 0 dropped |
+| black point, undithered | sRGB 34 (34 codes emit nothing) |
+| black point, dithered | **about sRGB 6** |
+| panel mean luminance over a 3 s clip | sd **1.7%**, no periodic structure |
+
+Camera evidence in card 007's log: the dark ramp (sRGB 0..63 across the panel)
+time-averaged over 80 frames is a continuous gradient dithered, and is **black
+for 34 columns then two hard steps** undithered.
+`docs/research/img/c007-darkramp-{dithered,undithered}.jpg`.
+
+**The cost, which this card underestimated.** Dithering means the DMA
+framebuffer must be rewritten **every refresh** instead of once per received
+frame. The conversion is 3.1 ms and the refresh is 154 Hz, so the display task
+consumes **about 48% of one core continuously — awake or idle** — against 8.7%
+undithered, where it sleeps between frames. The dither arithmetic itself is
+only 0.2 ms of that 3.1; the cost is the rewriting. Affordable on a dual-core
+chip currently using one core, and the first thing to trade if card 008's
+decode turns out to be expensive.
+
+**A bench note that outlived the card.** A single still cannot photograph a
+dithered panel honestly: the exposure is about 1/30 s and the dither cycle is
+16 refreshes at 154 Hz = 104 ms, so a still catches roughly a third of a cycle
+and the dark end of any pattern comes out as a checkerboard. Use a clip and
+ffmpeg's `tmix` below about sRGB 40. This is in card 007's log too and belongs
+in `docs/research/000-bench-notes.md` next time someone touches it.
+
+**Not done:** the note in `docs/design/architecture.md` about how brightness
+interacts. It no longer says anything interesting — card 007 made brightness
+output-enable duty, which costs no bit depth, so the prerequisite this card
+worried about simply went away. Recorded here instead of writing a paragraph
+that only says "never mind".

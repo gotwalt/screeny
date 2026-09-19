@@ -311,3 +311,244 @@ worth writing down: at any brightness we can actually use, the lit window is
 brightness does not merely leave ghosting alone, it removes the conditions for
 it. The one configuration that might ghost — lit across the latch slot — is not
 reachable through this API, by construction.
+
+### Deliverable 4 - gamma
+
+Inherited implementation (`firmware/src/gamma.rs`), verified on the panel.
+
+The table is the sRGB EOTF evaluated at all 256 codes and scaled to `63 * 16`,
+keeping four fractional bits below a duty level so the dither has a remainder
+to spend. Two compile-time assertions pin its ends. Nothing about it is
+empirical, which is the point: the LUT is correct by construction, and the
+camera's job is to confirm that it is actually *applied* and that its effect
+has the right direction and rough size.
+
+**What the camera says.** Grey ramp, sRGB 0 at the left to 255 at the right,
+box-averaged per LED column (red channel, the one furthest from clipping):
+
+| sRGB code | 16 | 33 | 65 | 98 | 130 | 162 | 195 | 227 | 243 |
+|---|---|---|---|---|---|---|---|---|---|
+| gamma on | 3 | 41 | 63 | 86 | 109 | 126 | 139 | 148 | 154 |
+| gamma off | 55 | 71 | 93 | 107 | 118 | 125 | 129 | 128 | 130 |
+
+With gamma **off** the camera's response is essentially **flat above sRGB 160**
+— the top 40% of the range produces a 4% change — and the first 6% of the range
+already consumes a third of the response. That is "mid-grey is blown out",
+exactly. With gamma **on** the response climbs across the whole range.
+
+![ramp, gamma on](../../research/img/c007-ramp-gamma.jpg)
+![ramp, gamma off](../../research/img/c007-ramp-nogamma.jpg)
+
+Those two figures are the capture box-averaged down to 64x32 and blown back up
+— "what the camera measured, per LED". A raw still of this panel looks blown
+out whatever is on it, because a lit LED bleeds most of the way to its
+neighbours; sampling per LED first is the only way to see the picture rather
+than the bloom.
+
+**What the camera cannot say, and why not.** The exact exponent. Two reasons,
+both worth writing down because they constrain every future optical measurement
+on this bench:
+
+1. **The camera auto-exposes, and it has enormous range.** A flat mid-grey
+   field at 25 output-enable slots and at 2 — a 12.5x change in emitted light —
+   came back at camera code 123 and 100. Absolute photometry through this rig
+   is impossible; only *within-frame* comparisons mean anything.
+2. **Its tone curve is not sRGB.** An exposure-independent ratio measurement (a
+   split field, captured twice with the halves swapped so lens shading cancels
+   in the geometric mean) gives L(128)/L(255) = 0.34 with gamma on, against
+   0.216 for a true sRGB EOTF and 0.508 for no gamma at all. The measurement
+   lands between them and nearer the correct one, which confirms the LUT is
+   applied; the residual is the webcam's own shadow lift, which nothing in this
+   rig can calibrate out. Card 012's homography work should not assume a known
+   camera transfer either.
+
+### Deliverable 5 - brightness that does not cost bit depth
+
+Inherited mechanism; verified, and this is the deliverable the whole vendored
+patch exists for.
+
+**How it is implemented.** Brightness is the **width of the output-enable
+window inside each 64-slot scan row**, rewritten in the framebuffer at run time
+— bit 8 of every entry, and nothing else. `display::slots_for()` maps the
+runtime 0..=255 brightness onto `0..=MAX_OE_SLOTS`, and `MAX_OE_SLOTS` is 25,
+i.e. 39% duty, which is exactly what Tidbyt's own firmware calls brightness 100
+and calls its maximum. The default is 96, which is 9 slots, 14% duty, a little
+above Tidbyt's shipping 12%.
+
+**Bit depth is untouched, and that is structural rather than measured.** The
+BCM planes are streamed unchanged and each plane's scan gets the same window,
+so every plane keeps its weight and their ratios are exact. Nothing in the
+colour path knows the brightness: the gamma table does not move by one entry
+between brightness 8 and 255. Compare the alternative the spike used — scaling
+pixel values — which at Tidbyt's default leaves a 6-bit channel using values
+0..7, throwing away three of six bits (card 001 section 3, card 020).
+
+**The evidence the card asks for.** The 16-step grey wedge (sRGB 0, 17, ...
+255) at 25 slots and at 2 slots, a 12.5x range, box-averaged per step with the
+block edges dropped:
+
+| step | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 25 slots | 1.4 | 23.5 | 47.7 | 63.3 | 75.8 | 88.7 | 98.9 | 107.9 | 116.3 | 123.7 | 129.0 | 133.5 | 138.4 | 144.0 | 150.7 | 160.3 |
+| 2 slots | 2.7 | 19.7 | 39.0 | 51.6 | 61.5 | 72.5 | 80.0 | 87.5 | 93.2 | 100.1 | 104.8 | 108.4 | 111.4 | 115.4 | 121.1 | 128.9 |
+
+**All sixteen steps are present, monotonic and separated at both levels.** At
+the dim setting the smallest gap is 3.0 camera codes (step 11 to 12) against a
+within-step spread of 3.0; at the bright setting the smallest gap is 4.6
+against 3.8. The two are the same picture, which is the claim.
+
+![steps at 25 slots](../../research/img/c007-steps-bright.jpg)
+![steps at 2 slots](../../research/img/c007-steps-dim.jpg)
+
+(The two figures look equally bright because the camera re-exposed, as above.
+Step *separation*, not step level, is the measurement.)
+
+The one honest limitation: the control's real resolution is 25 steps, not 256,
+because the panel is lit for a whole number of pixel clocks or not at all.
+`slots_for` rounds, and below brightness 6 the panel is dark. That is fine for
+a user-facing dimmer and should be said out loud rather than implied by a
+0..=255 API.
+
+**Card 020 is answered** and moves to `review/` with its conclusions folded in.
+
+### Deliverable 6 - status screen
+
+Inherited; verified. `screeny` in blue, the network state in green or amber,
+then the IP and `screeny.local`, in `embedded-graphics`' `FONT_5X7` and
+`FONT_4X6`. Drawn into the sRGB frame like any other content, so it goes
+through the same gamma and brightness path — a status screen that ignored the
+brightness setting would be the one thing on the device that could dazzle you.
+
+`192.168.7.221` is legible in the capture.
+
+![status screen](../../research/img/c007-status-screen.jpg)
+
+One fix: `Net::Lost` existed but nothing ever constructed it, so a device that
+associated and then lost the AP would have shown "joining wifi" forever. The
+status task now remembers whether it ever held an address and distinguishes the
+two.
+
+### Deliverable 7 - measurements and the frame-time budget
+
+From `captures/c007b-measure-dither.log`, `c007b-measure-stream.log` and
+`c007b-measure-stream-dither.log`.
+
+| quantity | value |
+|---|---|
+| Panel refresh, driver's compile-time figure | 154 Hz |
+| Panel refresh, **measured** (swaps/s with dither on) | **154/s**, steady |
+| ... with WiFi associated and a 30 fps stream running | **154/s**, unchanged |
+| sRGB888 -> DMA conversion, 2048 px, gamma + dither | **3.1 ms** typical, 6.6 ms worst in 60 s |
+| ... gamma only, no dither | **2.9 ms** typical, 5.0 ms worst |
+| Heap used / free | **45,416 / 69,272** of 114,688 |
+| Framebuffer, each of two | 12,312 B (in `.bss`, not the heap) |
+| Stream at 30 fps, 1470-byte datagrams | **30 fps in, 0 dropped** |
+
+**Frame-time budget, per 33.3 ms frame at 30 fps:**
+
+| | dither off | dither on (shipping) |
+|---|---|---|
+| renders per second | 30 (one per received frame) | 154 (one per refresh) |
+| render CPU | 30 x 2.9 ms = **8.7%** | 154 x 3.1 ms = **48%** |
+| display task when idle | sleeps, 0 swaps/s, ~0% | still 154 swaps/s, still 48% |
+| measured fps in / dropped at 30 fps | 30 / 0 | 30 / 0 |
+
+So **temporal dithering costs about 40 points of one core, permanently, awake
+or idle** — not because the dither arithmetic is expensive (it is 0.2 ms of the
+3.1) but because dithering means the framebuffer must be rewritten every
+refresh instead of once per frame. That is the real price of card 030 and it
+was not in its estimate. There is a lot of headroom at 30 fps on a dual-core
+chip that is currently using one core, so it is affordable; it is not free, and
+if card 008's decode turns out to be expensive this is the first thing to
+trade.
+
+Three things worth knowing beyond the table:
+
+- **A render can take 640 ms. Exactly once.** Every boot shows one ~640,000 us
+  render, during WiFi association, when esp-radio's setup preempts the display
+  task mid-conversion. It is not a conversion cost, and it is not lock waiting
+  either — the clock starts after the frame lock is taken, which the first
+  shift had already fixed. It is preemption. Steady-state worst case is
+  5-6.6 ms. Telemetry now reports a per-window maximum alongside the
+  since-boot one, because the since-boot figure is pinned at 640 ms forever and
+  hides everything else.
+- **The "newest wins, drop the rest" path never fires.** `frame_task` uses
+  `try_lock` and counts drops, and across every run here the count is zero,
+  including with the render holding the lock 48% of the time. It cannot fire:
+  the display task holds the lock across a *synchronous* render with no await
+  inside it, so on a single-threaded executor the frame task does not get to
+  run until the lock is free. Datagrams queue in the socket's four-slot buffer
+  instead. The design is right for card 008, but it is not currently doing
+  anything and the zero in the log should not be read as evidence that it
+  works.
+- **Refresh does not degrade under WiFi.** 154/s with the radio associated,
+  streaming at 30 fps, and the display loop free-running. Risk 6 from card
+  001's list (flicker when WiFi associates) is retired for this workload; the
+  `iram` feature, `circular-dma` and `Priority3` between them do the job.
+
+### Deliverable 8 (stretch) - temporal dithering: taken, and it works
+
+The first shift had already implemented this (`display::render`'s `phase`
+argument, `quantise_dither`, and the 4x4 Bayer phase offset), left it on by
+default, and never showed that it did anything. It does, and the effect is the
+largest single quality win on this panel.
+
+**The mechanism.** `gamma.rs` keeps four fractional bits below a duty level, so
+a code wants `q/16` levels. Each refresh, `quantise_dither` emits `floor(q/16)`
+or one more, according to whether the remainder exceeds a threshold that
+advances one step per refresh, offset per pixel by a 4x4 Bayer matrix. The
+Bayer offset is not spatial dithering — it is there so that pixels with the
+same remainder do not all toggle on the same refresh, which would beat the
+whole panel at refresh/16, about 10 Hz and very visible.
+
+**The evidence.** The dark ramp (sRGB 0..63 across the panel), time-averaged
+over 80 camera frames:
+
+![dark ramp, dithered](../../research/img/c007-darkramp-dithered.jpg)
+![dark ramp, undithered](../../research/img/c007-darkramp-undithered.jpg)
+
+Undithered, the panel is **black for the first 34 columns** and then steps
+twice — precisely the 34 sRGB codes that quantise to duty level 0 at six
+planes, as `gamma.rs`' doc comment predicts. Dithered, it is a continuous
+gradient from about sRGB 6. Per-column measurements agree: undithered, columns
+0-32 read 2-10 camera codes (black itself reads 2); dithered, column 6 already
+reads 37.
+
+**No visible flicker or beating.** Panel mean luminance over a 3 s clip (90
+frames): mean 73.8, standard deviation 1.24, i.e. **1.7%**, with no periodic
+structure — and most of that is one auto-exposure excursion by the camera.
+Card 030's acceptance asked for exactly this.
+
+**One caveat that matters for everyone else's captures.** A single still cannot
+photograph a dithered panel honestly. The exposure is about 1/30 s, the dither
+cycle is 16 refreshes at 154 Hz = 104 ms, so a still catches roughly a third of
+a cycle and the dark end of any pattern comes out as a checkerboard. Every
+still in this log shows it if you look at the shadows; the grey wedge's step 1
+has a standard deviation of 21 codes against 3 for the steps above it, entirely
+from this. **Use a clip and ffmpeg's `tmix` for anything below about sRGB 40.**
+
+**Card 030 moves to `review/`** with these results. The driver change it asked
+for lives in `firmware/src/display.rs` rather than in the framebuffer crate,
+because the remainder lives in our gamma table and never needs to reach the DMA
+layer.
+
+### Card 021 (board revision)
+
+Not taken; left in `backlog/` with what this card learned appended. This unit's
+rotated colour order is confirmed a second time here — red, green, blue and
+yellow all land in the right channels in the orientation and ghost patterns —
+so the *constant* is right. What card 021 asks for, the ADC strap read and a
+named configuration, is untouched and unblocked.
+
+### What is left undone
+
+- `write_row`'s "2.3x faster than the equivalent `set_pixel` loop" is the first
+  shift's number, inherited and **not re-measured**; re-checking it means
+  building the slow path back, which is not worth a bench slot. The 2.9-3.1 ms
+  it achieves is measured.
+- The brightness control's resolution is 25 steps, not 256 (above). No card
+  raised; it is documented on `display::slots_for`.
+- Absolute photometry on this bench is impossible with the camera's
+  auto-exposure. Card 061 records what a fixed-exposure capture path would buy,
+  since card 012 will want it too.
+- `set_oe_slots` / `set_oe_window` are worth offering upstream. Card 060.

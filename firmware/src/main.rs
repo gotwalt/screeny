@@ -116,8 +116,15 @@ static FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
 static SWAPS: AtomicU32 = AtomicU32::new(0);
 /// Last sRGB888 -> DMA conversion, in microseconds.
 static RENDER_US: AtomicU32 = AtomicU32::new(0);
-/// Rolling maximum of the same, since it is the number that can eat a frame.
+/// Maximum since boot, and maximum within the current telemetry period.
+///
+/// Both, because they answer different questions and the first one hides the
+/// second. WiFi association preempts the display task for most of a second
+/// exactly once, at boot; a since-boot maximum therefore reads ~640000 forever
+/// and says nothing about whether the steady state is healthy. The windowed
+/// figure is the one to watch while streaming.
 static RENDER_US_MAX: AtomicU32 = AtomicU32::new(0);
+static RENDER_US_MAX_WINDOW: AtomicU32 = AtomicU32::new(0);
 
 static BRIGHTNESS: AtomicU8 = AtomicU8::new(display::DEFAULT_BRIGHTNESS);
 /// Bench-only escape hatch: raw output-enable slots, ignoring the power cap.
@@ -244,6 +251,7 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
             let us = t0.elapsed().as_micros() as u32;
             RENDER_US.store(us, Ordering::Relaxed);
             RENDER_US_MAX.fetch_max(us, Ordering::Relaxed);
+            RENDER_US_MAX_WINDOW.fetch_max(us, Ordering::Relaxed);
         }
         phase = phase.wrapping_add(1);
 
@@ -377,11 +385,12 @@ async fn telemetry_task() {
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
         info!(
-            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {}) | bright {} -> {} slots from {} | gamma {} dither {} | heap used {} free {}",
+            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {} this window, {} since boot) | bright {} -> {} slots from {} | gamma {} dither {} | heap used {} free {}",
             frames.wrapping_sub(last_frames) / PERIOD_S,
             swaps.wrapping_sub(last_swaps) / PERIOD_S,
             FRAMES_DROPPED.load(Ordering::Relaxed),
             RENDER_US.load(Ordering::Relaxed),
+            RENDER_US_MAX_WINDOW.swap(0, Ordering::Relaxed),
             RENDER_US_MAX.load(Ordering::Relaxed),
             BRIGHTNESS.load(Ordering::Relaxed),
             target_oe_slots(),
