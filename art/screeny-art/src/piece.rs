@@ -46,6 +46,33 @@ pub fn local_now() -> f64 {
 /// panel never does, so every returned frame must be a complete picture.
 pub trait Piece: Send {
     fn render(&mut self, ctx: &Ctx) -> Frame;
+
+    /// For pieces that compose as they go: what is being performed right now,
+    /// and what the person watching can do about it. The studio shows this as
+    /// its "Now playing" panel.
+    fn playing(&self) -> Option<Playing> {
+        None
+    }
+
+    /// One of the actions offered by [`Piece::playing`] was chosen.
+    fn act(&mut self, _action: &str) {}
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Playing {
+    /// What it is, in the piece's own words: "needles > open, from a point".
+    pub title: String,
+    /// What is happening to it: "dancing, 6 s to go".
+    pub detail: String,
+    pub actions: Vec<Action>,
+    /// Anything worth telling: usually what has been learned from ratings.
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Action {
+    pub id: &'static str,
+    pub label: &'static str,
 }
 
 /// A tunable number. The studio builds a slider from this.

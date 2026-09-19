@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::State;
 
-const FPS: f64 = 30.0;
+/// Frames per second the engine may run at. The panel is assumed to take 60;
+/// 30 is there to see what a piece looks like at the measured rate.
+const RATES: [f64; 2] = [30.0, 60.0];
 /// Frame packet header size; see `Engine::tick` and `ui/main.js`.
 const HEADER: usize = 48;
 
@@ -28,6 +30,7 @@ struct Engine {
     last_tick: Instant,
     paused: bool,
     speed: f64,
+    rate: f64,
     seq: u32,
     fps: f32,
     packet: Vec<u8>,
@@ -48,6 +51,7 @@ impl Engine {
             last_tick: Instant::now(),
             paused: false,
             speed: 1.0,
+            rate: 60.0,
             seq: 0,
             fps: 0.0,
             packet: vec![0; HEADER + N * 3],
@@ -104,6 +108,7 @@ impl Engine {
             settings: self.pipeline.settings,
             paused: self.paused,
             speed: self.speed,
+            fps: self.rate,
         }
     }
 }
@@ -150,6 +155,7 @@ struct StudioState {
     settings: Settings,
     paused: bool,
     speed: f64,
+    fps: f64,
 }
 
 #[derive(Serialize)]
@@ -225,10 +231,24 @@ fn set_settings(engine: State<Shared>, settings: Settings) {
 }
 
 #[tauri::command]
-fn set_playback(engine: State<Shared>, paused: bool, speed: f64) {
+fn set_playback(engine: State<Shared>, paused: bool, speed: f64, fps: f64) {
     let mut e = lock(&engine);
     e.paused = paused;
     e.speed = speed.clamp(0.0, 8.0);
+    e.rate = if RATES.contains(&fps) { fps } else { e.rate };
+}
+
+/// What the piece says it is performing, if it is the kind that composes.
+#[tauri::command]
+fn piece_playing(engine: State<Shared>) -> Option<screeny_art::piece::Playing> {
+    lock(&engine).piece.playing()
+}
+
+#[tauri::command]
+fn piece_act(engine: State<Shared>, action: String) -> Option<screeny_art::piece::Playing> {
+    let mut e = lock(&engine);
+    e.piece.act(&action);
+    e.piece.playing()
 }
 
 #[tauri::command]
@@ -243,12 +263,11 @@ fn main() {
     std::thread::Builder::new()
         .name("engine".into())
         .spawn(move || {
-            let period = Duration::from_secs_f64(1.0 / FPS);
             let mut next = Instant::now();
             loop {
                 // A panicking piece reports itself on stderr; keep the clock running.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lock(&ticker).tick()));
-                next += period;
+                next += Duration::from_secs_f64(1.0 / lock(&ticker).rate);
                 let now = Instant::now();
                 if next > now {
                     std::thread::sleep(next - now);
@@ -270,6 +289,8 @@ fn main() {
             set_seed,
             set_settings,
             set_playback,
+            piece_playing,
+            piece_act,
             restart
         ])
         .run(tauri::generate_context!())

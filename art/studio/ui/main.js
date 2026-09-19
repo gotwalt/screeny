@@ -197,7 +197,7 @@ async function start(invoke) {
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => notice(`${cmd} failed: ${e}`));
   const pushSettings = () => call('set_settings', { settings: state.settings });
-  const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed });
+  const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed, fps: state.fps });
 
   // Piece, seed, parameters
   const pieceById = Object.fromEntries(boot.pieces.map((p) => [p.id, p]));
@@ -260,6 +260,7 @@ async function start(invoke) {
   pauseButton.addEventListener('click', togglePause);
   $('#restart').addEventListener('click', restart);
   showPaused();
+  bindRadios($('#fps'), { get: () => state.fps, set: (v) => { state.fps = Number(v); pushPlayback(); } });
   bindSlider($('#speed-slider'), {
     get: () => state.speed,
     set: (v) => { state.speed = v; pushPlayback(); },
@@ -379,7 +380,7 @@ async function start(invoke) {
       : 'Limiter idle.';
 
     // Bar spans 0..10% of full scale per frame; the tick is the limiter's rise rate.
-    const perFrame = s().limiter.max_rise_per_s / 30;
+    const perFrame = s().limiter.max_rise_per_s / (state.fps || 60);
     mDluma.out.textContent = `${(st.dluma * 100).toFixed(1)}%`;
     width(mDluma.fill, st.dluma / 0.1);
     mDluma.ghost.style.left = `${Math.min(1, st.dluma / 0.1) * 100}%`;
@@ -391,6 +392,37 @@ async function start(invoke) {
     $('#ro-time').textContent = `${st.t.toFixed(1)} s`;
     $('#ro-fps').textContent = `${st.fps.toFixed(1)} fps`;
   }
+
+  // Now playing: pieces that compose as they go say what they are performing
+  // and offer a say in it. Polled gently; it changes every few seconds at most.
+  let playingKey = '';
+  function showPlaying(p) {
+    $('#playing').hidden = !p;
+    if (!p) { playingKey = ''; return; }
+    $('#playing-title').textContent = p.title;
+    $('#playing-detail').textContent = p.detail;
+    $('#playing-notes').replaceChildren(...p.notes.map((n) => Object.assign(document.createElement('li'), { textContent: n })));
+    // Rebuild the buttons only when the set changes, so a click is never lost
+    // to a refresh and the "done" mark survives until the next dance.
+    const key = `${p.title}|${p.actions.map((a) => a.id).join()}`;
+    if (key === playingKey) return;
+    playingKey = key;
+    $('#playing-actions').replaceChildren(...p.actions.map((a) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', textContent: a.label });
+      b.dataset.id = a.id;
+      b.addEventListener('click', async () => {
+        const next = await call('piece_act', { action: a.id });
+        if (a.id === 'like' || a.id === 'dislike') {
+          document.querySelectorAll('#playing-actions button').forEach((o) => o.classList.remove('is-done'));
+          b.classList.add('is-done');
+        }
+        if (a.id === 'forget') playingKey = '';
+        showPlaying(next);
+      });
+      return b;
+    }));
+  }
+  setInterval(async () => showPlaying(await call('piece_playing')), 500);
 
   // Frame pump. The engine produces 30 frames a second whether or not we ask;
   // we take the newest one each display refresh and skip it if it is not new.

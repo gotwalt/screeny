@@ -134,9 +134,52 @@ pub enum Turn {
     Checker,
 }
 
+/// How a grid is shared between two formations: 0 is all the first, 1 all the
+/// second. The gradient is the interesting one: a soft band whose position is
+/// a wave, so stepping its phase carries one formation across the other.
+#[derive(Clone, Copy, Debug)]
+pub enum Mask {
+    Checker,
+    Columns,
+    Rows,
+    Halves { reverse: bool },
+    Gradient(Wave),
+}
+
+impl Mask {
+    fn weight(self, i: usize) -> f32 {
+        let (col, row) = (i % COLS, i / COLS);
+        let on = |b: bool| if b { 1.0 } else { 0.0 };
+        match self {
+            Mask::Checker => on((col + row) % 2 == 1),
+            Mask::Columns => on(col % 2 == 1),
+            Mask::Rows => on(row % 2 == 1),
+            Mask::Halves { reverse } => on((col >= COLS / 2) != reverse),
+            Mask::Gradient(wave) => {
+                let (x, y) = centre(i);
+                let s = 0.5 + 0.5 * (wave.k.0 * x + wave.k.1 * y + wave.phase).sin();
+                let t = ((s - 0.3) / 0.4).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            }
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Mask::Checker => "checker",
+            Mask::Columns => "columns",
+            Mask::Rows => "rows",
+            Mask::Halves { .. } => "halves",
+            Mask::Gradient(_) => "band",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Phase {
     pub to: Formation,
+    /// A second formation sharing the grid with `to`, and how they share it.
+    pub with: Option<(Formation, Mask)>,
     pub timing: Timing,
     pub turn: Turn,
     /// Full turns added on top of what it takes to get there.
@@ -248,7 +291,18 @@ pub fn plan(phases: &[Phase], from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], 
         let mut arrived = begin;
         for i in 0..CLOCKS {
             let mut target = phase.to.pose(i, digits);
-            if phase.to.symmetric() {
+            let mut symmetric = phase.to.symmetric();
+            if let Some((other, mask)) = phase.with {
+                let (b, w) = (other.pose(i, digits), mask.weight(i));
+                // Pair each hand with whichever of the other formation's is
+                // nearer, then go part of the way by the shorter arc.
+                let straight = shortest(target[0], b[0]).abs() + shortest(target[1], b[1]).abs();
+                let crossed = shortest(target[0], b[1]).abs() + shortest(target[1], b[0]).abs();
+                let b = if other.symmetric() && crossed < straight { [b[1], b[0]] } else { b };
+                target = [target[0] + shortest(target[0], b[0]) * w, target[1] + shortest(target[1], b[1]) * w];
+                symmetric &= other.symmetric();
+            }
+            if symmetric {
                 let cost = |t: Hands| shortest(pose[i][0], t[0]).abs() + shortest(pose[i][1], t[1]).abs();
                 let swapped = [target[1], target[0]];
                 if cost(swapped) < cost(target) {
@@ -290,7 +344,7 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
     let sweep = Timing::Columns { gap: 0.35, reverse: flip };
     let sweep_back = Timing::Columns { gap: 0.3, reverse: !flip };
     let way = if flip { Turn::Anticlockwise } else { Turn::Clockwise };
-    let step = |to, timing, turn, extra, rest| Phase { to, timing, turn, extra, rest };
+    let step = |to, timing, turn, extra, rest| Phase { to, with: None, timing, turn, extra, rest };
     let wave = Wave {
         base: if flip { 90.0 } else { 270.0 },
         amp: rng.range(15.0, 30.0),
@@ -401,15 +455,17 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
 //
 // The repertoire above is twelve sentences in a small language. `compose`
 // writes new ones. Sampling the grammar blindly gives mostly incoherent motion,
-// so a composition has three things a random one lacks:
+// so a composition has things a random one lacks:
 //
-//  - a *theme*: one idea of direction that every phase shares;
+//  - a *theme*: one idea of direction that every phase shares. It may change
+//    once, and only after a hold, so the change reads as a decision;
 //  - an *arc*: gather into order, develop that order, resolve into the time;
-//  - a *critic*: each candidate is planned for real and thrown away if it is
-//    too long or short, leaves the whole grid frozen part-way, barely moves,
-//    or asks more of a hand than the motor can give.
+//  - a *critic*: every sketch is planned for real. Ones that are too long or
+//    short, freeze the grid part-way, barely move, or overdrive a hand are
+//    thrown away; the rest are scored for flow, pacing, novelty against recent
+//    dances and the watcher's taste, and the best is performed.
 
-/// One idea of direction for a whole dance.
+/// One idea of direction for a dance.
 #[derive(Clone, Copy, Debug)]
 enum Theme {
     Sweep { reverse: bool },
@@ -419,6 +475,15 @@ enum Theme {
 }
 
 impl Theme {
+    fn new(rng: &mut Rng) -> Theme {
+        match rng.u64() % 5 {
+            0 => Theme::Sweep { reverse: rng.u64() & 1 == 0 },
+            1 => Theme::Cascade { reverse: rng.u64() & 1 == 0 },
+            2 => Theme::Diagonal,
+            _ => Theme::Point((rng.range(0.5, 7.5), rng.range(0.3, 2.7))),
+        }
+    }
+
     /// `back` is the return journey: the same idea, run the other way.
     fn timing(self, gap: f32, back: bool) -> Timing {
         match self {
@@ -452,6 +517,14 @@ enum Develop {
     Swell,
     /// A compass focus is carried to the far side.
     Carry,
+    /// Alternate dials take the quarter-turned formation: lines become
+    /// zigzags and lattices.
+    Weave,
+    /// Half the grid takes a different formation altogether.
+    Split,
+    /// A soft band crosses the grid, leaving the quarter-turned (or opened)
+    /// formation behind it. Two phases.
+    Morph,
 }
 
 impl Develop {
@@ -462,6 +535,9 @@ impl Develop {
             Develop::Open => "open",
             Develop::Swell => "swell",
             Develop::Carry => "carry",
+            Develop::Weave => "weave",
+            Develop::Split => "split",
+            Develop::Morph => "morph",
         }
     }
 }
@@ -487,18 +563,18 @@ impl Formation {
         use Develop::*;
         match self {
             Formation::Digits | Formation::Turned { .. } => &[],
-            Formation::Lines(_) | Formation::Needles(_) | Formation::Chevron { .. } => &[Spin, Quarter, Open],
-            Formation::Fan { .. } => &[Spin, Quarter, Swell],
-            Formation::Rings { .. } => &[Spin, Quarter],
+            Formation::Lines(_) | Formation::Chevron { .. } => &[Spin, Quarter, Open, Weave, Split, Morph],
+            Formation::Needles(_) => &[Spin, Quarter, Open, Weave, Morph],
+            Formation::Fan { .. } => &[Spin, Quarter, Swell, Weave],
+            Formation::Rings { .. } => &[Spin, Quarter, Morph, Split],
             Formation::Compass { .. } => &[Carry, Spin],
-            Formation::Flow { .. } => &[Spin, Quarter, Open, Swell],
+            Formation::Flow { .. } => &[Spin, Quarter, Open, Swell, Morph],
         }
     }
 
     fn develop(self, how: Develop) -> Formation {
         use Formation::*;
         match (self, how) {
-            (f, Develop::Spin) => f,
             (Lines(a), Develop::Quarter) => Lines(a + 90.0),
             (Needles(a), Develop::Quarter) => Needles(a + 90.0),
             (Chevron { axis, spread }, Develop::Quarter) => Chevron { axis: axis + 180.0, spread },
@@ -523,15 +599,34 @@ fn pick<T: Copy>(rng: &mut Rng, from: &[T]) -> T {
     from[(rng.u64() % from.len() as u64) as usize]
 }
 
+/// A formation to gather into.
+fn motif(rng: &mut Rng, focus: (f32, f32), wave: Wave) -> Formation {
+    let edge = if rng.u64() & 1 == 0 { (-1.5, 1.5) } else { (COLS as f32 + 1.5, 1.5) };
+    match rng.u64() % 8 {
+        0 => Formation::Lines(pick(rng, &[0.0, 45.0, 90.0, 135.0])),
+        1 => Formation::Needles(pick(rng, &[0.0, 90.0, 180.0, 270.0])),
+        2 => Formation::Fan { base: wave.base, per_col: rng.range(15.0, 30.0) * rng.sign() },
+        3 => Formation::Rings { focus, spokes: rng.u64() & 1 == 0 },
+        4 => Formation::Compass { focus: edge },
+        5 => Formation::Chevron { axis: pick(rng, &[0.0, 180.0]), spread: rng.range(60.0, 120.0) },
+        6 => Formation::Flow { wave, open: pick(rng, &[8.0, 180.0]) },
+        _ => Formation::Turned { wave: Wave { base: 0.0, amp: rng.range(80.0, 150.0), ..wave } },
+    }
+}
+
+/// A dance, and how it describes itself.
+#[derive(Clone, Debug)]
+pub struct Composition {
+    pub name: String,
+    pub phases: Vec<Phase>,
+    /// What it is made of, for novelty and taste: "motif:rings", "op:weave"...
+    pub tags: Vec<String>,
+}
+
 /// One candidate: a theme, a formation to gather into, up to two developments,
 /// and the way home.
-fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
-    let theme = match rng.u64() % 5 {
-        0 => Theme::Sweep { reverse: rng.u64() & 1 == 0 },
-        1 => Theme::Cascade { reverse: rng.u64() & 1 == 0 },
-        2 => Theme::Diagonal,
-        _ => Theme::Point((rng.range(0.5, 7.5), rng.range(0.3, 2.7))),
-    };
+fn sketch(rng: &mut Rng) -> Composition {
+    let mut theme = Theme::new(rng);
     let focus = match theme {
         Theme::Point(focus) => focus,
         _ => (COLS as f32 / 2.0, ROWS as f32 / 2.0),
@@ -539,12 +634,17 @@ fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
     let way = if rng.u64() & 1 == 0 { Turn::Clockwise } else { Turn::Anticlockwise };
     let gap = rng.range(0.2, 0.42);
     let overlap = |rng: &mut Rng| -rng.range(0.5, 1.2);
+    let mut tags = vec![format!("theme:{}", theme.name())];
 
     // One in five goes straight to the time, with a full turn on the way.
     if rng.u64() % 5 == 0 {
-        let turn = pick(rng, &[way, Turn::Counter, Turn::Mirror, Turn::CounterMirror, Turn::Checker]);
-        let phase = Phase { to: Formation::Digits, timing: theme.timing(gap, false), turn, extra: 1, rest: 0.0 };
-        return (format!("direct, {}", theme.name()), vec![phase]);
+        let (turn, turn_name) = pick(
+            rng,
+            &[(way, "together"), (Turn::Counter, "counter"), (Turn::Mirror, "mirror"), (Turn::CounterMirror, "bloom"), (Turn::Checker, "checker")],
+        );
+        tags.extend(["motif:direct".to_string(), format!("turn:{turn_name}")]);
+        let phase = Phase { to: Formation::Digits, with: None, timing: theme.timing(gap, false), turn, extra: 1, rest: 0.0 };
+        return Composition { name: format!("direct {turn_name}, {}", theme.name()), phases: vec![phase], tags };
     }
 
     let wave = Wave {
@@ -554,22 +654,14 @@ fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
         phase: rng.range(0.0, std::f32::consts::TAU),
         bow: rng.range(-30.0, 30.0),
     };
-    let edge = if rng.u64() & 1 == 0 { (-1.5, 1.5) } else { (COLS as f32 + 1.5, 1.5) };
-    let gather = match rng.u64() % 8 {
-        0 => Formation::Lines(pick(rng, &[0.0, 45.0, 90.0, 135.0])),
-        1 => Formation::Needles(pick(rng, &[0.0, 90.0, 180.0, 270.0])),
-        2 => Formation::Fan { base: wave.base, per_col: rng.range(15.0, 30.0) * rng.sign() },
-        3 => Formation::Rings { focus, spokes: rng.u64() & 1 == 0 },
-        4 => Formation::Compass { focus: edge },
-        5 => Formation::Chevron { axis: pick(rng, &[0.0, 180.0]), spread: rng.range(60.0, 120.0) },
-        6 => Formation::Flow { wave, open: pick(rng, &[8.0, 180.0]) },
-        _ => Formation::Turned { wave: Wave { base: 0.0, amp: rng.range(80.0, 150.0), ..wave } },
-    };
+    let gather = motif(rng, focus, wave);
+    tags.push(format!("motif:{}", gather.name()));
 
     let hold = rng.u64() & 1 == 0;
     let mut name = gather.name().to_string();
     let mut phases = vec![Phase {
         to: gather,
+        with: None,
         timing: theme.timing(gap, false),
         turn: if rng.u64() % 5 == 0 { way } else { Turn::Shortest },
         extra: 0,
@@ -579,7 +671,7 @@ fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
     let mut shape = gather;
     let steps = match rng.u64() % 20 {
         0..=2 => 0,
-        3..=14 => 1,
+        3..=13 => 1,
         _ => 2,
     };
     for _ in 0..steps {
@@ -587,15 +679,63 @@ fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
         if options.is_empty() {
             break;
         }
+        // A change of theme, at most once, and only out of stillness: hold the
+        // formation, then carry on from somewhere else.
+        if tags.iter().all(|t| !t.starts_with("theme2:")) && rng.u64() % 4 == 0 {
+            if let Some(last) = phases.last_mut() {
+                last.rest = rng.range(0.5, 0.9);
+            }
+            theme = Theme::new(rng);
+            tags.push(format!("theme2:{}", theme.name()));
+        }
+
         let how = pick(rng, options);
-        shape = shape.develop(how);
-        let (turn, extra) = match how {
-            Develop::Spin => (pick(rng, &[way, way, Turn::Mirror, Turn::Checker]), 1),
-            Develop::Open => (Turn::Counter, 0),
-            Develop::Quarter => (pick(rng, &[way, Turn::Shortest]), 0),
-            Develop::Swell | Develop::Carry => (Turn::Shortest, 0),
-        };
-        phases.push(Phase { to: shape, timing: theme.timing(gap, false), turn, extra, rest: overlap(rng) });
+        let timing = theme.timing(gap, false);
+        let phase = |to, with, turn, extra, rest| Phase { to, with, timing, turn, extra, rest };
+        match how {
+            Develop::Weave => {
+                let mask = pick(rng, &[Mask::Checker, Mask::Columns, Mask::Rows]);
+                phases.push(phase(shape, Some((shape.develop(Develop::Quarter), mask)), Turn::Shortest, 0, overlap(rng)));
+                tags.push(format!("mask:{}", mask.name()));
+            }
+            Develop::Split => {
+                let other = loop {
+                    let m = motif(rng, focus, wave);
+                    if m.name() != shape.name() && !matches!(m, Formation::Turned { .. }) {
+                        break m;
+                    }
+                };
+                let reverse = rng.u64() & 1 == 0;
+                let mask = pick(rng, &[Mask::Halves { reverse }, Mask::Rows]);
+                phases.push(phase(shape, Some((other, mask)), Turn::Shortest, 0, overlap(rng)));
+                tags.extend([format!("mask:{}", mask.name()), format!("motif:{}", other.name())]);
+            }
+            Develop::Morph => {
+                let becomes = shape.develop(if shape.developments().contains(&Develop::Open) && rng.u64() & 1 == 0 {
+                    Develop::Open
+                } else {
+                    Develop::Quarter
+                });
+                let band = Wave { k: (rng.range(0.5, 0.8) * rng.sign(), rng.range(0.0, 0.4)), ..wave };
+                for advance in [0.0, 2.6] {
+                    let mask = Mask::Gradient(Wave { phase: band.phase + advance, ..band });
+                    phases.push(phase(shape, Some((becomes, mask)), Turn::Shortest, 0, overlap(rng)));
+                }
+                shape = becomes;
+                tags.push("mask:band".to_string());
+            }
+            _ => {
+                shape = shape.develop(how);
+                let (turn, extra) = match how {
+                    Develop::Spin => (pick(rng, &[way, way, Turn::Mirror, Turn::Checker]), 1),
+                    Develop::Open => (Turn::Counter, 0),
+                    Develop::Quarter => (pick(rng, &[way, Turn::Shortest]), 0),
+                    _ => (Turn::Shortest, 0),
+                };
+                phases.push(phase(shape, None, turn, extra, overlap(rng)));
+            }
+        }
+        tags.push(format!("op:{}", how.name()));
         name = format!("{name} > {}", how.name());
     }
     if let Some(last) = phases.last_mut() {
@@ -604,12 +744,15 @@ fn sketch(rng: &mut Rng) -> (String, Vec<Phase>) {
 
     phases.push(Phase {
         to: Formation::Digits,
+        with: None,
         timing: theme.timing(gap, true),
         turn: if rng.u64() % 4 == 0 { way } else { Turn::Shortest },
         extra: 0,
         rest: 0.0,
     });
-    (format!("{name}, {}", theme.name()), phases)
+    let themes: Vec<&str> = tags.iter().filter_map(|t| t.strip_prefix("theme:").or(t.strip_prefix("theme2:"))).collect();
+    let name = format!("{name}, {}", themes.join(" then "));
+    Composition { name, phases, tags }
 }
 
 /// What the critic measures of a planned dance.
@@ -621,44 +764,82 @@ struct Review {
     frozen: f32,
     /// Mean degrees travelled per hand.
     travel: f32,
+    /// Mean share of hands in motion: 1 is everything always moving.
+    flow: f32,
 }
 
 fn review(phases: &[Phase], from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], motor: Motor) -> Review {
     let (moves, total) = plan(phases, from, digits, motor);
     let dt = 0.1;
-    let (mut peak, mut frozen, mut still) = (0.0_f32, 0.0_f32, 0.0_f32);
+    let (mut peak, mut frozen, mut still, mut moving) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
     let mut prev: Vec<Hands> = from.to_vec();
-    for k in 1..=(total / dt) as usize {
-        let mut fastest = 0.0_f32;
+    let samples = (total / dt) as usize;
+    for k in 1..=samples {
+        let (mut fastest, mut busy) = (0.0_f32, 0);
         for i in 0..CLOCKS {
             for h in 0..2 {
                 let a = angle_at(from[i][h], &moves[i][h], motor, k as f32 * dt);
-                fastest = fastest.max((a - prev[i][h]).abs() / dt);
+                let v = (a - prev[i][h]).abs() / dt;
+                fastest = fastest.max(v);
+                busy += (v > 2.0) as usize;
                 prev[i][h] = a;
             }
         }
         peak = peak.max(fastest / motor.speed);
+        moving += busy as f32 / (CLOCKS * 2) as f32;
         still = if fastest < 1.0 { still + dt } else { 0.0 };
         frozen = frozen.max(still);
     }
     let travel = moves.iter().flatten().flatten().map(|m| m.travel.abs()).sum::<f32>() / (CLOCKS * 2) as f32;
-    Review { total, peak, frozen, travel }
+    Review { total, peak, frozen, travel, flow: moving / samples.max(1) as f32 }
 }
 
-/// A new dance from `from` to `digits`. Falls back to the repertoire if the
-/// critic turns down every sketch, which it very rarely does.
-pub fn compose(rng: &mut Rng, from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], motor: Motor) -> (String, Vec<Phase>) {
-    for _ in 0..24 {
-        let (name, phases) = sketch(rng);
-        let r = review(&phases, from, digits, motor);
-        // Bounds scale with the motor: a slow motor is allowed a long dance.
-        let pace = 100.0 / motor.speed;
-        if (6.0 * pace..=20.0 * pace).contains(&r.total) && r.peak <= 2.05 && r.frozen <= 1.3 && r.travel >= 80.0 {
-            return (name, phases);
+/// A new dance from `from` to `digits`: the best of several sketches that pass
+/// the critic. `recent` is the tags of the last few dances, to steer away
+/// from; `taste` is what the watcher has said they like.
+pub fn compose(
+    rng: &mut Rng,
+    from: &[Hands; CLOCKS],
+    digits: &[Hands; CLOCKS],
+    motor: Motor,
+    taste: &crate::taste::Taste,
+    recent: &[Vec<String>],
+) -> Composition {
+    // Bounds scale with the motor: a slow motor is allowed a long dance.
+    let pace = 100.0 / motor.speed;
+    // Now and then, ignore taste, so it keeps being shown things to rate.
+    let explore = rng.u64() % 5 == 0;
+    let mut best: Option<(f32, Composition)> = None;
+    let mut passed = 0;
+    for _ in 0..48 {
+        let c = sketch(rng);
+        let r = review(&c.phases, from, digits, motor);
+        if !(6.0 * pace..=20.0 * pace).contains(&r.total) || r.peak > 2.05 || r.frozen > 1.3 || r.travel < 80.0 {
+            continue;
+        }
+        let shared = |other: &Vec<String>| c.tags.iter().filter(|t| other.contains(t)).count() as f32 / c.tags.len() as f32;
+        // Flow alone would always choose the simplest dance, where everything
+        // moves all the time; structure is worth something too.
+        let structure = 0.17 * (c.phases.len().min(4) as f32 - 1.0);
+        let score = 1.2 * r.flow + structure - (r.total / pace - 12.0).abs() / 6.0 - r.frozen - (r.peak - 1.3).max(0.0)
+            - 0.8 * recent.iter().map(shared).sum::<f32>()
+            + if explore { 0.0 } else { 0.9 * taste.score(&c.tags) }
+            + rng.range(0.0, 0.5);
+        if best.as_ref().is_none_or(|(s, _)| score > *s) {
+            best = Some((score, c));
+        }
+        passed += 1;
+        if passed == 8 {
+            break;
         }
     }
-    let (name, phases) = dance((rng.u64() % DANCES as u64) as usize, rng);
-    (name.to_string(), phases)
+    best.map(|(_, c)| c).unwrap_or_else(|| named((rng.u64() % DANCES as u64) as usize, rng))
+}
+
+/// A dance from the repertoire, as a composition.
+pub fn named(which: usize, rng: &mut Rng) -> Composition {
+    let (name, phases) = dance(which, rng);
+    Composition { name: name.to_string(), phases, tags: vec![format!("named:{name}")] }
 }
 
 #[cfg(test)]
@@ -691,7 +872,9 @@ mod tests {
         let mut names = std::collections::BTreeSet::new();
         let (mut fell_back, mut direct_runs) = (0, 0);
         for seed in 0..300 {
-            let (name, phases) = compose(&mut Rng::new(seed), &from, &to, MOTOR);
+            let Composition { name, phases, tags } =
+                compose(&mut Rng::new(seed), &from, &to, MOTOR, &crate::taste::Taste::in_memory(), &[]);
+            assert!(!tags.is_empty());
             fell_back += !name.contains(',') as usize;
             direct_runs += name.starts_with("direct") as usize;
             let (moves, total) = plan(&phases, &from, &to, MOTOR);
@@ -706,9 +889,35 @@ mod tests {
         }
         assert!(names.len() > 60, "only {} distinct shapes", names.len());
         assert!(fell_back < 15, "critic rejected everything {fell_back} times");
-        assert!(direct_runs < 100, "{direct_runs} of 300 took the plain route: the critic is biased");
+        assert!((20..100).contains(&direct_runs), "{direct_runs} of 300 took the plain route: the critic is biased");
         let direct = names.iter().filter(|n| n.starts_with("direct")).count();
         eprintln!("{} distinct shapes in 300; {direct_runs} runs direct ({direct} shapes); {fell_back} fell back", names.len());
+    }
+
+    /// Ratings change what gets composed.
+    #[test]
+    fn taste_steers_the_composer() {
+        let (from, to) = (pose(9, 25), pose(9, 26));
+        let count = |taste: &crate::taste::Taste| {
+            (0..200)
+                .filter(|seed| {
+                    let c = compose(&mut Rng::new(*seed), &from, &to, MOTOR, taste, &[]);
+                    c.tags.iter().any(|t| t == "motif:rings" || t == "motif:spokes")
+                })
+                .count()
+        };
+        let mut taste = crate::taste::Taste::in_memory();
+        let before = count(&taste);
+        for _ in 0..3 {
+            taste.rate(&["motif:rings".to_string(), "motif:spokes".to_string()], 1.0);
+        }
+        let liked = count(&taste);
+        for _ in 0..6 {
+            taste.rate(&["motif:rings".to_string(), "motif:spokes".to_string()], -1.0);
+        }
+        let disliked = count(&taste);
+        eprintln!("rings or spokes in 200 dances: {before} neutral, {liked} liked, {disliked} disliked");
+        assert!(liked > before * 3 / 2 && disliked < before * 2 / 3, "{before} -> {liked} / {disliked}");
     }
 
     /// Every dance, in many variations, ends exactly on the digits, in a

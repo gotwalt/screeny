@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const USAGE: &str = "\
 usage:
   screeny-art list
-  screeny-art pipe <piece> [--seed N] [--fps 30] [--seconds S] [--levels 64] [--set id=value]...
+  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--levels 64] [--set id=value]...
   screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--levels 64] [--set id=value]...
 
 `pipe` writes 6144-byte sRGB frames (64x32, row-major R,G,B) to stdout, paced by
@@ -62,7 +62,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         piece,
         params: Params::defaults(piece.params),
         seed: SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() as u64),
-        fps: 30.0,
+        fps: 60.0,
         seconds: None,
         at: 5.0,
         warmup: 2.0,
@@ -75,7 +75,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         let num = || value.parse::<f64>().map_err(|_| format!("{flag}: `{value}` is not a number"));
         match flag.as_str() {
             "--seed" => a.seed = value.parse().map_err(|_| format!("--seed: `{value}` is not an integer"))?,
-            "--fps" => a.fps = num()?.clamp(1.0, 30.0),
+            "--fps" => a.fps = num()?.clamp(1.0, 60.0),
             "--seconds" => a.seconds = Some(num()?),
             "--at" => a.at = num()?,
             "--warmup" => a.warmup = num()?.max(0.0),

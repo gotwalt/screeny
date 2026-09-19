@@ -18,7 +18,7 @@ pub(crate) mod dance;
 pub(crate) mod draw;
 
 use crate::frame::Frame;
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::piece::{param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
 use crate::rng::Rng;
 use dance::Motor;
 
@@ -109,6 +109,15 @@ struct Plan {
     minute: i64,
 }
 
+/// Something the person at the studio asked for, to do as soon as possible.
+#[derive(Clone, Copy, PartialEq)]
+enum Request {
+    /// Perform the last dance again.
+    Again,
+    /// Compose a new dance and perform it now.
+    Another,
+}
+
 struct Clocks {
     seed: u64,
     /// The time of day on the first frame; a sped-up clock (pace < 60) runs on
@@ -123,11 +132,37 @@ struct Clocks {
     /// Ambient motion between holding the time and the next dance.
     ambient: Option<ambient::Ambient>,
     /// The dance chosen for a minute, kept so it is composed only once.
-    chosen: Option<(i64, usize, String, Vec<dance::Phase>)>,
+    chosen: Option<(i64, usize, dance::Composition)>,
+    /// The dance being performed, or the last one that was: what a rating
+    /// applies to.
+    performed: Option<dance::Composition>,
+    /// Tags of the last few dances, so the composer can avoid repeating itself.
+    recent: std::collections::VecDeque<Vec<String>>,
+    taste: crate::taste::Taste,
+    request: Option<Request>,
+    /// How many dances have been asked for by hand, to vary them.
+    asked: u64,
+    /// What the hands are doing, for the studio.
+    doing: String,
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
-    Box::new(Clocks { seed, born: None, angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None, chosen: None })
+    Box::new(Clocks {
+        seed,
+        born: None,
+        angles: [[REST; 2]; CLOCKS],
+        minute: None,
+        plan: None,
+        landed: 0.0,
+        ambient: None,
+        chosen: None,
+        performed: None,
+        recent: Default::default(),
+        taste: crate::taste::Taste::load("clocks"),
+        request: None,
+        asked: 0,
+        doing: String::new(),
+    })
 }
 
 impl Clocks {
@@ -140,26 +175,47 @@ impl Clocks {
     /// The dance for the move to `minute`. Asked for by number it comes from
     /// the repertoire (or, at 13, is always composed). Left to vary, most are
     /// composed afresh and the rest drawn from the repertoire.
-    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor) -> (String, Vec<dance::Phase>) {
-        if let Some((m, c, name, phases)) = &self.chosen {
+    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor) -> dance::Composition {
+        if let Some((m, c, composition)) = &self.chosen {
             if (*m, *c) == (minute, choice) {
-                return (name.clone(), phases.clone());
+                return composition.clone();
             }
         }
-        let mut rng = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9));
+        let mut rng = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9) ^ self.asked.wrapping_mul(0x85eb_ca6b));
         let composed = match choice {
             0 => rng.u64() % 10 < 6,
             n => n > dance::DANCES,
         };
-        let (name, phases) = if composed {
-            dance::compose(&mut rng, &self.angles, to, motor)
+        let composition = if composed {
+            let recent: Vec<Vec<String>> = self.recent.iter().cloned().collect();
+            dance::compose(&mut rng, &self.angles, to, motor, &self.taste, &recent)
         } else {
-            let which = if choice == 0 { (rng.u64() % dance::DANCES as u64) as usize } else { choice - 1 };
-            let (name, phases) = dance::dance(which, &mut rng);
-            (name.to_string(), phases)
+            dance::named(if choice == 0 { (rng.u64() % dance::DANCES as u64) as usize } else { choice - 1 }, &mut rng)
         };
-        self.chosen = Some((minute, choice, name.clone(), phases.clone()));
-        (name, phases)
+        self.chosen = Some((minute, choice, composition.clone()));
+        composition
+    }
+
+    fn perform(&mut self, ctx: &Ctx, composition: dance::Composition, to: [Hands; CLOCKS], minute: i64, motor: Motor) {
+        let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
+        eprintln!(
+            "clocks: t={:.1} {:02}:{:02} by {}, {total:.1} s",
+            ctx.t,
+            minute.div_euclid(60).rem_euclid(24),
+            minute.rem_euclid(60),
+            composition.name
+        );
+        for hands in &mut self.angles {
+            *hands = hands.map(|a| a.rem_euclid(360.0));
+        }
+        self.ambient = None;
+        self.recent.push_back(composition.tags.clone());
+        while self.recent.len() > 3 {
+            self.recent.pop_front();
+        }
+        self.performed = Some(composition);
+        self.chosen = None;
+        self.plan = Some(Plan { began: ctx.t, from: self.angles, to, moves, total, minute });
     }
 
     fn step(&mut self, ctx: &Ctx) {
@@ -179,6 +235,7 @@ impl Clocks {
                     self.angles[i][h] = dance::angle_at(p.from[i][h], &p.moves[i][h], motor, tau);
                 }
             }
+            self.doing = format!("dancing, {:.0} s to go", (p.total - tau).max(0.0));
             if tau >= p.total {
                 self.angles = p.to;
                 self.minute = Some(p.minute);
@@ -186,6 +243,22 @@ impl Clocks {
             } else {
                 self.plan = Some(p);
             }
+            return;
+        }
+
+        // A dance asked for from the studio is performed at once, to the time
+        // already showing, and the minute's own dance follows when it is due.
+        if let (Some(request), Some(shown)) = (self.request.take(), self.minute) {
+            let to = Self::target(shown, hours24);
+            let composition = match (request, &self.performed) {
+                (Request::Again, Some(last)) => last.clone(),
+                _ => {
+                    self.asked += 1;
+                    self.chosen = None;
+                    self.dance_for(shown, dance::DANCES + 1, &to, motor)
+                }
+            };
+            self.perform(ctx, composition, to, shown, motor);
             return;
         }
 
@@ -198,20 +271,19 @@ impl Clocks {
             Some(shown) => shown + 1,
         };
         let to = Self::target(next, hours24);
-        let (name, phases) = self.dance_for(next, ctx.get("dance") as usize, &to, motor);
-        let (moves, total) = dance::plan(&phases, &self.angles, &to, motor);
+        let composition = self.dance_for(next, ctx.get("dance") as usize, &to, motor);
+        let (_, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
         // Engine seconds until the dance has to begin.
         let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
         let ready = self.ambient.as_ref().map_or(true, |a| a.at_rest());
         if self.minute.is_none() || (slack <= 0.0 && ready) {
-            eprintln!("clocks: t={:.1} {:02}:{:02} by {name}, {total:.1} s", ctx.t, next.div_euclid(60).rem_euclid(24), next.rem_euclid(60));
-            for hands in &mut self.angles {
-                *hands = hands.map(|a| a.rem_euclid(360.0));
-            }
-            self.ambient = None;
-            self.plan = Some(Plan { began: ctx.t, from: self.angles, to, moves, total, minute: next });
+            self.perform(ctx, composition, to, next, motor);
             return;
         }
+        self.doing = match &self.ambient {
+            Some(a) => format!("drifting ({}), next dance in {:.0} s", a.name(), slack.max(0.0)),
+            None => format!("holding the time, next dance in {:.0} s", slack.max(0.0)),
+        };
 
         // Between the time and the next dance: hold still for a while, then
         // drift. The ambient field is asked to settle with room to spare, so
@@ -232,7 +304,56 @@ impl Clocks {
     }
 }
 
+/// Tags as a person would say them: "op:weave" -> "weave".
+fn plain(tag: &str) -> String {
+    match tag.split_once(':') {
+        Some(("theme" | "theme2", t)) => format!("from a {t}").replace("from a diagonal", "on the diagonal").replace("from a sweep", "in a sweep").replace("from a cascade", "in a cascade"),
+        Some(("mask", t)) => format!("split by {t}"),
+        Some((_, t)) => t.to_string(),
+        None => tag.to_string(),
+    }
+}
+
 impl Piece for Clocks {
+    fn playing(&self) -> Option<Playing> {
+        let performed = self.performed.as_ref()?;
+        let opinions = self.taste.opinions();
+        let said = |liked: bool| {
+            let tags: Vec<String> = opinions.iter().filter(|(_, w)| (*w > 0.0) == liked).take(5).map(|(t, _)| plain(t)).collect();
+            (!tags.is_empty()).then(|| format!("{}: {}", if liked { "You like" } else { "You like less" }, tags.join(", ")))
+        };
+        let mut notes: Vec<String> = [said(true), said(false)].into_iter().flatten().collect();
+        if notes.is_empty() {
+            notes.push("Rate a few dances and the composer will lean towards what you like.".into());
+        }
+        let mut actions = vec![
+            Action { id: "like", label: "More like this" },
+            Action { id: "dislike", label: "Less like this" },
+            Action { id: "again", label: "Play it again" },
+            Action { id: "another", label: "Compose another" },
+        ];
+        if !opinions.is_empty() {
+            actions.push(Action { id: "forget", label: "Forget what I like" });
+        }
+        Some(Playing { title: performed.name.clone(), detail: self.doing.clone(), actions, notes })
+    }
+
+    fn act(&mut self, action: &str) {
+        let tags = self.performed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
+        match action {
+            "like" => self.taste.rate(&tags, 1.0),
+            "dislike" => self.taste.rate(&tags, -1.0),
+            "forget" => self.taste.forget(),
+            "again" => self.request = Some(Request::Again),
+            "another" => self.request = Some(Request::Another),
+            _ => {}
+        }
+        // What was just learned should show in the very next composition.
+        if matches!(action, "like" | "dislike" | "forget") {
+            self.chosen = None;
+        }
+    }
+
     fn render(&mut self, ctx: &Ctx) -> Frame {
         self.step(ctx);
         let half = ctx.get("weight") * 0.5;

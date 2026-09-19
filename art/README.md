@@ -77,6 +77,38 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   ship in `dance::dance`; each is varied by a seeded RNG, and a new one is a few
   lines. A test runs every dance in many variations and checks it lands exactly
   on the time and never exceeds twice the motor speed.
+- **Dances are composed, not only listed** (`dance::compose`). The twelve named
+  dances are sentences in a small grammar; the composer writes new ones. Blind
+  sampling of the grammar is mostly incoherent, so a composition has:
+  - a *theme*: one idea of direction shared by every phase (sweep, cascade,
+    diagonal, or a point). It may change once, and only after a hold, so the
+    change reads as a decision;
+  - an *arc*: gather into a formation, develop it with operators that suit it,
+    resolve into the time. Operators: spin, quarter, open, swell, carry, and
+    three that put two formations on the grid at once through a `Mask`
+    (checker, columns, rows, halves, or a soft gradient band): *weave* (a
+    formation with its own quarter-turn: zigzags, ladders, lattices), *split*
+    (two different formations side by side) and *morph* (a band crosses the
+    grid leaving the next formation behind it);
+  - a *critic*: every sketch is planned for real. Hard rules reject ones that
+    are too long or short, freeze the grid part-way, barely move, or overdrive
+    a hand. The survivors are scored for flow, structure, pacing, novelty
+    against the last three dances, and taste; the best of eight is performed.
+
+  About 200 distinct shapes in 300 seeds, each continuously varied. Tests check
+  that all land exactly, that the critic does not collapse onto the plain
+  "direct" kind (it did, twice, while being written), and that ratings steer it.
+  Left to vary, six dances in ten are composed; `dance` 13 is always composed,
+  1-12 are the named ones.
+- **Taste** (`taste.rs`). Every dance carries tags (`motif:rings`, `op:weave`,
+  `theme:point`, `mask:band`...). In the studio's **Now playing** panel, "More
+  like this" / "Less like this" nudge the weight of each tag the dance carried;
+  a sketch's taste score is the mean weight of its tags. One dance in five
+  ignores taste so there is always something new to rate. "Play it again" and
+  "Compose another" perform at once, to the time already showing. Weights are
+  saved to `~/.screeny-art/clocks.taste` (or `$SCREENY_ART_HOME`), a plain
+  `tag<TAB>weight` file, so the headless runner shares the studio's taste by
+  copying it. Any piece can offer such a panel: see `Piece::playing` / `act`.
 - **A minute has a shape**: the dance lands as the minute turns, the time is
   held ("Seconds the time is held"), then the hands are released into
   **ambient** motion (`ambient.rs`) until it is time to settle and dance again.
@@ -201,6 +233,7 @@ assumes about them is confined to these places, so reconciling is a small edit:
 | 64 linear levels per channel (fewer when dimmed) | `panel.rs`: `NATIVE_LEVELS`; a runtime setting everywhere else |
 | <= 16 colours = 1072 bytes exact, <= 32 = 1376 exact, more = lossy; 1464-byte budget | `budget.rs` |
 | What a lossy encode looks like (median cut + ordered dither; a stand-in, not the sender's algorithm) | `budget.rs`: `simulate_lossy` |
+| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). The studio engine and `pipe` default to 60, with 30 selectable | `studio/src/main.rs`: `RATES`; `screeny-art pipe --fps` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 
