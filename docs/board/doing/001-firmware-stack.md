@@ -4,8 +4,8 @@ title: Prove out the embassy firmware stack for Tidbyt Gen 1
 type: research
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker-a (Claude)
+branch: card/001-firmware-stack
 ---
 
 ## Goal
