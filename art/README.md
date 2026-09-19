@@ -55,6 +55,47 @@ Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive
 everything from `ctx.t`. State between frames is fine; keep it in the piece.
 
+## GPU and 3D pieces
+
+GPU pieces render through [wgpu](https://wgpu.rs) (`screeny-art/src/gpu/`). It
+needs no window or event loop, so the same code runs on the studio's engine
+thread (Metal on a Mac) and headless on a Linux box: Vulkan where there is a
+driver, otherwise OpenGL ES 3 over EGL. `WGPU_BACKEND=gl` (or `vulkan`) forces
+one; the adapter in use is logged at start-up. Device limits are held to
+`downlevel_defaults`, i.e. GLES 3 class hardware.
+
+A GPU piece is an ordinary `Piece`. It draws in linear light into an `Offscreen`
+target `samples` times the panel's resolution per axis (RGBA16F + depth), and
+`Offscreen::finish` reads it back and box-filters it to 64x32. Limiter, dither,
+panel model and statistics are shared with CPU pieces.
+
+Two templates:
+
+- **Shader only** (`pieces/lattice.rs` + `lattice.wgsl`): write
+  `fn piece(uv: vec2<f32>) -> vec3<f32>`, list the parameters, hand both to
+  `ShaderPiece::boxed`. Parameters arrive as `P(0)`, `P(1)`, ... in list order;
+  `u.t`, `u.seed` and `oklch()` are provided. This is the fast path for
+  raymarching and Shadertoy-style experiments.
+- **Mesh** (`pieces/knot.rs` + `knot.wgsl`): vertex/index buffers, a camera from
+  `gpu::mat`, a depth-tested pass from `Offscreen::pass`.
+
+Things to know:
+
+- Shaders are WGSL. wgpu can also take GLSL (its `glsl` feature and
+  `ShaderSource::Glsl`) if porting existing GLSL matters more than one language.
+- Smoothly shaded 3D makes hundreds of colours per frame, which would take the
+  lossy path. `palette::Palette` fixes that: build up to 32 colours in OKLCH
+  (`Palette::ramps`), then `map` the downsampled frame onto them (nearest in
+  OKLab, fixed ordered dither). The result is an indexed frame, sent exactly.
+  `knot` does this; set its Palette steps to 0 to compare with the raw render.
+  Map after the downsample, never in the shader: averaging samples creates new
+  colours.
+- The Linux headless path has not been run yet (no such box on the bench). It
+  needs a working Vulkan or EGL/GLES 3 driver and access to `/dev/dri/renderD*`;
+  no X or Wayland session.
+- `cargo build -p screeny-art --no-default-features` leaves wgpu and the GPU
+  pieces out.
+
 ## Provisional assumptions
 
 The firmware, protocol and sender are still being built. Everything this code

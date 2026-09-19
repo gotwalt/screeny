@@ -8,8 +8,11 @@ pub mod budget;
 pub mod color;
 pub mod dither;
 pub mod frame;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod limiter;
 pub mod output;
+pub mod palette;
 pub mod panel;
 pub mod piece;
 pub mod pieces;

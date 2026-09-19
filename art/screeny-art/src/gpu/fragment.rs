@@ -1,0 +1,152 @@
+//! Full-frame shader pieces: the quickest way to try a 3D idea. Write one WGSL
+//! function, `fn piece(uv: vec2<f32>) -> vec3<f32>`, list its parameters, done.
+//! See `fragment.wgsl` for what the shader is given and `pieces/lattice.rs` for
+//! a worked example.
+
+use super::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
+use crate::frame::Frame;
+use crate::piece::{Ctx, ParamSpec, Piece};
+use crate::rng::Rng;
+
+const HARNESS_WGSL: &str = include_str!("fragment.wgsl");
+/// `Uniforms.params` holds this many.
+const MAX_PARAMS: usize = 16;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    resolution: [f32; 2],
+    t: f32,
+    dt: f32,
+    seed: f32,
+    _pad: [f32; 3],
+    params: [f32; MAX_PARAMS],
+}
+
+struct Live {
+    gpu: &'static Gpu,
+    pipeline: wgpu::RenderPipeline,
+    uniforms: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    target: Offscreen,
+}
+
+pub struct ShaderPiece {
+    label: &'static str,
+    source: &'static str,
+    params: &'static [ParamSpec],
+    /// Which parameter, if any, sets samples per axis.
+    samples_param: Option<&'static str>,
+    seed: f32,
+    /// `None` until first render; `Some(None)` if the GPU could not be opened.
+    live: Option<Option<Live>>,
+}
+
+impl ShaderPiece {
+    /// `source` must define `fn piece(uv: vec2<f32>) -> vec3<f32>`. Parameters
+    /// reach it as `P(0)`, `P(1)`, ... in the order of `params`. If one of them
+    /// is called `samples`, it sets the supersampling; otherwise 4 per axis.
+    pub fn boxed(label: &'static str, source: &'static str, params: &'static [ParamSpec], seed: u64) -> Box<dyn Piece> {
+        assert!(params.len() <= MAX_PARAMS, "{label}: at most {MAX_PARAMS} parameters");
+        Box::new(ShaderPiece {
+            label,
+            source,
+            params,
+            samples_param: params.iter().map(|p| p.id).find(|id| *id == "samples"),
+            seed: Rng::new(seed).f32(),
+            live: None,
+        })
+    }
+
+    fn open(&self, samples: u32) -> Option<Live> {
+        let gpu = match Gpu::shared() {
+            Ok(gpu) => gpu,
+            Err(e) => {
+                eprintln!("screeny-art: {}: {e}; rendering black", self.label);
+                return None;
+            }
+        };
+        let module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(self.label),
+            source: wgpu::ShaderSource::Wgsl(format!("{COMMON_WGSL}\n{HARNESS_WGSL}\n{}", self.source).into()),
+        });
+        let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(self.label),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            // Unused by a full-frame shader, but it keeps every piece compatible
+            // with the one kind of pass `Offscreen` hands out.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(COLOR_FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let uniforms = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniforms"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+        });
+        Some(Live { gpu, pipeline, uniforms, bind_group, target: Offscreen::new(gpu, samples) })
+    }
+}
+
+impl Piece for ShaderPiece {
+    fn render(&mut self, ctx: &Ctx) -> Frame {
+        let samples = self.samples_param.map_or(4, |id| ctx.get(id) as u32);
+        if self.live.is_none() {
+            self.live = Some(self.open(samples));
+        }
+        let Some(Some(live)) = self.live.as_mut() else { return Frame::black() };
+        if live.target.samples() != samples.clamp(1, 16) {
+            live.target = Offscreen::new(live.gpu, samples);
+        }
+
+        let (w, h) = live.target.size();
+        let mut params = [0.0; MAX_PARAMS];
+        for (slot, spec) in params.iter_mut().zip(self.params) {
+            *slot = ctx.get(spec.id);
+        }
+        let uniforms = Uniforms {
+            resolution: [w as f32, h as f32],
+            t: ctx.t as f32,
+            dt: ctx.dt as f32,
+            seed: self.seed,
+            _pad: [0.0; 3],
+            params,
+        };
+        live.gpu.queue.write_buffer(&live.uniforms, 0, bytemuck::bytes_of(&uniforms));
+
+        let mut encoder = live.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = live.target.pass(&mut encoder);
+            pass.set_pipeline(&live.pipeline);
+            pass.set_bind_group(0, &live.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        live.target.finish(live.gpu, encoder)
+    }
+}

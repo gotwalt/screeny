@@ -136,6 +136,19 @@ fn oklab_to_linear(l: f32, a: f32, b: f32) -> Rgb {
     )
 }
 
+/// Linear sRGB -> OKLab `[L, a, b]`. Distances here track how different two
+/// colours look, which is what palette matching wants.
+pub fn to_oklab(c: Rgb) -> [f32; 3] {
+    let l = (0.412_221_46 * c.r + 0.536_332_55 * c.g + 0.051_445_995 * c.b).cbrt();
+    let m = (0.211_903_5 * c.r + 0.680_699_5 * c.g + 0.107_396_96 * c.b).cbrt();
+    let s = (0.088_302_46 * c.r + 0.281_718_85 * c.g + 0.629_978_7 * c.b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
 pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -160,6 +173,13 @@ mod tests {
                 assert!((0.0..=1.0).contains(&v));
             }
         }
+    }
+
+    #[test]
+    fn oklab_round_trips_through_oklch() {
+        let lab = to_oklab(oklch(0.7, 0.1, 40.0));
+        assert!((lab[0] - 0.7).abs() < 0.005, "L {}", lab[0]);
+        assert!(((lab[1] * lab[1] + lab[2] * lab[2]).sqrt() - 0.1).abs() < 0.005);
     }
 
     #[test]
