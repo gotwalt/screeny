@@ -93,15 +93,20 @@ impl Default for Backoff {
 
 impl Backoff {
     /// Delay after `attempt` consecutive failures. `attempt` 0 is immediate.
+    ///
+    /// Computed in seconds rather than by `Duration::mul_f64`, which panics
+    /// on overflow: a link that has been down for a week has a very large
+    /// attempt count, and the honest answer for all of them is `max`.
     #[must_use]
     pub fn delay(&self, attempt: u32) -> Duration {
         if attempt == 0 {
             return Duration::ZERO;
         }
-        let d = self
-            .first
-            .mul_f64(self.factor.powi(i32::try_from(attempt - 1).unwrap_or(0)));
-        d.min(self.max)
+        // `f64::max` returns the other operand when one is NaN, so this also
+        // makes a NaN factor harmless.
+        let growth = self.factor.max(1.0).powf(f64::from(attempt - 1));
+        let secs = self.first.as_secs_f64() * growth; // may be inf; min() handles it
+        Duration::from_secs_f64(secs.min(self.max.as_secs_f64()).max(0.0))
     }
 }
 
@@ -808,7 +813,23 @@ mod tests {
         assert_eq!(b.delay(2), Duration::from_millis(500));
         assert_eq!(b.delay(3), Duration::from_secs(1));
         assert_eq!(b.delay(20), b.max);
+        // A link that has been down for weeks: the exponent overflows every
+        // integer type in sight, and the answer is still `max`.
         assert_eq!(b.delay(u32::MAX), b.max);
+
+        // Degenerate configurations must not panic either.
+        let flat = Backoff {
+            first: Duration::ZERO,
+            max: Duration::from_secs(1),
+            factor: 0.0,
+        };
+        assert_eq!(flat.delay(1), Duration::ZERO);
+        assert_eq!(flat.delay(u32::MAX), Duration::ZERO);
+        let nan = Backoff {
+            factor: f64::NAN,
+            ..Backoff::default()
+        };
+        assert_eq!(nan.delay(5), nan.first);
     }
 
     #[test]
