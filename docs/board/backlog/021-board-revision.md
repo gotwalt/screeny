@@ -71,3 +71,26 @@ map, and the boot log says enough that a second unit could be diagnosed from
 it.
 
 ## Log
+
+### What card 007 learned (not taken; stays in backlog)
+
+- The rotated colour order is **confirmed a second time on hardware**. Card
+  007's orientation and ghost patterns draw red, green, blue, yellow and white
+  at known positions and all of them come out in the right channel with the
+  current mapping (`red=GPIO2/4, green=GPIO22/27, blue=GPIO21/23`). So the
+  *constant* is right for this unit and nothing is urgent here.
+- The hand-edit this card objects to has moved but not gone: it is now in
+  `firmware/src/main.rs`'s `Hub75Pins16` initialiser, with a comment
+  explaining it and pointing here. The named-configuration deliverable is
+  untouched.
+- The two ADC straps (GPIO13, GPIO15) have still never been read. Card 007 had
+  hardware access and did not spend it on this, on purpose: it is a separate
+  question from the display pipeline and it wants its own careful boot-log
+  work.
+- Useful when this card is picked up: `firmware/src/patterns.rs` now has a
+  ready-made `Bands` pattern (red, green and blue bands, each ramping) and an
+  `Orientation` card, selectable at run time over UDP through
+  `firmware/src/testcmd.rs` without reflashing. Checking a candidate RGB order
+  is one datagram, not a rebuild.
+- Nothing card 007 did blocks this card, and nothing in it depends on card 007
+  beyond `firmware/` now existing.

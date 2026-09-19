@@ -4,8 +4,8 @@ title: Panel brightness and current limiting without losing colour depth
 type: research
 hardware: no
 depends: [001]
-owner:
-branch:
+owner: claude-fable-5.1 (answered inside card 007)
+branch: card/007b-firmware-display
 ---
 
 ## Goal
@@ -97,3 +97,64 @@ Card 007 knows what brightness to ship and why, and card 002 knows how many
 bits per channel it is really encoding for.
 
 ## Log
+
+### Answered inside card 007, on hardware (2026-09-19)
+
+**The premise of this card is wrong, and that is the answer.** `esp-hub75` does
+not need to grow output-enable duty control: `hub75-framebuffer` already has
+the mechanism, it is simply not exposed. The output-enable line is **bit 8 of
+every 16-bit framebuffer entry**, written once by `make_data_template()` when
+the buffer is formatted and touched by nothing else — `set_pixel` and `erase`
+both mask bits 9..14 only. So the lit window inside each 64-slot scan row can
+be rewritten at run time, per buffer, without disturbing colour data, the row
+address or the latch.
+
+That is exactly Tidbyt's `setBrightness8()`. It is implemented in
+`firmware/vendor/hub75-framebuffer` (see `firmware/vendor/README.md`) as
+`set_oe_slots(lit)` / `set_oe_window(start, lit)`, about 40 lines.
+
+**Taking the questions in order.**
+
+1. *What does the panel actually draw?* Still unmeasured, and this card no
+   longer depends on it. We ship Tidbyt's own documented maximum — 25 of 64
+   slots, 39% duty, their "brightness 100" — as a hard cap in
+   `display::MAX_OE_SLOTS`, and come up at 9 slots (14%), just above their
+   shipping default. Since the mechanism is now the same one Tidbyt uses, their
+   numbers transfer directly, which they did not when we were scaling pixel
+   values. No ammeter card raised; raise one if the cap ever needs lifting.
+2. *Can we get OE duty out of `esp-hub75`?* Yes — option "a feature or config
+   it already has that card 001 missed", near enough. Not upstream yet; card
+   060 covers offering it.
+3. *How bad is value-scaling really?* Moot, and never measured, because
+   nothing scales values any more.
+4. *Is there a hybrid?* Not needed. The duty control reaches 0-39% on its own.
+5. *Does temporal dithering buy depth back?* Yes, and card 007 took it as its
+   stretch. It is reachable through the swap API, it costs about 40 points of
+   one core (the framebuffer must be rewritten every refresh rather than every
+   frame), and it moves the black point from sRGB 34 to about sRGB 6. See card
+   030's log.
+6. *What should the control look like?* Runtime 0..=255 over the control
+   channel, with the cap enforced in firmware at `display::MAX_OE_SLOTS` and
+   nowhere else. One bench-only escape hatch exists (`testcmd`'s `O` command,
+   raw slots, self-reverting after 10 s) so a session can photograph a duty we
+   would never ship.
+
+**What it costs in colour depth: nothing.** Every BCM plane keeps its weight
+and its range; the panel simply spends less time lit. Measured: a 16-step grey
+wedge at 25 slots and at 2 slots has all sixteen steps monotonic and separated
+at both. The gamma table does not move by one entry between them.
+
+**The note for card 002:** design for **six bits per channel**, not three.
+Effective depth is six planes, unreduced by brightness, and with the temporal
+dither on it behaves like roughly 7.6 — which is the figure card 002's own
+panel model already assumed for `BC1_DUAL`. The "brightness cap eats more"
+caveat in card 001 section 3 no longer applies and should be read as withdrawn.
+
+**One real limitation** to carry forward: the control's resolution is 25 steps,
+not 256, because the panel is lit for a whole number of pixel clocks or not at
+all. `display::slots_for` rounds; below brightness 6 the panel is dark.
+
+No `docs/research/020-panel-brightness.md` was written: the conclusions are
+short, they are already in `firmware/vendor/README.md` (the mechanism) and card
+007's log (the measurements), and a third copy would be the one that goes
+stale. Moving to `review/`.
