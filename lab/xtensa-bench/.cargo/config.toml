@@ -1,0 +1,8 @@
+[target.xtensa-esp32-none-elf]
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-nostartfiles"]
+
+[unstable]
+build-std = ["core"]
+
+[build]
+target = "xtensa-esp32-none-elf"

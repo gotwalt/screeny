@@ -4,3 +4,6 @@ captures/
 .DS_Store
 lab/out/
 .claude/worktrees/
+lab/Cargo.lock
+lab/xtensa-bench/target/
+lab/xtensa-bench/Cargo.lock
