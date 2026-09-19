@@ -12,9 +12,9 @@ decoders agree. Card 002.
 each frame three ways, decodes each candidate, scores it, and sends the winner;
 the mode byte already on the wire tells the firmware which decoder to run, so
 this costs the device nothing. That "hybrid" beat every single fixed codec on
-every content class we tested, at **mean dE 6.5 against the best single codec's
-9.5**, and it is the only approach that is simultaneously *lossless on text/UI*
-and *good on photographs*.
+every content class we tested, at **mean panel-aware dE 6.5 against the best
+fixed-rate codec's 9.5**, and it is the only approach that is simultaneously
+*lossless on text/UI* and *good on photographs*.
 
 | | |
 |---|---|
@@ -101,8 +101,9 @@ Two details that the measurements forced:
   because the panel is too coarse to show their error; under a dithered panel
   they fall apart (`cc4` on the dark clip: dE 10.6 → 35.0). Selecting against
   the better panel means the picture cannot get *worse* when the firmware gets
-  better. This is also why `blk42` and `cc4` are not in the shipping set
-  despite `blk42` ranking above `bc1-dual` on the headline metric.
+  better. It is also why `blk42` and `cc4` are not in the shipping set even
+  though both beat `bc1-dual` on the panel we have *today at today's
+  brightness* (3-bit column: 9.26 and 10.40 against 10.56).
 * **Hysteresis.** Switching mode changes the *character* of the error (block
   edges vs. dither noise) and the eye notices that even at equal magnitude.
 
@@ -143,6 +144,14 @@ panel refreshes that fit inside one 30 fps frame is worth more than eight
 bitplanes with none.** 195 distinct levels vs 183. That is a firmware change,
 not a codec change, and it is the single highest-leverage item this card found
 — see card 030.
+
+One more number from that direction, worth stating plainly: under the **3-bit
+dimmed** panel (what you get today at a Tidbyt-like 30/255 brightness, because
+the driver has no OE-duty control), the entire `darkfade` clip scores dE 0.00
+for *every codec in the study*. Not "close" — identical. At three linear bits
+every pixel in that clip emits zero duty, so the encoding is irrelevant because
+the panel shows black either way. Choosing a codec to suit that panel would be
+choosing a codec for a display that is not working. Fix brightness first.
 
 ### Metrics
 
@@ -258,10 +267,11 @@ and the point metric agrees with the eye exactly.
 * `img/sheet-textui.png` — all 22 codecs on a UI frame. The block codecs wash
   out the progress bar and bleed colour around the glyphs; the palette codecs
   are exact.
-* `img/sheet-photo.png` — the stress case. Note `pal4-adapt` (undithered) has
+* `img/sheet-photo.png` — the stress case. `pal4-adapt` (undithered) has
   visible contour banding in the sky while `pal4-adapt-ord` does not, even
-  though the dithered version scores *worse* on plain dE and better on
-  `dE blurred`. This is the one place the point metric and the eye disagree.
+  though the dithered version scores *worse* on plain dE (32.01 vs 28.51) and
+  better on `dE blurred` (17.68 vs 18.45). This is the one place the point
+  metric and the eye disagree, and it is why `dE blurred` exists.
 * `img/sheet-darkfade.png` — the endpoint-precision story above.
 * `img/zoom-plasma.png` — the five best on smooth saturated motion, at 9x.
 * `img/temporal-dither.png` — two consecutive temporally-dithered frames and
@@ -294,12 +304,15 @@ we have and badly against the panel we want. Excluded on that basis.
 error pattern is content-dependent, so it crawls when content moves. Ordered
 dither is temporally stable by construction. On a 30 fps display, stability wins.
 
-**Dithering at all, mostly.** At 5 bpp, dither is a wash or a loss on every
-metric (`pal5-adapt` 9.52 vs `pal5-adapt-ord` 10.77; blurred 5.14 vs 5.50).
-At 4 bpp it is worth it — `pal4-adapt` 8.85 vs `pal4-adapt-ord` 9.24 blurred,
-and the banding is obvious to the eye in `sheet-photo.png` — but we are not
-shipping a 4 bpp mode. Recommendation: **do not dither on the sender** except
-in the PAL5 floor, where the palette is genuinely tight.
+**Dithering at all, mostly.** At 5 bpp dither is a wash or a loss on every
+metric (overall `pal5-adapt` 9.52 against `pal5-adapt-ord` 10.77; blurred 5.14
+against 5.50). At 4 bpp on gradient-heavy content it earns its keep, but only
+once you low-pass: on `photo`, `pal4-adapt` scores 28.51 and `pal4-adapt-ord`
+32.01 on plain dE, and **17.68 against 18.45 blurred** — the ordering flips.
+Look at `sheet-photo.png`: the undithered version has obvious contour bands in
+the sky and the dithered one does not. Since we are not shipping a 4 bpp mode,
+the recommendation is **do not dither on the sender**, except in the PAL5
+floor where the palette is genuinely tight.
 
 **Sender-side temporal dithering** — `pal5-adapt-tdith` rotates the Bayer phase
 per frame. It does what it claims: `dE t-avg4` improves (6.51 vs 7.10) and
@@ -343,21 +356,49 @@ CPI between 1.0 and 1.5; internal-SRAM code and data on an LX6 is close to the
 former, code fetched through the flash cache closer to the latter. Card 013
 should confirm against `CCOUNT` on real hardware.
 
-<!--XTENSA-TABLE-->
+Shipping modes in **bold**.
 
-Three things worth noting:
+| mode | payload B | instructions/frame | us @240 MHz, CPI 1.0 | us @240 MHz, CPI 1.5 | % of a 33.3 ms frame (CPI 1.5) |
+|---|---|---|---|---|---|
+| **`pal4-lz`** | 392 | **71 600** | 298.3 | 447.5 | 1.34% |
+| **`pal8-lz`** | 1031 | **88 875** | 370.3 | 555.5 | 1.67% |
+| **`pal5`** | 1377 | **68 010** | 283.4 | 425.1 | 1.28% |
+| **`bc1-dual`** | 1297 | **131 293** | 547.1 | 820.6 | 2.46% |
+| `pal4` | 1073 | 45 273 | 188.6 | 283.0 | 0.85% |
+| `cc2-42` | 1281 | 43 635 | 181.8 | 272.7 | 0.82% |
+| `blk42` | 1281 | 54 641 | 227.7 | 341.5 | 1.02% |
+| `cc2-44` | 1025 | 61 763 | 257.3 | 386.0 | 1.16% |
+| `bc1-e888` | 1281 | 66 253 | 276.1 | 414.1 | 1.24% |
+| `cc4` | 1281 | 67 389 | 280.8 | 421.2 | 1.26% |
+| `bc1` | 1025 | 70 249 | 292.7 | 439.1 | 1.32% |
+| `blk84-i3` | 1025 | 105 562 | 439.8 | 659.8 | 1.98% |
+| `bc1-i3` | 1281 | 127 871 | 532.8 | 799.2 | 2.40% |
+| `ycocg-420` | 1409 | 188 498 | 785.4 | 1178.1 | 3.53% |
+| `ycocg-410` | 1441 | 290 461 | 1210.3 | 1815.4 | 5.45% |
 
-* Even the most expensive mode is **under 2.5% of a 33.3 ms frame**. Decode
-  cost is not a constraint at 30 fps; it would not be a constraint at 120 fps.
-  The card's "well under 5 ms" bar is cleared by roughly 6x.
-* **3-bit indices cost about 2x what 2-bit indices cost** (`bc1-i3` 128 k vs
-  `bc1` 70 k) because extracting a bit from each of three bitplanes is three
-  loads, three shifts and three masks per pixel. `BC1_DUAL` inherits that on the
-  blocks that choose 8 levels. If decode time ever does become tight, packing
-  3-bit indices as a byte-aligned bitstream instead of bitplanes is the obvious
-  lever — but there is no reason to spend the complexity now.
-* The LZ modes are **cheaper** than the block modes despite being variable-rate,
-  because a match is a memcpy and most frames are dominated by matches.
+Four things worth noting:
+
+* The worst shipping mode is **2.46% of a 33.3 ms frame**. Decode cost is not a
+  constraint at 30 fps and would not be one at 120 fps. The card's "well under
+  5 ms" bar is cleared by about 6x even at the pessimistic CPI.
+* **3-bit indices cost roughly twice what 2-bit indices cost** — `bc1-i3`
+  128 k against `bc1` 70 k, identical block size and endpoint work — because
+  pulling one bit out of each of three bitplanes is three loads, three shifts
+  and three masks per pixel. `BC1_DUAL` inherits that on the blocks that choose
+  8 levels, which is why it is the most expensive mode we ship. If decode ever
+  does get tight, packing 3-bit indices as a byte-aligned bitstream instead of
+  bitplanes is the obvious lever; there is no reason to spend that complexity
+  now.
+* **Decompressing is nearly free.** `pal8-lz` costs 89 k against `pal4`'s 45 k
+  and `pal5`'s 68 k, and it is doing an LZ inflate on top of the palette
+  expansion. A match is a short byte copy and most frames are dominated by
+  matches. Variable-rate coding is not buying quality at the device's expense.
+* `ycocg-410` is simultaneously the **most expensive** mode (290 k, 5.45%) and
+  among the worst-looking. Five bitplanes per chroma sample plus five for luma
+  means ten separate bit extractions per pixel. It loses on every axis.
+
+The counts include the register-window spill/fill traffic that the Xtensa
+windowed ABI generates, which the firmware will also pay.
 
 The decoders are proved firmware-ready mechanically: `lab/nostd-check` compiles
 `lab/src/dec/` as `#![no_std]` with no allocator declared. Lifting them into
@@ -391,9 +432,10 @@ The decoders are proved firmware-ready mechanically: `lab/nostd-check` compiles
    wasting three quarters of its packet.
 
 5. **Ordered dither loses on every number and wins to the eye** in exactly one
-   place — 4 bpp smooth gradients. The `dE blurred` metric was added after
+   place — 4 bpp smooth gradients. The `dE blurred` metric was added *after*
    looking at `sheet-photo.png` and disagreeing with the table; it flips the
-   ordering there and nowhere else, which is a good sign for the metric.
+   ordering there and essentially nowhere else, which is a good sign for the
+   metric and a reminder to look at the pictures.
 
 6. **Floyd-Steinberg is a temporal liability**, and no per-frame metric shows it.
    Only the flicker column does.
