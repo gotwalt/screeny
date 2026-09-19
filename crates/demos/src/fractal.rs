@@ -1,23 +1,34 @@
 //! Endless Mandelbrot zoom.
 //!
-//! **Endlessness.** A single zoom has a precision wall: at 64-bit the image
-//! turns to blocks somewhere past 1e-14. So the piece is a *tour*. It zooms
-//! toward one curated boundary point at a constant exponential rate for
-//! `leg_secs`, from scale 1.6 down to 2e-12 (still ~100x clear of the f64
-//! wall, which is where the sample spacing, `scale / (64 * ss)`, meets the
-//! ulp of the coordinate), and then cross-dissolves into the next leg, which
-//! is already zooming at the same rate when the dissolve starts. Motion
-//! continuity carries the cut. The tour is a fixed list traversed from a
-//! seeded offset, so it runs for hours (one lap is `legs * leg_secs`) and
-//! never degenerates: every target is checked by a test for interior fraction
-//! and colour count at full depth.
+//! **Endlessness.** The piece is a *tour*, not one zoom. It zooms toward a
+//! boundary point at a constant exponential rate for `leg_secs` - ten octaves
+//! in ninety seconds, about nine seconds per doubling, which is the ambient
+//! pace this panel wants - and then cross-dissolves into the next leg, which
+//! is already zooming at the same rate when the dissolve starts, so motion
+//! continuity carries the cut. Six targets makes a nine-minute lap, and the
+//! lap repeats forever without ever hitting a precision wall or a flat patch.
 //!
-//! **Look.** Continuous (smooth) escape time, mapped through a designed cyclic
-//! OKLCH ramp that never goes below L 0.42 (the panel's dark end is missing -
-//! brief section 2.1), snapped to panel levels, rotating slowly. Interior is
-//! true black, used as a shape. Every sample is coloured and then averaged in
-//! **linear light** over an ss x ss grid, which is what stops the bands
-//! shimmering as they flow.
+//! **Why only ten octaves.** Not precision - f64 is good to about forty. It
+//! is iterations. Escape counts near the boundary grow roughly geometrically
+//! with depth (measured: `preview probe`; at four octaves the 90th percentile
+//! pixel needs ~50 iterations, at twelve it needs ~5000, at twenty ~50000).
+//! Ten octaves is the deepest a 30 fps budget reaches at 16 samples per pixel,
+//! and it costs nothing artistically: everything a deeper view would add is
+//! finer than one of these 2048 pixels. Pixels that do exhaust the budget fade
+//! into the black interior instead of clipping, so the ceiling reads as a dark
+//! halo around the set rather than as speckle.
+//!
+//! **Look.** Continuous (smooth) escape time in a `sqrt` coordinate (so band
+//! spacing stays put as the view shrinks), mapped through a designed cyclic
+//! OKLCH ramp that never goes below L 0.40 (the panel's dark end is missing -
+//! brief section 2.1) and has a narrow bright highlight rather than a broad
+//! pale one. Interior is true black, used as a shape. Every sample is coloured
+//! and then averaged in **linear light** over an ss x ss grid, which is what
+//! stops the bands shimmering as they flow, and the result is snapped to codes
+//! the panel can emit, which typically halves the frame's colour count.
+//!
+//! Deterministic: the seed picks where in the tour it starts, and nothing else
+//! in the piece is random.
 
 use crate::color::{lin_to_srgb8_3, oklch_to_lin};
 use crate::dither::bayer;
@@ -25,8 +36,28 @@ use crate::frame::{Frame, Indexed, Piece, H, NPIX, W};
 use crate::panel::{Panel, NOMINAL};
 use std::time::Duration;
 
-/// A curated point on the boundary of the set, with the palette it is toured
-/// with. Coordinates are the centre of the deepest view.
+/// A curated *direction*, not a point: a segment from somewhere known to be
+/// inside the set to somewhere known to be outside it.
+///
+/// Hand-written deep-zoom coordinates are the obvious approach and it is a
+/// trap - a digit out of place puts the centre in a smooth patch of exterior
+/// and the zoom fades to one flat colour, which is exactly what the first
+/// version of this file did on three of six targets. Bisecting a segment
+/// whose ends straddle the boundary cannot do that: the limit point is on the
+/// boundary by construction, so every depth has black interior on one side
+/// and bands on the other. The endpoints only need three decimal places,
+/// which are the digits a human can actually be sure of.
+#[derive(Clone, Copy)]
+pub struct Region {
+    pub name: &'static str,
+    /// A point inside the set (a bulb or cardioid centre).
+    pub inside: (f64, f64),
+    /// A point outside it; the segment between them crosses the boundary.
+    pub outside: (f64, f64),
+    pub palette: usize,
+}
+
+/// A resolved target: `Region` bisected to the last bit of f64.
 #[derive(Clone, Copy)]
 pub struct Target {
     pub name: &'static str,
@@ -35,94 +66,152 @@ pub struct Target {
     pub palette: usize,
 }
 
-pub const TARGETS: &[Target] = &[
-    Target {
+pub const REGIONS: &[Region] = &[
+    // Seahorse valley, between the cardioid and the period-2 bulb.
+    Region {
         name: "seahorse",
-        cx: -0.743_643_887_037_151,
-        cy: 0.131_825_904_205_330,
+        inside: (-0.1, 0.0),
+        outside: (-0.748, 0.123),
         palette: 0,
     },
-    Target {
+    // The western antenna: aim from the period-2 bulb along the needle.
+    Region {
         name: "needle",
-        cx: -1.749_705_768_080_503,
-        cy: 0.000_029_831_647_555,
+        inside: (-1.0, 0.0),
+        outside: (-1.768, 0.002),
         palette: 1,
     },
-    Target {
-        name: "julia-island",
-        cx: -0.774_680_610_626_903_9,
-        cy: -0.137_416_885_603_786_7,
+    // Elephant valley on the east flank of the cardioid.
+    Region {
+        name: "elephant",
+        inside: (0.0, 0.0),
+        outside: (0.2825, 0.0105),
         palette: 2,
     },
-    Target {
-        name: "north-spiral",
-        cx: -0.101_096_363_845_62,
-        cy: 0.956_286_510_809_14,
+    // The northern bulb's shoulder.
+    Region {
+        name: "north",
+        inside: (-0.125, 0.744),
+        outside: (-0.1, 0.9),
         palette: 3,
     },
-    Target {
-        name: "elephant",
-        cx: 0.274_546_022_101_212_9,
-        cy: 0.005_819_581_324_461_8,
+    // Triple spiral valley, north-west of the cardioid.
+    Region {
+        name: "triple-spiral",
+        inside: (-0.125, 0.744),
+        outside: (-0.088, 0.654),
         palette: 4,
     },
-    Target {
-        name: "west-tendril",
-        cx: -1.256_885_663_319_430_4,
-        cy: 0.378_945_843_823_574_2,
+    // South-west, toward the period-3 bulb's antenna.
+    Region {
+        name: "south-tendril",
+        inside: (-1.0, 0.0),
+        outside: (-1.257, -0.379),
         palette: 5,
     },
 ];
 
+/// Is `c` in the set, as far as a long orbit can tell? Used only for the
+/// one-off bisection, so it can afford a big iteration count.
+fn inside(cr: f64, ci: f64) -> bool {
+    escape(cr, ci, 20_000).is_none()
+}
+
+/// Bisect a region's segment down to the last representable step. The result
+/// is a point every neighbourhood of which contains both interior and
+/// exterior: a boundary point, to f64.
+pub fn resolve(r: &Region) -> Target {
+    let (mut ax, mut ay) = r.inside;
+    let (mut bx, mut by) = r.outside;
+    debug_assert!(inside(ax, ay), "{}: inside end is not inside", r.name);
+    for _ in 0..90 {
+        let mx = 0.5 * (ax + bx);
+        let my = 0.5 * (ay + by);
+        if (mx == ax && my == ay) || (mx == bx && my == by) {
+            break;
+        }
+        if inside(mx, my) {
+            ax = mx;
+            ay = my;
+        } else {
+            bx = mx;
+            by = my;
+        }
+    }
+    Target {
+        name: r.name,
+        cx: bx,
+        cy: by,
+        palette: r.palette,
+    }
+}
+
 const BAILOUT: f64 = 256.0;
-const START_SCALE: f64 = 1.6;
-const END_SCALE: f64 = 2.0e-12;
+const START_SCALE: f64 = 0.55;
+const END_SCALE: f64 = 5.4e-4;
 
 /// Palette keyframes in OKLCH (L, chroma, hue in turns), interpolated
-/// cyclically. Designed so the whole ramp lives in the mid-to-bright range and
-/// each one is two hue families rather than a rainbow.
+/// cyclically.
+///
+/// Each ramp is one hue family swept through a second, with a *narrow*
+/// highlight rather than a broad pale one: on LED primaries, saturated colour
+/// is where this display is spectacular and large near-white areas read as
+/// washed out and dirty (brief section 2.2). Nothing goes below L 0.40, which
+/// is where the panel still has levels to spare.
 const PALETTES: &[&[(f32, f32, f32)]] = &[
-    // 0 ember: deep red -> orange -> pale gold -> magenta
+    // 0 ember: deep red -> orange -> gold -> white-hot -> magenta
     &[
-        (0.46, 0.15, 0.055),
-        (0.74, 0.17, 0.105),
-        (0.96, 0.07, 0.175),
-        (0.62, 0.14, 0.925),
+        (0.40, 0.16, 0.040),
+        (0.53, 0.18, 0.070),
+        (0.68, 0.19, 0.105),
+        (0.85, 0.15, 0.155),
+        (0.60, 0.17, 0.955),
+        (0.45, 0.16, 0.005),
     ],
-    // 1 ice: blue -> cyan -> white -> violet
+    // 1 ice: deep blue -> blue -> cyan -> pale cyan -> violet
     &[
-        (0.48, 0.14, 0.700),
-        (0.78, 0.12, 0.560),
-        (0.97, 0.03, 0.560),
-        (0.60, 0.15, 0.790),
+        (0.40, 0.15, 0.725),
+        (0.55, 0.16, 0.685),
+        (0.72, 0.14, 0.555),
+        (0.86, 0.11, 0.545),
+        (0.58, 0.16, 0.800),
+        (0.45, 0.15, 0.760),
     ],
-    // 2 acid: green -> chartreuse -> cream -> teal
+    // 2 acid: deep green -> green -> chartreuse -> cream -> teal
     &[
-        (0.52, 0.17, 0.390),
-        (0.80, 0.18, 0.320),
-        (0.96, 0.06, 0.270),
-        (0.62, 0.13, 0.480),
+        (0.42, 0.17, 0.425),
+        (0.58, 0.19, 0.380),
+        (0.75, 0.19, 0.325),
+        (0.86, 0.13, 0.260),
+        (0.57, 0.14, 0.495),
+        (0.46, 0.16, 0.455),
     ],
     // 3 sunset: magenta -> rose -> peach -> indigo
     &[
-        (0.50, 0.16, 0.940),
-        (0.74, 0.16, 0.030),
-        (0.95, 0.07, 0.130),
-        (0.58, 0.16, 0.820),
+        (0.42, 0.16, 0.900),
+        (0.55, 0.18, 0.965),
+        (0.70, 0.17, 0.025),
+        (0.85, 0.13, 0.095),
+        (0.52, 0.17, 0.805),
+        (0.45, 0.16, 0.855),
     ],
-    // 4 copper: brown-gold -> amber -> white-gold -> olive
+    // 4 copper: brown -> amber -> gold -> olive
     &[
-        (0.50, 0.12, 0.140),
-        (0.76, 0.15, 0.170),
-        (0.97, 0.05, 0.220),
-        (0.63, 0.11, 0.300),
+        (0.40, 0.11, 0.120),
+        (0.55, 0.14, 0.155),
+        (0.72, 0.16, 0.195),
+        (0.85, 0.13, 0.225),
+        (0.60, 0.12, 0.300),
+        (0.46, 0.11, 0.085),
     ],
-    // 5 lagoon: teal -> aqua -> pale -> blue
+    // 5 lagoon: teal -> aqua -> pale aqua -> blue
     &[
-        (0.50, 0.13, 0.520),
-        (0.79, 0.13, 0.480),
-        (0.96, 0.04, 0.430),
-        (0.60, 0.14, 0.650),
+        (0.42, 0.13, 0.545),
+        (0.56, 0.15, 0.500),
+        (0.72, 0.14, 0.460),
+        (0.85, 0.11, 0.425),
+        (0.55, 0.16, 0.660),
+        (0.46, 0.14, 0.600),
     ],
 ];
 
@@ -184,10 +273,15 @@ pub struct FractalZoom {
     pub ss: usize,
     pub leg_secs: f64,
     pub fade_secs: f64,
-    /// Palette cycles per unit of the mapped escape-time coordinate.
+    /// Escape-time band spacing, in units of sqrt(iterations) per palette
+    /// cycle. See `band_coord`.
     pub band_period: f32,
+    pub targets: Vec<Target>,
     /// Palette rotations per second.
     pub rot_rate: f32,
+    /// Iteration budget: `base + per_octave * zoom octaves`.
+    pub iter_base: f64,
+    pub iter_per_octave: f64,
     pub panel: Panel,
     ramps: Vec<Vec<[f32; 3]>>,
     ramps_idx: Vec<Vec<[u8; 3]>>,
@@ -229,10 +323,13 @@ impl FractalZoom {
         FractalZoom {
             seed,
             ss: 4,
-            leg_secs: 105.0,
-            fade_secs: 1.6,
-            band_period: 26.0,
+            leg_secs: 90.0,
+            fade_secs: 1.1,
+            band_period: 11.0,
             rot_rate: 0.035,
+            iter_base: 350.0,
+            iter_per_octave: 120.0,
+            targets: REGIONS.iter().map(resolve).collect(),
             panel,
             ramps,
             ramps_idx,
@@ -249,9 +346,9 @@ impl FractalZoom {
     }
 
     fn target(&self, leg_no: i64) -> Target {
-        let n = TARGETS.len() as i64;
+        let n = self.targets.len() as i64;
         let i = (leg_no + (self.seed as i64 % n) + n * 4) % n;
-        TARGETS[i as usize]
+        self.targets[i as usize]
     }
 
     /// The legs alive at time `t` and the weight of the newer one.
@@ -276,10 +373,8 @@ impl FractalZoom {
     }
 
     fn max_iter(&self, scale: f64) -> u32 {
-        // Enough to keep the boundary resolved as the view shrinks, with a
-        // floor that keeps the shallow end from looking blobby.
         let depth = (START_SCALE / scale).log2().max(0.0);
-        (220.0 + 62.0 * depth) as u32
+        (self.iter_base + self.iter_per_octave * depth) as u32
     }
 
     /// Render one leg into 64x32 linear-light colours.
@@ -297,6 +392,8 @@ impl FractalZoom {
         let dx = 2.0 * half_w / (W * ss) as f64;
         let dy = 2.0 * half_h / (H * ss) as f64;
         let rot = self.rot_rate as f64 * t;
+        let fade_from = 0.55 * max_iter as f64;
+        let fade_span = max_iter as f64 - fade_from;
         let inv_period = 1.0 / self.band_period as f64;
         let rows_per = H.div_ceil(self.threads.max(1));
         std::thread::scope(|s| {
@@ -312,12 +409,26 @@ impl FractalZoom {
                                 for i in 0..ss {
                                     let cr = x0 + ((x * ss + i) as f64 + 0.5) * dx;
                                     if let Some(nu) = escape(cr, ci, max_iter) {
-                                        let u = (nu * inv_period + rot).rem_euclid(1.0);
+                                        let u = (band_coord(nu) * inv_period + rot)
+                                            .rem_euclid(1.0);
                                         let e = ramp[(u * ramp.len() as f64) as usize
                                             % ramp.len()];
-                                        acc[0] += e[0];
-                                        acc[1] += e[1];
-                                        acc[2] += e[2];
+                                        // Fade the last stretch of the budget
+                                        // into the black interior, so the
+                                        // iteration ceiling reads as a dark
+                                        // halo round the set rather than as a
+                                        // hard edge and a rash of black
+                                        // speckles.
+                                        let g = if nu > fade_from {
+                                            let f = ((nu - fade_from) / (fade_span)).min(1.0);
+                                            let f = f * f * (3.0 - 2.0 * f);
+                                            (1.0 - f) as f32
+                                        } else {
+                                            1.0
+                                        };
+                                        acc[0] += e[0] * g;
+                                        acc[1] += e[1] * g;
+                                        acc[2] += e[2] * g;
                                     }
                                 }
                             }
@@ -386,7 +497,11 @@ impl Piece for FractalZoom {
         let mut lin = vec![[0f32; 3]; NPIX];
         self.render_lin(t, &mut lin);
         for i in 0..NPIX {
-            let c = lin_to_srgb8_3(lin[i]);
+            // Snap to codes the panel can actually emit. It costs nothing in
+            // quality - the panel would round to these anyway - and it folds
+            // hundreds of near-identical averages onto the same code, which
+            // is straight profit in the sender's palette budget.
+            let c = self.panel.snap(lin_to_srgb8_3(lin[i]));
             out.px[i * 3] = c[0];
             out.px[i * 3 + 1] = c[1];
             out.px[i * 3 + 2] = c[2];
@@ -449,6 +564,20 @@ impl Piece for FractalZoom {
         }
         true
     }
+}
+
+/// The coordinate the palette cycles in.
+///
+/// Escape counts pile up geometrically as you approach the set, so cycling
+/// the palette linearly in iterations gives wide bands far out and, near the
+/// boundary, bands finer than a pixel - which is the mush the first version of
+/// this piece showed at depth: 1800 colours of it, averaging to grey-pink.
+/// `sqrt` spreads the same range so that about three cycles cross the panel at
+/// any depth, shallow or deep, without any per-frame normalisation (which
+/// would flicker).
+#[inline]
+pub fn band_coord(nu: f64) -> f64 {
+    nu.max(0.0).sqrt()
 }
 
 /// Escape time with a continuous (fractional) iteration count, or `None` for
@@ -528,7 +657,7 @@ pub fn render_target(z: &mut FractalZoom, target: Target, age: f64, out: &mut Fr
     let mut lin = vec![[0f32; 3]; NPIX];
     z.render_leg(&leg, age, &mut lin);
     for i in 0..NPIX {
-        let c = lin_to_srgb8_3(lin[i]);
+        let c = z.panel.snap(lin_to_srgb8_3(lin[i]));
         out.px[i * 3] = c[0];
         out.px[i * 3 + 1] = c[1];
         out.px[i * 3 + 2] = c[2];

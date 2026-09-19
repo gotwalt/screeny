@@ -2,7 +2,7 @@
 //! does: distinct colours, estimated encoded size against the 1464-byte
 //! budget, average picture level, and frame-to-frame luminance change.
 
-use crate::color::{luma_lin, srgb8_to_lin};
+use crate::color::luma_lin;
 use crate::frame::{Frame, NPIX};
 use crate::panel::Panel;
 use std::collections::HashMap;

@@ -24,7 +24,7 @@
 //!     --bench N       render N frames and report ms/frame, write nothing
 //!     --out PATH      output PNG (default /tmp/preview-<piece>.png)
 
-use chrono::{Local, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{Local, NaiveDateTime, NaiveTime};
 use screeny_demos::clock::{Transition, WordClock};
 use screeny_demos::fractal::{self, FractalZoom};
 use screeny_demos::frame::{Frame, Indexed, Piece};
@@ -49,6 +49,7 @@ struct Args {
     indexed: bool,
     ss: usize,
     seed: u64,
+    band: f32,
     cols: usize,
     single: bool,
     bench: usize,
@@ -71,6 +72,7 @@ fn parse_args() -> Args {
         indexed: false,
         ss: 4,
         seed: 1,
+        band: 0.0,
         cols: 2,
         single: false,
         bench: 0,
@@ -94,6 +96,7 @@ fn parse_args() -> Args {
             "--indexed" => a.indexed = true,
             "--ss" => a.ss = val().parse().unwrap(),
             "--seed" => a.seed = val().parse().unwrap(),
+            "--band" => a.band = val().parse().unwrap(),
             "--cols" => a.cols = val().parse().unwrap(),
             "--single" => a.single = true,
             "--bench" => a.bench = val().parse().unwrap(),
@@ -126,6 +129,9 @@ fn make_piece(a: &Args) -> Box<dyn Piece> {
             let mut f = FractalZoom::new(a.seed);
             f.ss = a.ss;
             f.panel = Panel::new(a.levels);
+            if a.band > 0.0 {
+                f.band_period = a.band;
+            }
             Box::new(f)
         }
         "clock" => {
@@ -156,14 +162,17 @@ fn render_at(piece: &mut dyn Piece, t: Duration, indexed: bool, out: &mut Frame)
 fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
     let mut z = FractalZoom::new(a.seed);
     z.ss = a.ss;
+    if a.band > 0.0 {
+        z.band_period = a.band;
+    }
     let mut tiles = Vec::new();
     let ages: Vec<f64> = (0..a.frames)
         .map(|i| z.leg_secs * (i as f64 + 1.0) / a.frames as f64)
         .collect();
-    for t in fractal::TARGETS {
+    for t in z.targets.clone() {
         for age in &ages {
             let mut f = Frame::black();
-            fractal::render_target(&mut z, *t, *age, &mut f);
+            fractal::render_target(&mut z, t, *age, &mut f);
             let s = stats::frame_stats(&f, &opts.panel);
             tiles.push(Tile {
                 label: format!("{} {:.0}S {}", t.name.to_uppercase(), age, s.label()),
@@ -174,8 +183,57 @@ fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
     preview::sheet("FRACTAL TOUR TARGETS", tiles, ages.len())
 }
 
+/// How many iterations the tour actually needs, per target and depth. The
+/// iteration budget is the one number that decides whether a deep view is a
+/// picture or a black rectangle, so it is measured rather than guessed: for
+/// each depth, escape counts for every pixel of the view at a very high
+/// ceiling, reported as percentiles.
+fn probe(a: &Args) {
+    let z = FractalZoom::new(a.seed);
+    const CEIL: u32 = 200_000;
+    println!("depth  target          p50    p90    p99   p99.9   interior%");
+    for t in z.targets.clone() {
+        for oct in [4.0f64, 8.0, 12.0, 16.0, 20.0, 24.0] {
+            let scale = 1.6 * (-oct * std::f64::consts::LN_2).exp();
+            let (mut counts, mut interior) = (Vec::new(), 0usize);
+            for y in 0..32 {
+                for x in 0..64 {
+                    let cr = t.cx + (x as f64 - 31.5) / 32.0 * scale;
+                    let ci = t.cy + (y as f64 - 15.5) / 32.0 * scale;
+                    match fractal::escape(cr, ci, CEIL) {
+                        Some(nu) => counts.push(nu),
+                        None => interior += 1,
+                    }
+                }
+            }
+            counts.sort_by(|p, q| p.partial_cmp(q).unwrap());
+            let pct = |f: f64| {
+                if counts.is_empty() {
+                    0.0
+                } else {
+                    counts[((counts.len() - 1) as f64 * f) as usize]
+                }
+            };
+            println!(
+                "{:5.0}  {:14} {:6.0} {:6.0} {:6.0} {:7.0}   {:4.0}%",
+                oct,
+                t.name,
+                pct(0.5),
+                pct(0.9),
+                pct(0.99),
+                pct(0.999),
+                interior as f64 / 2048.0 * 100.0
+            );
+        }
+    }
+}
+
 fn main() {
     let a = parse_args();
+    if a.piece == "probe" {
+        probe(&a);
+        return;
+    }
     let opts = PreviewOpts {
         panel: Panel::new(a.levels),
         scale: a.scale,
