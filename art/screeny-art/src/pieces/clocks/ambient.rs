@@ -240,6 +240,17 @@ impl Ambient {
         self.goal = Mood::new(which, rng);
     }
 
+    /// Start gliding towards a mood that is mostly `which` with `amount` (0..1)
+    /// of `other` mixed in. A mood is only a handful of numbers, so any blend
+    /// of two is a mood too: the eight named ones are landmarks in a continuous
+    /// space, not the whole of it.
+    pub fn drift_to_blend(&mut self, which: usize, other: usize, amount: f32, rng: &mut Rng) {
+        let mut goal = Mood::new(which, rng);
+        let name = goal.name;
+        goal.toward(&Mood::new(other, rng), amount.clamp(0.0, 1.0));
+        self.goal = Mood { name, ..goal };
+    }
+
     fn target(&self, i: usize, p: &Phases) -> Hands {
         let (x, y) = self.places[i];
         let m = &self.mood;

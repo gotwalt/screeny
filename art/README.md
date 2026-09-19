@@ -103,11 +103,13 @@ letter, adapted to the panel. A grid of two-handed dials filling all 64 x 32
 (4x2, 6x3 or 8x4; 6x3 by default), in continuous motion driven by the clocks'
 ambient engine. Moods never switch: their numbers glide into one another while
 every oscillator keeps its own phase, so nothing ever jumps or repeats. Eight
-moods (drift, sway, breathe, corners, unison, tide, rings, streamlines); wander
-mode favours the open-handed ones, because hands reach their cell edge and,
+moods (drift, sway, breathe, corners, unison, tide, rings, streamlines), which
+are landmarks rather than the whole space: a mood is a handful of numbers, so
+wandering glides to blends of two. Wander mode favours the open-handed ones, because hands reach their cell edge and,
 when the field is gentle, neighbouring dials link into long curves across the
-whole panel. The two hands take two related tints, 15 steps each (31 colours,
-exact), which drift slowly by palette animation.
+whole panel. The hour and minute hands each have their own hue and saturation
+(`hue`/`chroma`, `hue2`/`chroma2`; the same in `clocks`), 15 steps each (31
+colours, exact), drifting slowly by palette animation.
 
 It is still a clock. Drawn digits need two dials side by side per digit, so
 eight columns, so 8-LED dials: numerals and large dials cannot both fit in 64

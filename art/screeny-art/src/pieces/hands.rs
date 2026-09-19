@@ -8,8 +8,8 @@
 //!   length to be graceful.
 //! - Hands reach the edge of their cell, so when the field is gentle the lines
 //!   of neighbouring dials join into long curves across the whole panel.
-//! - The two hands of each dial take two related tints, fifteen steps each:
-//!   31 colours, an exact frame. The tints drift slowly, by palette alone.
+//! - The hour and minute hands each have their own colour, fifteen steps
+//!   each: 31 colours, an exact frame. They drift slowly, by palette alone.
 //! - It never stops and never switches: moods glide into one another.
 //! - It is still a clock, in the way these dials can be. Drawn digits need two
 //!   dials side by side per digit, so eight columns, so 8-LED dials: numerals
@@ -21,13 +21,11 @@
 //! Motion is the clocks' ambient engine (`clocks/ambient.rs`): every hand a
 //! servo under one motor's speed and acceleration.
 
-use crate::color::{oklch, Rgb};
-use crate::dither::Dither;
-use crate::frame::{Frame, H, W};
-use crate::palette::Palette;
+use crate::frame::{Frame, W};
 use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
 use crate::pieces::clocks::ambient::{Ambient, MOODS};
 use crate::pieces::clocks::dance::Motor;
+use crate::pieces::clocks::draw::{Dials, Tint};
 use crate::pieces::clocks::Hands as Pair;
 use crate::rng::Rng;
 
@@ -48,10 +46,13 @@ const PARAMS: &[ParamSpec] = &[
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 20.0, 240.0, 1.0, 90.0),
     param("weight", "Hand weight (0 = auto)", 0.0, 4.0, 0.05, 0.0),
-    param("hue", "Hue", 0.0, 360.0, 1.0, 75.0),
-    param("second", "Second hand's hue shift", -180.0, 180.0, 1.0, -40.0),
-    param("chroma", "Colour", 0.0, 0.2, 0.005, 0.09),
+    param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 75.0),
+    param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.09),
+    param("hue2", "Minute hand hue", 0.0, 360.0, 1.0, 35.0),
+    param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.09),
+    param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.92),
     param("wheel", "Hue drift (deg/min)", 0.0, 120.0, 1.0, 25.0),
+    param("accent", "Amber hour hand while telling", 0.0, 1.0, 1.0, 1.0),
 ];
 
 /// All three fill the panel edge to edge: 16, 10.7 and 8 LEDs per dial. 6x3 is
@@ -127,7 +128,15 @@ impl Hands {
         };
         if let Some(next) = next {
             self.mood = next;
-            self.field.drift_to(next, &mut self.rng);
+            if asked > 0 {
+                self.field.drift_to(next, &mut self.rng);
+            } else {
+                // Wandering never lands on a pure mood twice: each stop is
+                // mostly one, tinged with another.
+                let other = (self.rng.u64() % MOODS as u64) as usize;
+                let tinge = self.rng.range(0.0, 0.45);
+                self.field.drift_to_blend(next, other, tinge, &mut self.rng);
+            }
             self.change_at = ctx.t + ctx.get("dwell") as f64 * self.rng.range(0.7, 1.3) as f64;
             eprintln!("hands: t={:.0} {}", ctx.t, self.field.name());
         }
@@ -154,20 +163,12 @@ impl Hands {
     }
 }
 
-fn hand_distance(px: f32, py: f32, angle: f32, len: f32) -> f32 {
-    let (s, c) = angle.to_radians().sin_cos();
-    let (dx, dy) = (s, -c);
-    let along = (px * dx + py * dy).clamp(0.0, len);
-    ((px - dx * along).powi(2) + (py - dy * along).powi(2)).sqrt()
-}
-
 impl Piece for Hands {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         self.step(ctx);
 
         let (cols, rows) = GRIDS[self.grid];
         let cell = self.cell();
-        let top = (H as f32 - rows as f32 * cell) * 0.5;
         // About an eighth of the dial, and never thinner than the panel can
         // draw cleanly.
         let weight = match ctx.get("weight") {
@@ -176,48 +177,23 @@ impl Piece for Hands {
         };
         let half = weight * 0.5;
         let len = cell * 0.5 - half;
-        // While the time is held the first hand is the hour hand, and shortens.
-        let lens = [len * (1.0 - (1.0 - HOUR_HAND) * self.field.grip()), len];
-
-        // Two ramps of fifteen. While the time is held they part company, so
-        // the hands can be told apart at a glance: the hour hand deepens to a
-        // saturated amber (which needs a lower lightness to have any chroma),
-        // the minute hand pales towards white. Palette animation only.
+        // While the time is held the hour hand draws in short.
         let grip = self.field.grip();
-        let hue = ctx.get("hue") + ctx.get("wheel") * (ctx.t / 60.0) as f32;
-        let chroma = ctx.get("chroma");
-        let mix = |a: f32, b: f32| a + (b - a) * grip;
-        let turn_to = |from: f32, to: f32| from + ((to - from + 540.0).rem_euclid(360.0) - 180.0) * grip;
-        let (dark, light) = (0.32, 0.92);
-        // (hue, chroma, lightest step)
-        let tints = [
-            (turn_to(hue, 58.0), mix(chroma, 0.18), mix(light, 0.74)),
-            (hue + ctx.get("second"), mix(chroma, 0.02), mix(light, 0.95)),
-        ];
-        let mut colours = vec![Rgb::BLACK];
-        for (h, c, top) in tints {
-            colours.extend((0..15).map(|k| oklch(dark + (top - dark) * k as f32 / 14.0, c, h)));
-        }
-        let palette = Palette::new(colours, (light - dark) / 14.0);
-        let inks = tints.map(|(h, c, top)| oklch(top, c, h));
+        let lens = [len * (1.0 - (1.0 - HOUR_HAND) * grip), len];
 
-        let angles = &self.angles;
-        let frame = Frame::supersample(6, |x, y| {
-            let (cx, cy) = (x / cell, (y - top) / cell);
-            if cy < 0.0 || cy >= rows as f32 {
-                return Rgb::BLACK;
-            }
-            let i = (cy as usize).min(rows - 1) * cols + (cx as usize).min(cols - 1);
-            let (px, py) = ((cx.fract() - 0.5) * cell, (cy.fract() - 0.5) * cell);
-            // The first hand lies over the second where they cross.
-            if hand_distance(px, py, angles[i][0], lens[0]) <= half {
-                inks[0]
-            } else if hand_distance(px, py, angles[i][1], lens[1]) <= half {
-                inks[1]
-            } else {
-                Rgb::BLACK
-            }
-        });
-        palette.map(&frame, Dither::None, 0.0)
+        // Each hand has its own colour, and both drift slowly round the wheel.
+        // While the time is held they can also part company so the hands are
+        // told apart at a glance: the hour hand deepens to a saturated amber
+        // (which needs a lower lightness to have any chroma) and the minute
+        // hand pales towards white. All of it is palette animation.
+        let wheel = ctx.get("wheel") * (ctx.t / 60.0) as f32;
+        let accent = grip * ctx.get("accent").round();
+        let mix = |a: f32, b: f32| a + (b - a) * accent;
+        let turn_to = |from: f32, to: f32| from + ((to - from + 540.0).rem_euclid(360.0) - 180.0) * accent;
+        let tints = [
+            Tint { hue: turn_to(ctx.get("hue") + wheel, 58.0), chroma: mix(ctx.get("chroma"), 0.18), light: mix(ctx.get("light"), 0.74) },
+            Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.02), light: mix(ctx.get("light"), 0.95) },
+        ];
+        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, ring: 0.0 }.draw()
     }
 }

@@ -15,11 +15,9 @@
 
 pub(crate) mod ambient;
 pub(crate) mod dance;
+pub(crate) mod draw;
 
-use crate::color::Rgb;
-use crate::dither::Dither;
 use crate::frame::Frame;
-use crate::palette::Palette;
 use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
 use crate::rng::Rng;
 use dance::Motor;
@@ -35,14 +33,17 @@ pub const DEF: PieceDef = PieceDef {
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 20.0),
-    param("dance", "Choreography (0 = vary)", 0.0, 12.0, 1.0, 0.0),
+    param("dance", "Choreography (0 = vary, 13 = always composed)", 0.0, 13.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     param("hours24", "24-hour", 0.0, 1.0, 1.0, 1.0),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 2.0),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
-    param("hue", "Hue", 0.0, 360.0, 1.0, 80.0),
-    param("chroma", "Colour", 0.0, 0.2, 0.005, 0.05),
+    param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 80.0),
+    param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.05),
+    param("hue2", "Minute hand hue", 0.0, 360.0, 1.0, 80.0),
+    param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.05),
+    param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.93),
 ];
 
 pub(crate) const COLS: usize = 8;
@@ -50,7 +51,6 @@ pub(crate) const ROWS: usize = 3;
 pub(crate) const CLOCKS: usize = COLS * ROWS;
 /// LEDs per clock; the grid is 64 x 24, centred in 64 x 32.
 const CELL: f32 = 8.0;
-const TOP: f32 = 4.0;
 
 /// Both hands at 7:30: how a clock that is not part of a digit rests.
 const REST: f32 = 225.0;
@@ -122,10 +122,12 @@ struct Clocks {
     landed: f64,
     /// Ambient motion between holding the time and the next dance.
     ambient: Option<ambient::Ambient>,
+    /// The dance chosen for a minute, kept so it is composed only once.
+    chosen: Option<(i64, usize, String, Vec<dance::Phase>)>,
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
-    Box::new(Clocks { seed, born: None, angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None })
+    Box::new(Clocks { seed, born: None, angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None, chosen: None })
 }
 
 impl Clocks {
@@ -135,17 +137,29 @@ impl Clocks {
         pose(h, m)
     }
 
-    /// The dance for the move to `minute`: a fixed one if asked for, otherwise
-    /// drawn from the repertoire, never the same as the minute before.
-    fn dance_for(&self, minute: i64, choice: f32) -> (&'static str, Vec<dance::Phase>) {
+    /// The dance for the move to `minute`. Asked for by number it comes from
+    /// the repertoire (or, at 13, is always composed). Left to vary, most are
+    /// composed afresh and the rest drawn from the repertoire.
+    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor) -> (String, Vec<dance::Phase>) {
+        if let Some((m, c, name, phases)) = &self.chosen {
+            if (*m, *c) == (minute, choice) {
+                return (name.clone(), phases.clone());
+            }
+        }
         let mut rng = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9));
-        let pick = |m: i64| (Rng::new(self.seed ^ (m as u64).wrapping_mul(0x2545_f491)).u64() % dance::DANCES as u64) as usize;
-        let which = match choice as usize {
-            0 if pick(minute) == pick(minute - 1) => pick(minute) + 1,
-            0 => pick(minute),
-            n => n - 1,
+        let composed = match choice {
+            0 => rng.u64() % 10 < 6,
+            n => n > dance::DANCES,
         };
-        dance::dance(which, &mut rng)
+        let (name, phases) = if composed {
+            dance::compose(&mut rng, &self.angles, to, motor)
+        } else {
+            let which = if choice == 0 { (rng.u64() % dance::DANCES as u64) as usize } else { choice - 1 };
+            let (name, phases) = dance::dance(which, &mut rng);
+            (name.to_string(), phases)
+        };
+        self.chosen = Some((minute, choice, name.clone(), phases.clone()));
+        (name, phases)
     }
 
     fn step(&mut self, ctx: &Ctx) {
@@ -184,7 +198,7 @@ impl Clocks {
             Some(shown) => shown + 1,
         };
         let to = Self::target(next, hours24);
-        let (name, phases) = self.dance_for(next, ctx.get("dance"));
+        let (name, phases) = self.dance_for(next, ctx.get("dance") as usize, &to, motor);
         let (moves, total) = dance::plan(&phases, &self.angles, &to, motor);
         // Engine seconds until the dance has to begin.
         let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
@@ -218,51 +232,24 @@ impl Clocks {
     }
 }
 
-/// Distance from `p` to the segment from the origin along `angle` for `len`.
-fn hand_distance(px: f32, py: f32, angle: f32, len: f32) -> f32 {
-    let (s, c) = angle.to_radians().sin_cos();
-    // 0 degrees is up; y grows downwards on the panel.
-    let (dx, dy) = (s, -c);
-    let along = (px * dx + py * dy).clamp(0.0, len);
-    ((px - dx * along).powi(2) + (py - dy * along).powi(2)).sqrt()
-}
-
 impl Piece for Clocks {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         self.step(ctx);
-
         let half = ctx.get("weight") * 0.5;
         // The rounded tip ends exactly on the cell edge, meeting its neighbour's.
         let len = CELL * 0.5 - half;
-        let dials = ctx.get("dials");
-        let angles = self.angles;
-
-        let frame = Frame::supersample(6, |x, y| {
-            let (cx, cy) = (x / CELL, (y - TOP) / CELL);
-            if !(0.0..ROWS as f32).contains(&cy) {
-                return Rgb::BLACK;
-            }
-            let i = cy as usize * COLS + cx as usize;
-            let (px, py) = ((cx.fract() - 0.5) * CELL, (cy.fract() - 0.5) * CELL);
-            let d = hand_distance(px, py, angles[i][0], len).min(hand_distance(px, py, angles[i][1], len));
-            if d <= half {
-                return Rgb::splat(1.0);
-            }
-            let ring = ((px * px + py * py).sqrt() - (CELL * 0.5 - 0.45)).abs();
-            if ring < 0.3 { Rgb::splat(0.1 * dials) } else { Rgb::BLACK }
-        });
-
-        // One hue, fifteen lightnesses: enough steps that the anti-aliased edge
-        // of a slowly turning hand is smooth without any dither on it.
-        let palette = Palette::ramps(&[ctx.get("hue")], 15, (0.32, 0.93), ctx.get("chroma"));
-        let tinted = match frame {
-            Frame::Linear(px) => {
-                let ink = *palette.colours().last().expect("ramp is not empty");
-                Frame::Linear(px.into_iter().map(|c| ink.scale(c.r)).collect())
-            }
-            other => other,
-        };
-        palette.map(&tinted, Dither::None, 0.0)
+        let tint = |hue: &str, chroma: &str| draw::Tint { hue: ctx.get(hue), chroma: ctx.get(chroma), light: ctx.get("light") };
+        draw::Dials {
+            angles: &self.angles,
+            cols: COLS,
+            rows: ROWS,
+            cell: CELL,
+            lens: [len; 2],
+            half,
+            tints: [tint("hue", "chroma"), tint("hue2", "chroma2")],
+            ring: ctx.get("dials"),
+        }
+        .draw()
     }
 }
 
