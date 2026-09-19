@@ -1,0 +1,72 @@
+[package]
+name = "fw-skeleton"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Compile-only spike: embassy + esp-radio WiFi + esp-hub75 on a Tidbyt Gen 1 (ESP32)"
+
+# Standalone crate: deliberately not part of any parent workspace.
+[workspace]
+
+[dependencies]
+# --- HAL / runtime -------------------------------------------------------
+esp-hal = { version = "=1.2.2", features = ["esp32", "unstable", "log-04"] }
+esp-rtos = { version = "=0.4.0", features = ["esp32", "embassy", "esp-radio", "log-04"] }
+esp-alloc = { version = "=0.11.0", features = ["esp32"] }
+esp-bootloader-esp-idf = { version = "=0.6.0", features = ["esp32"] }
+esp-backtrace = { version = "=0.20.0", features = ["esp32", "panic-handler", "println"] }
+esp-println = { version = "=0.18.0", features = ["esp32", "log-04", "auto"] }
+
+# --- WiFi ----------------------------------------------------------------
+# NOTE: 1.0.0-beta.1 (not beta.2) — beta.2 wants esp-metadata-generated ^0.6,
+# esp-hub75 0.17 wants ^0.5. See docs/research/001-firmware-stack.md.
+esp-radio = { version = "=1.0.0-beta.1", features = ["esp32", "wifi", "unstable", "log-04"] }
+
+# --- Async / net ---------------------------------------------------------
+embassy-executor = { version = "0.10.0" }
+embassy-time = { version = "0.5.1" }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "udp", "proto-ipv4", "multicast"] }
+embassy-sync = { version = "0.8.0" }
+
+# --- Display -------------------------------------------------------------
+esp-hub75 = { version = "=0.17.0", default-features = false, features = [
+  "esp32",
+  "log",
+  "iram",              # refresh ISR in IRAM: mandatory when WiFi is active
+  "skip-black-pixels",
+  "circular-dma",      # DMA loops forever; swaps are pointer-delta updates
+  "tail-closes-latch",
+  "trail-blank-8",
+  "invert-blank",
+  "invert-oe",
+] }
+embedded-graphics = { version = "0.8.2" }
+
+# --- discovery ------------------------------------------------------------
+edge-mdns = { version = "=0.8.0", default-features = false, features = ["io"] }
+edge-nal = "=0.7.0"
+edge-nal-embassy = "=0.9.0"
+rand_core = { version = "0.10", default-features = false }
+
+# --- misc ----------------------------------------------------------------
+heapless = { version = "0.9.3" }
+static_cell = { version = "2.1.1" }
+log = { version = "0.4.30" }
+
+[profile.dev]
+debug = true
+opt-level = "s"
+
+# "The radio blobs require optimization level 2 or 3 to function correctly."
+# — esp-radio's own documentation. The release profile is fine; a debug build
+# without this silently misbehaves.
+[profile.dev.package.esp-radio]
+opt-level = 3
+
+[profile.release]
+debug = true      # symbols do not cost flash space
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
