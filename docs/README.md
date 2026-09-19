@@ -1,5 +1,7 @@
 # Project docs
 
+The coordinating session's own playbook is `docs/ORCHESTRATOR.md`.
+
 ## Layout
 
 ```

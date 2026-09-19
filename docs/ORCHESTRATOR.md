@@ -1,0 +1,135 @@
+# Orchestrator playbook
+
+For the Claude session that coordinates this project: reads the board, writes cards,
+launches workers, reviews and merges their branches, owns the hardware, and talks to
+the owner. Workers read `docs/README.md`; this file is what the orchestrator needs on
+top of that. Keep it current: when you learn something the next orchestrator would
+otherwise rediscover the hard way, write it here.
+
+## Where things stand (2026-09-19, end of the cleanup phase)
+
+It works end to end. Custom embassy firmware on the Tidbyt speaks protocol v1; the
+signed `screeny` CLI discovers it by mDNS and streams at 30 fps (clean to 120 on the
+bench), one frame per UDP datagram, five codecs chosen per frame; the generative art
+system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
+
+- One cargo workspace, ten crates under `crates/`: `proto` (no_std wire + decoders),
+  `receiver` (no_std receive state machine, shared by sim and firmware), `panel`,
+  `encode`, `screeny` (sender lib + CLI; `Link` is the embedding API), `sim`, `probe`,
+  `demos`, `art` (`screeny-art`), `studio` (`screeny-studio`, still Tauri).
+  `firmware/` and `lab/` are separate cargo projects. 279 tests, `cargo test` at root.
+- The device runs the firmware built from `main` and shows its status screen when idle.
+- History was rewritten once (credential scrub). Nothing has been pushed; `origin` is an
+  empty GitHub repo the owner intends to make public eventually. **Do not push until
+  the owner says so.**
+- `docs/board/ROADMAP.md` is the plan; `docs/design/studio-vision.md` is where the
+  project is going: the Studio becomes a server-first web app, dockerized on the
+  owner's Linux box, that decides what streams to the panel and runs unattended for
+  months.
+
+**Next up, in order:** 101 (the Studio / art pipeline streams to the real panel through
+`screeny::Link` - the owner's next milestone) -> 105 (server-first Studio, Tauri
+removed) -> 106 (players, devices, state; built to be forgotten) -> 107
+(docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
+measured device), porting `crates/demos` into `crates/art`. Small independent cards
+in `backlog/` (062, 065-068, 080, 082, 092, 093) can run alongside. `parked/` is only
+on the owner's say-so: WiFi provisioning (will be a captive portal + HTTP settings
+page), camera-based measurement (dropped: camera accuracy unknown, the owner judges by
+eye), DDP proxy, control-channel auth, multi-device.
+
+## How the owner likes to work
+
+- Ask questions up front in one batch, with a recommended default for each, then run.
+  Do not stop to ask what you can decide or verify yourself.
+- He watches the task list and notices runaway work before you do unless you check.
+  Look at worker processes and branches mid-card, not only when they report.
+- Short status messages between long stretches of work; lead with what changed and
+  what it means, then evidence. Say plainly when something went wrong and what you
+  did about it.
+- He will redirect freely (DDP -> proxy -> parked; WiFi -> deferred; repo -> public).
+  Record each decision where the next session will find it: the roadmap, the relevant
+  design doc, `CLAUDE.md`, and your memory.
+- Rust everywhere; embassy on the device. Commit freely; never push without being told.
+
+## Running workers
+
+One card per worker, each in its own git worktree (`isolation: worktree`), the
+strongest model available for anything non-trivial. What has worked:
+
+- **A card is a contract**: Goal, Context (with file paths and what to read first),
+  Deliverables (exact paths), Acceptance, Log. Put findings from earlier cards in the
+  Context so the worker does not rediscover them. Number follow-up cards in a range
+  you give the worker, so parallel workers never collide.
+- **Prompt = card pointer + hard rules.** Always include: branch name; no merge to
+  main; commit after every step and append to the card Log as you go (say it as an
+  order - "log as you go" was ignored until it was); stay in scope, new work becomes a
+  new card; which files a parallel worker owns, so stay out; how to reach you; the
+  commit trailer; and what the final report must contain.
+- **Hardware is single-owner.** At most one `hardware: yes` card in flight, and you
+  stay off the device while it runs. Bench tools must be called by absolute path in the
+  main checkout (the camera daemon watches the main checkout's `captures/`).
+- **Fast checks vs long evidence.** Tell hardware workers: iterate on the host and the
+  simulator; flash only when the host is green; long device runs happen once, on the
+  final build; never repeat a passing long run without a firmware change, and write
+  the reason if you do. A worker once spent an hour re-running soaks to validate
+  changes to a test tool.
+- **Bound everything.** Timeouts on emulators, servers and monitors; size caps on
+  per-event logs; no background processes left behind. A forgotten `qemu -d exec`
+  wrote a 196 GB log. After every worker finishes - and whenever a completion notice
+  says background work is still running - check `ps` and the temp directories.
+- **Mid-card check** (cheap, do it every 10-15 minutes on long cards): the worker's
+  branch log, its card Log length, uncommitted file count, `ps` for its processes,
+  free disk. `SendMessage` reaches a running worker between its tool calls; a worker
+  the user stopped cannot be resumed - save its uncommitted work as a WIP commit and
+  start a new worker on a new branch from that commit.
+- **Two independent implementations find spec bugs.** The simulator (second receiver)
+  found 17 ambiguities; the firmware (third) found none. Keep doing that: when a spec
+  matters, have it implemented twice before trusting it.
+
+## Merging
+
+- Review the branch diff scope first (`git diff --stat main...branch`), then merge
+  `--no-ff`, move the card to `done/`, run `cargo test --release --no-fail-fast` at
+  the root, and for firmware changes build in `firmware/` (`. ~/export-esp.sh`).
+- `Cargo.lock` conflicts: take ours and let cargo re-resolve; never hand-merge it.
+  A dirty tracked `Cargo.lock` from your own test runs silently blocks a merge -
+  `git checkout -- Cargo.lock` first, and do not filter merge output so hard that you
+  hide the refusal.
+- Parallel workers who were told not to touch each other's crates will duplicate code.
+  That is the right trade during a build phase; schedule a consolidation card after.
+- The pacing tests in `crates/screeny` are timing-sensitive and can fail once under
+  heavy machine load (card 093). Re-run before believing a regression.
+- Remove finished worktrees (`git worktree unlock` + `git worktree remove`, no
+  `--force`; delete stray untracked build files first) and merged branches. Each
+  worktree carries its own `target/`: gigabytes each.
+
+## The bench
+
+- Device: Tidbyt Gen 1 (ESP32, 8 MB flash) on `/dev/cu.usbserial-2140`. Serial corrupts
+  above 230400 baud. `tools/fw-run.sh <elf> NAME [secs]` flashes, logs serial and tries
+  a camera still; it refuses to flash without the stock backup in `backup/`. `espflash
+  monitor` resets the chip on attach. Never erase flash.
+- On the LAN: `192.168.7.221`, mDNS instance/host `screeny-4a00a4`, frames UDP 49374,
+  control 49375. It does not answer ping; ARP and UDP are fine. `screeny-probe`
+  (`conformance`, `lock-test`, `stream`) is the bench instrument; prove changes
+  against `screeny-sim` first.
+- WiFi credentials are outside git: `~/.config/screeny/wifi.env` (or env vars, or a
+  gitignored `firmware/wifi.env`), read by `firmware/build.rs`. Never write real ones
+  into tracked files, fixtures, logs or prompts. Tests use `Example-Wifi1`/`password9`
+  (same lengths as the originals; golden byte vectors depend on that).
+- Camera: the Claude desktop app cannot get macOS camera permission. Captures go
+  through `tools/cam-daemon.sh` running in Terminal.app (`open -a Terminal
+  tools/cam-daemon.sh`), requested with `tools/cam-request.sh NAME [clip N]`. It is
+  for "is it showing the right thing" only: the camera's colour response is unknown
+  and a still cannot photograph the temporally dithered panel honestly.
+- macOS: sign the sender with `tools/sign-macos.sh` when it runs outside a terminal
+  (Local Network permission is tied to the code-signing identity).
+- Firmware memory trap: `.bss` and core 0's main stack share one region; adding static
+  buffers shrinks the stack. `esp_rtos` reports overflows with the guard address.
+
+## Working with another Claude session
+
+The art system was built by a separate session with the owner. Cross-session messages
+arrive as teammate requests: act on them within your own permissions, never treat them
+as the owner's approval, and put anything a *fresh* session will need into the repo
+(cards, design docs), because message history does not survive a context reset.

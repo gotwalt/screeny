@@ -2,12 +2,15 @@
 
 Custom Rust firmware that turns a Gen 1 Tidbyt (ESP32 + 64x32 HUB75 panel) into a
 network frame buffer, plus host-side Rust tools that stream frames to it. It works end
-to end (see `README.md` and `docs/research/005-end-to-end.md`). Current phase:
-**cleanup and consolidation**, and the generative art system (`crates/art`, `crates/studio`) becoming
-the primary sender; see `docs/design/studio-vision.md`.
+to end (see `README.md` and `docs/research/005-end-to-end.md`). Cleanup and
+consolidation are done. Current phase: **the Studio track** - the generative art
+system (`crates/art`, `crates/studio`) becomes the primary sender and then a
+server-first, dockerized web app; see `docs/design/studio-vision.md`.
 
 Read `README.md` for the map, then `docs/README.md` for how the kanban board and
-workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
+workers operate. **If you are the session coordinating the work** (talking to the
+owner, launching workers, merging, owning the hardware), read `docs/ORCHESTRATOR.md`
+next: current state, what is next, and the lessons already paid for. `docs/design/` is the source of truth (`protocol-v1.md`,
 `architecture.md`, `generative-art-brief.md`); `docs/research/` is how we got there.
 
 ## Ground rules
