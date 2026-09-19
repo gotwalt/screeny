@@ -4,8 +4,8 @@ title: Make crates/screeny a good library to embed (the art system becomes the p
 type: build
 hardware: no
 depends: [009]
-owner:
-branch:
+owner: card-011 worker
+branch: card/011-sender-embedding-api
 ---
 
 ## Goal
