@@ -3,3 +3,4 @@ backup/*.bin
 captures/
 .DS_Store
 lab/out/
+.claude/worktrees/
