@@ -27,10 +27,32 @@ ELF=target/xtensa-esp32-none-elf/release/xtensa-bench
 count() { # $1 = payload path, $2 = reps -> instructions executed
   BENCH_PAYLOAD="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")" BENCH_REPS="$2" \
     cargo +esp build --release -q 2>/dev/null
-  qemu-system-xtensa -machine sim -cpu dc232b -m 128M -nographic \
-    -monitor none -serial none -semihosting \
-    -accel tcg,one-insn-per-tb=on -kernel "$ELF" \
-    -d exec,nochain -D "$LOG/q.log" >/dev/null 2>&1 || true
+  # SAFETY: a bench binary that never reaches its semihosting exit (e.g. a decode
+  # error that lands in the panic handler's `loop {}`) makes qemu log forever. On
+  # 2026-09-19 an orphaned run wrote a 196 GB log in two hours and nearly filled the
+  # disk. So: cap the log at 2 GB (`ulimit -f`, 512-byte blocks -> SIGXFSZ) and kill
+  # qemu after 120 s. A normal run is a few seconds and a few hundred MB.
+  rm -f "$LOG/q.log"
+  (
+    ulimit -f 4194304
+    qemu-system-xtensa -machine sim -cpu dc232b -m 128M -nographic \
+      -monitor none -serial none -semihosting \
+      -accel tcg,one-insn-per-tb=on -kernel "$ELF" \
+      -d exec,nochain -D "$LOG/q.log" >/dev/null 2>&1 &
+    q=$!
+    ( sleep 120; kill -9 $q 2>/dev/null ) &
+    w=$!
+    wait $q 2>/dev/null
+    rc=$?
+    kill $w 2>/dev/null
+    exit $rc
+  )
+  rc=$?
+  if (( rc > 128 )); then
+    echo "xtensa-bench: qemu was killed (timeout or log cap) on $1 reps=$2; the binary did not exit" >&2
+    echo 0
+    return
+  fi
   grep -c . "$LOG/q.log"
 }
 
