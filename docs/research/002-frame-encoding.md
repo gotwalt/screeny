@@ -11,10 +11,17 @@ decoders agree. Card 002.
 **Ship four decoders and let the sender choose per frame.** The sender encodes
 each frame three ways, decodes each candidate, scores it, and sends the winner;
 the mode byte already on the wire tells the firmware which decoder to run, so
-this costs the device nothing. That "hybrid" beat every single fixed codec on
-every content class we tested, at **mean panel-aware dE 6.5 against the best
-fixed-rate codec's 9.5**, and it is the only approach that is simultaneously
-*lossless on text/UI* and *good on photographs*.
+this costs the device nothing. Overall that "hybrid" scores **mean panel-aware
+dE 6.5 against the best fixed-rate codec's 9.5**, and it is the only approach
+that is simultaneously *lossless on text/UI* and *good on photographs* — no
+single codec in the study manages both.
+
+Per clip it matches or beats the best fixed-rate codec on four of five, and on
+`darkfade` it is second by 0.12 (1.37 against `bc1-dual`'s 1.25). That last one
+is not a defect: the sender selects on dE against a *temporally dithered* panel
+(see below), and on that metric the hybrid wins all five — 1.05 against
+`bc1-dual`'s 1.81 on `darkfade`. It is buying robustness to a firmware
+improvement at a cost of 0.12 dE today.
 
 | | |
 |---|---|
@@ -246,14 +253,19 @@ precision decides everything, and where the temporal-dither column bites:
 
 | codec | dE(6-bit) | dE(6-bit +tdith) | px exact |
 |---|---|---|---|
-| `hybrid` | **0.98** | **1.23** | 73.2% |
-| `bc1-dual` | 1.25 | 1.81 | 67.1% |
+| `hybrid` | 1.37 | **1.05** | 72.2% |
+| `bc1-dual` | **1.25** | 1.81 | 67.1% |
 | `bc1-e888` | 1.26 | 1.81 | 67.1% |
 | `pal5-adapt` | 1.99 | 1.83 | 59.0% |
 | `bc1` (RGB565 ends) | 3.68 | **13.88** | 0.5% |
 | `cc2-42` (RGB565 ends) | 6.02 | **17.68** | 0.2% |
 | `cc4` (RGB444 ends) | 10.59 | **35.02** | 0.2% |
 | `blk42` (RGB444 ends) | 10.64 | **34.83** | 0.2% |
+
+This is the one clip where the hybrid is not first on the plain 6-bit metric
+(1.37 against `bc1-dual`'s 1.25) and first by a wide margin on the dithered one
+(1.05 against 1.81). It mixes PAL8_LZ on 65% of frames with BC1_DUAL on 28%,
+which is exactly what a per-frame chooser is for.
 
 `bc1` and `bc1-e888` differ *only* in endpoint format — identical block size,
 identical index count — and 888 endpoints are **2.9x better** here. Look at
