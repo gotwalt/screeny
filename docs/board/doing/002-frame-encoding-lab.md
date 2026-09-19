@@ -4,8 +4,8 @@ title: Frame encoding lab - best picture in one 1472-byte datagram
 type: research
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker-002
+branch: card/002-frame-encoding-lab
 ---
 
 ## Goal
