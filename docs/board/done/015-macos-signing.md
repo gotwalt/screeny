@@ -52,3 +52,29 @@ parent, both discover and stream to the panel after at most one permission promp
 and keep working across rebuilds.
 
 ## Log
+
+### 2026-09-19 - done by the orchestrator
+
+- `crates/screeny/Info.plist` + `crates/screeny/build.rs`: the plist is linked into
+  `__TEXT,__info_plist` of the `screeny` binary on macOS (`-sectcreate`). Carries
+  `CFBundleIdentifier=com.gotwalt.screeny`, `NSLocalNetworkUsageDescription`,
+  `NSBonjourServices=[_screeny._udp]`. Verified with `otool -s __TEXT __info_plist`.
+- `tools/sign-macos.sh [--debug]`: builds, then
+  `codesign --force --sign "Developer ID Application: Aaron Gotwalt (L2EG537FL9)"
+  --identifier com.gotwalt.screeny --options runtime --timestamp=none`, verifies
+  strictly and prints the result. `SCREENY_SIGN_IDENTITY` overrides (use `-` for ad hoc
+  on machines without the certificate).
+- Before: `Identifier=screeny-26abd4a0a82e2022`, `Signature=adhoc`,
+  `Info.plist=not bound` - an identity that changes on every rebuild. After:
+  `Identifier=com.gotwalt.screeny`, `TeamIdentifier=L2EG537FL9`, `flags=runtime`,
+  `Info.plist entries=8`, "satisfies its Designated Requirement". The signed binary runs
+  and `screeny discover` finds the bench device.
+- Denial hints (EHOSTUNREACH / empty browse -> "System Settings > Privacy & Security >
+  Local Network", `--addr` bypass) were implemented in card 009 (`Error::hint()`).
+- Not done: notarisation (only needed to distribute; would need `--timestamp`, a zip
+  and `notarytool`). Resetting a bad cached decision: `tccutil` cannot reset Local
+  Network; toggle the entry in System Settings, or reboot if the known caching bug
+  bites (see `docs/research/003-protocol-transport.md`, macOS section).
+- Workflow: run `tools/sign-macos.sh` instead of a bare `cargo build` whenever the
+  binary will be launched from anything other than a terminal. `cargo build` relinks
+  and drops the signature back to ad hoc.
