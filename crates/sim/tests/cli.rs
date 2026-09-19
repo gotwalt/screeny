@@ -102,7 +102,10 @@ fn headless_logs_statistics_and_exits_when_told() {
     assert!(log.contains("fps"), "expected a statistics line:\n{log}");
     assert!(log.contains("SOLID"), "expected the codec:\n{log}");
     assert!(log.contains("shown"), "expected the counters:\n{log}");
-    assert!(log.contains("LIVE") || log.contains("HOLD"), "state:\n{log}");
+    assert!(
+        log.contains("LIVE") || log.contains("HOLD"),
+        "state:\n{log}"
+    );
 }
 
 #[test]

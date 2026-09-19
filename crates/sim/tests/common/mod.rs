@@ -142,7 +142,9 @@ impl Ctrl {
     pub fn send(&self, req: &Request<'_>, req_id: u16) {
         let mut buf = vec![0u8; req.encoded_len()];
         let n = req.write(req_id, &mut buf).expect("request fits");
-        self.sock.send_to(&buf[..n], self.dst).expect("send request");
+        self.sock
+            .send_to(&buf[..n], self.dst)
+            .expect("send request");
     }
 
     /// Send arbitrary bytes.

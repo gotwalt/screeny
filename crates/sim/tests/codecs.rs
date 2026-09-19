@@ -71,7 +71,13 @@ fn hand_built_payloads_arrive_bit_exact() {
     check(codec::SOLID, &p, &e, "SOLID teal", &mut shown);
 
     let f = indexed_runs(32);
-    check(codec::PAL5, &pal5(&f), &f.expect(), "PAL5 32 colours", &mut shown);
+    check(
+        codec::PAL5,
+        &pal5(&f),
+        &f.expect(),
+        "PAL5 32 colours",
+        &mut shown,
+    );
 
     let f = indexed_runs(16);
     check(
@@ -146,16 +152,30 @@ fn an_unshowable_frame_leaves_the_previous_one_lit() {
         (codec::SOLID, &[1, 2, 3, 4], "SOLID payload one byte long"),
         (codec::PAL5, &good, "PAL5 payload far too short"),
         (codec::BC1_DUAL, &good, "BC1_DUAL payload far too short"),
-        (codec::PAL8_LZ, &[0u8], "PAL8_LZ with a palette and no stream"),
+        (
+            codec::PAL8_LZ,
+            &[0u8],
+            "PAL8_LZ with a palette and no stream",
+        ),
     ];
     for (c, payload, what) in bad {
         tx.send(*c, F_KEY, payload);
         let ev = sim
             .wait_for(&mut cursor, T, |e| {
-                matches!(e, Event::Dropped { cause: DropCause::Decode(_), .. })
+                matches!(
+                    e,
+                    Event::Dropped {
+                        cause: DropCause::Decode(_),
+                        ..
+                    }
+                )
             })
             .unwrap_or_else(|| panic!("{what}: expected a decode drop"));
-        if let Event::Dropped { cause: DropCause::Decode(e), .. } = ev {
+        if let Event::Dropped {
+            cause: DropCause::Decode(e),
+            ..
+        } = ev
+        {
             assert_ne!(e, DecodeError::Corrupt, "{what}: unexpected error shape");
         }
         let s = sim.snapshot();
@@ -165,7 +185,11 @@ fn an_unshowable_frame_leaves_the_previous_one_lit() {
 
     let t = sim.telemetry();
     assert_eq!(t.frames_dropped_decode, bad.len() as u32);
-    assert_eq!(t.frames_rx, 1 + bad.len() as u32, "all of them were accepted");
+    assert_eq!(
+        t.frames_rx,
+        1 + bad.len() as u32,
+        "all of them were accepted"
+    );
     assert_eq!(t.frames_rejected, 0, "a bad codec is not a bad packet");
 }
 

@@ -100,7 +100,11 @@ fn skipped_sequence_numbers_are_counted_as_gaps() {
 
     tx.send_seq(codec::SOLID, F_KEY, 11, &p);
     sim.wait_for_frames(2, T).unwrap();
-    assert_eq!(sim.telemetry().seq_gaps, 0, "consecutive frames leave no gap");
+    assert_eq!(
+        sim.telemetry().seq_gaps,
+        0,
+        "consecutive frames leave no gap"
+    );
 
     tx.send_seq(codec::SOLID, F_KEY, 20, &p);
     sim.wait_for_frames(3, T).unwrap();
@@ -208,7 +212,10 @@ fn a_new_source_resets_the_sequence_but_not_the_counters() {
         .expect("the second sender's first frame");
 
     assert_frames_eq(&s.decoded[..], &e2, "the new source took the panel");
-    assert_eq!(s.telemetry.frames_dropped_stale, 0, "seq 0 is not stale here");
+    assert_eq!(
+        s.telemetry.frames_dropped_stale, 0,
+        "seq 0 is not stale here"
+    );
     assert_eq!(s.telemetry.frames_rx, 2, "counters kept running");
     assert_eq!(s.active_source, Some(b.addr()));
 }

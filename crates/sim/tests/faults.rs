@@ -206,7 +206,8 @@ fn the_frame_sink_sees_exactly_the_frames_that_reach_the_panel() {
         // Far enough apart that no frame supersedes another.
         std::thread::sleep(Duration::from_millis(20));
     }
-    sim.wait_until(T, |s| s.telemetry.frames_shown >= 10).unwrap();
+    sim.wait_until(T, |s| s.telemetry.frames_shown >= 10)
+        .unwrap();
     std::thread::sleep(Duration::from_millis(50));
 
     let seen = seen.lock().unwrap();

@@ -87,11 +87,18 @@ fn every_opcode_is_implemented() {
     assert_eq!(sim.snapshot().brightness, 77);
 
     // IDENTIFY
-    let d = ctrl.call(&Request::Identify { duration_ms: 50 }, 5).unwrap();
+    let d = ctrl
+        .call(&Request::Identify { duration_ms: 50 }, 5)
+        .unwrap();
     assert!(matches!(parse_reply(&d).1, Ok(Reply::Identify)));
 
     // SET_IDLE
-    for mode in [IdleMode::Black, IdleMode::Dim, IdleMode::HoldForever, IdleMode::Status] {
+    for mode in [
+        IdleMode::Black,
+        IdleMode::Dim,
+        IdleMode::HoldForever,
+        IdleMode::Status,
+    ] {
         let d = ctrl.call(&Request::SetIdle(mode), 6).unwrap();
         assert!(matches!(parse_reply(&d).1, Ok(Reply::Idle { mode: m }) if m == mode.as_u8()));
         assert_eq!(sim.snapshot().idle_mode, mode);
@@ -276,7 +283,11 @@ fn every_error_code_a_request_can_earn() {
     for (o, body, what) in cases {
         ctrl.send_raw(&raw_control(*o, 0, 902, body));
         let reply = ctrl.recv(T).unwrap_or_else(|| panic!("{what}"));
-        assert_eq!(error_code(&reply), Some(ErrorCode::BadArg.as_u8()), "{what}");
+        assert_eq!(
+            error_code(&reply),
+            Some(ErrorCode::BadArg.as_u8()),
+            "{what}"
+        );
     }
 
     // The magic that does work.
@@ -392,7 +403,10 @@ fn get_info_is_rate_limited_but_a_retry_is_not() {
     // Nothing else is rate-limited: PING and TELEMETRY answer every time.
     for id in 200..210u16 {
         assert!(ctrl.call(&Request::Ping, id).is_some(), "PING {id}");
-        assert!(ctrl.call(&Request::Telemetry, id).is_some(), "TELEMETRY {id}");
+        assert!(
+            ctrl.call(&Request::Telemetry, id).is_some(),
+            "TELEMETRY {id}"
+        );
     }
 }
 
@@ -408,7 +422,12 @@ fn a_reply_arriving_at_the_device_is_ignored() {
     ctrl.send_raw(&d);
     assert!(ctrl.recv(Duration::from_millis(150)).is_none());
 
-    let d = raw_control_flags(op::PING, screeny_proto::C_REPLY | screeny_proto::C_ERROR, 5, &[2]);
+    let d = raw_control_flags(
+        op::PING,
+        screeny_proto::C_REPLY | screeny_proto::C_ERROR,
+        5,
+        &[2],
+    );
     ctrl.send_raw(&d);
     assert!(ctrl.recv(Duration::from_millis(150)).is_none());
 

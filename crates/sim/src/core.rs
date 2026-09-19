@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
-use screeny_proto::control::{op, state as tstate, wifi_state, IdleMode, Reply, Request};
 use screeny_proto::control::{busy_reason, ErrorCode, Telemetry};
+use screeny_proto::control::{op, state as tstate, wifi_state, IdleMode, Reply, Request};
 use screeny_proto::txt::DeviceInfo;
 use screeny_proto::{dec, ControlPacket, FramePacket, Rgb888Frame};
 use screeny_proto::{C_REPLY, MAX_UDP_PAYLOAD, NBYTES, TYPE_CONTROL, VERSION};
@@ -52,7 +52,9 @@ impl Outbox {
     /// True if there is nothing to send and nothing to say.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.from_frame_sock.is_empty() && self.from_control_sock.is_empty() && self.events.is_empty()
+        self.from_frame_sock.is_empty()
+            && self.from_control_sock.is_empty()
+            && self.events.is_empty()
     }
 }
 
@@ -450,7 +452,12 @@ impl Core {
                         from: p.from,
                     });
                     let t1 = Instant::now();
-                    panel::apply(&self.panel_model, self.brightness, &self.front, &mut self.panel_out);
+                    panel::apply(
+                        &self.panel_model,
+                        self.brightness,
+                        &self.front,
+                        &mut self.panel_out,
+                    );
                     self.stats.timings.render(t1.elapsed().as_micros() as u64);
                     out.events.push(Event::Shown {
                         from: p.from,
@@ -654,9 +661,7 @@ impl Core {
 
         let reply = match Request::decode(pkt.op, pkt.body) {
             Ok(req) => self.apply(now_us, from, req, out),
-            Err(code) => Some(Reply::Err {
-                code: code.as_u8(),
-            }),
+            Err(code) => Some(Reply::Err { code: code.as_u8() }),
         };
         emit_reply(out, from, pkt.op, req_id, reply);
     }
@@ -700,9 +705,7 @@ impl Core {
             from,
             h.b2,
             h.id,
-            Some(Reply::Err {
-                code: code.as_u8(),
-            }),
+            Some(Reply::Err { code: code.as_u8() }),
         );
     }
 
@@ -761,12 +764,8 @@ impl Core {
             }
             Request::SetIdle(mode) => {
                 self.idle_mode = mode;
-                out.events.push(Event::IdleMode {
-                    mode: mode.as_u8(),
-                });
-                Reply::Idle {
-                    mode: mode.as_u8(),
-                }
+                out.events.push(Event::IdleMode { mode: mode.as_u8() });
+                Reply::Idle { mode: mode.as_u8() }
             }
             Request::ResetStats => {
                 self.stats.reset();
@@ -827,13 +826,7 @@ impl Core {
 pub const SIM_SSID: &str = "simulated";
 
 /// Queue a reply datagram, or record that we deliberately sent none.
-fn emit_reply(
-    out: &mut Outbox,
-    from: SocketAddr,
-    op: u8,
-    req_id: u16,
-    reply: Option<Reply<'_>>,
-) {
+fn emit_reply(out: &mut Outbox, from: SocketAddr, op: u8, req_id: u16, reply: Option<Reply<'_>>) {
     let error = match &reply {
         Some(Reply::Err { code }) => Some(*code),
         _ => None,

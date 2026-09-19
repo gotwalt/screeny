@@ -198,9 +198,8 @@ fn random_bytes_on_either_port_cannot_stop_the_device() {
     let mut got = None;
     for _ in 0..30 {
         tx2.send(codec::SOLID, F_KEY, &p);
-        if let Some(s) = sim.wait_until(Duration::from_millis(100), |s| {
-            s.decoded[..3] == [7, 8, 9]
-        }) {
+        if let Some(s) = sim.wait_until(Duration::from_millis(100), |s| s.decoded[..3] == [7, 8, 9])
+        {
             got = Some(s);
             break;
         }

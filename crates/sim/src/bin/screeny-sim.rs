@@ -198,11 +198,13 @@ fn run(opts: Opts) -> Result<(), String> {
     };
     let sink = dumper.as_ref().map(|d| {
         let d = Arc::clone(d);
-        Box::new(move |frame: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
-            if let Err(e) = d.lock().unwrap().offer(frame) {
-                eprintln!("screeny-sim: dump: {e}");
-            }
-        }) as screeny_sim::FrameSink
+        Box::new(
+            move |frame: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
+                if let Err(e) = d.lock().unwrap().offer(frame) {
+                    eprintln!("screeny-sim: dump: {e}");
+                }
+            },
+        ) as screeny_sim::FrameSink
     });
 
     let headless = opts.headless;
@@ -248,9 +250,7 @@ fn run(opts: Opts) -> Result<(), String> {
         #[cfg(not(feature = "window"))]
         {
             let _ = scale;
-            return Err(
-                "built without the `window` feature; run with --headless".into(),
-            );
+            return Err("built without the `window` feature; run with --headless".into());
         }
     }
 
@@ -327,6 +327,9 @@ struct Line {
 }
 
 impl Line {
+    /// The statistics strip under the window. Built without the `window`
+    /// feature there is no strip to fill.
+    #[cfg(feature = "window")]
     fn overlay(&self) -> Vec<(String, u32)> {
         let t = &self.t;
         vec![
@@ -485,9 +488,9 @@ fn describe_important(e: &Event) -> Option<String> {
             cause: DropCause::Stale | DropCause::Superseded,
             ..
         } => None,
-        Event::Rejected { .. } | Event::ControlRejected { .. } | Event::Busy { sent: false, .. } => {
-            None
-        }
+        Event::Rejected { .. }
+        | Event::ControlRejected { .. }
+        | Event::Busy { sent: false, .. } => None,
         other => describe(other),
     }
 }

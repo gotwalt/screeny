@@ -357,8 +357,14 @@ mod tests {
         s.now_us = 10_000_000;
         s.have_frame = false;
         render(&s, &mut out);
-        let bright = out.chunks(3).filter(|px| px[0] > 200 && px[1] > 200).count();
-        assert!(bright > 10, "expected the name in near-white, got {bright} px");
+        let bright = out
+            .chunks(3)
+            .filter(|px| px[0] > 200 && px[1] > 200)
+            .count();
+        assert!(
+            bright > 10,
+            "expected the name in near-white, got {bright} px"
+        );
     }
 
     #[test]

@@ -140,7 +140,9 @@ fn a_new_source_takes_over_once_the_lock_lapses() {
         .expect("a takeover");
     assert!(matches!(ev, Event::LockReleased { source, .. } if source == a.addr()));
 
-    let s = sim.wait_until(T, |s| s.active_source == Some(b.addr())).unwrap();
+    let s = sim
+        .wait_until(T, |s| s.active_source == Some(b.addr()))
+        .unwrap();
     assert_frames_eq(&s.decoded[..], &eb, "B has the panel");
     assert_eq!(s.state, State::Live);
     assert_eq!(s.telemetry.frames_rejected, 0, "B was never locked out");
@@ -180,7 +182,9 @@ fn a_final_frame_releases_the_lock_at_once() {
 
     // "so any sender may take over instantly" - no LOCK_MS wait.
     b.send(codec::SOLID, F_KEY, &pb);
-    let s = sim.wait_until(T, |s| s.active_source == Some(b.addr())).unwrap();
+    let s = sim
+        .wait_until(T, |s| s.active_source == Some(b.addr()))
+        .unwrap();
     assert_eq!(s.state, State::Live);
     assert_frames_eq(&s.decoded[..], &eb, "B took over instantly");
     assert_eq!(s.telemetry.frames_rejected, 0);
@@ -354,7 +358,8 @@ fn identify_zero_stops_one_in_progress() {
     let sim = dev.handle();
     let ctrl = Ctrl::new(dev.control_addr());
 
-    ctrl.call(&Request::Identify { duration_ms: 5_000 }, 1).unwrap();
+    ctrl.call(&Request::Identify { duration_ms: 5_000 }, 1)
+        .unwrap();
     sim.wait_until(T, |s| {
         s.state_byte == screeny_proto::control::state::IDENTIFY
     })
