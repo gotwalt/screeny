@@ -7,47 +7,11 @@ use screeny_proto::control::IdleMode;
 /// The spec section 7.2 constants, overridable so a test does not have to wait
 /// ten real seconds to watch `HOLD` expire.
 ///
-/// [`Timing::SPEC`] is the device's behaviour and is the default. Anything
-/// else is a test fixture, and [`crate::SimDevice`] says so in its events.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Timing {
-    /// After the last accepted frame, the active source keeps exclusivity
-    /// this long.
-    pub lock_ms: u32,
-    /// No frames for this long and the stream is considered stopped.
-    pub stream_timeout_ms: u32,
-    /// How long the last frame stays lit after the stream stops.
-    pub hold_ms: u32,
-    /// Cross-fade duration into the idle screen.
-    pub fade_ms: u32,
-    /// Minimum gap between `BUSY` packets to one source.
-    pub busy_min_interval_ms: u32,
-    /// Minimum gap between piggybacked `TELEMETRY` packets to one source.
-    pub telemetry_min_interval_ms: u32,
-    /// Minimum gap between *new* `GET_INFO` replies to one source address
-    /// (spec section 5.5). A retry of a `req_id` already answered inside the
-    /// window is exempt.
-    pub info_min_interval_ms: u32,
-}
-
-impl Timing {
-    /// The constants exactly as spec section 7.2 and 5.5 give them.
-    pub const SPEC: Timing = Timing {
-        lock_ms: screeny_proto::LOCK_MS,
-        stream_timeout_ms: screeny_proto::STREAM_TIMEOUT_MS,
-        hold_ms: screeny_proto::HOLD_MS,
-        fade_ms: screeny_proto::FADE_MS,
-        busy_min_interval_ms: screeny_proto::BUSY_MIN_INTERVAL_MS,
-        telemetry_min_interval_ms: screeny_proto::TELEMETRY_MIN_INTERVAL_MS,
-        info_min_interval_ms: 1_000,
-    };
-}
-
-impl Default for Timing {
-    fn default() -> Self {
-        Timing::SPEC
-    }
-}
+/// `Timing::SPEC` is the device's behaviour and is the default. Anything else
+/// is a test fixture, and [`crate::SimDevice`] says so in its events. The type
+/// belongs to the shared receiver core (card 016), so the simulator and the
+/// firmware cannot disagree about what the constants are.
+pub use screeny_receiver::Timing;
 
 /// Deliberate misbehaviour, so a sender can be tested against a bad network
 /// and a slow device without either being real.

@@ -1,0 +1,13 @@
+[package]
+name = "screeny-receiver"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The screeny receive state machine: spec sections 3.3, 4.7, 6 and 7 with no I/O, no clock and no allocation. Shared by the firmware and the simulator."
+
+# `no_std`, no alloc, no float: this crate is compiled for xtensa-esp32-none-elf
+# by the firmware and for the host by the simulator, so anything it pulls in,
+# they both pull in.
+[dependencies]
+screeny-proto = { path = "../proto" }
+heapless = "0.9.3"

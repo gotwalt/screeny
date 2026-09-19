@@ -80,3 +80,46 @@ the panel transfer function, sRGB/Oklab conversion, the frame types. The device 
 firmware built from the shared core and behaves as it did in card 008.
 
 ## Log
+
+### 2026-09-19 - step 1a: the shared receiver core, simulator side
+
+New crate `crates/receiver` (`screeny-receiver`): `no_std`, no alloc, no float,
+deps `screeny-proto` + `heapless`. It holds the receive state machine (sections
+3.3, 4.7, 6, 7), the counters and EWMAs of 6.8, `Timing`, `State`, `DropCause`,
+`ReleaseReason`, `Offer`, `Intent`, `FrameMeta` and the fixed-slot rate
+limiters. Everything a receiver cannot decide for itself - the clock, where a
+datagram goes, what happens to a decoded frame, whether there is a radio - is a
+method on one `Host` trait. `Receiver<A>` is generic over the address type only
+(`SocketAddr` here, `IpEndpoint` there), so the host can be a short-lived
+borrow of an outbox.
+
+The firmware's shape won, as the card says: the caller keeps the survivor
+datagram and `offer_frame` answers `Keep`/`Drop`; `flush_frames` re-parses it
+and decodes into a caller-owned `back`. The simulator adapts - `crates/sim`'s
+`Core` is now a ~350-line adapter that owns the three frame buffers, the panel
+model and the `Vec` outbox, and its public API is byte-for-byte what it was.
+
+`crates/sim/src/stats.rs` is now a re-export; `config::Timing` is a re-export;
+`event::{State, DropCause, ReleaseReason}` are re-exports and `Event` keeps its
+owned `String` form with a `from_shared` conversion.
+
+**No test was changed.** `cargo test --workspace`: 209 passed, 0 failed, same
+as before the refactor. The sim's own count moves 97 -> 92 only because the
+five EWMA unit tests moved with the code into `screeny-receiver` (97 = 92 + 5
+either way).
+
+Three deliberate, recorded behaviour differences, all of them the firmware's
+shape winning:
+* the simulator's three unbounded `HashMap` rate limiters become four-slot
+  tables with oldest-entry eviction. Eviction can only make the device *more*
+  generous to a source it forgot, which is the right direction to fail.
+* `stats_req` holds two sources, not any number. Only the lock holder can have
+  a frame accepted, so the second slot is for the drain in which a takeover
+  happens; a third cannot arise.
+* the firmware answered queued `STATS_REQ`s LIFO (`Vec::pop`), the simulator
+  FIFO. The shared core is FIFO. It can only matter when two *different*
+  sources ask in one drain, and only for the order of two datagrams to two
+  different hosts.
+
+One new event, `IdentifyExpired`, exists for the firmware's repaint; the
+simulator drops it in `from_shared` so its event stream is unchanged.
