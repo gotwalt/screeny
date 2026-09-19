@@ -16,6 +16,13 @@ description = "screeny firmware: Tidbyt Gen 1 (ESP32) as a UDP network frame buf
 [patch.crates-io]
 hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
 
+[features]
+default = []
+# Bench A/B only (card 008): run the display task on core 0's executor, the
+# way card 007 shipped it, so the cost of the core split can be measured
+# against the identical decode path. Never ship this.
+display-on-core0 = []
+
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------
 esp-hal = { version = "=1.2.2", features = ["esp32", "unstable", "log-04"] }

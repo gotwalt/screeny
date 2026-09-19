@@ -44,7 +44,7 @@ const WARN: Rgb888 = Rgb888::new(0xd0, 0x80, 0x20);
 /// `phase` advances once per redraw (about 10 Hz); the sweep is the "slow
 /// ambient animation" section 7.5 asks for, and it doubles as proof of life —
 /// a frozen panel and an idle panel look identical without it.
-pub fn status(frame: &mut Frame, name: &str, net: Net, phase: u32) {
+pub fn status(frame: &mut Frame, name: &str, hostname: &str, net: Net, phase: u32) {
     frame.clear();
 
     let (state_text, state_colour): (&str, Rgb888) = match net {
@@ -54,19 +54,22 @@ pub fn status(frame: &mut Frame, name: &str, net: Net, phase: u32) {
         Net::Lost => ("network down", WARN),
     };
 
-    // A 12-character name fits the wider font; anything longer drops to 4x6,
-    // and past 16 characters it is simply cut off rather than wrapped.
+    // Line 1 is the *friendly* name, which `SET_NAME` changes. A
+    // 12-character name fits the wider font; anything longer drops to 4x6,
+    // and past 15 characters it is cut rather than wrapped.
     if name.len() <= 12 {
         let s = MonoTextStyle::new(&FONT_5X7, TITLE);
         let _ = Text::with_baseline(name, Point::new(1, 0), s, Baseline::Top).draw(frame);
     } else {
         let s = MonoTextStyle::new(&FONT_4X6, TITLE);
-        let cut = &name[..name.len().min(15)];
-        let _ = Text::with_baseline(cut, Point::new(1, 1), s, Baseline::Top).draw(frame);
+        let _ = Text::with_baseline(cut(name, 15), Point::new(1, 1), s, Baseline::Top).draw(frame);
     }
 
     let state = MonoTextStyle::new(&FONT_4X6, state_colour);
     let _ = Text::with_baseline(state_text, Point::new(1, 9), state, Baseline::Top).draw(frame);
+    // The bars share line 2 with the state text, which is at most twelve
+    // characters wide; line 1 is the name, which can run the full width.
+    rssi_bars(frame, crate::RSSI_DBM.load(core::sync::atomic::Ordering::Relaxed));
 
     let value = MonoTextStyle::new(&FONT_4X6, VALUE);
     let label = MonoTextStyle::new(&FONT_4X6, LABEL);
@@ -74,16 +77,37 @@ pub fn status(frame: &mut Frame, name: &str, net: Net, phase: u32) {
         let mut line = heapless::String::<16>::new();
         let _ = write!(line, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
         let _ = Text::with_baseline(&line, Point::new(1, 16), value, Baseline::Top).draw(frame);
-        let _ = Text::with_baseline("screeny.local", Point::new(1, 23), label, Baseline::Top)
+        // Line 4 is the *DNS* name, which `SET_NAME` does not change. The
+        // two are the same by default and that is fine: one of them is what
+        // you type and the other is what you called it.
+        let mut host = heapless::String::<22>::new();
+        let _ = host.push_str(hostname);
+        if host.push_str(".local").is_err() || host.len() > 16 {
+            host.clear();
+            let _ = host.push_str(hostname);
+        }
+        let _ = Text::with_baseline(cut(&host, 16), Point::new(1, 23), label, Baseline::Top)
             .draw(frame);
-        rssi_bars(frame, crate::RSSI_DBM.load(core::sync::atomic::Ordering::Relaxed));
     } else {
         let mut line = heapless::String::<16>::new();
-        let _ = write!(line, "bright {}", crate::BRIGHTNESS.load(core::sync::atomic::Ordering::Relaxed));
+        let _ = write!(
+            line,
+            "bright {}",
+            crate::BRIGHTNESS.load(core::sync::atomic::Ordering::Relaxed)
+        );
         let _ = Text::with_baseline(&line, Point::new(1, 16), label, Baseline::Top).draw(frame);
     }
 
     ambient(frame, phase);
+}
+
+/// Truncate to `n` characters, never splitting a UTF-8 code point: the name
+/// comes from `SET_NAME` and is only promised to be valid UTF-8.
+fn cut(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
 }
 
 /// Four signal bars in the top-right corner, from the last beacon RSSI.
@@ -101,12 +125,14 @@ fn rssi_bars(frame: &mut Frame, rssi_dbm: i8) {
     };
     for b in 0..4usize {
         let h = b + 1;
-        let x = COLS - 10 + b * 2;
-        let on = b < bars;
-        let c = if on { [0x30, 0xc0, 0x50] } else { [0x18, 0x18, 0x18] };
+        let x = COLS - 9 + b * 2;
+        let c = if b < bars {
+            [0x30, 0xc0, 0x50]
+        } else {
+            [0x18, 0x18, 0x18]
+        };
         for dy in 0..h {
-            frame.set(x, 6 - dy, c);
-            frame.set(x, 6 - dy, c);
+            frame.set(x, 13 - dy, c);
         }
     }
 }
@@ -156,8 +182,7 @@ pub fn identify(frame: &mut Frame, name: &str, net: Net, phase: u32) {
     }
 
     let s = MonoTextStyle::new(&FONT_4X6, Rgb888::new(0xff, 0xff, 0xff));
-    let cut = &name[..name.len().min(13)];
-    let _ = Text::with_baseline(cut, Point::new(4, 9), s, Baseline::Top).draw(frame);
+    let _ = Text::with_baseline(cut(name, 13), Point::new(4, 9), s, Baseline::Top).draw(frame);
     if let Net::Address(ip) = net {
         let mut line = heapless::String::<16>::new();
         let _ = write!(line, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);

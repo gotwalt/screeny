@@ -94,7 +94,11 @@ fn try_recv(socket: &UdpSocket<'_>, buf: &mut [u8]) -> Drained {
 
 /// UDP 49374: drain, validate, newest wins, decode, display (spec §3.3).
 #[embassy_executor::task]
-pub async fn frames_task(stack: Stack<'static>, mut producer: Producer) {
+pub async fn frames_task(
+    stack: Stack<'static>,
+    mut producer: Producer,
+    hostname: &'static str,
+) {
     // The socket's receive buffer is deliberately shallow (§3.3): four packet
     // slots, so that when the decoder falls behind the stack drops packets
     // instead of accumulating latency. esp-radio already queues up to
@@ -215,9 +219,9 @@ pub async fn frames_task(stack: Stack<'static>, mut producer: Producer) {
                     Intent::Identify => {
                         screens::identify(producer.back(), core.name(), net, phase)
                     }
-                    Intent::Idle => core.draw_idle(producer.back(), last, net, phase),
+                    Intent::Idle => core.draw_idle(producer.back(), last, hostname, net, phase),
                     Intent::Fade { t } => {
-                        core.draw_idle(producer.back(), last, net, phase);
+                        core.draw_idle(producer.back(), last, hostname, net, phase);
                         // In place, so the fade needs no third buffer:
                         // back = lerp(last, target, t).
                         let dst = producer.back();

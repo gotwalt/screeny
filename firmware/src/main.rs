@@ -122,10 +122,16 @@ const _: () = assert!(
     "panel refresh below 120 Hz: reduce PLANES or raise PIXEL_CLOCK"
 );
 
-/// Core 1's stack. It runs one task whose deepest call is `display::render`
-/// (a 192-byte row buffer); 8 KB is generous and the RTOS panics loudly if it
-/// is not.
-static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<8192>> =
+/// Core 1's stack.
+///
+/// It runs one task whose deepest call is `display::render` (a 192-byte row
+/// buffer), plus the HUB75 DMA interrupt at `Priority3`, which lands on
+/// whatever stack is current. 16 KB is generous for that; esp-rtos checks the
+/// guard on every switch and panics with the range, which is how the first
+/// flash of this firmware reported an 8 KB stack being eaten by two 12 KB
+/// framebuffers built in the wrong place.
+#[cfg_attr(feature = "display-on-core0", allow(dead_code))]
+static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<16384>> =
     static_cell::ConstStaticCell::new(CoreStack::new());
 
 /// The decoded-frame handoff between core 0 and core 1.
@@ -404,8 +410,19 @@ async fn main(spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
+    // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
+    // costs nothing, plus a smaller slice of ordinary `.bss`.
+    //
+    // Card 007 shipped 64 + 48 KB and measured 45.4 KB in use. Card 008 adds
+    // ~40 KB of `.bss` — three 6 KB frame slots, the cross-fade source, core
+    // 1's stack and two more sockets — and on this chip **`.bss` and core 0's
+    // main stack come out of the same pocket**: the stack is whatever is left
+    // between `_bss_end` and 0x3ffe0000. Taking 16 KB back off the heap is
+    // what pays for it. Symptom if this is ever too tight again: a
+    // "write to the stack guard value on ProCpu" panic inside `main`, from
+    // the two 12 KB `FrameBuffer::new()` temporaries just below.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 48 * 1024);
+    esp_alloc::heap_allocator!(size: 32 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
@@ -475,41 +492,64 @@ async fn main(spawner: Spawner) {
     // interrupt on the core we are trying to keep free.
     let i2s = peripherals.I2S0;
     let dma = peripherals.DMA_I2S0;
+    // The two DMA framebuffers are built *here*, on core 0's generous main
+    // stack, and only their `&'static mut`s cross over. `FrameBuffer::new()`
+    // materialises a 12 KB value before `StaticCell::write` moves it, which
+    // core 1's 16 KB stack will not survive twice — the first flash of this
+    // firmware died exactly there.
+    let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
+    let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
+    // Come up already dimmed. `FrameBuffer::new()` formats for the widest
+    // output-enable window the build can produce, which is well over the
+    // power cap; letting a single refresh out at that duty would be a bug
+    // with a current spike attached to it.
+    let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
+    fb0.set_oe_slots(slots);
+    fb1.set_oe_slots(slots);
+    BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
+    let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
+
+    let build_hub75 = move || {
+        Hub75::new_async(
+            i2s,
+            pins,
+            dma,
+            tx_descriptors,
+            Hub75Config::new()
+                .with_frequency(PIXEL_CLOCK)
+                .with_interrupt_priority(Priority::Priority3),
+            &*fb0,
+        )
+        .expect("hub75 init failed")
+    };
+
+    #[cfg(not(feature = "display-on-core0"))]
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL,
         peripherals.FROM_CPU_INTR1,
         APP_CORE_STACK.take(),
         move || {
-            let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
-            let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
-            // Come up already dimmed. `FrameBuffer::new()` formats for the
-            // widest output-enable window the build can produce, which is
-            // well over the power cap; letting a single refresh out at that
-            // duty would be a bug with a current spike attached to it.
-            let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
-            fb0.set_oe_slots(slots);
-            fb1.set_oe_slots(slots);
-            BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
-
-            let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
-            let hub75 = Hub75::new_async(
-                i2s,
-                pins,
-                dma,
-                tx_descriptors,
-                Hub75Config::new()
-                    .with_frequency(PIXEL_CLOCK)
-                    .with_interrupt_priority(Priority::Priority3),
-                &*fb0,
-            )
-            .expect("hub75 init failed");
-
-            let executor = mk_static!(esp_rtos::embassy::Executor, esp_rtos::embassy::Executor::new());
+            let hub75 = build_hub75();
+            let executor = mk_static!(
+                esp_rtos::embassy::Executor,
+                esp_rtos::embassy::Executor::new()
+            );
             executor.run(|spawner| {
                 spawner.spawn(display_task(hub75, fb1, consumer).unwrap());
             });
         },
     );
+
+    // The `display-on-core0` build exists only to be measured against the
+    // one above: same decode path, same triple buffer, same everything, with
+    // the display sharing core 0's executor the way card 007 shipped it. It
+    // is not a configuration to run the panel in.
+    #[cfg(feature = "display-on-core0")]
+    {
+        let _ = (peripherals.CPU_CTRL, peripherals.FROM_CPU_INTR1);
+        warn!("display: BENCH BUILD - display task is on core 0");
+        spawner.spawn(display_task(build_hub75(), fb1, consumer).unwrap());
+    }
 
     // --- wifi -------------------------------------------------------------
     let station = WifiConfig::Station(
@@ -574,7 +614,7 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(wifi_task(controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
-    spawner.spawn(net::frames_task(stack, producer).unwrap());
+    spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host).unwrap());
     spawner.spawn(telemetry_task().unwrap());

@@ -918,10 +918,17 @@ impl Core {
     ///
     /// The default is `STATUS` and not `BLACK` on purpose (section 7.5): a
     /// black panel is indistinguishable from a broken one.
-    pub fn draw_idle(&self, dst: &mut Frame, last: &Frame, net: crate::screens::Net, phase: u32) {
+    pub fn draw_idle(
+        &self,
+        dst: &mut Frame,
+        last: &Frame,
+        hostname: &str,
+        net: crate::screens::Net,
+        phase: u32,
+    ) {
         match self.idle_mode {
             IdleMode::Status | IdleMode::HoldForever => {
-                crate::screens::status(dst, &self.name, net, phase)
+                crate::screens::status(dst, &self.name, hostname, net, phase)
             }
             IdleMode::Dim => {
                 dst.copy_from(last);
