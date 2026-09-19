@@ -8,7 +8,7 @@ the phase before them has produced what they depend on.
 - [x] Identify chip (ESP32-D0WD-V3, 8 MB flash, Gen 1 Tidbyt)
 - [x] Install Xtensa Rust toolchain, espflash, esptool
 - [x] Verified backup of stock flash in `backup/` (sha256 in backup/README.md)
-- [ ] Camera capture working (`tools/` script)
+- [x] Camera capture working (via `tools/cam-daemon.sh` in Terminal.app; see docs/research/000-bench-notes.md)
 
 ## Phase 1 - research (parallel)
 

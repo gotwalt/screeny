@@ -8,6 +8,7 @@
 #
 # The .req file is removed when the capture is complete (or failed; see foo.err).
 set -uo pipefail
+export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.."
 mkdir -p captures/req
 echo "cam-daemon: watching captures/req (ctrl-c to stop)"
