@@ -1,0 +1,9 @@
+[package]
+name = "screeny-art"
+version = "0.1.0"
+edition = "2021"
+description = "Generative art pieces and the output pipeline for the screeny 64x32 LED panel"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+png = "0.17"

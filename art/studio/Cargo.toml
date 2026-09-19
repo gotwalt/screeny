@@ -1,0 +1,15 @@
+[package]
+name = "screeny-studio"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop preview for designing screeny generative art"
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+screeny-art = { path = "../screeny-art" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
