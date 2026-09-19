@@ -4,8 +4,8 @@
 use lab::content;
 use lab::enc::{self, Codec, EncCtx};
 use lab::frame::{Clip, Frame, NBYTES};
-use lab::metrics::{Collector, Summary};
-use lab::panel::{Panel, NOMINAL, PESSIMISTIC};
+use lab::metrics::{seq_de, Collector, Summary};
+use lab::panel::{Panel, DEEP, DIMMED, NOMINAL, TEMPORAL};
 use lab::sheet::{self, Tile};
 use lab::BUDGET;
 
@@ -16,7 +16,11 @@ use std::time::Instant;
 
 struct Run {
     summary: Summary,
-    de_pessimistic: f64,
+    /// dE under the 6-bit panel with device-side temporal dithering (5
+    /// subframes), the 3-bit dimmed panel, and an 8-bit reference panel.
+    de_temporal: f64,
+    de_dimmed: f64,
+    de_deep: f64,
     decoded: Vec<Frame>,
     modes: BTreeMap<&'static str, usize>,
     decode_ns: f64,
@@ -56,7 +60,6 @@ fn mode_label(payload: &[u8]) -> &'static str {
 fn run_codec(codec: &dyn Codec, clip: &Clip) -> Run {
     let mut ctx = EncCtx::default();
     let mut col = Collector::new(NOMINAL);
-    let mut col_p = Collector::new(PESSIMISTIC);
     let mut decoded = Vec::with_capacity(clip.frames.len());
     let mut payloads = Vec::with_capacity(clip.frames.len());
     let mut modes: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -72,7 +75,6 @@ fn run_codec(codec: &dyn Codec, clip: &Clip) -> Run {
         );
         let d = decode_frame(&p);
         col.add_frame(f, &d, p.len(), BUDGET);
-        col_p.add_frame(f, &d, p.len(), BUDGET);
         *modes.entry(mode_label(&p)).or_insert(0) += 1;
         decoded.push(d);
         payloads.push(p);
@@ -95,10 +97,11 @@ fn run_codec(codec: &dyn Codec, clip: &Clip) -> Run {
     }
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let de_pessimistic = col_p.finish().de_mean;
     Run {
         summary: col.finish(),
-        de_pessimistic,
+        de_temporal: seq_de(&TEMPORAL, &clip.frames, &decoded),
+        de_dimmed: seq_de(&DIMMED, &clip.frames, &decoded),
+        de_deep: seq_de(&DEEP, &clip.frames, &decoded),
         decoded,
         modes,
         decode_ns: times[3],
@@ -124,13 +127,24 @@ fn main() -> std::io::Result<()> {
 
     // --- panel facts -------------------------------------------------------
     let mut panel_tbl = String::new();
-    writeln!(panel_tbl, "| BCM bitplanes | distinct output levels from 256 sRGB codes | sRGB codes crushed to the bottom two levels |").unwrap();
-    writeln!(panel_tbl, "|---|---|---|").unwrap();
-    for bits in [4u32, 5, 6, 7, 8, 10] {
-        let (lv, crushed) = Panel::new(bits).distinct_levels();
+    writeln!(panel_tbl, "| panel | BCM bitplanes | refreshes dithered across | distinct output levels from 256 sRGB codes | sRGB codes that emit nothing |").unwrap();
+    writeln!(panel_tbl, "|---|---|---|---|---|").unwrap();
+    for (label, p) in [
+        ("dimmed today (30/255)", DIMMED),
+        ("", Panel::new(4)),
+        ("", Panel::new(5)),
+        ("**card 001 measured**", NOMINAL),
+        ("", Panel::new(7)),
+        ("", DEEP),
+        ("6-bit + 5x device temporal dither", TEMPORAL),
+        ("6-bit + 5x, if refresh allowed 10x", Panel::dithered(6, 10)),
+    ] {
+        let (lv, crushed) = p.distinct_levels();
         writeln!(
             panel_tbl,
-            "| {bits} | {lv} | {crushed} ({:.1}% of range) |",
+            "| {label} | {} | {} | {lv} | {crushed} ({:.1}% of range) |",
+            p.bits,
+            p.subframes,
             crushed as f64 / 256.0 * 100.0
         )
         .unwrap();
@@ -191,15 +205,16 @@ fn main() -> std::io::Result<()> {
     // --- tables ------------------------------------------------------------
     for (ci, clip) in clips.iter().enumerate() {
         report.push_str(&format!("\n### `{}`\n\n", clip.name));
-        report.push_str("| codec | bytes mean | bytes max | over budget | dE x1000 | dE p95 | dE blurred | dE @6-bit panel | SSIM | PSNR dB | px exact | flicker | dE t-avg4 | lossless | decode us | modes |\n");
-        report.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
+        report.push_str("| codec | bytes mean | bytes max | over budget | dE(6-bit) | dE p95 | dE blurred | dE(6-bit +tdith) | dE(3-bit dimmed) | dE(8-bit) | SSIM | PSNR dB | px exact | flicker | dE t-avg4 | lossless | decode us | modes |\n");
+        report.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
         for (i, c) in codecs.iter().enumerate() {
             let r = &runs[ci][i];
             let s = &r.summary;
             report.push_str(&format!(
-                "| `{}` | {:.0} | {} | {:.0}% | **{:.2}** | {:.2} | {:.2} | {:.2} | {:.4} | {:.1} | {:.1}% | {:+.2} | {:.2} | {:.0}% | {:.1} | {} |\n",
+                "| `{}` | {:.0} | {} | {:.0}% | **{:.2}** | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.4} | {:.1} | {:.1}% | {:+.2} | {:.2} | {:.0}% | {:.1} | {} |\n",
                 c.name(), s.bytes_mean, s.bytes_max, s.over_pct, s.de_mean, s.de_p95,
-                s.de_blur, r.de_pessimistic, s.ssim, s.psnr, s.exact_pct, s.flicker, s.tavg,
+                s.de_blur, r.de_temporal, r.de_dimmed, r.de_deep,
+                s.ssim, s.psnr, s.exact_pct, s.flicker, s.tavg,
                 s.lossless_pct, r.decode_ns / 1000.0,
                 fmt_modes(&r.modes, clip.frames.len())
             ));
@@ -208,7 +223,7 @@ fn main() -> std::io::Result<()> {
 
     // --- aggregate ---------------------------------------------------------
     report.push_str("\n### All clips, mean of per-clip means\n\n");
-    report.push_str("| codec | bytes mean | bytes max | dE x1000 | dE p95 | dE blurred | SSIM | flicker | dE t-avg4 | decode us |\n|---|---|---|---|---|---|---|---|---|---|\n");
+    report.push_str("| codec | bytes mean | bytes max | dE(6-bit) | dE p95 | dE blurred | dE(6-bit +tdith) | dE(3-bit) | dE(8-bit) | SSIM | flicker | dE t-avg4 | decode us |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     let mut ranked: Vec<(f64, usize)> = Vec::new();
     for (i, c) in codecs.iter().enumerate() {
         let n = clips.len() as f64;
@@ -216,13 +231,16 @@ fn main() -> std::io::Result<()> {
         let de = g(&|r| r.summary.de_mean);
         ranked.push((de, i));
         report.push_str(&format!(
-            "| `{}` | {:.0} | {} | **{:.2}** | {:.2} | {:.2} | {:.4} | {:+.2} | {:.2} | {:.1} |\n",
+            "| `{}` | {:.0} | {} | **{:.2}** | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.4} | {:+.2} | {:.2} | {:.1} |\n",
             c.name(),
             g(&|r| r.summary.bytes_mean),
             runs.iter().map(|r| r[i].summary.bytes_max).max().unwrap(),
             de,
             g(&|r| r.summary.de_p95),
             g(&|r| r.summary.de_blur),
+            g(&|r| r.de_temporal),
+            g(&|r| r.de_dimmed),
+            g(&|r| r.de_deep),
             g(&|r| r.summary.ssim),
             g(&|r| r.summary.flicker),
             g(&|r| r.summary.tavg),
@@ -329,6 +347,24 @@ fn main() -> std::io::Result<()> {
         )
         .save(&out.join("temporal-dither.png"))?;
     }
+
+    // One representative payload per wire mode, for `lab/xtensa-bench` to
+    // decode under qemu-system-xtensa and count instructions.
+    let pdir = out.join("payloads");
+    std::fs::create_dir_all(&pdir)?;
+    let mut seen: BTreeMap<&'static str, ()> = BTreeMap::new();
+    for clip in &clips {
+        let mut ctx = EncCtx::default();
+        for c in &codecs {
+            ctx.frame_idx = pick;
+            let p = c.encode(&clip.frames[pick], BUDGET, &mut ctx);
+            let m = mode_label(&p);
+            if seen.insert(m, ()).is_none() {
+                std::fs::write(pdir.join(format!("{m}.bin")), &p)?;
+            }
+        }
+    }
+    eprintln!("wrote {} payloads to {}", seen.len(), pdir.display());
 
     std::fs::write(out.join("results.md"), &report)?;
     eprintln!("wrote {}", out.join("results.md").display());

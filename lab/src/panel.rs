@@ -1,39 +1,62 @@
 //! What the LED panel actually emits.
 //!
-//! The firmware will hold one table mapping sRGB8 -> BCM duty cycle. An LED
-//! driven by binary-coded modulation emits light in proportion to duty, so
-//! that table *is* the gamma correction: `duty = round(eotf(v/255) * (2^n-1))`.
+//! The firmware holds one table mapping sRGB8 -> BCM duty. An LED driven by
+//! binary-coded modulation emits light in proportion to duty, so that table
+//! *is* the gamma correction: `duty = round(eotf(v/255) * (2^n-1))`.
+//!
+//! **n is small.** Card 001 measured the Rust `esp-hub75` driver on this panel
+//! at the Tidbyt's 10 MHz pixel clock: 6 bits/channel gives ~154 Hz refresh,
+//! 7 bits gives ~76 Hz (visibly flickering), 8 bits is unusable. And because
+//! that driver has no OE-duty brightness control, dimming costs bit depth:
+//! at a Tidbyt-like 30/255 brightness only about 3 of the 6 bits survive.
 //!
 //! Two consequences drive everything in this lab:
 //!
 //! 1. With n bitplanes the panel has 2^n duty steps spread **linearly in
-//!    light**, so the dark end is coarse in perceptual terms. At n=8, sRGB
-//!    codes 0..11 all collapse onto duty 0 or 1 -- roughly the bottom 5% of
-//!    the code range has 2 distinct outputs. Precision a codec spends down
-//!    there is wasted.
-//! 2. Conversely, error *up* the curve is compressed: codec error should be
-//!    judged after this transform, not on raw sRGB codes. Every perceptual
-//!    metric in `metrics.rs` therefore runs source and decode through
-//!    `Panel::emit` first.
+//!    light**, so the dark end is coarse in perceptual terms. At n=6 the
+//!    bottom 8.6% of the sRGB code range has one output level. Precision a
+//!    codec spends down there is wasted.
+//! 2. Codec error must be judged *after* this transform. Error the panel
+//!    cannot show is not error. Scoring against an 8-bit sRGB display would
+//!    over-reward codecs that spend bytes on precision, so every perceptual
+//!    metric in `metrics.rs` runs source and decode through `Panel::emit`
+//!    first.
+//!
+//! `subframes` models **device-side temporal dithering**: at 154 Hz refresh
+//! and a 30 fps network rate there are ~5 panel refreshes per received frame,
+//! so the driver can alternate between adjacent duty values and land on
+//! `2^n * subframes` effective levels in the time average.
 
 use crate::color::{oklab, SRGB_TO_LIN};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Panel {
-    /// Number of BCM bitplanes per channel actually clocked out.
+    /// BCM bitplanes per channel actually clocked out.
     pub bits: u32,
+    /// Panel refreshes per received frame that the driver may dither across.
+    pub subframes: u32,
 }
 
 impl Panel {
     pub const fn new(bits: u32) -> Self {
-        Self { bits }
+        Self {
+            bits,
+            subframes: 1,
+        }
+    }
+    pub const fn dithered(bits: u32, subframes: u32) -> Self {
+        Self { bits, subframes }
     }
 
-    /// Emitted linear light (0..1) for one sRGB8 code value.
+    fn steps(&self) -> f32 {
+        (((1u32 << self.bits) - 1) * self.subframes) as f32
+    }
+
+    /// Emitted linear light (0..1) for one sRGB8 code value, time-averaged
+    /// over `subframes` panel refreshes.
     pub fn emit1(&self, v: u8) -> f32 {
-        let max = ((1u32 << self.bits) - 1) as f32;
-        let lin = SRGB_TO_LIN[v as usize];
-        (lin * max).round() / max
+        let max = self.steps();
+        (SRGB_TO_LIN[v as usize] * max).round() / max
     }
 
     pub fn emit(&self, c: [u8; 3]) -> [f32; 3] {
@@ -44,14 +67,15 @@ impl Panel {
         oklab(self.emit(c))
     }
 
-    /// How many distinct output levels the panel can show, and how many sRGB
-    /// codes collapse onto the lowest two of them. Reported in the writeup.
+    /// (distinct output levels reachable from the 256 sRGB codes,
+    ///  how many sRGB codes land on the single lowest level)
     pub fn distinct_levels(&self) -> (usize, usize) {
+        let max = self.steps();
         let mut seen = std::collections::BTreeSet::new();
         let mut crushed = 0usize;
         for v in 0..=255u8 {
-            let d = (SRGB_TO_LIN[v as usize] * (((1u32 << self.bits) - 1) as f32)).round() as u32;
-            if d <= 1 {
+            let d = (SRGB_TO_LIN[v as usize] * max).round() as u32;
+            if d == 0 {
                 crushed += 1;
             }
             seen.insert(d);
@@ -60,8 +84,14 @@ impl Panel {
     }
 }
 
-/// The panel we assume for scoring. 8 BCM bitplanes at 64x32 1/16-scan is
-/// comfortably reachable on an ESP32 (see the research notes); we also report
-/// a pessimistic 5-bit panel to show how much the answer depends on it.
-pub const NOMINAL: Panel = Panel::new(8);
-pub const PESSIMISTIC: Panel = Panel::new(5);
+/// What card 001 measured: 6 bitplanes at ~154 Hz, no temporal dither.
+/// This is the panel every headline number in the report is scored against.
+pub const NOMINAL: Panel = Panel::new(6);
+/// Same panel with the driver dithering across the ~5 refreshes it gets per
+/// received frame. Shows how much codec precision stops being wasted.
+pub const TEMPORAL: Panel = Panel::dithered(6, 5);
+/// Today's dimmed behaviour: brightness is taken out of bit depth.
+pub const DIMMED: Panel = Panel::new(3);
+/// Reference, and the ceiling if the driver ever gets OE-duty brightness and
+/// a faster clock.
+pub const DEEP: Panel = Panel::new(8);

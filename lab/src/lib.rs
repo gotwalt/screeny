@@ -13,7 +13,7 @@ pub mod metrics;
 pub mod panel;
 pub mod sheet;
 
-/// One UDP datagram of 1472 payload bytes, minus a 10-byte DDP-style transport
-/// header (card 003 owns the real one), leaves this for the codec payload.
-/// The mode byte is included in the budget.
-pub const BUDGET: usize = 1450;
+/// One UDP datagram of 1472 payload bytes, minus the 8-byte transport header
+/// card 003 settled on, leaves this for the codec payload. The codec's own
+/// mode byte is included in this budget.
+pub const BUDGET: usize = 1464;

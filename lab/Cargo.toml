@@ -1,5 +1,6 @@
 [workspace]
 members = ["nostd-check"]
+exclude = ["xtensa-bench"]
 
 [package]
 name = "lab"

@@ -199,6 +199,16 @@ impl Collector {
     }
 }
 
+/// Mean panel-aware Oklab dE over a whole sequence, under an arbitrary panel
+/// model. Used to show how the ranking moves with panel depth.
+pub fn seq_de(panel: &Panel, src: &[Frame], dec: &[Frame]) -> f64 {
+    let mut s = 0f64;
+    for (a, b) in src.iter().zip(dec) {
+        s += mean_de(panel, a, b);
+    }
+    s / src.len() as f64 * 1000.0
+}
+
 /// Mean panel-aware Oklab dE between two frames. Used by the hybrid encoder to
 /// choose a mode, so it must be cheap enough to call a handful of times per
 /// frame -- it is, at 2048 pixels.

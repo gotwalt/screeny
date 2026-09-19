@@ -4,3 +4,5 @@ captures/
 .DS_Store
 lab/out/
 lab/Cargo.lock
+lab/xtensa-bench/target/
+lab/xtensa-bench/Cargo.lock
