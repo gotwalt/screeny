@@ -32,7 +32,7 @@ pub const DEF: PieceDef = PieceDef {
 
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
-    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 20.0),
+    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 15.0),
     param("dance", "Choreography (0 = vary, 13 = always composed)", 0.0, 13.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     param("hours24", "24-hour", 0.0, 1.0, 1.0, 1.0),
@@ -136,8 +136,8 @@ struct Clocks {
     /// The dance being performed, or the last one that was: what a rating
     /// applies to.
     performed: Option<dance::Composition>,
-    /// Tags of the last few dances, so the composer can avoid repeating itself.
-    recent: std::collections::VecDeque<Vec<String>>,
+    /// What has been performed, so the composer does not repeat itself.
+    variety: crate::variety::Variety,
     taste: crate::taste::Taste,
     request: Option<Request>,
     /// How many dances have been asked for by hand, to vary them.
@@ -157,7 +157,7 @@ fn make(seed: u64) -> Box<dyn Piece> {
         ambient: None,
         chosen: None,
         performed: None,
-        recent: Default::default(),
+        variety: Default::default(),
         taste: crate::taste::Taste::load("clocks"),
         request: None,
         asked: 0,
@@ -187,10 +187,14 @@ impl Clocks {
             n => n > dance::DANCES,
         };
         let composition = if composed {
-            let recent: Vec<Vec<String>> = self.recent.iter().cloned().collect();
-            dance::compose(&mut rng, &self.angles, to, motor, &self.taste, &recent)
+            dance::compose(&mut rng, &self.angles, to, motor, &self.taste, &self.variety)
+        } else if choice == 0 {
+            // From the repertoire, whichever has gone longest unperformed.
+            let names: Vec<String> = (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
+            let freshest = self.variety.freshest(&names, || rng.f32()).and_then(|n| names.iter().position(|m| m == n));
+            dance::named(freshest.unwrap_or(0), &mut rng)
         } else {
-            dance::named(if choice == 0 { (rng.u64() % dance::DANCES as u64) as usize } else { choice - 1 }, &mut rng)
+            dance::named(choice - 1, &mut rng)
         };
         self.chosen = Some((minute, choice, composition.clone()));
         composition
@@ -209,10 +213,7 @@ impl Clocks {
             *hands = hands.map(|a| a.rem_euclid(360.0));
         }
         self.ambient = None;
-        self.recent.push_back(composition.tags.clone());
-        while self.recent.len() > 3 {
-            self.recent.pop_front();
-        }
+        self.variety.note(&composition.name, &composition.tags);
         self.performed = Some(composition);
         self.chosen = None;
         self.plan = Some(Plan { began: ctx.t, from: self.angles, to, moves, total, minute });
@@ -294,7 +295,9 @@ impl Clocks {
             Some(ambient) => ambient.step(&mut self.angles, motor, ctx.dt as f32, slack < SETTLE),
             None if ctx.t - self.landed >= held && slack > SETTLE + 6.0 => {
                 let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
-                let mood = (rng.u64() % ambient::MOODS as u64) as usize;
+                let moods: Vec<String> = (0..ambient::MOODS).map(|m| format!("mood:{m}")).collect();
+                let mood = self.variety.freshest(&moods, || rng.f32()).and_then(|n| moods.iter().position(|m| m == n)).unwrap_or(0);
+                self.variety.note("", std::slice::from_ref(&moods[mood]));
                 let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
                 eprintln!("clocks: t={:.1} ambient {}", ctx.t, ambient.name());
                 self.ambient = Some(ambient);

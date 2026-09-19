@@ -82,6 +82,8 @@ struct Hands {
     mood: usize,
     /// Engine time at which to glide on to another.
     change_at: f64,
+    /// Which moods have been visited lately, so wandering keeps moving on.
+    variety: crate::variety::Variety,
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
@@ -90,7 +92,7 @@ fn make(seed: u64) -> Box<dyn Piece> {
     let grid = 1;
     let field = Ambient::new(&mut rng, mood, GRIDS[grid].0, GRIDS[grid].1, W as f32 / GRIDS[grid].0 as f32);
     eprintln!("hands: t=0 {}", field.name());
-    Box::new(Hands { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0 })
+    Box::new(Hands { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default() })
 }
 
 /// Every dial starts with both hands at 7:30, as an idle ClockClock does.
@@ -121,13 +123,22 @@ impl Hands {
         let next = if asked > 0 {
             Some(asked - 1).filter(|m| *m != self.mood)
         } else if ctx.t >= self.change_at {
-            let others: Vec<usize> = REPERTOIRE.iter().copied().filter(|m| *m != self.mood).collect();
-            Some(others[(self.rng.u64() % others.len() as u64) as usize])
+            // The mood least visited lately, allowing for how often each is
+            // meant to come up, with a little chance so it is never a rota.
+            (0..MOODS)
+                .filter(|m| *m != self.mood)
+                .map(|m| {
+                    let share = REPERTOIRE.iter().filter(|r| **r == m).count().max(1) as f32;
+                    (self.variety.staleness(&[format!("mood:{m}")]) / share + 0.03 * self.rng.f32(), m)
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, m)| m)
         } else {
             None
         };
         if let Some(next) = next {
             self.mood = next;
+            self.variety.note("", &[format!("mood:{next}")]);
             if asked > 0 {
                 self.field.drift_to(next, &mut self.rng);
             } else {

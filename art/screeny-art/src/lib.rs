@@ -20,6 +20,7 @@ pub mod pipeline;
 pub mod preview;
 pub mod rng;
 pub mod taste;
+pub mod variety;
 
 pub use color::Rgb;
 pub use frame::{Frame, WireFrame, H, N, W};

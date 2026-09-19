@@ -562,7 +562,11 @@ impl Formation {
     fn developments(self) -> &'static [Develop] {
         use Develop::*;
         match self {
-            Formation::Digits | Formation::Turned { .. } => &[],
+            Formation::Digits => &[],
+            // The time with every corner turned: it can spin as rigid corners
+            // (the original's most recognisable move), turn a quarter, or have
+            // its wave ebb.
+            Formation::Turned { .. } => &[Spin, Quarter, Swell],
             Formation::Lines(_) | Formation::Chevron { .. } => &[Spin, Quarter, Open, Weave, Split, Morph],
             Formation::Needles(_) => &[Spin, Quarter, Open, Weave, Morph],
             Formation::Fan { .. } => &[Spin, Quarter, Swell, Weave],
@@ -589,6 +593,8 @@ impl Formation {
             (Flow { wave, open }, Develop::Swell) => {
                 Flow { wave: Wave { amp: wave.amp * 2.8, phase: wave.phase + 2.0, ..wave }, open }
             }
+            (Turned { wave }, Develop::Quarter) => Turned { wave: Wave { base: wave.base + 90.0, ..wave } },
+            (Turned { wave }, Develop::Swell) => Turned { wave: Wave { amp: wave.amp * 0.4, phase: wave.phase + 2.0, ..wave } },
             (Compass { focus }, Develop::Carry) => Compass { focus: (COLS as f32 - focus.0, ROWS as f32 - focus.1) },
             (f, _) => f,
         }
@@ -795,15 +801,17 @@ fn review(phases: &[Phase], from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], mo
 }
 
 /// A new dance from `from` to `digits`: the best of several sketches that pass
-/// the critic. `recent` is the tags of the last few dances, to steer away
-/// from; `taste` is what the watcher has said they like.
+/// the critic. Above all it should not repeat itself: `variety` remembers what
+/// has been performed, a shape seen lately is not allowed back, and sketches
+/// made of well-worn parts score lower. `taste` is a lighter nudge towards what
+/// the watcher has said they like.
 pub fn compose(
     rng: &mut Rng,
     from: &[Hands; CLOCKS],
     digits: &[Hands; CLOCKS],
     motor: Motor,
     taste: &crate::taste::Taste,
-    recent: &[Vec<String>],
+    variety: &crate::variety::Variety,
 ) -> Composition {
     // Bounds scale with the motor: a slow motor is allowed a long dance.
     let pace = 100.0 / motor.speed;
@@ -813,17 +821,19 @@ pub fn compose(
     let mut passed = 0;
     for _ in 0..48 {
         let c = sketch(rng);
+        if variety.too_soon(&c.name) {
+            continue;
+        }
         let r = review(&c.phases, from, digits, motor);
         if !(6.0 * pace..=20.0 * pace).contains(&r.total) || r.peak > 2.05 || r.frozen > 1.3 || r.travel < 80.0 {
             continue;
         }
-        let shared = |other: &Vec<String>| c.tags.iter().filter(|t| other.contains(t)).count() as f32 / c.tags.len() as f32;
         // Flow alone would always choose the simplest dance, where everything
         // moves all the time; structure is worth something too.
         let structure = 0.17 * (c.phases.len().min(4) as f32 - 1.0);
         let score = 1.2 * r.flow + structure - (r.total / pace - 12.0).abs() / 6.0 - r.frozen - (r.peak - 1.3).max(0.0)
-            - 0.8 * recent.iter().map(shared).sum::<f32>()
-            + if explore { 0.0 } else { 0.9 * taste.score(&c.tags) }
+            - 3.0 * variety.staleness(&c.tags)
+            + if explore { 0.0 } else { 0.4 * taste.score(&c.tags) }
             + rng.range(0.0, 0.5);
         if best.as_ref().is_none_or(|(s, _)| score > *s) {
             best = Some((score, c));
@@ -873,7 +883,7 @@ mod tests {
         let (mut fell_back, mut direct_runs) = (0, 0);
         for seed in 0..300 {
             let Composition { name, phases, tags } =
-                compose(&mut Rng::new(seed), &from, &to, MOTOR, &crate::taste::Taste::in_memory(), &[]);
+                compose(&mut Rng::new(seed), &from, &to, MOTOR, &crate::taste::Taste::in_memory(), &Default::default());
             assert!(!tags.is_empty());
             fell_back += !name.contains(',') as usize;
             direct_runs += name.starts_with("direct") as usize;
@@ -894,6 +904,51 @@ mod tests {
         eprintln!("{} distinct shapes in 300; {direct_runs} runs direct ({direct} shapes); {fell_back} fell back", names.len());
     }
 
+    /// A day of dances, one a minute, each starting where the last ended. The
+    /// point of the composer is that the tenth hour does not look like the
+    /// first: no shape comes back too soon, there are a great many shapes, and
+    /// every part of the vocabulary gets used.
+    #[test]
+    fn a_day_of_dances_does_not_repeat_itself() {
+        let taste = crate::taste::Taste::in_memory();
+        let mut variety = crate::variety::Variety::default();
+        let mut rng = Rng::new(2026);
+        let mut names: Vec<String> = Vec::new();
+        let mut uses = std::collections::BTreeMap::<String, usize>::new();
+        for minute in 0..1440_u32 {
+            let (from, to) = (pose(minute / 60, minute % 60), pose((minute + 1) / 60 % 24, (minute + 1) % 60));
+            let c = compose(&mut rng, &from, &to, MOTOR, &taste, &variety);
+            variety.note(&c.name, &c.tags);
+            for t in &c.tags {
+                *uses.entry(t.clone()).or_default() += 1;
+            }
+            names.push(c.name);
+        }
+        let gap = (0..names.len())
+            .filter_map(|i| names[..i].iter().rposition(|n| *n == names[i]).map(|j| i - j))
+            .min()
+            .unwrap_or(usize::MAX);
+        let distinct = names.iter().collect::<std::collections::BTreeSet<_>>().len();
+        let share = |prefix: &str| {
+            let of: Vec<(&String, &usize)> = uses.iter().filter(|(t, _)| t.starts_with(prefix)).collect();
+            let total: usize = of.iter().map(|(_, n)| **n).sum();
+            let (lo, hi) = (of.iter().map(|(_, n)| **n).min().unwrap_or(0), of.iter().map(|(_, n)| **n).max().unwrap_or(0));
+            (of.len(), lo as f32 / total as f32, hi as f32 / total as f32)
+        };
+        let table: Vec<String> = uses.iter().filter(|(t, _)| t.starts_with("motif:") || t.starts_with("op:")).map(|(t, n)| format!("{t}={n}")).collect();
+        eprintln!("{}", table.join(" "));
+        let (motifs, rarest, commonest) = share("motif:");
+        let (ops, rarest_op, commonest_op) = share("op:");
+        eprintln!(
+            "1440 dances: {distinct} distinct shapes, soonest repeat after {gap}; {motifs} motifs used {:.0}%..{:.0}%, {ops} operators {:.0}%..{:.0}%",
+            rarest * 100.0, commonest * 100.0, rarest_op * 100.0, commonest_op * 100.0
+        );
+        assert!(gap > crate::variety::Variety::SPACING, "a shape came back after {gap} dances");
+        assert!(distinct > 250, "only {distinct} shapes in a day");
+        assert!(motifs >= 10 && rarest > 0.04, "a motif is being neglected: {rarest}");
+        assert!(ops >= 8 && rarest_op > 0.04, "an operator is being neglected: {rarest_op}");
+    }
+
     /// Ratings change what gets composed.
     #[test]
     fn taste_steers_the_composer() {
@@ -901,7 +956,7 @@ mod tests {
         let count = |taste: &crate::taste::Taste| {
             (0..200)
                 .filter(|seed| {
-                    let c = compose(&mut Rng::new(*seed), &from, &to, MOTOR, taste, &[]);
+                    let c = compose(&mut Rng::new(*seed), &from, &to, MOTOR, taste, &Default::default());
                     c.tags.iter().any(|t| t == "motif:rings" || t == "motif:spokes")
                 })
                 .count()
@@ -917,7 +972,7 @@ mod tests {
         }
         let disliked = count(&taste);
         eprintln!("rings or spokes in 200 dances: {before} neutral, {liked} liked, {disliked} disliked");
-        assert!(liked > before * 3 / 2 && disliked < before * 2 / 3, "{before} -> {liked} / {disliked}");
+        assert!(liked > before * 5 / 4 && disliked < before * 4 / 5, "{before} -> {liked} / {disliked}");
     }
 
     /// Every dance, in many variations, ends exactly on the digits, in a

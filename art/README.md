@@ -92,10 +92,19 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
     grid leaving the next formation behind it);
   - a *critic*: every sketch is planned for real. Hard rules reject ones that
     are too long or short, freeze the grid part-way, barely move, or overdrive
-    a hand. The survivors are scored for flow, structure, pacing, novelty
-    against the last three dances, and taste; the best of eight is performed.
+    a hand. The survivors are scored for flow, structure, pacing, freshness
+    and (lightly) taste; the best of eight is performed.
+  - a *memory* (`variety.rs`), because the aim is a clock that does not get
+    repetitive over a day, more than one whose every dance is the best. Tags
+    wear with use and recover with time, and worn sketches score lower, which
+    spreads use over the whole vocabulary; a shape may not return within 30
+    dances. Named dances and ambient moods are chosen the same way. A test
+    simulates a day (1440 dances): 527 distinct shapes, soonest repeat after 31,
+    every motif 5-12% of use and every operator 7-23%. (That test found the
+    "scatter" motif starved, because it had no operators of its own; it has
+    three now.)
 
-  About 200 distinct shapes in 300 seeds, each continuously varied. Tests check
+  About 190 distinct shapes in 300 independent seeds, each continuously varied. Tests check
   that all land exactly, that the critic does not collapse onto the plain
   "direct" kind (it did, twice, while being written), and that ratings steer it.
   Left to vary, six dances in ten are composed; `dance` 13 is always composed,
