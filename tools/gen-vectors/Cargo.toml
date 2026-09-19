@@ -1,0 +1,16 @@
+# Its own workspace: the host workspace at the repo root must not pull `lab`
+# (frozen card-002 reference material) into the tools every card builds.
+[workspace]
+
+[package]
+name = "gen-vectors"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Regenerates crates/proto/tests/vectors from the frozen lab encoders"
+
+[dependencies]
+lab = { path = "../../lab" }
+
+[profile.release]
+opt-level = 3
