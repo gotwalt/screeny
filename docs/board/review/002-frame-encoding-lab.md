@@ -73,3 +73,66 @@ A reader can pick the v1 wire format pixel encoding(s) from the report without
 re-running anything, and `cargo run --release` in `lab/` reproduces the numbers.
 
 ## Log
+
+### Worker, branch `card/002-frame-encoding-lab`
+
+**Delivered**
+
+- `lab/` — std Rust crate. `cargo run --release` (~8 s) regenerates every
+  number and PNG; `cargo test --release` runs 7 round-trip tests.
+  - `lab/src/dec/` — 16 decoders, `no_std`, allocation-free, integer-only.
+    `lab/nostd-check` compiles exactly that tree as `#![no_std]` with no
+    allocator, so "firmware-ready" is checked by the compiler, not asserted.
+  - `lab/src/enc/` — 22 codecs in the measured roster.
+  - `lab/src/content.rs` — plasma, Mandelbrot zoom, text/UI mock (with a 5x7
+    bitmap font), a photo-like stress case, and a dark-end probe. Everything
+    but the UI mock is rendered at 4x and box-filtered in linear light.
+  - `lab/src/panel.rs` — panel model: sRGB EOTF, BCM bit depth, optional
+    device-side temporal dithering across N refreshes.
+  - `lab/src/metrics.rs` — panel-aware Oklab dE, a blurred "viewing distance"
+    dE, SSIM, pixel-exactness, flicker, 4-frame-average error.
+  - `lab/xtensa-bench/` — counts real Xtensa instructions per decode under
+    `qemu-system-xtensa`.
+- `docs/research/002-frame-encoding.md` + five contact sheets in
+  `docs/research/img/`.
+- New cards: 030 (device temporal dithering), 031 (sender encode budget),
+  032 (real content corpus).
+
+**Recommendation**: a per-frame mode chooser over `PAL4_LZ` / `PAL8_LZ` /
+`PAL5` / `BC1_DUAL`. Mean panel-aware dE 6.53 against 9.52 for the best
+fixed-rate codec, 1029 B mean / 1464 B max, worst-case decode 131 k Xtensa
+instructions (~0.55-0.82 ms, 2.5% of a frame). Byte layouts are in the report.
+
+**Surprises**
+
+1. Palette+LZ beat every block codec on smooth saturated motion — PAL8_LZ was
+   selected for 98-100% of `plasma` and `mandel` frames. At 2048 pixels a frame
+   usually holds under ~1000 distinct colours, so a 256-entry palette is nearly
+   lossless. The tiny frame size inverts the texture-compression literature's
+   answer.
+2. Endpoint precision, not index count, decides dark content. `bc1` and
+   `bc1-e888` differ only in RGB565 vs RGB888 endpoints and the latter is 2.9x
+   better on `darkfade`. Visible as magenta blotches in near-black sky.
+3. Scoring against the panel we have is a trap. RGB444-endpoint codecs
+   (`blk42`, `cc4`) look competitive today and collapse under a temporally
+   dithered panel (dE 10.6 → 35.0): the panel's coarseness is hiding them.
+   The hybrid now selects against the *better* panel, costing 0.12 dE today.
+4. Six bitplanes dithered across five panel refreshes gives 195 distinct output
+   levels against 183 for eight undithered bitplanes. The cheapest big quality
+   win in the project is in the panel driver — card 030.
+5. At today's dimmed brightness (~3 linear bits), every codec in the study
+   scores dE 0.00 on the dark clip. The panel shows black regardless.
+6. Ordered dither loses on every number and wins to the eye in exactly one
+   place (4 bpp gradients). The blurred-dE metric exists because the contact
+   sheet disagreed with the table.
+
+**Notes for the orchestrator**
+
+- Card 001's panel measurement arrived mid-card and changed the scoring; the
+  writeup is against a 6-bit panel throughout, with 3-bit/8-bit/dithered
+  columns alongside.
+- Budget used is 1464 B (8-byte header), per the message from the orchestrator.
+- Mode bytes used so far are listed in `lab/src/dec/mod.rs::mode`; card 004
+  should reserve that space in the protocol spec. Only five of the sixteen are
+  recommended for v1.
+- No hardware was touched.
