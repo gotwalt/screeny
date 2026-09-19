@@ -319,3 +319,12 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 - **The bring-up firmware advertises `codecs=raw`.** `screeny discover` finds
   it and prints exactly that, and `Sender::connect` refuses with
   `NoCommonCodec` rather than guessing. Card 008 is the firmware side.
+
+## Demos
+
+`screeny fractal [--seed N]` streams the endless fractal zoom tour and `screeny clock
+[--at HH:MM[:SS]]` streams the word clock, both from `crates/demos`. They take the same
+streaming flags as `pattern` (`--addr`, `--name`, `--fps`, `--duration`, `--fast`).
+Measured against the simulator on loopback: clock ~280 B/frame, always `PAL4_LZ`
+(exact), 0.05 ms encode; fractal ~1300 B/frame, `PAL8_LZ`, 0.9 ms encode; both a
+steady 30 fps.

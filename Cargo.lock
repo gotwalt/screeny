@@ -811,10 +811,12 @@ name = "screeny"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "ctrlc",
  "libc",
  "mdns-sd",
+ "screeny-demos",
  "screeny-proto",
  "thiserror",
 ]

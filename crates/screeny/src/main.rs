@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand};
 
 use screeny::control::ControlClient;
 use screeny::encode::{EncodeConfig, Encoder, Profile};
-use screeny::frame::RawReader;
+use screeny::frame::{FrameTime, RawReader};
 use screeny::panel::TEMPORAL;
 use screeny::proto::control::state;
 use screeny::proto::{dec, NBYTES};
@@ -228,6 +228,24 @@ enum Cmd {
         stream: StreamArgs,
     },
 
+    /// Stream the endless fractal zoom demo.
+    Fractal {
+        /// Seed for the tour order and palette. Defaults to the clock.
+        #[arg(long)]
+        seed: Option<u64>,
+        #[command(flatten)]
+        stream: StreamArgs,
+    },
+
+    /// Stream the word clock demo (spells out the local time).
+    Clock {
+        /// Start from this local time today instead of now, e.g. 11:44:50.
+        #[arg(long, value_name = "HH:MM[:SS]")]
+        at: Option<String>,
+        #[command(flatten)]
+        stream: StreamArgs,
+    },
+
     /// Stream raw 6144-byte RGB888 frames from stdin.
     Pipe {
         #[command(flatten)]
@@ -281,6 +299,8 @@ fn run(cli: &Cli) -> Result<()> {
         Cmd::Reboot { yes } => cmd_reboot(cli, *yes),
         Cmd::Ping { count, interval } => cmd_ping(cli, *count, *interval),
         Cmd::Pattern { name, list, stream } => cmd_pattern(cli, name, *list, stream),
+        Cmd::Fractal { seed, stream } => cmd_fractal(cli, *seed, stream),
+        Cmd::Clock { at, stream } => cmd_clock(cli, at.as_deref(), stream),
         Cmd::Pipe { stream } => cmd_pipe(cli, stream),
         Cmd::EncodeStats {
             budget,
@@ -577,6 +597,60 @@ fn cmd_pattern(cli: &Cli, name: &str, list: bool, stream: &StreamArgs) -> Result
         );
     };
     stream_source(cli, stream, &mut p)
+}
+
+/// Adapts a `screeny-demos` piece to the sender's `FrameSource`. Pieces are pure
+/// functions of elapsed time, so a skipped frame is a skip, never a slowdown.
+struct PieceSource<P: screeny_demos::Piece> {
+    piece: P,
+    scratch: screeny_demos::Frame,
+}
+
+impl<P: screeny_demos::Piece> PieceSource<P> {
+    fn new(piece: P) -> Self {
+        Self {
+            piece,
+            scratch: screeny_demos::Frame::black(),
+        }
+    }
+}
+
+impl<P: screeny_demos::Piece> FrameSource for PieceSource<P> {
+    fn name(&self) -> &str {
+        self.piece.name()
+    }
+
+    fn render(&mut self, t: FrameTime, out: &mut Frame) -> bool {
+        self.piece.render(t.elapsed, &mut self.scratch);
+        out.as_bytes_mut().copy_from_slice(&self.scratch.px[..]);
+        true
+    }
+}
+
+fn cmd_fractal(cli: &Cli, seed: Option<u64>, stream: &StreamArgs) -> Result<()> {
+    let seed = seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_secs())
+    });
+    eprintln!("screeny: fractal seed {seed}");
+    let mut src = PieceSource::new(screeny_demos::fractal::FractalZoom::new(seed));
+    stream_source(cli, stream, &mut src)
+}
+
+fn cmd_clock(cli: &Cli, at: Option<&str>, stream: &StreamArgs) -> Result<()> {
+    let now = chrono::Local::now().naive_local();
+    let base = match at {
+        None => now,
+        Some(s) => {
+            let t = chrono::NaiveTime::parse_from_str(s, "%H:%M:%S")
+                .or_else(|_| chrono::NaiveTime::parse_from_str(s, "%H:%M"))
+                .with_context(|| format!("--at {s:?}: expected HH:MM or HH:MM:SS"))?;
+            now.date().and_time(t)
+        }
+    };
+    let mut src = PieceSource::new(screeny_demos::clock::WordClock::at(base));
+    stream_source(cli, stream, &mut src)
 }
 
 fn cmd_pipe(cli: &Cli, stream: &StreamArgs) -> Result<()> {
