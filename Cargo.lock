@@ -818,6 +818,7 @@ dependencies = [
  "mdns-sd",
  "screeny-demos",
  "screeny-proto",
+ "screeny-sim",
  "thiserror",
 ]
 

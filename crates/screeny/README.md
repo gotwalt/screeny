@@ -20,6 +20,147 @@ cargo bench -p screeny            # encode cost, by stage
 Use `--release` for anything that streams. A debug build's encoder is roughly
 ten times slower and will not hold 30 fps.
 
+## Embedding
+
+If you have your own render loop - a generative art system, a visualiser, a
+dashboard - this is the whole of it. No CLI, no pipe, no subprocess.
+
+```toml
+[dependencies]
+screeny = { path = "../screeny" }     # or a git dependency
+```
+
+```rust
+use screeny::{Link, LinkConfig, Pixels, Target};
+
+let mut link = Link::open(Target::default(), LinkConfig::default())?;
+let mut pace = link.pacer();                       // optional: spec 9.1's clock
+loop {
+    let t = pace.tick();
+    let (palette, indices) = your_art(t.secs());   // <= 32 colours, 2048 indices
+    link.send(Pixels::indexed(&palette, &indices))?;
+}
+```
+
+`cargo run --release -p screeny --example embed` is that, running.
+`--example art_output` is the same thing behind a trait with the shape the art
+system's `Output` has.
+
+### The five things worth knowing
+
+**1. Indexed frames go on the wire exactly.** A palette of 32 colours or fewer
+and 2048 indices reaches the panel as `palette[index]`, every pixel, with no
+requantisation and no dither of ours on top of yours - `PAL4_LZ` or `PAL8_LZ`
+if the indices compress, and raw `PAL5` if they do not. `PAL5` is fixed-rate at
+1376 bytes, which is why the promise holds for *any* index plane, including
+noise. 33 to 256 colours are exact too when they compress, because only the
+variable-rate `PAL8_LZ` can carry them.
+
+If nothing exact fits, the frame is expanded and run through the ordinary
+lossy chooser - a requantised frame beats a dropped one - and you are told:
+`Sent::exact()` is false, `LinkStats::indexed_fallback` rises, and
+`SendStats::last_fallback_colours` says how big the palette was. Nothing about
+it is silent. `Link::limits().exact_palette` is the size that is guaranteed
+against this device at this budget.
+
+**2. The network cannot make `send` fail.** It returns `Sent::Frame`,
+`Sent::Coalesced` or `Sent::Dropped`. The only `Err` is yours - a frame of the
+wrong size, or an index outside its palette - so once your sizes are right you
+can stop handling errors. A panel that reboots, changes address or goes off for
+a week is a run of `Sent::Dropped` and a line in `LinkStats`, not an exception
+in your render loop.
+
+**3. Reconnection is automatic and off-thread.** `Link` watches for the
+telemetry it asked for; UDP to a dead host succeeds, so silence is the only
+evidence there is (`LinkConfig::silence`, 5 s by default). When it goes quiet,
+the link re-resolves - by mDNS instance name if that is how you named it, so it
+follows a device across a DHCP lease - opens a new socket per spec 3.2, and
+retries with backoff, all on a background thread so a three-second browse never
+stalls your loop. `Link::open_deferred` starts without a panel at all, which is
+what a service wants: a panel that is off at boot is not a different case from
+one unplugged an hour later. `Link::retarget` moves a live link elsewhere.
+
+**4. Pacing is yours; overrunning is handled.** `Link` never sleeps. Render
+when you like. By default (`Cadence::Limit`) frames that arrive before the next
+slot is due are dropped and counted rather than sent, on an absolute schedule
+at the rate the device is keeping up with - so a 60 fps producer into a 30 fps
+panel sends every other frame and the device's `frames_dropped_superseded`
+stays at zero. That matters: spec 6.9 reads superseded frames as "cannot
+decode fast enough" and answers by switching to cheaper codecs, which is the
+wrong repair for a sender that is merely eager. `Cadence::Free` hands it all
+back. `Link::pacer()` gives you spec 9.1's schedule if you want ours.
+
+**5. The frame rate is a choice, and it moves.** `LinkConfig::sender.fps`
+defaults to 30, the owner's target; the firmware was measured clean to 120 on
+the bench (card 008). Whatever you ask for, spec 6.9's ladder steps it down
+under sustained loss and back up after ten clean seconds, so read
+`Link::fps()` rather than assuming. `Link::limits()` has the rest - budget,
+codec set, panel size, whether the codec set is currently reduced - and every
+field of it can change under a running link.
+
+### The API
+
+```rust
+enum Pixels<'a> { Rgb(&'a [u8]),                                  // 6144 bytes
+                  Indexed { palette: &'a [[u8; 3]], indices: &'a [u8] } }
+    Pixels::rgb(&[u8]) / indexed(&[[u8;3]], &[u8]) / is_indexed() / palette_len()
+    validate()            // shape + every index in range; check() is shape alone
+    From<&Frame>, From<&Rgb888Frame>
+
+enum Sent { Frame { codec, bytes, exact, seq }, Coalesced, Dropped }
+    is_sent() codec() exact() bytes()
+
+struct LinkConfig { sender: SenderConfig, cadence: Cadence, reconnect: bool,
+                    silence: Duration, backoff: Backoff }
+enum Cadence { Free, Limit }                     // Limit is the default
+struct Backoff { first: Duration, max: Duration, factor: f64 }
+
+struct Link;
+    Link::open(Target, LinkConfig) -> Result<Link>        // blocking; may fail
+    Link::open_deferred(Target, LinkConfig) -> Link       // never fails
+    fn send(&mut self, Pixels) -> Result<Sent>            // network cannot fail it
+    fn poll()                     // drain telemetry while frames are not flowing
+    fn close()                    // FINAL; Drop does this too
+    fn retarget(Target) / target()
+    fn state() -> LinkState { Up, Connecting, Waiting, Closed }
+    fn stats() -> &LinkStats      // lifetime, across sessions
+    fn session() -> Option<&SendStats>        // this socket's detail
+    fn limits() -> Limits / fps() / pacer() / device() / config()
+
+struct Limits { connected, fps, configured_fps, budget, exact_palette,
+                codecs, codec_limited, panel }
+struct LinkStats { frames_offered, frames_sent, frames_coalesced, frames_dropped,
+                   bytes, indexed_exact, indexed_fallback, sessions, drops,
+                   connect_failures, last_error, connected_since, down_since }
+
+struct Pace;                                     // spec 9.1, on its own
+    Pace::new(fps) tick() -> FrameTime  set_fps(f64)  skipped()  fps()
+```
+
+`frames_offered == frames_sent + frames_coalesced + frames_dropped`, always.
+
+Below `Link` is `Sender`: one socket, one session, every failure handed
+straight back. `Sender::send(Pixels)` and `Sender::send_indexed` are the
+same push API without the reconnection or the cadence ceiling, for a caller
+that wants to own both. `Sender::run` is the pull model the CLI uses.
+
+### Two sharp edges that are left
+
+- **`Drop` runs on a return or an unwind, not on a signal.** Letting a `Link`
+  fall out of scope sends `FINAL` and the device releases the source lock at
+  once; `SIGTERM` and ctrl-c terminate without running destructors, and the
+  device waits out `STREAM_TIMEOUT_MS` instead. Install a handler if that
+  second matters, the way the CLI does.
+- **One panel, one sender.** The device gives the lock to one source at a time
+  (spec 7.4). A second sender gets `BUSY` until the first stops or is taken
+  over; `SendStats::busy` counts them.
+
+Develop against [`screeny-sim`](../sim), not the bench device: `cargo run -p
+screeny-sim` gives you a window that shows what the panel would show, and
+`SimDevice::start(Config::for_test())` gives your own tests a real receiver on
+loopback. `crates/screeny/tests/indexed.rs` and `tests/embed.rs` are worked
+examples of the second.
+
 ## The library in one screen
 
 ```rust
@@ -27,6 +168,9 @@ ten times slower and will not hold 30 fps.
 struct Frame;                                  // 64x32 sRGB, derefs to [u8; 6144]
     Frame::black() / solid(c) / from_bytes(&[u8]) / from_pixels(Box<..>)
     get(x,y) set(x,y,c) at(p) set_at(p,c) as_bytes() distinct_colours()
+
+enum Pixels<'a> { Rgb(&[u8]), Indexed { palette: &[[u8;3]], indices: &[u8] } }
+                                               // what the push API takes
 
 struct FrameTime { index: u64, elapsed: Duration, fps: f64 }
 
@@ -85,14 +229,28 @@ struct SenderConfig { fps, budget: Option<usize>, profile, stats_interval,
                       adapt: bool, timestamps: bool, qos: bool, handshake: bool }
 struct Sender;
     Sender::connect(Device, SenderConfig) -> Result<Sender>    // GET_INFO handshake
-    fn run(&mut self, &mut dyn FrameSource, &AtomicBool) -> Result<()>
+    fn run(&mut self, &mut dyn FrameSource, &AtomicBool) -> Result<()>   // pull
     fn run_with(.., &mut dyn FnMut(&SendStats))                // live stats
+    fn send(&mut self, Pixels) -> Result<Sent>                 // push
+    fn send_indexed(&mut self, &[[u8;3]], &[u8]) -> Result<Sent>   // exact
     fn send_frame(&mut self, &Rgb888Frame, final_frame: bool) -> Result<u8>
     fn finish() poll_feedback() stats() budget() device() local_addr()
+    fn fps() codecs() config() last_feedback() silence()
+
+enum Sent { Frame { codec, bytes, exact, seq }, Coalesced, Dropped }
+
+// --- embedding (card 011); see "Embedding" at the top -------------------
+struct Link;                                   // reconnects, paces, FINAL on drop
+    Link::open(Target, LinkConfig) / open_deferred(..) / send(Pixels) / poll()
+    close() retarget(Target) state() stats() session() limits() fps() pacer()
+struct LinkConfig { sender, cadence, reconnect, silence, backoff }
+struct LinkStats; struct Limits; struct Pace;
+enum Cadence { Free, Limit }   enum LinkState { Up, Connecting, Waiting, Closed }
 
 struct SendStats { frames_sent, frames_skipped, bytes, by_codec, encode_total,
                    encode_max, min_gap, max_gap, fps, fps_changes, telemetry,
-                   busy, decode_failures, codecs_withdrawn, codec_limited }
+                   busy, decode_failures, codecs_withdrawn, codec_limited,
+                   indexed_exact, indexed_fallback, last_fallback_colours }
     actual_fps() mean_bytes() mean_encode() encode_pct(p)
 
 fn sender::period_of(fps) -> Duration
@@ -100,8 +258,9 @@ fn sender::sleep_until(Instant)             // sleep, then spin the last ms
 
 // --- errors ------------------------------------------------------------
 enum Error { Io, Timeout, Device(ErrorCode), BadReply, NotFound, NoSuchDevice,
-             Mdns, Metadata, NoCommonCodec, Budget }
+             Mdns, Metadata, NoCommonCodec, Budget, Frame, BadIndex }
     fn hint(&self) -> Option<String>        // the next step, in words
+    impl From<Error> for std::io::Error     // for embedders whose trait is io
 ```
 
 ### Quick start
@@ -281,8 +440,12 @@ device releases the source lock at once rather than waiting out
 
 ## Testing
 
-No test touches the bench device. `tests/common` is a fake device built
-directly on `screeny_proto`: two loopback sockets on ephemeral ports, the
+No test touches the bench device. `tests/simfix` starts a real
+[`screeny-sim`](../sim) on loopback with ephemeral ports and mDNS off - the
+second implementation of the protocol, which owes this crate's encoders
+nothing, and therefore the only thing worth checking an *exactness* claim
+with. `tests/common` is an older fake device built directly on
+`screeny_proto`: two loopback sockets on ephemeral ports, the
 spec's validation and sequence rules, proto's decoders, `STATS_REQ` answered
 from the frame port per spec 6.4, the control opcodes, and a loss injector.
 
@@ -293,6 +456,8 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 | `tests/pacing.rs` | 30.0 fps within 1% over ten seconds, no drift, no burst; a 300 ms stall skipped rather than caught up; 10/24/60 fps |
 | `tests/cli.rs` | the binary end to end: `pattern` at 30 fps, `pipe`, `encode-stats`, the control subcommands, and the failure messages |
 | `tests/color.rs` | the fast cube root against libm, and the panel model against card 001's measurements |
+| `tests/indexed.rs` | indexed frames are bit-exact end to end through `screeny-sim`: palettes of 2, 16, 17 and 32 colours, structured and incompressible, over a stream; the over-budget fallback and both malformed-frame errors |
+| `tests/embed.rs` | `Link`: the device rebooting on the same ports and moving to new ones mid-stream, the silence watchdog, reconnection off, a deferred link, `FINAL` on drop, and a 60 fps producer decimated to 30 with nothing superseded |
 
 `SCREENY_PACING_SECS` shortens the ten-second run while iterating.
 

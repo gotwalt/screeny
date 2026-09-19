@@ -238,22 +238,81 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
 
 ## 5. How your system should hand over frames
 
-The sender is being built now; its final interface is **[provisional]**. Two
-hand-over formats are planned. Build your output stage behind a small trait so
-either can be plugged in.
+The sender exists. **[decided]** It is `crates/screeny`, it is a library before it
+is a CLI, and you link it: `Output` becomes fifteen lines and there is no pipe,
+no subprocess and no framing to agree on. `crates/screeny/README.md`'s
+**Embedding** section is the reference; `crates/screeny/examples/art_output.rs`
+is a working sketch of the impl written against your `Output` and `WireFrame` as
+they stand.
 
-1. **Raw RGB frames on a pipe** (will certainly exist): 64x32, row-major, top-left
-   origin, 3 bytes per pixel sRGB R,G,B = 6144 bytes per frame, written to stdout
-   at your own pace up to 30 fps. The sender quantises, picks a codec, paces and
-   transmits. Simple, language-agnostic, lossy whenever you exceed 32 colours.
-2. **Indexed frames** (planned, preferred for art you control): a palette of up to 32
-   sRGB colours plus 2048 indices. This goes on the wire exactly as you made it. If
-   your system is written in Rust it will be able to link the sender library
-   directly and skip the pipe.
+```rust
+use screeny::{Link, LinkConfig, Pixels, Target};
 
-Until the sender exists, do not try to talk to the device, and never open the serial
-port or the camera: the hardware has a single owner (see `CLAUDE.md`). Develop
-against your own preview:
+let mut link = Link::open(Target::default(), LinkConfig::default())?;
+loop {
+    let wire = pipeline.process(piece.frame(ctx), dt);     // your loop, your clock
+    link.send(match &wire.indexed {
+        Some((palette, indices)) => Pixels::indexed(palette, indices),
+        None => Pixels::rgb(&wire.rgb),
+    })?;
+}
+```
+
+Seven things about it that should change how you build the output stage.
+
+1. **Indexed frames really do go on the wire exactly.** A palette of 32 colours or
+   fewer plus 2048 indices reaches the panel as `palette[index]`, every pixel, no
+   requantisation and no dither of ours on top of yours. **[measured]** end to end
+   against the reference receiver for palettes of 2, 16, 17 and 32 colours, with
+   structured indices *and* with pure index noise. The promise holds for any index
+   plane because the floor of the exact path is a fixed-rate 1376-byte codec that
+   cannot overflow. This is `overland`'s whole premise and it is safe to build on.
+2. **Up to 256 colours are exact when they compress.** The 32 in section 2.3 is the
+   size that is *guaranteed*; a larger palette still goes out losslessly whenever
+   the LZ coder can fit it, which for flat-shaded and terraced work it usually can.
+   Ask `Link::limits().exact_palette` for the guaranteed size against the device you
+   are actually connected to.
+3. **When nothing exact fits you are told, not fooled.** Too many colours and too
+   little structure means the frame is expanded and run through the lossy chooser -
+   a requantised frame beats a dropped one - and `Sent::exact()` comes back false
+   with `LinkStats::indexed_fallback` rising. Put it on the studio's stats strip
+   next to your own four numbers: it is the real answer to the one
+   `budget.rs::simulate_lossy` was estimating.
+4. **Replace `budget.rs`'s estimates with real numbers.** `Sent::bytes()` is the
+   actual payload size and `Sent::codec()` the codec that carried it. You no longer
+   have to model our encoder; ask it. (`screeny::encode::Encoder` will also encode
+   with no network anywhere, if the studio wants sizes without a panel.)
+5. **Keep your 60 fps loop.** Pacing is yours - the link never sleeps - and by
+   default it drops frames that arrive before the panel's next slot rather than
+   sending them, on an absolute schedule. A 60 fps producer into a 30 fps panel puts
+   30 fps on the wire and the device's superseded counter stays at zero.
+   **[measured]** Do *not* solve this by rendering at 30: render at whatever suits
+   the piece and let the link decimate. `Link::fps()` is the rate the panel is
+   actually keeping up with, which moves - the firmware is clean to 120 fps
+   **[measured]**, the owner's target is 30, and sustained packet loss steps it down
+   and back up by itself.
+6. **The panel going away is not your problem.** `Link::send` cannot fail because of
+   the network. A device that reboots, drops off WiFi or changes address is a run of
+   `Sent::Dropped` and a counter; the link re-resolves (by mDNS name, so it follows a
+   DHCP lease), reopens a socket and resumes, on a background thread so your loop
+   never stalls. `Link::open_deferred` starts with no panel at all, which is what a
+   server process wants. The only errors `send` returns are yours: a frame of the
+   wrong size or an index outside its palette.
+7. **Let the link drop out of scope when you are done.** That sends `FINAL` and the
+   panel releases the source lock at once instead of holding your last frame for ten
+   seconds. It does *not* happen on `SIGTERM` or ctrl-c, which skip destructors, so
+   install a handler if you care about that second.
+
+The raw-RGB pipe still exists (`screeny pipe`), unchanged, and is still the right
+answer for anything not written in Rust. It is lossy above 32 colours by
+construction, so it is the wrong answer for you.
+
+**The hardware still has a single owner.** Linking the sender does not change that:
+do not point a stream at the bench device, and never open the serial port or the
+camera (see `CLAUDE.md`). Develop against `crates/sim` - `cargo run -p screeny-sim`
+is a window that shows what the panel would show, and `SimDevice::start(Config::
+for_test())` is a real receiver on loopback for your own tests - and against your
+own preview:
 
 ### Build a faithful preview first
 

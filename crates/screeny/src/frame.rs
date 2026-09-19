@@ -132,6 +132,152 @@ impl Frame {
     }
 }
 
+/// One frame on its way to the panel, in whichever form the producer has it.
+///
+/// This is the type the push API takes ([`crate::Sender::send`],
+/// [`crate::Link::send`]). It borrows, so handing a frame over costs nothing,
+/// and it takes **slices** rather than fixed-size arrays because the systems
+/// that embed this library keep their frames in `Vec`s.
+///
+/// ```
+/// use screeny::Pixels;
+///
+/// let palette = [[0, 0, 0], [255, 40, 0]];
+/// let indices = vec![0u8; 64 * 32];
+/// let px = Pixels::indexed(&palette, &indices);
+/// assert!(px.is_indexed());
+/// ```
+///
+/// # Why indexed is worth the trouble
+///
+/// [`Pixels::Indexed`] of 32 colours or fewer goes on the wire **exactly**:
+/// `PAL4_LZ`, `PAL8_LZ` or raw `PAL5` carry the producer's own palette and
+/// its own indices, so every pixel the panel lights is `palette[index]`, with
+/// no quantisation and no dither of ours on top of theirs. [`Pixels::Rgb`] of
+/// more than 32 colours goes through the chooser and is lossy by definition -
+/// there is no 33-colour frame that fits in 1464 bytes.
+///
+/// Note that a frame's *colour count* is what matters, not the palette
+/// length: an indexed frame with a 64-entry palette that only uses 12 of them
+/// is a 12-colour frame, but this library takes it at its word and encodes
+/// all 64, because re-deriving the histogram would cost more than it saves.
+/// Producers should hand over a tight palette.
+#[derive(Debug, Clone, Copy)]
+pub enum Pixels<'a> {
+    /// [`NBYTES`] bytes of row-major, top-left-origin sRGB `R,G,B`.
+    Rgb(&'a [u8]),
+    /// Up to 256 sRGB colours and [`NPIX`] indices into them.
+    Indexed {
+        /// The colours, sRGB `R,G,B`. 32 or fewer is the exact path.
+        palette: &'a [[u8; 3]],
+        /// One index per pixel, raster order. [`NPIX`] of them.
+        indices: &'a [u8],
+    },
+}
+
+impl<'a> Pixels<'a> {
+    /// Raw sRGB pixels. The slice must be [`NBYTES`] long.
+    #[must_use]
+    pub fn rgb(px: &'a [u8]) -> Self {
+        Pixels::Rgb(px)
+    }
+
+    /// A palette and indices into it.
+    #[must_use]
+    pub fn indexed(palette: &'a [[u8; 3]], indices: &'a [u8]) -> Self {
+        Pixels::Indexed { palette, indices }
+    }
+
+    /// True for [`Pixels::Indexed`].
+    #[must_use]
+    pub fn is_indexed(&self) -> bool {
+        matches!(self, Pixels::Indexed { .. })
+    }
+
+    /// Distinct colours the producer offered: the palette length for an
+    /// indexed frame, and `None` for an RGB one (counting those means walking
+    /// 2048 pixels, which the encoder does anyway).
+    #[must_use]
+    pub fn palette_len(&self) -> Option<usize> {
+        match self {
+            Pixels::Rgb(_) => None,
+            Pixels::Indexed { palette, .. } => Some(palette.len()),
+        }
+    }
+
+    /// Check the shape **and**, for an indexed frame, that every index is
+    /// inside the palette.
+    ///
+    /// One pass over 2048 bytes, so it is worth doing before anything that
+    /// might discard the frame: an error the caller can fix should not depend
+    /// on whether the pacing happened to keep that frame.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Frame`] or [`crate::Error::BadIndex`] - between them,
+    /// every way a caller of [`crate::Sender::send`] can get a frame wrong.
+    pub fn validate(&self) -> crate::Result<()> {
+        self.check()?;
+        if let Pixels::Indexed { palette, indices } = self {
+            if let Some((pixel, &index)) = indices
+                .iter()
+                .enumerate()
+                .find(|(_, i)| **i as usize >= palette.len())
+            {
+                return Err(crate::Error::BadIndex {
+                    index,
+                    pixel,
+                    palette: palette.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the shape alone: the lengths, and that the palette is a legal
+    /// size. Cheap, and does not look at the indices; [`Pixels::validate`] is
+    /// the complete check.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Frame`] with the sizes involved.
+    pub fn check(&self) -> crate::Result<()> {
+        use crate::Error;
+        match self {
+            Pixels::Rgb(px) if px.len() != NBYTES => Err(Error::Frame {
+                what: "an RGB frame",
+                got: px.len(),
+                want: NBYTES,
+            }),
+            Pixels::Indexed { indices, .. } if indices.len() != NPIX => Err(Error::Frame {
+                what: "an index plane",
+                got: indices.len(),
+                want: NPIX,
+            }),
+            Pixels::Indexed { palette, .. } if palette.is_empty() || palette.len() > 256 => {
+                Err(Error::Frame {
+                    what: "a palette",
+                    got: palette.len(),
+                    want: 256,
+                })
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl<'a> From<&'a Frame> for Pixels<'a> {
+    fn from(f: &'a Frame) -> Self {
+        Pixels::Rgb(f.as_bytes())
+    }
+}
+
+impl<'a> From<&'a Rgb888Frame> for Pixels<'a> {
+    fn from(f: &'a Rgb888Frame) -> Self {
+        Pixels::Rgb(f)
+    }
+}
+
 /// Where a frame sits in a stream.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameTime {

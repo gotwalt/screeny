@@ -61,6 +61,7 @@ pub mod color;
 pub mod control;
 pub mod device;
 pub mod discover;
+pub mod embed;
 pub mod encode;
 pub mod error;
 pub mod frame;
@@ -72,12 +73,13 @@ pub mod sender;
 pub use control::ControlClient;
 pub use device::{Device, DeviceInfo};
 pub use discover::Target;
+pub use embed::{Backoff, Cadence, Limits, Link, LinkConfig, LinkState, LinkStats, Pace};
 pub use encode::{EncodeConfig, Encoded, Encoder, Profile};
 pub use error::{Error, Result};
-pub use frame::{FnSource, Frame, FrameSource, FrameTime, RawReader};
+pub use frame::{FnSource, Frame, FrameSource, FrameTime, Pixels, RawReader};
 pub use panel::Panel;
 pub use patterns::Pattern;
-pub use sender::{SendStats, Sender, SenderConfig};
+pub use sender::{SendStats, Sender, SenderConfig, Sent};
 
 /// Re-exported so callers do not have to depend on the wire crate directly.
 pub use screeny_proto as proto;
