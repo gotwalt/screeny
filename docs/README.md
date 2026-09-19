@@ -9,6 +9,7 @@ docs/
     doing/          claimed; the card names its owner and branch
     review/         work finished on a branch, waiting for the orchestrator to merge
     done/           merged to main
+    parked/         deliberately deferred; not picked up without the owner asking
   research/         findings. One file per question, conclusions first.
   design/           settled decisions (protocol spec, architecture). Source of truth.
 ```
