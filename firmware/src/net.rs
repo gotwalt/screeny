@@ -196,11 +196,11 @@ pub async fn frames_task(
         let now_ms = now / 1_000;
         let animating = matches!(intent, Intent::Identify | Intent::Fade { .. });
         let due = animating
-            || core.redraw != redraw_seen
+            || core.redraw() != redraw_seen
             || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
 
         if due {
-            redraw_seen = core.redraw;
+            redraw_seen = core.redraw();
             anim_at_ms = now_ms;
             phase = phase.wrapping_add(1);
             let hold = crate::PATTERN_HOLD.load(Ordering::Relaxed);
@@ -286,7 +286,7 @@ pub async fn control_task(stack: Stack<'static>) {
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core built before tasks spawn");
         let len = core.control(now_us(), meta.endpoint, &buf[..n], &mut reply[..]);
-        let reboot = core.reboot_pending;
+        let reboot = core.reboot_pending();
         let info_changed = core.take_info_changed();
         drop(guard);
 

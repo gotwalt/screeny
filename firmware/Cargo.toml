@@ -72,6 +72,11 @@ rand_core = { version = "0.10", default-features = false }
 # reaches or leaves a socket goes through it; the firmware parses nothing.
 screeny-proto = { path = "../crates/proto" }
 
+# Card 016's shared receive state machine: sections 3.3, 4.7, 6 and 7, the same
+# no_std crate crates/sim runs on, so the device and the simulator cannot drift
+# apart in behaviour the way they could while each kept its own copy.
+screeny-receiver = { path = "../crates/receiver" }
+
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }
 static_cell = { version = "2.1.1" }
