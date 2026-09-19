@@ -79,15 +79,15 @@ pub const BUTTON_GPIO: Option<u8> = None;
 /// "full brightness" is 100/255, about 39% duty, and the shipping default is
 /// 30/255, about 12%.
 ///
-/// `esp-hub75` has no output-enable duty control, so we cannot reproduce that
-/// mechanism; we scale pixel values instead, which costs colour depth. See
-/// card 020.
+/// Card 001 concluded that `esp-hub75` could not reproduce this and that we
+/// would have to scale pixel values, at a cost of about three of our six
+/// bits. **That turned out to be wrong**: output-enable is a bit in every
+/// framebuffer entry and the lit window can be narrowed at run time. Card 007
+/// does exactly what these numbers describe, in
+/// `DmaFrameBuffer::set_oe_slots` — see `vendor/README.md` and
+/// `display::MAX_OE_SLOTS`. Colour depth is untouched.
 pub const STOCK_BRIGHTNESS_DEFAULT: u8 = 30;
 pub const STOCK_BRIGHTNESS_MAX: u8 = 100;
-
-/// What we actually scale pixels by. Deliberately at Tidbyt's shipping
-/// default rather than their maximum: this panel runs off laptop USB.
-pub const BRIGHTNESS_CAP: u8 = STOCK_BRIGHTNESS_DEFAULT;
 
 /// Pixel clock. Tidbyt runs the panel at 10 MHz
 /// (`hdk/src/display.cpp:61`, `HUB75_I2S_CFG::HZ_10M`). That is the only

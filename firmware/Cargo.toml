@@ -10,6 +10,12 @@ description = "screeny firmware: Tidbyt Gen 1 (ESP32) as a UDP network frame buf
 # Standalone crate: deliberately not part of any parent workspace.
 [workspace]
 
+# `esp-hub75`'s public framebuffer types *are* `hub75-framebuffer`'s types, so
+# the patched copy has to replace the registry one everywhere rather than sit
+# beside it. What changed and why: `vendor/README.md`.
+[patch.crates-io]
+hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
+
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------
 esp-hal = { version = "=1.2.2", features = ["esp32", "unstable", "log-04"] }
@@ -35,7 +41,10 @@ esp-hub75 = { version = "=0.17.0", default-features = false, features = [
   "esp32",
   "log",
   "iram",              # refresh ISR in IRAM: mandatory when WiFi is active
-  "skip-black-pixels",
+  # NOTE: no "skip-black-pixels". It only short-circuits `set_pixel`, and the
+  # display path writes whole rows through `write_row` instead, which always
+  # writes and therefore needs no `erase()` pass. Leaving the feature on would
+  # only suggest a fast path we do not take.
   "circular-dma",      # DMA loops forever; swaps are pointer-delta updates
   "tail-closes-latch",
   "trail-blank-8",

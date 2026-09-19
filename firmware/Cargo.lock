@@ -1391,8 +1391,6 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hub75-framebuffer"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a58ceddd2164cf1ecffbf679032b479f589c200c1bc65d530a47c70c84c7ad"
 dependencies = [
  "bitfield",
  "embedded-dma",

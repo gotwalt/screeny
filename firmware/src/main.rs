@@ -1,50 +1,62 @@
-//! screeny firmware skeleton — compile-only spike for card 001.
+//! screeny firmware — a Gen 1 Tidbyt as a UDP network frame buffer.
 //!
-//! Proves that one binary can hold, at the same time:
+//! Grown out of `spike/fw-skeleton` (card 001), which proved the stack
+//! compiles and boots. Card 007 makes the *display half* right on the real
+//! panel: orientation, ghosting, gamma, brightness, a status screen.
 //!
-//!   * the embassy executor on top of `esp-rtos`,
-//!   * `esp-radio` WiFi in station mode with `embassy-net` (DHCP),
-//!   * a UDP socket bound to the frame port,
-//!   * an `edge-mdns` DNS-SD responder advertising `_screeny._udp`,
-//!   * `esp-hub75` driving the 64x32 panel over I2S0 parallel DMA with the
-//!     Tidbyt Gen 1 pin map, including the FM6124 driver-chip init,
+//! Networking is still the spike's throwaway test receiver (`testcmd`); card
+//! 008 replaces it with `crates/proto` once that exists.
 //!
-//! and that the RAM they want together fits. It has never been run on
-//! hardware: see `docs/research/001-firmware-stack.md` for what that leaves
-//! unverified.
+//! Task layout follows `docs/design/architecture.md`:
+//!
+//! | task | job |
+//! |---|---|
+//! | `display` | owns esp-hub75 and both DMA buffers; converts sRGB -> BCM planes and swaps |
+//! | `wifi` | associate, reconnect forever, modem sleep off |
+//! | `net` | embassy-net runner |
+//! | `frames` | UDP 49374, newest frame wins |
+//! | `status` | draws the idle screen when nothing is streaming |
+//! | `mdns` | `_screeny._udp` responder |
+//! | `telemetry` | the numbers a camera cannot measure |
 
 #![no_std]
 #![no_main]
 
+mod display;
+mod gamma;
 mod mdns;
 mod panel_init;
+mod patterns;
+mod status;
+mod testcmd;
 mod tidbyt;
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{Runner, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Timer};
-use embedded_graphics::geometry::Point;
+use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
 use esp_hal::interrupt::Priority;
 use esp_hal::rng::Rng;
-use esp_hal::time::Rate;
+use esp_hal::time::{Instant, Rate};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use esp_hub75::framebuffer::compute_rows;
-use esp_hub75::{Color, Hub75, Hub75Config, Hub75Pins16};
+use esp_hub75::{Hub75, Hub75Config, Hub75Pins16};
 use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{
     AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, PowerSaveMode,
     WifiController,
 };
 use log::{info, warn};
+
+use display::{Frame, Mode};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -55,71 +67,75 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const SSID: &str = "Example-Wifi1";
 const PASSWORD: &str = "password9";
 
-/// Ports from card 003. The control port is not implemented here; it is named
-/// so that nobody else claims it.
 const FRAME_PORT: u16 = 49374;
 const CONTROL_PORT: u16 = 49375;
 
-/// One frame per datagram, at most one Ethernet MTU of payload.
-///
-/// This only holds because `.cargo/config.toml` raises esp-radio's MTU to
-/// 1500. Its default is 1492, which would cap the payload at 1464.
+/// One frame per datagram, at most one Ethernet MTU of payload. Only holds
+/// because `.cargo/config.toml` raises esp-radio's MTU to 1500.
 const MAX_DATAGRAM: usize = 1472;
 
-const COLS: usize = tidbyt::PANEL_COLS;
-const ROWS: usize = tidbyt::PANEL_ROWS;
+pub const COLS: usize = tidbyt::PANEL_COLS;
+pub const ROWS: usize = tidbyt::PANEL_ROWS;
 /// 1/16 scan: the panel shifts two rows at a time.
 const NROWS: usize = compute_rows(ROWS);
 
-/// Binary-code-modulation depth, i.e. bits per colour channel the panel can
-/// actually show. Every extra plane halves the refresh rate.
-const PLANES: usize = 6;
+/// Binary-code-modulation depth. Every extra plane halves the refresh rate;
+/// the gamma table is built against this number.
+const PLANES: usize = gamma::PLANES;
 
-/// I2S pixel clock. 10 MHz is what Tidbyt's own firmware runs this panel at,
-/// so it is the only rate we know the hardware tolerates. The ESP32's I2S
-/// tops out near 19 MHz; see the refresh-rate table in the research doc for
-/// what raising it buys and costs.
 const PIXEL_CLOCK: Rate = Rate::from_mhz(tidbyt::PIXEL_CLOCK_MHZ);
 
-type FrameBuffer = DmaFrameBuffer<NROWS, COLS, PLANES>;
+pub type FrameBuffer = DmaFrameBuffer<NROWS, COLS, PLANES>;
 
-/// Panel refresh rate for the configuration above, computed by the driver at
-/// compile time from the BCM sequence and the pixel clock.
 const REFRESH_HZ: u32 = esp_hub75::refresh_hz::<FrameBuffer>(PIXEL_CLOCK);
 
-// A configuration that cannot keep up with the eye is a bug, not a tuning
-// question, so fail the build rather than the bring-up.
 const _: () = assert!(
     REFRESH_HZ >= 120,
     "panel refresh below 120 Hz: reduce PLANES or raise PIXEL_CLOCK"
 );
 
+/// How long after the last datagram we go back to the status screen.
+const STREAM_IDLE: Duration = Duration::from_millis(1500);
+
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
-/// The most recently received frame, as RGB888. The real firmware will hold a
-/// decoded frame here instead; the size is the same either way, and the point
-/// of carrying it in the skeleton is that it is the largest single block of
-/// SRAM we allocate outside the DMA buffers.
-struct RgbFrame {
-    px: [[u8; 3]; COLS * ROWS],
-}
+/// What the display task is asked to put on the panel. One writer at a time
+/// by convention: `frames` owns it while a stream is running, `status` owns
+/// it otherwise, and a pattern command freezes whatever it drew.
+static FRAME: Mutex<CriticalSectionRawMutex, Frame> = Mutex::new(Frame::new());
 
-impl RgbFrame {
-    const fn new() -> Self {
-        Self {
-            px: [[0u8; 3]; COLS * ROWS],
-        }
-    }
-}
-
-static FRAME: Mutex<CriticalSectionRawMutex, RgbFrame> = Mutex::new(RgbFrame::new());
-
-/// Bumped every time a datagram lands, so the display task can tell a new
-/// frame from a repeat without holding the frame lock.
+/// Bumped by whoever last changed `FRAME`, so the display task can tell new
+/// content from a repeat without taking the lock.
 static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
+static FRAMES_RECEIVED: AtomicU32 = AtomicU32::new(0);
 static FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
+
+/// Panel refreshes actually pushed, for the measured refresh rate.
+static SWAPS: AtomicU32 = AtomicU32::new(0);
+/// Last sRGB888 -> DMA conversion, in microseconds.
+static RENDER_US: AtomicU32 = AtomicU32::new(0);
+/// Rolling maximum of the same, since it is the number that can eat a frame.
+static RENDER_US_MAX: AtomicU32 = AtomicU32::new(0);
+
+static BRIGHTNESS: AtomicU8 = AtomicU8::new(display::DEFAULT_BRIGHTNESS);
+/// Bench-only escape hatch: raw output-enable slots, ignoring the power cap.
+/// `u8::MAX` means "not overridden". See `testcmd`.
+static OE_OVERRIDE: AtomicU8 = AtomicU8::new(u8::MAX);
+static OE_OVERRIDE_DEADLINE_MS: AtomicU32 = AtomicU32::new(0);
+/// Set whenever the brightness the panel is showing may be stale. Two,
+/// because there are two framebuffers and the setting lives in the buffer.
+static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
+
+static GAMMA_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.gamma);
+static DITHER_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.dither);
+
+/// `0` = follow the stream / status screen. `n > 0` = hold pattern `n - 1`.
+static PATTERN_HOLD: AtomicU8 = AtomicU8::new(0);
+
+/// Milliseconds since boot of the last received frame datagram.
+static LAST_FRAME_MS: AtomicU32 = AtomicU32::new(0);
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -129,81 +145,157 @@ macro_rules! mk_static {
 }
 pub(crate) use mk_static;
 
+fn now_ms() -> u32 {
+    EmbassyInstant::now().as_millis() as u32
+}
+
+fn mode() -> Mode {
+    Mode {
+        gamma: GAMMA_ON.load(Ordering::Relaxed),
+        dither: DITHER_ON.load(Ordering::Relaxed),
+    }
+}
+
+/// Output-enable slots the panel should be lit for right now.
+fn target_oe_slots() -> usize {
+    let raw = OE_OVERRIDE.load(Ordering::Relaxed);
+    if raw != u8::MAX {
+        // The override is time-boxed on purpose: it exists so a bench session
+        // can photograph the panel at a duty cycle we would never ship, and
+        // an override left on by a forgotten script is a power problem.
+        if now_ms().wrapping_sub(OE_OVERRIDE_DEADLINE_MS.load(Ordering::Relaxed)) as i32 > 0 {
+            OE_OVERRIDE.store(u8::MAX, Ordering::Relaxed);
+            BRIGHTNESS_DIRTY.store(2, Ordering::Relaxed);
+            warn!("display: OE override expired, back to brightness cap");
+        } else {
+            return raw as usize;
+        }
+    }
+    display::slots_for(BRIGHTNESS.load(Ordering::Relaxed))
+}
+
 // ---------------------------------------------------------------------------
-// Tasks
+// Display
 // ---------------------------------------------------------------------------
 
-/// Owns the panel. Redraws whenever the network task reports a new frame, and
-/// otherwise leaves the DMA engine looping over the buffer it already has.
+/// Owns the panel and both framebuffers.
+///
+/// Two regimes, because they want opposite things:
+///
+/// * **dither off** — the panel content only changes when someone changes it,
+///   so the task sleeps between frames and the DMA engine loops on the buffer
+///   it already has. Costs almost no CPU.
+/// * **dither on** — the sub-level remainder is spent across successive
+///   refreshes, so the buffer has to be rewritten every refresh and the loop
+///   free-runs. `swap()` blocks until a frame boundary, so the loop rate *is*
+///   the refresh rate; nothing else paces it.
 #[embassy_executor::task]
 async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'static mut FrameBuffer) {
-    info!("display: refresh {} Hz, {} planes", REFRESH_HZ, PLANES);
+    info!(
+        "display: {} planes, {} Hz refresh (driver), {} bytes/buffer, OE slots 0..={} (cap {})",
+        PLANES,
+        REFRESH_HZ,
+        core::mem::size_of::<FrameBuffer>(),
+        FrameBuffer::OE_SLOTS,
+        display::MAX_OE_SLOTS,
+    );
 
     let mut last_seq = u32::MAX;
+    let mut phase: u16 = 0;
     loop {
+        let dither = DITHER_ON.load(Ordering::Relaxed);
         let seq = FRAME_SEQ.load(Ordering::Relaxed);
-        if seq == last_seq {
-            // Nothing new. At 30 fps this wakes us about twice per frame.
-            Timer::after(Duration::from_millis(8)).await;
+        let dirty = BRIGHTNESS_DIRTY.load(Ordering::Relaxed) > 0;
+
+        if !dither && seq == last_seq && !dirty {
+            // Nothing to do. At 30 fps this wakes about twice per frame.
+            Timer::after(Duration::from_millis(4)).await;
             continue;
         }
         last_seq = seq;
 
-        {
-            let frame = FRAME.lock().await;
-            for y in 0..ROWS {
-                for x in 0..COLS {
-                    let [r, g, b] = frame.px[y * COLS + x];
-                    fb.set_pixel(
-                        Point::new(x as i32, y as i32),
-                        Color::new(scale(r), scale(g), scale(b)),
-                    );
-                }
-            }
+        if dirty {
+            // The setting lives in the framebuffer, not the peripheral, so it
+            // has to be written into each of the two in turn.
+            fb.set_oe_slots(target_oe_slots());
+            BRIGHTNESS_DIRTY.fetch_sub(1, Ordering::Relaxed);
         }
+
+        {
+            // The clock starts *after* the lock: waiting for the frame task
+            // to finish writing is queueing, not conversion, and mixing the
+            // two produced a 641 ms "conversion" during WiFi association the
+            // first time this was measured.
+            let frame = FRAME.lock().await;
+            let t0 = Instant::now();
+            display::render(&frame, fb, mode(), phase);
+            let us = t0.elapsed().as_micros() as u32;
+            RENDER_US.store(us, Ordering::Relaxed);
+            RENDER_US_MAX.fetch_max(us, Ordering::Relaxed);
+        }
+        phase = phase.wrapping_add(1);
 
         let mut xfer = hub75.swap(fb).expect("swap already in flight");
         xfer.wait_for_done().await;
         fb = xfer.wait().expect("hub75 DMA transfer failed");
+        SWAPS.fetch_add(1, Ordering::Relaxed);
     }
 }
 
-/// Checks a typed GPIO peripheral against the GPIO number the Tidbyt sources
-/// give for that signal.
-#[track_caller]
-fn assert_pin(pin: &impl Pin, expected: u8) {
-    assert_eq!(pin.number(), expected, "pin map disagrees with tidbyt::pins");
+// ---------------------------------------------------------------------------
+// Status screen
+// ---------------------------------------------------------------------------
+
+/// Draws the idle screen whenever no stream is running and no pattern is
+/// held. Redraws on state change, and every second while idle so the clock of
+/// "nothing is streaming" keeps ticking even if the display task is asleep.
+#[embassy_executor::task]
+async fn status_task(stack: embassy_net::Stack<'static>) {
+    let mut shown: Option<(status::Net, u8, bool)> = None;
+    loop {
+        let net = if let Some(cfg) = stack.config_v4() {
+            let o = cfg.address.address().octets();
+            status::Net::Address(o)
+        } else if stack.is_link_up() {
+            status::Net::Associated
+        } else {
+            status::Net::Joining
+        };
+
+        let streaming =
+            now_ms().wrapping_sub(LAST_FRAME_MS.load(Ordering::Relaxed)) < STREAM_IDLE.as_millis() as u32;
+        let hold = PATTERN_HOLD.load(Ordering::Relaxed);
+        let brightness = BRIGHTNESS.load(Ordering::Relaxed);
+
+        if hold == 0 && !streaming {
+            let want = (net, brightness, true);
+            if shown != Some(want) {
+                let mut frame = FRAME.lock().await;
+                status::draw(&mut frame, net, brightness);
+                drop(frame);
+                FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
+                shown = Some(want);
+            }
+        } else {
+            shown = None;
+        }
+        Timer::after(Duration::from_millis(200)).await;
+    }
 }
 
-/// Hard brightness cap. The panel is powered from laptop USB, so full-scale
-/// white is not a thing we are allowed to draw.
-#[inline]
-fn scale(v: u8) -> u8 {
-    ((v as u16 * tidbyt::BRIGHTNESS_CAP as u16) / 255) as u8
-}
+// ---------------------------------------------------------------------------
+// Network
+// ---------------------------------------------------------------------------
 
-/// Keeps the station associated, reconnecting forever.
 #[embassy_executor::task]
 async fn wifi_task(mut controller: WifiController<'static>) {
-    // Bring-up aid: list what the radio can actually see before trying to join.
-    match controller
-        .scan_async(&esp_radio::wifi::scan::ScanConfig::default().with_max(20))
-        .await
-    {
-        Ok(aps) => {
-            for ap in aps {
-                info!(
-                    "scan: {:?} ch {} rssi {} auth {:?}",
-                    ap.ssid, ap.channel, ap.signal_strength, ap.auth_method
-                );
-            }
-        }
-        Err(e) => warn!("scan failed {:?}", e),
-    }
     loop {
         match controller.connect_async().await {
             Ok(info) => {
-                info!("wifi: connected {:?}", info);
+                info!(
+                    "wifi: connected ssid {:?} ch {} bssid {:02x?}",
+                    info.ssid, info.channel, info.bssid
+                );
                 let reason = controller.wait_for_disconnect_async().await;
                 warn!("wifi: disconnected {:?}", reason);
             }
@@ -218,11 +310,8 @@ async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
 }
 
-/// Receives one frame per datagram and drops it into `FRAME`.
-///
-/// Newest wins: if the display task still holds the frame lock when a datagram
-/// arrives we throw the datagram away rather than queue it, because a late
-/// frame is worth less than the next one.
+/// UDP 49374. Still the spike's raw-RGB888 test receiver, plus the bench
+/// command channel in `testcmd`. Card 008 replaces the whole task.
 #[embassy_executor::task]
 async fn frame_task(stack: embassy_net::Stack<'static>) {
     stack.wait_config_up().await;
@@ -248,42 +337,42 @@ async fn frame_task(stack: embassy_net::Stack<'static>) {
                 continue;
             }
         };
-
-        // Card 002 picks the real codec; the skeleton only proves the path, so
-        // it treats the payload as raw RGB888 and pads short frames with black.
-        match FRAME.try_lock() {
-            Ok(mut frame) => {
-                let pixels = (len / 3).min(COLS * ROWS);
-                for i in 0..pixels {
-                    frame.px[i] = [datagram[i * 3], datagram[i * 3 + 1], datagram[i * 3 + 2]];
-                }
-                for px in frame.px.iter_mut().skip(pixels) {
-                    *px = [0, 0, 0];
-                }
-                drop(frame);
-                FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(_) => {
-                FRAMES_DROPPED.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        testcmd::handle(&datagram[..len]).await;
     }
 }
 
-/// Prints the counters that the camera rig cannot measure.
+// ---------------------------------------------------------------------------
+// Telemetry
+// ---------------------------------------------------------------------------
+
+/// The numbers the camera cannot measure. Every one of these feeds the frame
+/// time budget table in card 007's log.
 #[embassy_executor::task]
 async fn telemetry_task() {
-    let mut last = 0u32;
+    const PERIOD_S: u32 = 5;
+    let mut last_frames = 0u32;
+    let mut last_swaps = 0u32;
     loop {
-        Timer::after(Duration::from_secs(5)).await;
-        let seq = FRAME_SEQ.load(Ordering::Relaxed);
+        Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
+        let frames = FRAMES_RECEIVED.load(Ordering::Relaxed);
+        let swaps = SWAPS.load(Ordering::Relaxed);
+        let stats = esp_alloc::HEAP.stats();
         info!(
-            "telemetry: {} fps, {} dropped, heap {:?}",
-            (seq.wrapping_sub(last)) / 5,
+            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {}) | bright {} -> {} slots | gamma {} dither {} | heap used {} free {}",
+            frames.wrapping_sub(last_frames) / PERIOD_S,
+            swaps.wrapping_sub(last_swaps) / PERIOD_S,
             FRAMES_DROPPED.load(Ordering::Relaxed),
-            esp_alloc::HEAP.stats()
+            RENDER_US.load(Ordering::Relaxed),
+            RENDER_US_MAX.load(Ordering::Relaxed),
+            BRIGHTNESS.load(Ordering::Relaxed),
+            target_oe_slots(),
+            GAMMA_ON.load(Ordering::Relaxed) as u8,
+            DITHER_ON.load(Ordering::Relaxed) as u8,
+            stats.current_usage,
+            stats.size - stats.current_usage,
         );
-        last = seq;
+        last_frames = frames;
+        last_swaps = swaps;
     }
 }
 
@@ -291,14 +380,16 @@ async fn telemetry_task() {
 // main
 // ---------------------------------------------------------------------------
 
+#[track_caller]
+fn assert_pin(pin: &impl Pin, expected: u8) {
+    assert_eq!(pin.number(), expected, "pin map disagrees with tidbyt::pins");
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
-    // esp-radio allocates its WiFi buffers from the global heap. The first
-    // region is DRAM the ROM bootloader no longer needs; the second is plain
-    // internal DRAM.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 48 * 1024);
 
@@ -308,18 +399,17 @@ async fn main(spawner: Spawner) {
     // --- panel ------------------------------------------------------------
     let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
     let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
-    info!(
-        "display: framebuffer {} bytes each, {} Hz refresh",
-        core::mem::size_of::<FrameBuffer>(),
-        REFRESH_HZ
-    );
+    // Come up already dimmed. `FrameBuffer::new()` formats for the widest
+    // output-enable window the build can produce, which is well over the
+    // power cap; letting a single refresh out at that duty would be a bug
+    // with a current spike attached to it.
+    let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
+    fb0.set_oe_slots(slots);
+    fb1.set_oe_slots(slots);
+    BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
 
     let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
 
-    // The pin map lives in `tidbyt::pins` as plain numbers, because that is
-    // how the Tidbyt sources state it and how a human checks it against them.
-    // The driver wants typed peripherals instead, so the two could drift;
-    // this ties them together and costs one boot-time comparison each.
     assert_pin(&peripherals.GPIO21, tidbyt::pins::R1);
     assert_pin(&peripherals.GPIO2, tidbyt::pins::G1);
     assert_pin(&peripherals.GPIO22, tidbyt::pins::B1);
@@ -335,9 +425,6 @@ async fn main(spawner: Spawner) {
     assert_pin(&peripherals.GPIO32, tidbyt::pins::OE);
     assert_pin(&peripherals.GPIO33, tidbyt::pins::CLK);
 
-    // The driver chips ignore pixel data until their configuration registers
-    // are loaded, and that has to happen while the GPIOs are still ours —
-    // once I2S owns them we cannot bit-bang. See `panel_init`.
     {
         let out = OutputConfig::default();
         let mut rgb = [
@@ -354,10 +441,11 @@ async fn main(spawner: Spawner) {
         panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
     }
 
-    // Tidbyt Gen 1 map; see `tidbyt::pins` for where each number comes from.
     let pins = Hub75Pins16 {
-        // Observed on this unit (MAC b4:8a:0a:4a:00:a4): the lines the hdk names
-        // R/G/B drive blue/red/green respectively, so the colours are rotated here.
+        // This unit's colour lines are rotated relative to the hdk's names:
+        // the lines it calls R/G/B drive blue/red/green. Confirmed on the
+        // panel at bring-up (card 001) and again by card 007's test card.
+        // Card 021 owns the board-revision story.
         red1: peripherals.GPIO2.degrade(),
         grn1: peripherals.GPIO22.degrade(),
         blu1: peripherals.GPIO21.degrade(),
@@ -368,7 +456,6 @@ async fn main(spawner: Spawner) {
         addr1: peripherals.GPIO5.degrade(),
         addr2: peripherals.GPIO25.degrade(),
         addr3: peripherals.GPIO18.degrade(),
-        // 1/16 scan: no E line on this board. See `tidbyt::pins::E_UNUSED`.
         addr4: peripherals.GPIO14.degrade(),
         blank: peripherals.GPIO32.degrade(),
         clock: peripherals.GPIO33.degrade(),
@@ -382,10 +469,6 @@ async fn main(spawner: Spawner) {
         tx_descriptors,
         Hub75Config::new()
             .with_frequency(PIXEL_CLOCK)
-            // The refresh ISR must outrank WiFi's handlers or the panel
-            // flickers whenever the radio is busy. `circular-dma` means the
-            // ISR only fires on a buffer swap, but a swap that lands late
-            // still tears.
             .with_interrupt_priority(Priority::Priority3),
         &*fb0,
     )
@@ -404,18 +487,11 @@ async fn main(spawner: Spawner) {
         peripherals.WIFI,
         ControllerConfig::default()
             .with_initial_config(station)
-            // We drain to the newest frame and throw the rest away, so a deep
-            // driver queue only buys us stale frames and latency. Three is a
-            // starting point, not a measured optimum.
             .with_rx_queue_size(3)
-            // The default is "CN", which is the wrong channel set here.
             .with_country_info(*b"US"),
     )
     .expect("wifi init failed");
 
-    // Modem power save parks the radio between beacons, which costs tens of
-    // milliseconds of latency on an unsolicited datagram. We are streaming,
-    // so it has to go.
     controller
         .set_power_saving(PowerSaveMode::None)
         .expect("failed to disable power saving");
@@ -432,36 +508,20 @@ async fn main(spawner: Spawner) {
         seed,
     );
 
+    // Something on the panel before WiFi has a chance to take nine seconds.
+    {
+        let mut frame = FRAME.lock().await;
+        status::draw(&mut frame, status::Net::Joining, display::DEFAULT_BRIGHTNESS);
+    }
+    FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
+
     spawner.spawn(display_task(hub75, fb1).unwrap());
     spawner.spawn(wifi_task(controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(frame_task(stack).unwrap());
+    spawner.spawn(status_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack).unwrap());
     spawner.spawn(telemetry_task().unwrap());
-
-    // Until the first datagram arrives, show something so a human can tell the
-    // panel is alive and the colour channels are in the right order: a red,
-    // green and blue band, top to bottom.
-    {
-        let mut frame = FRAME.lock().await;
-        for y in 0..ROWS {
-            let band = match y * 3 / ROWS {
-                0 => [255, 0, 0],
-                1 => [0, 255, 0],
-                _ => [0, 0, 255],
-            };
-            for x in 0..COLS {
-                // Ramp left to right so a wrong BCM depth shows up as banding.
-                let k = (x * 255 / (COLS - 1)) as u8;
-                frame.px[y * COLS + x] = [
-                    ((band[0] as u16 * k as u16) / 255) as u8,
-                    ((band[1] as u16 * k as u16) / 255) as u8,
-                    ((band[2] as u16 * k as u16) / 255) as u8,
-                ];
-            }
-        }
-    }
-    FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
