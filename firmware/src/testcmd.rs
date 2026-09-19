@@ -11,7 +11,7 @@
 //! what the card 001 spike accepted and what card 001's notes describe.
 //!
 //! ```text
-//! "SX" 'P' n        show built-in pattern n (0..=7, see `patterns`)
+//! "SX" 'P' n        show built-in pattern n (0..=8, see `patterns`)
 //! "SX" 'C' -        release the pattern, go back to stream/status
 //! "SX" 'B' n        brightness 0..=255 (output-enable duty, power-capped)
 //! "SX" 'O' n        RAW output-enable slots, ignoring the cap. BENCH ONLY:

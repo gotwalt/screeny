@@ -419,9 +419,16 @@ then the IP and `screeny.local`, in `embedded-graphics`' `FONT_5X7` and
 through the same gamma and brightness path — a status screen that ignored the
 brightness setting would be the one thing on the device that could dazzle you.
 
-`192.168.7.221` is legible in the capture.
+`192.168.7.221` is legible in the capture (`captures/c007b-final-status.jpg`),
+and unambiguous in the per-LED rendering of the same screen at brightness 32.
 
 ![status screen](../../research/img/c007-status-screen.jpg)
+![status screen, per LED](../../research/img/c007-status-screen-perled.jpg)
+
+Note for whoever photographs this next: the camera's autofocus sometimes hunts
+and comes back soft enough to make the IP unreadable (`captures/c007b-final.jpg`
+is an example, taken 30 s before the good one). If a capture looks like that,
+just ask for another.
 
 One fix: `Net::Lost` existed but nothing ever constructed it, so a device that
 associated and then lost the AP would have shown "joining wifi" forever. The
@@ -552,3 +559,20 @@ named configuration, is untouched and unblocked.
   auto-exposure. Card 061 records what a fixed-exposure capture path would buy,
   since card 012 will want it too.
 - `set_oe_slots` / `set_oe_window` are worth offering upstream. Card 060.
+
+### Final state
+
+`c007b-final.log`: boots, associates, DHCP 192.168.7.221, mDNS up, UDP 49374
+listening, 154 swaps/s, render 3.1 ms, heap 45416/69272. The device is left
+running this build at the default brightness 96 showing the status screen.
+
+Added while finishing: `patterns::GhostRow` (pattern 8), the single-lit-row
+probe that actually measures ghosting, so the next person does not have to push
+it from a script; and a note on `ghost` that 1/16 scan couples row `y` with
+`y + 16`, which its own tall white block sits on top of.
+
+The measurement scripts used here (LED-grid fit and centre sampling, the
+swapped split-field ratio, the step reader, the frame pushers) stayed in the
+session scratchpad deliberately. Card 012 owns the real homography and card 061
+the exposure problem; committing a throwaway version of either would give the
+next worker something to trust that should not be trusted.

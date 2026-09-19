@@ -35,6 +35,9 @@ pub enum Pattern {
     DarkRamp = 6,
     /// Flat sRGB 128 grey. Mid-grey must not read as white.
     MidGrey = 7,
+    /// One lit row on black. The pattern that actually measures ghosting; see
+    /// [`ghost_row`] and card 007's log.
+    GhostRow = 8,
 }
 
 impl Pattern {
@@ -48,6 +51,7 @@ impl Pattern {
             5 => Pattern::GreySteps,
             6 => Pattern::DarkRamp,
             7 => Pattern::MidGrey,
+            8 => Pattern::GhostRow,
             _ => return None,
         })
     }
@@ -64,6 +68,7 @@ pub fn draw(frame: &mut Frame, pattern: Pattern) {
         Pattern::GreySteps => grey_steps(frame),
         Pattern::DarkRamp => dark_ramp(frame),
         Pattern::MidGrey => fill(frame, [128, 128, 128]),
+        Pattern::GhostRow => ghost_row(frame),
     }
 }
 
@@ -147,9 +152,34 @@ fn bands(frame: &mut Frame) {
     }
 }
 
+/// The row that measures ghosting: one lit row, black everywhere else.
+///
+/// [`ghost`] is the pattern you look at; this is the one you measure, and card
+/// 007 needed it because the camera bleeds a lit LED several rows into its
+/// neighbours and a block pattern cannot tell that bloom from a ghost.
+///
+/// Ghosting is **one-sided** — a faint copy appears below a lit row, never
+/// above — while bloom, lens flare and any residual grid misalignment are
+/// symmetric. So the measurement is the row above against the row below, at
+/// the same distance, which needs no exposure calibration. Card 007 got 1.00
+/// against a method that moves 2.3x for a 6% ghost.
+///
+/// Row 8 specifically: 1/16 scan drives panel rows `y` and `y + 16` together,
+/// so lighting row 8 in the upper half leaves rows 24 and 25 as a control for
+/// leakage across the halves, and rows 0-7 and 10-15 as clean background.
+fn ghost_row(frame: &mut Frame) {
+    for x in 0..COLS {
+        frame.set(x, 8, [255, 255, 255]);
+    }
+}
+
 /// Three lit blocks with four blank rows under each. Ghosting on this panel
-/// is a faint copy of a lit row appearing one or two rows below it, so the
-/// blank rows are the measurement and the colours say which channel leaks.
+/// would be a faint copy of a lit row appearing one or two rows below it, so
+/// the blank rows are the measurement and the colours say which channel leaks.
+///
+/// Note when reading it that 1/16 scan couples `y` with `y + 16`: the copy of
+/// the top-left block lands on row 22, where the tall white block already is.
+/// Use [`ghost_row`] for anything quantitative.
 fn ghost(frame: &mut Frame) {
     rect(frame, 4, 2, 24, 4, [255, 255, 255]);
     rect(frame, 34, 2, 24, 4, [255, 0, 0]);
