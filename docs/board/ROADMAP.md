@@ -42,10 +42,15 @@ The generative art system (`crates/art` + `crates/studio`) becomes the primary
 sender. Owner's direction, 2026-09-19: cleanup first; WiFi setup and camera-based
 measurement are deferred.
 
-- 011 sender embedding API: exact indexed frames through `Sender`, push API,
-  auto-reconnect for a long-running daemon, Linux build check, examples, brief section 5
-- 016 consolidate duplicated code: one receiver core for sim + firmware, one set of
-  frame types, one panel/colour model; delete `spike/`; (hardware, for re-verification)
+- [x] 011 sender embedding API: `Pixels`, `Sender::send`/`send_indexed` (exact), `Link`
+  push API with auto-reconnect, Linux targets check clean, examples, brief section 5
+- [x] 016 consolidation: `crates/receiver` (one receive core for sim + firmware),
+  `crates/panel`, `crates/encode`, proto frame types everywhere, `spike/` deleted;
+  device re-verified (conformance 22/22, lock-test 11/11, 60 s stream, 0 decode drops)
+- [x] 017 one `crates/` workspace: the art system is `crates/art` + `crates/studio`
+- [x] credentials out of git: firmware reads WiFi credentials at build time from
+  outside the repo; history rewritten with same-length dummies and verified clean
+  (every ref, message and object). Nothing is pushed until the owner says so
 - [x] orchestrator: root README, CLAUDE.md, this roadmap, art brief refresh, stale
   worktrees/branches
 - [x] 100 art system merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
@@ -55,8 +60,7 @@ measurement are deferred.
 - 102 reconcile art's panel model and colour rules with the measured device - art session
 - 104 piece runner / scheduler (design with the owner) - art session
 
-Studio track (`docs/design/studio-vision.md`), in order: 017 one `crates/` workspace
-(after 011 + 016) -> 101 Studio streams to the panel -> 105 server-first Studio, Tauri
+Studio track (`docs/design/studio-vision.md`), in order: 101 Studio streams to the panel -> 105 server-first Studio, Tauri
 removed -> 106 players/devices/state, built to be forgotten -> 107 docker-compose on
 `workbench.local` -> 104 scheduler, 102 panel-model reconcile, demos ported into art.
 

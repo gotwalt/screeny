@@ -70,9 +70,12 @@ let sent = match &frame.indexed {
   `link.state()` / `link.stats()` are there for a status light. Drop the link to send
   `FINAL` and release the panel.
 - Two layout changes are coming that affect where you work, so **start from a fresh
-  `main`**: (1) the WiFi-credential scrub rewrote history on 2026-09-19 - old clones
-  and the old `claude/generative-art-designer-624186` branch must not be merged or
-  pushed again, re-clone instead; (2) card 017 has moved the art system into the single workspace - it now lives in
+  `main`**: (1) the WiFi-credential scrub rewrote all history on 2026-09-19 - every commit hash
+  changed, the old `claude/generative-art-designer-624186` branch and its worktree
+  are gone (fully merged first), and any old clone or bundle must never be merged or
+  pushed; branch from the current `main`. Credentials now come from
+  `~/.config/screeny/wifi.env` via `firmware/build.rs` - never put real ones in a
+  tracked file, test fixture or log; (2) card 017 has moved the art system into the single workspace - it now lives in
   `crates/art` (package `screeny-art`) and `crates/studio` - and the plan in
   `docs/design/studio-vision.md` then drops Tauri for a server-first Studio (card 105).
 - First milestone the owner wants: design a piece in the Studio and watch it on the
