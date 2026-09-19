@@ -4,8 +4,8 @@ title: Wire protocol, discovery and transport research
 type: research
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker (agent-abe43d01)
+branch: card/003-protocol-transport
 ---
 
 ## Goal
