@@ -50,3 +50,7 @@ workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
   a terminal (Developer ID signing keeps Local Network permission stable).
 - Workers work in their own git worktree/branch, log as they go, commit after every
   step, and do not merge to `main`; the orchestrator merges.
+- Remote: `origin` = `git@github.com:gotwalt/screeny.git` (**private**). Workers never
+  push. If the repo is ever made public, first deal with the WiFi credentials that are
+  committed here and in `firmware/` (fine while private; the owner does not treat
+  them as secret, but a public repo is a different audience).

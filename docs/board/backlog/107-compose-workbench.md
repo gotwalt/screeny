@@ -28,8 +28,12 @@ a Portainer stack. Target facts: `docs/design/studio-vision.md`, "Deployment tar
 - A second profile / override file for hosts without host networking or a GPU
   (macOS Docker, other people's machines): published port, manual device addresses,
   CPU pieces only. It must start and stream; discovery is expected not to work there.
-- `tools/deploy-workbench.sh`: rsync or `git pull` + `docker compose build && up -d`
-  over SSH, prints `/healthz`. Building inside Portainer is too slow for a Rust + wgpu
+- `tools/deploy-workbench.sh`: over SSH, clone/pull `git@github.com:gotwalt/screeny.git`
+  (private; workbench already authenticates to GitHub as `gotwalt` and can read it -
+  verified 2026-09-19) into `~/src/screeny`, then `docker compose build && up -d`,
+  then print `/healthz`. Deploys what is on `origin/main`, so it refuses to run if the
+  local `main` is ahead of `origin/main` (deploying unpushed work silently would be a
+  trap). Building inside Portainer is too slow for a Rust + wgpu
   image; Portainer still sees and manages the stack.
 - Verify early and write down: (a) `mdns-sd` inside a host-network container coexists
   with the host's avahi on UDP 5353 and finds `screeny-4a00a4`; (b) wgpu enumerates
