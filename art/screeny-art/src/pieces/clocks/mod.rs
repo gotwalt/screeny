@@ -13,6 +13,7 @@
 //! simply takes longer. Each choreography is a plan of such moves, timed to land
 //! on the new time exactly as the minute turns.
 
+mod ambient;
 mod dance;
 
 use crate::color::Rgb;
@@ -33,7 +34,8 @@ pub const DEF: PieceDef = PieceDef {
 
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
-    param("dance", "Choreography (0 = vary)", 0.0, 10.0, 1.0, 0.0),
+    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 20.0),
+    param("dance", "Choreography (0 = vary)", 0.0, 12.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     param("hours24", "24-hour", 0.0, 1.0, 1.0, 1.0),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
@@ -57,18 +59,20 @@ pub(crate) type Hands = [f32; 2];
 
 /// Each digit is 2 clocks wide and 3 tall, read in rows. U R D L are hand
 /// directions and N is the rest pose. Where a junction would need three hands,
-/// the vertical stroke wins (3, 4, 6, 9), as on the original; its 8 is the
-/// "cyclops", a box with one bar for an eye, so it cannot be mistaken for a 0.
+/// something has to give. 0, 2, 5, 6 and 9 were checked against footage of
+/// the original (its 9 keeps the vertical and lets the bar fall short); the
+/// rest follow manu.ninja's table, drawn from the studio's promotional films,
+/// including the "cyclops" 8: a closed box over a cup.
 const DIGITS: [[&str; 6]; 10] = [
     ["RD", "LD", "UD", "UD", "UR", "UL"],
     ["NN", "DD", "NN", "UD", "NN", "UU"],
     ["RR", "LD", "RD", "LU", "UR", "LL"],
-    ["RR", "LD", "RR", "UD", "RR", "LU"],
+    ["RR", "LD", "RR", "LU", "RR", "LU"],
     ["DD", "DD", "UR", "UD", "NN", "UU"],
     ["RD", "LL", "UR", "LD", "RR", "LU"],
     ["RD", "LL", "UD", "LD", "UR", "UL"],
     ["RR", "LD", "NN", "UD", "NN", "UU"],
-    ["RD", "LD", "RR", "LL", "UR", "UL"],
+    ["RD", "LD", "UR", "UL", "UR", "UL"],
     ["RD", "LD", "UR", "UD", "RR", "LU"],
 ];
 
@@ -114,10 +118,14 @@ struct Clocks {
     /// The minute the hands currently show, or are moving towards.
     minute: Option<i64>,
     plan: Option<Plan>,
+    /// Engine time at which the hands last landed on a time.
+    landed: f64,
+    /// Ambient motion between holding the time and the next dance.
+    ambient: Option<ambient::Ambient>,
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
-    Box::new(Clocks { seed, born: local_seconds(), angles: [[REST; 2]; CLOCKS], minute: None, plan: None })
+    Box::new(Clocks { seed, born: local_seconds(), angles: [[REST; 2]; CLOCKS], minute: None, plan: None, landed: 0.0, ambient: None })
 }
 
 /// Seconds since the epoch, shifted into the local time zone.
@@ -177,14 +185,15 @@ impl Clocks {
             if tau >= p.total {
                 self.angles = p.to;
                 self.minute = Some(p.minute);
+                self.landed = ctx.t;
             } else {
                 self.plan = Some(p);
             }
             return;
         }
 
-        // Idle. On the first frame go straight to the current time; after that,
-        // set off early enough to land on the next minute as it turns.
+        // Not dancing. On the first frame go straight to the current time;
+        // after that, set off early enough to land on the next minute as it turns.
         let now_minute = (clock / 60.0).floor() as i64;
         let next = match self.minute {
             None => now_minute,
@@ -194,10 +203,32 @@ impl Clocks {
         let to = Self::target(next, hours24);
         let (name, phases) = self.dance_for(next, ctx.get("dance"));
         let (moves, total) = dance::plan(&phases, &self.angles, &to, motor);
-        let due = self.minute.is_none() || clock + total as f64 * rate >= next as f64 * 60.0;
-        if due {
-            eprintln!("clocks: {:02}:{:02} by {name}, {total:.1} s", next.div_euclid(60).rem_euclid(24), next.rem_euclid(60));
+        // Engine seconds until the dance has to begin.
+        let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
+        let ready = self.ambient.as_ref().map_or(true, |a| a.at_rest());
+        if self.minute.is_none() || (slack <= 0.0 && ready) {
+            eprintln!("clocks: t={:.1} {:02}:{:02} by {name}, {total:.1} s", ctx.t, next.div_euclid(60).rem_euclid(24), next.rem_euclid(60));
+            for hands in &mut self.angles {
+                *hands = hands.map(|a| a.rem_euclid(360.0));
+            }
+            self.ambient = None;
             self.plan = Some(Plan { began: ctx.t, from: self.angles, to, moves, total, minute: next });
+            return;
+        }
+
+        // Between the time and the next dance: hold still for a while, then
+        // drift. The ambient field is asked to settle with room to spare, so
+        // the hands are at rest when the dance has to leave.
+        const SETTLE: f64 = 4.0;
+        let held = ctx.get("still") as f64 * pace as f64 / 60.0;
+        match &mut self.ambient {
+            Some(ambient) => ambient.step(&mut self.angles, motor, ctx.dt as f32, slack < SETTLE),
+            None if ctx.t - self.landed >= held && slack > SETTLE + 6.0 => {
+                let ambient = ambient::Ambient::new(&mut Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b)));
+                eprintln!("clocks: t={:.1} ambient {}", ctx.t, ambient.name());
+                self.ambient = Some(ambient);
+            }
+            None => {}
         }
     }
 }

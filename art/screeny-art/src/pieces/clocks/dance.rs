@@ -61,6 +61,27 @@ pub fn shortest(a: f32, b: f32) -> f32 {
     (b - a + 540.0).rem_euclid(360.0) - 180.0
 }
 
+/// A smooth angle over the grid: one sine with its own direction, plus a bow
+/// across the width. Never uniform, never quite symmetrical.
+#[derive(Clone, Copy, Debug)]
+pub struct Wave {
+    pub base: f32,
+    pub amp: f32,
+    /// Radians per clock, across and down.
+    pub k: (f32, f32),
+    pub phase: f32,
+    /// Degrees added at the left and right edges relative to the middle.
+    pub bow: f32,
+}
+
+impl Wave {
+    fn at(self, i: usize) -> f32 {
+        let (x, y) = centre(i);
+        let across = (x - COLS as f32 / 2.0) / (COLS as f32 / 2.0);
+        self.base + self.amp * (self.k.0 * x + self.k.1 * y + self.phase).sin() + self.bow * across * across
+    }
+}
+
 /// A pose for the whole grid. Positions are in clock units: (0, 0) is the top
 /// left of the grid, (8, 3) the bottom right.
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +100,12 @@ pub enum Formation {
     Compass { focus: (f32, f32) },
     /// Hands closed upwards like a bud, or a chevron opening by `spread` degrees.
     Chevron { axis: f32, spread: f32 },
+    /// Hands `open` degrees apart about an angle that follows a wave: folded
+    /// needles when nearly closed, lines at 180.
+    Flow { wave: Wave, open: f32 },
+    /// The digits, but every clock's pair of hands turned rigidly by a wave:
+    /// the time, scattered, with its corners intact.
+    Turned { wave: Wave },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -145,13 +172,15 @@ impl Formation {
             }
             Formation::Compass { focus } => [bearing(i, focus); 2],
             Formation::Chevron { axis, spread } => [axis - spread * 0.5, axis + spread * 0.5],
+            Formation::Flow { wave, open } => [wave.at(i) - open * 0.5, wave.at(i) + open * 0.5],
+            Formation::Turned { wave } => [digits[i][0] + wave.at(i), digits[i][1] + wave.at(i)],
         }
     }
 
     /// Whether the two hands are interchangeable in this pose, so each clock
     /// may give either hand either end.
     fn symmetric(self) -> bool {
-        !matches!(self, Formation::Digits)
+        !matches!(self, Formation::Digits | Formation::Turned { .. })
     }
 }
 
@@ -247,7 +276,7 @@ pub fn angle_at(from: f32, moves: &[Move], motor: Motor, tau: f32) -> f32 {
     moves.iter().fold(from, |a, m| a + m.travel.signum() * motor.position(m.travel.abs(), tau - m.start))
 }
 
-pub const DANCES: usize = 10;
+pub const DANCES: usize = 12;
 
 /// The repertoire. `which` is 0..DANCES; `rng` varies direction, focus and
 /// angles, so the same dance is rarely performed the same way twice.
@@ -262,6 +291,13 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
     let sweep_back = Timing::Columns { gap: 0.3, reverse: !flip };
     let way = if flip { Turn::Anticlockwise } else { Turn::Clockwise };
     let step = |to, timing, turn, extra, rest| Phase { to, timing, turn, extra, rest };
+    let wave = Wave {
+        base: if flip { 90.0 } else { 270.0 },
+        amp: rng.range(15.0, 30.0),
+        k: (rng.range(0.4, 0.8), rng.range(0.3, 0.9) * rng.sign()),
+        phase: rng.range(0.0, 6.28),
+        bow: rng.range(-25.0, 25.0),
+    };
 
     match which % DANCES {
         // Every corner spins as a rigid shape, column after column.
@@ -327,6 +363,25 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
                 step(Lines(90.0), Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, -0.8),
                 step(Chevron { axis: 180.0, spread: 90.0 }, Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, 0.2),
                 step(Digits, Timing::Ripple { focus: middle, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
+            ],
+        ),
+        // Folded needles settle into a shallow wave, which deepens and rolls
+        // on before the digits surface out of it.
+        9 => (
+            "swell",
+            vec![
+                step(Flow { wave, open: 6.0 }, sweep, Turn::Shortest, 0, -1.0),
+                step(Flow { wave: Wave { amp: wave.amp * 3.0, phase: wave.phase + 2.0, ..wave }, open: 6.0 }, sweep, way, 0, -1.0),
+                step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
+            ],
+        ),
+        // The new time appears at once but scattered, each clock's corner
+        // turned by a wave, then the wave drains away.
+        10 => (
+            "scatter",
+            vec![
+                step(Turned { wave: Wave { base: 0.0, amp: rng.range(90.0, 150.0), ..wave } }, Timing::Ripple { focus, gap: 0.2, inward: false }, way, 0, 0.3),
+                step(Digits, Timing::Ripple { focus, gap: 0.3, inward: true }, Turn::Shortest, 0, 0.0),
             ],
         ),
         // A vortex: rings about the middle, spun a full turn from the rim inwards.

@@ -69,14 +69,28 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   fan, rings/spokes, compass, chevron) x a *timing* field (together, columns,
   rows, diagonal, ripple) x a *turn* rule (shortest, clockwise, counter,
   mirror, checker). Phases may overlap (negative `rest`); overlapping moves add,
-  so hands cruise through a formation instead of stopping on it. Ten dances
+  so hands cruise through a formation instead of stopping on it. Twelve dances
   ship in `dance::dance`; each is varied by a seeded RNG, and a new one is a few
   lines. A test runs every dance in many variations and checks it lands exactly
   on the time and never exceeds twice the motor speed.
-- Transitions set off early so they *finish* as the minute turns.
-- In the studio, drag "Seconds per minute" down to ~16 to see dances back to
-  back, and "Choreography" to pick one; the dance in use is logged to stderr.
-  At 60 it is a real clock on local time.
+- **A minute has a shape**: the dance lands as the minute turns, the time is
+  held ("Seconds the time is held"), then the hands are released into
+  **ambient** motion (`ambient.rs`) until it is time to settle and dance again.
+  Ambient cannot be planned moves, because the target never stops: each hand is
+  a servo following a drifting field (a slow turn plus two ripples of unrelated
+  wavelength, a separate wave for how far the two hands open, and a few degrees
+  of fixed per-clock error) under the same motor limits, with a braking curve so
+  it never overshoots. Four moods: drift, sway, breathe, corners. A test checks
+  speed and acceleration stay bounded and that everything comes to rest.
+- Formations include non-uniform ones taken from footage of the original:
+  `Flow` (hands about a bowed sine wave, folded into needles or open) and
+  `Turned` (the digits with each clock's corner rigidly rotated by a wave).
+- Digit shapes: 0, 2, 5, 6, 9 checked against 1080p footage of the original; 1,
+  3, 4, 7, 8 follow manu.ninja's table (from the studio's promotional films).
+- In the studio, drag "Seconds per minute" down to ~30 to see the whole cycle
+  quickly, and "Choreography" to pick a dance; dances and moods are logged to
+  stderr with their start times. At 60 it is a real clock on local time. Set
+  "Seconds the time is held" to 60 for a clock that only moves on the minute.
 
 ## GPU and 3D pieces
 
