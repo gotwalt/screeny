@@ -308,3 +308,77 @@ The seven are pre-existing style lints in `crates/demos`' renderers and in
 `crates/probe`, in code this card did not rewrite. Nothing new was introduced:
 the one warning the new code did produce (a `Default::default()` field
 assignment in the new frame-type test) is fixed.
+
+### 2026-09-19 - step 5: architecture.md, and what I did not consolidate
+
+`docs/design/architecture.md` now describes the layout that exists: the two new
+crates in the repository map, the dependency graph drawn as a line with the
+`screeny -> demos` edge called out (it is the reason `panel/` and `encode/` are
+crates and not modules), a "one implementation of each shared thing" section, a
+receiver-core section with the drain/flush contract, a note that `screeny::Frame`
+and `demos::Frame` are both just `Box<Rgb888Frame>`, the card 016 RAM figures
+next to card 008's, and `spike/` gone from the tree.
+
+#### Test counts, before and after
+
+| crate | before | after |
+|---|---|---|
+| proto | 39 | 39 |
+| receiver | - | **5** (the EWMA tests, moved from sim) |
+| panel | - | **6** (5 moved from sim's panel.rs, 1 new) |
+| encode | - | 1 doctest (moved from screeny) |
+| screeny | 54 | 53 (the encode doctest left with the code) |
+| demos | 16 | **17** (1 new: owned and borrowed indexed frames agree) |
+| sim | 97 | **92** (5 left for receiver, 5 left for panel, 2 new local ones) |
+| probe | 3 | 3 |
+| **total** | **209** | **213**, 0 failed |
+
+Nothing was deleted. The only test whose *text* changed is the clock's codec
+label, explained above.
+
+#### Things I did not consolidate, and why
+
+1. **`PieceSource` still copies 6 KB a frame.** The card allowed two lines for
+   it; removing it honestly needs `Piece::render` to take a borrowed frame,
+   which is every renderer in `crates/demos`, or `screeny::Frame` to hand out
+   its `Box`, which is card 011's file. Filed as **card 067** with the analysis.
+2. **`crates/sim/src/screens.rs` + `font.rs` are a second status screen**, 650
+   lines against `firmware/src/screens.rs`' 200, with their own hand-made
+   fonts. Now that the state machine agrees about *when* the idle screen is up,
+   what it *looks like* is the next place the simulator and the device can
+   drift. Out of this card's scope (it named the receive state machine, the
+   frame types, the panel model and the dead weight). Filed as **card 068**.
+3. **The simulator's brightness model is the pre-card-020 one**: it scales
+   before quantising and so predicts banding the device no longer has. Moving
+   the code made the comment saying so impossible to miss. Changing the model
+   changes what every sim brightness test expects, which is a card of its own -
+   **card 066**.
+4. **`crates/demos/src/font.rs` stays separate** from the simulator's fonts. It
+   is a proportional hand-drawn font that exists because "TWENTY FIVE" does not
+   fit on a 5 px monospace grid. It is art, not chrome, and merging it with a
+   status-screen font would be a regression.
+5. **`lab/` untouched**, as the card says: frozen reference.
+6. **`firmware/src/gamma.rs` stays its own thing.** It is the integer sRGB8 ->
+   duty LUT with no `f32` in it; `crates/panel` is `f32` and host-only. They
+   model the same transfer function in two arithmetics on purpose, and the
+   device's is the one the panel obeys.
+7. **`display-on-core0`** kept, as the card instructs: documented and cheap.
+
+#### Bench hygiene
+
+One flash, one `conformance`, one `lock-test`, one 60 s stream. No soak, and
+nothing repeated: the firmware has not changed since it was flashed (`cargo
+build --release` after every later commit is a no-op), so the 60 s pass above
+is a pass on the final firmware. Serial: one `espflash` at a time, 230400 baud,
+stock backup verified before flashing, flash never erased, `backup/` untouched,
+brightness cap untouched (the device reports 96 of a 160 cap).
+
+**The camera never worked this session.** During the flash, `cam-request.sh`
+reached the daemon but ffmpeg reported "Video device not found / Anker
+PowerConf C200"; at the end of the card the daemon itself reports it is not
+running. Per the card's instruction I skipped the still rather than starting
+ffmpeg myself. So there is no `c016-final.jpg`. What can be said without it:
+the device answers on 192.168.7.221 with `state 0 (IDLE)`, `brightness 96`,
+uptime 22 minutes, and the counters from the 60 s run still standing - IDLE
+with the default `Status` idle mode is the status screen, composed by the
+`frames` task from the shared core's `Intent::Idle`.
