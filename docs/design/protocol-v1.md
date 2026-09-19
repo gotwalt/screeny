@@ -1,13 +1,11 @@
-# screeny protocol v1 - DRAFT
+# screeny protocol v1
 
-Status: **draft**, produced by card 003. Not yet the source of truth. The
-orchestrator finalises it in card 004 after filling in the codec table from card
-002. Everything except section 4 (codecs) is intended to be implementable as
-written: two workers should be able to build a sender and a receiver from this
-document alone and interoperate.
-
-Reasoning and evidence behind these choices is in
-`docs/research/003-protocol-transport.md`.
+Status: **accepted** (card 004, 2026-09-19). This is the source of truth for the
+wire format. Transport, discovery and control came from card 003
+(`docs/research/003-protocol-transport.md`); the codec set came from card 002
+(`docs/research/002-frame-encoding.md`). Changes after this point go through a card
+and bump `txtvers`/`proto` as described in section 5. Remaining open questions are
+listed at the end; none block implementation.
 
 Conventions in this document:
 
@@ -27,7 +25,7 @@ Conventions in this document:
 | Transport | UDP over IPv4. No TCP, no IPv6 in v1. |
 | Frame port (default) | **49374** (0xC0DE) |
 | Control port (default) | **49375** (0xC0DF) |
-| Max UDP payload | **1472** bytes = 1500 MTU - 20 IPv4 - 8 UDP |
+| Max UDP payload | **1472** bytes = 1500 MTU - 20 IPv4 - 8 UDP. Firmware MUST build with `ESP_RADIO_CONFIG_WIFI_MTU=1500`; esp-radio defaults to 1492, which silently caps payloads at 1464 (card 001). |
 | Fixed header | **8** bytes |
 | Max pixel payload | **1464** bytes |
 | Nominal frame rate | 30 fps (33.333 ms period) |
@@ -189,31 +187,107 @@ reordering window beyond the `newer()` test. Rationale in the research report
 
 ---
 
-## 4. Codec ids
+## 4. Codecs
 
-**Owned by card 002. This table is a placeholder and MUST be replaced before
-this document is promoted out of draft.**
+The header `codec` byte (offset 2) selects the decoder. It is the same value card
+002's lab calls the *mode byte*; on the wire it lives **only in the header** and the
+pixel payload starts directly with the codec's own fields. (The lab prepends it to
+the payload, so lab sizes are one byte larger than wire sizes.)
 
-| Id | Name | Stateless | Notes |
+All codecs are stateless: every frame decodes standalone, so every `FRAME` sets
+`flags.KEY`. Multi-byte fields are little-endian. Index planes are raster order
+(row-major, top-left origin), MSB-first within a byte. Decoders produce 64x32
+RGB888 **sRGB**; gamma to linear panel duty is the display driver's job, shared by
+all codecs. Decoders are integer-only, allocation-free and need no scratch RAM.
+
+| Id | Name | Payload size | Use |
 |---|---|---|---|
 | `0x00` | reserved | - | MUST be rejected |
-| `0x01` | `RGB888_RAW` | yes | Only legal for `len <= 1464`, i.e. a partial frame; reserved for test patterns. |
-| `0x02`.. | TBD from card 002 | | |
-| `0xF0`-`0xFE` | experimental / private | | Devices MAY reject. |
+| `0x02` | `PAL5` | 1376 fixed | 32-colour adaptive palette; the always-fits floor |
+| `0x10` | `PAL8_LZ` | variable, <= 1464 | up to 256-colour palette + LZ indices; the workhorse |
+| `0x11` | `PAL4_LZ` | variable, <= 1464 | 16-colour palette + LZ nibbles; text and UI, bit-exact |
+| `0x28` | `BC1_DUAL` | 1296 fixed | 4x4 block codec; photographic and many-colour content |
+| `0x7F` | `SOLID` | 3 | whole frame one colour |
+| `0xF0`-`0xFE` | experimental / private | | Devices MAY reject |
 | `0xFF` | reserved | - | MUST be rejected |
 
-Rules the final table MUST obey:
+Other ids in `lab/src/dec/mod.rs` (`0x01`, `0x03`, `0x20`-`0x27`, `0x30`, `0x31`)
+are lab-only and reserved; v1 devices do not advertise them.
+
+### 4.1 `0x02 PAL5`
+
+```
+[palette : 32 x RGB888 = 96 B][low nibbles : 1024 B][bit-4 plane : 256 B]
+```
+Pixel i has index `nib(i) | bit4(i) << 4`. Nibbles are two per byte, high nibble
+first; the bit plane is 8 pixels per byte, MSB first.
+
+### 4.2 `0x10 PAL8_LZ`
+
+```
+[n-1 : u8][palette : n x RGB888][LZ stream -> exactly 2048 index bytes]
+```
+`n` is 1..=256. Every decoded index MUST be `< n`; otherwise the frame is corrupt.
+The decoder inflates into the front of the frame buffer and expands indices to
+pixels in place, back to front.
+
+### 4.3 `0x11 PAL4_LZ`
+
+```
+[palette : 16 x RGB888 = 48 B][LZ stream -> exactly 1024 bytes of packed nibbles]
+```
+
+### 4.4 LZ stream
+
+The byte-oriented LZ format is defined by the reference decoder
+`lab/src/dec/lz.rs` (to be lifted unchanged into `crates/proto`), which is
+normative until this section is expanded into prose by card 005. A decoder MUST
+bounds-check every literal run and match (offset within already-produced output,
+length within the remaining output) and MUST reject a stream that produces more or
+fewer bytes than the codec requires.
+
+### 4.5 `0x28 BC1_DUAL`
+
+```
+[flags : 16 B, one bit per block, MSB first, raster order of blocks][128 blocks x 10 B]
+
+flag 0:  [e0 : RGB565 u16le][e1 : RGB565 u16le][idx : 3 bitplanes x 2 B]   8 levels
+flag 1:  [e0 : RGB888][e1 : RGB888][idx : 16 x 2 bits = 4 B]               4 levels
+```
+Blocks are 4x4 pixels, 16 across and 8 down. Level k is
+`lerp(e0, e1, W[k])`, `lerp(a,b,w) = (a*(256-w) + b*w + 128) >> 8`, with
+`W4 = [0,85,171,256]` and `W8 = [0,37,73,110,146,183,219,256]`. RGB565 endpoints
+expand to 8 bits by bit replication. Interpolation is in sRGB space. Exact bit
+order within the index fields is as in `lab/src/dec/block.rs` (normative, as 4.4).
+
+### 4.6 `0x7F SOLID`
+
+```
+[R][G][B]
+```
+
+### 4.7 Rules
 
 - A device advertises the ids it can decode in the `codecs=` TXT key and in
-  `GET_INFO`. A sender MUST NOT send a codec the device did not advertise.
-- A frame with an unsupported or reserved codec is discarded and counted in
-  `frames_dropped_decode`.
-- A codec whose decoder depends on the previous frame MUST be decoded only when
-  the previous frame was accepted and `KEY` handling is honoured: after any
-  discarded frame, the device MUST discard non-`KEY` frames until the next
-  `KEY` frame arrives, counting them in `frames_dropped_decode`.
-- `codec` is per-frame, so a sender MAY switch codecs frame to frame (a text
-  frame lossless, the next visualizer frame lossy) with no negotiation.
+  `GET_INFO`. A v1 device MUST support all five. A sender MUST NOT send a codec the
+  device did not advertise.
+- A frame with an unsupported or reserved codec, or one whose decoder reports an
+  error, is discarded and counted in `frames_dropped_decode`. The previous frame
+  stays on the panel. A decoder MUST NOT leave a partially decoded frame visible:
+  decode into the back buffer and swap only on success.
+- `codec` is per-frame: a sender MAY switch codecs frame to frame with no negotiation.
+- Future stateful codecs (deltas) would clear `flags.KEY`; after any discarded frame
+  the device MUST discard non-`KEY` frames until the next `KEY` frame. v1 has none.
+
+### 4.8 Sender codec selection (informative)
+
+The reference sender encodes each frame as (a) the palette ladder
+`PAL4_LZ -> PAL8_LZ at 256/128/64/32 colours -> PAL5`, (b) dithered `PAL5`, and
+(c) `BC1_DUAL`; decodes each; scores mean Oklab dE through a model of the panel
+*with* temporal dithering; gives the previous frame's codec an 8% advantage
+(hysteresis, because a change in the character of the error is visible); and sends
+the winner. A sender given an indexed frame of <= 16 or <= 32 colours can skip all
+of that: `PAL4_LZ` or `PAL5` is exact. See card 002 for measurements.
 
 ---
 
@@ -786,39 +860,27 @@ Total datagram: 8 + 1200 = 1208 bytes UDP payload.
 
 ---
 
-## 11. Open questions
+## 11. Decisions and open questions
 
-Things this draft deliberately does not settle. The orchestrator should close
-these in card 004.
+Closed by card 004 (2026-09-19):
 
-1. **Codec table (§4)** - owned by card 002. Blocking for promotion out of
-   draft.
-2. **Payload budget** - is 1464 right, or should the default be lower to survive
-   a path with a sub-1500 MTU (VPN, some mesh APs)? `mtu=` in TXT lets the device
-   state it; the sender needs a `--mtu` override regardless.
-3. **Playout buffer** - §3.3 says none. Should it be a runtime toggle so card
-   013 can measure hold-immediately against a 1-frame buffer on real hardware?
-4. ~~DDP secondary receive mode~~ - **resolved 2026-09-19: out.** The device never
-   speaks DDP. DDP compatibility is a host-side proxy in the sender that reassembles
-   DDP on loopback/LAN and forwards native frames (card 040).
-5. **`HAS_TS`** - is round-trip/2 from `PING` good enough for card 013's latency
-   numbers, or does that card need SNTP on the device and a real one-way
-   measurement?
-6. **Ports 49374/49375** - confirm. They are in the dynamic range so there is
-   nothing to collide with, but the decision should be recorded rather than
-   inherited.
-7. **DSCP / `SO_NET_SERVICE_TYPE`** - does the bench AP honour it on the
-   downlink to the ESP32? Until measured, §9.2 is a suggestion, not a
-   requirement.
-8. **mDNS responder crate** - `edge-mdns` 0.8 assumed. Needs a compile test
-   against embassy-net 0.9.1 / xarxa; that is card 001 question 4. Plan B is
-   `hick-embassy` 0.2, which needs an allocator.
-9. **Multiple devices from one sender** - currently only a sender-side concern.
-   Confirm nothing in the wire protocol needs to change (e.g. a group id).
-10. **Control auth** - v1 is unauthenticated by decision (§8.4). Card 041 holds
-    the hardening design; confirm it stays out of v1.
-11. **`FRAME_FRAG` (type `0x1`)** - reserved but undefined. Leave undefined, or
-    specify it now so a lossless keyframe can span two datagrams?
-12. **Telemetry struct growth** - §6.7 says a future device may append fields.
-    Confirm that `len`-based versioning is preferred over bumping `txtvers` /
-    the protocol version.
+1. **Codec table** - done, section 4.
+2. **Payload budget** - 1464 stays the default. The device states `mtu=` in TXT and
+   the sender takes `--mtu`; the codec ladder already degrades to any budget >= 1376.
+3. **Playout buffer** - none, but the firmware keeps a compile-time toggle for a
+   1-frame buffer so card 013 can measure the difference on hardware.
+4. **DDP** - the device never speaks DDP. A host-side proxy is parked as card 040.
+5. **Ports 49374 / 49375** - confirmed.
+6. **mDNS responder** - `edge-mdns` 0.8 compiles with the stack and works on
+   hardware: macOS browses and resolves it (docs/research/004-first-bringup.md).
+7. **Multiple devices from one sender** - sender-side only; no wire change.
+8. **Control auth** - out of v1. Parked as card 041.
+9. **`FRAME_FRAG`** - stays reserved and undefined. One frame, one datagram.
+10. **Telemetry growth** - append fields and rely on `len`; no version bump.
+
+Still open (do not block implementation):
+
+- **`HAS_TS`** - whether `PING`/2 is enough latency resolution is card 013's call.
+- **DSCP / `SO_NET_SERVICE_TYPE`** - unmeasured on this AP; section 9.2 stays advice.
+- **LZ and BC1_DUAL bit-level prose** - sections 4.4 and 4.5 defer to the reference
+  decoders; card 005 writes the prose and test vectors when it lifts them.

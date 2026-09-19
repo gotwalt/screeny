@@ -1,7 +1,7 @@
 # 003 - Wire protocol, discovery and transport
 
 Research for card 003. Conclusions first; evidence and links below. The concrete
-draft spec that falls out of this is `docs/design/protocol-v1-draft.md`.
+draft spec that falls out of this is `docs/design/protocol-v1.md`.
 
 Research done 2026-09-19. Everything version-numbered below was checked against
 crates.io / docs.rs / upstream source on that date, not from memory.

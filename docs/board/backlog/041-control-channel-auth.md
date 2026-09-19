@@ -18,7 +18,7 @@ owner does not control.
 ## Context
 
 Found while researching card 003; see `docs/research/003-protocol-transport.md`
-§1.9 and `docs/design/protocol-v1-draft.md` §8.4. v1 is **deliberately**
+§1.9 and `docs/design/protocol-v1.md` §8.4. v1 is **deliberately**
 unauthenticated: the owner has stated the Wi-Fi password is not a secret and
 the LAN is trusted, and card 003 was explicitly told not to over-engineer this.
 This card exists so the reasoning is not rediscovered from scratch later, not

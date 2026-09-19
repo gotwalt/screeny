@@ -13,9 +13,9 @@ Every statement carries a status:
 - **[provisional]** our current best understanding; expect revision. Design so that
   a change here does not break you.
 
-Source of truth as the project moves: `docs/design/protocol-v1-draft.md` (wire
+Source of truth as the project moves: `docs/design/protocol-v1.md` (wire
 protocol), `docs/research/001-firmware-stack.md` (hardware), `docs/research/002-*`
-(frame encoding; not finished at the time of writing), `docs/research/004-first-bringup.md`.
+(frame encoding lab and codec measurements), `docs/research/004-first-bringup.md`.
 If this brief disagrees with those, they win; tell your user so this file gets fixed.
 
 ---
@@ -97,43 +97,56 @@ through a camera, not with a colorimeter]**:
 ### 2.3 The byte budget is really a palette budget
 
 2048 pixels in 1464 bytes. Raw RGB888 would be 6144 bytes, so every frame is
-compressed, and the codec is chosen per frame. The exact codec set is being
-finalised (card 002) **[provisional]**, but the shape of the constraint will not
-change, so design to the shape:
+compressed. The sender picks a codec per frame (spec: `docs/design/protocol-v1.md`
+section 4; measurements: `docs/research/002-frame-encoding.md`). **[decided]** What
+that means for you:
 
-- **A frame with at most 16 distinct colours always fits, exactly**, with room to
-  spare (4 bits/pixel = 1024 bytes + a 48-byte palette).
-- **A frame with at most 32 distinct colours fits exactly** (5 bits/pixel = 1280 +
-  96 bytes).
-- A frame with more colours than that is encoded **lossily** (adaptive palette with
-  dithering, or a block codec, whichever the sender judges best). How good it looks
-  depends on content. Smooth full-frame multi-hue gradients are the hardest case;
-  flat regions, limited hue ranges and hard edges are the easiest.
-- The palette is per frame. It can be any 16/32 colours out of the panel's
-  64x64x64, and it can change completely on every frame at negligible cost.
+- **A frame with at most 16 distinct colours is always exact.** Text/UI-like frames
+  land around 400 bytes.
+- **A frame with at most 32 distinct colours is always exact** (the fixed-size
+  `PAL5` floor, 1376 bytes).
+- **A frame with up to 256 distinct colours is exact *if its index image compresses*
+  into the budget** (`PAL8_LZ`: palette + LZ-compressed indices). Smooth, coherent
+  images compress well: in the lab a plasma and a Mandelbrot zoom went out this way
+  on 98-100% of frames. Noise, fine dither and high-frequency texture do not
+  compress, and the sender then reduces the palette (256 -> 128 -> 64 -> 32) until
+  it fits.
+- Anything else is sent lossy, either as a reduced adaptive palette or as a 4x4
+  block codec (`BC1_DUAL`) which suits photographic content. The sender scores the
+  candidates perceptually and picks the best; you do not choose.
+- The palette is per frame. It can be any colours at all, and it can change
+  completely on every frame at negligible cost.
 
-That last point is the single most useful creative fact here. **Think like an
-indexed-colour artist.** This target rewards the whole family of palette techniques:
+Two consequences worth internalising:
 
-- *Palette animation*: keep the index image fixed or slow-moving and animate the
-  palette (colour cycling, palette rotation through a fractal, day/night shifts).
-  Costs 48-96 bytes per frame and is perfectly lossless.
-- *Deliberate palettes*: choose 8-32 colours per piece or per scene, as a design
-  decision, in a perceptual space, snapped to panel levels (section 2.1). Then
-  render directly into indices. You control quantisation instead of a generic
-  quantiser guessing, and the result is exact on the wire.
-- *Ramps*: a 32-entry palette is, for example, one 32-step ramp, or four 8-step
-  ramps in different hues, or a 2D ramp of 8 hues x 4 brightnesses. Pick the
-  structure that matches the piece.
+1. **Spatial coherence is your compression.** Large flat or smoothly varying regions
+   are nearly free; per-pixel noise is the most expensive thing you can draw. This is
+   the opposite of the intuition from the colour-count rules alone: a 200-colour
+   smooth gradient fits exactly, while a 40-colour field of random confetti may not.
+   Ordered dither (section 2.4) is a regular pattern and compresses far better than
+   random or error-diffusion dither.
+2. **Think like an indexed-colour artist.** This target rewards the whole family of
+   palette techniques:
+   - *Palette animation*: keep the index image fixed or slow-moving and animate the
+     palette (colour cycling, palette rotation through a fractal, day/night shifts).
+     Perfectly lossless and nearly free.
+   - *Deliberate palettes*: choose 8-32 colours per piece or per scene, as a design
+     decision, in a perceptual space, snapped to panel levels (section 2.1). Render
+     directly into indices. You control quantisation instead of a generic quantiser
+     guessing, and the result is exact on the wire.
+   - *Ramps*: a 32-entry palette is one 32-step ramp, or four 8-step ramps in
+     different hues, or 8 hues x 4 brightnesses. Pick the structure the piece needs.
 
 If a piece genuinely needs continuous colour (a photographic source, a many-hue
-plasma), it will still work, lossy. But prefer designing within a palette: it will
-look better *and* be exact.
+field), it will still work, lossy, at a quality the lab measured as good (SSIM
+~0.98). But prefer designing within a palette: it will look better *and* be exact.
 
-**Palette stability** **[provisional]**: when a lossy adaptive palette is recomputed
-every frame, colours of static regions can shimmer as the palette shifts under them.
-If you own the palette, this cannot happen. If you hand over full-colour frames,
-expect some shimmer in slow-moving gradients and keep them moving or textured.
+**Palette stability** **[measured in the lab]**: when the sender has to build a
+reduced palette, it seeds it from the previous frame's and applies hysteresis to
+codec switching, because both palette drift and a change in the *character* of the
+error (block edges vs dither noise) are visible as shimmer. If you own the palette,
+neither can happen. If you hand over full-colour frames, keep slow gradients moving
+or textured rather than nearly static.
 
 ### 2.4 Dithering
 
