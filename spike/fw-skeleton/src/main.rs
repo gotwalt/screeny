@@ -15,6 +15,7 @@
 #![no_std]
 #![no_main]
 
+mod panel_init;
 mod tidbyt;
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -28,7 +29,8 @@ use embassy_time::{Duration, Timer};
 use embedded_graphics::geometry::Point;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::Pin;
+use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
+use esp_hal::interrupt::Priority;
 use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
@@ -67,8 +69,11 @@ const NROWS: usize = compute_rows(ROWS);
 /// actually show. Every extra plane halves the refresh rate.
 const PLANES: usize = 6;
 
-/// I2S pixel clock. The ESP32's I2S peripheral tops out around 19 MHz.
-const PIXEL_CLOCK: Rate = Rate::from_mhz(19);
+/// I2S pixel clock. 10 MHz is what Tidbyt's own firmware runs this panel at,
+/// so it is the only rate we know the hardware tolerates. The ESP32's I2S
+/// tops out near 19 MHz; see the refresh-rate table in the research doc for
+/// what raising it buys and costs.
+const PIXEL_CLOCK: Rate = Rate::from_mhz(tidbyt::PIXEL_CLOCK_MHZ);
 
 type FrameBuffer = DmaFrameBuffer<NROWS, COLS, PLANES>;
 
@@ -154,6 +159,13 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
         xfer.wait_for_done().await;
         fb = xfer.wait().expect("hub75 DMA transfer failed");
     }
+}
+
+/// Checks a typed GPIO peripheral against the GPIO number the Tidbyt sources
+/// give for that signal.
+#[track_caller]
+fn assert_pin(pin: &impl Pin, expected: u8) {
+    assert_eq!(pin.number(), expected, "pin map disagrees with tidbyt::pins");
 }
 
 /// Hard brightness cap. The panel is powered from laptop USB, so full-scale
@@ -260,7 +272,7 @@ async fn telemetry_task() {
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
-    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // esp-radio allocates its WiFi buffers from the global heap. The first
     // region is DRAM the ROM bootloader no longer needs; the second is plain
@@ -282,6 +294,45 @@ async fn main(spawner: Spawner) {
 
     let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
 
+    // The pin map lives in `tidbyt::pins` as plain numbers, because that is
+    // how the Tidbyt sources state it and how a human checks it against them.
+    // The driver wants typed peripherals instead, so the two could drift;
+    // this ties them together and costs one boot-time comparison each.
+    assert_pin(&peripherals.GPIO21, tidbyt::pins::R1);
+    assert_pin(&peripherals.GPIO2, tidbyt::pins::G1);
+    assert_pin(&peripherals.GPIO22, tidbyt::pins::B1);
+    assert_pin(&peripherals.GPIO23, tidbyt::pins::R2);
+    assert_pin(&peripherals.GPIO4, tidbyt::pins::G2);
+    assert_pin(&peripherals.GPIO27, tidbyt::pins::B2);
+    assert_pin(&peripherals.GPIO26, tidbyt::pins::A);
+    assert_pin(&peripherals.GPIO5, tidbyt::pins::B);
+    assert_pin(&peripherals.GPIO25, tidbyt::pins::C);
+    assert_pin(&peripherals.GPIO18, tidbyt::pins::D);
+    assert_pin(&peripherals.GPIO14, tidbyt::pins::E_UNUSED);
+    assert_pin(&peripherals.GPIO19, tidbyt::pins::LAT);
+    assert_pin(&peripherals.GPIO32, tidbyt::pins::OE);
+    assert_pin(&peripherals.GPIO33, tidbyt::pins::CLK);
+
+    // The driver chips ignore pixel data until their configuration registers
+    // are loaded, and that has to happen while the GPIOs are still ours —
+    // once I2S owns them we cannot bit-bang. See `panel_init`.
+    {
+        let out = OutputConfig::default();
+        let mut rgb = [
+            Output::new(peripherals.GPIO21.reborrow(), Level::Low, out), // R1
+            Output::new(peripherals.GPIO23.reborrow(), Level::Low, out), // R2
+            Output::new(peripherals.GPIO2.reborrow(), Level::Low, out),  // G1
+            Output::new(peripherals.GPIO4.reborrow(), Level::Low, out),  // G2
+            Output::new(peripherals.GPIO22.reborrow(), Level::Low, out), // B1
+            Output::new(peripherals.GPIO27.reborrow(), Level::Low, out), // B2
+        ];
+        let mut clk = Output::new(peripherals.GPIO33.reborrow(), Level::Low, out);
+        let mut lat = Output::new(peripherals.GPIO19.reborrow(), Level::Low, out);
+        let mut oe = Output::new(peripherals.GPIO32.reborrow(), Level::High, out);
+        panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
+    }
+
+    // Tidbyt Gen 1 map; see `tidbyt::pins` for where each number comes from.
     let pins = Hub75Pins16 {
         red1: peripherals.GPIO21.degrade(),
         grn1: peripherals.GPIO2.degrade(),
@@ -293,10 +344,10 @@ async fn main(spawner: Spawner) {
         addr1: peripherals.GPIO5.degrade(),
         addr2: peripherals.GPIO25.degrade(),
         addr3: peripherals.GPIO18.degrade(),
-        // 1/16 scan panel: no E line on the board, see `tidbyt::pins`.
-        addr4: peripherals.GPIO33.degrade(),
+        // 1/16 scan: no E line on this board. See `tidbyt::pins::E_UNUSED`.
+        addr4: peripherals.GPIO14.degrade(),
         blank: peripherals.GPIO32.degrade(),
-        clock: peripherals.GPIO14.degrade(),
+        clock: peripherals.GPIO33.degrade(),
         latch: peripherals.GPIO19.degrade(),
     };
 
@@ -305,7 +356,13 @@ async fn main(spawner: Spawner) {
         pins,
         peripherals.DMA_I2S0,
         tx_descriptors,
-        Hub75Config::new().with_frequency(PIXEL_CLOCK),
+        Hub75Config::new()
+            .with_frequency(PIXEL_CLOCK)
+            // The refresh ISR must outrank WiFi's handlers or the panel
+            // flickers whenever the radio is busy. `circular-dma` means the
+            // ISR only fires on a buffer swap, but a swap that lands late
+            // still tears.
+            .with_interrupt_priority(Priority::Priority3),
         &*fb0,
     )
     .expect("hub75 init failed");
