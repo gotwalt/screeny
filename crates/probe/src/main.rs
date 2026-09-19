@@ -971,39 +971,52 @@ fn cmd_conformance(frame_addr: SocketAddr, ctrl_addr: SocketAddr) -> Result<bool
     // 2.2 / 6.7: everything the frame port rejects is counted, and nothing
     // it rejects is answered. Three shapes: bad magic, bad version, a
     // CONTROL on the frame port.
-    ctrl.request(Request::ResetStats)?;
-    let _ = frame.poll();
-    frame.send_raw(&[0x00; 16]).map_err(|e| e.to_string())?;
-    frame
-        .send_raw(&[0x53, 0x90, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3])
-        .map_err(|e| e.to_string())?;
-    frame
-        .send_raw(&hdr(op::PING, 0, 0x9999, 0))
-        .map_err(|e| e.to_string())?;
-    // A FRAME whose `len` the datagram does not back up.
-    frame
-        .send_raw(&[0x53, 0x10, 0x7F, 0x01, 0, 0, 0xFF, 0x00, 1, 2, 3])
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(250));
-    let t = telemetry(&mut ctrl)?;
-    let answered = frame.poll().len();
-    check(
-        "2.2  four junk datagrams on the frame port -> 4 rejected",
-        t.frames_rejected == 4,
-        format!("frames_rejected {}", t.frames_rejected),
-    );
+    //
+    // One at a time, with the counter read in between. Sent as a burst these
+    // were flaky on the real device - two runs in three counted three of
+    // four - and a burst cannot tell "the firmware ignored one" from "the air
+    // ate one", which is the only question worth asking. Each is retried up
+    // to three times before it is called a failure: this is UDP over WiFi and
+    // a lost probe is not a lost MUST.
+    let junk: [(&str, Vec<u8>); 4] = [
+        ("bad magic", vec![0x00; 16]),
+        (
+            "version 9",
+            vec![0x53, 0x90, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
+        ),
+        ("CONTROL on the frame port", hdr(op::PING, 0, 0x9999, 0)),
+        (
+            "FRAME len the datagram does not back up",
+            vec![0x53, 0x10, 0x7F, 0x01, 0, 0, 0xFF, 0x00, 1, 2, 3],
+        ),
+    ];
+    let mut answered = 0usize;
+    for (what, bytes) in &junk {
+        let mut counted = false;
+        let mut tries = 0;
+        while !counted && tries < 3 {
+            tries += 1;
+            ctrl.request(Request::ResetStats)?;
+            let _ = frame.poll();
+            frame.send_raw(bytes).map_err(|e| e.to_string())?;
+            std::thread::sleep(Duration::from_millis(150));
+            let t = telemetry(&mut ctrl)?;
+            answered += frame.poll().len();
+            counted = t.frames_rejected == 1
+                && t.frames_rx == 0
+                && t.frames_shown == 0
+                && t.frames_dropped_decode == 0;
+        }
+        check(
+            &format!("2.2  frame port: {what} -> frames_rejected += 1"),
+            counted,
+            format!("after {tries} attempt(s)"),
+        );
+    }
     check(
         "2.2  a CONTROL request on the frame port is not answered",
         answered == 0,
         format!("{answered} packets came back"),
-    );
-    check(
-        "6.7  junk on the frame port does not move the other counters",
-        t.frames_rx == 0 && t.frames_shown == 0 && t.frames_dropped_decode == 0,
-        format!(
-            "rx {} shown {} decode {}",
-            t.frames_rx, t.frames_shown, t.frames_dropped_decode
-        ),
     );
 
     // 4.7: a reserved codec id, and a payload of the wrong length, are both
