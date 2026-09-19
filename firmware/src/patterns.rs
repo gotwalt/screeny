@@ -73,8 +73,8 @@ pub fn draw(frame: &mut Frame, pattern: Pattern) {
 }
 
 fn fill(frame: &mut Frame, rgb: [u8; 3]) {
-    for px in frame.px.iter_mut() {
-        *px = rgb;
+    for px in frame.px.chunks_exact_mut(3) {
+        px.copy_from_slice(&rgb);
     }
 }
 

@@ -1,49 +1,62 @@
 //! screeny firmware — a Gen 1 Tidbyt as a UDP network frame buffer.
 //!
 //! Grown out of `spike/fw-skeleton` (card 001), which proved the stack
-//! compiles and boots. Card 007 makes the *display half* right on the real
-//! panel: orientation, ghosting, gamma, brightness, a status screen.
+//! compiles and boots. Card 007 made the *display half* right on the real
+//! panel: orientation, ghosting, gamma, brightness, dithering, a status
+//! screen. Card 008 makes the *network half* real: `crates/proto` for every
+//! byte on the wire, the full control surface, and the display moved onto
+//! core 1.
 //!
-//! Networking is still the spike's throwaway test receiver (`testcmd`); card
-//! 008 replaces it with `crates/proto` once that exists.
+//! ## Why the cores are split the way they are
 //!
-//! Task layout follows `docs/design/architecture.md`:
+//! Card 007 measured temporal dithering at ~48% of a core, permanently: the
+//! DMA framebuffer has to be rewritten every refresh (154 Hz), not once per
+//! frame, because that is what spends the sub-level remainder over time. On
+//! one executor that render also *held the frame lock* across a synchronous
+//! 3 ms conversion, so the frame task could not run while it was in flight
+//! and "drain the socket, newest wins" could never fire.
 //!
-//! | task | job |
-//! |---|---|
-//! | `display` | owns esp-hub75 and both DMA buffers; converts sRGB -> BCM planes and swaps |
-//! | `wifi` | associate, reconnect forever, modem sleep off |
-//! | `net` | embassy-net runner |
-//! | `frames` | UDP 49374, newest frame wins |
-//! | `status` | draws the idle screen when nothing is streaming |
-//! | `mdns` | `_screeny._udp` responder |
-//! | `telemetry` | the numbers a camera cannot measure |
+//! So: **core 1 does nothing but convert sRGB to the panel and swap DMA
+//! buffers**, and **core 0 does WiFi, the network stack, decode, control and
+//! mDNS**. The handoff is [`fb`], a lock-free triple buffer: no mutex between
+//! the halves, no copy, and no critical section to disturb the refresh ISR.
+//!
+//! | core | task | job |
+//! |---|---|---|
+//! | 1 | `display` | owns esp-hub75 and both DMA buffers; gamma + dither + swap |
+//! | 0 | `wifi` | associate, reconnect forever, modem sleep off, RSSI |
+//! | 0 | `net` | embassy-net runner |
+//! | 0 | `frames` | UDP 49374: drain, newest wins, decode, source lock, idle screens |
+//! | 0 | `control` | UDP 49375: every opcode in spec section 6.3 |
+//! | 0 | `mdns` | `_screeny._udp`, TXT from the same bytes as `GET_INFO` |
+//! | 0 | `telemetry` | the serial-log numbers a camera cannot measure |
 
 #![no_std]
 #![no_main]
 
 mod display;
+mod fb;
 mod gamma;
 mod mdns;
+mod net;
 mod panel_init;
 mod patterns;
-mod status;
-mod testcmd;
+mod receiver;
+mod rxstats;
+mod screens;
 mod tidbyt;
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU8, Ordering};
 
 use embassy_executor::Spawner;
-use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{Runner, StackResources};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
 use esp_hal::interrupt::Priority;
 use esp_hal::rng::Rng;
+use esp_hal::system::Stack as CoreStack;
 use esp_hal::time::{Instant, Rate};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
@@ -55,8 +68,9 @@ use esp_radio::wifi::{
     WifiController,
 };
 use log::{info, warn};
+use screeny_proto::control::wifi_state;
 
-use display::{Frame, Mode};
+use display::Mode;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -64,15 +78,29 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Configuration
 // ---------------------------------------------------------------------------
 
-const SSID: &str = "Example-Wifi1";
+/// Compile-time credentials. Card 014 adds the stored pair and the fallback
+/// ladder of spec section 8.3; until then this is the only network we join.
+pub const SSID: &str = "Example-Wifi1";
 const PASSWORD: &str = "password9";
 
-const FRAME_PORT: u16 = 49374;
-const CONTROL_PORT: u16 = 49375;
+/// The `fw=` TXT key and `GET_INFO` field.
+pub const FW_VERSION: &str = "0.2.0";
+
+pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
+pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
 
 /// One frame per datagram, at most one Ethernet MTU of payload. Only holds
 /// because `.cargo/config.toml` raises esp-radio's MTU to 1500.
-const MAX_DATAGRAM: usize = 1472;
+pub const MAX_DATAGRAM: usize = screeny_proto::MAX_UDP_PAYLOAD;
+
+/// Ceiling on the runtime brightness a `SET_BRIGHTNESS` can reach, and what
+/// the reply's `applied` byte reports back (spec section 6.3).
+///
+/// The *power* cap is [`display::MAX_OE_SLOTS`] and lives in the duty
+/// mapping, where card 007 put it; this is a second, softer limit so that a
+/// sender on the LAN cannot drive a USB-powered panel to its ceiling during
+/// an unattended soak. 160/255 is 16 of 64 output-enable slots, 25% duty.
+pub const BRIGHTNESS_CAP: u8 = 160;
 
 pub const COLS: usize = tidbyt::PANEL_COLS;
 pub const ROWS: usize = tidbyt::PANEL_ROWS;
@@ -94,63 +122,66 @@ const _: () = assert!(
     "panel refresh below 120 Hz: reduce PLANES or raise PIXEL_CLOCK"
 );
 
-/// How long after the last datagram we go back to the status screen.
-const STREAM_IDLE: Duration = Duration::from_millis(1500);
+/// Core 1's stack.
+///
+/// It runs one task whose deepest call is `display::render` (a 192-byte row
+/// buffer), plus the HUB75 DMA interrupt at `Priority3`, which lands on
+/// whatever stack is current. 16 KB is generous for that; esp-rtos checks the
+/// guard on every switch and panics with the range, which is how the first
+/// flash of this firmware reported an 8 KB stack being eaten by two 12 KB
+/// framebuffers built in the wrong place.
+#[cfg_attr(feature = "display-on-core0", allow(dead_code))]
+static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<16384>> =
+    static_cell::ConstStaticCell::new(CoreStack::new());
+
+/// The decoded-frame handoff between core 0 and core 1.
+static SLOTS: fb::Slots = fb::Slots::new();
 
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
-/// What the display task is asked to put on the panel. One writer at a time
-/// by convention: `frames` owns it while a stream is running, `status` owns
-/// it otherwise, and a pattern command freezes whatever it drew.
-static FRAME: Mutex<CriticalSectionRawMutex, Frame> = Mutex::new(Frame::new());
-
-/// Bumped by whoever last changed `FRAME`, so the display task can tell new
-/// content from a repeat without taking the lock.
-static FRAME_SEQ: AtomicU32 = AtomicU32::new(0);
-static FRAMES_RECEIVED: AtomicU32 = AtomicU32::new(0);
-static FRAMES_DROPPED: AtomicU32 = AtomicU32::new(0);
-
 /// Panel refreshes actually pushed, for the measured refresh rate.
-static SWAPS: AtomicU32 = AtomicU32::new(0);
+pub static SWAPS: AtomicU32 = AtomicU32::new(0);
 /// Last sRGB888 -> DMA conversion, in microseconds.
-static RENDER_US: AtomicU32 = AtomicU32::new(0);
-/// Maximum since boot, and maximum within the current telemetry period.
+pub static RENDER_US: AtomicU32 = AtomicU32::new(0);
+/// Maximum since boot, and maximum within the current serial-telemetry period.
 ///
 /// Both, because they answer different questions and the first one hides the
-/// second. WiFi association preempts the display task for most of a second
-/// exactly once, at boot; a since-boot maximum therefore reads ~640000 forever
-/// and says nothing about whether the steady state is healthy. The windowed
-/// figure is the one to watch while streaming.
-static RENDER_US_MAX: AtomicU32 = AtomicU32::new(0);
-static RENDER_US_MAX_WINDOW: AtomicU32 = AtomicU32::new(0);
+/// second. Card 007 found WiFi association preempting the display task for
+/// most of a second exactly once, at boot; a since-boot maximum therefore
+/// read ~640000 forever and said nothing about the steady state. Whether that
+/// still happens with the display on core 1 is one of card 008's measurements.
+pub static RENDER_US_MAX: AtomicU32 = AtomicU32::new(0);
+pub static RENDER_US_MAX_WINDOW: AtomicU32 = AtomicU32::new(0);
+/// The same maximum again, for telemetry byte 42, where `RESET_STATS` owns
+/// the reset instead of the 5-second log window.
+pub static RENDER_US_MAX_PROTO: AtomicU32 = AtomicU32::new(0);
 
-static BRIGHTNESS: AtomicU8 = AtomicU8::new(display::DEFAULT_BRIGHTNESS);
+pub static BRIGHTNESS: AtomicU8 = AtomicU8::new(display::DEFAULT_BRIGHTNESS);
 /// Bench-only escape hatch: raw output-enable slots, ignoring the power cap.
-/// `u8::MAX` means "not overridden". See `testcmd`.
-static OE_OVERRIDE: AtomicU8 = AtomicU8::new(u8::MAX);
-static OE_OVERRIDE_DEADLINE_MS: AtomicU32 = AtomicU32::new(0);
+/// `u8::MAX` means "not overridden". See `receiver::Core::bench`.
+pub static OE_OVERRIDE: AtomicU8 = AtomicU8::new(u8::MAX);
+pub static OE_OVERRIDE_DEADLINE_MS: AtomicU32 = AtomicU32::new(0);
 /// Set whenever the brightness the panel is showing may be stale. Two,
 /// because there are two framebuffers and the setting lives in the buffer.
-static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
+pub static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
 
 /// First pixel-clock slot of the scan row that the panel is allowed to be
-/// lit for. **This is the anti-ghosting control.** A HUB75 panel ghosts onto
-/// the scan-adjacent row when it is still lit as the next row's address goes
-/// out, so the first slots after the latch have to stay dark. The
-/// `trail-blank-8` feature sets the default; card 007 swept it on the bench
-/// from here rather than by rebuilding eight times.
-static OE_START: AtomicU8 = AtomicU8::new(FrameBuffer::OE_DEFAULT_START as u8);
+/// lit for. **This is the anti-ghosting control.** Card 007 swept it on the
+/// bench and found nothing to fix; it stays at the `trail-blank-8` default.
+pub static OE_START: AtomicU8 = AtomicU8::new(FrameBuffer::OE_DEFAULT_START as u8);
 
-static GAMMA_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.gamma);
-static DITHER_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.dither);
+pub static GAMMA_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.gamma);
+pub static DITHER_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.dither);
 
-/// `0` = follow the stream / status screen. `n > 0` = hold pattern `n - 1`.
-static PATTERN_HOLD: AtomicU8 = AtomicU8::new(0);
+/// `0` = follow the stream / idle screen. `n > 0` = hold pattern `n - 1`.
+pub static PATTERN_HOLD: AtomicU8 = AtomicU8::new(0);
 
-/// Milliseconds since boot of the last received frame datagram.
-static LAST_FRAME_MS: AtomicU32 = AtomicU32::new(0);
+/// Last beacon RSSI, telemetry byte 44. 0 means "never reported".
+pub static RSSI_DBM: AtomicI8 = AtomicI8::new(0);
+/// The join state of `GET_WIFI`; see [`screeny_proto::control::wifi_state`].
+pub static WIFI_STATE: AtomicU8 = AtomicU8::new(wifi_state::CONNECTING);
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -160,7 +191,7 @@ macro_rules! mk_static {
 }
 pub(crate) use mk_static;
 
-fn now_ms() -> u32 {
+pub fn now_ms() -> u32 {
     EmbassyInstant::now().as_millis() as u32
 }
 
@@ -190,7 +221,7 @@ fn target_oe_slots() -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Display
+// Display — core 1, and nothing else runs there
 // ---------------------------------------------------------------------------
 
 /// Owns the panel and both framebuffers.
@@ -204,10 +235,18 @@ fn target_oe_slots() -> usize {
 ///   refreshes, so the buffer has to be rewritten every refresh and the loop
 ///   free-runs. `swap()` blocks until a frame boundary, so the loop rate *is*
 ///   the refresh rate; nothing else paces it.
+///
+/// Since card 008 it takes its frames from [`fb::Consumer`], which never
+/// blocks and never copies, so nothing on core 0 can stall a refresh and a
+/// refresh cannot stall a decode.
 #[embassy_executor::task]
-async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'static mut FrameBuffer) {
+async fn display_task(
+    hub75: Hub75<esp_hal::Async, FrameBuffer>,
+    mut fb: &'static mut FrameBuffer,
+    mut frames: fb::Consumer,
+) {
     info!(
-        "display: {} planes, {} Hz refresh (driver), {} bytes/buffer, OE slots 0..={} (cap {}), OE start {}",
+        "display: core 1, {} planes, {} Hz refresh (driver), {} bytes/buffer, OE slots 0..={} (cap {}), OE start {}",
         PLANES,
         REFRESH_HZ,
         core::mem::size_of::<FrameBuffer>(),
@@ -216,43 +255,35 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
         OE_START.load(Ordering::Relaxed),
     );
 
-    let mut last_seq = u32::MAX;
     let mut phase: u16 = 0;
+    let mut last_mode = mode();
     loop {
-        let dither = DITHER_ON.load(Ordering::Relaxed);
-        let seq = FRAME_SEQ.load(Ordering::Relaxed);
+        let m = mode();
+        let mode_changed = m != last_mode;
+        last_mode = m;
+        let fresh = frames.acquire();
         let dirty = BRIGHTNESS_DIRTY.load(Ordering::Relaxed) > 0;
 
-        if !dither && seq == last_seq && !dirty {
+        if !m.dither && !fresh && !dirty && !mode_changed {
             // Nothing to do. At 30 fps this wakes about twice per frame.
             Timer::after(Duration::from_millis(4)).await;
             continue;
         }
-        last_seq = seq;
 
         if dirty {
             // The setting lives in the framebuffer, not the peripheral, so it
             // has to be written into each of the two in turn.
-            fb.set_oe_window(
-                OE_START.load(Ordering::Relaxed) as usize,
-                target_oe_slots(),
-            );
+            fb.set_oe_window(OE_START.load(Ordering::Relaxed) as usize, target_oe_slots());
             BRIGHTNESS_DIRTY.fetch_sub(1, Ordering::Relaxed);
         }
 
-        {
-            // The clock starts *after* the lock: waiting for the frame task
-            // to finish writing is queueing, not conversion, and mixing the
-            // two produced a 641 ms "conversion" during WiFi association the
-            // first time this was measured.
-            let frame = FRAME.lock().await;
-            let t0 = Instant::now();
-            display::render(&frame, fb, mode(), phase);
-            let us = t0.elapsed().as_micros() as u32;
-            RENDER_US.store(us, Ordering::Relaxed);
-            RENDER_US_MAX.fetch_max(us, Ordering::Relaxed);
-            RENDER_US_MAX_WINDOW.fetch_max(us, Ordering::Relaxed);
-        }
+        let t0 = Instant::now();
+        display::render(frames.front(), fb, m, phase);
+        let us = t0.elapsed().as_micros() as u32;
+        RENDER_US.store(us, Ordering::Relaxed);
+        RENDER_US_MAX.fetch_max(us, Ordering::Relaxed);
+        RENDER_US_MAX_WINDOW.fetch_max(us, Ordering::Relaxed);
+        RENDER_US_MAX_PROTO.fetch_max(us, Ordering::Relaxed);
         phase = phase.wrapping_add(1);
 
         let mut xfer = hub75.swap(fb).expect("swap already in flight");
@@ -263,70 +294,46 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
 }
 
 // ---------------------------------------------------------------------------
-// Status screen
-// ---------------------------------------------------------------------------
-
-/// Draws the idle screen whenever no stream is running and no pattern is
-/// held. Redraws on state change, and every second while idle so the clock of
-/// "nothing is streaming" keeps ticking even if the display task is asleep.
-#[embassy_executor::task]
-async fn status_task(stack: embassy_net::Stack<'static>) {
-    let mut shown: Option<(status::Net, u8, bool)> = None;
-    // "joining" and "lost" are the same state to the network stack and very
-    // different states to someone looking at the panel, so the difference is
-    // whether we ever got as far as an address.
-    let mut had_address = false;
-    loop {
-        let net = if let Some(cfg) = stack.config_v4() {
-            let o = cfg.address.address().octets();
-            had_address = true;
-            status::Net::Address(o)
-        } else if stack.is_link_up() {
-            status::Net::Associated
-        } else if had_address {
-            status::Net::Lost
-        } else {
-            status::Net::Joining
-        };
-
-        let streaming =
-            now_ms().wrapping_sub(LAST_FRAME_MS.load(Ordering::Relaxed)) < STREAM_IDLE.as_millis() as u32;
-        let hold = PATTERN_HOLD.load(Ordering::Relaxed);
-        let brightness = BRIGHTNESS.load(Ordering::Relaxed);
-
-        if hold == 0 && !streaming {
-            let want = (net, brightness, true);
-            if shown != Some(want) {
-                let mut frame = FRAME.lock().await;
-                status::draw(&mut frame, net, brightness);
-                drop(frame);
-                FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
-                shown = Some(want);
-            }
-        } else {
-            shown = None;
-        }
-        Timer::after(Duration::from_millis(200)).await;
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Network
 // ---------------------------------------------------------------------------
 
 #[embassy_executor::task]
 async fn wifi_task(mut controller: WifiController<'static>) {
     loop {
+        WIFI_STATE.store(wifi_state::CONNECTING, Ordering::Relaxed);
         match controller.connect_async().await {
             Ok(info) => {
                 info!(
                     "wifi: connected ssid {:?} ch {} bssid {:02x?}",
                     info.ssid, info.channel, info.bssid
                 );
-                let reason = controller.wait_for_disconnect_async().await;
-                warn!("wifi: disconnected {:?}", reason);
+                WIFI_STATE.store(wifi_state::CONNECTED, Ordering::Relaxed);
+                // Poll the beacon RSSI for telemetry byte 44 and the status
+                // screen's bars, and notice a disconnect either way.
+                loop {
+                    if let Ok(r) = controller.rssi() {
+                        RSSI_DBM.store(r.clamp(-128, 0) as i8, Ordering::Relaxed);
+                    }
+                    match embassy_time::with_timeout(
+                        Duration::from_secs(2),
+                        controller.wait_for_disconnect_async(),
+                    )
+                    .await
+                    {
+                        Ok(reason) => {
+                            warn!("wifi: disconnected {:?}", reason);
+                            break;
+                        }
+                        Err(_) => continue,
+                    }
+                }
+                WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
+                RSSI_DBM.store(0, Ordering::Relaxed);
             }
-            Err(e) => warn!("wifi: connect failed {:?}", e),
+            Err(e) => {
+                warn!("wifi: connect failed {:?}", e);
+                WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
+            }
         }
         Timer::after(Duration::from_millis(2000)).await;
     }
@@ -337,71 +344,55 @@ async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
 }
 
-/// UDP 49374. Still the spike's raw-RGB888 test receiver, plus the bench
-/// command channel in `testcmd`. Card 008 replaces the whole task.
-#[embassy_executor::task]
-async fn frame_task(stack: embassy_net::Stack<'static>) {
-    stack.wait_config_up().await;
-    if let Some(cfg) = stack.config_v4() {
-        info!("net: address {}", cfg.address);
-    }
-
-    let rx_meta = mk_static!([PacketMetadata; 8], [PacketMetadata::EMPTY; 8]);
-    let rx_buf = mk_static!([u8; 4 * MAX_DATAGRAM], [0u8; 4 * MAX_DATAGRAM]);
-    let tx_meta = mk_static!([PacketMetadata; 4], [PacketMetadata::EMPTY; 4]);
-    let tx_buf = mk_static!([u8; MAX_DATAGRAM], [0u8; MAX_DATAGRAM]);
-
-    let mut socket = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
-    socket.bind(FRAME_PORT).expect("bind failed");
-    info!("net: listening on udp/{}", FRAME_PORT);
-
-    let mut datagram = [0u8; MAX_DATAGRAM];
-    loop {
-        let (len, _from) = match socket.recv_from(&mut datagram).await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("net: recv error {:?}", e);
-                continue;
-            }
-        };
-        testcmd::handle(&datagram[..len]).await;
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Telemetry
+// Telemetry (serial)
 // ---------------------------------------------------------------------------
 
-/// The numbers the camera cannot measure. Every one of these feeds the frame
-/// time budget table in card 007's log.
+/// The numbers the camera cannot measure, on the serial log. The protocol's
+/// own telemetry is spec section 6.7 and goes out over UDP; this is for a
+/// bench session watching `espflash monitor`.
 #[embassy_executor::task]
 async fn telemetry_task() {
     const PERIOD_S: u32 = 5;
-    let mut last_frames = 0u32;
     let mut last_swaps = 0u32;
+    let mut last_rx = 0u32;
+    let mut last_shown = 0u32;
     loop {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
-        let frames = FRAMES_RECEIVED.load(Ordering::Relaxed);
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
+        let t = {
+            let mut guard = net::CORE.lock().await;
+            let core = guard.as_mut().expect("core exists");
+            core.telemetry(EmbassyInstant::now().as_micros())
+        };
         info!(
-            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {} this window, {} since boot) | bright {} -> {} slots from {} | gamma {} dither {} | heap used {} free {}",
-            frames.wrapping_sub(last_frames) / PERIOD_S,
+            "telemetry: {} fps rx, {} fps shown, {} swaps/s | drops stale {} superseded {} decode {} rejected {} gaps {} | ia {} us jit {} us | decode {} us (max {}) | render {} us (max {} window, {} boot) | state {} codec {:#04x} rssi {} bright {} | heap {}/{}",
+            t.frames_rx.wrapping_sub(last_rx) / PERIOD_S,
+            t.frames_shown.wrapping_sub(last_shown) / PERIOD_S,
             swaps.wrapping_sub(last_swaps) / PERIOD_S,
-            FRAMES_DROPPED.load(Ordering::Relaxed),
+            t.frames_dropped_stale,
+            t.frames_dropped_superseded,
+            t.frames_dropped_decode,
+            t.frames_rejected,
+            t.seq_gaps,
+            t.interarrival_us,
+            t.jitter_us,
+            t.decode_us,
+            t.decode_us_max,
             RENDER_US.load(Ordering::Relaxed),
             RENDER_US_MAX_WINDOW.swap(0, Ordering::Relaxed),
             RENDER_US_MAX.load(Ordering::Relaxed),
-            BRIGHTNESS.load(Ordering::Relaxed),
-            target_oe_slots(),
-            OE_START.load(Ordering::Relaxed),
-            GAMMA_ON.load(Ordering::Relaxed) as u8,
-            DITHER_ON.load(Ordering::Relaxed) as u8,
+            t.state,
+            t.last_codec,
+            t.rssi_dbm,
+            t.brightness,
             stats.current_usage,
-            stats.size - stats.current_usage,
+            stats.size,
         );
-        last_frames = frames;
         last_swaps = swaps;
+        last_rx = t.frames_rx;
+        last_shown = t.frames_shown;
     }
 }
 
@@ -419,26 +410,24 @@ async fn main(spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
+    // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
+    // costs nothing, plus a smaller slice of ordinary `.bss`.
+    //
+    // Card 007 shipped 64 + 48 KB and measured 45.4 KB in use. Card 008 adds
+    // ~40 KB of `.bss` — three 6 KB frame slots, the cross-fade source, core
+    // 1's stack and two more sockets — and on this chip **`.bss` and core 0's
+    // main stack come out of the same pocket**: the stack is whatever is left
+    // between `_bss_end` and 0x3ffe0000. Taking 16 KB back off the heap is
+    // what pays for it. Symptom if this is ever too tight again: a
+    // "write to the stack guard value on ProCpu" panic inside `main`, from
+    // the two 12 KB `FrameBuffer::new()` temporaries just below.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 48 * 1024);
+    esp_alloc::heap_allocator!(size: 32 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
     // --- panel ------------------------------------------------------------
-    let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
-    let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
-    // Come up already dimmed. `FrameBuffer::new()` formats for the widest
-    // output-enable window the build can produce, which is well over the
-    // power cap; letting a single refresh out at that duty would be a bug
-    // with a current spike attached to it.
-    let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
-    fb0.set_oe_slots(slots);
-    fb1.set_oe_slots(slots);
-    BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
-
-    let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
-
     assert_pin(&peripherals.GPIO21, tidbyt::pins::R1);
     assert_pin(&peripherals.GPIO2, tidbyt::pins::G1);
     assert_pin(&peripherals.GPIO22, tidbyt::pins::B1);
@@ -491,17 +480,76 @@ async fn main(spawner: Spawner) {
         latch: peripherals.GPIO19.degrade(),
     };
 
-    let hub75 = Hub75::new_async(
-        peripherals.I2S0,
-        pins,
-        peripherals.DMA_I2S0,
-        tx_descriptors,
-        Hub75Config::new()
-            .with_frequency(PIXEL_CLOCK)
-            .with_interrupt_priority(Priority::Priority3),
-        &*fb0,
-    )
-    .expect("hub75 init failed");
+    let (producer, consumer) = SLOTS.split();
+
+    // --- core 1 ------------------------------------------------------------
+    //
+    // The panel is built *here*, inside the second core's entry point, rather
+    // than on core 0 and moved. `esp_hal` enables an interrupt on whichever
+    // core asks, so constructing the HUB75 driver on core 1 puts its DMA
+    // completion interrupt on core 1 too. Built on core 0 it would still
+    // work, but every one of the 154 refreshes a second would take an
+    // interrupt on the core we are trying to keep free.
+    let i2s = peripherals.I2S0;
+    let dma = peripherals.DMA_I2S0;
+    // The two DMA framebuffers are built *here*, on core 0's generous main
+    // stack, and only their `&'static mut`s cross over. `FrameBuffer::new()`
+    // materialises a 12 KB value before `StaticCell::write` moves it, which
+    // core 1's 16 KB stack will not survive twice — the first flash of this
+    // firmware died exactly there.
+    let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
+    let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
+    // Come up already dimmed. `FrameBuffer::new()` formats for the widest
+    // output-enable window the build can produce, which is well over the
+    // power cap; letting a single refresh out at that duty would be a bug
+    // with a current spike attached to it.
+    let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
+    fb0.set_oe_slots(slots);
+    fb1.set_oe_slots(slots);
+    BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
+    let tx_descriptors = esp_hub75::hub75_dma_descriptors!(FrameBuffer);
+
+    let build_hub75 = move || {
+        Hub75::new_async(
+            i2s,
+            pins,
+            dma,
+            tx_descriptors,
+            Hub75Config::new()
+                .with_frequency(PIXEL_CLOCK)
+                .with_interrupt_priority(Priority::Priority3),
+            &*fb0,
+        )
+        .expect("hub75 init failed")
+    };
+
+    #[cfg(not(feature = "display-on-core0"))]
+    esp_rtos::start_second_core(
+        peripherals.CPU_CTRL,
+        peripherals.FROM_CPU_INTR1,
+        APP_CORE_STACK.take(),
+        move || {
+            let hub75 = build_hub75();
+            let executor = mk_static!(
+                esp_rtos::embassy::Executor,
+                esp_rtos::embassy::Executor::new()
+            );
+            executor.run(|spawner| {
+                spawner.spawn(display_task(hub75, fb1, consumer).unwrap());
+            });
+        },
+    );
+
+    // The `display-on-core0` build exists only to be measured against the
+    // one above: same decode path, same triple buffer, same everything, with
+    // the display sharing core 0's executor the way card 007 shipped it. It
+    // is not a configuration to run the panel in.
+    #[cfg(feature = "display-on-core0")]
+    {
+        let _ = (peripherals.CPU_CTRL, peripherals.FROM_CPU_INTR1);
+        warn!("display: BENCH BUILD - display task is on core 0");
+        spawner.spawn(display_task(build_hub75(), fb1, consumer).unwrap());
+    }
 
     // --- wifi -------------------------------------------------------------
     let station = WifiConfig::Station(
@@ -527,29 +575,48 @@ async fn main(spawner: Spawner) {
 
     let interface = Interface::station();
 
+    // Spec section 5.1: the device id is the last three bytes of the station
+    // MAC in lowercase hex, and it is what `id=`, the default name and the
+    // mDNS host name are all built from.
+    let mac = interface.mac_address();
+    let id = {
+        let mut s = heapless::String::<8>::new();
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for b in &mac[3..6] {
+            let _ = s.push(HEX[(b >> 4) as usize] as char);
+            let _ = s.push(HEX[(b & 0xf) as usize] as char);
+        }
+        s
+    };
+    info!("device: mac {:02x?} id {}", mac, id.as_str());
+
     let rng = Rng::new();
     let seed = ((rng.random() as u64) << 32) | rng.random() as u64;
 
     let (stack, runner) = embassy_net::new(
         interface,
         embassy_net::Config::dhcpv4(Default::default()),
-        mk_static!(StackResources<4>, StackResources::<4>::new()),
+        mk_static!(StackResources<6>, StackResources::<6>::new()),
         seed,
     );
 
-    // Something on the panel before WiFi has a chance to take nine seconds.
     {
-        let mut frame = FRAME.lock().await;
-        status::draw(&mut frame, status::Net::Joining, display::DEFAULT_BRIGHTNESS);
+        let mut guard = net::CORE.lock().await;
+        *guard = Some(receiver::Core::new(&id));
     }
-    FRAME_SEQ.fetch_add(1, Ordering::Relaxed);
 
-    spawner.spawn(display_task(hub75, fb1).unwrap());
+    let host: &'static str = {
+        let s = mk_static!(heapless::String<16>, heapless::String::new());
+        let _ = s.push_str("screeny-");
+        let _ = s.push_str(&id);
+        s.as_str()
+    };
+
     spawner.spawn(wifi_task(controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
-    spawner.spawn(frame_task(stack).unwrap());
-    spawner.spawn(status_task(stack).unwrap());
-    spawner.spawn(mdns::mdns_task(stack).unwrap());
+    spawner.spawn(net::frames_task(stack, producer, host).unwrap());
+    spawner.spawn(net::control_task(stack).unwrap());
+    spawner.spawn(mdns::mdns_task(stack, host).unwrap());
     spawner.spawn(telemetry_task().unwrap());
 
     loop {

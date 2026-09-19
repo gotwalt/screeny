@@ -18,28 +18,48 @@ pub const NPIX: usize = COLS * ROWS;
 // The sRGB frame
 // ---------------------------------------------------------------------------
 
-/// One frame of sRGB888, exactly as `crates/proto` will hand it over.
+/// One frame of sRGB888, in exactly the layout `crates/proto` decodes into.
+///
+/// `px` *is* [`screeny_proto::Rgb888Frame`] — a flat `[u8; 6144]`, three bytes
+/// per pixel, row-major — so a decoder writes straight into the framebuffer
+/// the display will scan out, with no repacking step in between.
 #[derive(Clone)]
 pub struct Frame {
-    pub px: [[u8; 3]; NPIX],
+    pub px: screeny_proto::Rgb888Frame,
 }
 
 impl Frame {
     pub const fn new() -> Self {
         Self {
-            px: [[0u8; 3]; NPIX],
+            px: [0u8; NPIX * 3],
         }
     }
 
     #[inline]
     pub fn set(&mut self, x: usize, y: usize, rgb: [u8; 3]) {
         if x < COLS && y < ROWS {
-            self.px[y * COLS + x] = rgb;
+            let i = (y * COLS + x) * 3;
+            self.px[i] = rgb[0];
+            self.px[i + 1] = rgb[1];
+            self.px[i + 2] = rgb[2];
         }
     }
 
     pub fn clear(&mut self) {
-        self.px = [[0u8; 3]; NPIX];
+        self.px = [0u8; NPIX * 3];
+    }
+
+    /// Copy another frame over this one.
+    pub fn copy_from(&mut self, other: &Frame) {
+        self.px.copy_from_slice(&other.px);
+    }
+
+    /// `dst = self * n / 256`, per channel.
+    pub fn scale(&mut self, n: u16) {
+        let n = n.min(256) as u32;
+        for b in self.px.iter_mut() {
+            *b = ((*b as u32 * n + 128) >> 8) as u8;
+        }
     }
 }
 
@@ -138,10 +158,10 @@ impl Mode {
 pub fn render(frame: &Frame, fb: &mut FrameBuffer, mode: Mode, phase: u16) {
     let mut row = [[0u8; 3]; COLS];
     for y in 0..ROWS {
-        let src = &frame.px[y * COLS..(y + 1) * COLS];
+        let src = &frame.px[y * COLS * 3..(y + 1) * COLS * 3];
         let bayer = &BAYER4[y & 3];
         for x in 0..COLS {
-            let [r, g, b] = src[x];
+            let (r, g, b) = (src[x * 3], src[x * 3 + 1], src[x * 3 + 2]);
             let (qr, qg, qb) = if mode.gamma {
                 (gamma::gamma_q(r), gamma::gamma_q(g), gamma::gamma_q(b))
             } else {

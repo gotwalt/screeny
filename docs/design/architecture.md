@@ -24,6 +24,12 @@ crates/
                       telemetry, mDNS as `screeny-sim`), decodes with `proto`, shows an
                       LED-dot window, and has a headless mode that dumps frames + stats
                       for tests. The reference for anyone without hardware access.
+  probe/              std. `screeny-probe` (card 008), the bench instrument: streams
+                      the checked-in vectors at a paced rate, drives the source lock
+                      from two sockets, and probes the MUSTs only a *device* can fail.
+                      Not the product - it sends payloads somebody else encoded and
+                      reports what the device says it received. Prove changes against
+                      `sim` before pointing it at hardware.
 firmware/             its own cargo project (esp toolchain, xtensa-esp32-none-elf),
                       NOT a workspace member. Depends on crates/proto by path.
 lab/                  card 002's codec lab. Frozen reference; not a workspace member.
@@ -48,24 +54,58 @@ firmware's final sRGB8 -> panel duty lookup.
 
 ## Firmware
 
-Embassy tasks on esp-rtos, all on core 0 unless measurement says otherwise:
+Embassy tasks on esp-rtos, **split across both cores** (card 008):
 
-| Task | Job |
+| Core | Task | Job |
+|---|---|---|
+| 1 | `display` | owns esp-hub75 + both DMA framebuffers; converts the front sRGB888 frame through the gamma LUT and the dither phase into the inactive DMA buffer and swaps at a refresh boundary. Takes new frames from the triple buffer; blocks on nothing |
+| 0 | `wifi` | associate, reconnect forever, modem sleep off, poll RSSI |
+| 0 | `net` | embassy-net runner |
+| 0 | `frames` | UDP 49374: drain the socket until it would block, keep the newest valid FRAME for the active source, decode into the display's back buffer (never partially visible), publish. Owns the source lock, the idle state machine, and therefore also the idle screen, the cross-fade and the IDENTIFY overlay |
+| 0 | `control` | UDP 49375: every opcode in protocol-v1 section 6.3 |
+| 0 | `mdns` | `_screeny._udp` responder; TXT built by parsing the GET_INFO body back out, so the two cannot drift. Re-announces on SET_NAME |
+| 0 | `telemetry` | the serial-log line a camera cannot measure. The protocol's own telemetry is section 6.7 and leaves by the sockets above |
+
+There is no `status` task: a state machine that knows whether a source holds the
+lock is also what knows whether the idle screen is wanted, so the `frames` task
+composes it and is the **single writer** to the display.
+
+**The handoff between the two halves is `firmware/src/fb.rs`: a lock-free triple
+buffer.** Three 6 KB sRGB slots and one atomic word; publish and acquire are one
+swap each. No mutex, no copy, and no critical section to disturb the `Priority3`
+refresh ISR. The invariant that makes it sound is that the producer's slot index
+and the consumer's are never equal, so `back()` and `front()` cannot alias — which
+is also why tearing is structurally impossible rather than merely unobserved.
+
+Card 008 measured the split itself as *neutral* at 30 fps and up to 120 fps: the
+lock-free handoff is what fixed card 007's "newest wins can never fire", and the
+core split on top of it buys headroom (core 0's display cost drops from ~48% to
+~2%) that nothing needs yet. `--features display-on-core0` keeps the A/B build.
+
+Memory on this chip is tighter than card 001 assumed, and the reason is worth
+carrying: **`.bss` and core 0's main stack come out of the same pocket**, the
+region between `_bss_end` and `0x3ffe0000`, while the 64 KB reclaimed-ROM heap
+sits above the stack where it cannot help. Budget:
+
+| | |
 |---|---|
-| `display` | owns esp-hub75 + two DMA framebuffers; on a "new frame" signal converts the decoded RGB888 back buffer through the gamma/brightness LUT into the inactive DMA buffer and swaps at a refresh boundary |
-| `wifi` | associate, reconnect forever, modem sleep off |
-| `net` | embassy-net runner |
-| `frames` | UDP 49374: drain socket, keep newest valid FRAME for the active source, decode into the RGB888 back buffer (never partially visible), signal `display`; source lock + idle timeout state machine |
-| `control` | UDP 49375: GET_INFO, PING, telemetry, brightness, identify, reboot, SET_WIFI |
-| `mdns` | `_screeny._udp` responder, TXT from the same bytes as GET_INFO |
-| `status` | draws boot / connecting / IP / idle screens with a bitmap font when no stream is active |
+| two DMA framebuffers | 2 x 12,312 B (`.bss`) |
+| triple buffer + cross-fade source | 4 x 6,144 B (`.bss`) |
+| core 1's stack | 16 KB (`.bss`) |
+| heap | 64 KB reclaimed + 32 KB `.bss`; 45.4 KB in use |
+| core 0's main stack | 37,744 B, and it must hold a 12 KB `FrameBuffer::new()` temporary |
 
-Memory (card 001): two 12.3 KB DMA framebuffers + one 6 KB RGB888 decode buffer +
-WiFi heap. Decoders need no scratch.
+Decoders need no scratch beyond `decode_pal8_lz`'s 768-byte stack palette.
 
 Display quality roadmap, in order: gamma LUT (required for v1) -> ghosting fix ->
 brightness without losing bit depth (card 020) -> temporal dithering across refreshes
-(card 030). Codec selection in the sender already assumes the dithered panel.
+(card 030). All four are done. Codec selection in the sender assumes the dithered panel.
+
+Bench levers (gamma, dither, output-enable window, held test patterns) are private
+control opcode `0x80`, which section 6.3 reserves for exactly that. They are
+deliberately **not** on the frame port: every datagram arriving on 49374 has to be
+either a conforming frame or a `frames_rejected`, or the counter a sender reads to
+diagnose its video stream stops meaning anything.
 
 ## Sender
 

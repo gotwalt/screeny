@@ -830,6 +830,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "screeny-probe"
+version = "0.1.0"
+dependencies = [
+ "screeny-proto",
+]
+
+[[package]]
 name = "screeny-proto"
 version = "0.1.0"
 
