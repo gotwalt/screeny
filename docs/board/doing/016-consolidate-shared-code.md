@@ -160,3 +160,45 @@ stack whatever is left below `0x3ffe0000`. 37,536 B still holds the 12 KB
 generic `Receiver<IpEndpoint>` monomorphised plus the `Params`/`Timing`
 constructor the device now runs at boot: worth it, and nowhere near a
 constraint on a 8 MB part.
+
+### 2026-09-19 - bench: the device on the shared core
+
+Flashed `firmware/target/xtensa-esp32-none-elf/release/screeny-fw` (743,408 B
+app image) with `/Users/aaron/src/screeny/tools/fw-run.sh ... c016-flash 25`,
+one `espflash` at a time, 230400 baud, stock backup present, no erase. Boot log
+`captures/c016-flash.log`: display on core 1, 6 planes, 154 Hz, OE slots 0..=55
+(cap 25); wifi up; mDNS `screeny-4a00a4.local -> 192.168.7.221`, 10 TXT keys;
+**heap 45,344 / 98,304 in use**, which is card 008's 45.4 KB unchanged.
+
+The camera still failed: the daemon is running, but ffmpeg reports "Video
+device not found / Anker PowerConf C200". Not my hardware to fix, so no stills
+this card; everything below is measured over the wire instead.
+
+`screeny-probe --addr 192.168.7.221 conformance` - **all PASS** (22 checks:
+sections 2.2, 3.2, 3.3, 4.7, 5.5, 6.1, 6.2, 6.3, 6.5). Worth naming, because
+they are exactly what a rewritten receive path could have broken: the three
+GET_INFO rate-limit cases including the retransmission exemption, the four
+frame-port reject counters, `rx = shown + superseded + decode`, the stale and
+gap counters, and SET_BRIGHTNESS clamping to 160.
+
+`screeny-probe --addr 192.168.7.221 lock-test` - **all PASS** (11 checks): the
+whole of section 7.4 including BUSY rate limiting (2 packets for ~63 rejected
+frames), takeover at LOCK_MS, FINAL releasing the lock, RELEASE from the same
+IP, and the stream timeout.
+
+`screeny-probe --addr 192.168.7.221 stream --codec all --fps 30 --secs 60` -
+**PASS**, one run, on the final firmware:
+
+```
+sent 1801 (30.0 fps, 30 kB/s, 0 pacer skips)
+frames_rx 1801 (100.00%)   frames_shown 1797 (99.78%)
+stale 0   superseded 4   decode 0   rejected 0   seq_gaps 0   loss 0
+interarrival/jitter 33474/4501 us   decode 517 us ewma, 2643 us max
+render_us_max 3308 us   telemetry 61 replies, 0 BUSY
+identity rx = shown+sup+dec  1801 vs 1801  OK
+verdict PASS (no decode drops, <1% loss, nothing rejected)
+```
+
+Zero decode drops, as the card requires. The four superseded frames are
+section 3.3 doing its job. Card 008's 30 fps row was 1801/1797-1800 with 0-4
+superseded, so this is the same device behaving the same way.
