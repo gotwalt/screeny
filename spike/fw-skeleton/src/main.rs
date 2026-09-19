@@ -52,7 +52,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Configuration
 // ---------------------------------------------------------------------------
 
-const SSID: &str = "example-wifi1";
+const SSID: &str = "Example-Wifi1";
 const PASSWORD: &str = "password9";
 
 /// Ports from card 003. The control port is not implemented here; it is named
@@ -185,6 +185,21 @@ fn scale(v: u8) -> u8 {
 /// Keeps the station associated, reconnecting forever.
 #[embassy_executor::task]
 async fn wifi_task(mut controller: WifiController<'static>) {
+    // Bring-up aid: list what the radio can actually see before trying to join.
+    match controller
+        .scan_async(&esp_radio::wifi::scan::ScanConfig::default().with_max(20))
+        .await
+    {
+        Ok(aps) => {
+            for ap in aps {
+                info!(
+                    "scan: {:?} ch {} rssi {} auth {:?}",
+                    ap.ssid, ap.channel, ap.signal_strength, ap.auth_method
+                );
+            }
+        }
+        Err(e) => warn!("scan failed {:?}", e),
+    }
     loop {
         match controller.connect_async().await {
             Ok(info) => {
@@ -341,12 +356,14 @@ async fn main(spawner: Spawner) {
 
     // Tidbyt Gen 1 map; see `tidbyt::pins` for where each number comes from.
     let pins = Hub75Pins16 {
-        red1: peripherals.GPIO21.degrade(),
-        grn1: peripherals.GPIO2.degrade(),
-        blu1: peripherals.GPIO22.degrade(),
-        red2: peripherals.GPIO23.degrade(),
-        grn2: peripherals.GPIO4.degrade(),
-        blu2: peripherals.GPIO27.degrade(),
+        // Observed on this unit (MAC b4:8a:0a:4a:00:a4): the lines the hdk names
+        // R/G/B drive blue/red/green respectively, so the colours are rotated here.
+        red1: peripherals.GPIO2.degrade(),
+        grn1: peripherals.GPIO22.degrade(),
+        blu1: peripherals.GPIO21.degrade(),
+        red2: peripherals.GPIO4.degrade(),
+        grn2: peripherals.GPIO27.degrade(),
+        blu2: peripherals.GPIO23.degrade(),
         addr0: peripherals.GPIO26.degrade(),
         addr1: peripherals.GPIO5.degrade(),
         addr2: peripherals.GPIO25.degrade(),

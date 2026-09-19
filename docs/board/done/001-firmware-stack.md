@@ -55,7 +55,7 @@ fallback (esp-idf-hal/std).
   features, the pin map table, a task/core architecture sketch, and a risk list.
 - `spike/fw-skeleton/`: a minimal crate that **compiles** for `xtensa-esp32-none-elf`
   with the recommended dependency set, initialises embassy, WiFi (SSID
-  `example-wifi1`, password `password9`), a UDP socket, and the HUB75 driver with the
+  `Example-Wifi1`, password `password9`), a UDP socket, and the HUB75 driver with the
   Tidbyt pin map, and draws a test pattern. It will not be flashed by you (no hardware
   access); compiling cleanly is the bar. Note anything you could not verify without
   hardware.

@@ -18,7 +18,7 @@ settled; `docs/research/` holds findings that feed them.
   host simulator. Never use baud rates above 230400 on this port; it corrupts.
 - **Never flash** unless `backup/tidbyt-stock-*.bin` exists (8388608 bytes).
 - **Panel brightness is capped in firmware.** The panel runs off laptop USB.
-- WiFi: SSID `example-wifi1`, password `password9` (owner says this is not secret).
+- WiFi: SSID `Example-Wifi1`, password `password9` (owner says this is not secret).
 - Xtensa toolchain: `. ~/export-esp.sh` then build with the `esp` rustup toolchain.
 - Workers work in their own git worktree/branch and do not merge to `main`; the
   orchestrator merges.

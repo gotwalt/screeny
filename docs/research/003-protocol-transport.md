@@ -297,7 +297,7 @@ what is it called".
 | 5 | BLE / Improv over BLE | Highest: BLE stack plus single-radio Wi-Fi/BLE coexistence, big RAM cost | Not recommended here |
 
 **v1 recommendation: 1 and 2 together**, credentials in `sequential-storage` on
-a dedicated flash partition, plus a compile-time fallback (the `example-wifi1`
+a dedicated flash partition, plus a compile-time fallback (the `Example-Wifi1`
 credentials) used when storage is empty. Add a project-specific rule that costs
 nothing and saves a lot of bench time: **if the stored credentials fail to join
 three times, fall back to the compiled-in ones; if those also fail, say so on

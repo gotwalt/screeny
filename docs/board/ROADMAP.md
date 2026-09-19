@@ -32,6 +32,7 @@ the phase before them has produced what they depend on.
 - 010 fractal zoom sender
 - 011 word clock sender: spells out the current time, animated transitions
 - 012 camera measurement harness: capture, locate panel, compare with sent frames (hardware)
+- 015 macOS code signing + Local Network permission for the sender binaries
 
 ## Phase 4 - tune
 
