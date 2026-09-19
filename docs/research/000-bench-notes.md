@@ -14,12 +14,13 @@ Auto-reset into the bootloader over DTR/RTS works; no button press needed.
 
 Anker PowerConf C200, avfoundation. The Claude desktop app cannot get macOS camera
 permission (it never appears in Privacy > Camera), so captures go through
-`tools/cam-daemon.sh` running in Terminal.app (started with
-`open -a Terminal tools/cam-daemon.sh`). Request a capture with:
+`tools/cam-daemon.sh` running in Terminal.app. Start it with
+`open -a Terminal tools/cam-daemon.sh` (NOT from the Claude terminal pane, which has
+no camera access either). It is single-instance; a second copy exits immediately.
+Request captures with:
 
-    echo snap     > captures/req/NAME.req    # -> captures/NAME.jpg
-    echo "clip 3" > captures/req/NAME.req    # -> captures/NAME.mp4
-    # wait until the .req file disappears; errors land in captures/NAME.err
+    tools/cam-request.sh NAME           # -> captures/NAME.jpg
+    tools/cam-request.sh NAME clip 3    # -> captures/NAME.mp4 (3 s)
 
 ffmpeg quirks: the camera advertises exactly 30.000030 fps and `-framerate 30` fails
 with "Could not lock device for configuration"; pixel format must be one of
