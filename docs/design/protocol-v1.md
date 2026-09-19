@@ -214,6 +214,13 @@ all codecs. Decoders are integer-only, allocation-free and need no scratch RAM.
 Other ids in `lab/src/dec/mod.rs` (`0x01`, `0x03`, `0x20`-`0x27`, `0x30`, `0x31`)
 are lab-only and reserved; v1 devices do not advertise them.
 
+A payload MUST be **exactly** the size its codec calls for: the fixed sizes in
+the table above, and for the variable-rate codecs the palette plus an LZ stream
+that ends where the index plane is complete (§4.4). A receiver MUST reject a
+payload that is longer as well as one that is shorter. Padding, where a sender
+wants it, goes beyond the header's `len` (§2.3), which is where a receiver
+already ignores it.
+
 ### 4.1 `0x02 PAL5`
 
 ```
@@ -239,12 +246,55 @@ pixels in place, back to front.
 
 ### 4.4 LZ stream
 
-The byte-oriented LZ format is defined by the reference decoder
-`lab/src/dec/lz.rs` (to be lifted unchanged into `crates/proto`), which is
-normative until this section is expanded into prose by card 005. A decoder MUST
-bounds-check every literal run and match (offset within already-produced output,
-length within the remaining output) and MUST reject a stream that produces more or
-fewer bytes than the codec requires.
+A byte-aligned LZSS/LZ77. It was chosen over heatshrink because heatshrink's
+bit-level coding needs a stateful bit reader and a ring buffer of its own,
+whereas this format decompresses straight into the destination buffer: a
+compare, a shift and a byte copy per item, no tables, no allocation, no scratch
+RAM.
+
+The output length is **not** carried in the stream. It is fixed by the codec -
+2048 index bytes for `PAL8_LZ`, 1024 nibble bytes for `PAL4_LZ` - and the
+decoder stops when it has produced exactly that many.
+
+```
+ stream  := group*
+ group   := flags:u8  item{0,8}       ; item k is selected by bit (7-k) of flags
+ item    := literal                   ; when the flag bit is 1
+          | match                     ; when the flag bit is 0
+ literal := b:u8                      ; b is appended to the output
+ match   := b0:u8 b1:u8
+            offset = ((b0 << 4) | (b1 >> 4)) + 1     ; 1..=4096, backwards
+            length = (b1 & 0x0F) + 3                 ; 3..=18
+```
+
+A match copies `length` bytes from `offset` bytes before the current end of the
+output, **one byte at a time**, so a match may overlap itself: `offset = 1,
+length = 18` emits eighteen copies of the previous byte, and that is the
+format's only run-length encoding. There is no separate window - the 4096-byte
+offset range covers the whole 2048-byte index plane, so every byte already
+produced is reachable.
+
+A group's eight item slots are read in order, most significant flag bit first.
+A decoder MUST stop at the first item boundary at which the output is complete,
+so an encoder need not pad the final group and the unused low bits of a final
+flag byte mean nothing. A sender MUST NOT emit trailing bytes after the item
+that completes the output; a receiver MUST reject a payload that has them,
+because padding belongs beyond the header's `len` (§2.3), not inside it.
+
+A decoder MUST bounds-check every item before it moves a byte:
+
+- a literal requires one more byte of input;
+- a match requires two more bytes of input, `offset <= bytes produced so far`
+  (otherwise it reaches before the start of the output), and
+  `produced + length <= required output length` (otherwise it overruns);
+
+and MUST reject a stream that produces more or fewer bytes than the codec
+requires, or that ends before the output is complete. Every item appends at
+least one byte, so a decoder that loops while the output is incomplete
+terminates after at most `output length` iterations on any input whatsoever.
+
+Reference implementation: `crates/proto/src/dec/lz.rs`, with vectors in
+`crates/proto/tests/vectors/`.
 
 ### 4.5 `0x28 BC1_DUAL`
 
@@ -254,11 +304,43 @@ fewer bytes than the codec requires.
 flag 0:  [e0 : RGB565 u16le][e1 : RGB565 u16le][idx : 3 bitplanes x 2 B]   8 levels
 flag 1:  [e0 : RGB888][e1 : RGB888][idx : 16 x 2 bits = 4 B]               4 levels
 ```
-Blocks are 4x4 pixels, 16 across and 8 down. Level k is
-`lerp(e0, e1, W[k])`, `lerp(a,b,w) = (a*(256-w) + b*w + 128) >> 8`, with
-`W4 = [0,85,171,256]` and `W8 = [0,37,73,110,146,183,219,256]`. RGB565 endpoints
-expand to 8 bits by bit replication. Interpolation is in sRGB space. Exact bit
-order within the index fields is as in `lab/src/dec/block.rs` (normative, as 4.4).
+Blocks are 4x4 pixels, 16 across and 8 down, in raster order of blocks: block
+`n = by * 16 + bx` covers pixels `x = bx*4 .. bx*4+3`, `y = by*4 .. by*4+3`.
+Within a block the 16 pixels are numbered `j = 0..15` in raster order,
+`x = bx*4 + (j & 3)`, `y = by*4 + (j >> 2)`.
+
+The flag plane is 16 bytes, one bit per block, MSB first: block `n`'s flag is
+bit `7 - (n & 7)` of byte `n >> 3`. It selects what the block's 10 bytes spend
+their bits on, because measurement said the two things a block can be short of
+are *endpoint precision* (dark, smooth blocks, where RGB565's 5-bit steps are
+coarse just where the panel is finest in relative terms) and *gradation*
+(bright smooth ramps, where four levels band).
+
+**Flag 0 - RGB565 endpoints, 8 levels.** Bytes 0..1 are `e0` and bytes 2..3 are
+`e1`, each an RGB565 `u16le` (`rrrrrggg gggbbbbb` once assembled), expanded to 8
+bits per channel by bit replication. Bytes 4..9 are three bitplanes of two bytes
+each: plane `p` occupies bytes `4 + 2p .. 5 + 2p`, and pixel `j` takes bit
+`7 - (j & 7)` of byte `(j >> 3)` within each plane. Plane 0 is the least
+significant bit of the index, plane 2 the most, so
+`idx = b0 | (b1 << 1) | (b2 << 2)`, giving `idx` in 0..=7.
+
+**Flag 1 - RGB888 endpoints, 4 levels.** Bytes 0..2 are `e0` as R, G, B and
+bytes 3..5 are `e1`. Bytes 6..9 hold sixteen 2-bit indices, four per byte, most
+significant pair first: pixel `j` takes bits `7 - 2*(j & 3)` and `6 - 2*(j & 3)`
+of byte `6 + (j >> 2)`, giving `idx` in 0..=3.
+
+Level k is `lerp(e0, e1, W[k])`, `lerp(a,b,w) = (a*(256-w) + b*w + 128) >> 8`,
+with `W4 = [0,85,171,256]` and `W8 = [0,37,73,110,146,183,219,256]`, applied per
+channel. The weights are scaled to 256 so `W[k] + W[n-1-k] == 256`, which
+reproduces BC1's 1/3 and 2/3 points to within one code value while replacing the
+divide with a multiply and a shift. Interpolation is in sRGB (gamma) space: on a
+linear-light LED panel the perceptually even ramp between two colours is the one
+that is even in sRGB, so this is both the cheap option and the right one (card
+002).
+
+Every bit pattern is legal, so this codec has no corrupt case: a payload of
+exactly 1296 bytes always decodes. Reference implementation:
+`crates/proto/src/dec/block.rs`.
 
 ### 4.6 `0x7F SOLID`
 
@@ -319,7 +401,7 @@ Keys are lowercase ASCII, values are ASCII unless noted. Order is as listed;
 | `proto` | `1` | screeny wire protocol version(s) supported, comma-separated |
 | `w` | `64` | panel width in pixels |
 | `h` | `32` | panel height in pixels |
-| `codecs` | `1,3,5` | decimal codec ids the device can decode, comma-separated, preference order (most preferred first) |
+| `codecs` | `16,17,40,2,127` | decimal codec ids the device can decode, comma-separated, preference order (most preferred first) |
 | `mtu` | `1464` | max pixel payload bytes the device accepts |
 | `ctrl` | `49375` | control UDP port |
 | `fw` | `0.1.0` | firmware version |
@@ -441,6 +523,13 @@ Notes:
   runs off laptop USB); `applied` in the reply is the value actually in effect,
   which is how a sender learns the cap.
 - An unknown opcode gets `ERR_UNKNOWN_OP`, not silence, so a sender can probe.
+- `GET_WIFI`'s `state` byte is the join state: 0 `DISCONNECTED` (not associated
+  and not trying), 1 `CONNECTING`, 2 `CONNECTED`, 3 `FAILED` (the last join
+  attempt failed - this is what §8.2 means by "so `GET_WIFI` reports
+  `ERR_WIFI`"). Other values are reserved.
+- `BUSY`'s `reason` byte is 0 `LOCKED` (another source holds the lock, §7.4) in
+  v1. Other values are reserved, so a sender MUST treat an unknown reason the
+  same as `LOCKED`.
 
 ### 6.4 Telemetry piggybacked on the frame stream
 
@@ -843,15 +932,15 @@ pub const HOLD_MS: u32 = 10_000;
 pub const FADE_MS: u32 = 500;
 ```
 
-Worked example - a 30 fps sender's 31st frame, codec 3, keyframe, asking for
-stats, 1200 bytes of pixels, `seq = 0x0100`:
+Worked example - a 30 fps sender's 31st frame, codec `0x10` (`PAL8_LZ`),
+keyframe, asking for stats, 1200 bytes of pixels, `seq = 0x0100`:
 
 ```
-53 10 03 03 00 01 B0 04  <1200 bytes>
+53 10 10 03 00 01 B0 04  <1200 bytes>
 ^  ^  ^  ^  ^---^ ^---^
 |  |  |  |  seq   len=0x04B0=1200
 |  |  |  flags = KEY|STATS_REQ
-|  |  codec 3
+|  |  codec 0x10 = PAL8_LZ
 |  version 1, type FRAME
 magic
 ```
@@ -878,9 +967,18 @@ Closed by card 004 (2026-09-19):
 9. **`FRAME_FRAG`** - stays reserved and undefined. One frame, one datagram.
 10. **Telemetry growth** - append fields and rely on `len`; no version bump.
 
+Closed by card 005 (2026-09-19), while lifting the decoders into
+`crates/proto`:
+
+11. **LZ and BC1_DUAL bit-level prose** - written, sections 4.4 and 4.5. The
+    reference implementation is now `crates/proto/src/dec/`, with vectors in
+    `crates/proto/tests/vectors/` cross-checked against the lab.
+12. **Exact payload length** - a payload must be exactly its codec's size;
+    over-long is a reject, not padding (section 4).
+13. **`GET_WIFI` `state` and `BUSY` `reason`** - both bytes were undefined;
+    values assigned in section 6.3.
+
 Still open (do not block implementation):
 
 - **`HAS_TS`** - whether `PING`/2 is enough latency resolution is card 013's call.
 - **DSCP / `SO_NET_SERVICE_TYPE`** - unmeasured on this AP; section 9.2 stays advice.
-- **LZ and BC1_DUAL bit-level prose** - sections 4.4 and 4.5 defer to the reference
-  decoders; card 005 writes the prose and test vectors when it lifts them.

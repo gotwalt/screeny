@@ -107,7 +107,12 @@ pub fn decode_bc1_dual(src: &[u8], dst: &mut Rgb888Frame) -> Result<(), DecodeEr
             if e888 {
                 let t = ramp4([b[0], b[1], b[2]], [b[3], b[4], b[5]]);
                 for j in 0..16 {
-                    put(dst, bx * 4 + (j & 3), by * 4 + (j >> 2), t[idx2(&b[6..], j)]);
+                    put(
+                        dst,
+                        bx * 4 + (j & 3),
+                        by * 4 + (j >> 2),
+                        t[idx2(&b[6..], j)],
+                    );
                 }
             } else {
                 let t = ramp8(rgb565(b[0], b[1]), rgb565(b[2], b[3]));

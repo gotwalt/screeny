@@ -19,9 +19,7 @@
 //! [`FramePacket`] that exists is a packet whose `len` agreed with the
 //! datagram it came from.
 
-use crate::{
-    C_ERROR, C_REPLY, F_HAS_TS, HEADER_LEN, MAGIC, MAX_PIXEL_PAYLOAD, TS_LEN, VERSION,
-};
+use crate::{C_ERROR, C_REPLY, F_HAS_TS, HEADER_LEN, MAGIC, MAX_PIXEL_PAYLOAD, TS_LEN, VERSION};
 
 /// Packet type nibble for `FRAME`.
 pub const TYPE_FRAME: u8 = 0x0;

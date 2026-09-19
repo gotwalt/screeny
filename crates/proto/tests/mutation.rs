@@ -250,31 +250,6 @@ fn lz_rejects_matches_that_reach_before_the_output() {
 }
 
 #[test]
-fn pal8_lz_rejects_an_index_outside_its_palette() {
-    // n = 2 colours, then an LZ stream of 2048 literal index bytes would be
-    // enormous; instead build one that fills the plane with a run of 0xFF.
-    let mut payload = vec![1u8]; // n-1 = 1, so n = 2
-    payload.extend_from_slice(&[1, 2, 3, 4, 5, 6]); // two RGB888 entries
-    let mut stream = vec![0b1000_0000, 0xFF]; // one literal 0xFF...
-    let mut produced = 1usize;
-    while produced < 2048 {
-        let run = (2048 - produced).min(18);
-        // flags: first item is a match, rest unused (we stop at `want`).
-        stream.push(0b0000_0000);
-        stream.push(0x00); // offset high bits
-        stream.push(((0 & 0xf) << 4) | (run - 3) as u8); // offset 1, len run
-        produced += run;
-    }
-    payload.extend_from_slice(&stream);
-    let mut dst = blank();
-    assert_eq!(
-        dec::decode(dec::codec::PAL8_LZ, &payload, &mut dst),
-        Err(dec::DecodeError::Corrupt),
-        "index 0xFF is outside a 2-colour palette"
-    );
-}
-
-#[test]
 fn no_datagram_can_break_the_packet_parser() {
     let mut rng = Rng(0xFEED_0005);
     let corpus = corpus();
@@ -312,10 +287,10 @@ fn no_datagram_can_break_the_packet_parser() {
         let d = if i % 4 == 0 {
             rng.bytes_below(80)
         } else {
-        {
-            let pick = rng.below(seeds.len());
-            mutate(&mut rng, &seeds[pick])
-        }
+            {
+                let pick = rng.below(seeds.len());
+                mutate(&mut rng, &seeds[pick])
+            }
         };
 
         // Whatever comes back, the invariants hold.

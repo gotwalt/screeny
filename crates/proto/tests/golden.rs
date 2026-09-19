@@ -87,7 +87,11 @@ fn write_derives_has_ts_from_the_timestamp() {
         timestamp_us: None,
         payload: &[],
     };
-    assert_eq!(built(|b| lying.write(b).unwrap())[3], 0xF7, "HAS_TS cleared");
+    assert_eq!(
+        built(|b| lying.write(b).unwrap())[3],
+        0xF7,
+        "HAS_TS cleared"
+    );
 
     let quiet = FramePacket {
         codec: 2,
@@ -196,7 +200,9 @@ fn control_requests() {
         (Request::Release, vec![0x53, 0x12, 0x08, 0x00, 2, 1, 0, 0]),
         (
             Request::SetName("Desk"),
-            vec![0x53, 0x12, 0x09, 0x00, 2, 1, 5, 0, 4, b'D', b'e', b's', b'k'],
+            vec![
+                0x53, 0x12, 0x09, 0x00, 2, 1, 5, 0, 4, b'D', b'e', b's', b'k',
+            ],
         ),
         (Request::GetWifi, vec![0x53, 0x12, 0x0A, 0x00, 2, 1, 0, 0]),
         (
@@ -307,7 +313,9 @@ fn control_replies() {
                 reason: busy_reason::LOCKED,
                 lock_holder_ms_remaining: 420,
             },
-            vec![0x53, 0x12, 0x0C, 0x01, 9, 0, 5, 0, 0, 0xA4, 0x01, 0x00, 0x00],
+            vec![
+                0x53, 0x12, 0x0C, 0x01, 9, 0, 5, 0, 0, 0xA4, 0x01, 0x00, 0x00,
+            ],
         ),
         (
             op::SET_BRIGHTNESS,
@@ -365,7 +373,10 @@ fn request_decode_reports_the_error_code_to_reply_with() {
     // Section 6.5's codes are exactly what the device puts in the error reply.
     assert_eq!(Request::decode(0x7E, &[]), Err(ErrorCode::UnknownOp));
     assert_eq!(Request::decode(op::PING, &[0]), Err(ErrorCode::BadLength));
-    assert_eq!(Request::decode(op::SET_BRIGHTNESS, &[]), Err(ErrorCode::BadLength));
+    assert_eq!(
+        Request::decode(op::SET_BRIGHTNESS, &[]),
+        Err(ErrorCode::BadLength)
+    );
     assert_eq!(
         Request::decode(op::SET_BRIGHTNESS, &[1, 2]),
         Err(ErrorCode::BadLength)
@@ -373,7 +384,7 @@ fn request_decode_reports_the_error_code_to_reply_with() {
     assert_eq!(Request::decode(op::SET_IDLE, &[4]), Err(ErrorCode::BadArg));
     // SET_NAME longer than 32 bytes
     let mut long = vec![33u8];
-    long.extend(std::iter::repeat(b'x').take(33));
+    long.extend([b'x'; 33]);
     assert_eq!(Request::decode(op::SET_NAME, &long), Err(ErrorCode::BadArg));
     // SET_NAME whose length byte disagrees with the body
     assert_eq!(

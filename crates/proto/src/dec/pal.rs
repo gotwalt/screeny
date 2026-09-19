@@ -119,7 +119,8 @@ fn expand_nib_inplace(dst: &mut Rgb888Frame, pal: &[u8; PAL16]) {
     for p in (0..NPIX).rev() {
         let b = dst[p >> 1];
         let idx = if p & 1 == 0 { b >> 4 } else { b & 0xf } as usize;
-        let c = idx * 3; // 0..=45, always inside a 48-byte palette
+        // `idx` is 4 bits, so `c` is 0..=45: always inside a 48-byte palette.
+        let c = idx * 3;
         // Read before write: for p == 0 the source byte is dst[0], which is
         // also the first byte we overwrite, so pull the colour out first.
         let (r, g, bl) = (pal[c], pal[c + 1], pal[c + 2]);

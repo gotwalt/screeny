@@ -62,8 +62,7 @@ fn every_vector_decodes_to_the_lab_s_pixels() {
     let mut seen = [false; 256];
     for v in &vectors {
         let mut dst = blank();
-        dec::decode(v.codec, &v.payload, &mut dst)
-            .unwrap_or_else(|e| panic!("{}: {e:?}", v.name));
+        dec::decode(v.codec, &v.payload, &mut dst).unwrap_or_else(|e| panic!("{}: {e:?}", v.name));
         assert!(
             dst[..] == v.expect[..],
             "{}: pixels differ from the lab decoder",
