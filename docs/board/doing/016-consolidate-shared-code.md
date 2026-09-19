@@ -123,3 +123,40 @@ shape winning:
 
 One new event, `IdentifyExpired`, exists for the firmware's repaint; the
 simulator drops it in `from_shared` so its event stream is unchanged.
+
+### 2026-09-19 - step 1b: the firmware on the shared core
+
+`firmware/src/receiver.rs` is 940 lines -> 330, and is now only what a device
+has that a simulator does not: the serial log lines, the atomics the display
+task reads, the fixed `Outbox`, the bench opcode `0x80` and the idle screen.
+`firmware/src/rxstats.rs` (174 lines, a hand copy of the simulator's
+`stats.rs` carrying the comment "the two files should be diffed if either
+changes") is **deleted**. Call sites: `core.redraw` / `core.reboot_pending`
+became accessor calls; nothing else in `net.rs`, `main.rs` or `mdns.rs` moved.
+
+Also done before flashing, so that the binary on the bench is the final one:
+* **card 016 item 5**: `screens::identify` used `cut(name, 13)`; 14 fit (text
+  starts at x=4, the 4x6 font is 4 px wide, the chevron border starts at 62).
+* **unused dependency**: `edge-nal` was in `firmware/Cargo.toml` and named
+  nowhere in `firmware/src`. Removed; the build is unaffected (`edge-mdns`
+  brings its own).
+
+Firmware size, same toolchain, release profile, both built from a clean tree
+(baseline rebuilt from commit df970f6 in a scratch checkout):
+
+| | before | after | delta |
+|---|---|---|---|
+| flash image (text+rodata+data+rwtext+vectors+appdesc) | 740,537 B | 743,293 B | **+2,756 B (+0.37%)** |
+| `.text` | 528,513 | 531,205 | +2,692 |
+| `.rodata` | 73,192 | 73,064 | -128 |
+| `.data` | 31,300 | 31,492 | +192 |
+| `.bss` | 127,040 | 127,040 | **0** |
+| core 0 main `.stack` | 37,728 | 37,536 | -192 |
+
+`.bss` is unchanged and the 192 bytes `.data` grew come straight out of the
+main stack, because architecture.md's "same pocket" is the linker giving the
+stack whatever is left below `0x3ffe0000`. 37,536 B still holds the 12 KB
+`FrameBuffer::new()` temporary with room to spare. The 2.7 KB of flash is the
+generic `Receiver<IpEndpoint>` monomorphised plus the `Params`/`Timing`
+constructor the device now runs at boot: worth it, and nowhere near a
+constraint on a 8 MB part.

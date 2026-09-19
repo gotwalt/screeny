@@ -1820,7 +1820,6 @@ name = "screeny-fw"
 version = "0.1.0"
 dependencies = [
  "edge-mdns",
- "edge-nal",
  "edge-nal-embassy",
  "embassy-executor",
  "embassy-futures",
