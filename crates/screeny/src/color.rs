@@ -58,8 +58,9 @@ pub fn lin_to_srgb8(v: f32) -> u8 {
 /// tens of thousands of them per frame (card 031). This is the classic
 /// exponent-divide seed plus two Newton steps; over the argument range Oklab
 /// actually uses (linear light in `0..=1`, so `l`,`m`,`s` in `0..=1`) the
-/// relative error is below 1e-6, which is four orders of magnitude smaller
-/// than the differences the chooser ranks. `tests/color.rs` pins that.
+/// relative error stays below 2e-6 - about fifteen ulp, and four orders of
+/// magnitude smaller than the differences the chooser ranks. `tests/color.rs`
+/// pins that.
 #[inline(always)]
 #[must_use]
 pub fn cbrt_fast(x: f32) -> f32 {

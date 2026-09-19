@@ -395,7 +395,10 @@ impl Sender {
         self.stats.frames_sent += 1;
         self.stats.bytes += payload.len() as u64;
         *self.stats.by_codec.entry(codec).or_insert(0) += 1;
-        if let Some(prev) = self.last_send {
+        // The `FINAL` frame goes out the moment the source ends, right behind
+        // the frame before it, so it is not part of the paced stream and does
+        // not belong in the gap statistics.
+        if let (Some(prev), false) = (self.last_send, final_frame) {
             let gap = now.duration_since(prev);
             self.stats.min_gap = Some(self.stats.min_gap.map_or(gap, |m| m.min(gap)));
             self.stats.max_gap = Some(self.stats.max_gap.map_or(gap, |m| m.max(gap)));
@@ -601,11 +604,18 @@ impl Sender {
             // Spec 9.1: if we have fallen more than two periods behind,
             // resynchronise rather than bursting. The device shows
             // newest-wins, so skipping is the correct repair.
+            //
+            // One deliberate deviation from the spec's pseudo-code, which
+            // sets `n = should_be`: that leaves the next target at roughly
+            // *now*, so the frame after a stall goes out immediately behind
+            // the stalled one - a two-frame burst, which is the one thing the
+            // rule exists to avoid. Resuming at the next whole slot costs one
+            // more skipped frame and keeps the stream strictly paced.
             let behind = Instant::now().saturating_duration_since(start);
             let should_be = (behind.as_nanos() / period.as_nanos().max(1)) as u64;
             if should_be > n + 1 {
-                self.stats.frames_skipped += should_be - n;
-                n = should_be;
+                self.stats.frames_skipped += should_be + 1 - n;
+                n = should_be + 1;
             }
 
             // Only adaptation writes `stats.fps`, and it writes an exact

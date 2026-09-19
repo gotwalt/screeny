@@ -88,18 +88,25 @@ impl TargetArgs {
     }
 
     fn resolve(&self) -> Result<Device> {
-        let t = self.to_target()?;
-        match t.resolve() {
-            Ok(d) => Ok(d),
-            Err(e) => {
-                let hint = e.hint();
-                let mut err = anyhow::Error::new(e);
-                if let Some(h) = hint {
-                    err = err.context(h);
-                }
-                Err(err)
-            }
-        }
+        self.to_target()?.resolve().hinted()
+    }
+}
+
+/// Turn a library error into a reported one, with its next step attached.
+///
+/// The hint is folded into the message rather than added as an `anyhow`
+/// context because these are read by a person at a terminal: a paragraph
+/// naming System Settings is more use than a chain of causes (spec 9.3).
+trait Hinted<T> {
+    fn hinted(self) -> Result<T>;
+}
+
+impl<T> Hinted<T> for screeny::Result<T> {
+    fn hinted(self) -> Result<T> {
+        self.map_err(|e| match e.hint() {
+            Some(h) => anyhow::anyhow!("{e}\n\n{h}"),
+            None => anyhow::anyhow!("{e}"),
+        })
     }
 }
 
@@ -255,7 +262,7 @@ enum Cmd {
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(&cli) {
-        eprintln!("screeny: {e:#}");
+        eprintln!("screeny: {e}");
         std::process::exit(1);
     }
 }
@@ -295,17 +302,17 @@ fn cmd_discover(cli: &Cli) -> Result<()> {
     if let Some(addr) = t.addr {
         // `--addr` with `discover` means "tell me about this one".
         let mut d = Device::from_addr(addr);
-        let mut ctl = ControlClient::connect(d.control)?;
-        let info = ctl.info()?;
+        let mut ctl = ControlClient::connect(d.control).hinted()?;
+        let info = ctl.info().hinted()?;
         d.apply(info);
         print_device(&d, cli.verbose);
         return Ok(());
     }
     let timeout = Duration::from_secs_f64(cli.target.timeout);
     let found = if t.broadcast {
-        screeny::discover::broadcast_probe(timeout, screeny::proto::DEFAULT_CONTROL_PORT)?
+        screeny::discover::broadcast_probe(timeout, screeny::proto::DEFAULT_CONTROL_PORT).hinted()?
     } else {
-        screeny::discover::browse(timeout, None)?
+        screeny::discover::browse(timeout, None).hinted()?
     };
     if found.is_empty() {
         let e = screeny::Error::NotFound {
@@ -366,13 +373,13 @@ fn print_device(d: &Device, verbose: bool) {
 
 fn control(cli: &Cli) -> Result<(Device, ControlClient)> {
     let d = cli.target.resolve()?;
-    let c = ControlClient::connect(d.control)?;
+    let c = ControlClient::connect(d.control).hinted()?;
     Ok((d, c))
 }
 
 fn cmd_info(cli: &Cli) -> Result<()> {
     let (mut d, mut ctl) = control(cli)?;
-    let info = ctl.info()?;
+    let info = ctl.info().hinted()?;
     d.apply(info);
     print_device(&d, true);
     Ok(())
@@ -380,7 +387,7 @@ fn cmd_info(cli: &Cli) -> Result<()> {
 
 fn cmd_brightness(cli: &Cli, level: u8) -> Result<()> {
     let (_, mut ctl) = control(cli)?;
-    let applied = ctl.set_brightness(level)?;
+    let applied = ctl.set_brightness(level).hinted()?;
     if applied == level {
         println!("brightness {applied}");
     } else {
@@ -391,7 +398,7 @@ fn cmd_brightness(cli: &Cli, level: u8) -> Result<()> {
 
 fn cmd_identify(cli: &Cli, ms: u16) -> Result<()> {
     let (d, mut ctl) = control(cli)?;
-    ctl.identify(ms)?;
+    ctl.identify(ms).hinted()?;
     println!("{} is identifying for {ms} ms", d.label());
     Ok(())
 }
@@ -401,7 +408,7 @@ fn cmd_reboot(cli: &Cli, yes: bool) -> Result<()> {
         bail!("rebooting interrupts whatever is on the panel; pass --yes to confirm");
     }
     let (d, mut ctl) = control(cli)?;
-    ctl.reboot()?;
+    ctl.reboot().hinted()?;
     println!("{} is rebooting", d.label());
     Ok(())
 }
@@ -461,7 +468,7 @@ fn state_name(s: u8) -> &'static str {
 fn cmd_stats(cli: &Cli, interval: f64, count: Option<u32>, reset: bool) -> Result<()> {
     let (d, mut ctl) = control(cli)?;
     if reset {
-        ctl.reset_stats()?;
+        ctl.reset_stats().hinted()?;
     }
     println!("{}", d.label());
     println!(
@@ -473,7 +480,7 @@ fn cmd_stats(cli: &Cli, interval: f64, count: Option<u32>, reset: bool) -> Resul
     let mut prev: Option<screeny::proto::control::Telemetry> = None;
     let mut n = 0u32;
     while !stop.load(Ordering::Relaxed) {
-        let t = ctl.telemetry()?;
+        let t = ctl.telemetry().hinted()?;
         let (rx, shown, stale, sup, dec_, rej) = match prev {
             Some(p) => (
                 t.frames_rx.wrapping_sub(p.frames_rx),
@@ -584,17 +591,7 @@ fn cmd_pipe(cli: &Cli, stream: &StreamArgs) -> Result<()> {
 fn stream_source(cli: &Cli, args: &StreamArgs, src: &mut dyn FrameSource) -> Result<()> {
     let device = cli.target.resolve()?;
     let cfg = args.config();
-    let mut sender = match Sender::connect(device, cfg) {
-        Ok(s) => s,
-        Err(e) => {
-            let hint = e.hint();
-            let mut err = anyhow::Error::new(e);
-            if let Some(h) = hint {
-                err = err.context(h);
-            }
-            return Err(err);
-        }
-    };
+    let mut sender = Sender::connect(device, cfg).hinted()?;
 
     println!(
         "streaming {} to {} at {:.1} fps, budget {} B{}",
@@ -694,17 +691,7 @@ fn stream_source(cli: &Cli, args: &StreamArgs, src: &mut dyn FrameSource) -> Res
                 .join(", ")
         );
     }
-    match r {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let hint = e.hint();
-            let mut err = anyhow::Error::new(e);
-            if let Some(h) = hint {
-                err = err.context(h);
-            }
-            Err(err)
-        }
-    }
+    r.hinted()
 }
 
 // ---------------------------------------------------------------------------

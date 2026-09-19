@@ -116,6 +116,12 @@ mid-run.";
                      {LOCAL_NETWORK}"
                 ))
             }
+            Error::Io(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => Some(
+                "The host answered but nothing is listening on that port. Check the port \
+                 number - the frame port is 49374 and the control port 49375 by default - \
+                 or run `screeny discover` to see what is actually advertised."
+                    .to_string(),
+            ),
             Error::Timeout { addr, .. } if crate::net::is_private(addr) => Some(format!(
                 "{addr} did not answer. Check the device is powered and on the same network; \
                  `screeny discover` will say whether it is advertising.\n\n{LOCAL_NETWORK}"
