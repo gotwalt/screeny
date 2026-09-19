@@ -2,6 +2,7 @@
 
 use crate::piece::PieceDef;
 
+mod clocks;
 #[cfg(feature = "gpu")]
 mod knot;
 #[cfg(feature = "gpu")]
@@ -13,6 +14,7 @@ mod plasma;
 mod testcard;
 
 pub static ALL: &[PieceDef] = &[
+    clocks::DEF,
     plasma::DEF,
     metaballs::DEF,
     #[cfg(feature = "gpu")]

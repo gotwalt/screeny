@@ -10,6 +10,7 @@ png = "0.17"
 wgpu = { version = "30.0.1", optional = true }
 pollster = { version = "1.0.1", optional = true }
 bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
+libc = "0.2.189"
 
 [features]
 default = ["gpu"]

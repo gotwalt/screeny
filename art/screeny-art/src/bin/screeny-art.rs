@@ -11,7 +11,7 @@ const USAGE: &str = "\
 usage:
   screeny-art list
   screeny-art pipe <piece> [--seed N] [--fps 30] [--seconds S] [--levels 64] [--set id=value]...
-  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--scale 12] [--seed N] [--levels 64] [--set id=value]...
+  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--levels 64] [--set id=value]...
 
 `pipe` writes 6144-byte sRGB frames (64x32, row-major R,G,B) to stdout, paced by
 the wall clock. The seed is logged to stderr so a good run can be reproduced.";
@@ -30,6 +30,7 @@ struct Args {
     fps: f64,
     seconds: Option<f64>,
     at: f64,
+    warmup: f64,
     scale: usize,
     out: Option<String>,
     settings: Settings,
@@ -64,6 +65,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         fps: 30.0,
         seconds: None,
         at: 5.0,
+        warmup: 2.0,
         scale: 12,
         out: None,
         settings: Settings::default(),
@@ -76,6 +78,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--fps" => a.fps = num()?.clamp(1.0, 30.0),
             "--seconds" => a.seconds = Some(num()?),
             "--at" => a.at = num()?,
+            "--warmup" => a.warmup = num()?.max(0.0),
             "--scale" => a.scale = (num()? as usize).clamp(1, 64),
             "--levels" => a.settings.levels = num()? as u32,
             "--out" => a.out = Some(value),
@@ -130,9 +133,10 @@ fn snapshot(a: Args) -> Result<(), String> {
     let mut piece = (a.piece.make)(a.seed);
     let mut pipeline = Pipeline::new(a.settings);
     // Run up to the requested moment at 30 fps so stateful pieces and the
-    // limiter are where they would be in a live run.
+    // limiter are where they would be in a live run. Pieces with long-lived
+    // state want a longer --warmup.
     let dt = 1.0 / 30.0;
-    let first = (a.at - 2.0).max(0.0);
+    let first = (a.at - a.warmup).max(0.0);
     let steps = ((a.at - first) / dt).round() as usize;
     let mut result = None;
     for i in 0..=steps {

@@ -2906,6 +2906,7 @@ name = "screeny-art"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "libc",
  "png 0.17.16",
  "pollster",
  "serde",

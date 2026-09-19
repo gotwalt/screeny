@@ -55,6 +55,29 @@ Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive
 everything from `ctx.t`. State between frames is fine; keep it in the piece.
 
+## Twenty-four clocks (`pieces/clocks/`)
+
+Kinetic choreography after Humans since 1982's ClockClock 24: a 3 x 8 grid of
+two-handed clocks whose hands draw the time. 8 x 8 LED cells fit the panel
+exactly, and hands reach their cell edge so neighbouring strokes join into
+continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
+
+- **Motion is motor-limited, not tweened** (`dance.rs`, `Motor`): every hand
+  shares one top speed and one acceleration, so longer moves take longer. No
+  physics; this constraint is what reads as mechanical.
+- **A dance is a list of phases**, each a *formation* (digits, lines, needles,
+  fan, rings/spokes, compass, chevron) x a *timing* field (together, columns,
+  rows, diagonal, ripple) x a *turn* rule (shortest, clockwise, counter,
+  mirror, checker). Phases may overlap (negative `rest`); overlapping moves add,
+  so hands cruise through a formation instead of stopping on it. Ten dances
+  ship in `dance::dance`; each is varied by a seeded RNG, and a new one is a few
+  lines. A test runs every dance in many variations and checks it lands exactly
+  on the time and never exceeds twice the motor speed.
+- Transitions set off early so they *finish* as the minute turns.
+- In the studio, drag "Seconds per minute" down to ~16 to see dances back to
+  back, and "Choreography" to pick one; the dance in use is logged to stderr.
+  At 60 it is a real clock on local time.
+
 ## GPU and 3D pieces
 
 GPU pieces render through [wgpu](https://wgpu.rs) (`screeny-art/src/gpu/`). It
