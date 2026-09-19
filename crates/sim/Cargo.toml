@@ -17,6 +17,7 @@ window = ["dep:minifb"]
 
 [dependencies]
 screeny-proto = { path = "../proto" }
+screeny-panel = { path = "../panel" }
 screeny-receiver = { path = "../receiver" }
 mdns-sd = "0.21.3"
 png = "0.18.1"

@@ -1,20 +1,39 @@
 //! Frame types and the `Piece` trait.
 //!
-//! These mirror what `crates/proto` will own (see `docs/design/architecture.md`):
-//! `Frame.px` is exactly the `[u8; 6144]` sRGB888 buffer that goes to the
-//! sender, and `Indexed` is the palette + 2048 indices form. Conversion to the
-//! proto types is a field move; card 009 reconciles them.
+//! The types themselves are `crates/proto`'s (card 016): `Frame` is a heap box
+//! of [`Rgb888Frame`], the `[u8; 6144]` sRGB888 buffer a sender encodes and a
+//! device decodes into, and [`Indexed`] is the owned form of proto's borrowed
+//! [`IndexedFrame`], which [`Indexed::as_proto`] hands out without copying.
+//! The geometry constants are proto's too, so there is one definition of what
+//! 64x32 means.
+//!
+//! What stays here is the `Piece` trait and the supersampled linear-light
+//! buffer pieces draw into, neither of which a receiver has any use for.
 
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
-pub const W: usize = 64;
-pub const H: usize = 32;
-pub const NPIX: usize = W * H;
+use screeny_proto::{IndexedFrame, Rgb888Frame, NBYTES};
+
+pub use screeny_proto::{H, NPIX, W};
 
 /// 64x32 sRGB888, row-major, top-left origin.
 #[derive(Clone)]
 pub struct Frame {
-    pub px: Box<[u8; NPIX * 3]>,
+    pub px: Box<Rgb888Frame>,
+}
+
+impl Deref for Frame {
+    type Target = Rgb888Frame;
+    fn deref(&self) -> &Rgb888Frame {
+        &self.px
+    }
+}
+
+impl DerefMut for Frame {
+    fn deref_mut(&mut self) -> &mut Rgb888Frame {
+        &mut self.px
+    }
 }
 
 impl Default for Frame {
@@ -26,8 +45,23 @@ impl Default for Frame {
 impl Frame {
     pub fn black() -> Self {
         Frame {
-            px: Box::new([0u8; NPIX * 3]),
+            px: Box::new([0u8; NBYTES]),
         }
+    }
+
+    /// Take ownership of an existing pixel array.
+    pub fn from_pixels(px: Box<Rgb888Frame>) -> Self {
+        Frame { px }
+    }
+
+    /// The raw pixels, as the encoder and `screeny_proto::decode` want them.
+    pub fn as_bytes(&self) -> &Rgb888Frame {
+        &self.px
+    }
+
+    /// The raw pixels, mutably.
+    pub fn as_bytes_mut(&mut self) -> &mut Rgb888Frame {
+        &mut self.px
     }
 
     #[inline]
@@ -78,6 +112,16 @@ impl Default for Indexed {
 }
 
 impl Indexed {
+    /// Borrow this frame as proto's [`IndexedFrame`], which is what the
+    /// encoder's exact `PAL4_LZ`/`PAL5` path takes. No copy: the two types are
+    /// the owned and the borrowed form of the same thing.
+    pub fn as_proto(&self) -> IndexedFrame<'_> {
+        IndexedFrame {
+            palette: &self.palette,
+            indices: &self.indices,
+        }
+    }
+
     pub fn to_frame(&self) -> Frame {
         let mut f = Frame::black();
         for i in 0..NPIX {

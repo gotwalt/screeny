@@ -842,6 +842,7 @@ dependencies = [
  "libc",
  "mdns-sd",
  "screeny-demos",
+ "screeny-panel",
  "screeny-proto",
  "thiserror",
 ]
@@ -852,6 +853,15 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "png 0.17.16",
+ "screeny-panel",
+ "screeny-proto",
+]
+
+[[package]]
+name = "screeny-panel"
+version = "0.1.0"
+dependencies = [
+ "screeny-proto",
 ]
 
 [[package]]
@@ -880,6 +890,7 @@ dependencies = [
  "mdns-sd",
  "minifb",
  "png 0.18.1",
+ "screeny-panel",
  "screeny-proto",
  "screeny-receiver",
 ]
