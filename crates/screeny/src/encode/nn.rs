@@ -82,7 +82,7 @@ impl NnIndex {
                 axis = k;
             }
         }
-        let mid = (lo + hi) / 2;
+        let mid = usize::midpoint(lo, hi);
         self.pts[lo..hi].select_nth_unstable_by(mid - lo, |a, b| {
             a.0[axis]
                 .partial_cmp(&b.0[axis])
@@ -120,7 +120,11 @@ impl NnIndex {
             for (p, i) in &self.pts[n.lo as usize..n.hi as usize] {
                 let d = d2(q, *p);
                 let i = *i as usize;
-                if d < best.1 || (d == best.1 && i < best.0) {
+                // Exact equality is the point: this reproduces a linear
+                // scan's tie-break, and an epsilon would not.
+                #[allow(clippy::float_cmp)]
+                let tie = d == best.1 && i < best.0;
+                if d < best.1 || tie {
                     *best = (i, d);
                 }
             }
@@ -188,7 +192,7 @@ mod tests {
                 // Every point must find itself.
                 for (i, p) in pts.iter().enumerate() {
                     let (j, d) = idx.nearest(*p);
-                    assert_eq!(d, 0.0);
+                    assert!(d == 0.0, "a point did not find itself: d={d}");
                     assert!(j <= i, "k={k} dup={dup}: {j} > {i}");
                 }
             }

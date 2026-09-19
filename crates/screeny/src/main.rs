@@ -340,14 +340,22 @@ fn print_device(d: &Device, verbose: bool) {
     }
     if let Some(i) = &d.info {
         println!("  panel    {}x{}", i.w, i.h);
-        println!(
-            "  codecs   {}",
-            i.codecs
-                .iter()
-                .map(|c| format!("{} ({c})", codec_name(*c)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        if i.codecs.is_empty() {
+            println!(
+                "  codecs   {:?} - nothing this sender can produce, so it cannot \
+                 stream to this device",
+                i.codecs_raw
+            );
+        } else {
+            println!(
+                "  codecs   {}",
+                i.codecs
+                    .iter()
+                    .map(|c| format!("{} ({c})", codec_name(*c)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         println!("  mtu      {}", i.mtu);
         println!("  firmware {}", i.fw);
         println!("  id       {}", i.id);

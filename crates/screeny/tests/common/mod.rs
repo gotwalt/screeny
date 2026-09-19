@@ -287,7 +287,7 @@ fn frame_loop(
             continue;
         };
         seen += 1;
-        if drop_one_in > 0 && seen % drop_one_in == 0 {
+        if drop_one_in > 0 && seen.is_multiple_of(drop_one_in) {
             let mut s = state.lock().unwrap();
             s.lost += 1;
             continue;

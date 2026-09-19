@@ -188,7 +188,7 @@ pub fn build(
             let seeded = lloyd(hist, start, iters_for(k, effort.seeded_iters));
             let cs = hist.palette_cost(&NnIndex::build(&seeded));
             let drifted = prev_cost.is_none_or(|p| cs > p * SEED_DRIFT);
-            let due = frame_idx % RESEED_EVERY == 0;
+            let due = frame_idx.is_multiple_of(RESEED_EVERY);
             if effort.verify_seed && (drifted || due) {
                 let (f, cf) = fresh(hist);
                 if cs <= cf * 1.15 {

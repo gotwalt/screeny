@@ -28,6 +28,11 @@ pub struct DeviceInfo {
     pub h: u16,
     /// Codec ids the device can decode, in the device's preference order.
     pub codecs: Vec<u8>,
+    /// The `codecs=` value exactly as advertised. Kept because a device that
+    /// advertises something this sender cannot parse - the bring-up firmware
+    /// says `codecs=raw` - is much easier to diagnose when the tool can show
+    /// what it actually saw.
+    pub codecs_raw: String,
     /// Largest pixel payload the device accepts.
     pub mtu: u16,
     /// Control UDP port.
@@ -49,6 +54,7 @@ impl Default for DeviceInfo {
             w: d.w,
             h: d.h,
             codecs: d.codec_ids().collect(),
+            codecs_raw: d.codecs.to_string(),
             mtu: d.mtu,
             ctrl: d.ctrl,
             fw: d.fw.to_string(),
@@ -74,6 +80,7 @@ impl DeviceInfo {
             w: d.w,
             h: d.h,
             codecs: d.codec_ids().collect(),
+            codecs_raw: d.codecs.to_string(),
             mtu: d.mtu,
             ctrl: d.ctrl,
             fw: d.fw.to_string(),
@@ -116,12 +123,15 @@ impl DeviceInfo {
     ///
     /// [`Error::Metadata`] if the values do not fit proto's writer.
     pub fn to_txt(&self) -> Result<Vec<u8>> {
-        let codecs = self
-            .codecs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
+        let codecs = if self.codecs.is_empty() {
+            self.codecs_raw.clone()
+        } else {
+            self.codecs
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         let d = txt::DeviceInfo {
             txtvers: self.txtvers,
             proto: &self.proto,
@@ -255,5 +265,96 @@ impl Device {
             Some(i) if !i.name.is_empty() => format!("{} at {}", i.name, self.frame),
             _ => format!("{} at {}", self.instance, self.frame),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn txt(pairs: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for p in pairs {
+            out.push(p.len() as u8);
+            out.extend_from_slice(p.as_bytes());
+        }
+        out
+    }
+
+    /// What the card 001 bring-up firmware actually advertises today, read
+    /// off the wire with `dns-sd -L`: no `txtvers`, no `mtu`, and a `codecs`
+    /// value from before the codec table existed.
+    ///
+    /// A sender must handle this gracefully - discover the device, show what
+    /// it saw, and refuse to stream - rather than crash or, worse, guess a
+    /// codec and send it.
+    #[test]
+    fn the_bring_up_firmwares_txt_record_parses_but_offers_no_codecs() {
+        let bytes = txt(&["proto=1", "w=64", "h=32", "ctrl=49375", "codecs=raw"]);
+        let info = DeviceInfo::parse(&bytes).expect("parses");
+        assert!(info.speaks_v1());
+        assert_eq!(info.w, 64);
+        assert_eq!(info.ctrl, 49375);
+        assert!(info.codecs.is_empty(), "\"raw\" is not a codec id");
+        assert_eq!(info.codecs_raw, "raw");
+        assert_eq!(info.best_codec(&screeny_proto::dec::SUPPORTED_CODECS), None);
+        // The raw value survives a round trip, so what gets printed is what
+        // was advertised.
+        let again = DeviceInfo::parse(&info.to_txt().unwrap()).unwrap();
+        assert_eq!(again.codecs_raw, "raw");
+    }
+
+    #[test]
+    fn a_full_txt_record_round_trips() {
+        let bytes = txt(&[
+            "txtvers=1",
+            "proto=1",
+            "w=64",
+            "h=32",
+            "codecs=16,17,40,2,127",
+            "mtu=1464",
+            "ctrl=49375",
+            "fw=0.1.0",
+            "id=a4cf12",
+            "name=Desk panel",
+        ]);
+        let info = DeviceInfo::parse(&bytes).expect("parses");
+        assert_eq!(info.codecs, screeny_proto::dec::SUPPORTED_CODECS.to_vec());
+        assert_eq!(info.name, "Desk panel");
+        assert_eq!(info.budget(), 1464);
+        assert_eq!(info.best_codec(&[0x28, 0x02]), Some(0x28));
+        assert_eq!(info.common_codecs(&[0x02, 0x10]), vec![0x10, 0x02]);
+        assert_eq!(DeviceInfo::parse(&info.to_txt().unwrap()).unwrap(), info);
+    }
+
+    /// A required key missing means the service must be ignored (spec 5.2).
+    #[test]
+    fn a_service_missing_a_required_key_is_rejected() {
+        const KEYS: [&str; 5] = ["proto=1", "w=64", "h=32", "ctrl=49375", "codecs=16"];
+        for dropped in KEYS {
+            let kept: Vec<&str> = KEYS.into_iter().filter(|k| *k != dropped).collect();
+            assert!(
+                DeviceInfo::parse(&txt(&kept)).is_err(),
+                "accepted a record with no {dropped}"
+            );
+        }
+    }
+
+    /// `--addr IP` takes the default ports, and the control port becomes the
+    /// advertised one once a handshake has happened.
+    #[test]
+    fn from_addr_uses_the_default_ports_then_adopts_the_advertised_one() {
+        let d = Device::from_addr("192.0.2.9:49374".parse().unwrap());
+        assert_eq!(d.frame.port(), DEFAULT_FRAME_PORT);
+        assert_eq!(d.control.port(), DEFAULT_CONTROL_PORT);
+
+        let mut d = Device::from_addr("192.0.2.9:6000".parse().unwrap());
+        assert_eq!(d.control.port(), 6001, "the port above, by convention");
+        let info = DeviceInfo {
+            ctrl: 7777,
+            ..DeviceInfo::default()
+        };
+        d.apply(info);
+        assert_eq!(d.control.port(), 7777);
     }
 }
