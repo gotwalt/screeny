@@ -1,6 +1,6 @@
 ---
 id: 103
-title: Run art/ headless on the Linux GPU box
+title: Run the art system headless on the Linux GPU box
 type: test
 hardware: no
 depends: [100]
@@ -17,7 +17,7 @@ Mac it was built on. Parked until the owner says which box.
 
 ## Context
 
-`art/README.md`, "GPU and 3D pieces". `WGPU_BACKEND=gl|vulkan` forces a backend; the
+`crates/art/README.md`, "GPU and 3D pieces". `WGPU_BACKEND=gl|vulkan` forces a backend; the
 adapter is logged at start-up; device limits are held to `downlevel_defaults`.
 `libc::localtime_r` is used for local time (`piece.rs`).
 

@@ -18,7 +18,7 @@ how parameters and seeds are configured without the studio.
 
 ## Context
 
-`art/screeny-art/src/variety.rs` already does this within the clock pieces (wear by
+`crates/art/src/variety.rs` already does this within the clock pieces (wear by
 tag, no near repeats) and may generalise. Transitions must respect the limiter.
 
 ## Deliverables

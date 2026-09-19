@@ -7,7 +7,7 @@ frame to fit a single packet, and streams at 30 fps.
 
 ```
  renderer ──> screeny (encode: pick best of 4 codecs, <= 1464 B) ──UDP/WiFi──> firmware ──> HUB75 panel
-   art/ , demos, pipe          crates/screeny                                   firmware/
+   crates/art, demos, pipe     crates/screeny                                   firmware/
                                         └────────── crates/proto (shared wire format + decoders) ─────┘
 ```
 
@@ -26,7 +26,8 @@ Details: `docs/research/005-end-to-end.md`.
 | `crates/sim` | A fake panel that speaks the whole protocol; LED-dot window or headless. |
 | `crates/probe` | `screeny-probe`, bench instrument: conformance checks, lock tests, paced vector streams. |
 | `firmware/` | The ESP32 firmware (separate cargo project, `esp` toolchain). |
-| `art/` | The generative art system (its own workspace); the primary sender. |
+| `crates/art` | The generative art system: pieces, panel-aware pipeline, headless `screeny-art` binary. The primary source of frames. |
+| `crates/studio` | Screeny Studio: design pieces and (soon) run the panels. Becoming a web server; see `docs/design/studio-vision.md`. |
 | `docs/design/` | **Source of truth**: `protocol-v1.md`, `architecture.md`, `generative-art-brief.md`. |
 | `docs/research/` | How we got here: stack choice, codec lab, transport, bring-up, end-to-end results. |
 | `docs/board/` | Kanban: `backlog/`, `doing/`, `review/`, `done/`, `parked/`. See `docs/README.md`. |

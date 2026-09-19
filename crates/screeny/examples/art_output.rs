@@ -1,6 +1,6 @@
 //! What the generative art system's `Output` impl will look like.
 //!
-//! The art system (`art/screeny-art`, on its own branch until it is merged)
+//! The art system (`crates/art`)
 //! ends every frame in a `WireFrame` and hands it to an `Output`:
 //!
 //! ```text
@@ -15,7 +15,7 @@
 //! ```
 //!
 //! Both are restated here as stand-ins so this file compiles on its own; the
-//! real ones live in `art/screeny-art/src/output.rs` and `frame.rs` and are
+//! real ones live in `crates/art/src/output.rs` and `frame.rs` and are
 //! not touched by this crate. `SenderOutput` below is the whole of the work
 //! that merge will need. **It is 15 lines.**
 //!
@@ -41,7 +41,7 @@ use std::time::Duration;
 use screeny::{Link, LinkConfig, Pixels, Target};
 
 // ---------------------------------------------------------------------------
-// Stand-ins for the art system's own types (do not edit art/ from here)
+// Stand-ins for the art system's own types (the real ones are in crates/art)
 // ---------------------------------------------------------------------------
 
 const N: usize = 64 * 32;

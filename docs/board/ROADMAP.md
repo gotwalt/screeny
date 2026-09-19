@@ -38,7 +38,7 @@ Everything below is merged and verified on the real panel
 
 ## Phase 4 - cleanup and hand-over (current)
 
-The generative art system (`art/`, developed on its own branch) becomes the primary
+The generative art system (`crates/art` + `crates/studio`) becomes the primary
 sender. Owner's direction, 2026-09-19: cleanup first; WiFi setup and camera-based
 measurement are deferred.
 
@@ -48,7 +48,7 @@ measurement are deferred.
   frame types, one panel/colour model; delete `spike/`; (hardware, for re-verification)
 - [x] orchestrator: root README, CLAUDE.md, this roadmap, art brief refresh, stale
   worktrees/branches
-- [x] 100 `art/` merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
+- [x] 100 art system merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
   tests, art 31 tests, and `screeny-art pipe clocks-numerals | screeny pipe --fps 60`
   into the simulator at 60 fps, 304 B/frame, `PAL4_LZ` exact, 0 drops
 - 101 art sends through `crates/screeny` (after 011) - art session

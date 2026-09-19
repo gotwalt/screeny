@@ -18,9 +18,9 @@ First milestone: the Studio streams to the real hardware. Then keep going.
 
 ## What exists today
 
-- `art/screeny-art`: pieces -> limiter -> panel-aware quantise -> `WireFrame` ->
+- `crates/art`: pieces -> limiter -> panel-aware quantise -> `WireFrame` ->
   `Output` trait. Headless binary (`list`, `pipe`, `snapshot`). Optional wgpu.
-- `art/studio`: Tauri v2 desktop app, ~1.2k lines. One `Engine` on its own thread; 11
+- `crates/studio`: Tauri v2 desktop app, ~1.2k lines. One `Engine` on its own thread; 11
   Tauri commands (`bootstrap`, `frame`, `set_piece`, `set_param`, `reset_params`,
   `set_seed`, `set_settings`, `set_playback`, `piece_playing`, `piece_act`,
   `restart`); a static three-file front end whose every call goes through one
@@ -140,8 +140,8 @@ crates/
   receiver/   no_std receive state machine (card 016)  (firmware + sim)
   screeny/    sender library + `screeny` CLI
   sim/        fake panel          probe/   bench instrument
-  art/        was art/screeny-art: pieces, pipeline, headless bin   (pkg screeny-art)
-  studio/     was art/studio: the server + embedded UI, no Tauri    (pkg screeny-studio)
+  art/        was crates/art: pieces, pipeline, headless bin   (pkg screeny-art)
+  studio/     was crates/studio: the server + embedded UI, no Tauri    (pkg screeny-studio)
   demos/      fractal + word clock - to be ported into art as pieces, then retired
 firmware/  lab/  docs/  tools/
 ```

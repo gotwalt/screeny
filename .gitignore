@@ -7,4 +7,4 @@ lab/out/
 lab/Cargo.lock
 lab/xtensa-bench/target/
 lab/xtensa-bench/Cargo.lock
-art/studio/gen/
+crates/studio/gen/

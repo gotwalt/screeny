@@ -3,9 +3,16 @@ resolver = "2"
 members = ["crates/*"]
 # firmware/ uses the esp toolchain and an Xtensa target; lab/ and spike/ are frozen
 # reference material. None of them belong in the host workspace.
-# art/ is the generative art system: its own workspace (Tauri + wgpu), merged from
-# its own branch. It depends on crates/screeny by path; it is not a member here.
-exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check", "spike/fw-skeleton", "art"]
+# Everything host-side lives under crates/ (card 017). `cargo build`/`cargo test` with
+# no -p use default-members: every crate except the studio, which is still a Tauri
+# app until card 105 turns it into a plain server, and Tauri needs GUI system
+# libraries that a headless box or a container does not have. Build it explicitly:
+# `cargo run -p screeny-studio`.
+default-members = [
+  "crates/proto", "crates/screeny", "crates/demos", "crates/sim", "crates/probe",
+  "crates/art",
+]
+exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check", "spike/fw-skeleton"]
 
 [workspace.package]
 edition = "2021"
@@ -13,3 +20,8 @@ license = "MIT"
 
 [profile.release]
 debug = 1
+
+# Art pieces are per-pixel float maths; unoptimised they cannot hold 30 fps at 16
+# samples per pixel, so the studio would be unusable in a debug build.
+[profile.dev.package.screeny-art]
+opt-level = 2

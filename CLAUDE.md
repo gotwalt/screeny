@@ -3,8 +3,8 @@
 Custom Rust firmware that turns a Gen 1 Tidbyt (ESP32 + 64x32 HUB75 panel) into a
 network frame buffer, plus host-side Rust tools that stream frames to it. It works end
 to end (see `README.md` and `docs/research/005-end-to-end.md`). Current phase:
-**cleanup and consolidation**, so the generative art system (`art/`) can merge in and
-become the primary sender.
+**cleanup and consolidation**, and the generative art system (`crates/art`, `crates/studio`) becoming
+the primary sender; see `docs/design/studio-vision.md`.
 
 Read `README.md` for the map, then `docs/README.md` for how the kanban board and
 workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
@@ -13,8 +13,9 @@ workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
 ## Ground rules
 
 - **Rust everywhere.** Firmware is `no_std` embassy / esp-hal on esp-rtos. Host tools
-  are std Rust on the stable toolchain, in the root cargo workspace (`crates/*`).
-  `firmware/`, `art/` and `lab/` are separate cargo projects, not workspace members.
+  are std Rust on the stable toolchain, all in the one root cargo workspace
+  (`crates/*`). `firmware/` and `lab/` are separate cargo projects. A plain
+  `cargo test` skips only `crates/studio` (Tauri, until card 105); build it with `-p`.
 - **One implementation of each thing.** Wire format and decoders live in
   `crates/proto` and nowhere else. If you need wire logic, add it there.
 - **Target: 30 fps**, one frame per UDP datagram (<= 1472 byte payload, 1464 for

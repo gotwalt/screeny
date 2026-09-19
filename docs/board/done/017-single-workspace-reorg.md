@@ -47,3 +47,20 @@ screeny-studio` and `cargo run -p screeny-art -- list` work; firmware builds; no
 references to `art/` remain outside history and done cards.
 
 ## Log
+
+2026-09-19, orchestrator. Done ahead of card 016 landing, on the owner's say-so (the
+overlap with 016 is the root `Cargo.toml`, `Cargo.lock` and one doc; resolved at merge).
+
+- `art/screeny-art` -> `crates/art`, `art/studio` -> `crates/studio`, `art/README.md`
+  -> `crates/art/README.md` (+ a short `crates/studio/README.md`); `art/Cargo.toml`,
+  `art/Cargo.lock` removed; the stale 895 MB `art/target/` deleted.
+- Root manifest: seven members; `default-members` = all but `screeny-studio`;
+  `[profile.dev.package.screeny-art] opt-level = 2` replaces art's workspace-wide dev
+  profile; `art` dropped from `exclude`. `.gitignore`: `crates/studio/gen/`.
+- One `Cargo.lock`. `cargo test --release` (default members) = 275 passed, 0 failed
+  (244 before + art's 31). `cargo build -p screeny-studio` builds in the unified
+  workspace. `cargo run -p screeny-art -- list` lists all eight pieces.
+- Paths fixed in README, CLAUDE.md, roadmap, studio-vision, cards 101/102/103/104, the
+  art README and `crates/screeny/examples/art_output.rs`. Remaining `art/` mentions are
+  in done cards and research notes, which are history.
+- `firmware/` untouched (no code change, not rebuilt here; 016 is mid-flight in it).

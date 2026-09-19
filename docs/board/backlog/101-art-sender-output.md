@@ -1,6 +1,6 @@
 ---
 id: 101
-title: art/ sends to the panel through crates/screeny
+title: The art system sends to the panel through crates/screeny
 type: build
 hardware: no
 depends: [011, 100]
@@ -10,23 +10,23 @@ branch:
 
 ## Goal
 
-Give `art/screeny-art` an `Output` that pushes frames through `crates/screeny`, so the
+Give `crates/art` an `Output` that pushes frames through `crates/screeny`, so the
 art system is a real sender: indexed frames exact, RGB frames through the sender's
 encoder. Replace the stand-in byte-budget estimates with the real encoder's answer.
 
 ## Context
 
-- `art/screeny-art/src/output.rs` (`Output`, `PipeOutput`), `frame.rs` (`WireFrame`).
+- `crates/art/src/output.rs` (`Output`, `PipeOutput`), `frame.rs` (`WireFrame`).
 - Card 011 shapes `crates/screeny` for exactly this and sketches the impl in
   `crates/screeny/examples/art_output.rs`. Start from that.
-- `art/screeny-art/src/budget.rs` estimates encoded size and fakes a lossy encode for
+- `crates/art/src/budget.rs` estimates encoded size and fakes a lossy encode for
   the studio preview. With the real encoder available it should report the real codec
   chosen and real byte count, and the preview should show the real decoded frame.
   (This is what the deleted card 071 asked for.)
 
 ## Deliverables
 
-- `art/screeny-art/src/output/sender.rs` (or similar): `SenderOutput`, behind a cargo
+- `crates/art/src/output/sender.rs` (or similar): `SenderOutput`, behind a cargo
   feature so the core still builds with no network stack.
 - `screeny-art play <piece> --to <name-or-addr>`; the studio gains a "send to panel"
   switch that drives the same output alongside the preview.
@@ -72,11 +72,9 @@ let sent = match &frame.indexed {
 - Two layout changes are coming that affect where you work, so **start from a fresh
   `main`**: (1) the WiFi-credential scrub rewrote history on 2026-09-19 - old clones
   and the old `claude/generative-art-designer-624186` branch must not be merged or
-  pushed again, re-clone instead; (2) card 017 moves `art/screeny-art` ->
-  `crates/art` and `art/studio` -> `crates/studio` in one workspace, and the plan in
+  pushed again, re-clone instead; (2) card 017 has moved the art system into the single workspace - it now lives in
+  `crates/art` (package `screeny-art`) and `crates/studio` - and the plan in
   `docs/design/studio-vision.md` then drops Tauri for a server-first Studio (card 105).
-  If 017 has not happened when you start, ask the orchestrator before building on the
-  old layout.
 - First milestone the owner wants: design a piece in the Studio and watch it on the
   real panel (192.168.7.221, mDNS instance `screeny-4a00a4`). Streaming over WiFi
   from this card is expected and fine; serial and flashing stay with the orchestrator.
