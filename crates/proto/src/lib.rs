@@ -38,7 +38,8 @@ pub mod txt;
 
 pub use dec::{decode, DecodeError};
 pub use packet::{
-    gap, newer, BuildError, ControlPacket, FramePacket, Packet, Reject, TYPE_CONTROL, TYPE_FRAME,
+    gap, newer, peek, BuildError, ControlPacket, FramePacket, Packet, RawHeader, Reject,
+    TYPE_CONTROL, TYPE_FRAME,
 };
 
 // ---------------------------------------------------------------------------

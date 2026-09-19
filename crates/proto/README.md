@@ -50,6 +50,11 @@ enum BuildError { BufferTooSmall, TooLong }
 fn newer(a: u16, b: u16) -> bool           // RFC 1982, spec 3.2
 fn gap(new: u16, last: u16) -> u16         // what to add to seq_gaps
 
+struct RawHeader { version, ty, b2, flags, id, len }
+fn peek(&[u8]) -> Option<RawHeader>        // op/req_id out of a header we are
+                                           // rejecting: spec 2.2 ERR_VERSION,
+                                           // 6.5 ERR_BAD_LENGTH
+
 // --- control (spec 6, 8.2) ---------------------------------------------
 control::op::{PING, GET_INFO, TELEMETRY, SET_BRIGHTNESS, IDENTIFY, SET_IDLE,
               RESET_STATS, RELEASE, SET_NAME, GET_WIFI, SET_WIFI, BUSY, REBOOT}

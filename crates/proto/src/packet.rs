@@ -413,6 +413,62 @@ pub fn newer(a: u16, b: u16) -> bool {
     d != 0 && d < 0x8000
 }
 
+// ---------------------------------------------------------------------------
+// Peeking at a header we are going to reject
+// ---------------------------------------------------------------------------
+
+/// The 8-byte header read without validating anything but the magic byte.
+///
+/// [`peek`] produces it. Every field is raw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawHeader {
+    /// High nibble of byte 1. [`VERSION`] for a packet we can parse.
+    pub version: u8,
+    /// Low nibble of byte 1: [`TYPE_FRAME`], [`TYPE_CONTROL`], or reserved.
+    pub ty: u8,
+    /// Byte 2: `codec` on a `FRAME`, `op` on a `CONTROL`.
+    pub b2: u8,
+    /// Byte 3: the flag bits.
+    pub flags: u8,
+    /// Bytes 4..6: `seq` on a `FRAME`, `req_id` on a `CONTROL`.
+    pub id: u16,
+    /// Bytes 6..8, as written. **Not** checked against the datagram.
+    pub len: u16,
+}
+
+/// Read the header of a datagram this crate is about to refuse.
+///
+/// [`Packet::parse`] and friends deliberately hand back a [`Reject`] and
+/// nothing else, because a packet that failed section 2 has no trustworthy
+/// contents. Two places in the spec nevertheless need two fields out of such a
+/// datagram, and only those two:
+///
+/// * section 2.2 - a device **MAY** answer a `CONTROL` of an unknown version
+///   with `ERR_VERSION` "using version 1 framing", which means echoing the
+///   request's `op` and `req_id`;
+/// * section 6.5 - `ERR_BAD_LENGTH` is defined as "`len` inconsistent with the
+///   datagram", so the reply that carries it is built from a header whose
+///   `len` we have just rejected.
+///
+/// Both need `b2` and `id` from bytes that are certainly present, and nothing
+/// from the body. Returns `None` when there is not even a header, or when the
+/// magic byte is wrong - section 2.1 says such a datagram is discarded
+/// "without further parsing", and that includes this.
+#[must_use]
+pub fn peek(datagram: &[u8]) -> Option<RawHeader> {
+    if datagram.len() < HEADER_LEN || datagram[0] != MAGIC {
+        return None;
+    }
+    Some(RawHeader {
+        version: datagram[1] >> 4,
+        ty: datagram[1] & 0x0f,
+        b2: datagram[2],
+        flags: datagram[3],
+        id: u16::from_le_bytes([datagram[4], datagram[5]]),
+        len: u16::from_le_bytes([datagram[6], datagram[7]]),
+    })
+}
+
 /// How many sequence numbers were skipped between `last` and `new`.
 ///
 /// This is the value section 3.2 says to add to `seq_gaps`. It is 0 unless
