@@ -4,8 +4,8 @@ title: firmware networking on protocol v1 (frames, control, telemetry, mDNS, loc
 type: build
 hardware: yes
 depends: [005, 006, 007]
-owner:
-branch:
+owner: claude-fable-5.1 (bench worker)
+branch: card/008-firmware-network
 ---
 
 ## Goal
