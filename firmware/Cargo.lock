@@ -1836,6 +1836,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "heapless 0.9.3",
+ "hub75-framebuffer",
  "log",
  "rand_core 0.10.1",
  "static_cell",

@@ -128,6 +128,14 @@ static OE_OVERRIDE_DEADLINE_MS: AtomicU32 = AtomicU32::new(0);
 /// because there are two framebuffers and the setting lives in the buffer.
 static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
 
+/// First pixel-clock slot of the scan row that the panel is allowed to be
+/// lit for. **This is the anti-ghosting control.** A HUB75 panel ghosts onto
+/// the scan-adjacent row when it is still lit as the next row's address goes
+/// out, so the first slots after the latch have to stay dark. The
+/// `trail-blank-8` feature sets the default; card 007 swept it on the bench
+/// from here rather than by rebuilding eight times.
+static OE_START: AtomicU8 = AtomicU8::new(hub75_framebuffer::TRAIL_BLANK_DELAY as u8);
+
 static GAMMA_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.gamma);
 static DITHER_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.dither);
 
@@ -192,12 +200,13 @@ fn target_oe_slots() -> usize {
 #[embassy_executor::task]
 async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'static mut FrameBuffer) {
     info!(
-        "display: {} planes, {} Hz refresh (driver), {} bytes/buffer, OE slots 0..={} (cap {})",
+        "display: {} planes, {} Hz refresh (driver), {} bytes/buffer, OE slots 0..={} (cap {}), OE start {}",
         PLANES,
         REFRESH_HZ,
         core::mem::size_of::<FrameBuffer>(),
         FrameBuffer::OE_SLOTS,
         display::MAX_OE_SLOTS,
+        OE_START.load(Ordering::Relaxed),
     );
 
     let mut last_seq = u32::MAX;
@@ -217,7 +226,10 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
         if dirty {
             // The setting lives in the framebuffer, not the peripheral, so it
             // has to be written into each of the two in turn.
-            fb.set_oe_slots(target_oe_slots());
+            fb.set_oe_window(
+                OE_START.load(Ordering::Relaxed) as usize,
+                target_oe_slots(),
+            );
             BRIGHTNESS_DIRTY.fetch_sub(1, Ordering::Relaxed);
         }
 
@@ -358,7 +370,7 @@ async fn telemetry_task() {
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
         info!(
-            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {}) | bright {} -> {} slots | gamma {} dither {} | heap used {} free {}",
+            "telemetry: {} fps in, {} swaps/s, {} dropped | render {} us (max {}) | bright {} -> {} slots from {} | gamma {} dither {} | heap used {} free {}",
             frames.wrapping_sub(last_frames) / PERIOD_S,
             swaps.wrapping_sub(last_swaps) / PERIOD_S,
             FRAMES_DROPPED.load(Ordering::Relaxed),
@@ -366,6 +378,7 @@ async fn telemetry_task() {
             RENDER_US_MAX.load(Ordering::Relaxed),
             BRIGHTNESS.load(Ordering::Relaxed),
             target_oe_slots(),
+            OE_START.load(Ordering::Relaxed),
             GAMMA_ON.load(Ordering::Relaxed) as u8,
             DITHER_ON.load(Ordering::Relaxed) as u8,
             stats.current_usage,

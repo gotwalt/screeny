@@ -276,13 +276,30 @@ impl<const NROWS: usize, const COLS: usize, const PLANES: usize>
     /// double-buffered setup, since it is stored in the buffer, not the
     /// peripheral.
     pub fn set_oe_slots(&mut self, lit: usize) {
-        let lit = if lit > Self::OE_SLOTS {
-            Self::OE_SLOTS
+        self.set_oe_window(TRAIL_BLANK_DELAY, lit);
+    }
+
+    /// As [`Self::set_oe_slots`], but also chooses where in the scan row the
+    /// lit window starts.
+    ///
+    /// `start` is the anti-ghosting control. A HUB75 row ghosts when the
+    /// panel is still lit as the next row's address is applied, so the fix is
+    /// to keep the first few pixel-clock slots after the latch dark — which
+    /// is what the compile-time `trail-blank-N` features do. Making it a
+    /// parameter means the right N can be found by sweeping it against a
+    /// camera instead of by rebuilding, and it stays free: at any brightness
+    /// we can actually use, the lit window is far shorter than the row, so
+    /// moving its start costs no light at all.
+    ///
+    /// The window is clamped to end before the latch slot.
+    pub fn set_oe_window(&mut self, start: usize, lit: usize) {
+        let last_usable = COLS.saturating_sub(LEAD_BLANK_DELAY + 1);
+        let start = if start > last_usable {
+            last_usable
         } else {
-            lit
+            start
         };
-        let start = TRAIL_BLANK_DELAY;
-        let end = start + lit;
+        let end = (start + lit).min(last_usable);
         const OE_MASK: u16 = 0b1_0000_0000;
         for plane in &mut self.planes {
             for row in &mut plane.rows {

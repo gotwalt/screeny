@@ -16,6 +16,7 @@
 //! "SX" 'B' n        brightness 0..=255 (output-enable duty, power-capped)
 //! "SX" 'O' n        RAW output-enable slots, ignoring the cap. BENCH ONLY:
 //!                   reverts after 10 s. Use only with sparse patterns.
+//! "SX" 'W' n        first lit slot of the scan row (anti-ghosting window)
 //! "SX" 'G' 0|1      sRGB gamma on/off
 //! "SX" 'D' 0|1      temporal dithering on/off
 //! "SX" 'F' hi lo …  sRGB888 pixels starting at pixel (hi<<8)|lo
@@ -32,7 +33,8 @@ use crate::display::NPIX;
 use crate::patterns::{self, Pattern};
 use crate::{
     now_ms, BRIGHTNESS, BRIGHTNESS_DIRTY, DITHER_ON, FRAME, FRAMES_DROPPED, FRAMES_RECEIVED,
-    FRAME_SEQ, GAMMA_ON, LAST_FRAME_MS, OE_OVERRIDE, OE_OVERRIDE_DEADLINE_MS, PATTERN_HOLD,
+    FRAME_SEQ, GAMMA_ON, LAST_FRAME_MS, OE_OVERRIDE, OE_OVERRIDE_DEADLINE_MS, OE_START,
+    PATTERN_HOLD,
 };
 
 const MAGIC: &[u8; 2] = b"SX";
@@ -79,6 +81,11 @@ async fn command(data: &[u8]) {
             OE_OVERRIDE_DEADLINE_MS.store(now_ms().wrapping_add(OVERRIDE_MS), Ordering::Relaxed);
             BRIGHTNESS_DIRTY.store(2, Ordering::Relaxed);
             info!("test: RAW OE slots {} for {} ms", arg, OVERRIDE_MS);
+        }
+        b'W' => {
+            OE_START.store(arg, Ordering::Relaxed);
+            BRIGHTNESS_DIRTY.store(2, Ordering::Relaxed);
+            info!("test: OE window starts at slot {}", arg);
         }
         b'G' => {
             GAMMA_ON.store(arg != 0, Ordering::Relaxed);
