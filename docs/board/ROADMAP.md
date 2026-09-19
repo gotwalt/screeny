@@ -16,28 +16,32 @@ the phase before them has produced what they depend on.
 - 002 frame encoding lab
 - 003 protocol / discovery / transport
 
-## Phase 2 - design (orchestrator)
+## Phase 2 - design (orchestrator) - done
 
-- 004 finalise `docs/design/protocol-v1.md` and `docs/design/architecture.md`
-- workspace layout: `crates/proto` (no_std codec + packet types, shared),
-  `firmware/`, `crates/screeny` (sender lib + CLI), `crates/sim`
+- [x] 004 `docs/design/protocol-v1.md` accepted, `docs/design/architecture.md`,
+  host workspace skeleton
 
-## Phase 3 - build (parallel where possible)
+## Phase 3 - build
 
-- 005 `proto` crate: packet types + codecs, no_std, property-tested against the lab
-- 006 host simulator: receives the protocol, renders the panel in a window/terminal
-- 007 firmware bring-up on hardware: panel test pattern, brightness cap (hardware)
-- 008 firmware networking: WiFi, UDP receive, decode, display, telemetry, mDNS (hardware)
-- 009 sender library + CLI: discovery, pacing, stats, test patterns
-- 010 fractal zoom sender
-- 011 word clock sender: spells out the current time, animated transitions
-- 012 camera measurement harness: capture, locate panel, compare with sent frames (hardware)
-- 015 macOS code signing + Local Network permission for the sender binaries
+Wave 1 (parallel, no dependencies between them):
+- 005 `crates/proto`: no_std wire types + the five decoders, hardened against bad input
+- 007 `firmware/` display pipeline on hardware: orientation, ghosting, gamma,
+  brightness without losing depth (020), status screen; stretch temporal dither (030)
+- 010 `crates/demos`: fractal zoom + word clock renderers with a panel-model preview
 
-## Phase 4 - tune
+Wave 2 (needs 005):
+- 006 `crates/sim`: fake panel speaking the full protocol, window + headless
+- 008 firmware networking: proto-based frame/control/telemetry/mDNS, source lock, idle (hardware)
+- 009 `crates/screeny`: encoders + chooser, discovery, paced sender, CLI; wires in the demos
+- 015 macOS code signing + Local Network permission for the `screeny` binary
 
-- 013 end-to-end fps / latency / loss measurement and codec trade-offs on real hardware
-- 014 runtime WiFi provisioning
+Wave 3:
+- 012 camera measurement harness: corner calibration, compare sent vs shown (hardware)
+- 013 end-to-end fps / latency / loss and codec trade-offs on real hardware (hardware)
+- 014 runtime WiFi provisioning (serial command + SET_WIFI)
+- 030 device-side temporal dithering (if not done in 007)
+- 031 sender encode-time budget; 032 real-content corpus for the codec chooser
+- 021 board revision / colour order detection
 
 ## Parked - not scheduled, only on the owner's say-so
 

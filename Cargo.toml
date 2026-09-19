@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# firmware/ uses the esp toolchain and an Xtensa target; lab/ and spike/ are frozen
+# reference material. None of them belong in the host workspace.
+exclude = ["firmware", "lab", "lab/xtensa-bench", "lab/nostd-check", "spike/fw-skeleton"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+debug = 1
