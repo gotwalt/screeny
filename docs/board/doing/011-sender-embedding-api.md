@@ -254,3 +254,43 @@ running destructors. An embedder that wants the lock released promptly on a
 signal needs its own handler, the way the CLI does. In the runs above the
 simulator logged `lock released by ...: Timeout` for exactly that reason,
 because `timeout(1)` killed the example.
+
+### Linux (gap 4)
+
+`rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu` (both
+were in fact already installed), then:
+
+| | |
+|---|---|
+| `cargo check -p screeny --target x86_64-unknown-linux-gnu` | clean, no warnings |
+| `cargo check -p screeny --target aarch64-unknown-linux-gnu` | clean, no warnings |
+| `cargo clippy -p screeny --all-targets --target <both>` | clean |
+
+`--all-targets` includes the new sim-backed tests and both examples, which
+matters because it pulls `screeny-sim` in as well; it is a dev-dependency with
+`default-features = false`, so `minifb` (and X11) never enter the Linux build.
+
+**Nothing needed fixing**, which deserves a check of its own rather than a
+shrug, because "it compiled" and "the `cfg(target_os = "linux")` branch was
+compiled" are different claims. Proved the second directly: a temporary
+`compile_error!` inside the `#[cfg(target_os = "linux")]` arm of
+`net::set_dontfrag` fires on both Linux targets and is silent on macOS. So
+`IP_MTU_DISCOVER`/`IP_PMTUDISC_DO` really is the code being built there, and
+the macOS `IP_DONTFRAG = 28` really is not. Probe reverted.
+
+The other `unsafe` path, `net::local_ipv4`'s `getifaddrs`, is portable as
+written: `sa_family` is `u8` on macOS and `u16` on Linux and the code casts to
+`c_int`, and it already null-checks `ifa_netmask`, which Linux leaves null for
+some interfaces.
+
+**mDNS on headless Linux needs no avahi.** `cargo tree -p mdns-sd --target
+x86_64-unknown-linux-gnu` is `fastrand`, `flume`, `if-addrs`, `log`, `mio`,
+`socket-pktinfo`, `socket2` - every one pure Rust over `libc`, with no `-sys`
+crate, no build script linking anything, and no dbus, X11 or Wayland anywhere
+in `screeny`'s Linux tree. It is its own responder, not a client of one. Two
+things a deployment still has to get right, neither testable from this bench:
+a box already running `avahi-daemon` has something else bound to UDP 5353, and
+a container on Docker's default bridge network sees no multicast at all. Both
+fail the same survivable way an empty browse always does - and `--addr` and
+`--broadcast` both work regardless, which is why discovery is never the only
+route to a device.
