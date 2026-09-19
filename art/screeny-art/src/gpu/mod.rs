@@ -14,7 +14,7 @@
 mod fragment;
 pub mod mat;
 
-pub use fragment::ShaderPiece;
+pub use fragment::{Scene, SceneFn, ShaderPiece, MAX_EXTRA};
 
 use crate::color::Rgb;
 use crate::frame::{Frame, H, N, W};

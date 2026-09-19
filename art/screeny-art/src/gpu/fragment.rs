@@ -4,13 +4,16 @@
 //! a worked example.
 
 use super::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
-use crate::frame::Frame;
+use crate::dither::Dither;
+use crate::frame::{Frame, MAX_PALETTE};
+use crate::palette::Palette;
 use crate::piece::{Ctx, ParamSpec, Piece};
 use crate::rng::Rng;
 
 const HARNESS_WGSL: &str = include_str!("fragment.wgsl");
 /// `Uniforms.params` holds this many.
 const MAX_PARAMS: usize = 16;
+pub const MAX_EXTRA: usize = 16;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -21,7 +24,24 @@ struct Uniforms {
     seed: f32,
     _pad: [f32; 3],
     params: [f32; MAX_PARAMS],
+    extra: [f32; MAX_EXTRA],
+    palette: [[f32; 4]; MAX_PALETTE],
 }
+
+/// What a piece's scene function works out on the CPU each frame.
+pub struct Scene {
+    /// Anything the shader needs that is not a parameter: light direction,
+    /// phase of a cycle, camera state. Read in the shader as `X(i)`.
+    pub extra: [f32; MAX_EXTRA],
+    /// If set, the shader can paint with it (`PAL(i)`, `ramp()`), and the
+    /// rendered frame is mapped onto it, so it is sent as an exact indexed frame.
+    pub palette: Option<Palette>,
+    /// Strength of the ordered dither used by that mapping, 0..1.
+    pub dither: f32,
+}
+
+/// `seed` is the same 0..1 value the shader sees as `u.seed`.
+pub type SceneFn = fn(ctx: &Ctx, seed: f32) -> Scene;
 
 struct Live {
     gpu: &'static Gpu,
@@ -38,6 +58,7 @@ pub struct ShaderPiece {
     /// Which parameter, if any, sets samples per axis.
     samples_param: Option<&'static str>,
     seed: f32,
+    scene: Option<SceneFn>,
     /// `None` until first render; `Some(None)` if the GPU could not be opened.
     live: Option<Option<Live>>,
 }
@@ -47,6 +68,28 @@ impl ShaderPiece {
     /// reach it as `P(0)`, `P(1)`, ... in the order of `params`. If one of them
     /// is called `samples`, it sets the supersampling; otherwise 4 per axis.
     pub fn boxed(label: &'static str, source: &'static str, params: &'static [ParamSpec], seed: u64) -> Box<dyn Piece> {
+        Self::build(label, source, params, seed, None)
+    }
+
+    /// As `boxed`, plus a function run on the CPU every frame to give the
+    /// shader a palette and scene values. See `pieces/overland.rs`.
+    pub fn with_scene(
+        label: &'static str,
+        source: &'static str,
+        params: &'static [ParamSpec],
+        seed: u64,
+        scene: SceneFn,
+    ) -> Box<dyn Piece> {
+        Self::build(label, source, params, seed, Some(scene))
+    }
+
+    fn build(
+        label: &'static str,
+        source: &'static str,
+        params: &'static [ParamSpec],
+        seed: u64,
+        scene: Option<SceneFn>,
+    ) -> Box<dyn Piece> {
         assert!(params.len() <= MAX_PARAMS, "{label}: at most {MAX_PARAMS} parameters");
         Box::new(ShaderPiece {
             label,
@@ -54,6 +97,7 @@ impl ShaderPiece {
             params,
             samples_param: params.iter().map(|p| p.id).find(|id| *id == "samples"),
             seed: Rng::new(seed).f32(),
+            scene,
             live: None,
         })
     }
@@ -120,6 +164,7 @@ impl Piece for ShaderPiece {
         if self.live.is_none() {
             self.live = Some(self.open(samples));
         }
+        let scene = self.scene.map(|f| f(ctx, self.seed));
         let Some(Some(live)) = self.live.as_mut() else { return Frame::black() };
         if live.target.samples() != samples.clamp(1, 16) {
             live.target = Offscreen::new(live.gpu, samples);
@@ -137,6 +182,11 @@ impl Piece for ShaderPiece {
             seed: self.seed,
             _pad: [0.0; 3],
             params,
+            extra: scene.as_ref().map_or([0.0; MAX_EXTRA], |s| s.extra),
+            palette: std::array::from_fn(|i| {
+                let c = scene.as_ref().and_then(|s| s.palette.as_ref()).and_then(|p| p.colours().get(i));
+                c.map_or([0.0; 4], |c| [c.r, c.g, c.b, 1.0])
+            }),
         };
         live.gpu.queue.write_buffer(&live.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
@@ -147,6 +197,10 @@ impl Piece for ShaderPiece {
             pass.set_bind_group(0, &live.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        live.target.finish(live.gpu, encoder)
+        let frame = live.target.finish(live.gpu, encoder);
+        match scene {
+            Some(Scene { palette: Some(palette), dither, .. }) => palette.map(&frame, Dither::BlueNoise, dither),
+            _ => frame,
+        }
     }
 }

@@ -79,6 +79,35 @@ Two templates:
 - **Mesh** (`pieces/knot.rs` + `knot.wgsl`): vertex/index buffers, a camera from
   `gpu::mat`, a depth-tested pass from `Offscreen::pass`.
 
+### Painting by palette index (`overland`)
+
+The third template, and the one built for this panel rather than shrunk onto
+it. `ShaderPiece::with_scene` takes a function that runs on the CPU every frame
+and returns a `Scene`: a palette of up to 32 colours and a few floats. The
+shader then never computes a colour. Each surface picks a palette entry
+(`PAL(i)`), or a mix of two neighbouring entries (`ramp()`), and the frame is
+mapped back onto the same palette after the downsample. Pure entries map to
+themselves; mixes and anti-aliased edges become fixed blue-noise dither. The
+result is a 3D scene that is an exact indexed frame.
+
+What that buys, all of it used in `pieces/overland.rs` + `overland.wgsl`:
+
+- **Time of day is palette animation.** Geometry and indices do not care what
+  hour it is; the 32 colours move through dawn, noon, dusk and night. Lossless
+  and nearly free on the wire.
+- **No fades through the crushed darks.** A palette colour that would fall
+  below OKLCH L 0.3 is cut to true black, so at dusk the sky goes out one band
+  at a time, zenith first, and night terrain is silhouette. A test checks this
+  for every hour.
+- **Depth without fog.** Four depth bands, each its own ramp, getting lighter,
+  greyer and bluer with distance; plus occlusion, parallax and cast shadows.
+- **Shapes sized for 64x32.** Terraced terrain from three noise octaves plus one
+  broad one (finer detail is below an LED); flats tinted by elevation like a
+  relief map; normals from a stencil that widens with distance; a sun disc
+  about 8 LEDs across; monolith towers; water as horizontal dashes.
+- **Small things animate in the palette.** The tower beacons pulse because
+  entry 7 does.
+
 Things to know:
 
 - Shaders are WGSL. wgpu can also take GLSL (its `glsl` feature and

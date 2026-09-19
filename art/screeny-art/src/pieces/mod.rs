@@ -7,12 +7,16 @@ mod knot;
 #[cfg(feature = "gpu")]
 mod lattice;
 mod metaballs;
+#[cfg(feature = "gpu")]
+mod overland;
 mod plasma;
 mod testcard;
 
 pub static ALL: &[PieceDef] = &[
     plasma::DEF,
     metaballs::DEF,
+    #[cfg(feature = "gpu")]
+    overland::DEF,
     #[cfg(feature = "gpu")]
     lattice::DEF,
     #[cfg(feature = "gpu")]

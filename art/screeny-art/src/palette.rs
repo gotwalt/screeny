@@ -43,6 +43,10 @@ impl Palette {
         Palette::new(colours, gap.abs().max(0.02))
     }
 
+    pub fn colours(&self) -> &[Rgb] {
+        &self.colours
+    }
+
     pub fn len(&self) -> usize {
         self.colours.len()
     }
