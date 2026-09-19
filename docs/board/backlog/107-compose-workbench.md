@@ -33,7 +33,10 @@ a Portainer stack. Target facts: `docs/design/studio-vision.md`, "Deployment tar
   verified 2026-09-19) into `~/src/screeny`, then `docker compose build && up -d`,
   then print `/healthz`. Deploys what is on `origin/main`, so it refuses to run if the
   local `main` is ahead of `origin/main` (deploying unpushed work silently would be a
-  trap). Building inside Portainer is too slow for a Rust + wgpu
+  trap). The owner is keeping the repo local-only until it is ready to publish, so
+  support a second route that needs no GitHub: a bare repo on workbench reached as an
+  SSH git remote (`git push workbench main`), with the deploy script building from a
+  checkout of that. Pick by flag; same refusal-to-deploy-unpushed-work rule. Building inside Portainer is too slow for a Rust + wgpu
   image; Portainer still sees and manages the stack.
 - Verify early and write down: (a) `mdns-sd` inside a host-network container coexists
   with the host's avahi on UDP 5353 and finds `screeny-4a00a4`; (b) wgpu enumerates
