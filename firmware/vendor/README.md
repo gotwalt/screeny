@@ -32,25 +32,35 @@ stream is the same length). It is the answer to card 020.
 
 ### The changes
 
-1. `src/lib.rs`: `LEAD_BLANK_DELAY`, `TRAIL_BLANK_DELAY` and
-   `INTER_ROW_BLANK` changed from `pub(crate)` to `pub`. No behaviour change;
-   the firmware needs them to size its brightness scale.
+All of them are in `src/bitplane/plain/frame.rs`, on `DmaFrameBuffer` only (the
+layout we use), and all are additive:
 
-2. `src/bitplane/plain/frame.rs`, on `DmaFrameBuffer` only (the layout we
-   use), all additive:
+- `pub const OE_SLOTS` — the widest achievable output-enable window, in
+  pixel-clock slots per scan row. With `trail-blank-8` and no lead blank on a
+  64-column panel this is 55, i.e. full brightness is 86% duty.
+- `pub const OE_DEFAULT_START` — the slot the compile-time `trail-blank-N`
+  feature starts that window at, so a caller can move the window and come back
+  to the default without depending on this crate for the constant.
+- `pub fn set_oe_slots(&mut self, lit: usize)` — rewrites bit 8 of every entry
+  so the panel is lit for `lit` of those slots. Clamped to `OE_SLOTS`. This is
+  the brightness control.
+- `pub fn set_oe_window(&mut self, start: usize, lit: usize)` — the same, but
+  also moves where in the scan row the lit window begins. This is the
+  anti-ghosting control the `trail-blank-N` features set at build time, made
+  runtime-adjustable so it can be swept against a camera rather than by
+  rebuilding. Card 007 did sweep it and found this panel does not ghost at any
+  setting; it stays because the sweep should be repeatable on the next panel.
+- `pub fn write_row(&mut self, y, &[[u8; 3]; COLS])` — writes one whole display
+  row of already-quantised colour, hoisting the `planes[p].rows[r]` lookup out
+  of the per-pixel loop and always writing (so a full-frame conversion needs no
+  `erase()` pass). Measured 2.3x faster than the equivalent `set_pixel` loop on
+  this chip; see card 007's log.
 
-   - `pub const OE_SLOTS` — the widest achievable output-enable window, in
-     pixel-clock slots per scan row. With `trail-blank-8` and no lead blank
-     on a 64-column panel this is 55, i.e. full brightness is 86% duty.
-   - `pub fn set_oe_slots(&mut self, lit: usize)` — rewrites bit 8 of every
-     entry so the panel is lit for `lit` of those slots. Clamped to
-     `OE_SLOTS`. This is the brightness control.
-   - `pub fn write_row(&mut self, y, &[[u8; 3]; COLS])` — writes one whole
-     display row of already-quantised colour, hoisting the
-     `planes[p].rows[r]` lookup out of the per-pixel loop and always writing
-     (so a full-frame conversion needs no `erase()` pass). Measured 2.3x
-     faster than the equivalent `set_pixel` loop on this chip; see card 007's
-     log.
+Nothing in `src/lib.rs` is touched. An earlier revision of this patch made
+`LEAD_BLANK_DELAY`, `TRAIL_BLANK_DELAY` and `INTER_ROW_BLANK` `pub` so the
+firmware could read the trail blank; that was reverted in favour of
+`OE_DEFAULT_START`, which needs no second dependency on this crate and does not
+trip its own `#![warn(missing_docs)]`.
 
 Nothing was removed or altered, so upstream behaviour for anyone not calling
 the new functions is byte-identical. The `benches/` directory was dropped

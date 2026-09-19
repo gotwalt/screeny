@@ -52,10 +52,6 @@ esp-hub75 = { version = "=0.17.0", default-features = false, features = [
   "invert-oe",
 ] }
 embedded-graphics = { version = "0.8.2" }
-# Named directly only to reach `TRAIL_BLANK_DELAY`, which is the default start
-# of the output-enable window. `[patch.crates-io]` above makes this the same
-# vendored copy esp-hub75 uses, so the types are identical.
-hub75-framebuffer = { version = "=0.12.0" }
 
 # --- discovery ------------------------------------------------------------
 edge-mdns = { version = "=0.8.0", default-features = false, features = ["io"] }

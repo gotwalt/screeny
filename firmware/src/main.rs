@@ -134,7 +134,7 @@ static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
 /// out, so the first slots after the latch have to stay dark. The
 /// `trail-blank-8` feature sets the default; card 007 swept it on the bench
 /// from here rather than by rebuilding eight times.
-static OE_START: AtomicU8 = AtomicU8::new(hub75_framebuffer::TRAIL_BLANK_DELAY as u8);
+static OE_START: AtomicU8 = AtomicU8::new(FrameBuffer::OE_DEFAULT_START as u8);
 
 static GAMMA_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.gamma);
 static DITHER_ON: AtomicBool = AtomicBool::new(Mode::DEFAULT.dither);
@@ -264,12 +264,19 @@ async fn display_task(hub75: Hub75<esp_hal::Async, FrameBuffer>, mut fb: &'stati
 #[embassy_executor::task]
 async fn status_task(stack: embassy_net::Stack<'static>) {
     let mut shown: Option<(status::Net, u8, bool)> = None;
+    // "joining" and "lost" are the same state to the network stack and very
+    // different states to someone looking at the panel, so the difference is
+    // whether we ever got as far as an address.
+    let mut had_address = false;
     loop {
         let net = if let Some(cfg) = stack.config_v4() {
             let o = cfg.address.address().octets();
+            had_address = true;
             status::Net::Address(o)
         } else if stack.is_link_up() {
             status::Net::Associated
+        } else if had_address {
+            status::Net::Lost
         } else {
             status::Net::Joining
         };

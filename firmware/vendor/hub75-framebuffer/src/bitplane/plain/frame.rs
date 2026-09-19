@@ -259,6 +259,15 @@ impl<const NROWS: usize, const COLS: usize, const PLANES: usize>
     /// `OE_SLOTS / COLS`, not 100%.
     pub const OE_SLOTS: usize = COLS.saturating_sub(TRAIL_BLANK_DELAY + LEAD_BLANK_DELAY + 1);
 
+    /// Where the lit window starts by default: the slot the compile-time
+    /// `trail-blank-N` feature picked, which is what
+    /// [`Self::set_oe_slots`] uses.
+    ///
+    /// Exposed so a caller can name the default when it wants to move the
+    /// window with [`Self::set_oe_window`] and come back to it, without
+    /// depending on this crate directly for the constant.
+    pub const OE_DEFAULT_START: usize = TRAIL_BLANK_DELAY;
+
     /// Sets the output-enable duty cycle: how many pixel-clock slots of each
     /// scan row the panel is actually lit for.
     ///
