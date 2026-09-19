@@ -14,7 +14,7 @@ it; git history keeps it. What it proved is still true.)
 | Refresh | 154 Hz, 6 bit planes, 10 MHz pixel clock. No visible flicker on camera at 30 fps. |
 | Colour order | **Rotated on this unit.** The lines the hdk names R/G/B drive blue/red/green. Fixed by mapping red=GPIO2/4, green=GPIO22/27, blue=GPIO21/23. Feeds card 021. |
 | Geometry | Test pattern bands and ramps land where expected; no shift or garbling, so clock phase is right. Mirroring not yet proven (needs an asymmetric pattern). |
-| WiFi | Joins `Example-Wifi1` (capital T - the SSID is case-sensitive) on 2.4 GHz ch 1, RSSI about -41 dBm, WPA2. Three APs share the SSID. ~9 s from reset to DHCP lease. |
+| WiFi | Joins the bench network (the SSID is case-sensitive, and a wrong-case first letter cost a debugging round: the scan printed the real name) on 2.4 GHz ch 1, RSSI about -41 dBm, WPA2. Three APs share the SSID. ~9 s from reset to DHCP lease. |
 | mDNS | Works. `dns-sd -B _screeny._udp` finds `screeny`, `screeny.local` resolves. Multicast through esp-radio is fine - risk 5 from card 001 is retired. |
 | UDP receive | 30 fps sent from the Mac (wired ethernet -> AP -> WiFi), **29 fps shown, 0 dropped** over 14 s, 1470-byte datagrams. Camera shows smooth motion, no tearing. |
 | ICMP | Device does not answer ping. ARP works. Low priority, but handy for debugging. |

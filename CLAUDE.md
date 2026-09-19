@@ -38,9 +38,13 @@ workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
 - The device: `192.168.7.221`, mDNS host `screeny-4a00a4.local`, instance
   `screeny-4a00a4`, frames UDP 49374, control UDP 49375. This unit's HUB75 colour
   lines are rotated relative to Tidbyt's published pin map (fixed in `firmware/`).
-- WiFi: SSID `Example-Wifi1` (capital T), password `password9` (owner says this is not
-  secret). Compiled in for now; the plan is a captive-portal setup with an HTTP
-  settings page. Do not build other provisioning schemes.
+- WiFi credentials are **not in git**. `firmware/build.rs` compiles them in from
+  the environment, `firmware/wifi.env` (gitignored) or `~/.config/screeny/wifi.env`
+  (outside the repo, so every worktree finds it). Never write the real SSID or
+  password into a tracked file, a card log, a commit message, a test fixture or a
+  worker prompt; tests use the dummies `Example-Wifi1` / `password9`. The plan for
+  provisioning is a captive-portal setup with an HTTP settings page; do not build
+  other schemes.
 - Camera captures are for "is it showing the right thing", not colour measurement:
   the bench camera's colour response is unknown and it cannot photograph the
   temporally dithered panel honestly. The Claude app has no camera permission;
@@ -52,6 +56,6 @@ workers operate. `docs/design/` is the source of truth (`protocol-v1.md`,
 - Workers work in their own git worktree/branch, log as they go, commit after every
   step, and do not merge to `main`; the orchestrator merges.
 - Remote: `origin` = `git@github.com:gotwalt/screeny.git` (private, currently empty).
-  **Nobody pushes until the owner says so**; all work stays local. Workers never push. If the repo is ever made public, first deal with the WiFi credentials that are
-  committed here and in `firmware/` (fine while private; the owner does not treat
-  them as secret, but a public repo is a different audience).
+  **Nobody pushes until the owner says so**; all work stays local. Workers never push.
+  The repo is intended to become public: keep it free of credentials and of anything
+  the owner has not chosen to publish.

@@ -8,3 +8,6 @@ lab/Cargo.lock
 lab/xtensa-bench/target/
 lab/xtensa-bench/Cargo.lock
 crates/studio/gen/
+
+# WiFi credentials never go in git (firmware/build.rs reads them at build time)
+wifi.env

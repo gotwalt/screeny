@@ -77,10 +77,12 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Compile-time credentials. Card 014 adds the stored pair and the fallback
-/// ladder of spec section 8.3; until then this is the only network we join.
-pub const SSID: &str = "Example-Wifi1";
-const PASSWORD: &str = "password9";
+/// Compile-time credentials, supplied by `build.rs` from outside git (environment,
+/// `firmware/wifi.env`, or `~/.config/screeny/wifi.env`). Never write them here.
+/// Runtime provisioning (a captive portal) is planned; until then this is the only
+/// network we join.
+pub const SSID: &str = env!("SCREENY_WIFI_SSID");
+const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 
 /// The `fw=` TXT key and `GET_INFO` field.
 pub const FW_VERSION: &str = "0.2.0";
