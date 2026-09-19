@@ -133,12 +133,10 @@ struct Clocks {
     ambient: Option<ambient::Ambient>,
     /// The dance chosen for a minute, kept so it is composed only once.
     chosen: Option<(i64, usize, dance::Composition)>,
-    /// The dance being performed, or the last one that was: what a rating
-    /// applies to.
+    /// The dance being performed, or the last one that was.
     performed: Option<dance::Composition>,
     /// What has been performed, so the composer does not repeat itself.
     variety: crate::variety::Variety,
-    taste: crate::taste::Taste,
     request: Option<Request>,
     /// How many dances have been asked for by hand, to vary them.
     asked: u64,
@@ -158,7 +156,6 @@ fn make(seed: u64) -> Box<dyn Piece> {
         chosen: None,
         performed: None,
         variety: Default::default(),
-        taste: crate::taste::Taste::load("clocks"),
         request: None,
         asked: 0,
         doing: String::new(),
@@ -187,7 +184,7 @@ impl Clocks {
             n => n > dance::DANCES,
         };
         let composition = if composed {
-            dance::compose(&mut rng, &self.angles, to, motor, &self.taste, &self.variety)
+            dance::compose(&mut rng, &self.angles, to, motor, &self.variety)
         } else if choice == 0 {
             // From the repertoire, whichever has gone longest unperformed.
             let names: Vec<String> = (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
@@ -307,53 +304,21 @@ impl Clocks {
     }
 }
 
-/// Tags as a person would say them: "op:weave" -> "weave".
-fn plain(tag: &str) -> String {
-    match tag.split_once(':') {
-        Some(("theme" | "theme2", t)) => format!("from a {t}").replace("from a diagonal", "on the diagonal").replace("from a sweep", "in a sweep").replace("from a cascade", "in a cascade"),
-        Some(("mask", t)) => format!("split by {t}"),
-        Some((_, t)) => t.to_string(),
-        None => tag.to_string(),
-    }
-}
-
 impl Piece for Clocks {
     fn playing(&self) -> Option<Playing> {
         let performed = self.performed.as_ref()?;
-        let opinions = self.taste.opinions();
-        let said = |liked: bool| {
-            let tags: Vec<String> = opinions.iter().filter(|(_, w)| (*w > 0.0) == liked).take(5).map(|(t, _)| plain(t)).collect();
-            (!tags.is_empty()).then(|| format!("{}: {}", if liked { "You like" } else { "You like less" }, tags.join(", ")))
-        };
-        let mut notes: Vec<String> = [said(true), said(false)].into_iter().flatten().collect();
-        if notes.is_empty() {
-            notes.push("Rate a few dances and the composer will lean towards what you like.".into());
-        }
-        let mut actions = vec![
-            Action { id: "like", label: "More like this" },
-            Action { id: "dislike", label: "Less like this" },
+        let actions = vec![
             Action { id: "again", label: "Play it again" },
             Action { id: "another", label: "Compose another" },
         ];
-        if !opinions.is_empty() {
-            actions.push(Action { id: "forget", label: "Forget what I like" });
-        }
-        Some(Playing { title: performed.name.clone(), detail: self.doing.clone(), actions, notes })
+        Some(Playing { title: performed.name.clone(), detail: self.doing.clone(), actions, notes: Vec::new() })
     }
 
     fn act(&mut self, action: &str) {
-        let tags = self.performed.as_ref().map(|p| p.tags.clone()).unwrap_or_default();
         match action {
-            "like" => self.taste.rate(&tags, 1.0),
-            "dislike" => self.taste.rate(&tags, -1.0),
-            "forget" => self.taste.forget(),
             "again" => self.request = Some(Request::Again),
             "another" => self.request = Some(Request::Another),
             _ => {}
-        }
-        // What was just learned should show in the very next composition.
-        if matches!(action, "like" | "dislike" | "forget") {
-            self.chosen = None;
         }
     }
 

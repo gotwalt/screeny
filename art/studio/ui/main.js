@@ -394,7 +394,7 @@ async function start(invoke) {
   }
 
   // Now playing: pieces that compose as they go say what they are performing
-  // and offer a say in it. Polled gently; it changes every few seconds at most.
+  // and may offer a control or two. Polled gently; it changes every few seconds at most.
   let playingKey = '';
   function showPlaying(p) {
     $('#playing').hidden = !p;
@@ -403,21 +403,15 @@ async function start(invoke) {
     $('#playing-detail').textContent = p.detail;
     $('#playing-notes').replaceChildren(...p.notes.map((n) => Object.assign(document.createElement('li'), { textContent: n })));
     // Rebuild the buttons only when the set changes, so a click is never lost
-    // to a refresh and the "done" mark survives until the next dance.
-    const key = `${p.title}|${p.actions.map((a) => a.id).join()}`;
+    // to a refresh.
+    const key = p.actions.map((a) => a.id).join();
     if (key === playingKey) return;
     playingKey = key;
     $('#playing-actions').replaceChildren(...p.actions.map((a) => {
       const b = Object.assign(document.createElement('button'), { type: 'button', textContent: a.label });
       b.dataset.id = a.id;
       b.addEventListener('click', async () => {
-        const next = await call('piece_act', { action: a.id });
-        if (a.id === 'like' || a.id === 'dislike') {
-          document.querySelectorAll('#playing-actions button').forEach((o) => o.classList.remove('is-done'));
-          b.classList.add('is-done');
-        }
-        if (a.id === 'forget') playingKey = '';
-        showPlaying(next);
+        showPlaying(await call('piece_act', { action: a.id }));
       });
       return b;
     }));

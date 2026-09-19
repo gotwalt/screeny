@@ -92,8 +92,8 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
     grid leaving the next formation behind it);
   - a *critic*: every sketch is planned for real. Hard rules reject ones that
     are too long or short, freeze the grid part-way, barely move, or overdrive
-    a hand. The survivors are scored for flow, structure, pacing, freshness
-    and (lightly) taste; the best of eight is performed.
+    a hand. The survivors are scored for flow, structure, pacing and
+    freshness; the best of eight is performed.
   - a *memory* (`variety.rs`), because the aim is a clock that does not get
     repetitive over a day, more than one whose every dance is the best. Tags
     wear with use and recover with time, and worn sketches score lower, which
@@ -106,18 +106,16 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
 
   About 190 distinct shapes in 300 independent seeds, each continuously varied. Tests check
   that all land exactly, that the critic does not collapse onto the plain
-  "direct" kind (it did, twice, while being written), and that ratings steer it.
+  "direct" kind (it did, twice, while being written).
   Left to vary, six dances in ten are composed; `dance` 13 is always composed,
   1-12 are the named ones.
-- **Taste** (`taste.rs`). Every dance carries tags (`motif:rings`, `op:weave`,
-  `theme:point`, `mask:band`...). In the studio's **Now playing** panel, "More
-  like this" / "Less like this" nudge the weight of each tag the dance carried;
-  a sketch's taste score is the mean weight of its tags. One dance in five
-  ignores taste so there is always something new to rate. "Play it again" and
-  "Compose another" perform at once, to the time already showing. Weights are
-  saved to `~/.screeny-art/clocks.taste` (or `$SCREENY_ART_HOME`), a plain
-  `tag<TAB>weight` file, so the headless runner shares the studio's taste by
-  copying it. Any piece can offer such a panel: see `Piece::playing` / `act`.
+- **Now playing.** A piece that composes as it goes can say what it is
+  performing (`Piece::playing`) and offer a control or two (`Piece::act`); the
+  studio shows this in its inspector. The clock names its dance ("rings > morph
+  > split, point") and offers "Play it again" and "Compose another", which
+  perform at once to the time already showing. Hands names its mood and offers
+  "Move on". (A ratings mechanism was tried and removed: the owner likes nearly
+  every dance, so the composer is steered by variety, not taste.)
 - **A minute has a shape**: the dance lands as the minute turns, the time is
   held ("Seconds the time is held"), then the hands are released into
   **ambient** motion (`ambient.rs`) until it is time to settle and dance again.

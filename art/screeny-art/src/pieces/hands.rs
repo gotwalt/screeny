@@ -22,7 +22,7 @@
 //! servo under one motor's speed and acceleration.
 
 use crate::frame::{Frame, W};
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::piece::{param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
 use crate::pieces::clocks::ambient::{Ambient, MOODS};
 use crate::pieces::clocks::dance::Motor;
 use crate::pieces::clocks::draw::{Dials, Tint};
@@ -84,6 +84,12 @@ struct Hands {
     change_at: f64,
     /// Which moods have been visited lately, so wandering keeps moving on.
     variety: crate::variety::Variety,
+    /// The mood mixed into the current one, if enough to be worth naming.
+    tinge: Option<&'static str>,
+    /// What is happening, for the studio.
+    doing: String,
+    /// Asked from the studio: glide on to another mood now.
+    move_on: bool,
 }
 
 fn make(seed: u64) -> Box<dyn Piece> {
@@ -92,7 +98,7 @@ fn make(seed: u64) -> Box<dyn Piece> {
     let grid = 1;
     let field = Ambient::new(&mut rng, mood, GRIDS[grid].0, GRIDS[grid].1, W as f32 / GRIDS[grid].0 as f32);
     eprintln!("hands: t=0 {}", field.name());
-    Box::new(Hands { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default() })
+    Box::new(Hands { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default(), tinge: None, doing: String::new(), move_on: false })
 }
 
 /// Every dial starts with both hands at 7:30, as an idle ClockClock does.
@@ -122,7 +128,7 @@ impl Hands {
         let asked = ctx.get("mood") as usize;
         let next = if asked > 0 {
             Some(asked - 1).filter(|m| *m != self.mood)
-        } else if ctx.t >= self.change_at {
+        } else if ctx.t >= self.change_at || std::mem::take(&mut self.move_on) {
             // The mood least visited lately, allowing for how often each is
             // meant to come up, with a little chance so it is never a rota.
             (0..MOODS)
@@ -139,6 +145,7 @@ impl Hands {
         if let Some(next) = next {
             self.mood = next;
             self.variety.note("", &[format!("mood:{next}")]);
+            self.tinge = None;
             if asked > 0 {
                 self.field.drift_to(next, &mut self.rng);
             } else {
@@ -147,6 +154,9 @@ impl Hands {
                 let other = (self.rng.u64() % MOODS as u64) as usize;
                 let tinge = self.rng.range(0.0, 0.45);
                 self.field.drift_to_blend(next, other, tinge, &mut self.rng);
+                if tinge > 0.15 && other != next {
+                    self.tinge = Some(crate::pieces::clocks::ambient::Mood::new(other, &mut Rng::new(0)).name);
+                }
             }
             self.change_at = ctx.t + ctx.get("dwell") as f64 * self.rng.range(0.7, 1.3) as f64;
             eprintln!("hands: t={:.0} {}", ctx.t, self.field.name());
@@ -166,6 +176,13 @@ impl Hands {
             // The mood waits until the time has been let go.
             self.change_at = self.change_at.max(ctx.t + 4.0);
         }
+        self.doing = if telling {
+            "telling the time".to_string()
+        } else if asked > 0 {
+            "held in this mood".to_string()
+        } else {
+            format!("moving on in {:.0} s", (self.change_at - ctx.t).max(0.0))
+        };
 
         let speed = ctx.get("speed");
         // Gentler than the clock's dances: this is never in a hurry.
@@ -175,6 +192,19 @@ impl Hands {
 }
 
 impl Piece for Hands {
+    fn playing(&self) -> Option<Playing> {
+        let title = match self.tinge {
+            Some(other) => format!("{}, tinged with {other}", self.field.name()),
+            None => self.field.name().to_string(),
+        };
+        let actions = vec![Action { id: "move-on", label: "Move on" }];
+        Some(Playing { title, detail: self.doing.clone(), actions, notes: Vec::new() })
+    }
+
+    fn act(&mut self, action: &str) {
+        self.move_on |= action == "move-on";
+    }
+
     fn render(&mut self, ctx: &Ctx) -> Frame {
         self.step(ctx);
 

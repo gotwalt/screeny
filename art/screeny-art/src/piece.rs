@@ -65,7 +65,7 @@ pub struct Playing {
     /// What is happening to it: "dancing, 6 s to go".
     pub detail: String,
     pub actions: Vec<Action>,
-    /// Anything worth telling: usually what has been learned from ratings.
+    /// Anything else worth a line.
     pub notes: Vec<String>,
 }
 
