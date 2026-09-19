@@ -357,3 +357,35 @@ Final state: `cargo test -p screeny` is 109 tests green (the 18.6 s is
 --all-targets` clean on macOS and on both Linux targets; `cargo doc` clean
 apart from the four pre-existing `quant.rs` warnings now filed as card 092.
 `pgrep -lf screeny` shows nothing of mine.
+
+### Done
+
+All deliverables done. Card moved to `review/`; not merged.
+
+What the acceptance criteria say now:
+
+- `cargo test -p screeny` passes: 109 tests, including `tests/indexed.rs` (16)
+  and `tests/embed.rs` (14), both driving `screeny_sim::SimDevice` on loopback
+  with ephemeral ports and mDNS off.
+- Both Linux targets `cargo check` and `cargo clippy --all-targets` clean.
+- An embedder can stream exact indexed frames with auto-reconnect using only
+  what the README's Embedding section shows - `examples/embed.rs` is that
+  fragment, running, and `examples/art_output.rs` is the art system's `Output`
+  impl in fifteen lines.
+
+Left undone, deliberately:
+
+- The optional indexed `FrameSource` for the built-in demos. Its only natural
+  consumer is `crates/demos`, which card 016 held; card **092**.
+- Four pre-existing `cargo doc` warnings in `encode/quant.rs`; also card 092.
+- `tests/pacing.rs` fails under `SCREENY_PACING_SECS`; pre-existing, card
+  **093**.
+- The mDNS re-resolve path through `Link` is written and documented but has no
+  test, because these tests run with mDNS off by rule. What is tested is the
+  reconnect machinery either side of it: a device rebooting on the same ports,
+  and `retarget` moving a live link to a different pair. Worth a bench check
+  when someone next has the hardware.
+
+No hardware was touched. `pgrep -lf 'screeny'` shows nothing of mine (the
+`screeny-studio` and `cam-daemon.sh` processes on this machine belong to other
+sessions and were left alone).
