@@ -17,6 +17,7 @@
 
 #[path = "../../src/dec/mod.rs"]
 mod dec;
+mod vectors;
 
 use core::arch::{asm, global_asm};
 

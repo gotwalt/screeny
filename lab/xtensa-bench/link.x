@@ -17,6 +17,13 @@ MEMORY {
 }
 SECTIONS {
   .reset : { KEEP(*(.literal.reset .text.reset)) } > VEC
+  /* Register-window spill/fill vectors, 0x40 apart from the vector base. */
+  .wvec.of4  0xd0000000 : { KEEP(*(.wvec.of4))  }
+  .wvec.uf4  0xd0000040 : { KEEP(*(.wvec.uf4))  }
+  .wvec.of8  0xd0000080 : { KEEP(*(.wvec.of8))  }
+  .wvec.uf8  0xd00000c0 : { KEEP(*(.wvec.uf8))  }
+  .wvec.of12 0xd0000100 : { KEEP(*(.wvec.of12)) }
+  .wvec.uf12 0xd0000140 : { KEEP(*(.wvec.uf12)) }
   .text : ALIGN(4) {
     *(.literal.start .text.start)
     *(.literal .text .literal.* .text.*)
