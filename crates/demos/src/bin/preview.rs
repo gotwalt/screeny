@@ -183,6 +183,40 @@ fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
     preview::sheet("FRACTAL TOUR TARGETS", tiles, ages.len())
 }
 
+/// The clock's awkward cases on one sheet: the longest phrase, the shortest,
+/// both layouts, noon and midnight.
+fn phrases_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
+    const TIMES: &[(u32, u32)] = &[
+        (11, 35),
+        (0, 0),
+        (12, 0),
+        (9, 0),
+        (6, 30),
+        (3, 5),
+        (1, 20),
+        (7, 55),
+        (22, 25),
+        (17, 40),
+    ];
+    let mut tiles = Vec::new();
+    for (h, m) in TIMES {
+        let base = Local::now()
+            .naive_local()
+            .date()
+            .and_time(NaiveTime::from_hms_opt(*h, *m, 0).unwrap());
+        let mut c = WordClock::at(base);
+        c.panel = Panel::new(a.levels);
+        let mut f = Frame::black();
+        render_at(&mut c, Duration::from_secs_f64(120.0), a.indexed, &mut f);
+        let s = stats::frame_stats(&f, &opts.panel);
+        tiles.push(Tile {
+            label: format!("{:02}:{:02} {}", h, m, s.label()),
+            img: preview::render(&f, opts),
+        });
+    }
+    preview::sheet("WORD CLOCK PHRASES", tiles, a.cols)
+}
+
 /// How many iterations the tour actually needs, per target and depth. The
 /// iteration budget is the one number that decides whether a deep view is a
 /// picture or a black rectangle, so it is measured rather than guessed: for
@@ -272,6 +306,13 @@ fn main() {
     let out = a.out.clone().unwrap_or_else(|| {
         PathBuf::from(format!("/tmp/preview-{}.png", a.piece))
     });
+
+    if a.piece == "phrases" {
+        let img = phrases_sheet(&a, &opts);
+        img.save(&out).unwrap();
+        println!("wrote {} ({}x{})", out.display(), img.w, img.h);
+        return;
+    }
 
     if a.piece == "targets" {
         let img = targets_sheet(&a, &opts);

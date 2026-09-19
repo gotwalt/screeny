@@ -23,8 +23,8 @@ use std::time::Duration;
 const TEXT_LEVELS: usize = 7;
 /// Accent ramp steps (plus black).
 const ACCENT_LEVELS: usize = 3;
-/// Seconds a word takes to roll out and the new one to roll in.
-const ROLL_SECS: f32 = 0.55;
+/// Seconds for a word to roll out and the replacement to roll in.
+const ROLL_SECS: f32 = 0.66;
 /// Extra delay per line, so the phrase turns over as a cascade.
 const LINE_STAGGER: f32 = 0.07;
 
@@ -149,11 +149,18 @@ pub fn phrase_extent(p: &Phrase) -> i32 {
 /// ago that was. The phrase turns over at the rounding boundary (:02:30,
 /// :07:30, ...), so the whole animation is derived from the clock.
 fn since_change(now: &NaiveDateTime) -> (f32, NaiveDateTime) {
+    // `phrase` rounds whole minutes, so the phrase turns over on a minute
+    // boundary - the minute where (m + 2) % 5 == 0, which is :03, :08, :13 and
+    // so on. Deriving the boundary any other way (the obvious :02:30 rounding
+    // instant, say) puts the animation half a slot away from the words it is
+    // animating, which is exactly what the first version did.
     let secs = now.num_seconds_from_midnight() as i64;
-    let boundary = ((secs + 150).div_euclid(300)) * 300 - 150;
+    let min = secs.div_euclid(60);
+    let boundary_min = (min + 2).div_euclid(5) * 5 - 2;
     let sub = now.and_utc().timestamp_subsec_millis() as f32 / 1000.0;
-    let age = (secs - boundary) as f32 + sub;
-    let prev = *now - TimeDelta::try_seconds(age as i64 + 1).unwrap();
+    let age = (secs - boundary_min * 60) as f32 + sub;
+    // The phrase before this one: one minute before the boundary.
+    let prev = *now - TimeDelta::try_seconds(age as i64 + 60).unwrap();
     (age, prev)
 }
 
@@ -206,7 +213,7 @@ impl WordClock {
     fn text_ramp(&self, now: &NaiveDateTime) -> Vec<[u8; 3]> {
         let day = now.num_seconds_from_midnight() as f32 / 86400.0;
         let hue = self.hue + 0.055 * (day * std::f32::consts::TAU - 1.9).sin();
-        let full = oklch_to_lin(0.93, 0.055, hue);
+        let full = oklch_to_lin(0.88, 0.115, hue);
         (1..=TEXT_LEVELS)
             .map(|k| {
                 let a = k as f32 / TEXT_LEVELS as f32;
@@ -271,25 +278,35 @@ impl WordClock {
     /// no extra colours, because it modulates within the same 7-step ramp.
     fn sheen(&self, x: usize, secs: f32) -> f32 {
         let pos = ((secs / 21.0).fract() * (W as f32 + 60.0)) - 30.0;
-        let d = (x as f32 - pos) / 16.0;
-        0.74 + 0.26 * (-d * d).exp()
+        let d = (x as f32 - pos) / 13.0;
+        0.70 + 0.30 * (-d * d).exp()
     }
 
-    fn draw_progress(&mut self, age: f32, secs: f32) {
+    /// The five-minute rule: a dim rail across the bottom row with a bright
+    /// marker travelling along it, arriving at the right-hand end exactly as
+    /// the words turn over.
+    ///
+    /// It started as a bar that filled, which at full width was the loudest
+    /// thing on the panel and fought the type. A rail and a marker carry the
+    /// same information at a third of the light. The marker moves 0.21 px/s,
+    /// so it has to be drawn at sub-pixel positions or it would visibly jump
+    /// once a second (brief section 3).
+    fn draw_progress(&mut self, age: f32) {
         if !self.progress {
             return;
         }
-        // Fills over the five-minute slot and resets exactly when the words
-        // turn over. 0.21 px/s: the leading edge has to be sub-pixel or it
-        // would visibly step once a second.
         let p = (age / 300.0).clamp(0.0, 1.0);
-        let len = p * W as f32;
-        // A slow breath keeps it alive without moving.
-        let gain = 0.82 + 0.18 * (secs * 0.35).sin();
+        let pos = p * (W - 1) as f32;
+        let row = 30 * W;
         for x in 0..W {
-            let v = (len - x as f32).clamp(0.0, 1.0);
+            self.accent[row + x] = 1.0 / ACCENT_LEVELS as f32;
+        }
+        // A soft 2 px marker, spread across the pixels it straddles.
+        for x in 0..W {
+            let d = (x as f32 - pos).abs();
+            let v = (1.5 - d).clamp(0.0, 1.0);
             if v > 0.0 {
-                self.accent[30 * W + x] = v * gain;
+                self.accent[row + x] = self.accent[row + x].max(v);
             }
         }
     }
@@ -306,30 +323,33 @@ impl WordClock {
         let new_words = layout(&cur);
         let old_words = layout(&old);
         for w in &new_words {
-            let held = old_words.contains(w);
-            let p = self.ease(age, w.line, held);
             let band = self.band(w);
-            match p {
-                None => self.draw_word(w, 0.0, 0.0, 1.0, band),
-                Some(p) => {
-                    let (dx, dy) = self.offset(1.0 - p);
-                    self.draw_word(w, dx, dy, 1.0, band);
-                }
+            if old_words.contains(w) {
+                // This word did not change: it does not move. Only the words
+                // that change should move.
+                self.draw_word(w, 0.0, 0.0, 1.0, band);
+                continue;
+            }
+            let p = self.roll_in(age, w.line);
+            if p >= 1.0 {
+                self.draw_word(w, 0.0, 0.0, 1.0, band);
+            } else {
+                let (dx, dy) = self.offset(1.0 - ease(p));
+                self.draw_word(w, dx, dy, 1.0, band);
             }
         }
-        if age < ROLL_SECS + LINE_STAGGER * 3.0 {
-            for w in &old_words {
-                if new_words.contains(w) {
-                    continue;
-                }
+        for w in &old_words {
+            if new_words.contains(w) {
+                continue;
+            }
+            let p = self.roll_out(age, w.line);
+            if p < 1.0 {
                 let band = self.band(w);
-                if let Some(p) = self.ease(age, w.line, false) {
-                    let (dx, dy) = self.offset(-p);
-                    self.draw_word(w, dx, dy, 1.0, band);
-                }
+                let (dx, dy) = self.offset(-ease(p));
+                self.draw_word(w, dx, dy, 1.0, band);
             }
         }
-        self.draw_progress(age, secs);
+        self.draw_progress(age);
 
         // Quantise into the palette.
         let text = self.text_ramp(&now);
@@ -367,20 +387,22 @@ impl WordClock {
         (w.y, w.y + ROWS as i32)
     }
 
-    /// Progress of this word's roll, or `None` if it is simply standing there.
-    fn ease(&self, age: f32, line: usize, held: bool) -> Option<f32> {
-        if held {
-            return None;
-        }
+    /// How far through its exit the outgoing word is, 0..=1.
+    ///
+    /// Exit and entry are *sequenced*, not simultaneous: the old word is
+    /// clear of the band before the new one starts into it. Running both at
+    /// once - the obvious way, and the way this first worked - puts two words
+    /// in the same seven rows for a third of a second, and what you see is not
+    /// a transition but a smear of broken letters.
+    fn roll_out(&self, age: f32, line: usize) -> f32 {
         let start = LINE_STAGGER * line as f32;
-        let p = (age - start) / ROLL_SECS;
-        if p >= 1.0 {
-            return None;
-        }
-        let p = p.clamp(0.0, 1.0);
-        // Ease in-out, so words leave and arrive without a mechanical constant
-        // velocity.
-        Some(p * p * (3.0 - 2.0 * p))
+        ((age - start) / (ROLL_SECS * 0.45)).clamp(0.0, 1.0)
+    }
+
+    /// How far through its entrance the incoming word is, 0..=1.
+    fn roll_in(&self, age: f32, line: usize) -> f32 {
+        let start = LINE_STAGGER * line as f32 + ROLL_SECS * 0.55;
+        ((age - start) / (ROLL_SECS * 0.45)).clamp(0.0, 1.0)
     }
 
     /// Where a word sits at roll progress `p`: p = 0 is home, p = -1 has it
@@ -412,6 +434,12 @@ impl Piece for WordClock {
 
 /// Every five-minute slot of a day, as (hour, minute) of the *unrounded* time
 /// at the middle of the slot. Used by the tests.
+/// Ease in-out, so words leave and arrive without a mechanical constant
+/// velocity.
+fn ease(p: f32) -> f32 {
+    p * p * (3.0 - 2.0 * p)
+}
+
 pub fn all_slots() -> impl Iterator<Item = (u32, u32)> {
     (0..288).map(|i| {
         let t = i * 5;
