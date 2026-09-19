@@ -4,8 +4,8 @@ title: Consolidate duplicated code (receiver core, frame types, panel model) and
 type: build
 hardware: yes
 depends: [006, 008, 010]
-owner:
-branch:
+owner: worker (card 016)
+branch: card/016-consolidate-shared-code
 ---
 
 ## Goal
