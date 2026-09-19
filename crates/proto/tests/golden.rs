@@ -578,3 +578,40 @@ fn seq_is_rfc_1982_serial_arithmetic() {
     assert_eq!(gap(0, 0), 0, "a duplicate cannot manufacture a gap");
     assert_eq!(gap(0, 5), 0, "nor can a reordered frame");
 }
+
+// ---------------------------------------------------------------------------
+// peek: the two fields of a header we are rejecting, sections 2.2 and 6.5
+// ---------------------------------------------------------------------------
+
+#[test]
+fn peek_reads_a_header_that_parse_refuses() {
+    use screeny_proto::{peek, ControlPacket, RawHeader, Reject};
+
+    // A CONTROL whose `len` claims a body that is not there: section 6.5 says
+    // this is ERR_BAD_LENGTH, and the reply has to echo op and req_id.
+    let d = [0x53, 0x12, 0x04, 0x00, 0x34, 0x12, 0xFF, 0x00];
+    assert_eq!(ControlPacket::parse(&d), Err(Reject::BadLength));
+    assert_eq!(
+        peek(&d),
+        Some(RawHeader {
+            version: 1,
+            ty: screeny_proto::TYPE_CONTROL,
+            b2: 0x04,
+            flags: 0x00,
+            id: 0x1234,
+            len: 0x00FF,
+        })
+    );
+
+    // A version-2 CONTROL: section 2.2's ERR_VERSION case.
+    let d = [0x53, 0x22, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00];
+    assert_eq!(ControlPacket::parse(&d), Err(Reject::BadVersion));
+    let h = peek(&d).unwrap();
+    assert_eq!((h.version, h.ty, h.b2, h.id), (2, 2, 1, 1));
+
+    // Section 2.1: bad magic is discarded without further parsing, and a
+    // header shorter than 8 bytes is not a header.
+    assert_eq!(peek(&[0x52, 0x12, 0, 0, 0, 0, 0, 0]), None);
+    assert_eq!(peek(&[0x53, 0x12, 0, 0, 0, 0, 0]), None);
+    assert_eq!(peek(&[]), None);
+}
