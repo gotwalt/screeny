@@ -29,9 +29,12 @@ ship a real binary.
 
 ## Deliverables
 
-- Decide identity: Developer ID Application certificate if the owner has one
-  (ask), else a stable self-signed code-signing cert in the login keychain. Never
-  ad-hoc for anything long-lived.
+- Identity (decided 2026-09-19): sign with the owner's
+  `Developer ID Application: Aaron Gotwalt (L2EG537FL9)` from the login keychain.
+  Select it by name or team id, never by hash, and make it overridable with
+  `SCREENY_SIGN_IDENTITY` so other machines can build. Never ad-hoc for anything
+  long-lived. Notarisation is not needed for locally built binaries; note what it
+  would take if the sender is ever distributed.
 - `tools/sign-macos.sh`: signs `target/release/screeny` with a fixed identifier
   (e.g. `com.gotwalt.screeny`), hardened runtime, and an embedded Info.plist
   (`-sectcreate __TEXT __info_plist` at link time) carrying
