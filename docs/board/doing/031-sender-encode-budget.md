@@ -4,8 +4,8 @@ title: Make the hybrid encoder's per-frame cost fit a 30 fps sender
 type: build
 hardware: no
 depends: [005, 009]
-owner:
-branch:
+owner: card-009 worker
+branch: card/009-sender
 ---
 
 ## Goal

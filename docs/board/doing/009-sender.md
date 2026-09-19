@@ -4,8 +4,8 @@ title: crates/screeny - sender library and CLI
 type: build
 hardware: no
 depends: [005]
-owner:
-branch:
+owner: card-009 worker
+branch: card/009-sender
 ---
 
 ## Goal
