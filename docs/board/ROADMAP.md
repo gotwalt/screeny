@@ -46,8 +46,14 @@ measurement are deferred.
   auto-reconnect for a long-running daemon, Linux build check, examples, brief section 5
 - 016 consolidate duplicated code: one receiver core for sim + firmware, one set of
   frame types, one panel/colour model; delete `spike/`; (hardware, for re-verification)
-- orchestrator: root README, CLAUDE.md, this roadmap, art brief refresh, stale
-  worktrees/branches, merge of `art/` when that instance is ready
+- [x] orchestrator: root README, CLAUDE.md, this roadmap, art brief refresh, stale
+  worktrees/branches
+- [x] 100 `art/` merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
+  tests, art 31 tests, and `screeny-art pipe clocks-numerals | screeny pipe --fps 60`
+  into the simulator at 60 fps, 304 B/frame, `PAL4_LZ` exact, 0 drops
+- 101 art sends through `crates/screeny` (after 011) - art session
+- 102 reconcile art's panel model and colour rules with the measured device - art session
+- 104 piece runner / scheduler (design with the owner) - art session
 
 Then, small and optional:
 - 062 mDNS lifecycle (goodbye, re-announce, TTL)
