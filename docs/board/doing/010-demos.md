@@ -4,8 +4,8 @@ title: crates/demos - fractal zoom and word clock renderers
 type: build
 hardware: no
 depends: [004]
-owner:
-branch:
+owner: claude-worker-010
+branch: card/010-demos
 ---
 
 ## Goal
