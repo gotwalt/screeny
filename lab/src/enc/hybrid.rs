@@ -16,10 +16,10 @@
 
 use super::pal::{emit_pal5, map};
 use super::quant;
-use super::{block::BlockCodec, lz, Codec, Dither, EncCtx};
+use super::{lz, Codec, Dither, EncCtx};
 use crate::frame::{Frame, NBYTES};
 use crate::metrics::mean_de;
-use crate::panel::NOMINAL;
+use crate::panel::TEMPORAL;
 
 /// A challenger must beat the incumbent mode by this fraction to be chosen.
 const MARGIN: f64 = 0.92;
@@ -29,14 +29,18 @@ pub struct Hybrid {
 }
 
 impl Hybrid {
+    /// Candidates are deliberately limited to codecs that store colour at 8
+    /// bits per channel or in a full-precision palette.
+    ///
+    /// `blk42` and `cc4` (RGB444 endpoints) score well against today's 6-bit
+    /// panel and *badly* against the same panel with device-side temporal
+    /// dithering -- the panel's coarseness is currently hiding their error.
+    /// Picking them would mean the picture gets worse when the firmware gets
+    /// better, so they are not on the menu. For the same reason selection is
+    /// scored against `panel::TEMPORAL`, not the panel we have today.
     pub fn new() -> Self {
         Hybrid {
-            blocks: vec![
-                Box::new(super::block::BlockDual),
-                Box::new(BlockCodec::cc4()),
-                Box::new(BlockCodec::blk42()),
-                Box::new(BlockCodec::cc2_44()),
-            ],
+            blocks: vec![Box::new(super::block::BlockDual)],
         }
     }
 }
@@ -59,7 +63,7 @@ impl Codec for Hybrid {
         "hybrid"
     }
     fn note(&self) -> &'static str {
-        "per-frame pick of {pal-lz ladder, pal5+dither, cc4, bc1-i3, blk42, cc2-44} by panel dE"
+        "per-frame pick of {pal-lz ladder, pal5+dither, bc1-dual} by dE against a temporally dithered panel"
     }
     fn encode(&self, f: &Frame, budget: usize, ctx: &mut EncCtx) -> Vec<u8> {
         let mut cands: Vec<Vec<u8>> = Vec::new();
@@ -82,7 +86,7 @@ impl Codec for Hybrid {
                 continue;
             }
             let Some(d) = decode_to_frame(c) else { continue };
-            let mut score = mean_de(&NOMINAL, f, &d);
+            let mut score = mean_de(&TEMPORAL, f, &d);
             if Some(c[0]) == ctx.prev_mode {
                 score *= MARGIN; // incumbent advantage
             }
