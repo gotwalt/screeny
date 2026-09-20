@@ -61,3 +61,47 @@ merge or push; no hardware, no LAN; bounded commands; never write a real SSID or
 (examples use `Example-Wifi1` / `password9`); touch nothing outside `docs/` and the card.
 
 ## Log
+
+### 2026-09-20 - what I read before editing
+
+`crates/device-api` (all of `route.rs`, `error.rs`, `reply.rs`, `request.rs`,
+`form.rs`, `text.rs`, README), `crates/provision` (`machine.rs` in full,
+`lib.rs`, `screen.rs` head), `crates/settings/src/lib.rs`,
+`firmware/src/http.rs` (all 2,250 lines), `firmware/src/provision.rs`,
+`firmware/src/net.rs` (the control task and the screen composition),
+`firmware/src/receiver.rs` (`set_wifi`), `firmware/src/store.rs`
+(`Immediate`/`commit_immediate`), `firmware/src/mdns.rs` head, the rule names
+and numbering of `crates/probe/src/http/rules.rs`, and `crates/sim/src/api.rs`
+around the captive answer. Every claim in the edits below is from those files.
+
+### Step 1 - 8.1, 8.2, 8.3, 8.4
+
+- Section 8's title is now "Runtime provisioning and the device's HTTP API" and
+  its opening says three paths, one store (`crates/settings`).
+- **8.1** is the setup portal instead of the serial console: the soft-AP's name
+  and open authentication, 192.168.4.1/24, the DHCP pool and lease, no option
+  114, the DNS catch-all, the panel screen and the `PROVISIONING` overlay,
+  `GET /setup` and `GET /` on the AP, why the answer is HTML and why there is
+  no file input. A closing paragraph strikes the console by name (`wifi set`,
+  `wifi get`, `wifi clear`, `info`, `stats`, `reboot`, Improv) and says what
+  replaced each of them. There is no line reader anywhere in `firmware/src`.
+- **8.2** keeps its body and its three steps; step 1 now points at 8.3 for the
+  attempt count, the auth-failure exception and the fallback, and says that
+  `POST /api/v1/wifi` and `POST /setup` enter the same trial with `persist`
+  implied set (neither carries such a bit; `firmware/src/http.rs:756,1151`).
+- **8.3** is rewritten from `crates/provision/src/machine.rs`: boot order
+  (stored -> compile-time -> portal), `join_attempts` 3 x `join_attempt_ms`
+  15 s, "a join is not a join until there is an address", the trial rules
+  (nothing stored before it joins, `trial_attempts` 3 with no retry on an auth
+  failure, portal-origin vs online-origin, the sticky `FAILED`, a second post
+  cancels the first), commit + `ap_grace_ms` 30 s + `connected_screen_ms` 60 s
+  and its yielding to a stream, the 10-minute `portal_retry_ms` gated on
+  `ap_clients == 0` that does not reset when suppressed, `link_down_ms` 60 s,
+  the button wipe (defined, not yet reachable in 0.5.1), and a table mapping
+  the machine's states onto §6.3's `GET_WIFI` byte.
+- **8.4** gains the HTTP posture (decision 3: every route unauthenticated,
+  upload included; `pin`/`counter` parsed and ignored; `check_auth`;
+  `unauthorized` reserved) and the open setup AP (decision 2). The no-PSK
+  invariant now says "never carried by any HTTP reply" and "never written to a
+  log line" instead of "printed by the serial console", and names the three
+  places that enforce it.

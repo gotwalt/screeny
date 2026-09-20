@@ -872,29 +872,59 @@ On Wi-Fi disconnection the device goes to `HOLD` immediately and, after
 
 ---
 
-## 8. Runtime Wi-Fi provisioning
+## 8. Runtime provisioning and the device's HTTP API
 
-v1 ships two paths. Both write to the same store: `esp-storage` +
-`sequential-storage` on a dedicated flash partition.
+v1 ships three ways to put credentials on the device, and they all write one
+store: `esp-storage` + `sequential-storage` on the dedicated `screeny`
+partition, through `crates/settings`. The setup portal (§8.1) is the one a
+person uses; `SET_WIFI` (§8.2) is the one on the control port; the settings
+page is the HTTP API (§8.5-§8.9), which serves the rest of the device's web
+surface as well. §8.3 is the order the device tries what it has and §8.4 is
+the security posture.
 
-### 8.1 Serial console (primary)
+### 8.1 The setup portal (primary)
 
-A line-oriented reader on the existing USB-UART at **115200** baud (the bench
-rule is <= 230400; 115200 is what espflash monitors at):
+A device that has no network (§8.3) raises a **soft-AP** and serves a setup
+page on it. The radio is in APSTA mode, so the station half keeps doing
+whatever it was doing; the ESP32 has one PHY, so the AP follows the station's
+channel and a client on the AP MAY lose it for the length of a trial join.
 
-```
-wifi set <ssid> <psk>     store credentials and rejoin
-wifi get                  print the stored SSID (never the PSK) and join state
-wifi clear                erase stored credentials
-info                      the GET_INFO key/value pairs, one per line
-stats                     telemetry, one field per line
-reboot
-```
+| | |
+|---|---|
+| AP name | `screeny-<xxxxxx>`, the §5.1 device id. **Never the friendly name**: the QR below carries 14 characters and `screeny-4a00a4` is exactly 14. |
+| Authentication | **open** (device-web decision 2). The home PSK crosses it in clear; §8.4. |
+| Address | 192.168.4.1/24, static. The portal answers on that address only. |
+| DHCP | `192.168.4.50`-`.53`, four leases, 600 s, router and DNS both 192.168.4.1. **No RFC 8910 option 114** (see below). |
+| DNS | a catch-all: every name answers 192.168.4.1, TTL 10 s. |
+| HTTP | §8.5, port 80, with the captive catch-all of §8.9. |
+| Panel | the portal screen: a version 2-L QR of `WIFI:T:nopass;S:<ap name>;;`, the name and `192.168.4.1`. It does not alternate with anything. |
+| Telemetry `state` | `PROVISIONING` (§6.7). While the portal screen is up a decoded frame is still counted but does not reach the panel. |
 
-Implement the parser so it can later be wrapped in Improv Serial framing
-(`IMPROV` + version `0x01` + type + length + data + checksum, RPC command `0x01`
-= send Wi-Fi settings) without restructuring. That is the v1.1 upgrade and buys
-a browser-based installer.
+The page is `GET /setup`, and `GET /` on the AP interface is the same page. It
+takes an ordinary urlencoded `ssid=&psk=` form (§8.7) and answers **HTML**, not
+JSON: what posts to it is a `<form>` in a captive mini-browser with no
+JavaScript, and a browser handed `{"result":"trying"}` shows a person a page of
+JSON. Posting starts a trial join (§8.3) and the page reports the result on a
+full-page reload, which is the only navigation the iOS mini-browser re-probes
+on. The page has **no file input**: they do not work in a captive mini-browser,
+so a firmware upload is on the LAN page only.
+
+Two things the portal deliberately does not do, both measured on the owner's
+phone (iOS 18.7, card 223): it does not send DHCP option 114, because RFC
+8910/8908 want an HTTPS API endpoint on a hostname answering
+`application/captive+json` and this device can offer neither; and it does not
+redirect a captive probe. The catch-all answers with the setup page itself
+(§8.9). The DNS catch-all and the HTTP catch-all carry the whole weight.
+
+**The serial console this section used to specify does not exist and will not
+be built.** There is no line reader on the UART: `wifi set` / `wifi get` /
+`wifi clear` / `info` / `stats` / `reboot` were never implemented, and neither
+was the Improv Serial framing they were shaped for. The portal above, the
+settings page (§8.5) and `SET_WIFI` (§8.2) replaced the `wifi` commands;
+`GET_INFO` and `TELEMETRY` on the control port, and `GET /api/v1/status` and
+`GET /api/v1/telemetry` over HTTP, replaced `info` and `stats`; `REBOOT` and
+`POST /api/v1/reboot` replaced `reboot`. The serial port is a log, not an
+interface (device-web decision 5).
 
 ### 8.2 `SET_WIFI` control packet (secondary)
 
@@ -910,7 +940,11 @@ a browser-based installer.
 The device MUST send the reply **before** disconnecting, because after
 disconnecting it cannot. Then:
 
-1. Disconnect and attempt to join the new network, up to 3 attempts.
+1. Disconnect and attempt to join the new network. This is §8.3's **trial**,
+   and §8.3 has the attempt count, the exception for an authentication failure
+   and what a failure falls back to. `POST /api/v1/wifi` and `POST /setup`
+   (§8.6) enter the same path, with `persist` implied set - they carry no such
+   bit - so there is one trial machine and three front doors.
 2. On success, **then** store the credentials if `persist`, and re-announce over
    mDNS from the new address. Credentials MUST NOT be stored before they have
    joined: firmware 0.4.0 stored first, and one wrong `SET_WIFI` replaced a working
@@ -920,19 +954,111 @@ disconnecting it cannot. Then:
 3. On failure, fall back per §8.3 to the credentials it had, leave the store
    untouched, and set the join state so `GET_WIFI` reports `ERR_WIFI`.
 
-### 8.3 Fallback rule
+### 8.3 Joining a network
 
-1. Try stored credentials, 3 attempts.
-2. If that fails, try the compile-time credentials.
-3. If that also fails, display the failure on the panel: the SSID tried, the
-   error, and "hold the button / connect serial". The device is a display; it
-   should say why it is not working rather than requiring a serial monitor.
+The order, the counts and the timeouts are one state machine -
+`crates/provision`'s `Provisioner`, which the firmware and `crates/sim` both
+drive - and the constants below are its `Timing::SPEC`, named as it names them.
+The machine never sees a password: an event carries the SSID and the caller
+holds the credential until the machine asks for it to be committed, which is
+§8.4's invariant made structural.
+
+**At boot**, in order:
+
+1. the **stored** credentials, if the store holds a pair;
+2. the build's **compile-time** credentials, if it has any. A default build has
+   none and its `build.rs` does not look for any; the one build that does is
+   the off-by-default `bench-wifi` build, for testing (device-web decision 6).
+   A compile-time pair that joins **seeds an empty store**; it never replaces a
+   stored pair that failed, which is the owner's to replace and not a test
+   build's to overwrite;
+3. otherwise - nothing stored and nothing compiled in, or both exhausted - the
+   **portal** of §8.1. The portal is never terminal.
+
+Each target gets `join_attempts` = 3 attempts and each attempt is bounded by
+`join_attempt_ms` = 15 s, so a target is ~45 s. The deadline is the machine's
+own, so a radio that never answers still advances. **A join is not a join until
+there is an address**: an association with no DHCP answer is a failed attempt.
+
+**Credentials posted** - to `POST /api/v1/wifi`, to `POST /setup` or by
+`SET_WIFI` - start a **trial**, from whatever state the device is in:
+
+- **Nothing is written to the store.** The pair is held in RAM and committed
+  only after the join has succeeded (§8.2 records what it cost to learn that).
+- A trial makes up to `trial_attempts` = 3 attempts, **except that an
+  authentication failure is not retried at all**: a wrong password is
+  deterministic, and three attempts is 45 s of somebody holding a phone for the
+  same answer.
+- A trial posted **to the portal** keeps the AP up throughout, so the page that
+  posted can be told what happened; a failure returns to the portal, which
+  shows the reason.
+- A trial posted **while the device is online or joining** raises no AP: there
+  is one station, so it drops the association it has, and there is nobody on a
+  setup network to inform. A failure goes back to the **stored** credentials
+  (then the compile-time pair, then the portal only if there is nothing at
+  all) and **never clears the store**. The panel stays the stream's and `ip` is
+  `None` for the length of the trial.
+- A failed online-origin trial is **sticky**: `GET_WIFI` reads `FAILED` and
+  `GET /api/v1/wifi` carries the reason until the next post, a credentials wipe
+  or a reboot - the previous network reconnecting is not an answer to "did the
+  pair I just gave you work".
+- A second post while a trial is in flight cancels it and starts again with the
+  new pair, down the channel the second post arrived on.
+
+On success the credentials are committed, mDNS re-announces (§5.3), and:
+
+- a soft-AP that is up stays up for `ap_grace_ms` = 30 s, whatever raised it,
+  so a phone standing on the portal can reload the page and read the new
+  address; and
+- after a **portal** trial only, the acquired address goes on the panel for
+  `connected_screen_ms` = 60 s. It yields to a stream: the phone's page carries
+  the address too, and a panel that is being sent a picture shows the picture.
+
+**While the portal is up**, if the store holds credentials and **no station is
+associated to the AP**, the stored pair is retried every `portal_retry_ms` =
+10 minutes, so the 3 a.m. router reboot heals itself. A retry is suppressed
+while somebody is on the AP, because it would cost them a ~45 s outage, and
+suppressing it does not reset the timer: it fires on the first tick after the
+last client leaves. The AP stays up across the retry.
+
+**While online**, a link that goes down and stays down for `link_down_ms` =
+60 s returns the device to step 1. A link that comes back inside that window is
+not an event. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
+once.)
+
+A credentials wipe - the button's five-second hold - erases the store and opens
+the portal from any state, and after one `GET_WIFI` reads `DISCONNECTED` rather
+than `FAILED`, because a wipe is not a failure. The machine defines it; no
+event in firmware 0.5.1 produces one yet (card 230).
+
+`GET_WIFI`'s state byte (§6.3) is this machine's, with the sticky trial result
+folded in:
+
+| Machine state | `GET_WIFI` `state` |
+|---|---|
+| before the first decision | 0 `DISCONNECTED` |
+| joining, or a trial in flight | 1 `CONNECTING` |
+| online | 2 `CONNECTED` |
+| portal, nothing having failed to get there | 0 `DISCONNECTED` |
+| portal after a failure, or a sticky failed trial | 3 `FAILED` |
+
+`GET /api/v1/status`'s `wifi_state` is **the link** and takes no sticky value
+(§8.6); the sticky result belongs to `GET /api/v1/wifi` alone.
 
 ### 8.4 Security posture for v1
 
 The project owner has stated the Wi-Fi password is not a secret, so `SET_WIFI`
-and `REBOOT` are unauthenticated on the LAN in v1. This is a deliberate
-simplification, not an oversight.
+and `REBOOT` are unauthenticated on the LAN in v1, and so is **every route of
+the HTTP API**, settings and the reserved firmware upload included
+(device-web decision 3). The setup AP of §8.1 is **open**, so the home PSK
+crosses it in clear while setup is happening (decision 2). All of this is a
+deliberate simplification, not an oversight.
+
+The API is nevertheless *shaped* for a PIN: every mutating request may carry a
+`pin` and a monotonic `counter`, which are parsed and ignored today, and
+`crates/device-api`'s `request::check_auth` is the single hook every mutating
+route already calls. The error code `unauthorized` (401) is reserved for it and
+nothing returns it.
 
 What an untrusted-LAN deployment would need, recorded now so it is not
 rediscovered later (card 041):
@@ -946,8 +1072,13 @@ rediscovered later (card 041):
   drawing on the panel, and the `LOCK_MS` rule already bounds that to an
   annoyance rather than a takeover.
 - Invariant that holds in **all** versions including v1: the PSK is never
-  returned by `GET_WIFI`, never appears in telemetry, and is never shown on the
-  panel or printed by the serial console.
+  returned by `GET_WIFI`, never appears in telemetry, is never carried by any
+  HTTP reply, and is never shown on the panel or written to a log line. It is
+  enforced rather than remembered: no reply type in `crates/device-api` has a
+  field for one (`tests/no_psk.rs` serialises a worst-case value of every reply
+  and greps the bytes, and `screeny-probe http` rule 38 does the same over the
+  wire), the one request type that holds a PSK prints its length and not its
+  bytes, and `crates/provision`'s machine has nowhere to put one at all.
 
 ---
 
