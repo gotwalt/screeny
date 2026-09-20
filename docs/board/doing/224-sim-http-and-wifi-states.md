@@ -330,8 +330,9 @@ deliberate and is the loudest way I could flag this. **Proposed card 232** below
   Every pre-existing suite is unchanged in meaning; the only edit to an existing test
   file is the `--http-port 0` in `tests/cli.rs`'s spawn arguments, explained above.
   (The README's old "97 of them" was already stale; it now says 112.)
-- Root `cargo test`: 55 suites green; the one failure is card 237's flake above, which
-  reproduces identically on `main`.
+- Root `cargo test`: run three times. Every suite green except card 237's flake above,
+  which reproduces identically on `main` (measured, twice in three runs each way). The
+  `crates/screeny` pacing tests passed every time.
 - `cargo clippy -p screeny-sim --all-targets`: **before 0, after 0** warnings from
   `crates/sim`. (The workspace run reports one warning throughout, from
   `crates/probe/src/vectors.rs`, on `main` and on this branch alike.)
