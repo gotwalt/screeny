@@ -61,7 +61,10 @@ next: current state, what is next, and the lessons already paid for. `docs/desig
   a terminal (Developer ID signing keeps Local Network permission stable).
 - Workers work in their own git worktree/branch, log as they go, commit after every
   step, and do not merge to `main`; the orchestrator merges.
-- Remote: `origin` = `git@github.com:gotwalt/screeny.git` (private, currently empty).
-  **Nobody pushes until the owner says so**; all work stays local. Workers never push.
+- Remote: `origin` = `git@github.com:gotwalt/screeny.git` (**private**). The owner allowed
+  pushing on 2026-09-20 for workflow purposes (deploying to `workbench.local` builds from
+  `origin/main`): **only the orchestrator pushes, only `main`, never a force-push, and only
+  while the repo is private**. Workers never push. Making the repo public is the owner's
+  decision alone.
   The repo is intended to become public: keep it free of credentials and of anything
   the owner has not chosen to publish.

@@ -19,9 +19,17 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
   `demos`, `art` (`screeny-art`), `studio` (`screeny-studio`, an axum server + browser UI).
   `firmware/` and `lab/` are separate cargo projects. 299 tests, `cargo test` at root.
 - The device runs the firmware built from `main` and shows its status screen when idle.
-- History was rewritten once (credential scrub). Nothing has been pushed; `origin` is an
-  empty GitHub repo the owner intends to make public eventually. **Do not push until
-  the owner says so.**
+- History was rewritten once (credential scrub). `origin` is a **private** GitHub repo the
+  owner intends to make public eventually. Since 2026-09-20 the owner allows the
+  orchestrator to push `main` there as the deployment workflow needs (workbench builds from
+  `origin/main`); no force-pushes, no other branches, workers never push. Before the first
+  push the real WiFi values were checked against all history and the tree: no hits.
+- **Another Claude session works on firmware in this same checkout** (owner, 2026-09-20):
+  its cards are numbered 200+, it may hold the serial port and reflash the panel at any
+  time, and its untracked or modified files appear in `git status` here. Never `git add -A`
+  in the main checkout - add your own paths explicitly - and expect the panel to reboot
+  under a real-panel run; check `screeny info` for the firmware version before blaming
+  your own change.
 - `docs/board/ROADMAP.md` is the plan; `docs/design/studio-vision.md` is where the
   project is going: the Studio becomes a server-first web app, dockerized on the
   owner's Linux box, that decides what streams to the panel and runs unattended for
