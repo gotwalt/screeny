@@ -168,5 +168,79 @@ would have failed four times over. That is the bug, in the test.
 - `fn counters(&Telemetry) -> String` prints all six on one line, and **every**
   assertion message uses it.
 
-The rewritten test is also *faster*: 0.65-0.74 s against 1.05-1.13 s, because
+The rewritten test is also *faster*: 0.66-0.74 s against 1.05-1.13 s, because
 two fixed 200 ms sleeps became two conditions.
+
+### The two recipes, and the before/after
+
+**Recipe A - a loaded bench.** 12 spinning threads plus a second process
+looping `cargo test -p screeny-sim -- --test-threads=16`, while the test binary
+is run by name N times in a row (`scratchpad/loadprobe.sh`). Load average
+reached 105 on a 10-core machine.
+
+| | old | new |
+| --- | --- | --- |
+| failures | **0 of 30** | **0 of 30** |
+| per run | 1.05-1.13 s | 0.66-0.74 s |
+
+A is the recipe the exit criterion asks for and the new test is 30 for 30 under
+it - but it is honest to say that **A never reproduced the bug either**, for
+the old test or the new one. macOS gives a runnable thread the CPU inside 4 ms
+even at load 105, and 4 ms is all this test needs.
+
+**Recipe B - a starved bench.** The same spinning threads (24 of them) with the
+test at background QoS (`taskpolicy -b`), which throttles it to near-idle and
+stretches the send loop's `sleep(4)` to over a second. This *does* reproduce
+the mechanism, in the counters:
+
+| sample | lossy counters | old `superseded == 0` | new `superseded * 3 <= frames_rx` |
+| --- | --- | --- | --- |
+| B1 (`send_ms=69578`) | `rx=39 shown=35 sup=4` | **fails** | passes (12 <= 39) |
+| B2 (`send_ms=86609`) | `rx=39 shown=32 sup=7` | **fails** | passes (21 <= 39) |
+
+Two samples, two failures of the old assertion, on a link with **no slow device
+in it at all**. That is the bug, and the new bound has better than half its
+range spare at the worst starvation the bench can produce.
+
+Recipe B also found the new test's own limit, which is now written beside the
+assertion rather than papered over: one run failed with
+
+```
+and could not draw it in time; frames_rx 61, frames_shown 50, superseded 11, seq_gaps 0, ...
+```
+
+At that starvation the host had stretched the sender to ~1.4 s a frame, so 40 ms
+of injected decode was no longer the slower of the two and the device drew 50 of
+the 61 it got. No true assertion can call that a slow device; the test says so
+with every counter printed, which is the right answer. Recipe B is ~100x
+starvation - at load 105 the send loop still paced at 5.5 ms a frame.
+
+### Checks
+
+- `timeout 900 cargo test -p screeny-sim`: **141 passed, 0 failed** (18 binaries;
+  the two long ones are `stall_234` at 40.5 s and `conformance` at 36.4 s).
+- `cargo clippy -p screeny-sim --all-targets`: silent.
+- `cargo fmt -p screeny-sim -- --check`: `tests/telemetry.rs` is clean. (The
+  crate has 26 other rustfmt diffs, all of them pre-existing on `main` and none
+  of them touched here.)
+- Nothing left running: `pgrep` for the burners, the looping suite and the
+  throwaway probe binary is empty, and `crates/sim/tests/probe143.rs` was
+  deleted. No hardware, no serial port, no LAN - loopback only.
+
+### Three more of the same family in `crates/sim`, not fixed here
+
+Noted rather than touched, because the card is about one test and a small diff:
+
+- `tests/faults.rs::a_slow_device_never_calls_the_sink_for_a_superseded_frame`
+  asserts `*count == t.frames_shown` after a fixed 300 ms. The frame sink is
+  called in `frame_loop` **after** the core lock is dropped, so `frames_shown`
+  is already bumped while the callback has not run yet; a read landing in that
+  window sees `frames_shown == count + 1`. Narrow, but real.
+- `tests/faults.rs::the_frame_sink_sees_exactly_the_frames_that_reach_the_panel`
+  is the same race with a 50 ms sleep over it after a proper `wait_until`.
+- `tests/faults.rs::faults_can_be_turned_on_and_off_while_it_runs` and
+  `a_delayed_link_raises_jitter_without_losing_frames` are exact counts after a
+  fixed 100/300 ms settle - the shape this card fixed, though both counts are
+  of *received* frames and so exact on loopback as long as the settle holds.
+
+The tail-frame idea used here transplants to all four.
