@@ -179,3 +179,246 @@ Two things the map does turn up:
    work"). It is not a deadlock - `wake()` takes the waker and every displaced waiter is
    re-woken - but it does mean that whenever two tasks want `CORE` at once, core 0 burns
    CPU ping-ponging until the holder lets go. Worth knowing when reading a latency number.
+
+### Step 2-4: what can actually wedge, and the one thing that certainly could
+
+**The shape of the end state is itself evidence, and it had not been used.**
+`firmware/Cargo.toml:125` takes `esp-backtrace` with `panic-handler` and **without**
+`halt-cores` or `custom-halt`, so its `abort()` ends in
+`arch::interrupt_free(|| loop {})` (`esp-backtrace-0.20.0/src/lib.rs:223-227`): a panic
+on core 0 spins core 0 forever with interrupts off and **leaves core 1 running**. Core 1
+is the display task and the HUB75 DMA, so the panel stays lit and keeps dithering. That
+is exactly what was seen: everything on the network dead, no reboot, several minutes,
+recovered only by a reset. It also means the backtrace *was* printed - to a UART nobody
+was attached to. **Whatever else this card concludes, never run this sequence again
+without the monitor attached and logging.**
+
+**The receiver is not it (card step 3).** I walked every per-source table for what a
+second source address does. `Limiter` is a fixed four-slot array with oldest-entry
+eviction and a loop that cannot fail to terminate
+(`crates/receiver/src/lib.rs:465-501`); `stats_req` is a `heapless::Vec<A, 2>` fully
+drained in `flush_frames` (`lib.rs:996-999`); the firmware's `Outbox` is a
+`heapless::Vec<Out, 4>` whose overflow is discarded (`firmware/src/receiver.rs:122`).
+Nothing there allocates, grows or blocks. What a second source address *does* cost the
+device is more unsolicited `BUSY` datagrams - and that is the trigger for candidate 1,
+not a cause of its own.
+
+**picoserve does not time out a handler.** `serve_and_shutdown` selects
+`app.handle_request(..)` against
+`read_request_timeout.map(ignore_output).then(futures::pend_forever)`
+(`picoserve-0.20.0/src/lib.rs:431-443`) - the timeout branch deliberately never completes,
+it only arms the socket to error on later *reads* - and the other arm is
+`shutdown_signal`, which is `core::future::pending()` for `listen_and_serve`. Every other
+phase is bounded (`start_read_request` 3 s, `read_request` 5 s, `write` 5 s per write,
+`shutdown` 5 s each way, plus embassy-net's own `set_timeout(45 s)` on the socket). So **a
+handler that blocks is a worker lost forever, silently**, and this firmware has exactly
+two workers and four handlers that take a lock (`http.rs:572`, `:632`, `:708`, `:795`).
+
+#### Ranked candidates
+
+**1. `frames_task` and `control_task` awaiting `UdpSocket::send_to` with no bound.**
+`firmware/src/net.rs:321` and `:419` as they stood at 86fd2f5. *Fixed on this branch.*
+smoltcp will not make room in a transmit queue by itself: `udp::Socket::dispatch` hands
+the head datagram to the interface, the interface cannot resolve the hardware address and
+returns `DispatchError::NeighborPending`, and `PacketBuffer::dequeue_with` consumes
+**zero** bytes when the closure errs (`smoltcp-0.13.1/src/storage/packet_buffer.rs:196`,
+`src/socket/udp.rs:545`, `src/iface/interface/mod.rs:802`). The datagram therefore stays
+at the head of the queue and is retried once a second forever (`DISCOVERY_SILENT_TIME`,
+`src/iface/socket_meta.rs:46`); four of them fill `tx_meta` and `send_to` never returns.
+On `control_task` that is **every reply to every peer**, because the task is then stuck
+before its next `recv_from` - which is precisely "rule 20 onward: no reply to op ... after
+4 attempts", for 45 consecutive rules, with nothing in the log.
+*Fit:* excellent for the UDP half and for "it never came back"; **none** for HTTP dying
+first; against the serial log going quiet, since `telemetry_task` is independent of both
+sockets. *Confidence the bug is real: certain. That it is the whole story: ~25%.*
+*Killed or confirmed by:* the new `net: ... did not fit the transmit queue` warning.
+
+**2. A panic on core 0 that nobody was there to read.** Mechanism certain (see above).
+*Fit:* the best single-event fit there is - HTTP, UDP and the log stop together, the panel
+stays lit, only a reset recovers, and it would not reproduce. The candidate panics in this
+build are `embassy_net::tcp::TcpSocket::new` / `UdpSocket::new` when the station's
+`StackResources<8>` is full (smoltcp's `SocketSet::add` panics; `main.rs:414` counts 8
+against a steady demand of 7-8: DHCP, DNS, frames, control, mDNS's `edge-nal-embassy`
+`Udp` - which `main.rs:399-403` records as holding more than one - and two HTTP workers),
+a `RefCell` double-borrow on `MACHINE`, and `esp_sync: lock is not reentrant`. I could not
+find a path that produces any of them with the AP down, so the trigger is
+**unidentified**. *Confidence: ~30%, and an instrument settles it in one line.*
+
+**3. A flash write that did not come back.** `store::commit` holds `STORE` across
+`f.save_*(..).await` (`store.rs:629-637`), which is `BlockingAsync` over the ROM routine:
+core 1 parked, core 0's interrupts masked ~50 ms per sector.
+`docs/design/device-web.md:100-102` already flags this as an **open risk, bench only** -
+"whether esp-radio's WiFi survives that is the first thing to measure on hardware" - and
+it still has not been measured under load. The window fits: the `screeny-probe http` run
+posts settings, and conformance rules 13-15 are two `SET_BRIGHTNESS` and four `SET_IDLE`,
+each of which marks the store dirty (`firmware/src/receiver.rs:192, :197`), so several
+debounced commits land in 85-105 s. If a ROM call ever fails to return, core 0 stops
+inside a critical section and the end state is indistinguishable from candidate 2 - except
+that nothing is printed at all. *Fit: good for a single event; none for HTTP first.
+Confidence: ~15%.*
+
+**4. The soft-AP went up.** The only candidate that is **new in 0.5.1** and the only one
+that naturally produces "HTTP first". Since 86fd2f5 *both* HTTP workers follow the AP
+(`http.rs:1538-1568`), where 0.5.0 moved one and left the other on the LAN, so an AP raise
+now takes LAN HTTP away completely within one `AP_POLL` (200 ms). `Driver::raise_ap`
+(`provision.rs:740-751`) then re-applies the config, and STA -> APSTA is a mode change,
+which restarts the radio and drops the station - so UDP would follow within a second or
+two rather than ten. Getting there from `Online` also takes 60 s of `LinkDown`
+(`machine.rs:686-708`) plus three 15 s join attempts, which is ~130 s at the earliest, not
+90. *Confidence: ~10%.* *Killed in five seconds at the bench:* is the panel showing the
+QR, and is an open network named `screeny-4a00a4` beaconing?
+
+**5. Both HTTP workers pinned in a handler on `CORE` or `STORE`.** The mechanism is
+certain (picoserve, above) and the consequence is permanent and unlogged, but **no `CORE`
+region in this firmware contains an `await`** (see step 1's table), so nothing can hold it
+while suspended. This is therefore not a cause on its own - it is the amplifier that turns
+any of 1, 3 or a future mistake into "the page died and stayed dead".
+*Confidence as the cause: ~10%. As a hazard that needs a guard: high.*
+
+**6. Rejected: the unfair `CORE` mutex.** `embassy_sync`'s single `WakerRegistration`
+makes contending tasks wake each other in a loop (`waker_registration.rs:29-40`), which
+burns core 0 but cannot deadlock: `wake()` takes the waker and every displaced waiter is
+re-woken. A latency finding, not a stall.
+
+**7. Rejected: a lock-order deadlock.** See step 1. The order is uniform and `MACHINE`
+cannot be held across a suspension.
+
+### The fix on this branch
+
+`firmware/src/net.rs`: `send_bounded` gives each datagram 200 ms, warns by destination
+when it does not fit, and after three in a row closes and re-binds the socket - which
+resets both smoltcp buffers and is the only way to drop a wedged head-of-line datagram.
+Not a spec change: both frame-socket datagrams are unsolicited (section 6.2) and a control
+reply is something a sender retries. Worst case it costs the frame loop 600 ms once, on a
+device that is already broken, and `crates/receiver/tests/outbox_bound.rs` is what pins
+the "four datagrams per drain" that price is computed from.
+
+`.stack` **27,520 -> 27,376** (floor 24,576). Firmware clippy warnings unchanged (9, all
+pre-existing, none in `net.rs`).
+
+**How sure am I that this is *the* bug? Not sure.** It is certainly *a* bug, it explains
+the UDP half completely, and it is the only candidate whose mechanism I could verify line
+by line in the dependency sources. It does not explain HTTP dying first, and it does not
+explain the serial log. If the bench sees the new warning, the card is answered; if it
+sees a panic backtrace instead, candidate 2 is - and the fix was still worth making.
+
+### Host tests
+
+* `crates/sim/tests/stall_234.rs` - the three things the bench was doing at once, which no
+  test had ever combined: the HTTP suite, a release, then the UDP suite, with
+  `GET /api/v1/status` polled at 5 Hz throughout; and separately two frame sources (one
+  refused, settled deterministically rather than by a race) plus control traffic plus the
+  page. Asserts no port goes silent - a *run* of missed polls, not a single one, because
+  the simulator drops a connection when it cannot get a thread
+  (`crates/sim/src/http.rs`, "Out of threads").
+* `crates/receiver/tests/outbox_bound.rs` - what one drain can ask the caller to send.
+  **It found something.** The bound is *not* section 6.2's rate limits: `Limiter` has four
+  slots and evicts the oldest, so twelve new sources in one drain get twelve `BUSY`s. The
+  bound is the firmware's `heapless::Vec<Out, 4>`, whose overflow `firmware/src/receiver.rs`
+  discards with `let _ = out.push(item)`. So `FRAME_TX_BUF`'s reasoning in `net.rs:60-77`
+  is load-bearing on a number in a different file, and the simulator, whose `Outbox` is a
+  plain `Vec` (`crates/sim/src/core.rs:51`), sends all twelve where the firmware sends
+  four. A divergence, not a stall; a backlog card is suggested below.
+* `crates/sim/tests/telemetry.rs` - polls for its `TELEMETRY` instead of looking once.
+  `drain()` settles for 5 ms and the reply leaves after the core lock is released; the two
+  new multi-second tests were enough load to make that the flake in a whole-workspace run.
+
+`cargo test` (whole workspace) green on three consecutive runs;
+`cargo clippy --workspace --all-targets` silent. **One flake seen once and not mine to
+fix:** `crates/studio/tests/fleet.rs:185`
+(`device_of(&s)["player"]["panel"]["connected"]`) failed in the first loaded run and
+passed in isolation and in the next two runs. It is a timing-sensitive assertion about a
+live stream and it belongs to the `software` session - worth telling them, since this card
+made `cargo test` measurably busier.
+
+### The instrument (card step 6)
+
+**Build it now - it is ~25 lines and costs zero `.bss`.** Take `esp-backtrace`'s
+`custom-halt` feature and give it a `custom_halt()` that writes a breadcrumb into **RTC
+memory** and then reboots:
+
+```rust
+#[esp_hal::ram(rtc_fast, persistent)]
+static CRUMB: [u32; 6] = [0; 6];   // magic, uptime_ms, and four task counters
+```
+
+* `#[ram(rtc_fast, persistent)]` is its **own** memory region: not `.data`, not `.bss`,
+  and therefore not core 0's `.stack`. **Cost: 0 bytes of the pool that breaks first**,
+  24 bytes of RTC_FAST (8 KB, empty today), ~300 bytes of flash.
+* `custom_halt()` stamps a magic word and `now_ms`, waits ~50 ms for the UART to drain,
+  then `esp_hal::system::software_reset()`. `main` reads the crumb before anything else,
+  logs it, and clears the magic.
+* What it buys, for nothing: **a panic stops being silence.** The device reboots in 15 s
+  instead of sitting there for minutes, the Studio sees a new `boot_id`, and the first
+  line of the next boot log says a panic happened and at what uptime - whether or not
+  anybody was attached to the UART when it did. It settles candidate 2 outright.
+
+This *is* card 243's RTC panic breadcrumb. **Pull it forward**: it is the cheapest thing
+on this board and it is the difference between this card happening again and it being
+diagnosed in one line.
+
+**Second, only if the breadcrumb comes back empty** (a stall with no panic): a core-0
+liveness watchdog. `esp_hal::rtc_cntl::Rwdt`, stage 0 an interrupt at 15 s that writes the
+crumb, stage 1 a reset at 19 s, **fed from `telemetry_task`'s existing 5 s loop so there
+is no new task and no new task future**; each core-0 task bumps a `u32` in the same RTC
+array on every iteration, so the reboot's first log line says *which task last ran and how
+many times*. That is the difference between "one task wedged in `send_to`" and "the
+executor stopped". ~30 lines, ~600 bytes of flash, another 24 bytes of RTC_FAST, **0 bytes
+of `.bss`**. Do not arm it before 60 s of uptime, and do not build it until the breadcrumb
+has ruled a panic out: if it *is* a panic the breadcrumb alone is the whole answer, and a
+watchdog on a device that must run unattended for months is a risk taken for nothing.
+
+### The bench procedure I want run (card step 7)
+
+Bounded, once, ~5 minutes of device time. **No hardware was touched by this card.**
+
+0. Merge this branch. Build the default firmware (`.stack` must read >= 24,576; it is
+   27,376 here) and flash with `tools/fw-run.sh`.
+1. **Attach the monitor and log it, capped, for the whole run.** This is the single
+   biggest change to how this is observed - last time the evidence was printed into a UART
+   nobody was reading:
+   `timeout 420 espflash monitor ... | head -c 5000000 > captures/fw-0.5.2-card234.raw.log`
+2. Let it join and let the Studio pick the panel up. Note the uptime.
+3. Then, in this order, once:
+   a. `timeout 180 cargo run --release -p screeny-probe -- --addr 192.168.7.221 http`
+   b. release the panel from the Studio (state `HOLD`)
+   c. **turn the Mac's WiFi on, so both interfaces are on 192.168.7.0/24**, and put both
+      addresses in the log (`ifconfig | grep 192.168.7`). This was the accident last time
+      and it is the one condition that has never been reproduced deliberately.
+   d. `timeout 300 cargo run --release -p screeny-probe -- --addr 192.168.7.221 conformance --slow`
+4. Read the log for these, in this order:
+   * `net: control reply to ... did not fit the transmit queue in 200 ms`, or
+     `net: udp/49375 was wedged; closed and re-bound` -> **candidate 1 confirmed**, and
+     the fix caught it. One line answers the card.
+   * a **panic backtrace** anywhere -> candidate 2; the frame it names is the answer.
+   * `provision: Online -> Joining`, `provision: soft-AP ... up`, or
+     `net: http worker N listening on tcp/80 (setup network)` -> candidate 4.
+   * a `store: ... committed in N us` line with no successor, or a gap in the 5 s
+     telemetry cadence around one -> candidate 3.
+   * a `stack: core 0 high-water ...` line that jumps -> none of them, but worth knowing.
+5. **If it goes silent again, do these three things before resetting it** - they cost
+   nothing and each one kills a candidate:
+   * Look at the panel. Lit *and moving* (the idle screen animates at 10 Hz) means core 0
+     is alive and one task is wedged -> candidate 1 or 5. **Lit and frozen** means core 0
+     stopped and core 1 is still scanning the last DMA buffer -> candidate 2 or 3.
+   * `arp -n 192.168.7.221` and `ping -c 3 192.168.7.221` from the wired interface. A
+     device whose core 0 has halted answers neither.
+   * Is an open network named `screeny-4a00a4` in the Mac's WiFi list? -> candidate 4.
+   Then keep the monitor log and reset.
+6. **Do not repeat the run if it passes.** A passing long run is not repeated without a
+   firmware change, and this one did not reproduce in the first place.
+
+### Backlog cards this turned up (not done here)
+
+* **The simulator and the firmware disagree about how many `BUSY`s one drain sends.** The
+  firmware caps at four and silently discards the rest; the simulator's `Outbox` is an
+  unbounded `Vec`. Either give the simulator the same four-slot cap, or give
+  `screeny-receiver` the cap and let both inherit it - the second is the "one
+  implementation of each thing" answer, and it changes `crates/receiver`, which is why
+  this card did not do it.
+* **`provision::step` logs inside the `MACHINE` critical section** (`provision.rs:648`),
+  which the module's own docs forbid because it masks core 1's HUB75 DMA interrupt for the
+  length of a formatted line. Move the `info!` out of the closure. Two lines.
+* **Card 243's RTC breadcrumb should be pulled forward** - see the instrument above.
+* `crates/studio/tests/fleet.rs:185` is timing-sensitive under a loaded `cargo test` (the
+  `software` session's).
