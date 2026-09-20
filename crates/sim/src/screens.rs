@@ -230,14 +230,18 @@ fn status_screen(s: &Scene<'_>, c: &mut Canvas) {
 
     // Address, 3x5, centred - or, with no network, what is wrong instead.
     // A panel showing a stale address it can no longer be reached at is
-    // worse than one that admits the network is gone.
-    let (line, colour) = if s.network_down {
-        ("NO NETWORK".to_string(), [255, 150, 40])
+    // worse than one that admits the network is gone. The message goes in the
+    // 5x7 font because the tiny one has only digits, `.`, `:` and `-`: it was
+    // cut for addresses.
+    if s.network_down {
+        const DOWN: &str = "NO NETWORK";
+        let w = font::width_5x7(DOWN) as i32;
+        c.text_5x7((W as i32 - w) / 2, 11, DOWN, [255, 150, 40]);
     } else {
-        (s.addr.to_string(), [90, 180, 255])
-    };
-    let w = font::width_3x5(&line) as i32;
-    c.text_3x5((W as i32 - w) / 2, 11, &line, colour);
+        let addr = s.addr.to_string();
+        let w = font::width_3x5(&addr) as i32;
+        c.text_3x5((W as i32 - w) / 2, 11, &addr, [90, 180, 255]);
+    }
 
     // RSSI bars, five of them, growing to the right. All dark with no link:
     // the last measured RSSI means nothing once the link is gone.
