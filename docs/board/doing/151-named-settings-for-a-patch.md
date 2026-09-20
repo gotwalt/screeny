@@ -4,8 +4,8 @@ title: A patch has named settings - save, load, rename, delete, and a mark when 
 type: build
 hardware: no
 depends: [150]
-owner:
-branch:
+owner: worker (Claude Opus 5)
+branch: card/151-named-settings
 ---
 
 ## Goal
@@ -90,3 +90,25 @@ load "Lava" - one change, the panel follows at once; move a slider - the name sh
 modified; Revert - it clears; restart the container - all of it is still there.
 
 ## Log
+
+### Claimed (worker, 2026-09-20)
+
+Branch `card/151-named-settings` off `main` at b081736. Read the card, cards 150, 165,
+196, 198 and 170, `crates/studio/README.md`, and the code it touches: `state.rs`,
+`player.rs`, `api.rs`, `page.rs`, `ui/index.html`, `ui/picture.js`, `ui/common.js`,
+`ui/style.css`, `tests/ui.rs`, and every patch in `crates/art/src/patches`.
+
+The shape I am building, decided from the card and the code:
+
+- **Stored** per patch, in the one `patches` map of `state.json`: the working copy
+  (`seed`, `params` sparse against the defaults, and - new - `speed`), the name it was
+  loaded from (`setting`), and `settings`: name -> `{seed, params, speed}`.
+- **Computed, never stored**: `modified`. The working copy compared against the *usable*
+  form of the setting it names (or against Default when it names none), so a setting that
+  had to be repaired for this build does not read as modified for ever.
+- **Default** is synthesised, not stored: the patch's `ParamSpec` defaults, speed 1.0 and
+  a fixed seed. No patch declares a seed of its own today, so that seed is the studio's
+  own default, `StoredPlayer::default().seed` = 1 - fixed, so Default is one picture.
+- `speed` joins the per-patch memory, because a setting carries it: without that,
+  switching patch and back would lose the speed a setting set and `modified` would lie.
+  `fps` and `paused` stay per player - they are about playback, not about the patch.
