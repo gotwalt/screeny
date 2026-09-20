@@ -4,8 +4,8 @@ title: Studio device health - thresholds the firmware session measured, and "it 
 type: build
 hardware: no
 depends: [180, 192]
-owner:
-branch:
+owner: worker-195
+branch: card/195-device-health-thresholds
 ---
 
 ## Goal
