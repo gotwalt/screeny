@@ -257,6 +257,22 @@ impl Health {
         parse_api_name(s, "--fw-state", FW_STATES)
     }
 
+    /// One line naming all seven, in the API's own names, for the binary's
+    /// banner. What is printed is what `GET /api/v1/status` will say.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "reset {} slot {} state {} store_errors {} heap {}/{} B stack_free {} B",
+            api_name(&self.reset_reason),
+            api_name(&self.fw_slot),
+            api_name(&self.fw_state),
+            self.store_errors,
+            self.heap_used,
+            self.heap_size,
+            self.stack_free,
+        )
+    }
+
     /// Refuse a combination the device could not report.
     ///
     /// Only one of those exists: more heap in use than there is heap. It is a
