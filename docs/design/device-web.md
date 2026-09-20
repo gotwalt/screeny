@@ -326,7 +326,8 @@ Studio all depend on - `crates/proto` is not touched.
 | 223 | **done, on the device (fw 0.5.0)** - HTTP suite green with the 223 rules enforced; the 64-rule UDP suite 60/0/4 (re-run 2026-09-20 with the Mac's WiFi off); the phone test passed on **fw 0.5.1** after five fixes, and one unexplained silent stall is open (the card's Log, 2026-09-20). Scanning split out to 229. Was: firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
-| 225 | spec: strike 8.1, rewrite 8.3 to end at the portal, add the HTTP API section (shared surface: notice to the software session) | no |
+| 225 | **done** - spec 8.1 is the setup portal (serial console struck), 8.3 the real join sequence, 8.5-8.9 the HTTP API; nine code/spec disagreements listed and disposed of in the card's Log | no |
+| 235 | **done** - the simulator answers a captive probe with a `200` page like fw 0.5.1, not a `302` | no |
 | 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
 | 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
