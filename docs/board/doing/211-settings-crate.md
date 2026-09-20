@@ -4,8 +4,8 @@ title: crates/settings - the device's persisted settings, host-tested against th
 type: build
 hardware: no
 depends: [200]
-owner:
-branch:
+owner: worker-211
+branch: card/211-settings-crate
 ---
 
 ## Goal
