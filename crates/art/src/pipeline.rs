@@ -1,7 +1,7 @@
 //! Piece frame in, hand-over frame + faithful preview + statistics out.
 //!
 //! ```text
-//! piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> outputs
+//! piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
 //!                                                              \-> meter -> encode
 //!                                                                        -> decode -> preview
 //! ```

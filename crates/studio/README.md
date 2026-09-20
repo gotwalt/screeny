@@ -154,7 +154,7 @@ fact.
 
 **Only what differs from the piece's defaults is stored**, so a later release's better
 default still reaches everybody who never moved that slider, and the file stays small.
-The seed is remembered with the parameters; the pipeline `settings` (levels, dither,
+The seed is remembered with the parameters; the pipeline `settings` (panel model, dither,
 limiter) are not - those are about the panel, not about the piece.
 
 **A remembered value can never break a piece.** Pieces gain, lose and re-range

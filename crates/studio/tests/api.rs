@@ -53,14 +53,14 @@ async fn the_api_round_trips() {
 
     // set_settings: the panel model the preview is drawn through.
     let mut settings = fresh["settings"].clone();
-    settings["levels"] = 32.into();
+    settings["panel"] = "bit_planes".into();
     settings["dither"] = "bayer4".into();
     settings["limiter"]["enabled"] = false.into();
     let body = serde_json::json!({ "settings": settings }).to_string();
     let after = post(at, "/api/v1/set_settings", &body).await;
     assert_eq!(after.status, 200);
     let after = after.json();
-    assert_eq!(after["settings"]["levels"], 32);
+    assert_eq!(after["settings"]["panel"], "bit_planes");
     assert_eq!(after["settings"]["dither"], "bayer4");
     assert_eq!(after["settings"]["limiter"]["enabled"], false);
 
