@@ -100,3 +100,136 @@ Confirmed causes:
   same jitter, both signs. So `min_gap >= 0.4 * period` is measuring the OS
   scheduler, and the margin to failure is one 20 ms hiccup.
 - No run skipped a frame, at any length, under this load.
+
+### What the tests measure now
+
+The tests record the pacer's own wake-ups - the slot it chose and the instant
+`sleep_until` handed control back - through the frame source, and assert on
+that `Timeline`. The split the card asked for, made explicit in the module
+doc: the pacer owns **the schedule it asks for**, the OS owns **when the
+thread actually wakes**, every observable is the first contaminated by the
+second, and each assertion is chosen to be blind to the contamination.
+
+| property | old assertion | new assertion |
+|---|---|---|
+| rate | `frames_sent / elapsed` in 29.7..30.3 | slope of lateness across the run, within 1% |
+| drift | last arrival within 2 periods of due, frames counted | `span - slots * period` within 1.5 periods, slots counted |
+| no burst | `min_gap >= 0.4 * period` | no gap under 0.4 of a period *behind a frame that was on time* |
+| absolute grid | (implied) | no wake-up before its slot |
+| skips | `skipped == 0` | skips must agree with the timeline, and stay under 1% of slots, named as host disturbance |
+| receiver | `(n-1)/span` including `FINAL` | the arrivals as a `Timeline` of their own against the same slots, same estimators, `FINAL` excluded |
+
+Three things are worth spelling out.
+
+**A short gap behind a late frame is the schedule working.** `min_gap >= 0.4 *
+period` punished exactly the behaviour spec 9.1 asks for: an absolute schedule
+answers a late frame by shortening the next gap, which is the error being paid
+off instead of accumulated. Since `sleep_until` never returns early, a gap can
+only be short if the wake-up before it was late, and a busy host can only make
+wake-ups late - so "short gap behind an *on-time* frame" is a burst the host
+cannot manufacture. Measured `min_gap` was 22.6-29.9 ms on runs where nothing
+was wrong.
+
+**The median frame interval is not a usable rate estimator on this host.** It
+was my first choice and 20 runs at 2 s failed 7 times once the machine got
+busy (load average 13-19, against 4 during the baseline). The cause turned out
+to be interesting enough to card (154): `thread::sleep` on this Mac overshoots
+by about 4 ms, more than `sleep_until`'s 1 ms spin window, so a wake-up sits
+either *on* its slot or 4.0 ms past it, and every flip between those two
+states makes one interval long and the next one short. The intervals pile up
+at three values instead of one; with 60 of them the median lands on a side
+pile. It read 33.99 ms on a run whose mean interval was 33.48 ms.
+
+`Timeline::rate_error` is the slope of lateness instead: median of the first
+half of the run against median of the second. Robust to the flips, and the two
+medians are half a run apart, so the estimate *sharpens* as the run
+lengthens - which is what lets one tolerance hold at 2 s and at 10 s. The mean
+interval is the other candidate and is rejected in the doc comment: it is
+drift rewritten, a two-sample estimator (first wake-up against last) whose
+noise is one wake-up's lateness however long the run is. Fine over 10 s, half
+the 1% budget over 2 s.
+
+**One stall proves nothing about bursting.** After a stall ending a fraction
+`f` of the way into slot `m`, a correct pacer resumes at slot `m + 1` and so
+waits `1 - f` of a period; a pacer that resumes at slot `m` fires at once. The
+old test's single 300 ms stall is *exactly* nine periods, so `f` was near zero
+and the correct pacer's gap was nearly a full period - it passed on an
+arithmetic coincidence. Let the stall oversleep by 20 ms, which a loaded host
+will do, and `f` goes past 0.6 and a **correct** pacer fails
+`min_gap >= 0.4 * period`. Confirmed directly: with stalls at 9.17, 9.50 and
+9.83 periods the correct pacer's smallest datagram gap is 8.2 ms, a quarter of
+a period. The test now stalls three times, a third of a period apart, and
+checks that the frame after each resync is *on its slot* - phase-independent,
+and at most one of three phases can ever sit in the quarter where the two
+pacers look alike.
+
+### After: 50 runs, same protocol
+
+Load average 8-14 during this set (heavier than the baseline's 4).
+
+| run length | n | pass | rate error | drift | skipped | wake-ups held past half a period |
+|---|---|---|---|---|---|---|
+| 10 s | 20 | **20** | -0.022% .. +0.010% | +0.2 .. +5.1 ms | 0 | 0 |
+| 6 s  | 10 | **10** | -0.028% .. +0.031% | +0.0 .. +4.0 ms | 0 | 0 |
+| 2 s  | 20 | **20** | -0.122% .. +0.112% | +2.0 .. +4.0 ms | 0 | 0-1 |
+
+Failure rate under load, `holds_thirty_fps_within_one_percent`: **30/50 before
+(all 30 at 2 s and 6 s), 0/50 after.** The margin to the +-1% bound is 8x at
+2 s and 30x at 10 s, and it is 8x rather than 30x for the honest reason that a
+2 s run has fewer wake-ups to average.
+
+### Mutation check
+
+The pacer was deliberately broken three ways, one at a time, and restored;
+`crates/screeny/src/sender.rs` is byte-identical to `HEAD` afterwards.
+
+| mutation | one line | caught by | reading |
+|---|---|---|---|
+| **fast** `period_of(fps * 1.02)` | period 2% short | `holds_thirty_fps...` at 2 s **and** 10 s | -2.032% at 2 s, -1.966% at 10 s |
+| **bursty** `n = should_be` (the card 090 regression) | resume on the slot already inside | `skips_rather_than_bursting_after_a_stall`, 3 attempts out of 3 | all three stalls flagged, post-stall lateness 0.27, 0.55, 0.85 periods |
+| **drifting** `sleep_until(now + period)`, no resync | incremental schedule | `holds_thirty_fps...` and `other_frame_rates...`, both lengths | +7.5% and drift +145 ms at 2 s; +8.7% and drift +808 ms at 10 s |
+
+The bursty pacer passes `holds_thirty_fps_within_one_percent`, and should: an
+idle run never provokes the bug, because nothing ever falls two periods
+behind. That is why the stall test exists and why it now stalls at three
+phases. Conversely the fast and drifting pacers pass the stall test. Each test
+catches what it is for, and the module doc says which is which.
+
+### Wall time
+
+`cargo test -p screeny --test pacing`, three runs each, debug:
+
+- before: 18.56, 18.60, 18.71 s
+- after: 18.91, 18.92, 19.03 s
+
++0.35 s, 1.9%, all of it the stall test going from one stall over 90 slots to
+three over 100. In release the suite is 18.75 s. The 10 s default is
+unchanged - the point of the card is that `SCREENY_PACING_SECS=2` now works,
+which turns the suite's slowest test into a 2 s one while iterating, and the
+README says so.
+
+### Also done, and found
+
+- `RxState::fps()` and `gaps()` counted the `FINAL` frame. `tests/cli.rs`
+  asserts 29.4..30.6 fps over a 2 s stream and `FINAL` is worth +1.7% there,
+  so it was sitting on the edge of the same flake. `RxState::paced()` is now
+  the one place the rule lives.
+- **Card 153**: `SendStats::actual_fps()` counts the frame at t=0 and the
+  `FINAL` frame, so the rate the sender reports reads high by `2 / slots` -
+  +0.67% over 10 s, +3.2% over 2 s. The root cause of this card, still present
+  in the shipped code; nothing in this card's scope fixes it, because the
+  tests no longer ask that function anything.
+- **Card 154**: every frame leaves about 4 ms after the slot it was due,
+  all run long, because macOS's `thread::sleep` overshoots by more than
+  `sleep_until`'s 1 ms spin window. The rate is untouched - the schedule is
+  absolute, so the offset is constant - which is why nothing has noticed. It
+  is 12% of a frame period of avoidable latency and belongs in card 013's
+  numbers.
+
+No pacer bug found. Code and `docs/design/protocol-v1.md` 9.1 agree; the one
+spec sentence this work casts doubt on is "spinning the last millisecond ...
+is what makes the difference between 30 fps give or take 5 ms and 30.00 fps",
+whose rate half is measured and true and whose latency half is card 154's
+question, so 9.1 is left alone until that card answers it.
+
+Root `cargo test --release --no-fail-fast`: 300 tests, 52 binaries, all pass.
