@@ -176,6 +176,48 @@ function sizeCanvas(canvas) {
 
 // ---------- small control helpers ----------
 
+/* Card 183: draw a range input's `list` on the track.
+ *
+ * Chrome paints tick marks for a `<datalist>` only on the *default* track, and
+ * style.css replaces `::-webkit-slider-runnable-track`, so the stops were real
+ * to the accessibility tree and invisible on the page - a declaration nobody
+ * could see. They are drawn here instead, from the datalist itself, so there is
+ * still one list of stops and adding a `list=` to any slider draws it.
+ *
+ * The geometry is the thumb's, not the track's: a 7px thumb inside a full-width
+ * input puts its centre at `3.5px + frac * (W - 7px)`, so a mark at `frac%`
+ * would be out by up to half a thumb - visibly wrong at the right-hand end.
+ * `calc()` does the same sum the browser does, which also makes it correct at
+ * every width without measuring anything.
+ *
+ * **They do not snap.** Card 172's worker decided that deliberately and this
+ * card kept it: a magnet at 30 makes 29 and 31 unreachable with a mouse, and a
+ * rate a script set must be shown exactly rather than quietly rounded to the
+ * nearest stop. The marks say where the useful rates are; the arrow keys and
+ * the readout do the rest. */
+function drawStops(root) {
+  const input = root.querySelector('input[type="range"][list]');
+  if (!input) return;
+  const list = document.getElementById(input.getAttribute('list'));
+  if (!list) return;
+  const min = Number(input.min), max = Number(input.max);
+  if (!(max > min)) return;
+  const strip = document.createElement('div');
+  strip.className = 'stops';
+  strip.ariaHidden = 'true';
+  for (const option of list.options) {
+    const at = (Number(option.value) - min) / (max - min);
+    if (!(at >= 0 && at <= 1)) continue;
+    const mark = document.createElement('i');
+    // The same arithmetic the thumb does. 3.5px and 7px are the thumb's half
+    // width and width in style.css; keep them in step.
+    mark.style.left = `calc(3.5px + ${at} * (100% - 7px))`;
+    if (option.label) mark.title = option.label;
+    strip.append(mark);
+  }
+  if (strip.children.length) input.after(strip);
+}
+
 function bindSlider(root, { get, set, format }) {
   const input = root.querySelector('input');
   const out = root.querySelector('output');
@@ -582,6 +624,9 @@ async function start() {
   $('#restart').addEventListener('click', restart);
   showPaused();
   bind({ refresh: showPaused });
+  // Card 183: every slider that declares its useful stops draws them. Static
+  // markup, so once is enough.
+  document.querySelectorAll('.slider').forEach(drawStops);
   // Card 172: any rate the player may be on, including one a script set. The
   // slider both shows it and changes it, and `set_playback` now clamps rather
   // than ignoring, so the two can no longer disagree.

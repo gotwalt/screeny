@@ -128,19 +128,22 @@
            `player::MIN_FPS`/`MAX_FPS`, checked by a test.
 
            The datalist names the rates worth reaching for. Chrome only paints
-           tick marks on the *default* track and style.css replaces it, so they
-           are not drawn: card 183. The readout is the exact rate either way,
-           and the arrow keys step by one. -->
+           tick marks on the *default* track and style.css replaces it, so card
+           183 draws them from this list instead (`drawStops` in main.js), on
+           the thumb's own geometry. This is still the one list of stops: it is
+           what the accessibility tree reads and what is drawn. They do not
+           snap - the readout is the exact rate and the arrow keys step by
+           one. -->
       <div class="slider" id="fps-slider">
         <label for="fps">Frames per second</label><output></output>
         <input id="fps" type="range" min="1" max="60" step="1" value="60" list="fps-stops">
         <datalist id="fps-stops">
-          <option value="1"></option>
-          <option value="10"></option>
-          <option value="15"></option>
-          <option value="24"></option>
-          <option value="30"></option>
-          <option value="60"></option>
+          <option value="1" label="1 fps"></option>
+          <option value="10" label="10 fps"></option>
+          <option value="15" label="15 fps"></option>
+          <option value="24" label="24 fps"></option>
+          <option value="30" label="30 fps"></option>
+          <option value="60" label="60 fps"></option>
         </datalist>
       </div>
       <div class="slider" id="speed-slider">
