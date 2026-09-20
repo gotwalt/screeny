@@ -285,7 +285,17 @@ pub fn report() -> Report {
 /// Call it from `main` as soon as the logger is up and **before** anything that
 /// can panic, so that a boot-path panic is still counted against the crash-loop
 /// guard.
-pub fn boot() -> Report {
+pub fn boot() -> bool {
+    // **A short wait and a blank line before the first word this firmware
+    // says.** The bench sees the *first* log line come out partly garbled on
+    // every boot while the second is clean: the ROM logs at 74880 baud and the
+    // second-stage bootloader at 115200, so when `main` starts there are still
+    // bytes in flight from a different bit rate and the monitor is midway
+    // through a character. Twenty milliseconds is three characters at the
+    // slowest of those rates, and the newline gives whatever the monitor has
+    // half-decoded a line of its own to die on. It costs a boot 20 ms, once.
+    xtensa_lx::timer::delay(240_000 * 20);
+    println!();
     let reason = raw_reset_reason();
     if !intact() {
         // Either the first boot after a power-on (the runtime zeroed the
@@ -323,7 +333,12 @@ pub fn boot() -> Report {
             QUICK_MS / 1000,
         );
     }
-    r
+    // **A `bool`, not the `Report`.** `main` is an embassy task, so anything it
+    // holds across an `await` is part of a future in `.bss`, and `.bss` is core
+    // 0's stack: carrying the whole report from here to the crash-loop check
+    // cost 128 bytes of ceiling for a value that cannot change. The check reads
+    // it again with [`report`], which is a dozen volatile loads.
+    r.halt
 }
 
 /// The `panic-test` build's one-shot latch: `true` the first time it is called

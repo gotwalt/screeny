@@ -10,7 +10,7 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply,
     WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::MAX_IDENTIFY_MS;
@@ -430,7 +430,55 @@ pub fn all() -> Vec<Rule> {
             flags: 0,
             run: no_reply_carries_a_psk,
         },
+        // --- GET /api/v1/panic (card 243) --------------------------------
+        //
+        // Last, and numbered after the three cross-cutting rules, because the
+        // numbers above are cited by name in `firmware/src/http.rs` and in
+        // spec 8.7 ("rules 37, 27") and renumbering them to make room in the
+        // middle would break every one of those references.
+        Rule {
+            n: 39,
+            section: "panic",
+            route: route::PANIC,
+            name: "the panic breadcrumb parses, and says nothing when nothing crashed",
+            cite: "reply::PanicReply; card 243",
+            secs: 0.3,
+            flags: 0,
+            run: panic_breadcrumb,
+        },
     ]
+}
+
+/// Card 243: `GET /api/v1/panic` is the RTC breadcrumb, and it is
+/// self-consistent.
+///
+/// The interesting assertion is the invariant rather than the values: a device
+/// that reports no panic must report `panic_count` 0, and one that reports a
+/// record must name a file. A panel that has panicked is not a failure of this
+/// rule - the breadcrumb doing its job is the whole point of the card - so the
+/// verdict says what it found and passes either way.
+fn panic_breadcrumb(cx: &mut Ctx) -> Result<Outcome, String> {
+    let res = cx.get(route::PANIC)?;
+    if res.status != 200 {
+        return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
+    }
+    let p: PanicReply = res.parse()?;
+    match &p.last_panic {
+        None => verdict(
+            p.panic_count == 0,
+            format!(
+                "no panic on record, {} panic(s) counted, boot {}",
+                p.panic_count, p.boot_count
+            ),
+        ),
+        Some(r) => verdict(
+            p.panic_count > 0 && !r.file.is_empty() && r.boot <= p.boot_count,
+            format!(
+                "last panic {}:{} at {} ms, boot {} of {}, {} in a row",
+                r.file, r.line, r.uptime_ms, r.boot, p.boot_count, r.consecutive
+            ),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

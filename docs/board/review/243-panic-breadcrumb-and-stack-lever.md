@@ -430,3 +430,130 @@ to read the log for:
 **A device that has stopped with `CRASHED` on the panel** (five quick panics in a row) is
 recovered by a **power cycle** - unplug and replug, or the EN button. A software reboot
 does not clear the latch, and there is no HTTP on a device in that state.
+
+### 2026-09-20, worker-243, the bench regression: +4,832 bytes of core 0's stack
+
+The orchestrator's 0.5.2 bench run found the panic path working exactly as predicted and
+**one regression**: after `screeny-probe http` the core 0 high-water read **17,440 of
+26,272** (`stack_free` 7,808), against **14,240 of 27,520** (13,280 free) on 0.5.1. The
+`stack:` line landed right after a settings commit, so the first suspicion was the store -
+the `Parts`/`read_partitions` change of step 5. **It was not the store.**
+
+#### How it was found, without hardware
+
+`xtensa-esp32-elf-objdump -d` gives every function's frame size (`entry a1, N`, plus any
+`addi a1, a1, -N`), so a build is a table of frames. I built **0.5.1 from
+`git archive 3186cd2`** into a scratch tree and diffed the two tables. Every Rust frame
+over 700 bytes, 0.5.1 -> 0.5.2:
+
+| frame | 0.5.1 | 0.5.2 | delta |
+|---|---|---|---|
+| `Select<serve_on, wait_ap_pub>::poll` (the HTTP worker) | 4,608 | 5,312 | +704 |
+| picoserve `handle_request` poll | 1,728 | 4,384 | **+2,656** |
+| `http::route_request` | 1,552 | 1,680 | +128 |
+| **the HTTP serve chain** | **7,888** | **11,376** | **+3,488** |
+| `main`'s future poll | 5,104 | 3,056 | -2,048 |
+| the partition-table read | 3,200 | 3,360 | +160 |
+
++3,488 on the HTTP path against a measured +3,200 in the device's peak: that is the
+regression, and the store is innocent. The commit line in the log is a coincidence of
+timing - `screeny-probe http` posts its settings **over HTTP**, and the 4 Hz stack watcher
+printed on the next tick. Step 5 did what it claimed: the boot path's own peak fell
+(13,056 -> 12,608 on the device) and `main`'s frame lost the 3 KB buffer.
+
+#### What cost 3,488 bytes: 44 bytes of `StatusReply`
+
+Six ablation builds, each one measurement:
+
+| build | `StatusReply` grows by | serve chain |
+|---|---|---|
+| 0.5.1 | - | 7,888 |
+| 0.5.2 as merged (`Option<PanicRecord>` + 2 counters) | +44 | 11,376 |
+| the same, page row simplified to one `{}` | +44 | 11,376 (**the page row costs nothing**) |
+| flat fields instead of the nested record | +44 | 11,360 (**the nesting costs nothing**) |
+| `Option<PanicFileText>` + 2 counters | +28 | 10,832 |
+| `Option<u32>` + 2 counters | +16 | 8,304 |
+| the 2 counters alone | +8 | 8,080 |
+
+So it is the **size** of `StatusReply`, and the multiplier is enormous and non-linear:
+`Reply` is an enum whose `Page` and `Api` variants both carry one, `Reply::write_to` is a
+single `async fn` whose three arms are three inlined response chains, and rustc lays a
+future's states side by side rather than overlapping them. Every byte added to this reply
+is paid for a dozen times over, in one frame.
+
+**One thing that did not work, recorded so nobody tries it twice:** collapsing the three
+`write_to` arms into one `Content` (the natural continuation of card 233) made it
+**worse** - chain 13,648, `.stack` 25,744 - because the merged `match` in `write_content`
+put both formatting chains in one frame. picoserve's JSON serializer is private, so the
+JSON arm could not have joined them anyway.
+
+#### The fix
+
+**`StatusReply` goes back to its 0.5.1 shape, byte for byte**, and the breadcrumb gets a
+route of its own: `GET /api/v1/panic` -> `PanicReply { boot_count, panic_count,
+last_panic }`. It costs nothing, because `ApiBody`'s size is its largest variant and that
+is still `Status`. The right argument for it is not the bytes, though - it is that **the
+breadcrumb cannot change while the device runs** (a panic reboots it), so it does not
+belong on the one route that is polled every four seconds. `boot_id` already tells a
+reader that the device restarted; `/api/v1/panic` says why, once.
+
+Three more recoveries of what the card had spent, found by diffing the `.data`/`.bss`
+symbol tables the same way:
+
+* `http_task::POOL` +128 -> back: the two worker futures shrink with the reply.
+* `__embassy_main::POOL` +128 -> `panic::boot()` returns a `bool` instead of a `Report`;
+  `main` is a task, so what it holds across an `await` is `.bss`, which is core 0's stack.
+  The crash-loop branch reads the breadcrumb again where it uses it.
+* `store::STORE` +76 -> `Parts` no longer keeps the `screeny` entry, which `Flash::entry`
+  already is; `read_partitions` returns it separately to its one boot-time caller.
+
+The status **page** keeps its `panic` row in full, rendered from `panic::report()` inside
+`Page::fmt`. That is safe here and nowhere else on that page: picoserve formats a body
+twice (once to measure it, once to send it) and the two passes must produce the same
+bytes, and the breadcrumb is the only thing on the page that cannot change between them.
+It costs `Reply` nothing.
+
+#### Where it lands
+
+| | 0.5.1 | 0.5.2 as merged | 0.5.2b |
+|---|---|---|---|
+| HTTP serve chain (static) | 7,888 | 11,376 | **7,872** |
+| `.stack` | 27,376 | 26,272 | **27,088** |
+| device high-water after the HTTP suite | 14,240 | 17,440 | **~14,200 (predicted)** |
+
+The chain is **16 bytes below 0.5.1**. The remaining 288 bytes of ceiling are the panic
+handler's own statics (`IN_PANIC`, the `otadata` entry, section padding) - the breadcrumb
+array itself is 52 bytes of `.rtc_slow.persistent` and costs main DRAM nothing - so the
+predicted `stack_free` is **~12,900 of 27,088**, against 13,280 on 0.5.1 and 4.7 KB above
+the Studio's warning line. If the orchestrator wants the last 400 bytes, the lever I would
+pull - and did not, because it changes a tuned network parameter I cannot test - is
+`TCP_TX` 1024 -> 768 in `firmware/src/http.rs`: 512 bytes of ceiling, at the price of a
+few more TCP segments per page load.
+
+All four builds: default **27,088**, `panic-test` **27,024**, `http-selftest` **26,784**,
+`start-in-portal` **27,088** (floor 24,576). `timeout 1200 cargo test`: **758 passed, 0
+failed, 1 ignored**. `cargo clippy --workspace --all-targets`: silent. Firmware clippy: the
+same 9 warnings as `main`.
+
+#### Also in this branch
+
+* **The garbled first `boot:` line.** The ROM logs at 74880 baud and the second-stage
+  bootloader at 115200, so when `main` starts there are still bytes in flight at a
+  different bit rate and the monitor is midway through a character - which is why the
+  *first* line is mangled and the second is clean. `panic::boot()` now waits 20 ms (three
+  characters at the slower rate) and prints a blank line before the first word this
+  firmware says. It costs each boot 20 ms, once.
+* `crates/probe` gains rule **39**, `GET /api/v1/panic`: it parses, and a device reporting
+  no panic reports `panic_count` 0. It is numbered last rather than inserted in sequence
+  because `firmware/src/http.rs` and spec 8.7 cite rules 27, 34 and 37 by number.
+* Spec 8.6 gains the `panic` route and a sentence that is the real lesson: **nothing else
+  goes in `status`** - it is the polled route, and 44 bytes in it cost 3,488 bytes of
+  core 0's stack.
+
+**What the orchestrator should see on the bench.** `stack: core 0 main high-water` around
+**14,200 of 27,088** after `screeny-probe http` (0.5.1: 14,240 of 27,520), and no jump at
+the settings commit. `curl http://192.168.7.221/api/v1/panic` answers
+`{"boot_count":N,"panic_count":0,"last_panic":null}` on a device that has not panicked and
+the full record on one that has; `GET /api/v1/status` no longer carries those fields. The
+`panic-test` build's evidence is unchanged except for where the record is read: the serial
+lines are the same, and the HTTP check moves from `/api/v1/status` to `/api/v1/panic`.

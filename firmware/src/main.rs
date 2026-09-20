@@ -668,7 +668,7 @@ async fn main(spawner: Spawner) {
     // what the last one left in RTC memory, and learn whether the crash-loop
     // guard has latched. A panic in the boot path below is then counted like
     // any other, which is the case the guard exists for.
-    let crumb = panic::boot();
+    let crashed = panic::boot();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
@@ -885,7 +885,11 @@ async fn main(spawner: Spawner) {
     // thing that could panic again. A power cycle clears the breadcrumb - the
     // RTC region is zeroed on a power-on reset and on nothing else - so the
     // recovery is the one the owner would try anyway.
-    if crumb.halt {
+    if crashed {
+        // Read the breadcrumb again here rather than carrying it from
+        // `panic::boot()`: `main`'s locals live in a future, which is `.bss`,
+        // which is core 0's stack (card 243's stack fix).
+        let crumb = panic::report();
         let last = crumb.last;
         let (file, line) = match &last {
             Some(p) => (p.file(), p.line),

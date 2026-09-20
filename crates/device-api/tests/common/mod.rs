@@ -29,8 +29,8 @@ use screeny_device_api::enums::{
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, SettingsReply, StatusReply,
-    TelemetryReply, WifiReply, MAX_NETWORKS,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply,
+    StatusReply, TelemetryReply, WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
@@ -178,10 +178,16 @@ pub fn worst_status() -> StatusReply {
         fw_state: FwState::PendingVerify,
         reset_reason: ResetReason::DeepSleep,
         store_errors: u32::MAX,
+    }
+}
+
+/// The longest [`PanicReply`] that can exist.
+pub fn worst_panic_reply() -> PanicReply {
+    PanicReply {
         boot_count: u32::MAX,
         panic_count: u32::MAX,
         // `Some`, not `None`: the bound has to cover the reply that carries a
-        // panic record, since that is the longest one that can exist.
+        // record, since that is the longest one that can exist.
         last_panic: Some(worst_panic()),
     }
 }

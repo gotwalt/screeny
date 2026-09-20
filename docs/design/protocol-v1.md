@@ -1149,7 +1149,8 @@ request that overruns it is **answered** `payload_too_large`, not dropped.
 | GET | `/setup` | - | the setup page (§8.9) | - |
 | POST | `/setup` | urlencoded `ssid=&psk=` | the setup page, saying what is happening | 384 |
 | GET | `/api/v1/status` | - | `StatusReply` | - |
-| GET | `/api/v1/telemetry` | - | `TelemetryReply` | - |
+| GET | `/api/v1/telemetry` | - | `TelemetryReply` |
+| GET | `/api/v1/panic` | - | `PanicReply` | - |
 | GET | `/api/v1/networks` | - | `NetworksReply` | - |
 | GET | `/api/v1/wifi` | - | `WifiReply` | - |
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
@@ -1170,15 +1171,24 @@ shape here bumps it and moves the prefix, a new optional field does not.
   `fw_state` and `reset_reason`. Its `wifi_state` is **the link** -
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
-  It also carries the device's **panic breadcrumb**: `boot_count` and
-  `panic_count` since the device last lost power, and `last_panic`, which is
-  `null` or `{uptime_ms, boot, file, line, consecutive}` - `file` being the base
-  name of a source file and `consecutive` how many panics in a row, each within
-  a minute of a boot, that one made. A device that panics prints a backtrace and
-  reboots itself, so this is what a reader who was not watching the serial port
-  can still see; `reset_reason` alone says only `software`, because that is all
-  the chip's register knows. All three MAY be absent, and a reader MUST treat an
-  absent one as `0` / `null`: firmware older than 0.5.2 does not send them.
+  **Nothing else goes in it.** It is the one route that is polled - the Studio
+  every 10 s, the page every 4 - and firmware 0.5.2 measured what a field here
+  costs on the device: 44 bytes added to the reply cost **3,488 bytes of core
+  0's stack**, because the firmware moves one of these through its response
+  chain many times inside one inlined async frame. A fact that does not change
+  between polls belongs on a route of its own; `panic` below is the first one.
+- **`panic`** is the device's RTC breadcrumb (firmware 0.5.2): `boot_count` and
+  `panic_count` since it last lost power, and `last_panic`, which is `null` or
+  `{uptime_ms, boot, file, line, consecutive}` - `file` being the base name of a
+  source file, and `consecutive` how many panics in a row, each within a minute
+  of a boot, that one made. A device that panics prints a backtrace and reboots
+  itself, so this is what a reader who was not watching the serial port can
+  still see; `status.reset_reason` alone says only `software`, because that is
+  all the chip's register knows. **The answer cannot change while the device is
+  running** - a panic reboots it - so a reader asks once per `boot_id` and not
+  on every poll. A device that does not keep a breadcrumb answers
+  `{"boot_count":1,"panic_count":0,"last_panic":null}`, and one running firmware
+  older than 0.5.2 answers `404`.
 - **`telemetry`** is the 48 bytes of §6.7 as named fields, so a browser and a
   UDP sender see the same numbers (rule 10). It is the numbers and not an
   interpretation of them: `state` and `last_codec` are the raw bytes here,

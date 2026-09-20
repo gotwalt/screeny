@@ -324,6 +324,7 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
     match (method, head.path.as_str()) {
         (route::Method::Get, route::STATUS) => status(shared),
         (route::Method::Get, route::TELEMETRY) => telemetry(shared),
+        (route::Method::Get, route::PANIC) => panic_breadcrumb(),
         (route::Method::Get, route::NETWORKS) => networks(shared, state),
         (route::Method::Get, route::WIFI) => get_wifi(shared),
         (route::Method::Post, route::WIFI) => post_wifi(shared, head, body),
@@ -381,18 +382,23 @@ fn status(shared: &Shared) -> Response {
         fw_state: ident.fw_state,
         reset_reason: ident.reset_reason,
         store_errors: ident.store_errors,
-        // Card 243's RTC breadcrumb. The simulator has no RTC memory and no
-        // panic path - a panic here is a process that stops, and the operating
-        // system is the one that says so - so the honest answer is "this is my
-        // first boot and nothing has crashed": `boot_count` 1 and no record.
-        // Nothing in the simulator reads these back; they exist so that a
-        // client written against the sim meets the same fields the device
-        // sends.
+    };
+    ok_json(&reply)
+}
+
+/// `GET /api/v1/panic` (card 243).
+///
+/// The simulator has no RTC memory and no panic path - a panic here is a
+/// process that stops, and the operating system is the one that says so - so
+/// the honest answer is "this is my first boot and nothing has crashed".
+/// Nothing in the simulator reads it back; the route exists so that a client
+/// written against the sim meets the same shape the device sends.
+fn panic_breadcrumb() -> Response {
+    ok_json(&screeny_device_api::reply::PanicReply {
         boot_count: 1,
         panic_count: 0,
         last_panic: None,
-    };
-    ok_json(&reply)
+    })
 }
 
 fn telemetry(shared: &Shared) -> Response {

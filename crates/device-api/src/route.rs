@@ -6,8 +6,8 @@
 //! server covers it and the README can be checked against it.
 
 use crate::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
-    WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply,
+    TelemetryReply, WifiReply,
 };
 use crate::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
@@ -24,6 +24,11 @@ pub const PREFIX: &str = "/api/v1";
 pub const STATUS: &str = "/api/v1/status";
 /// `GET /api/v1/telemetry`: [`TelemetryReply`].
 pub const TELEMETRY: &str = "/api/v1/telemetry";
+
+/// The RTC panic breadcrumb (card 243). Its own route because the answer
+/// cannot change while the device runs and because `StatusReply` is on the hot
+/// path and is full - see [`crate::reply::StatusReply`].
+pub const PANIC: &str = "/api/v1/panic";
 /// `GET /api/v1/networks`: [`NetworksReply`]. Triggers a scan; rate-limited to
 /// one per [`SCAN_MIN_INTERVAL_MS`], and a caller that asks sooner gets
 /// [`ErrorCode::RateLimited`](crate::ErrorCode::RateLimited).
@@ -116,6 +121,14 @@ pub const ROUTES: &[Route] = &[
         body: Body::None,
         max_request_len: 0,
         max_reply_len: TelemetryReply::MAX_JSON_LEN,
+        mutating: false,
+    },
+    Route {
+        path: PANIC,
+        method: Method::Get,
+        body: Body::None,
+        max_request_len: 0,
+        max_reply_len: PanicReply::MAX_JSON_LEN,
         mutating: false,
     },
     Route {

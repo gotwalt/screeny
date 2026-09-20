@@ -54,6 +54,10 @@ fn no_reply_type_can_carry_a_psk() {
         &serde_json::to_vec(&worst_accepted()).unwrap(),
     );
     no_secret_words("ErrorReply", &serde_json::to_vec(&worst_error()).unwrap());
+    no_secret_words(
+        "PanicReply",
+        &serde_json::to_vec(&worst_panic_reply()).unwrap(),
+    );
 }
 
 #[test]
