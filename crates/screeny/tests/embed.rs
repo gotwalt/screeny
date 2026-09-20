@@ -60,9 +60,41 @@ fn target_at(frame: SocketAddr) -> Target {
 /// bare `Target { addr }` finds both halves - which is what an embedder will
 /// actually have on the bench.
 fn sim_pair(frame_port: u16) -> (SimDevice, SimHandle) {
-    let dev = SimDevice::start(sim_config(frame_port, frame_port + 1)).expect("sim starts");
+    let dev = sim_at(frame_port, frame_port + 1);
     let sim = dev.handle();
     (dev, sim)
+}
+
+/// How long a **named** port pair is waited for before its absence is a test
+/// failure. These are the re-binds: the ports a simulator has just released,
+/// which the test needs back because "the same ports" is the property being
+/// tested.
+const REBIND: Duration = Duration::from_secs(5);
+
+/// A simulator on two named ports, waiting for them if they are not free yet.
+///
+/// **Card 117.** The pair a dropped simulator has just released is normally
+/// free at once, but not always: the sockets are closed by `Drop` on another
+/// thread's schedule, and a second copy of this suite - another worktree
+/// running `cargo test` at the same time - can hold a pair for a moment in
+/// between, which is how `reconnection_can_be_turned_off` was once seen to
+/// panic in here with nothing but "sim starts" to go on. A bounded wait, and a
+/// message that names the ports and the last error.
+fn sim_at(frame_port: u16, control_port: u16) -> SimDevice {
+    let deadline = Instant::now() + REBIND;
+    loop {
+        match SimDevice::start(sim_config(frame_port, control_port)) {
+            Ok(dev) => return dev,
+            Err(e) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "no simulator on 127.0.0.1:{frame_port}/{control_port} after {:.0?}: {e}",
+                    REBIND
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 /// A simulator on *some* free port pair, retrying if another test in this
@@ -608,8 +640,7 @@ fn an_attached_link_reconnects_to_the_same_two_ports() {
     );
 
     // Back on exactly the ports it had, which is a reboot.
-    let dev2 = SimDevice::start(sim_config(frame.port(), control.port()))
-        .expect("the ports the sim just released are free again");
+    let dev2 = sim_at(frame.port(), control.port());
     let sim2 = dev2.handle();
     assert!(
         push_until(&mut link, PATIENCE, |l| l.stats().sessions >= 2),
