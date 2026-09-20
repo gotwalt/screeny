@@ -361,6 +361,18 @@ Three kinds of message come out of the frame socket:
 A browser identifies itself with an `X-Studio-Client` header on changes and
 `?client=<id>` on the socket; the server does not echo a browser its own change.
 
+**State is paced too** (card 196), because dragging a slider is sixty
+`set_param` a second and each one put a whole `StudioState` - 416 bytes - on
+every *other* socket: 25 KB/s of JSON for one control moving, and on a hidden
+tab, which asks for no pictures at all, everything that tab cost. A socket is
+now sent at most one state message every 50 ms - 20 a second - and the one it
+is sent is always the newest. The first change after a quiet moment still goes
+out at once, so a piece picked or a switch flipped is as immediate as it ever
+was; only a burst is thinned, and the last change of a burst is **held rather
+than dropped**, so the value a drag ended on always arrives and no browser is
+left resting on a stale one. Measured: 60 messages/s and 24.9 KB/s become 20/s
+and 8.0 KB/s, with a single change crossing in about 4 ms.
+
 **And one goes in** (card 120). A frame packet is 6196 bytes, so every frame a second
 is 6.2 KB/s per tab; a socket says how many of them it wants, on the way in with
 `?fps=&repeat=` or at any time with
@@ -441,6 +453,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 |---|---|
 | `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
 | `tests/preview.rs` | card 120: a hidden tab is sent no pictures, keeps its heartbeat and comes straight back; a socket is paced to what it asked for; an unchanged picture is not sent again; **a hidden tab is not a watcher**, so a studio with no panel and only hidden tabs idles at 5 fps; and `sockets` on `/status` counts at least what a browser received |
+| `tests/pacing.rs` | card 196: with two browsers open and one of them dragging a slider at 60 Hz, the other is sent a bounded number of state messages a second (measured 19.3-19.7/s and 8.0 KB/s, against 60.0/s and 24.9 KB/s before the card) and the dragging one is sent none; a single deliberate change still crosses in a few milliseconds; and the value a drag **ended on** always arrives, within one gap of the drag stopping |
 | `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
