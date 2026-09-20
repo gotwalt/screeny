@@ -201,8 +201,24 @@ pub struct PlayerHealth {
     pub last_tick_ago: Option<f64>,
     /// Seconds since a frame last reached the wire.
     pub last_frame_ago: Option<f64>,
-    /// Sessions the link has opened: one at first connect, one per reconnect.
+    /// Sessions the **current link object** has opened. Per link, so it goes
+    /// back to zero whenever the link is rebuilt: useful for "is this link
+    /// flapping", useless as "has this panel dropped". Read
+    /// [`PlayerHealth::reconnects`] for that (card 171).
     pub sessions: u64,
+    /// Every time this panel's stream has come up **since the studio
+    /// started**, carried across link rebuilds the way `ticks` is carried
+    /// across core restarts. One at the first connect.
+    pub link_ups: u64,
+    /// How many times the panel has come *back*: [`PlayerHealth::link_ups`]
+    /// less the first connect, and less the times the studio itself let the
+    /// panel go and picked it up again (output switched off and on).
+    ///
+    /// This is the one a human reads, and it is the number card 171 was
+    /// written about: the old readout was `sessions - 1`, which the studio
+    /// reset every time it rebuilt the link, so a panel that had really
+    /// reconnected three times could show `0`.
+    pub reconnects: u64,
     /// The brightness policy as actually applied by the device (its own cap
     /// may be lower than what was asked for).
     pub brightness_applied: Option<u8>,
@@ -391,9 +407,27 @@ struct LinkSlot {
     /// What the link was built for, so a changed address rebuilds it and an
     /// unchanged one does not.
     key: String,
-    /// Sessions the last time we looked, for counting reconnects and for
-    /// knowing when to re-apply the brightness policy.
+    /// Sessions the **current** link had the last time we looked.
     sessions: u32,
+    /// Sessions banked from every link this player has already closed.
+    ///
+    /// Card 171: the studio builds a new link whenever what it is aiming at
+    /// changes, and the link's own counter starts again at zero. Banking it
+    /// here is what makes "how many times has this panel's stream come up" a
+    /// *player* lifetime number rather than a per-link one.
+    closed_ups: u64,
+    /// Of those, the ones the **studio** caused rather than the panel: output
+    /// switched off and then on again. Subtracted from the reconnect count,
+    /// because "the panel dropped" and "you turned it off" are not the same
+    /// thing and only the first is worth a person's attention.
+    ///
+    /// A link rebuilt because the panel moved or was re-resolved after a
+    /// stale period is **not** counted here: the panel really was away and
+    /// really did come back.
+    studio_ups: u64,
+    /// Ask the device for the brightness policy again on the next pass, even
+    /// though no new session has opened - because the policy itself changed.
+    reapply_brightness: bool,
     /// When a frame last reached the wire.
     last_frame_unix: Option<u64>,
 }
@@ -558,8 +592,11 @@ impl Player {
             }
             if let Some(b) = change.brightness {
                 cfg.brightness = b;
-                // Re-apply on the next pass.
-                self.slot().sessions = 0;
+                // Re-apply on the next pass. Card 171: this used to be
+                // `slot.sessions = 0`, which made the supervisor see a new
+                // session that had not happened - and, once reconnects were
+                // counted, would have invented one.
+                self.slot().reapply_brightness = true;
             }
             if let Some(on) = change.on {
                 cfg.on = on;
@@ -609,9 +646,20 @@ impl Player {
                 // FINAL: the panel is released now rather than after its
                 // stream timeout, and goes back to its own idle screen.
                 out.close();
+                let banked = u64::from(slot.sessions);
+                slot.closed_ups += banked;
+                // Output switched off is the *studio* letting the panel go, so
+                // the connect that follows switching it back on is not the
+                // panel coming back and must not read as a reconnect. Losing
+                // the device's address (`Reach::Unknown`) is the opposite: the
+                // panel really is away.
+                if !on {
+                    slot.studio_ups += 1;
+                }
             }
             slot.out = None;
             slot.key = String::new();
+            slot.sessions = 0;
             return;
         }
         if slot.out.is_some() && slot.key == key {
@@ -619,6 +667,8 @@ impl Player {
         }
         if let Some(out) = slot.out.as_mut() {
             out.close();
+            let banked = u64::from(slot.sessions);
+            slot.closed_ups += banked;
         }
         slot.out = Some(open_link(reach));
         slot.key = key;
@@ -682,18 +732,34 @@ impl Player {
             (cfg.brightness, cfg.device.clone())
         };
         let mut slot = self.slot();
+        let last = slot.sessions;
+        let reapply = slot.reapply_brightness;
+        let mut sessions = 0;
+        let mut up = false;
         if let Some(out) = slot.out.as_mut() {
             out.poll();
-            let sessions = out.link().stats().sessions;
-            let up = out.link().state().is_up();
-            if up && sessions != slot.sessions {
-                slot.sessions = sessions;
-                if let Some(level) = want {
-                    job = Some(BrightnessJob { device, level });
-                }
-            }
-            self.health_mut().sessions = u64::from(sessions);
+            sessions = out.link().stats().sessions;
+            up = out.link().state().is_up();
         }
+        if up && (sessions != last || reapply) {
+            slot.reapply_brightness = false;
+            if let Some(level) = want {
+                job = Some(BrightnessJob { device, level });
+            }
+        }
+        slot.sessions = sessions;
+        // Card 171: the count a person reads is a *player* lifetime one. The
+        // link's own counter starts again at zero every time the link is
+        // rebuilt, so what is banked from the closed links is added back, and
+        // the first connect - plus any the studio itself caused - is taken off.
+        let link_ups = slot.closed_ups + u64::from(sessions);
+        let reconnects = link_ups.saturating_sub(1 + slot.studio_ups);
+        drop(slot);
+        let mut health = self.health_mut();
+        health.sessions = u64::from(sessions);
+        health.link_ups = link_ups;
+        health.reconnects = reconnects;
+        drop(health);
         job
     }
 

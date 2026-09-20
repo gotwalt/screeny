@@ -195,7 +195,8 @@ async fn the_server_survives_a_bounded_soak() {
         ticks,
         ticks - base_ticks,
         d["player"]["panel"]["frames_sent"],
-        d["player"]["health"]["sessions"].as_u64().unwrap_or(0).saturating_sub(1),
+        // Card 171: the player-lifetime count, which survives a link rebuild.
+        d["player"]["health"]["reconnects"].as_u64().unwrap_or(0),
         d["player"]["health"]["panics"],
         d["player"]["health"]["stalls"],
         d["player"]["health"]["restarts"],

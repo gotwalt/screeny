@@ -50,3 +50,60 @@ than a footnote.
 Unplug the panel and plug it back in three times; the page says 3.
 
 ## Log
+
+### The card against today's tree
+
+Unchanged. `LinkSlot.sessions`, `PlayerHealth.sessions`, `supervise()` copying
+one into the other and `aim()` setting it back to zero are all still there, and
+`ui/main.js` still drew `Math.max(0, player.health.sessions - 1)`.
+
+One extra thing the card did not mention, found on the way: `configure()` also
+set `slot.sessions = 0` when the brightness policy changed, purely to make the
+supervisor think a new session had opened so it would re-apply the policy. That
+is a second reason the number was wrong, and once reconnects were counted it
+would have *invented* one. It is an explicit `reapply_brightness` flag now.
+
+### The decision
+
+**Kept, not deleted** - the card 170 worker asked. It can be right, and a panel
+that has dropped six times overnight is worth knowing about.
+
+Two numbers, because one cannot carry both facts honestly:
+
+- `link_ups` - every time this panel's stream has come up since the studio
+  started, carried across link rebuilds the way `ticks` is carried across core
+  restarts. The raw, unarguable count.
+- `reconnects` - `link_ups` less the first connect and less the ones the
+  **studio** caused, which is the card's "worth telling apart, if it is cheap".
+  It was cheap: the only case is output being switched off and on, which `aim()`
+  already knows it is doing (`!on`), so it is one `studio_ups += 1` there.
+
+A link rebuilt because the panel *moved* or was re-resolved after a stale
+period is deliberately **not** discounted: the panel really was away and really
+did come back, which is what the reader wants to know.
+
+`health.sessions` stays, unchanged, as the per-link number it always was, with
+a doc comment that now says so - it is still the right thing for "is this one
+link flapping".
+
+### What I did
+
+- `player.rs`: `LinkSlot` gains `closed_ups` (banked from closed links),
+  `studio_ups` and `reapply_brightness`; `aim()` banks before it closes;
+  `supervise()` computes `link_ups = closed_ups + sessions` and
+  `reconnects = link_ups - 1 - studio_ups`.
+- `PlayerHealth` gains `link_ups` and `reconnects` (additive; `sessions` kept).
+- The page: `Reconnects  2 since the studio started`. The label says the window
+  because without it the number has no meaning.
+- `tests/soak.rs` prints `reconnects` instead of `sessions - 1`, which is the
+  number card 106's Log went looking for and could not trust.
+
+### Evidence
+
+`tests/panel.rs::a_panel_that_comes_back_twice_says_two` (12 s): a simulator on
+a known port pair is dropped and a fresh one started in its place, twice; the
+page says 2 and `link_ups` 3. Then `set_panel {"on":false}` / `{"on":true}` -
+which **rebuilds the link**, the exact thing that used to wipe the count to 0 -
+and it still says 2, while `link_ups` goes to 4 so nothing is hidden. Every
+wait is `until_json` with a 30 s deadline and every assertion is made on the
+one read that satisfied its wait.

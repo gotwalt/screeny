@@ -617,7 +617,10 @@ async function start() {
       if (link.indexed_fallback) rows.push(['Requantised', nf.format(link.indexed_fallback), 'warn']);
     }
     if (player) {
-      rows.push(['Reconnects', Math.max(0, player.health.sessions - 1)]);
+      // Card 171: a player-lifetime count that survives the link being
+      // rebuilt, not `sessions - 1` - which was per link object, and the
+      // studio builds a new link whenever what it is aiming at changes.
+      rows.push(['Reconnects', `${nf.format(player.health.reconnects)} since the studio started`]);
       rows.push(['Rendered', `${nf.format(player.health.ticks)} frames at ${player.fps_measured.toFixed(0)} fps`]);
       if (player.health.panics || player.health.stalls) {
         rows.push(['Faults', `${player.health.panics} panics, ${player.health.stalls} stalls, ${player.health.restarts} restarts`, 'warn']);
