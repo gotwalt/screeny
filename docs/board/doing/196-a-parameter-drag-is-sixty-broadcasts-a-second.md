@@ -4,8 +4,8 @@ title: Dragging a parameter is sixty state broadcasts a second
 type: build
 hardware: no
 depends: [120]
-owner:
-branch:
+owner: worker-196
+branch: card/196-state-broadcast-pacing
 ---
 
 ## Goal
