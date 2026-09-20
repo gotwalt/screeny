@@ -43,10 +43,15 @@ fn api(dev: &SimDevice) -> SocketAddr {
 }
 
 /// A body that looks enough like an ESP32 image for the header checks.
-fn image(len: usize) -> Vec<u8> {
-    let mut v = vec![0x55u8; len];
-    v[0] = 0xE9;
-    v
+/// A real ESP32 image of this project, built by the crate that validates one.
+///
+/// Card 240: the simulator runs the firmware's whole validator now, so a
+/// `0xE9` followed by filler - which is what this used to be, and what the
+/// old two-check simulator accepted - is no longer an image. `Builder` is
+/// `screeny-fwimage`'s own, so a test that says "the simulator accepts this"
+/// is saying it about something the device would accept too.
+fn image() -> Vec<u8> {
+    screeny_fwimage::build::Builder::good().build()
 }
 
 /// The smallest request each route will accept. The `_` arm is the point of
@@ -58,7 +63,7 @@ fn exercise(addr: SocketAddr, r: &Route) -> Res {
             http::post_form(addr, r.path, "ssid=Example-Wifi1&psk=password9")
         }
         (Method::Post, route::SETTINGS) => http::post_json(addr, r.path, r#"{"brightness":96}"#),
-        (Method::Post, route::FIRMWARE) => http::post_bytes(addr, r.path, &image(256)),
+        (Method::Post, route::FIRMWARE) => http::post_bytes(addr, r.path, &image()),
         (Method::Post, route::REBOOT) => http::post_json(addr, r.path, r#"{"confirm":"RBOO"}"#),
         (Method::Post, route::IDENTIFY) => http::post_json(addr, r.path, r#"{"duration_ms":300}"#),
         (m, path) => panic!(
@@ -145,9 +150,10 @@ fn every_reply_parses_as_the_type_the_firmware_will_send() {
         .parse();
     assert_eq!(settings.brightness, 96);
 
-    let fw: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &image(1024)).parse();
+    let img = image();
+    let fw: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &img).parse();
     assert!(fw.ok);
-    assert_eq!(fw.written, 1024);
+    assert_eq!(fw.written as usize, img.len());
 
     let rebooting: AcceptedReply =
         http::post_json(addr, route::REBOOT, r#"{"confirm":"RBOO"}"#).parse();
@@ -291,16 +297,41 @@ fn the_firmware_route_checks_what_it_can_and_installs_nothing() {
     let dev = online_device();
     let addr = api(&dev);
 
-    // Research 006's first check: an ESP32 image begins 0xE9.
-    let ok: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &image(4096)).parse();
+    // Card 240: every one of research 006 section 5's checks, through the
+    // firmware's own `screeny-fwimage`, so an image the simulator accepts is
+    // one the device would stage.
+    let img = image();
+    let ok: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &img).parse();
     assert!(ok.ok);
-    assert_eq!(ok.written, 4096);
+    assert_eq!(ok.written as usize, img.len());
     assert_eq!(ok.error, None);
 
     let bad: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &[0x00; 64]).parse();
     assert!(!bad.ok);
     assert_eq!(bad.error, Some(FirmwareError::BadMagic));
-    assert_eq!(bad.written, 64, "it says where it stopped");
+    assert_eq!(bad.written, 0, "nothing reached the sink");
+
+    // The checks the old two-check simulator could not run, each on an image
+    // that is correct in every other respect - same checksum, same appended
+    // hash. These are the ones that matter: a bad *image* is obvious, and a
+    // good image for the wrong chip is not.
+    let c3 = screeny_fwimage::build::Builder::wrong_chip().build();
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &c3).parse();
+    assert_eq!(r.error, Some(FirmwareError::WrongChip));
+    assert!(!r.ok);
+
+    let theirs = screeny_fwimage::build::Builder::wrong_project().build();
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &theirs).parse();
+    assert_eq!(r.error, Some(FirmwareError::WrongProject));
+
+    let mut flipped = image();
+    flipped[2000] ^= 0x01;
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &flipped).parse();
+    assert_eq!(r.error, Some(FirmwareError::BadChecksum));
+
+    let cut = &img[..img.len() - 200];
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, cut).parse();
+    assert_eq!(r.error, Some(FirmwareError::BadSha256), "a truncated upload");
 
     // An empty body has no magic byte to check.
     let empty: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &[]).parse();
