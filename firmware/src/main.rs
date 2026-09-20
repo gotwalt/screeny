@@ -110,8 +110,12 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// The `fw=` TXT key and `GET_INFO` field.
 ///
 /// 0.3.0 was card 212: settings live in flash. 0.4.0 is card 222: the device
-/// answers HTTP on the LAN.
-pub const FW_VERSION: &str = "0.4.1";
+/// answers HTTP on the LAN. 0.4.1 fixed `SET_WIFI` committing credentials to
+/// flash before proving them. 0.4.2 is card 227: core 1's stack measured and
+/// cut to fit, the heap arena trimmed, and a **second HTTP connection
+/// worker** - which is the part visible from outside, because back-to-back
+/// connections no longer pay a 1 s SYN retransmit.
+pub const FW_VERSION: &str = "0.4.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -149,16 +153,36 @@ const _: () = assert!(
     "panel refresh below 120 Hz: reduce PLANES or raise PIXEL_CLOCK"
 );
 
-/// Core 1's stack.
+/// Core 1's stack. **6 KB, and it is measured, not guessed** (card 227).
 ///
 /// It runs one task whose deepest call is `display::render` (a 192-byte row
 /// buffer), plus the HUB75 DMA interrupt at `Priority3`, which lands on
-/// whatever stack is current. 16 KB is generous for that; esp-rtos checks the
-/// guard on every switch and panics with the range, which is how the first
-/// flash of this firmware reported an 8 KB stack being eaten by two 12 KB
-/// framebuffers built in the wrong place.
+/// whatever stack is current - `xtensa-lx-rt`'s `SAVE_CONTEXT` opens with
+/// `addmi sp, sp, -256` on the interrupted stack, and there is no separate
+/// interrupt stack on this chip.
+///
+/// It was 16 KB from the first flash of this firmware to card 227, on the
+/// reasoning that 16 KB is "generous" - and it was: `stack_probe::CORE1`
+/// paints the region from core 0 before the core starts and scans it from
+/// core 0 afterwards, and after 200 s of 30 fps streaming with dither on and
+/// 2,378 HTTP connections in flight on the other core, **the high-water mark
+/// was 1,872 bytes of 16,384**. Three quarters of it had never been touched.
+///
+/// That was not free. Core 1's stack is ordinary `.bss`, and on this chip
+/// `.data`, `.bss` and core 0's main stack come out of one DRAM region with
+/// the stack as the remainder - so every byte over-provisioned here was a
+/// byte core 0 did not have. Releasing 10,240 of them is what paid for the
+/// second HTTP worker.
+///
+/// The size is card 227's rule, `max(2 * high_water, 6 KB)` rounded up to a
+/// kilobyte: `max(3744, 6144)` = 6,144. It is the 6 KB floor that binds, not
+/// the measurement, which means there is better than a **3.2x** margin over
+/// anything ever observed. Do not cut it further without a reason and a
+/// number; esp-rtos checks the guard on every context switch and panics with
+/// the range, so an undersized stack fails loudly - but the panic is a boot
+/// loop on a device that may not be on your desk.
 #[cfg_attr(feature = "display-on-core0", allow(dead_code))]
-static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<16384>> =
+static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<6144>> =
     static_cell::ConstStaticCell::new(CoreStack::new());
 
 /// The two DMA framebuffers core 1 swaps between.
