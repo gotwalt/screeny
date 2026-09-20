@@ -92,12 +92,21 @@ impl Panel {
         (v.clamp(0.0, 1.0) * max).round() / max
     }
 
+    /// The sRGB8 code that displays what the panel emits for the code `v`:
+    /// send `v`, see this. On [`DEVICE`] it is the identity for every code
+    /// above 38, and below that a collapse of up to four codes onto one level
+    /// - which is the whole of the dark end in one function.
+    #[inline]
+    #[must_use]
+    pub fn code(&self, v: u8) -> u8 {
+        lin_to_srgb8(self.emit1(v))
+    }
+
     /// The sRGB8 code that displays what the panel would emit for `c`. This is
     /// the transform the preview applies before drawing dots.
     #[must_use]
     pub fn round_trip(&self, c: [u8; 3]) -> [u8; 3] {
-        let e = self.emit(c);
-        [lin_to_srgb8(e[0]), lin_to_srgb8(e[1]), lin_to_srgb8(e[2])]
+        [self.code(c[0]), self.code(c[1]), self.code(c[2])]
     }
 
     /// Snap an sRGB8 colour to one the panel can show exactly. Palette design
@@ -143,7 +152,40 @@ pub const NOMINAL: Panel = Panel::new(6);
 /// The same panel with the driver dithering across the ~5 refreshes it gets
 /// per received frame. **Codec selection scores against this** (card 002,
 /// `enc/hybrid.rs`), and since card 030 it is also what the device does.
+///
+/// This is the *within one frame* view: a colour that is only on screen for
+/// one 30 fps frame gets about five of the firmware's sixteen dither phases,
+/// so it resolves about 195 of the 256 sRGB codes. A colour that is **held**
+/// gets the whole cycle and resolves 237 - that is [`DEVICE`]. Scoring a codec
+/// is a per-frame question, so the encoder keeps this one.
 pub const TEMPORAL: Panel = Panel::dithered(6, 5);
+
+/// How many refreshes the firmware spends a sub-level remainder over:
+/// `gamma::FRAC` in `firmware/src/gamma.rs`, which keeps four fractional bits
+/// below one duty level and bumps the level when the remainder beats the
+/// phase threshold.
+pub const DITHER_PHASES: u32 = 16;
+
+/// **What the device shows a colour it is holding.** 64 duty levels spread
+/// over [`DITHER_PHASES`] refreshes: 1008 duty steps per channel, in the time
+/// average, and the panel model everything on the art side quantises and
+/// previews against.
+///
+/// The full phase cycle is 16 refreshes, about 104 ms at the measured 154 Hz,
+/// so this is the picture from three 30 fps frames onwards. Numbers, all
+/// checked in this module's tests against the firmware's own table:
+///
+/// | | [`NOMINAL`] | [`TEMPORAL`] | `DEVICE` |
+/// |---|---|---|---|
+/// | duty steps | 63 | 315 | 1008 |
+/// | distinct levels out of 256 sRGB codes | 64 | 195 | 237 |
+/// | codes that come out black | 22 | 6 | 2 |
+/// | darkest lit code | 22 | 6 | 2 |
+///
+/// The brief's "the darkest visible level is about sRGB 6, it was 34 without
+/// dithering" is the same fact seen by eye: sRGB 2 is one duty step in sixteen
+/// refreshes and is not something you could call visible.
+pub const DEVICE: Panel = Panel::dithered(6, DITHER_PHASES);
 /// What dimming used to cost, before card 020: brightness scaled the pixel
 /// values, so a 30/255 cap left a 6-bit channel using values 0-7. **The device
 /// has not behaved like this since card 020** - it dims the output-enable
@@ -151,8 +193,12 @@ pub const TEMPORAL: Panel = Panel::dithered(6, 5);
 /// brightness. Kept as the name of the loss, for `lab`'s comparison tables and
 /// for anyone reading the old research.
 pub const DIMMED: Panel = Panel::new(3);
-/// A dim room in the art brief's terms: half the levels (brief section 2.1).
-/// Every piece is checked at 32 levels as well as at 64.
+/// Half the levels, which the first version of the art brief called "a dim
+/// room". **It is not one.** Dimming costs light and not depth (card 020, card
+/// 066): a dim room is [`DEVICE`] times [`oe_light`], with every duty step
+/// still there. Kept, like [`DIMMED`], as the name of a loss - a receiver that
+/// had to scale pixel values would land here - and used by `lab`'s comparison
+/// tables, not by anything that predicts this device.
 pub const DIM: Panel = Panel::levels(32);
 /// Reference: 8 bitplanes. More depth than this panel has at any brightness.
 pub const DEEP: Panel = Panel::new(8);
@@ -400,6 +446,102 @@ mod tests {
             assert_eq!(off.map(v), 0, "brightness 0 is black at {v}");
         }
         assert!(half.map(255) < 255);
+    }
+
+    // -----------------------------------------------------------------
+    // Card 102: the dark end, pinned to the firmware
+    // -----------------------------------------------------------------
+
+    /// `firmware/src/gamma.rs`'s `SRGB_TO_Q`, copied here as a **fixture**.
+    ///
+    /// Not a second implementation - nothing reads it but the test below.
+    /// The device's whole colour behaviour is this table plus
+    /// `display::quantise_dither`, and the one claim [`DEVICE`] makes is that
+    /// it reproduces them. A copy of the numbers is the only way to check that
+    /// from a host crate: `firmware/` is a separate cargo project on the `esp`
+    /// toolchain and cannot be depended on.
+    #[rustfmt::skip]
+    const FIRMWARE_SRGB_TO_Q: [u16; 256] = [
+        0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5,
+        5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 12, 12, 13, 14,
+        15, 15, 16, 17, 18, 19, 20, 20, 21, 22, 23, 24, 25, 26, 28, 29,
+        30, 31, 32, 33, 35, 36, 37, 39, 40, 41, 43, 44, 46, 47, 49, 50,
+        52, 53, 55, 57, 58, 60, 62, 64, 65, 67, 69, 71, 73, 75, 77, 79,
+        81, 83, 85, 87, 89, 92, 94, 96, 98, 101, 103, 105, 108, 110, 113, 115,
+        118, 120, 123, 126, 128, 131, 134, 137, 140, 142, 145, 148, 151, 154, 157, 160,
+        163, 166, 170, 173, 176, 179, 183, 186, 189, 193, 196, 200, 203, 207, 210, 214,
+        218, 221, 225, 229, 233, 236, 240, 244, 248, 252, 256, 260, 264, 268, 273, 277,
+        281, 285, 290, 294, 299, 303, 307, 312, 317, 321, 326, 330, 335, 340, 345, 349,
+        354, 359, 364, 369, 374, 379, 384, 390, 395, 400, 405, 410, 416, 421, 427, 432,
+        438, 443, 449, 454, 460, 466, 472, 477, 483, 489, 495, 501, 507, 513, 519, 525,
+        531, 538, 544, 550, 556, 563, 569, 576, 582, 589, 595, 602, 609, 615, 622, 629,
+        636, 643, 650, 657, 664, 671, 678, 685, 692, 699, 707, 714, 721, 729, 736, 744,
+        751, 759, 767, 774, 782, 790, 798, 805, 813, 821, 829, 837, 846, 854, 862, 870,
+        878, 887, 895, 903, 912, 920, 929, 938, 946, 955, 964, 972, 981, 990, 999, 1008,
+    ];
+
+    /// **[`DEVICE`] is the firmware, to the last duty step.**
+    ///
+    /// The firmware keeps `FRAC_BITS = 4` fractional bits below a duty level
+    /// (`SRGB_TO_Q[v] = round(63 * 16 * lin(v))`) and `quantise_dither` spends
+    /// the remainder across the 16 phases, so over a full cycle a held colour
+    /// averages exactly `SRGB_TO_Q[v] / 16` levels out of 63. That is
+    /// `Panel::dithered(6, 16)`, and this is the proof rather than the claim.
+    #[test]
+    fn device_is_the_firmwares_gamma_table() {
+        for v in 0..=255usize {
+            let want = f64::from(FIRMWARE_SRGB_TO_Q[v]) / 1008.0;
+            let got = f64::from(DEVICE.emit1(v as u8));
+            assert!((want - got).abs() < 1e-6, "code {v}: firmware emits {want}, DEVICE says {got}");
+        }
+        assert_eq!(DEVICE.steps, 1008, "63 levels x 16 dither phases");
+    }
+
+    /// The dark end, as numbers rather than adjectives. The firmware's own doc
+    /// comment says "only sRGB 0 and 1 emit nothing"; the brief says the
+    /// darkest visible value moved from sRGB 34 to about 6.
+    #[test]
+    fn the_dark_end_is_what_the_brief_measured() {
+        assert_eq!(NOMINAL.distinct_levels(), (64, 22), "bit planes alone");
+        assert_eq!(TEMPORAL.distinct_levels(), (195, 6), "one frame's worth of phases");
+        assert_eq!(DEVICE.distinct_levels(), (237, 2), "a held colour, all 16 phases");
+
+        let first_lit = |p: &Panel| (0..=255u8).find(|v| p.emit1(*v) > 0.0).unwrap();
+        assert_eq!(first_lit(&NOMINAL), 22);
+        assert_eq!(first_lit(&TEMPORAL), 6, "the brief's 'about sRGB 6'");
+        assert_eq!(first_lit(&DEVICE), 2, "the firmware's 'only sRGB 0 and 1 emit nothing'");
+    }
+
+    /// Where the panel is coarser than the 8-bit hand-over and where it is
+    /// finer. Above code 38 the device shows back exactly the code it was
+    /// sent; below it codes share a level - at most four of them - and that
+    /// collapse is the only thing an art pipeline has to dither around.
+    #[test]
+    fn the_collapse_is_confined_to_the_bottom_forty_codes() {
+        let collapsed: Vec<u8> = (0..=255u8).filter(|v| DEVICE.code(*v) != *v).collect();
+        assert_eq!(collapsed.len(), 19);
+        assert_eq!(*collapsed.last().unwrap(), 38, "nothing above 38 moves");
+
+        let mut per_level = std::collections::BTreeMap::new();
+        for v in 0..=255u8 {
+            *per_level.entry(DEVICE.code(v)).or_insert(0u32) += 1;
+        }
+        assert_eq!(*per_level.values().max().unwrap(), 4, "the worst pile-up is four codes");
+    }
+
+    /// Brightness still costs light and not depth on the dithered panel, and
+    /// the old "32 levels is a dim room" reading is wrong by 205 levels.
+    #[test]
+    fn a_dim_room_is_the_same_depth_at_less_light() {
+        let full = Lut::new(DEVICE, 255);
+        let dim = Lut::new(DEVICE, 96);
+        assert!(dim.map(255) < full.map(255), "brightness 96 is dimmer");
+        assert!(
+            (oe_light(96) - 9.0 / 25.0).abs() < 1e-6,
+            "the firmware's DEFAULT_BRIGHTNESS is 9 of 25 slots"
+        );
+        assert_eq!(DEVICE.distinct_levels().0, 237);
+        assert_eq!(DIM.distinct_levels().0, 32, "the model card 066 retired");
     }
 
     /// Six bitplanes, 64 levels and the art brief's `Panel { levels: 64 }` are
