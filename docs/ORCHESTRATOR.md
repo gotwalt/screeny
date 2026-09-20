@@ -37,8 +37,9 @@ server, `cargo run --release -p screeny-studio` -> http://127.0.0.1:8787/, Tauri
 whole workspace is default members; streams to the real panel over the HTTP API and
 releases it on SIGTERM), **111** (`Link::attach` for a resolved `Device`), **112**, **066**
 (the sim dims by output-enable window like the device), **080** (the 64-rule conformance
-suite; the firmware passes 60, 4 skipped by design). Not yet verified by anyone but the
-owner: the Studio page rendered in a browser (card 121). Follow-up cards: 120, 121, 125,
+suite; the firmware passes 60, 4 skipped by design). Not yet verified by
+anyone: the Studio page rendered in a browser (no browser tooling was connected; the
+owner opening the tab is the first real render - card 121). Follow-up cards: 120, 121, 125,
 130-133, 135, 136 (**136 needs the owner**: brightness has 25 real steps and 1..=5 is
 black while `applied` echoes the value).
 
