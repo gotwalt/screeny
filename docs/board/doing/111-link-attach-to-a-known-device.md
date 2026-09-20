@@ -4,6 +4,8 @@ title: Link should be constructible from a Device, not only a Target
 type: build
 hardware: no
 depends: [011, 101]
+owner: worker-111
+branch: card/111-112-link-attach-sender-default
 ---
 
 ## Goal

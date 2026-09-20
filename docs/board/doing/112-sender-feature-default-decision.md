@@ -4,6 +4,8 @@ title: Decide whether screeny-art's `sender` feature is on by default
 type: design
 hardware: no
 depends: [101]
+owner: worker-111
+branch: card/111-112-link-attach-sender-default
 ---
 
 ## Goal
