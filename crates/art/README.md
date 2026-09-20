@@ -23,6 +23,7 @@ cargo run -p screeny-studio                      # the designer
 cargo run -p screeny-art -- list                 # pieces and their parameters
 cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
+cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.png
 cargo test -p screeny-art                        # includes the end-to-end wire tests
 
 # to a panel (use --release, the encoder is ~10x slower in a debug build)
@@ -113,9 +114,61 @@ piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireF
   preview is literally the decoded datagram.
 - The studio's four meters are the four numbers from brief section 5.
 
-Pieces that tell the time read `ctx.now` (local time of day), not the system
-clock: the studio and `pipe` pass the real time, `snapshot` simulates it, so
-clock pieces can be run faster than real time and tested.
+## Telling a run what time it is (`--time`)
+
+Pieces that tell the time read `ctx.now` (local time of day), never the system
+clock. Where that comes from is `piece::Clock`, a value the runner carries:
+`Clock::Live` reads the machine, `Clock::Pinned` pretends it was a given time
+of day when the run began and lets it run on with engine time. `snapshot` has
+always simulated the clock so a clock piece can be run faster than real time;
+since card 162 it can also be *aimed*, with `--time HH:MM[:SS]` on `snapshot`,
+`pipe` and `play`:
+
+```bash
+# from the repo root, with --release: 30 fps of the full pipeline per second of run
+cargo run --release -p screeny-art -- \
+  snapshot clocks-numerals --time 21:12 --out settled.png
+cargo run --release -p screeny-art -- \
+  snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out dancing.png
+cargo run --release -p screeny-art -- \
+  snapshot clocks-dials --time 10:09:50 --at 15 --out telling.png
+```
+
+| you want | the command |
+|---|---|
+| the numerals piece **settled on 21:12**, hands holding the time | `--time 21:12` |
+| it **mid-dance into 21:12**, two seconds from landing | `--time 21:11:20 --at 38 --seed 7` |
+| the dials piece **telling 10:10**, gathered and held | `--time 10:09:50 --at 15` |
+
+Reading those:
+
+- **The settled minute is `--time` and nothing else.** With `--time`, `--at`
+  defaults to 20 s and `--warmup` to the whole run: a clock has to be watched
+  from its first frame, and the numerals piece dances onto the minute it was
+  born on in up to about 16 s (15.4 s, the longest over 60 seeds and all
+  thirteen choreographies). At 20 s every one of them has landed and settled
+  and none has set off for the next minute. **No `--seed` either**: once the
+  hands have landed, what is on the panel is the minute, not the dance that got
+  there, and all 60 seeds give one PNG. There is a test.
+- **The run starts at the pinned time and goes forward**, so `--at` is seconds
+  after it, and `--at`/`--warmup` given explicitly still mean what they always
+  did.
+- **A dance lands exactly as the minute turns.** So the way to catch one is to
+  start before the minute and render just before it: born at 21:11:20 the piece
+  dances onto 21:11, holds, sets off again around t=31 and lands at t=40, which
+  is 21:12:00. `--at 38` is two seconds from the end of that dance. This one
+  *is* the choreography, so pin `--seed`.
+- **The pinned day is day zero, not today.** The numerals piece seeds each
+  minute's choreography from the absolute minute number, so "21:12 today" would
+  pick a different dance tomorrow. `--time` means one thing for ever.
+- **`--seed` is still the system clock by default.** Anything whose picture
+  depends on the piece's own randomness wants `--seed N` as well.
+- The pieces' `offset` parameter is unchanged: an offset in minutes, relative
+  to whatever the clock says, which is what the studio's slider wants.
+
+`snapshot::take` is the whole run - it is what the command calls and what the
+tests in [`tests/pinned_time.rs`](tests/pinned_time.rs) render through, so the
+determinism claim is checked on the code that is shipped.
 
 ## Adding a piece
 
@@ -224,6 +277,10 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   `Turned` (the digits with each clock's corner rigidly rotated by a wave).
 - Digit shapes: 0, 2, 5, 6, 9 checked against 1080p footage of the original; 1,
   3, 4, 7, 8 follow manu.ninja's table (from the studio's promotional films).
+- **To render a chosen minute**, `--time` (above): `snapshot clocks-numerals
+  --time 21:12 --out x.png` is the settled picture of 21:12, the same PNG every
+  time it is typed, whatever the seed. Before/after comparisons of this piece
+  are only comparable that way.
 - In the studio, drag "Seconds per minute" down to ~30 to see the whole cycle
   quickly, and "Choreography" to pick a dance; dances and moods are logged to
   stderr with their start times. At 60 it is a real clock on local time. Set

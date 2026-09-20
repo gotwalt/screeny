@@ -24,6 +24,68 @@ impl Ctx<'_> {
     }
 }
 
+/// Where a run's time of day comes from (card 162).
+///
+/// [`Ctx::now`] is the only clock a piece may read, so pinning it here is what
+/// makes a run of a time-telling piece repeatable: the same command draws the
+/// same picture today and tomorrow. It is a value the runner carries, not a
+/// global, so a studio player can pin a run the same way later.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Clock {
+    /// Read the machine's clock. What a live run does.
+    #[default]
+    Live,
+    /// Pretend it was this time when the run began - engine time zero - and
+    /// let it run on from there. Seconds on [`local_now`]'s scale.
+    Pinned(f64),
+}
+
+impl Clock {
+    /// The time of day at engine time `t`.
+    ///
+    /// A live clock ignores `t` and answers the machine; a pinned one answers
+    /// the pinned moment carried forward by `t`. A simulated run that steps
+    /// its own clock (a snapshot) asks once, for its first frame's `t`, and
+    /// advances from there.
+    #[must_use]
+    pub fn now(self, t: f64) -> f64 {
+        match self {
+            Clock::Live => local_now(),
+            Clock::Pinned(at_zero) => at_zero + t,
+        }
+    }
+
+    /// A time of day - `HH:MM` or `HH:MM:SS`, seconds may be fractional -
+    /// pinned **on a fixed day**, not today.
+    ///
+    /// The day has to be fixed for the promise to hold: the clock pieces seed
+    /// each minute's choreography from the absolute minute number, so "21:12
+    /// today" is a different number tomorrow and would choose a different
+    /// dance. Day zero on [`local_now`]'s scale costs nothing - no piece reads
+    /// the date - and makes `--time 21:12` mean one thing for ever.
+    ///
+    /// # Errors
+    ///
+    /// If it is not two or three colon-separated numbers, or is not a time.
+    pub fn parse(s: &str) -> Result<Clock, String> {
+        let bad = || format!("`{s}` is not a time of day; write HH:MM or HH:MM:SS");
+        let mut parts = s.split(':');
+        let h: u32 = parts.next().ok_or_else(bad)?.parse().map_err(|_| bad())?;
+        let m: u32 = parts.next().ok_or_else(bad)?.parse().map_err(|_| bad())?;
+        let sec: f64 = match parts.next() {
+            Some(s) => s.parse().map_err(|_| bad())?,
+            None => 0.0,
+        };
+        if parts.next().is_some() {
+            return Err(bad());
+        }
+        if h > 23 || m > 59 || !(0.0..60.0).contains(&sec) {
+            return Err(format!("`{s}` is not a time of day: hours 0-23, minutes 0-59, seconds 0-59"));
+        }
+        Ok(Clock::Pinned(f64::from(h * 3600 + m * 60) + sec))
+    }
+}
+
 /// The real time of day, for [`Ctx::now`].
 pub fn local_now() -> f64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
@@ -234,6 +296,42 @@ mod tests {
         assert!(p.set(SPECS, "scale", 100.0));
         assert_eq!(p.get("scale"), 4.0);
         assert!(!p.set(SPECS, "nonesuch", 1.0), "an unknown id is still refused");
+    }
+
+    // ---------------- card 162: what time is it ----------------
+
+    /// A pinned time is a time of day on **day zero**, never today. The whole
+    /// point of the flag is a command that draws the same picture tomorrow,
+    /// and the numerals piece seeds each minute's choreography from the
+    /// absolute minute number, so anchoring to today would quietly choose a
+    /// different dance every day.
+    #[test]
+    fn a_pinned_time_is_the_same_number_every_day() {
+        assert_eq!(Clock::parse("21:12"), Ok(Clock::Pinned(21.0 * 3600.0 + 12.0 * 60.0)));
+        assert_eq!(Clock::parse("00:00"), Ok(Clock::Pinned(0.0)));
+        assert_eq!(Clock::parse("23:59:59"), Ok(Clock::Pinned(86399.0)));
+        assert_eq!(Clock::parse("21:11:58.5"), Ok(Clock::Pinned(76318.5)), "seconds may be fractional");
+        // Well under today: nothing here consults the machine.
+        assert!(matches!(Clock::parse("21:12"), Ok(Clock::Pinned(s)) if s < 86400.0));
+    }
+
+    #[test]
+    fn a_pinned_clock_carries_the_moment_forward_by_engine_time() {
+        let c = Clock::parse("21:11:58").expect("a time");
+        assert_eq!(c.now(0.0), 76318.0);
+        assert_eq!(c.now(4.0), 76322.0, "four seconds in, it is 21:12:02");
+        // A live clock ignores `t` and answers the machine, which is what the
+        // unpinned snapshot, `pipe` and `play` have always done.
+        let live = Clock::Live.now(0.0);
+        assert!((live - local_now()).abs() < 5.0);
+        assert_eq!(Clock::default(), Clock::Live);
+    }
+
+    #[test]
+    fn a_thing_that_is_not_a_time_of_day_is_refused() {
+        for s in ["", "21", "21:", "9pm", "21:12:13:14", "24:00", "21:60", "-1:00", "21:12:60", "21:xx"] {
+            assert!(Clock::parse(s).is_err(), "`{s}` is not a time of day");
+        }
     }
 
     // ---------------- card 163: parameters that are lists ----------------
