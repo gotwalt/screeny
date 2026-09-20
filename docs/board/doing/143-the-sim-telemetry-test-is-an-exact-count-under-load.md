@@ -92,6 +92,81 @@ test binary is run N times in a row by name.
 
 So the failure is rarer than a loop of thirty at load 105, and hammering is not
 going to find it in a reasonable time. Switched to measuring the *margins*
-instead: a throwaway `crates/sim/tests/probe143.rs` that runs the same two
-streams, reads the counters at the 200 ms mark exactly as the test does, then
-keeps polling until they have been still for 300 ms and prints both.
+instead: a throwaway `crates/sim/tests/probe143.rs` (deleted afterwards) that
+runs the same two streams, reads the counters at the 200 ms mark exactly as the
+test does, then keeps polling until they have been still for 300 ms and prints
+both. 40 runs under the same load:
+
+| run | at the 200 ms mark | once still |
+| --- | --- | --- |
+| lossy | `rx=39 shown=39 sup=0 gaps=19` (40 of 40) | identical, 40 of 40 |
+| slow | `rx=60 shown=8 sup=52` (28) / `shown=9 sup=51` (12) | identical |
+
+**The 200 ms settle was never short**: at load 105 the counters were already
+final at the 200 ms mark in all 80 samples, and `frames_rx` was 60 of 60 in all
+40 slow runs. Both of the card's hypotheses are wrong.
+
+### The actual cause, which was already written down
+
+`docs/board/done/141-studio-follow-a-panel-that-moved.md` records the failure
+text from the one sighting anybody captured:
+
+> `screeny-sim`'s `a_sender_can_tell_network_loss_from_a_slow_device` ... failed
+> once under a full parallel `--release` suite with **`frames_dropped_superseded
+> 1, expected 0`**
+
+That is the **lossy** run, and the assertion the card did not name:
+
+```rust
+assert_eq!(lossy.frames_dropped_superseded, 0, "a lost packet is not a superseded one");
+```
+
+`frames_dropped_superseded` is bumped in `Receiver::offer_frame`
+(`crates/receiver/src/lib.rs:910`) whenever `self.pending` is already `Some` -
+that is, whenever **two datagrams land in one drain of the frame loop**. The
+lossy run injects no decode delay, so the drain is fast and the sender's 4 ms
+gap normally puts one datagram in each. One scheduling hiccup longer than 4 ms
+on the frame thread puts two in one, and the counter is 1. The assertion was a
+statement about the host's scheduler, not about the device.
+
+Reproduced the mechanism directly rather than waiting for the rare event: the
+probe run at **background QoS** (`taskpolicy -b`) against 24 spinning threads
+gave
+
+```
+PROBE lossy send_ms=69578 at200[rx=39 shown=35 sup=4 gaps=7 stale=0 rej=0]
+```
+
+**four superseded on a link with no slow device anywhere** - the old assertion
+would have failed four times over. That is the bug, in the test.
+
+### The fix
+
+`crates/sim/tests/telemetry.rs`, test only; no production code touched.
+
+- **The settle is a condition with a deadline.** After the 60 frames the faults
+  come off and one more frame goes out; the test waits (`SimHandle::wait_until`,
+  deadline `T` = 3 s, the file's own constant) for *that* frame to be the one on
+  the panel. Loopback delivers in order and the frame thread drains in order, so
+  that proves every datagram of the stream before it has been through
+  `offer_frame` and counted. It replaces `sleep(200 ms)` in both runs, and its
+  timeout message prints all six counters.
+- **Both `superseded` assertions are proportions of `frames_rx`**, not counts
+  against zero: under a quarter for the lossy run, over half for the slow one.
+  Observed 0% and 85%, and 10% at the worst starvation I could produce, so the
+  two cases stay an order of magnitude apart - the distinction the test exists
+  for is if anything sharper than it was, because it now says *how far* apart
+  they are rather than resting on a zero.
+- **`frames_rx` for the slow run is "nearly all of them" plus "and `seq_gaps`
+  saw no holes"**. Together those say "nothing was lost on the way in" without
+  asserting an OS-dependent exact number: the tail frame proves the drain
+  reached the end of the stream, so a datagram the kernel had dropped would
+  necessarily have left a hole behind it and `seq_gaps` would count it.
+- **A closing assertion states the test's own sentence in counters** -
+  `slow.frames_rx > lossy.frames_rx` and `slow.superseded > lossy.superseded` -
+  so the thing the name promises is asserted and not merely implied.
+- `fn counters(&Telemetry) -> String` prints all six on one line, and **every**
+  assertion message uses it.
+
+The rewritten test is also *faster*: 0.65-0.74 s against 1.05-1.13 s, because
+two fixed 200 ms sleeps became two conditions.
