@@ -150,3 +150,47 @@ Conflict to flag for the orchestrator: `firmware/src/tidbyt.rs` calls GPIO15
 `BOARD_ID_ADC_B`. That is also true — but only in app1 (Aug 2024), which has
 `Couldn't adc read IO13` **and** `Couldn't adc read IO15`. app0, the running image,
 has neither string. So GPIO15 is dual-purpose on this board. Detail in the doc.
+
+### 2026-09-19 — the probe binary
+
+`firmware/src/bin/gpio_probe.rs`, plus a `gpio-probe` feature and two explicit
+`[[bin]]` sections in `firmware/Cargo.toml`. The probe bin carries
+`required-features = ["gpio-probe"]`, which is what keeps it out of the normal
+build. Verified, in this order: built the probe (ELF at
+`firmware/target/xtensa-esp32-none-elf/release/gpio_probe`), then ran a plain
+`cargo build --release` — it compiled `screeny-fw` only and left the probe
+artifact's timestamp untouched. No warnings from either build.
+`espflash save-image` turns the probe ELF into a 93,360-byte application image,
+so it is a valid flashable binary. **Not flashed:** this card is `hardware: no`.
+
+API checked against the real `esp-hal =1.2.2` sources rather than memory:
+`Input::new(pin, InputConfig)`, `Input::apply_config(&InputConfig)`,
+`Input::level()`, `InputConfig::with_pull`, `AnyPin: InputPin`, `Pin::number()`,
+`Instant::now().duration_since_epoch().as_millis()`. `Input` has no
+`pin_number()`, so the pin-table assertion runs on the `AnyPin` array before the
+inputs are constructed. The async `wait_for_any_edge` / `wait_for_rising_edge`
+the gesture design leans on are real too (`gpio/asynch.rs`).
+
+GPIO12 is probed but gets **no internal pull in either phase** — the card's own
+rule is "reading it is fine, never drive it", and the benefit of pulling the
+flash-voltage strap was not worth arguing about. It is called out in the legend
+the probe prints, so the transcript explains itself.
+
+### 2026-09-19 — write-up, and a small honest edit to `tidbyt.rs`
+
+`docs/research/008-button.md`: conclusions, the static analysis with addresses
+and short disassembly excerpts, the independent web confirmation with URLs, the
+GPIO15-is-also-a-strap loose end, the probe and exactly what to ask the owner to
+do, the gesture design (thresholds table + the one-paragraph version the card
+asked for), the power-cycle fallback with its failure modes, and five proposed
+build cards. No card files written, as instructed.
+
+`firmware/src/tidbyt.rs`: `BUTTON_GPIO` stays `None`, because nothing has been
+measured on this unit — but the comment now says what the binary says, points at
+the research doc and the probe, and says which card is allowed to set it to
+`Some(15)`. `pins::BOARD_ID_ADC_B` gained a cross-reference. Comments only; the
+release build was re-run afterwards and is clean.
+
+Temp extracts (the two app partitions, a disassembly chunk and the probe image)
+lived only in the session scratch directory and were deleted. No process left
+running, no serial port opened, no camera.
