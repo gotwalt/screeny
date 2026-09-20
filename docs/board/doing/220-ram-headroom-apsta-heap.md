@@ -254,3 +254,63 @@ association, DHCP, mDNS, the decode path and whatever interrupts land on core 0.
 Stream unchanged by the move: 30 fps rx, 30 fps shown, 154-155 swaps/s, zero
 stale/decode/rejected drops, render 3,086 us against 3,081-3,147 before. Heap
 unchanged at 45,540 of 98,304 - as expected, nothing moved to the heap.
+
+### Flash 4 - the APSTA run (the one long run, 195 s)
+
+Clean. Zero WARN and zero ERROR lines in the whole run.
+
+```
+INFO - apsta-probe: stage 1, station only, 60 s before the AP goes up
+INFO - apsta-probe: stage 1 done: station-only baseline | heap used 45540 of 98304 (52764 free) | max usage 50640 | total alloc 1508912 freed 1463372
+INFO - apsta-probe: stage 2, raising open AP "screeny-4a00a4"
+INFO - apsta-probe: stage 2: APSTA mode set | heap used 48936 of 98304 (49368 free) | max usage 50640 | total alloc 1516456 freed 1467520
+INFO - apsta-probe: stage 3, AP stack at 192.168.4.1 with nothing listening
+INFO - stack: core 0 main high-water 6256 of 33472 bytes after APSTA, 26192 free
+INFO - apsta-probe: stage 3: APSTA idle | heap used 48868 of 98304 (49436 free) | max usage 53876 | total alloc 3948056 freed 3899188
+```
+
+**APSTA costs 3,328 bytes of heap.** Steady used 45,540 -> 48,868 and esp-alloc's
+all-allocations watermark 50,640 -> 53,968: the same 3,328 both ways, so the AP's
+allocations are structural rather than churn. Free at the worst instant of the
+whole run: **44,336 of 98,304**. The lowest the 5 s sampler itself ever saw was
+47,840.
+
+esp-radio's docs quote 47-57 KB for a station and 53-63 KB for an open AP. Those
+are two alternative totals, not two addends - which is the misreading that most
+threatened this whole track.
+
+The switch is graceful: station drops, receiver goes `LIVE -> HOLD` and releases
+the source lock, station re-associates, the Studio reconnects ~10 s later,
+`HOLD -> LIVE`. Stream after the switch: 30 fps rx, 30 fps shown, 154-155
+swaps/s, **zero** stale/decode/rejected drops, render 3,085-3,092 us against
+3,086 us station-only. Stack high-water unmoved by the AP.
+
+**One thing that is not explained.** RSSI was -53/-54 dBm for all 11 samples of
+stage 1 and -76..-78 dBm for all 26 samples after the switch. A 24 dB step, at
+the instant of the switch, sustained. It cost no frames, but the portal's job is
+to get a station associated from wherever the panel is sitting, and this is
+worth reproducing before anyone designs around it. Proposed as card 221.
+
+### Flash 5 - final, the device is on this branch's default build
+
+```
+INFO - display: core 1, 6 planes, 154 Hz refresh (driver), 12312 bytes/buffer, OE slots 0..=55 (cap 25), OE start 8
+INFO - device: mac [b4, 8a, 0a, 4a, 00, a4] id 4a00a4
+INFO - stack: core 0 main high-water 6304 of 37512 bytes, 30184 free (painted at boot)
+INFO - telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops stale 0 superseded 0 decode 0 rejected 0 gaps 0 | ia 33317 us jit 1142 us | decode 541 us (max 2362) | render 3086 us (max 3293 window, 3461 boot) | state 1 codec 0x10 rssi -54 bright 96 | heap 45540/98304
+```
+
+No panic, no warnings, no `apsta-probe` or `BENCH BUILD` lines - the default
+build, streaming, 30 fps, zero drops. `pgrep -fl espflash` is empty.
+
+Five flashes: the panicking probe, the fixed "before", the "after", the APSTA
+run, and the restore. Four were necessary; the first was my bug.
+
+### Conclusions written up
+
+`docs/research/009-ram-headroom.md`, conclusions first: the before/after table,
+the APSTA heap numbers, the recommended heap split (**keep 64 + 32 KB; do not
+take card 201's lever 3, and do not grow the heap either - it comes out of the
+same region `.bss` and `.stack` share**) and the ~17.1 KB `.bss` budget for
+picoserve / DHCP / DNS / the AP stack, which leaves `.stack` at ~20.4 KB against
+a measured demand of 6,304. Cards 221-226 proposed there, no card files written.
