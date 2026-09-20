@@ -56,3 +56,10 @@ the shape is that a renderer should write where the encoder will read.
 
 `grep -n copy_from_slice crates/screeny/src/main.rs` finds nothing in
 `PieceSource`, and `cargo test --workspace` is green with the same assertions.
+
+## Note from the orchestrator (2026-09-20)
+
+Card 092 took most of this card's prize from the other end: a piece's own buffer is now lent to
+the encoder (`IndexedSource` returns a borrowed `Pixels`), so the streaming path no longer copies
+and the literal acceptance grep passes. What remains (`Piece::render` into a borrowed frame) only
+helps the demos' preview and tests. Low value; do not pick up without a reason.

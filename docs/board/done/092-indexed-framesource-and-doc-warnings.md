@@ -284,3 +284,16 @@ tests across 30 targets, 0 failed, exit 0.
   `Link::send(Pixels::indexed(..))` is already exact.
 - **No `FnIndexedSource`** (a closure adapter like `FnSource`): nothing wants
   one yet, and a seam with no consumer is what card 011 deliberately avoided.
+
+### Orchestrator: merged, and run on the real panel (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-demos -p screeny-encode`:
+113 passed, 0 failed (full root run after the other workers finish).
+
+Real panel (`screeny-4a00a4`, firmware 0.2.0): `screeny clock --fps 30 --duration 30` -> 903
+frames, 30.06 fps, 0 skipped, 245 B mean, `pal4-lz 100%`, "902 indexed frames exact on the
+wire", device drops 0/0/0. `screeny fractal --seed 7 --duration 20` -> 602 frames, 30.09 fps,
+828 B mean, `pal8-lz 100%`, "601 indexed frames exact", device drops 0/1/0 (one superseded
+frame over WiFi). Panel back to HOLD afterwards. The fractal keeps the indexed door: same
+pixels, 40% fewer bytes. Cosmetic, not carded: the summary can print a p95 above the max
+(`p95 0.50 ms / max 0.11 ms`) - the p95 is a histogram bucket edge.
