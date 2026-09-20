@@ -4,7 +4,7 @@
 'use strict';
 
 const W = 64, H = 32;
-const HEADER = 48; // keep in step with studio/src/main.rs
+const HEADER = 52; // keep in step with studio/src/main.rs
 const PITCH_MM = 3; // LED pitch: the lit area is 192 x 96 mm
 
 const $ = (sel) => document.querySelector(sel);
@@ -272,7 +272,34 @@ async function start(invoke) {
   bindRadios($('#levels'), { get: () => s().levels, set: (v) => { s().levels = Number(v); pushSettings(); } });
   bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushSettings(); } });
   bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushSettings(); } });
-  bindSwitch($('#lossy-sim'), { get: () => s().lossy_sim, set: (v) => { s().lossy_sim = v; pushSettings(); } });
+  bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushSettings(); } });
+
+  // Send to panel. Everything about the link lives in screeny_art::output; this
+  // is a switch, a text box and a line of status.
+  const panelSwitch = $('#panel-send'), panelTo = $('#panel-to'), panelNote = $('#panel-note');
+  panelTo.value = localStorage.getItem('screeny.panel.to') || '';
+  const pushPanel = async () => {
+    localStorage.setItem('screeny.panel.to', panelTo.value);
+    showPanel(await call('set_panel', { on: panelSwitch.checked, to: panelTo.value }));
+  };
+  panelSwitch.addEventListener('change', pushPanel);
+  // Retarget on Enter rather than on every keystroke.
+  panelTo.addEventListener('change', () => panelSwitch.checked && pushPanel());
+
+  function showPanel(p) {
+    if (!p) { panelNote.textContent = 'Off. Nothing is being sent.'; panelNote.dataset.state = ''; return; }
+    const where = p.device || p.target;
+    const head = p.connected
+      ? `Sending to ${where} at ${p.fps.toFixed(0)} fps.`
+      : `${p.state[0].toUpperCase()}${p.state.slice(1)}: ${where}.`;
+    // frames_coalesced is not a fault: a 60 fps piece into a 30 fps panel
+    // folds half its frames away by design. Fallbacks are the number to watch.
+    const counts = `${p.frames_sent} sent, ${p.frames_coalesced} coalesced, ${p.frames_dropped} dropped.`
+      + ` Exact ${p.indexed_exact}, fallback ${p.indexed_fallback}.`;
+    panelNote.textContent = `${head} ${counts}${p.last_error ? ` Last error: ${p.last_error}` : ''}`;
+    panelNote.dataset.state = p.connected ? '' : 'warn';
+  }
+  setInterval(async () => panelSwitch.checked && showPanel(await call('panel_status')), 1000);
 
   // Limiter
   bindSwitch($('#limiter-on'), {
@@ -351,20 +378,23 @@ async function start(invoke) {
   const mColours = meter('#m-colours'), mBytes = meter('#m-bytes'), mApl = meter('#m-apl'), mDluma = meter('#m-dluma');
   const width = (el, frac) => { el.style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`; };
 
+  // Wire codec ids, spec 4. The studio shows the name the sender uses.
+  const CODECS = { 0x02: 'pal5', 0x10: 'pal8-lz', 0x11: 'pal4-lz', 0x28: 'bc1-dual', 0x7f: 'solid' };
+
   function showStats(st) {
     mColours.out.textContent = st.colours;
     width(mColours.fill, st.colours / 64);
-    mColours.root.dataset.state = st.encoding === 2 ? 'warn' : '';
-    mColours.note.textContent = [
-      'Exact at 4 bits per pixel.',
-      'Exact at 5 bits per pixel.',
-      'Too many to send exactly. The sender will encode this lossily.',
-    ][st.encoding];
+    mColours.root.dataset.state = st.exact ? '' : 'warn';
+    mColours.note.textContent = st.exact
+      ? 'Sent exactly: every pixel reaches the panel as drawn.'
+      : 'Too many to send exactly. The encoder is quantising this frame.';
 
     mBytes.out.textContent = st.bytes;
     mBytes.of.textContent = `of ${boot.payload_bytes} bytes`;
     width(mBytes.fill, st.bytes / boot.payload_bytes);
-    mBytes.root.dataset.state = st.encoding === 2 ? 'warn' : '';
+    mBytes.root.dataset.state = st.exact ? '' : 'warn';
+    // Measured, not estimated: this is what the encoder really produced.
+    mBytes.note.textContent = `${CODECS[st.codec] || `codec ${st.codec}`}, measured.`;
 
     const cap = s().limiter.apl_cap;
     const limiting = st.gain < 0.995;
@@ -436,13 +466,14 @@ async function start(invoke) {
             t: dv.getFloat32(4, true),
             colours: dv.getUint32(8, true),
             bytes: dv.getUint32(12, true),
-            encoding: dv.getUint32(16, true),
-            apl: dv.getFloat32(20, true),
-            aplIn: dv.getFloat32(24, true),
-            dluma: dv.getFloat32(32, true),
-            dlumaPeak: dv.getFloat32(36, true),
-            gain: dv.getFloat32(40, true),
-            fps: dv.getFloat32(44, true),
+            codec: dv.getUint32(16, true),
+            exact: dv.getUint32(20, true) !== 0,
+            apl: dv.getFloat32(24, true),
+            aplIn: dv.getFloat32(28, true),
+            dluma: dv.getFloat32(36, true),
+            dlumaPeak: dv.getFloat32(40, true),
+            gain: dv.getFloat32(44, true),
+            fps: dv.getFloat32(48, true),
           });
         }
       }

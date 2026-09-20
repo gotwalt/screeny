@@ -24,7 +24,7 @@ use screeny_proto::{dec, IndexedFrame, Rgb888Frame, NPIX};
 pub const PAYLOAD_BYTES: u32 = screeny_proto::MAX_PIXEL_PAYLOAD as u32;
 
 /// What the encoder did with one frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Measured {
     /// Wire codec id (spec 4). [`Measured::codec_name`] puts it in words.
     pub codec: u8,
@@ -43,12 +43,6 @@ impl Measured {
     #[must_use]
     pub fn codec_name(&self) -> &'static str {
         codec_name(self.codec)
-    }
-}
-
-impl Default for Measured {
-    fn default() -> Self {
-        Measured { codec: 0, bytes: 0, exact: false, colours: 0 }
     }
 }
 

@@ -209,3 +209,51 @@ card's code: it is macOS Local Network permission for processes this session sta
 mDNS browsing works (the name resolved to the right host and port); only the unicast
 that follows is dropped. Consequence for the real-panel step: see the note at the end
 of this log.
+
+### Step 3 - the studio sends, and its meters stop estimating
+
+Deliberately thin, because card 105 deletes Tauri. Everything real is in `crates/art`
+and the studio holds a field and four lines:
+
+- `Engine.panel: Option<SenderOutput>`, set by a `set_panel(on, to)` command; `tick`
+  sends the same `WireFrame` the preview came from and refreshes the meter's budget and
+  codec set from `link.limits()` once a second. `panel_status()` returns
+  `screeny_art::output::PanelStatus` - which is defined in `crates/art`, derives
+  `Serialize` there, and so crosses the IPC boundary and will cross card 105's HTTP one
+  without changing.
+- Deferred, not blocking: turning the switch on must not freeze the window for a
+  three-second browse, and a panel that is off now is the same case as one unplugged
+  later. Turning it off drops the link, which sends `FINAL`.
+- The frame packet header grows 48 -> 52 bytes: `encoding: u32` (a three-valued enum)
+  becomes `codec: u32` + `exact: u32`. `ui/main.js`'s offsets moved with it.
+- `#lossy-sim` becomes `#codec-preview` ("Show the frame after the real codec"), and
+  the frame-size meter's note - which read **"Estimate. The codec is not final."** -
+  now reads the codec's name and the word "measured".
+- A "Panel" section in the inspector: a switch, a name-or-address box (remembered in
+  `localStorage`), and one line of status - link state, device, fps, sent / coalesced /
+  dropped, exact / fallback. Default **off**; nothing is sent until it is turned on and
+  a target typed.
+
+Also `[profile.dev.package.screeny-encode]` and `screeny-proto` at `opt-level = 2` in
+the workspace manifest: the pipeline now encodes *and* decodes every frame, and a
+debug-built encoder is about ten times slower, which would eat the whole frame period
+in a `cargo run -p screeny-studio`.
+
+`cargo build -p screeny-studio` clean - Tauri builds fine in this environment, no
+excuse needed. `cargo test --release --no-fail-fast` at the workspace root: all green,
+no failures; `crates/screeny`'s timing-sensitive `tests/pacing.rs` passed 4/4 in 18.5 s
+first time, so card 093's flake did not appear.
+
+One wrinkle to hand over: `crates/art/tests/sender.rs` is `#![cfg(feature = "sender")]`,
+so a plain `cargo test` reports "0 tests" for it rather than running this card's
+acceptance. That follows the card's own wording ("check both ... with and without the
+feature"), and `gpu` is default-on in the same crate, so making `sender` default-on
+would be consistent - but it would put mDNS and sockets in every build of
+`screeny-art`. Left as it is, documented in `crates/art/README.md`, and flagged here so
+the next person runs `cargo test --release -p screeny-art --features sender`.
+
+`crates/art/README.md` rewritten where it was wrong: the pipeline diagram, a new
+"Sending to a panel" section, and the "Provisional assumptions" table, which had two
+rows about `budget.rs` and closed with "When the sender library exists, it becomes an
+`Output` impl and replaces `budget.rs`'s estimates with real encoded sizes." It does
+now.
