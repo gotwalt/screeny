@@ -926,6 +926,15 @@ impl Player {
         }
     }
 
+    /// Card 164: what this player's link has put on the wire and taken off it,
+    /// over the life of the link object. Read once a second by the supervisor,
+    /// which banks the difference per device; nothing on the frame path is
+    /// involved.
+    #[must_use]
+    pub fn link_traffic(&self) -> screeny::LinkTraffic {
+        self.slot().out.as_ref().map_or_else(Default::default, |o| o.link().stats().traffic)
+    }
+
     /// The brightness policy, and what the device last said it applied.
     ///
     /// Compared against the device's own telemetry once a second, which is how

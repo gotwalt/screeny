@@ -136,6 +136,12 @@ async fn supervise(st: &AppState) {
     for player in st.players.all() {
         aim_at_device(st, &player);
         let device = player.device();
+        // Card 164: the frame path's counters, read once a second off the link
+        // the supervisor is already holding. The render loop does not know
+        // this exists.
+        if device != UNBOUND {
+            st.devices.metered_link(&device, player.link_traffic());
+        }
         match player.supervise() {
             Some(job) => jobs.push(job),
             // The link noticing a new session is not the only way a panel
@@ -165,6 +171,12 @@ async fn supervise(st: &AppState) {
     for job in jobs {
         apply_brightness(st, &job).await;
     }
+
+    // **Card 164: the rate is worked out here and nowhere else.** One pass,
+    // after everything this tick has added, so every browser reading
+    // `/api/v1/status` gets the same number and no page has to divide two
+    // counters it fetched at two different moments.
+    st.devices.sample_traffic();
 }
 
 /// Apply the brightness policy, and record what the device actually did with
@@ -172,7 +184,17 @@ async fn supervise(st: &AppState) {
 async fn apply_brightness(st: &AppState, job: &BrightnessJob) {
     let Some(addr) = st.devices.get(&job.device).and_then(|d| d.control_addr()) else { return };
     let level = job.level;
-    let done = tokio::task::spawn_blocking(move || devices::control(addr).and_then(|mut c| c.set_brightness(level).map_err(|e| e.to_string()))).await;
+    let done = tokio::task::spawn_blocking(move || {
+        devices::control_call(addr, |c| c.set_brightness(level).map_err(|e| e.to_string()))
+    })
+    .await;
+    let done = match done {
+        Ok((cost, out)) => {
+            st.devices.metered_control(&job.device, cost);
+            Ok(out)
+        }
+        Err(e) => Err(e),
+    };
     match done {
         Ok(Ok(applied)) => {
             if let Some(p) = st.players.get(&job.device) {
@@ -401,7 +423,18 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
                 fail(backoff, &id);
                 continue;
             };
-            match tokio::task::spawn_blocking(move || devices::identify_at(addr)).await {
+            let asked = tokio::task::spawn_blocking(move || devices::identify_at_counted(addr)).await;
+            // Card 164: the GET_INFO is control traffic with this panel
+            // whether or not it answered. Recorded against the id it is known
+            // by now; adopting a real id below carries the record over.
+            let asked = match asked {
+                Ok((cost, out)) => {
+                    st.devices.metered_control(&id, cost);
+                    Ok(out)
+                }
+                Err(e) => Err(e),
+            };
+            match asked {
                 Ok(Ok(dev)) => {
                     let (new_id, renamed) = st.devices.resolved(&dev);
                     if let Some(from) = renamed {
@@ -427,7 +460,18 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
             fail(backoff, &id);
             continue;
         };
-        match tokio::task::spawn_blocking(move || devices::control(addr).and_then(|mut c| c.telemetry().map_err(|e| e.to_string()))).await {
+        let polled = tokio::task::spawn_blocking(move || {
+            devices::control_call(addr, |c| c.telemetry().map_err(|e| e.to_string()))
+        })
+        .await;
+        let polled = match polled {
+            Ok((cost, out)) => {
+                st.devices.metered_control(&id, cost);
+                Ok(out)
+            }
+            Err(e) => Err(e),
+        };
+        match polled {
             Ok(Ok(t)) => {
                 st.devices.heard(&id, &t);
                 backoff.remove(&id);
@@ -517,7 +561,16 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
         // the telemetry poll is what finds out where this device is.
         let Some(addr) = record.http_addr(st.cfg.device_http_port) else { continue };
 
-        let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status(addr, crate::devhttp::TIMEOUT)).await;
+        let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status_counted(addr, crate::devhttp::TIMEOUT)).await;
+        // Card 164: the HTTP path's bytes, recorded before the reply is
+        // looked at - a read that failed still cost what it cost.
+        let read = match read {
+            Ok((cost, out)) => {
+                st.devices.metered_http(&id, cost.out, cost.inbound);
+                Ok(out)
+            }
+            Err(e) => Err(e),
+        };
         match read {
             Ok(Ok(reply)) => {
                 // Said on the first read ever, and again when a device starts

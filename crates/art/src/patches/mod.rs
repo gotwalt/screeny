@@ -13,10 +13,12 @@ mod metaballs;
 mod overland;
 mod plasma;
 mod testcard;
+pub(crate) mod vesta;
 
 pub static ALL: &[PatchDef] = &[
     clocks::DEF,
     clocks::dials::DEF,
+    vesta::DEF,
     plasma::DEF,
     metaballs::DEF,
     flock::DEF,

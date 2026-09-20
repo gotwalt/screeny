@@ -26,6 +26,12 @@
 //!   refused rather than read.
 //! * **The SSID in the answer is never logged.** [`Fault`] carries no payload
 //!   bytes, and [`crate::devices::DeviceFacts`] redacts its SSID in `Debug`.
+//! * **It says what it cost** (card 164). [`get_status_counted`] hands back the
+//!   bytes written and the bytes read, *however the read went* - a request that
+//!   timed out still went out, and a reply that turned out to be somebody
+//!   else's web server still came down the wire. Bytes on the socket and
+//!   nothing more: TCP's retransmissions, its ACKs and its handshake are
+//!   invisible from user space, so no overhead is guessed at here.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -85,6 +91,19 @@ impl std::fmt::Display for Fault {
     }
 }
 
+/// What one read put on the socket and took off it (card 164).
+///
+/// Bytes only, and only the ones this process handed to `write` or got back
+/// from `read`. There is no packet count because there is no packet: a stream
+/// socket does not tell user space how the bytes were carried.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cost {
+    /// Request bytes written.
+    pub out: u64,
+    /// Reply bytes read, head and body together.
+    pub inbound: u64,
+}
+
 /// Read `GET /api/v1/status` from the device at `addr`.
 ///
 /// Blocking, and bounded by `patience` end to end.
@@ -93,6 +112,22 @@ impl std::fmt::Display for Fault {
 ///
 /// [`Fault`], which says whether the device simply has no HTTP server.
 pub fn get_status(addr: SocketAddr, patience: Duration) -> Result<StatusReply, Fault> {
+    get_status_counted(addr, patience).1
+}
+
+/// [`get_status`], saying what it cost on the wire (card 164).
+///
+/// The [`Cost`] comes back whether the read worked or not, which is the point:
+/// a panel that is refusing connections costs a few bytes every ten seconds,
+/// and a studio that could not say so would be under-reporting exactly the
+/// case somebody is looking at the page about.
+pub fn get_status_counted(addr: SocketAddr, patience: Duration) -> (Cost, Result<StatusReply, Fault>) {
+    let mut cost = Cost::default();
+    let out = read_status(addr, patience, &mut cost);
+    (cost, out)
+}
+
+fn read_status(addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<StatusReply, Fault> {
     let started = Instant::now();
     let left = || patience.checked_sub(started.elapsed()).filter(|d| !d.is_zero());
 
@@ -115,9 +150,13 @@ pub fn get_status(addr: SocketAddr, patience: Duration) -> Result<StatusReply, F
     );
     let deadline = left().ok_or_else(|| Fault::reached("ran out of time connecting"))?;
     stream.set_write_timeout(Some(deadline)).map_err(|e| Fault::reached(e.to_string()))?;
+    // Counted before the write is attempted: a head that went halfway out
+    // still went halfway out, and the honest figure is the one that does not
+    // depend on the far end having been polite about it.
+    cost.out += head.len() as u64;
     stream.write_all(head.as_bytes()).map_err(|e| Fault::reached(format!("asking for its status: {e}")))?;
 
-    let raw = read_reply(&mut stream, &left)?;
+    let raw = read_reply(&mut stream, &left, cost)?;
     let (status, body) = split_reply(&raw)?;
     if status != 200 {
         // A 404 is something else's web server on that address; anything else
@@ -135,7 +174,7 @@ pub fn get_status(addr: SocketAddr, patience: Duration) -> Result<StatusReply, F
 
 /// Read until the server closes, or until `Content-Length` is satisfied, or
 /// until [`MAX_REPLY`] - whichever comes first.
-fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>) -> Result<Vec<u8>, Fault> {
+fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost: &mut Cost) -> Result<Vec<u8>, Fault> {
     let mut raw: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
@@ -151,6 +190,9 @@ fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>) -> Re
             Err(e) => return Err(Fault::reached(format!("reading its status: {e}"))),
         };
         raw.extend_from_slice(&chunk[..n]);
+        // Every byte read, including the ones of a reply that is about to be
+        // refused for being too long: they crossed the network either way.
+        cost.inbound += n as u64;
         if raw.len() > MAX_REPLY {
             return Err(Fault::absent("its HTTP port sent more than a status reply can be"));
         }

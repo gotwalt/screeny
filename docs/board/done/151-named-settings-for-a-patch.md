@@ -360,3 +360,12 @@ right. Nothing in `firmware/`, `crates/proto`, `crates/receiver`, `crates/sim`,
 `crates/device-api`, `crates/settings` or the spec was touched.
 
 No processes left: the simulator and the studio were both stopped and `ps` is clear.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed the scope and, before merging, ran this branch's build against a defanged copy
+of workbench's live v4 state (loopback, `on:false`): "migrated to v5; the v4 file is kept
+as state.v4.json", the backup byte-identical, the owner's `clocks-dials` (seed 4242, four
+tuned parameters, speed 0.55) intact and shown as **Default, modified** with no settings
+yet - which is the truth, and one "Save as" away from being his first named setting.
+Copies deleted. Merged `--no-ff`; root suite 818 passed, 0 failed; clippy silent.
