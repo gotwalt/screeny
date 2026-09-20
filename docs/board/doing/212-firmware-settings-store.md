@@ -130,3 +130,50 @@ other monitors. If a build does not boot, reflash the last good build before dia
   `FAILED`.
 
 ## Log
+
+### Baseline, before any change (worker-212)
+
+Branch `card/212-firmware-settings-store`, based on `5525f10` (which contains
+`0d3e952`, so `crates/settings`, `crates/provision`, research 006-009, card 220's
+`ConstStaticCell` framebuffers and the rollback bootloader are all present).
+
+`xtensa-esp32-elf-size -A` on the unmodified default build:
+
+| section | bytes |
+|---|---|
+| `.rwtext` | 11812 |
+| `.data` | 56124 |
+| `.bss` | 102424 |
+| `.stack` | 37512 |
+| `.text` | 531237 |
+| `.rodata` | 73176 |
+
+Flash image (`espflash save-image --flash-size 8mb --partition-table
+firmware/partitions.csv`): **768,176 bytes** of the 2 MB `ota_0` slot (36.63%).
+
+The 60 s stack line, **before**, quoted from the bench log of the build this branch
+is based on (`captures/card226-scan-all-channels.log`, i.e. commit `0d3e952`,
+flashed by the orchestrator) rather than from a flash of my own - the sources are
+byte-identical, so a flash to re-measure an unchanged build would have been one of
+my six for nothing:
+
+```
+stack: core 0 main high-water 6000 of 37512 bytes, 30488 free (painted at boot)
+```
+
+A copy of that ELF is kept outside the worktree as the known-good image to reflash
+if one of my builds does not boot.
+
+### Owner decision 2026-09-20, relayed by the orchestrator
+
+Compiled-in WiFi credentials are going away; they survive only as an explicit bench
+override behind a new cargo feature `bench-wifi`, **off by default**. With the
+feature off `build.rs` must not even look for credentials and the constants must not
+exist, so any use of them fails to compile. With it on they (a) seed an *empty* store
+at boot through the normal store path and (b) are the spec 8.3 step-2 fallback after
+stored credentials have failed three times. A default build has no step 2: stored
+credentials, then the failure idle screen with periodic retries (the portal is card
+223). This matches `crates/provision`'s `has_builtin: false` model. The bench flow is
+therefore: flash a `bench-wifi` build once to seed the store, then flash the **default**
+build and watch it join from the store alone - which is also the card's acceptance and
+the state the device is left in.
