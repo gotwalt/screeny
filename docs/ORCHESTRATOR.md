@@ -69,9 +69,13 @@ allows a workbench reboot to prove the last line of its acceptance.
 In flight: **160** (clocks-numerals: resting dials read as colons; the owner wants them
 visible but unobtrusive, format stays four digits with no punctuation; cards 162-164) and
 **165** (the Studio remembers each piece's settings; state schema v2 with a migration;
-166-169). Waiting for the owner: card 144 (does aiming the design view at a panel take it
-over from its player, or is it refused?). Worth doing next: 161 (narrow-window layout, from
-the owner's first screenshot), 145 (say in the UI when there is no GPU), 146, 147.
+166-169; one shared memory, not per context). **Next big one: 170** - the owner corrected the
+product model (2026-09-19): a Studio is attached to one panel and the page is a live window
+onto what that panel shows; no preview/player split, no promote step. 170 unifies them, folds
+the dashboard into the page and makes it work on a phone (absorbs 161; 144 is gone). Launch
+it after 165 merges - both rewrite `crates/studio`. Then 145 (say when there is no GPU), 146, 147.
+The workbench reboot for card 107 is the owner's to run (`ssh workbench.local sudo systemctl
+reboot`): this session's permission guard refuses it, and that is fine.
 
 **Next up, in order:** 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
