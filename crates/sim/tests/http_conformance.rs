@@ -216,7 +216,11 @@ fn the_sticky_failed_result_stays_off_the_status_route() {
         http::Summary {
             passed: 1,
             failed: 0,
-            skipped: 0
+            skipped: 0,
+            // Card 236: the simulator's server has a real listen backlog, so a
+            // connect is never refused against it. The field is here to prove
+            // that, not just to compile.
+            refused: 0
         },
         "rule 8 should pass: the link is up, whatever the last trial did"
     );

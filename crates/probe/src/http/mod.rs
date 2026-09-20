@@ -498,6 +498,16 @@ pub struct Summary {
     pub failed: usize,
     /// Rules that could not be asked.
     pub skipped: usize,
+    /// Connects the device **refused** (card 236), retried or not.
+    ///
+    /// Not a failure and not a pass: it is the one number that says how often
+    /// the server had no worker in `accept` when a request arrived. smoltcp has
+    /// no listen backlog, so that is a RST on the wire and the client knows
+    /// immediately; [`client::CONNECT_TRIES`] means a rule survives it, and
+    /// this field means surviving it does not hide it. A run where every rule
+    /// passes and this is 14 is a different device from one where it is 0, and
+    /// before this field the two printed the same last line.
+    pub refused: usize,
 }
 
 impl Summary {
@@ -653,6 +663,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         passed: 0,
         failed: 0,
         skipped: 0,
+        refused: 0,
     };
     let total = rules.len();
     for (i, r) in rules.iter().enumerate() {
@@ -715,9 +726,25 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             s.failed += 1;
         }
     }
+    // Card 236: the refusals go in the **last line**, whether they cost a rule
+    // or not. The count is read after the restore, because the restore's own
+    // requests can be refused too, and it is read off `cx.http` - every clone
+    // shares the counter.
+    s.refused = cx.http.connect_refusals() as usize;
     println!(
-        "http conformance: {} passed, {} failed, {} skipped",
-        s.passed, s.failed, s.skipped
+        "http conformance: {} passed, {} failed, {} skipped, {} connects refused{}",
+        s.passed,
+        s.failed,
+        s.skipped,
+        s.refused,
+        if s.refused == 0 {
+            String::new()
+        } else {
+            format!(
+                " (retried up to {} times each; the device had no worker in accept)",
+                client::CONNECT_TRIES
+            )
+        }
     );
     Ok(s)
 }

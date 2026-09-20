@@ -26,10 +26,16 @@
 //!   threads, so that is true by construction;
 //! * `Connection: close` on every request, one request per connection;
 //! * a connect timeout far longer than that 1 s retransmit, so a *slow*
-//!   connect is never read as a failure.
+//!   connect is never read as a failure;
+//! * a **refused** connect is retried and counted (card 236). Card 227's
+//!   second worker made the dropped-SYN case rare and turned it into the
+//!   refused-SYN case instead: two workers busy is a RST, not silence, and the
+//!   client learns immediately. See [`CONNECT_TRIES`].
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long to wait for the TCP handshake.
@@ -37,6 +43,30 @@ use std::time::{Duration, Instant};
 /// Generously longer than the 1 s SYN retransmit a busy one-worker firmware
 /// costs (card 222): waiting a second is the device behaving, not failing.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How many times to try the TCP handshake when it is **refused**.
+///
+/// A refusal is not the same failure as a timeout, and card 236 is why it has
+/// its own handling. smoltcp has no listen backlog: a SYN that arrives while
+/// neither of the device's two HTTP workers is in `accept` is answered with a
+/// RST rather than queued, and the client sees `Connection refused` at once -
+/// macOS does not retransmit a SYN that was *answered*, the way it does one
+/// that was dropped. There is nothing wrong with the device in that moment; it
+/// is simply busy, and a suite that reports it as a failure is measuring the
+/// bench's timing rather than the firmware's conformance.
+///
+/// So the connect is retried - and **counted**, which is the more important
+/// half. [`Client::connect_refusals`] is reported in the suite's last line, so
+/// "the run passed" and "the device refused eleven connections on the way" are
+/// two facts the orchestrator sees rather than one that hides the other.
+pub const CONNECT_TRIES: usize = 3;
+
+/// How long to wait between a refused connect and the next try.
+///
+/// Long enough for a worker that was closing to finish and call `accept`
+/// (which, after card 236's firmware, is bounded by the device); short enough
+/// that three tries add at most 200 ms to a rule.
+pub const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// How long a request may be silent once connected.
 pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -143,6 +173,12 @@ impl Res {
 pub struct Client {
     addr: SocketAddr,
     host: String,
+    /// How many connects this client has had **refused** (card 236).
+    ///
+    /// Shared between clones on purpose: the suite hands a clone to its restore
+    /// guard, and the number the last line reports has to be the run's, not one
+    /// arbitrary copy's.
+    refusals: Arc<AtomicU32>,
 }
 
 impl Client {
@@ -156,7 +192,41 @@ impl Client {
         Client {
             addr,
             host: host.into(),
+            refusals: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    /// How many connects were refused, over every clone of this client.
+    ///
+    /// Counts every refusal, including the ones a retry recovered from - that
+    /// is the number card 236 wants visible. A rule whose [`CONNECT_TRIES`] are
+    /// all refused still fails, and contributes all of them to this count.
+    #[must_use]
+    pub fn connect_refusals(&self) -> u32 {
+        self.refusals.load(Ordering::Relaxed)
+    }
+
+    /// One TCP connection, retrying a **refusal** and nothing else.
+    ///
+    /// A timeout, an unreachable host or a reset are all left to fail on the
+    /// first try: they say something is wrong. Only `ECONNREFUSED` means "the
+    /// server is there and had no worker free", which is a wait, not a fault.
+    fn connect(&self) -> Result<TcpStream, String> {
+        let mut last = String::new();
+        for try_n in 1..=CONNECT_TRIES {
+            match TcpStream::connect_timeout(&self.addr, CONNECT_TIMEOUT) {
+                Ok(s) => return Ok(s),
+                Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+                    self.refusals.fetch_add(1, Ordering::Relaxed);
+                    last = format!("connect {}: {e} (refused, try {try_n}/{CONNECT_TRIES})", self.addr);
+                    if try_n < CONNECT_TRIES {
+                        std::thread::sleep(CONNECT_RETRY_DELAY);
+                    }
+                }
+                Err(e) => return Err(format!("connect {}: {e}", self.addr)),
+            }
+        }
+        Err(last)
     }
 
     /// The address requests go to.
@@ -252,8 +322,7 @@ impl Client {
 
     fn exchange(&self, wire: &[u8]) -> Result<(Vec<u8>, Duration), String> {
         let t0 = Instant::now();
-        let mut s = TcpStream::connect_timeout(&self.addr, CONNECT_TIMEOUT)
-            .map_err(|e| format!("connect {}: {e}", self.addr))?;
+        let mut s = self.connect()?;
         s.set_read_timeout(Some(IO_TIMEOUT))
             .and_then(|()| s.set_write_timeout(Some(IO_TIMEOUT)))
             .map_err(|e| format!("timeouts: {e}"))?;
@@ -403,6 +472,39 @@ mod tests {
         assert_eq!(content_length(b"HTTP/1.1 200 OK\r\ncontent-length: 7"), Some(7));
         assert_eq!(content_length(b"HTTP/1.1 200 OK\r\nContent-Length:  7 "), Some(7));
         assert_eq!(content_length(b"HTTP/1.1 200 OK"), None);
+    }
+
+    /// Card 236: a refused connect is tried [`CONNECT_TRIES`] times, every one
+    /// of them is counted, and the last error says so.
+    ///
+    /// The port is one a listener held and let go, which is the one way to make
+    /// `ECONNREFUSED` happen on demand: nothing is listening, so the host's own
+    /// stack answers the SYN with a RST.
+    #[test]
+    fn a_refused_connect_is_retried_and_every_refusal_is_counted() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        drop(listener);
+
+        let c = Client::new(addr, addr.to_string());
+        assert_eq!(c.connect_refusals(), 0);
+
+        let t0 = Instant::now();
+        let err = c.get("/api/v1/status").expect_err("nothing is listening");
+        assert!(err.contains("refused"), "{err}");
+        assert!(
+            err.contains(&format!("{CONNECT_TRIES}/{CONNECT_TRIES}")),
+            "the last try is named: {err}"
+        );
+        assert_eq!(c.connect_refusals(), CONNECT_TRIES as u32);
+        assert!(
+            t0.elapsed() >= CONNECT_RETRY_DELAY * (CONNECT_TRIES as u32 - 1),
+            "the tries are spaced out"
+        );
+
+        // A clone shares the count, because the suite hands one to its restore
+        // guard and the last line has to report the run's total.
+        assert_eq!(c.clone().connect_refusals(), CONNECT_TRIES as u32);
     }
 
     #[test]
