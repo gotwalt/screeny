@@ -49,3 +49,13 @@ The check fails if `main.js` stops drawing frames, and it runs in the normal tes
 suite or is one documented command away from it.
 
 ## Log
+
+### Note from the orchestrator (2026-09-20, after card 198)
+
+`ui/main.js` no longer exists. The front end is two screens over one shared module:
+`index.html` + `picture.js` at `/`, `panel.html` + `panel.js` at `/panel`, and `common.js`
+(the socket, the status poll, formatting, the sliders, the one judgement of what the panel
+is doing). `crates/studio/tests/ui.rs` cross-checks ids per pair and holds `common.js` to
+reaching for no element but `#notice`. Whatever this card builds has to check both screens;
+card 198's Log lists what its worker verified by hand in Chrome and what it could not (the
+canvas: the extension's window is a hidden tab, so no frame is ever drawn there).
