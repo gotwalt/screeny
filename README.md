@@ -27,7 +27,7 @@ Details: `docs/research/005-end-to-end.md`.
 | `crates/probe` | `screeny-probe`, bench instrument: the wire-level conformance suite, paced vector streams. A library too, so `crates/sim`'s tests drive the same sender, encoders and rules. |
 | `firmware/` | The ESP32 firmware (separate cargo project, `esp` toolchain). |
 | `crates/art` | The generative art system: pieces, panel-aware pipeline, headless `screeny-art` binary. The primary source of frames. |
-| `crates/studio` | Screeny Studio: an HTTP + WebSocket server with the UI built in. Design pieces in a browser and stream them to a panel; see `docs/design/studio-vision.md`. |
+| `crates/studio` | Screeny Studio: an HTTP + WebSocket server with the UI built in. `/` designs pieces in a browser, `/dashboard` says what each panel is playing and changes it. Owns what plays where across restarts; see `docs/design/studio-vision.md`. |
 | `docs/design/` | **Source of truth**: `protocol-v1.md`, `architecture.md`, `generative-art-brief.md`; `deployment.md` for running the studio as a service. |
 | `docs/research/` | How we got here: stack choice, codec lab, transport, bring-up, end-to-end results. |
 | `docs/board/` | Kanban: `backlog/`, `doing/`, `review/`, `done/`, `parked/`. See `docs/README.md`. |

@@ -6,21 +6,29 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-screeny-studio - design generative pieces for the panel, in a browser
+screeny-studio - play generative pieces on the panels, and design them in a browser
 
-    screeny-studio [--listen ADDR] [--ui-dir DIR]
+    screeny-studio [--listen ADDR] [--state-dir DIR] [--ui-dir DIR] [--no-discover]
 
-    --listen ADDR   address to serve on (default 127.0.0.1:8787). Anything
-                    other than a loopback address puts the studio - and the
-                    panel it is streaming to - in reach of the whole network,
-                    with no password: see crates/studio/README.md
-    --ui-dir DIR    serve the UI from this directory instead of from the
-                    binary, so an edit needs a reload rather than a rebuild
-    -h, --help      this
+    --listen ADDR    address to serve on (default 127.0.0.1:8787, env
+                     SCREENY_LISTEN). Anything other than a loopback address
+                     puts the studio - and the panels it is streaming to - in
+                     reach of the whole network, with no password: see
+                     crates/studio/README.md
+    --state-dir DIR  where to keep what plays where (default ./.screeny-studio,
+                     env SCREENY_STATE_DIR). One small file, written
+                     atomically; the studio resumes from it after a restart
+    --ui-dir DIR     serve the UI from this directory instead of from the
+                     binary, so an edit needs a reload rather than a rebuild
+    --no-discover    do not browse for panels; use configured addresses only
+    -h, --help       this
+
+    SCREENY_STUDIO_FAULTS=1 also offers two pieces that misbehave on purpose
+    (fault-panic, fault-stall), for watching the containment work.
 ";
 
 fn main() -> ExitCode {
-    let cfg = match parse(std::env::args().skip(1)) {
+    let cfg = match parse(std::env::args().skip(1), &from_env) {
         Ok(Some(cfg)) => cfg,
         Ok(None) => {
             print!("{USAGE}");
@@ -55,6 +63,15 @@ fn main() -> ExitCode {
         if let Some(dir) = &cfg.ui_dir {
             println!("studio: serving the UI from {} (reload to see an edit)", dir.display());
         }
+        if let Some(dir) = &cfg.state_dir {
+            println!("studio: state in {}", dir.display());
+        }
+        if !cfg.discover {
+            println!("studio: not browsing for panels; configured addresses only");
+        }
+        if cfg.fault_pieces {
+            println!("studio: the fault pieces are offered (SCREENY_STUDIO_FAULTS=1)");
+        }
         // Ctrl-C and SIGTERM stop cleanly, which releases the panel at once
         // instead of leaving it on the last frame until its stream timeout.
         studio.stop_on_signal();
@@ -77,9 +94,23 @@ fn shown(addr: SocketAddr) -> String {
     }
 }
 
+/// The state directory a local run uses when nothing says otherwise. Card 107
+/// mounts a volume at `/data` and sets `SCREENY_STATE_DIR` instead.
+const DEFAULT_STATE_DIR: &str = ".screeny-studio";
+
 /// `Ok(None)` means `--help` was asked for.
-fn parse(args: impl Iterator<Item = String>) -> Result<Option<Config>, String> {
-    let mut cfg = Config::default();
+///
+/// `env` is the environment to fall back on, passed in so the tests can give
+/// their own rather than mutating the process's.
+fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<Config>, String> {
+    // Flags beat the environment, the environment beats the default.
+    let mut cfg = Config { discover: true, ..Config::default() };
+    if let Some(v) = env("SCREENY_LISTEN") {
+        cfg.listen = resolve(&v).map_err(|e| e.replace("--listen", "SCREENY_LISTEN"))?;
+    }
+    cfg.state_dir = Some(PathBuf::from(env("SCREENY_STATE_DIR").unwrap_or_else(|| DEFAULT_STATE_DIR.to_string())));
+    cfg.fault_pieces = env("SCREENY_STUDIO_FAULTS").as_deref() == Some("1");
+
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -89,6 +120,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Config>, String> {
                 let v = value()?;
                 cfg.listen = resolve(&v)?;
             }
+            "--state-dir" => {
+                let v = value()?;
+                cfg.state_dir = Some(PathBuf::from(v));
+            }
+            "--no-discover" => cfg.discover = false,
             "--ui-dir" => {
                 let v = value()?;
                 let dir = PathBuf::from(&v);
@@ -101,6 +137,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Config>, String> {
         }
     }
     Ok(Some(cfg))
+}
+
+fn from_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
 /// `--listen` takes `HOST:PORT`, or a bare port for the usual local case.
@@ -119,7 +159,52 @@ mod tests {
     use super::*;
 
     fn parse_args(args: &[&str]) -> Result<Option<Config>, String> {
-        parse(args.iter().map(|s| (*s).to_string()))
+        parse(args.iter().map(|s| (*s).to_string()), &|_| None)
+    }
+
+    fn parse_env(args: &[&str], env: &[(&str, &str)]) -> Result<Option<Config>, String> {
+        let env: Vec<(String, String)> = env.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        parse(args.iter().map(|s| (*s).to_string()), &move |k| {
+            env.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone())
+        })
+    }
+
+    /// The order the orchestrator asked for: a flag beats the environment,
+    /// and the environment beats the default.
+    #[test]
+    fn a_flag_beats_the_environment_which_beats_the_default() {
+        let cfg = parse_env(&[], &[]).unwrap().unwrap();
+        assert_eq!(cfg.listen.to_string(), "127.0.0.1:8787");
+        assert_eq!(cfg.state_dir.as_deref().map(std::path::Path::to_string_lossy).as_deref(), Some(DEFAULT_STATE_DIR));
+        assert!(cfg.discover, "the product browses; only tests do not");
+
+        let cfg = parse_env(&[], &[("SCREENY_LISTEN", "0.0.0.0:9999"), ("SCREENY_STATE_DIR", "/data")]).unwrap().unwrap();
+        assert_eq!(cfg.listen.to_string(), "0.0.0.0:9999");
+        assert_eq!(cfg.state_dir.as_deref().map(std::path::Path::to_string_lossy).as_deref(), Some("/data"));
+
+        let cfg = parse_env(
+            &["--listen", "127.0.0.1:1234", "--state-dir", "/tmp/elsewhere", "--no-discover"],
+            &[("SCREENY_LISTEN", "0.0.0.0:9999"), ("SCREENY_STATE_DIR", "/data")],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(cfg.listen.to_string(), "127.0.0.1:1234");
+        assert_eq!(cfg.state_dir.as_deref().map(std::path::Path::to_string_lossy).as_deref(), Some("/tmp/elsewhere"));
+        assert!(!cfg.discover);
+    }
+
+    /// A broken SCREENY_LISTEN says so in its own name, not in the flag's.
+    #[test]
+    fn a_bad_listen_in_the_environment_names_the_environment() {
+        let e = parse_env(&[], &[("SCREENY_LISTEN", "nowhere")]).unwrap_err();
+        assert!(e.contains("SCREENY_LISTEN"), "{e}");
+    }
+
+    #[test]
+    fn the_fault_pieces_need_asking_for() {
+        assert!(!parse_env(&[], &[]).unwrap().unwrap().fault_pieces);
+        assert!(!parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "0")]).unwrap().unwrap().fault_pieces);
+        assert!(parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "1")]).unwrap().unwrap().fault_pieces);
     }
 
     #[test]

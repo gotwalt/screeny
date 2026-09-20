@@ -38,8 +38,16 @@ pub struct Engine {
     /// Set when the "send to panel" switch is on. All of the behaviour is in
     /// `screeny_art::output`; this is a field and four lines in `tick`.
     panel: Option<SenderOutput>,
+    /// What the switch was last set to, so the answer survives a restart.
+    /// Card 105 left this out of `StudioState` on purpose and handed it to
+    /// card 106; it now lives in the state file like everything else.
+    panel_on: bool,
+    panel_to: String,
     /// When the meter last took the connected device's budget and codec set.
     limits_at: Instant,
+    /// Whether the deliberately broken pieces are on the menu here too, so a
+    /// human can watch the containment work in the design view.
+    faults: bool,
 }
 
 impl Engine {
@@ -63,8 +71,17 @@ impl Engine {
             fps: 0.0,
             packet: Arc::new(vec![0; PACKET_BYTES]),
             panel: None,
+            panel_on: false,
+            panel_to: String::new(),
             limits_at: Instant::now(),
+            faults: false,
         }
+    }
+
+    /// Offer the deliberately broken pieces here as well. Off unless the
+    /// studio was started with them (`SCREENY_STUDIO_FAULTS=1`).
+    pub fn allow_faults(&mut self, on: bool) {
+        self.faults = on;
     }
 
     /// Rebuild the piece from its seed and start its clock again.
@@ -155,7 +172,7 @@ impl Engine {
     ///
     /// If no piece has that id.
     pub fn set_piece(&mut self, id: &str) -> Result<(), String> {
-        let def = screeny_art::piece::find(id).ok_or_else(|| format!("no piece called `{id}`"))?;
+        let def = crate::player::find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
         self.def = def;
         self.params = Params::defaults(def.params);
         self.rebuild();
@@ -218,6 +235,8 @@ impl Engine {
     /// Turning it off drops the link, which sends `FINAL` and releases the
     /// panel at once.
     pub fn set_panel(&mut self, on: bool, to: &str) -> Option<PanelStatus> {
+        self.panel_on = on;
+        self.panel_to = to.trim().to_string();
         self.panel = on.then(|| SenderOutput::deferred(screeny_art::output::target_for(to)));
         self.limits_at = Instant::now() - Duration::from_secs(10);
         self.panel.as_ref().map(SenderOutput::status)
@@ -231,6 +250,14 @@ impl Engine {
             p.poll();
         }
         self.panel.as_ref().map(SenderOutput::status)
+    }
+
+    /// Whether the preview is being sent to a panel, and to which. This is the
+    /// half of the studio's state that used to live only in the browser's
+    /// `localStorage`.
+    #[must_use]
+    pub fn panel_aim(&self) -> (bool, String) {
+        (self.panel_on, self.panel_to.clone())
     }
 
     /// Send `FINAL` so the panel is released the moment the server stops,
@@ -264,6 +291,21 @@ pub type Shared = Arc<Mutex<Engine>>;
 /// usable, so the studio carries on rather than taking the process with it.
 pub fn lock(engine: &Shared) -> MutexGuard<'_, Engine> {
     engine.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The same, but never waits.
+///
+/// `None` means somebody else has it - usually the engine thread mid-render,
+/// occasionally a piece that has stopped returning. The status heartbeat and
+/// `/api/v1/status` use this so that a wedged piece cannot take the dashboard
+/// down with it: the one moment you most want to read the status is the moment
+/// something is stuck.
+pub fn try_lock(engine: &Shared) -> Option<MutexGuard<'_, Engine>> {
+    match engine.try_lock() {
+        Ok(g) => Some(g),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -305,8 +347,11 @@ pub struct Bootstrap {
 
 #[must_use]
 pub fn bootstrap(engine: &Shared) -> Bootstrap {
+    let faults = lock(engine).faults;
+    let extra = if faults { crate::player::FAULT_PIECES } else { &[] };
     let pieces = pieces::ALL
         .iter()
+        .chain(extra.iter())
         .map(|d| PieceInfo {
             id: d.id,
             name: d.name,

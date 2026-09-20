@@ -8,6 +8,10 @@ lab/Cargo.lock
 lab/xtensa-bench/target/
 lab/xtensa-bench/Cargo.lock
 
+# The Studio's state directory for a local run (card 106). In Docker this is a
+# volume at /data instead; see SCREENY_STATE_DIR.
+.screeny-studio/
+
 # WiFi credentials never go in git (firmware/build.rs reads them at build time)
 wifi.env
 

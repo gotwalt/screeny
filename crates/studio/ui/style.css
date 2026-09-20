@@ -80,6 +80,11 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 .readouts dt { margin-bottom: 5px; }
 .readouts dd { font-size: 15px; }
 
+/* The way to the dashboard (card 106). One link, in the readout row, so the
+   design view is not restyled to hold it. */
+.titleblock__link { color: var(--dim); text-decoration: none; white-space: nowrap; }
+.titleblock__link:hover { color: var(--amber); }
+
 .stage {
   position: relative;
   display: flex;

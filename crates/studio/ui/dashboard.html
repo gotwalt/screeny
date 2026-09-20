@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screeny Panels</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body class="dash">
+  <header class="dash__head">
+    <div>
+      <h1>Panels</h1>
+      <p class="dash__sub" id="server-line">&nbsp;</p>
+    </div>
+    <a class="dash__nav" href="/">Design view &rarr;</a>
+  </header>
+
+  <main class="dash__main">
+    <p class="dash__empty" id="empty" hidden>
+      No panels yet. Add one below by name (<code>screeny-4a00a4</code>) or address.
+    </p>
+
+    <div class="cards" id="cards"></div>
+
+    <section class="card card--add">
+      <h2>Add a panel</h2>
+      <div class="field">
+        <label for="add-to">Name or address</label>
+        <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-4a00a4 or 192.168.7.221">
+      </div>
+      <div class="field">
+        <label for="add-name">Call it</label>
+        <input id="add-name" type="text" spellcheck="false" autocomplete="off" placeholder="Desk (optional)">
+      </div>
+      <div class="actions">
+        <button type="button" id="add">Add and play</button>
+        <button type="button" id="refresh">Look again</button>
+      </div>
+      <p class="hint" id="add-note">A name follows the panel if its address changes. An address does not.</p>
+    </section>
+
+    <section class="card card--server">
+      <h2>Server</h2>
+      <dl class="facts" id="server-facts"></dl>
+      <p class="hint" id="server-problems"></p>
+    </section>
+  </main>
+
+  <p class="notice" id="notice" role="status" hidden></p>
+
+  <template id="card-template">
+    <section class="card card--panel">
+      <header class="card__head">
+        <div>
+          <h2 class="card__name"></h2>
+          <p class="card__id"></p>
+        </div>
+        <span class="pill"></span>
+      </header>
+
+      <div class="group">
+        <h3>Playing</h3>
+        <div class="field">
+          <label>Piece</label>
+          <select class="piece"></select>
+        </div>
+        <div class="field">
+          <label>Seed</label>
+          <input class="seed" type="number" min="0" max="4294967295" step="1" inputmode="numeric">
+          <button type="button" class="quiet new-seed">New</button>
+        </div>
+        <div class="field">
+          <label>Rate</label>
+          <select class="fps">
+            <option value="10">10</option>
+            <option value="15">15</option>
+            <option value="24">24</option>
+            <option value="30">30</option>
+            <option value="60">60</option>
+          </select>
+        </div>
+        <label class="switch"><input type="checkbox" class="on"><span>Playing</span></label>
+        <p class="hint fallback" hidden></p>
+      </div>
+
+      <div class="group">
+        <h3>Brightness</h3>
+        <div class="slider">
+          <label>Level</label><output class="bright-out"></output>
+          <input class="bright" type="range" min="0" max="255" step="1">
+        </div>
+        <p class="hint bright-note"></p>
+      </div>
+
+      <div class="group">
+        <h3>Health</h3>
+        <dl class="facts"></dl>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="adopt" title="Make what the design view is showing what this panel plays">Play my preview</button>
+        <button type="button" class="identify">Identify</button>
+        <button type="button" class="rename">Rename</button>
+        <button type="button" class="reboot danger">Reboot</button>
+        <button type="button" class="forget quiet">Forget this panel</button>
+      </div>
+    </section>
+  </template>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

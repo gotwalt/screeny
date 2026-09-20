@@ -14,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use screeny_studio::{Config, Running, Studio};
+use std::path::{Path, PathBuf};
 
 /// Nothing in these tests waits longer than this for a thing that should
 /// happen at once.
@@ -22,8 +23,68 @@ pub const PATIENCE: Duration = Duration::from_secs(5);
 /// A studio on an ephemeral loopback port. Dropping the returned handle stops
 /// the engine thread, releases the panel and stops the server.
 pub async fn studio() -> Running {
-    let cfg = Config { listen: SocketAddr::from(([127, 0, 0, 1], 0)), ui_dir: None };
+    Studio::bind(test_config()).await.expect("bind an ephemeral loopback port").spawn()
+}
+
+/// The configuration every test in this crate starts from.
+///
+/// Loopback, an ephemeral port, **no discovery** and **no state file**: a
+/// worker's environment cannot reach the LAN and must never try, and a test
+/// must never leave a file behind. Everything a test wants beyond that it
+/// turns on itself.
+#[must_use]
+pub fn test_config() -> Config {
+    Config {
+        listen: SocketAddr::from(([127, 0, 0, 1], 0)),
+        // Fast enough that a test is seconds rather than minutes, slow enough
+        // that the loops are still loops.
+        supervise_every: Duration::from_millis(200),
+        telemetry_every: Duration::from_millis(200),
+        ..Config::default()
+    }
+}
+
+/// A studio that keeps its state in `dir`, so it can be restarted.
+pub async fn studio_in(dir: &Path, faults: bool) -> Running {
+    let cfg = Config { state_dir: Some(dir.to_path_buf()), fault_pieces: faults, ..test_config() };
     Studio::bind(cfg).await.expect("bind an ephemeral loopback port").spawn()
+}
+
+/// A directory of this test's own, removed when the test ends.
+pub struct Temp(pub PathBuf);
+
+impl Temp {
+    #[must_use]
+    pub fn new(tag: &str) -> Temp {
+        let p = std::env::temp_dir().join(format!("screeny-studio-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).expect("a temp dir");
+        Temp(p)
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Poll `f` until it is true, or give up after [`PATIENCE`] (or `patience`).
+///
+/// Every wait in these tests goes through here, so none of them can hang.
+pub async fn until<F, Fut>(patience: Duration, what: &str, mut f: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        if f().await {
+            return;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 pub struct Response {

@@ -15,7 +15,16 @@ const EMBEDDED: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
     ("main.js", "text/javascript; charset=utf-8", include_bytes!("../ui/main.js")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
+    // The dashboard (card 106): what each panel is playing, and how to change
+    // it. It borrows `style.css` and adds only what a scrolling page of cards
+    // needs, so the design view is not touched by it.
+    ("dashboard.html", "text/html; charset=utf-8", include_bytes!("../ui/dashboard.html")),
+    ("dashboard.js", "text/javascript; charset=utf-8", include_bytes!("../ui/dashboard.js")),
+    ("dashboard.css", "text/css; charset=utf-8", include_bytes!("../ui/dashboard.css")),
 ];
+
+/// Tidy URLs, so the dashboard is `/dashboard` rather than `/dashboard.html`.
+const PAGES: &[(&str, &str)] = &[("", "index.html"), ("dashboard", "dashboard.html")];
 
 /// Where the UI is read from: the binary, or a directory being edited.
 #[derive(Clone, Debug, Default)]
@@ -60,8 +69,8 @@ fn content_type(name: &str) -> &'static str {
 /// Everything that is not the API is the UI. Anything unknown is a 404 rather
 /// than the index: a mistyped asset should say so, not arrive as HTML.
 pub async fn serve(axum::extract::State(st): axum::extract::State<crate::AppState>, uri: Uri) -> Response {
-    let path = uri.path().trim_start_matches('/');
-    let name = if path.is_empty() { "index.html" } else { path };
+    let path = uri.path().trim_start_matches('/').trim_end_matches('/');
+    let name = PAGES.iter().find(|(url, _)| *url == path).map_or(path, |(_, file)| *file);
     // A served name is one file in one directory: no traversal, no
     // subdirectories, whether the bytes come from the binary or from disk.
     if name.contains('/') || name.contains('\\') || name.starts_with('.') {

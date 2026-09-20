@@ -229,7 +229,14 @@ async fn the_socket_carries_the_heartbeat() {
     let studio = studio().await;
     post(studio.addr, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await;
     let mut ws = Ws::connect(studio.addr, None).await;
-    let status = ws.event("status").await;
+    // Heartbeats are taken while the engine is between frames, so the first
+    // one after a piece is rebuilt can legitimately have nothing to perform
+    // yet. What is being pinned is that the heartbeat carries it at all.
+    let mut status = ws.event("status").await;
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !status["playing"]["title"].is_string() && tokio::time::Instant::now() < deadline {
+        status = ws.event("status").await;
+    }
     assert!(status["playing"]["title"].is_string(), "the heartbeat carries now playing: {status}");
     assert_eq!(status["panel"], serde_json::Value::Null, "nothing is being sent");
 }

@@ -1,0 +1,152 @@
+/* The dashboard: what each panel is playing, whether it is well, and how to
+   change it - from a phone, at a glance.
+
+   It borrows style.css wholesale for the colours, the type and the controls,
+   and only overrides what a scrolling page of cards needs that a fixed
+   two-column bench did not. The design view is not touched. */
+
+body.dash {
+  display: block;
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+  padding-bottom: 64px;
+}
+
+html:has(body.dash) { height: auto; overflow: auto; }
+
+.dash__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 28px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.dash__head h1 {
+  font: 400 34px/0.95 var(--label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dash__sub { margin-top: 7px; color: var(--dim); font-family: var(--data); font-size: 12px; }
+
+.dash__nav {
+  flex: none;
+  color: var(--dim);
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: 8px 0;
+}
+.dash__nav:hover { color: var(--amber); }
+
+.dash__main { padding: 22px 28px 0; }
+.dash__empty { max-width: 60ch; margin-bottom: 20px; color: var(--dim); }
+.dash__empty code { font-family: var(--data); color: var(--paper); }
+
+/* One column on a phone, as many as fit on a bench. */
+.cards { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(320px, 400px)); }
+
+.card {
+  padding: 18px 20px 20px;
+  background: var(--bench-raised);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.card--add, .card--server { margin-top: 18px; max-width: 520px; }
+.card h2 { color: var(--paper); font-size: 15px; margin-bottom: 14px; }
+
+.card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.card__name { font: 400 22px/1.05 var(--label); letter-spacing: 0.05em; text-transform: uppercase; color: var(--paper); }
+.card__id { margin-top: 4px; color: var(--dim); font-family: var(--data); font-size: 11.5px; word-break: break-all; }
+
+/* The one thing you read from across the room. */
+.pill {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--dim);
+  font: 400 11px/1.3 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pill[data-state="playing"] { border-color: var(--amber); color: var(--amber); }
+.pill[data-state="away"] { border-color: var(--dim); color: var(--dim); }
+.pill[data-state="bad"] { border-color: var(--over); color: var(--over); }
+
+.group { padding-top: 16px; margin-top: 16px; border-top: 1px solid var(--rule); }
+.group:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
+.group h3 {
+  margin-bottom: 12px;
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.field label {
+  flex: none;
+  width: 84px;
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.field input, .field select { flex: 1; min-width: 0; }
+
+select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--bench);
+  color: var(--paper);
+  font: 12.5px/1 var(--body);
+}
+
+.card .switch { margin-top: 12px; }
+.card .slider { margin-bottom: 8px; }
+
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; margin: 0; }
+.facts dt { font-size: 11.5px; }
+.facts dd { margin: 0; font-family: var(--data); font-size: 12px; color: var(--paper); word-break: break-word; }
+.facts dd[data-tone="dim"] { color: var(--dim); }
+.facts dd[data-tone="warn"] { color: var(--amber); }
+.facts dd[data-tone="bad"] { color: var(--over); }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.actions button { flex: 1 1 auto; min-width: 112px; }
+.actions button.danger:hover { border-color: var(--over); color: var(--over); }
+.actions button.quiet { flex: 1 1 100%; text-align: left; }
+
+.notice {
+  position: fixed;
+  left: 28px;
+  right: 28px;
+  bottom: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 10px 14px;
+  border-left: 3px solid var(--amber);
+  background: var(--bench-raised);
+  box-shadow: 0 10px 30px -12px rgb(0 0 0 / 0.8);
+  user-select: text;
+}
+.notice[data-tone="bad"] { border-left-color: var(--over); }
+
+@media (max-width: 640px) {
+  .dash__head, .dash__main { padding-inline: 16px; }
+  .dash__head h1 { font-size: 26px; }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  .field { flex-wrap: wrap; }
+  .field label { width: 100%; }
+  .notice { left: 12px; right: 12px; }
+}
