@@ -175,18 +175,40 @@ enum State {
 impl Module {
     /// Advance to engine time `t`, heading for `target`.
     fn step(&mut self, t: f64, target: u8, fall: f64, cascade: bool) {
-        if self.state == State::Falling && t - self.began >= fall {
-            self.shown = self.to;
-            self.state = if self.shown == target { State::Settling } else { State::Still };
-            self.began = t;
+        let next = |shown: u8| if cascade { (shown + 1) % 10 } else { target };
+        // Retire every card that has landed since the last frame, each one
+        // handing the clock to the next at the moment it should have landed
+        // rather than at `t`. A card lands between frames, so starting the
+        // next from `t` would cost a cascade a frame a card - by the fifth,
+        // the five modules of `:59` to `:00` are visibly out of step with
+        // each other for no reason. The bound is a guard, not a rule: it
+        // matters only if a frame is dropped for several flips at once.
+        for _ in 0..16 {
+            let (span, was_falling) = match self.state {
+                State::Falling => (fall, true),
+                State::Settling => (fall * SETTLE, false),
+                State::Still => break,
+            };
+            if t - self.began < span {
+                break;
+            }
+            if was_falling {
+                self.shown = self.to;
+            }
+            self.began += span;
+            self.state = if self.shown != target {
+                self.to = next(self.shown);
+                State::Falling
+            } else if was_falling {
+                State::Settling
+            } else {
+                State::Still
+            };
         }
-        if self.state == State::Settling && t - self.began >= fall * SETTLE {
-            self.state = State::Still;
-        }
-        // A new target interrupts a settle but never a fall: a card that has
-        // let go is falling whatever the clock does next.
+        // A target that moves while the module is still or settling lets a
+        // card go now. One that has already let go is never interrupted.
         if self.state != State::Falling && self.shown != target {
-            self.to = if cascade { (self.shown + 1) % 10 } else { target };
+            self.to = next(self.shown);
             self.began = t;
             self.state = State::Falling;
         }
@@ -648,9 +670,20 @@ mod tests {
             let f = run("21:12", 3.0, set);
             (0..N).map(|i| f.pixel(i).duty()).sum::<f32>() / N as f32
         };
+        // Measured, at the defaults: 0.95% resting, peaking at 1.23% while
+        // four modules are mid-flip. The card asked for a few percent; this
+        // is under one, which is where a red-on-black clock lands when the
+        // card bodies really are black.
         let plain = apl(&[]);
-        assert!(plain < 0.03, "the resting picture is {:.1}% of full", plain * 100.0);
-        assert!(plain > 0.002, "it went dark: {:.2}%", plain * 100.0);
+        assert!((0.007..0.012).contains(&plain), "the resting picture is {:.2}% of full", plain * 100.0);
+        let peak = (30..=40)
+            .map(|k| {
+                let f = run("09:59:59", f64::from(k) / crate::snapshot::FPS, &[]);
+                (0..N).map(|i| f.pixel(i).duty()).sum::<f32>() / N as f32
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(peak < 0.02, "four modules mid-flip reach {:.2}%", peak * 100.0);
+        assert!(peak > plain, "a flip should put more light on the panel, not less");
         // The halftone is the cheap way to halve the light without shrinking
         // anything, which is the one thing it has to actually do.
         let half = apl(&[("fill", 0.5)]);

@@ -4,8 +4,8 @@ title: vesta - a low-light split-flap clock for the night
 type: build
 hardware: no
 depends: [150, 162]
-owner:
-branch:
+owner: worker (Claude Opus 5)
+branch: card/155-vesta
 ---
 
 ## Goal
@@ -104,3 +104,50 @@ On the panel, at night, by the owner's eye. Before that: the orchestrator looks 
 snapshots and the mid-flip sequence reads as a flap falling, not as a wipe or a squash.
 
 ## Log
+
+### 2026-09-20, worker (branch `card/155-vesta`)
+
+**Step 1: built it.** `crates/art/src/patches/vesta/` in three files, registered in
+`patches/mod.rs`. The model, in the order it matters:
+
+- **One module is 14 x 30 LEDs**, axle on the panel's own centre line (row 16, a pixel
+  boundary), four of them at x-centres 8, 23, 41, 56 with a 1-LED black gap inside each
+  pair and a 4-LED colon in the middle: columns 1..15, 16..30, [colon], 34..48, 49..63,
+  62 of the 64. A numeral is 12 x 22 LEDs of ink inside that. This is the owner's
+  "spend the pixels": a 15-row half-card foreshortens through 15, 14, 12, 9, 5, 1 rows.
+- **The falling card** is a rigid card hinged on the axle, and one cosine does three
+  jobs: `squash = cos(theta - tilt) / cos(tilt)` is the foreshortening, its *sign* is
+  which face is towards us (the card's normal dotted with the view direction is the
+  same cosine), and its zero is where the card goes edge-on - which `tilt` moves past
+  90 degrees, because a viewer above the board sees the front of a card for longer.
+  Inverting `v = -r squash / (1 - r sin(theta) / D)` for `r` is one division, so every
+  supersample can ask "how far along the card am I".
+- **The lighting** is Lambert on those same two vectors, plus a lit free edge that is
+  brightest exactly when the face has nothing left to show, plus the card's shadow cast
+  on the plate below. The light sits *below* the eye (6 degrees against tilt's 16) on
+  purpose: with the light more frontal than the viewer the shadow runs **ahead** of the
+  card down the plate (1.0-2.0 LEDs of lead between 100 and 150 degrees) and tucks back
+  under it as it lands. Put the light above the eye and the shadow hides under the card
+  and buys nothing. There is a test for the lead.
+- **The fall is gravity, not an easing curve.** First attempt was a rod released 12
+  degrees past balance: the time integral was right but it is *useless* at 30 fps - half
+  the fall happens in the first 30 degrees, so the six frames were 0, 2, 11, 28, 59,
+  110, 180 - three frames of nothing and then a slam. Rejected. What ships is the same
+  equation with the drum's own speed as the initial condition (`PUSH`, the card leaves
+  the pin at a quarter of the speed it lands at): the six frames are **0, 13, 30, 52,
+  84, 127, 180**, accelerating the whole way with real motion in every one. Integrated
+  once into a 256-entry table and inverted.
+- **Colour**: one ramp of one hue plus black, 32 entries, so every frame is exact on
+  the wire whatever it draws. The hue is picked in OKLCH (the only way a hue slider
+  behaves) and then normalised to a ray with its brightest channel at 1 - and a channel
+  under 0.002 linear (sRGB 7, the panel's own floor) is **turned off**, because OKLCH's
+  gamut search stops just inside the boundary and leaves a thousandth of green behind
+  at red. That is a second die lit at about sRGB 3 in every numeral pixel: invisible as
+  colour, visible as card 102's dark-end sparkle. At the default hue the emitted sRGB is
+  exactly `(x, 0, 0)`; there is a test over every palette entry.
+
+**Step 2: the cascade drifted.** A card lands between frames, and starting the next one
+from `t` rather than from when this one should have ended cost a frame a card - by the
+fifth card of `09:59 -> 10:00` the modules were visibly out of step for no reason. Fixed:
+each landing hands the clock on at `began + fall`, and `step` retires every card that
+has landed since the last frame.
