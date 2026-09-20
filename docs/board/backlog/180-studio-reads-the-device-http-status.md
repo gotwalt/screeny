@@ -31,6 +31,11 @@ next to what the UDP telemetry already gives it.
   find where it lives now. The UDP control-port telemetry stays the fallback for firmware
   that has no HTTP server, and stays the source for frame counters.
 
+- 2026-09-20: firmware card 224 has merged - `screeny-sim` serves the HTTP API
+  (`--http-port`, `--start-in-portal`, `--no-http`; `SimHandle::http_addr()` / `http_url()`
+  in tests; `Config::for_test()` uses an ephemeral port), `boot_id` included. So this card
+  can be built against the sim as soon as card 170 has merged; the real device follows with
+  firmware card 222.
 - Agreed with the firmware session (2026-09-19): the status payload will carry `boot_id`, a
   random u32 drawn once at boot (no flash wear). Same id = the link flapped; different id =
   the device rebooted. Use that to count reboots; do not infer them from uptime.
