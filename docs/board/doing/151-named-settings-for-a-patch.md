@@ -249,3 +249,89 @@ reply has no `settings` key at all. Card 150 freed that word *for this card*, so
 is now "`settings` is the patch's named settings, a list of names" - still never the
 output block under its old name. Two in `tests/memory.rs` hard-coded `version == 4`; they
 read `state::SCHEMA_VERSION` now.
+
+### Verified on loopback: curl, the browser, and a restart (worker)
+
+A `screeny-sim` on `127.0.0.1:49474/49475` (`--headless --no-mdns --http-port 8199`) and a
+release studio on `127.0.0.1:8791` (`--no-discover --no-device-http`, its own scratch
+`--state-dir`), both under `timeout`. No LAN, no serial port, no camera.
+
+**The card's acceptance sequence, by curl** (the script is in the scratch directory; this
+is what it printed):
+
+```
+== tune metaballs, Save as "Lava"
+   setting='Lava' settings=['Lava'] modified=False speed=1.0 count=8.0 hue=330.0
+== tune again and slow it down, Save as "Slow ink"
+   setting='Slow ink' settings=['Lava','Slow ink'] modified=False speed=0.25 count=3.0
+== switch to clocks-dials, and back
+   setting='Default' settings=[]  (clocks-dials has its own settings, which is none)
+   setting='Slow ink' settings=['Lava','Slow ink'] modified=False speed=0.25 count=3.0
+== load "Lava"          setting='Lava'  modified=False speed=1.0 count=8.0
+== move a slider        setting='Lava'  modified=True  count=6.0
+== Revert               setting='Lava'  modified=False count=8.0
+== rename it            setting='Lava lamp' settings=['Lava lamp','Slow ink'] modified=False
+== refusals
+   save {"name":"Default"}   -> 400 `Default` is the patch's own setting, so it cannot be the name of one of yours.
+   save {"name":"lava lamp"} -> 400 There is already a setting called `Lava lamp`.
+   load {"name":"Nope"}      -> 400 `Metaballs` has no setting called `Nope`.
+== load Default (what "Reset" became)   modified=False, every parameter its default
+== delete "Slow ink"                    settings=['Lava lamp'], what is playing unchanged
+== the panel: connected=True frames_sent=819, state.repaired=[]
+```
+
+Two things that sequence taught me, both fixed rather than written off:
+
+1. **A patch nobody has touched must arrive on Default.** Switching to `clocks-dials`
+   carried the *previous* patch's seed and speed over (which is what `recall` has always
+   done for a seed it does not know), so a patch nobody had ever tuned came up marked
+   **modified**. With "modified" now a comparison against Default, that is a lie.
+   `recall_into` now puts an unremembered patch on `DEFAULT_SEED` and 1.00x - it arrives
+   *on* Default - and a patch that really was tuned still comes back exactly as it was
+   left. Test: `an_untouched_patch_arrives_on_default`.
+2. `save {"name":""}` answered 200 in that run, which is right and my script's expectation
+   was wrong: the working copy was on `Lava lamp` at the time, and an empty name is
+   "overwrite the one it is on". On Default it is a 400, which `tests/ui.rs` pins.
+
+**The restart.** Killed the studio (it logged `stopping; releasing the panel`), started it
+again on the same state directory: `setting='Default' settings=['Lava lamp']`, and loading
+`Lava lamp` brought back `count=8.0 hue=330.0`. The file on disk is `"version": 5` with the
+working copy, `setting` and `settings` as designed, and the sim was being sent frames again
+within a second.
+
+**In a browser** (Chrome, two tabs on the same studio):
+
+- Clicked **Another** -> `MODIFIED` appeared in the amber label face beside the name.
+- **Save as…** -> the inline name field opened focused, typed `Bench`, Enter -> the list
+  said `Bench`, the mark cleared, and Save / Rename / Delete came alive.
+- Typed `default` into Save as… -> the refusal appeared **inline under the control**, in
+  the fault tone, with the box still open and the text still in it. Escape closed it.
+- **Delete** -> `Delete "Bench"?` inline with Delete / Keep it -> deleted: back on Default,
+  marked modified, and what was playing did not change.
+- **Two browsers**: a save in the second tab appeared in the first within 400 ms (list,
+  name and mark), and a load in the second put the first on `Default` unmodified. No extra
+  read: it rides the state broadcast.
+- **Console clean** in both tabs (hooked `console.*`, `error` and `unhandledrejection`:
+  nothing), and the notice line stayed empty - settings errors go beside the control.
+- **390 px and 1400 px**, in two same-origin iframes: `scrollWidth - clientWidth == 0` at
+  both, the control 292 px wide inside the 390 px frame, five buttons wrapping to two rows
+  rather than squeezing. Screenshots taken at both widths.
+- Keyboard: the select, all five buttons and Another are native focusables at `tabIndex 0`;
+  Revert is `disabled` when there is nothing to revert, as are Rename and Delete on
+  Default.
+
+The canvas is black in those screenshots: the automated tab reports `document.hidden`, so
+the page asks the socket for **no frames** (card 120). Everything else on the page is live,
+and `/api/v1/status` showed the sim connected and counting frames throughout.
+
+### Follow-up
+
+One card, `159`: the **Panel** screen still asks with `window.prompt` / `window.confirm`
+for rename, reboot and forget (card 198's code). Card 151's reasons against those dialogs
+are not about settings, so they should go the same way - and then `tests/ui.rs` can hold
+both screens to it instead of only the Picture screen, where the exemption names card 159.
+
+I did **not** write a card for `screeny-art play|snapshot --setting NAME`, which the card
+left to my judgement: it would make the CLI read the Studio's private state file, and the
+Studio track is going server-first (card 105 onward). If somebody wants a setting on the
+command line later, the honest way is the Studio's own API, not its file.

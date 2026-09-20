@@ -67,18 +67,20 @@ fn remember_current(cfg: &StoredPlayer, memory: &crate::state::SharedMemory, fau
 /// here, or on another panel. One memory, one answer.
 ///
 /// Card 151: **speed comes back with the parameters and the seed**, because it
-/// is part of a setting and therefore part of the working copy. A patch that
-/// has never said a speed leaves the player's alone, as it always did.
+/// is part of a setting and therefore part of the working copy.
+///
+/// And a patch the studio has never been on **arrives on Default** - its
+/// declared defaults, `DEFAULT_SEED` and 1.00x - rather than inheriting the
+/// seed and the speed of the patch that was playing a moment ago. That was
+/// harmless while nothing compared them with anything; now that "modified" is
+/// the working copy against Default, inheriting would mark a patch nobody has
+/// ever touched as modified, which is not so.
 fn recall_into(cfg: &mut StoredPlayer, def: &'static PatchDef, memory: &crate::state::SharedMemory, device: &str) {
     cfg.patch = def.id.to_string();
     let was = memory.recall(def, &format!("panel {}", label(device)));
     cfg.params = was.params;
-    if let Some(seed) = was.seed {
-        cfg.seed = seed;
-    }
-    if let Some(speed) = was.speed {
-        cfg.speed = speed.clamp(0.0, MAX_SPEED);
-    }
+    cfg.seed = was.seed.unwrap_or(crate::state::DEFAULT_SEED);
+    cfg.speed = was.speed.unwrap_or(1.0).clamp(0.0, MAX_SPEED);
 }
 
 /// How long one frame may take before the player is treated as wedged.
@@ -1746,6 +1748,31 @@ mod tests {
         assert_eq!(s.params["scale"], 2.5, "the good value survived the bad ones");
         assert!(!s.params.contains_key("gone"));
         assert_eq!(s.params["drift"], 2.0, "clamped to this build's range, as the slider would");
+    }
+
+    /// Card 151: a patch the studio has never been on arrives **on Default** -
+    /// and therefore not modified - rather than inheriting the seed and the
+    /// speed of whatever was playing a moment ago.
+    #[test]
+    fn an_untouched_patch_arrives_on_default() {
+        let p = idle_player();
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { seed: Some(654_321), ..PlayerChange::default() })).expect("another");
+        p.configure(&change(PlayerChange { speed: Some(0.25), ..PlayerChange::default() })).expect("slowly");
+
+        p.configure(&change(PlayerChange { patch: Some("testcard".into()), ..PlayerChange::default() })).expect("testcard");
+        let s = p.stored();
+        assert_eq!(s.seed, crate::state::DEFAULT_SEED, "not the seed the last patch was on");
+        assert_eq!(s.speed, 1.0, "nor its speed");
+        let state = p.state();
+        assert_eq!(state.setting, DEFAULT_SETTING);
+        assert!(!state.modified, "a patch nobody has touched is not modified");
+
+        // ...and the patch that *was* tuned still comes back as it was left.
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        let s = p.stored();
+        assert_eq!(s.seed, 654_321);
+        assert_eq!(s.speed, 0.25);
     }
 
     /// An entry for a patch this build has never heard of is kept, not thrown

@@ -371,8 +371,10 @@ impl Default for LegacyPreview {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PatchMemory {
-    /// The seed this patch was last left on. `None` means "never chosen", in
-    /// which case switching to it keeps whatever seed the context is on.
+    /// The seed this patch was last left on. `None` means "never chosen", and
+    /// switching to it then puts it on [`DEFAULT_SEED`] - which is to say, on
+    /// Default, where a patch nobody has touched belongs (card 151; before it,
+    /// the patch kept whatever seed the previous one happened to be on).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u32>,
     /// Parameter values that differ from the defaults, by param id.
