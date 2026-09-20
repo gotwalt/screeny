@@ -220,8 +220,8 @@ const FW_UNKNOWN: u8 = 0xff;
 /// `STORE` lock, which does not belong in an HTTP handler; and a status request
 /// should not touch flash.
 ///
-/// Call it from `main` after [`crate::store::init`] and before the panel is lit
-/// - it is a read, and at that point core 1 is not running, so nothing is
+/// Call it from `main` after [`crate::store::init`] and before the panel is
+/// lit: it is a read, and at that point core 1 is not running, so nothing is
 /// parked.
 ///
 /// **It no longer reads the partition table itself** (card 243). It used to,

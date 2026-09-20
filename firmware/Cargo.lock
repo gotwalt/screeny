@@ -1986,6 +1986,7 @@ dependencies = [
  "serde",
  "serde-json-core",
  "static_cell",
+ "xtensa-lx",
 ]
 
 [[package]]

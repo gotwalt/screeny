@@ -290,3 +290,143 @@ under test differs from the shipping build in one visible way while the self-tes
 worker 0 is busy, so the server is worker 1 alone for a couple of seconds - which is the
 one-worker configuration card 222 shipped and card 227 measured, and the `fallback
 evidence` line now says `HTTP_TASKS - 1` rather than claiming both.
+
+### Steps 7-8: the ride-alongs, and 0.5.2
+
+All seven done, each named in the commit. Two are worth a line here rather than just a
+diff:
+
+* **`provision::step` logs outside the `MACHINE` critical section** now: the transition is
+  noted into a local inside the lock and the `info!` runs after it. The file's own rules
+  (its lines 31-35) forbid formatting while that lock is held, because a critical section
+  masks the interrupt core 1's HUB75 DMA runs on, and this was the one place it
+  contradicted itself.
+* **The PSK input's `maxlength` 63 -> 64**, on both forms. Spec 8.2 types `psk_len` as
+  `0..=64` and `screeny_proto::control::MAX_PSK_LEN` is 64 - a WPA2 PSK written as 64 hex
+  characters is the case, and a `maxlength` of 63 ate the last one *silently*, in a
+  captive mini-browser where there is no other way to find out.
+
+The spec edits are the one clause allowed in 7.3 (a frame under the setup-screen overlay
+is admitted, decoded and counted, and not shown - so `frames_rx` moving while
+`frames_shown` does not is the expected reading in `PROVISIONING`) and the new status
+fields in 8.6, including the sentence that makes them safe: **a reader MUST treat an
+absent one as `0` / `null`, because firmware older than 0.5.2 does not send them.**
+
+Firmware clippy is back to the **same 9 warnings** card 234 recorded (plus the 2
+pre-existing build-script ones): the three this card added were two `doc list item without
+indentation` in my own new doc comments and `empty loop {}` in `halt()`, which now carries
+an `#[allow]` and the one-line reason (`esp-backtrace`'s own `abort()` spells it the same
+way).
+
+### The four builds, and `cargo test`
+
+| build | `.stack` | `.bss` | image |
+|---|---|---|---|
+| default | **26,272** | 111,056 | 976,125 |
+| `--features panic-test` | **26,208** | 111,120 | 977,001 |
+| `--features http-selftest` | **25,968** | 111,328 | 1,009,665 |
+| `--features start-in-portal` | **26,272** | 111,056 | 976,117 |
+
+Floor 24,576; `main` was 27,376 with `http-selftest` failing at 22,056. The default build
+spends 1,104 bytes of ceiling on the whole card (the breadcrumb itself spends none - it is
+52 bytes of `.rtc_slow.persistent` at `0x5000_0000`), and the demand it removes from the
+boot path is ~3 KB.
+
+`timeout 1200 cargo test` (workspace): **green** - 84 `test result: ok` lines, **752
+passed, 0 failed, 1 ignored**, no flakes in three runs of the affected crates.
+`cargo clippy --workspace --all-targets`: silent.
+
+### What the orchestrator should see on the bench
+
+**Flashing re-arms everything by itself.** `espflash` resets the chip with the EN pin,
+which this SoC reports as `ChipPowerOn`, and esp-hal zero-fills `.rtc_slow.persistent` on
+exactly that reason - so every flash starts from boot #1 with an empty breadcrumb. A
+`POST /api/v1/reboot` does **not** (it is a software reset, which is the whole point), so
+the counters keep climbing across one.
+
+#### The `panic-test` build, in order
+
+Flash `screeny-fw-0.5.2-panic-test.elf` with the monitor attached and logging, capped.
+
+1. The ROM banner, the bootloader, then **the first two lines this firmware prints**:
+   ```
+   INFO - boot: #1 since power-on, reset reason power_on (the boot before it started with -)
+   INFO - boot: no panic on record
+   ```
+2. The ordinary boot: `store: 'screeny' partition at 0x410000 ...`, `store: loaded schema
+   ...`, `http: fw slot Ota0 state Valid`, `display: core 1, ...`, `device: mac ... id
+   4a00a4`, and once the tasks are up:
+   ```
+   WARN - panic-test: BENCH BUILD - panicking on core 0 in 20 s, once (card 243)
+   ```
+   Then the join, `net: http worker 0/1 listening on tcp/80 (lan)`, and the 5 s
+   `telemetry:` lines.
+3. At **~20 s of uptime**, the panic. Blank lines are real (they are esp-backtrace's
+   shape, kept):
+   ```
+
+   ====================== PANIC ======================
+   panicked at src/panic.rs:600:5:
+   panic-test: deliberate panic on core 0 (card 243)
+
+   Backtrace:
+
+   0x400d....
+   0x400d....            (several frames)
+
+   panic: resetting the chip (card 243; the breadcrumb is in RTC memory).
+   ```
+   `src/panic.rs:600` is **the `panic!()` in the test task**, not the handler failing:
+   that is where the deliberate panic is written (line 600 as the file stands at this
+   commit; read it as "the line `panic-test: deliberate panic` is on"). The reset follows
+   ~120 ms later.
+4. The ROM banner again, and then **the evidence**:
+   ```
+   INFO - boot: #2 since power-on, reset reason software (the boot before it started with power_on)
+   WARN - boot: last panic was boot #1 at uptime 20xxx ms, panic.rs:600, 1 in a row (1 panic(s) since power-on)
+   INFO - panic-test: already fired since power-on; this boot runs normally
+   ```
+   The device then joins as usual, ~15 s from the reset, and does **not** panic again.
+5. Over HTTP, once it is back: `curl -s http://192.168.7.221/api/v1/status` must carry
+   ```json
+   "reset_reason":"software","boot_count":2,"panic_count":1,
+   "last_panic":{"uptime_ms":20xxx,"boot":1,"file":"panic.rs","line":600,"consecutive":1}
+   ```
+   and `http://192.168.7.221/` must show one row: `panic  panic.rs:600 at 20 s, boot 1 of
+   2 (1 in a row, 1 total)`.
+6. **If step 4 says `boot: #1 ... power_on` and `no panic on record`**, the breadcrumb did
+   not survive the reset and that is the one thing this card cannot test without hardware.
+   The suspect is the custom ESP-IDF bootloader (card 242) clearing or reserving RTC slow
+   memory; the fallbacks, in order, are to move the region to the *top* of RTC slow, or to
+   `rtc_fast` - which works but gives up a panic on core 1, since RTC fast is PRO-CPU only
+   on this chip. Everything else in the card stands either way.
+
+#### The default build
+
+Flash `screeny-fw-0.5.2-default.elf`. It should look exactly like 0.5.1 plus two lines at
+the top of the log:
+
+```
+INFO - boot: #1 since power-on, reset reason power_on (the boot before it started with -)
+INFO - boot: no panic on record
+```
+
+and `fw` reading `0.5.2` in `GET_INFO`, the mDNS TXT and the page. Nothing else about the
+device's behaviour changes while it does not panic. `GET /api/v1/status` carries
+`"boot_count":1,"panic_count":0,"last_panic":null`, and the page's new row reads
+`none in 1 boot(s) since power-on`.
+
+Then card 234's bench procedure, once, on this build - it is the run that was waiting for
+this firmware, and it now has both the bounded send and the breadcrumb. Two extra things
+to read the log for:
+
+* `stack: core 0 main high-water N of 26272 bytes` at the 60 s mark. **The number to
+  compare is card 227's 13,056**; step 5 predicts ~9,984. Whatever it says is the card's
+  measurement of the lever.
+* a `boot: #N` line with N > 1 during a soak means the device rebooted by itself, and the
+  line after it says why. That is the whole point of the card: 0.5.1 could not have told
+  you.
+
+**A device that has stopped with `CRASHED` on the panel** (five quick panics in a row) is
+recovered by a **power cycle** - unplug and replug, or the EN button. A software reboot
+does not clear the latch, and there is no HTTP on a device in that state.

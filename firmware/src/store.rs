@@ -389,9 +389,9 @@ pub struct Parts {
     pub settings: Option<PartitionEntry>,
     /// `otadata`, which card 222 reads for `fw_state` and card 241 will write.
     pub otadata: Option<PartitionEntry>,
-    /// Flash offset of the partition this image is running from, from the MMU
-    /// - which is the *booted* slot and not otadata's selection, and the two
-    /// differ exactly when a rollback has happened.
+    /// Flash offset of the partition this image is running from, read from
+    /// the MMU. That is the *booted* slot and not otadata's selection, and the
+    /// two differ exactly when a rollback has happened.
     pub booted_offset: Option<u32>,
 }
 

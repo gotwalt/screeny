@@ -517,6 +517,9 @@ fn settle() {
 /// Stop, with interrupts off, for ever. The pre-0.5.2 behaviour, now reached
 /// only by the crash-loop guard's last line.
 fn halt() -> ! {
+    // Empty on purpose: there is nothing left to do and nothing that may run.
+    // `esp-backtrace`'s own `abort()` spells it the same way.
+    #[allow(clippy::empty_loop)]
     xtensa_lx::interrupt::free(|| loop {})
 }
 
