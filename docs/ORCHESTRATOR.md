@@ -150,8 +150,8 @@ worker, nobody else in `crates/art` or `crates/studio` while it runs). **Next, a
 merges, in parallel (disjoint files: 151 is `crates/studio`, 155 is one new patch in
 `crates/art`):** 151 (named settings, state v5) and **155 - `vesta`, the owner's low-light
 split-flap night clock** (red numerals, modest size, flaps that fall in 3D; a first version
-to look at with him, snapshots via `--time`). Do not redeploy before ~14:45 on 2026-09-20 without telling the
-firmware session (its one-hour soak of fw 0.5.2 runs under the Studio's stream). The owner
+to look at with him, snapshots via `--time`). Do not redeploy before ~15:25 PDT on 2026-09-20 without telling the
+firmware session (its one-hour acceptance soak of fw 0.5.3 runs under the Studio's stream). The owner
 said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
 permission for `screeny-studio`/`screeny-art`, is the one to check the first time he does).
@@ -257,6 +257,10 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
 - The pacing tests in `crates/screeny` used to fail under load; card 093 fixed the cause
   (they counted the first and `FINAL` frames and asserted on the OS scheduler). They now
   assert on the pacer's own schedule: a failure there is real until shown otherwise.
+- **A loaded bench fails tests that pass alone.** Two sessions and their workers build on one
+  Mac; fixed-port re-binds and wall-clock bounds lose. Card 117 hardened three; card 156
+  lists four more. One failure in those under load: re-run it alone, report both results,
+  and do not hold a merge for it.
 - Remove finished worktrees (`git worktree unlock` + `git worktree remove`, no
   `--force`; delete stray untracked build files first) and merged branches. Each
   worktree carries its own `target/`: gigabytes each.
