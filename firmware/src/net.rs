@@ -54,6 +54,9 @@ fn now_us() -> u64 {
 
 /// What the network looks like from here, for the status screen.
 fn net_state(stack: Stack<'static>, had_address: &mut bool) -> Net {
+    // The HTTP handlers want the same answer and cannot hold a `Stack` in a
+    // `static` (it is not `Sync`), so this tick publishes it for them.
+    crate::http::set_ipv4(stack.config_v4().map(|c| c.address.address().octets()));
     if let Some(cfg) = stack.config_v4() {
         *had_address = true;
         Net::Address(cfg.address.address().octets())

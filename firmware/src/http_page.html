@@ -1,0 +1,101 @@
+<!doctype html>
+<!-- The device's one page (card 222). Self-contained: no external asset, no
+     font, no framework. The status table between the marker below is rendered
+     by the firmware, so the page is readable with JavaScript disabled; the
+     script only replaces the same cells every few seconds. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>screeny</title>
+<style>
+:root{color-scheme:light dark;--fg:#111;--bg:#fff;--dim:#666;--line:#ddd;--acc:#06c}
+@media(prefers-color-scheme:dark){:root{--fg:#e8e8e8;--bg:#161616;--dim:#999;--line:#333;--acc:#6af}}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;max-width:36rem;font:15px/1.5 system-ui,sans-serif;color:var(--fg);background:var(--bg)}
+h1{font-size:1.3rem;margin:0 0 2px}
+h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:24px 0 6px}
+p.sub{margin:0 0 4px;color:var(--dim);font-size:.85rem}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:3px 0;border-bottom:1px solid var(--line);font-weight:400}
+th{color:var(--dim);width:9rem}
+label{display:block;margin:8px 0}
+label span{display:block;color:var(--dim);font-size:.85rem}
+input,select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+input[type=range]{padding:0;border:0;width:100%}
+button{cursor:pointer;border-color:var(--acc);color:var(--acc)}
+button.warn{border-color:#c33;color:#c33}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#msg{min-height:1.2em;font-size:.85rem;color:var(--dim)}
+.todo{border:1px dashed var(--line);border-radius:6px;padding:8px 10px;color:var(--dim);font-size:.85rem}
+</style>
+</head>
+<body>
+<h1 id="title">screeny</h1>
+<p class="sub">Tidbyt Gen 1 as a network frame buffer.</p>
+
+<h2>Status</h2>
+<table id="st"><tbody><!--STATUS--></tbody></table>
+<p id="msg"></p>
+
+<h2>Settings</h2>
+<form id="set">
+<label><span>Name (empty means screeny-&lt;id&gt;)</span><input id="name" maxlength="32" placeholder="screeny"></label>
+<label><span>Brightness <output id="bv"></output> (the firmware caps it)</span><input id="bright" type="range" min="0" max="255"></label>
+<label><span>When nothing is streaming</span>
+<select id="idle">
+<option value="status">status screen</option>
+<option value="hold_forever">hold the last frame</option>
+<option value="dim">dim the last frame</option>
+<option value="black">black</option>
+</select></label>
+<div class="row"><button type="submit">Apply</button>
+<button type="button" id="ident">Identify</button>
+<button type="button" id="boot" class="warn">Reboot</button></div>
+</form>
+
+<h2>Wi-Fi</h2>
+<div class="todo">The network form lives here once the setup portal lands (card 223).
+The API route <code>POST /api/v1/wifi</code> already works: it takes an
+urlencoded <code>ssid</code> and <code>psk</code>.</div>
+
+<h2>Firmware</h2>
+<div class="todo">Firmware upload lives here once the OTA path lands (card 240).</div>
+
+<script>
+const $=s=>document.querySelector(s),msg=t=>{$("#msg").textContent=t};
+let touched=false;
+["#name","#bright","#idle"].forEach(s=>$(s).addEventListener("input",()=>{touched=true}));
+$("#bright").addEventListener("input",()=>{$("#bv").textContent=$("#bright").value});
+function paint(s){
+ for(const k in s){const c=document.querySelector('[data-k="'+k+'"]');if(c&&typeof s[k]!="object")c.textContent=s[k]}
+ const put=(k,v)=>{const c=document.querySelector('[data-k="'+k+'"]');if(c)c.textContent=v};
+ put("ssid",s.ssid??"-");put("ip",s.ip??"-");put("rssi",s.rssi_dbm+" dBm");
+ put("uptime",Math.floor(s.uptime_ms/1000)+" s");put("heap",s.heap_used+" / "+s.heap_size);
+ put("wifi",s.wifi_state);put("boot_id",s.boot_id.toString(16).padStart(8,"0"));
+ put("firmware",s.fw_slot+" / "+s.fw_state);put("reset",s.reset_reason);
+ $("#title").textContent=s.name||("screeny-"+s.id);document.title=$("#title").textContent;
+ if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode}
+}
+async function poll(){
+ try{const r=await fetch("/api/v1/status",{cache:"no-store"});if(r.ok)paint(await r.json())}catch(e){msg("device unreachable")}
+}
+async function send(path,body){
+ try{
+  const r=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(!r.ok){msg("error: "+j.error+(j.detail?" - "+j.detail:""));return null}
+  msg("ok");return j;
+ }catch(e){msg("request failed");return null}
+}
+$("#set").addEventListener("submit",async e=>{
+ e.preventDefault();
+ const j=await send("/api/v1/settings",{name:$("#name").value,brightness:+$("#bright").value,idle_mode:$("#idle").value});
+ if(j){touched=false;msg("applied: brightness "+j.brightness);poll()}
+});
+$("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10000}));
+$("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"})});
+poll();setInterval(poll,4000);
+</script>
+</body>
+</html>

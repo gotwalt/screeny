@@ -1,4 +1,4 @@
-//! DNS-SD responder: spec section 5.
+//! DNS-SD responder: spec section 5, plus card 222's `_http._tcp`.
 //!
 //! The service is `_screeny._udp.local.`, the `SRV` target is
 //! `screeny-<id>.local.` with the **frame** port, and the TXT record is built
@@ -7,6 +7,12 @@
 //! in the firmware, one parser in the sender, and a sender that browsed mDNS
 //! is guaranteed identical metadata to one that was handed a bare IP, because
 //! the two came from the same bytes.
+//!
+//! Since card 222 the same instance name is advertised a second time as
+//! `_http._tcp.local.` on port 80, so a browser or `dns-sd -B _http._tcp`
+//! finds the status page without knowing anything about screeny. The two
+//! services share one [`Host`], so they share the `A` record and the host
+//! name; only the `SRV` port and the TXT keys differ.
 //!
 //! `SET_NAME` changes those bytes, so the responder is restarted on
 //! [`crate::net::INFO_CHANGED`], which also re-announces (RFC 6762 section
@@ -19,7 +25,7 @@ use edge_mdns::buf::VecBufAccess;
 use edge_mdns::domain::base::Ttl;
 use edge_mdns::host::{Host, Service, ServiceAnswers};
 use edge_mdns::io::{self, IPV4_DEFAULT_SOCKET};
-use edge_mdns::HostAnswersMdnsHandler;
+use edge_mdns::{ChainedHostAnswers, HostAnswersMdnsHandler};
 use edge_nal_embassy::{Udp, UdpBuffers};
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -33,6 +39,10 @@ use crate::{mk_static, FRAME_PORT};
 
 const SERVICE: &str = "_screeny";
 const PROTOCOL: &str = "_udp";
+
+/// Card 222's second service: the status page and the JSON API.
+const HTTP_SERVICE: &str = "_http";
+const HTTP_PROTOCOL: &str = "_tcp";
 
 /// An mDNS query or response fits in one datagram many times over; 1500 is
 /// the honest ceiling and costs 3 KB of the two buffers together.
@@ -62,7 +72,11 @@ impl rand_core::TryRng for HwRng {
 }
 
 #[embassy_executor::task]
-pub async fn mdns_task(stack: embassy_net::Stack<'static>, hostname: &'static str) {
+pub async fn mdns_task(
+    stack: embassy_net::Stack<'static>,
+    hostname: &'static str,
+    id: &'static str,
+) {
     stack.wait_config_up().await;
     let Some(config) = stack.config_v4() else {
         warn!("mdns: no IPv4 address, giving up");
@@ -150,18 +164,47 @@ pub async fn mdns_task(stack: embassy_net::Stack<'static>, hostname: &'static st
             txt_kvs: &kvs,
         };
 
+        // The web service's own TXT. Deliberately three short keys: every byte
+        // here is in every response that answers either service, and the
+        // useful ones are "which device is this" and "where is the page".
+        // RFC 6763 section 6.5 wants `txtvers` first.
+        let mut http_kvs: heapless::Vec<(&str, &str), 3> = heapless::Vec::new();
+        let _ = http_kvs.push(("txtvers", "1"));
+        let _ = http_kvs.push(("id", id));
+        let _ = http_kvs.push(("path", "/"));
+
+        let http_service = Service {
+            name: &instance,
+            priority: 0,
+            weight: 0,
+            service: HTTP_SERVICE,
+            protocol: HTTP_PROTOCOL,
+            port: crate::http::HTTP_PORT,
+            service_subtypes: &[],
+            txt_kvs: &http_kvs,
+        };
+
         info!(
-            "mdns: {}.local -> {} as {}.{}.{}.local port {} ({} txt keys)",
+            "mdns: {}.local -> {} as {}.{}.{}.local port {} ({} txt keys), and {}.{}.local port {}",
             hostname,
             ipv4,
             instance.as_str(),
             SERVICE,
             PROTOCOL,
             FRAME_PORT,
-            kvs.len()
+            kvs.len(),
+            HTTP_SERVICE,
+            HTTP_PROTOCOL,
+            crate::http::HTTP_PORT,
         );
 
-        let handler = HostAnswersMdnsHandler::new(ServiceAnswers::new(&host, &service));
+        // Chained, not two responders: one socket, one pair of buffers, and
+        // both services answered out of the same packet. Each of them emits
+        // the `A` record, which a resolver de-duplicates.
+        let handler = HostAnswersMdnsHandler::new(ChainedHostAnswers::new(
+            ServiceAnswers::new(&host, &service),
+            ServiceAnswers::new(&host, &http_service),
+        ));
         match select(mdns.run(handler), INFO_CHANGED.wait()).await {
             Either::First(Err(e)) => {
                 warn!("mdns: responder stopped: {:?}", e);
