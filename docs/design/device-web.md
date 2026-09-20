@@ -3,7 +3,7 @@
 **Status (2026-09-20, late): research done (200-202); on the device: the partition
 table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
 strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
-(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); in flight: 227 (RAM levers, hardware); 232 (state-machine and API refinements) done.** This file is the
+(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); fw 0.4.2 (227: RAM levers, two HTTP workers); `screeny-probe http` (228); in flight: 233 (single HTTP dispatch, hardware).** This file is the
 source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
 Claude session): decisions, what the research settled, and the build order at the end.
 
@@ -228,14 +228,27 @@ fails three times, the built-ins join), send `screeny-probe set-wifi SSID PSK --
 flash the default build. **Bench rule that follows: after any wrong-credentials test,
 reboot the device and see it rejoin before calling the test passed.**
 
-Where core 0's stack goes (card 227, `docs/research/010-stack-and-ram-levers.md`): not a
-buffer - picoserve's router is nine nested `Either` futures, each layer's `poll` frame
-holding the rest by value: 5,968 (the http task) + 800 + 5,680 + 2,192 + 1,104 = 15.7 KB,
-of which 7.9 KB is dispatch before any handler runs. Interrupts land on the interrupted
-stack (256 bytes of context per level; esp-rtos has no interrupt stack), which is why
-`stack_free` creeps down for an hour: a high-water mark records the unluckiest
-coincidence so far. **Card 233 (one router future instead of nine nested ones, ~7.8 KB)
-goes before card 223.**
+Where core 0's stack goes (card 227, `docs/research/010-stack-and-ram-levers.md`),
+measured on fw 0.4.2: **the boot path sets the mark (13,056 bytes)**; 2,378 real HTTP
+connections added 272 bytes and a forced WiFi join failure + rejoin added none. Interrupts
+land on the interrupted stack (256 bytes of context per level; esp-rtos has no interrupt
+stack), which is the 16-112 byte creep. The ~18 KB seen on fw 0.4.0 was, by strong
+inference, the flash write that `POST /api/v1/wifi` used to do *inside the HTTP handler*
+(esp-storage's 4 KB frames on top of the router chain) - moving that write into the WiFi
+task fixed the credentials bug and removed the deepest call chain at once. Rule for
+firmware cards: **never write flash from inside an HTTP handler.** picoserve's nested
+`Either` router is still a 5,680-byte frame (43% of the high-water) and each HTTP worker
+costs 7,504 bytes of `.bss`; card 233 replaces it with one dispatch and *measures* what
+that buys.
+
+RAM levers pulled in 0.4.2: core 1's stack 16 KB -> 6 KB (measured high-water 1,872, the
+same number from two region sizes), second heap arena 32 -> 24 KB (APSTA watermark 54,040
+of 90,112: 36 KB free at the worst instant), a second HTTP worker (+7.5 KB) with an eighth
+socket. `.stack` 33,072, `stack_free` 17-19 KB under load, `tools/fw-size.sh` floor 24,576.
+**Card 223 priced by building the spike: 15.8 KB of `.stack`, not the ~9 KB estimated**;
+minus the spike's 6 KB scratch frame it lands at ~23.4 KB, ~1.2 KB under the floor. The
+floor stays; 223 takes one more lever first (233's result, or the frame-socket tx buffer /
+mDNS buffers at ~1.9 KB each).
 
 What card 222 must not rediscover:
 
@@ -292,8 +305,8 @@ Studio all depend on - `crates/proto` is not touched.
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | **done, on the device (fw 0.4.0)**: http://192.168.7.221/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
 | 228 | `screeny-probe http`: 38 rules over the HTTP API, the same suite against the sim and the device - **done**; `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http` is the check after every flash, beside the UDP `conformance`. Known firmware-0.4.x gaps are skips behind one constant, `screeny_probe::http::CARD_223_LANDED` | no |
-| 227 | (in flight, hardware) RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
-| 233 | firmware: one router future instead of picoserve's nine nested ones (~7.8 KB of stack depth back); **gates 223** | yes |
+| 227 | **done (fw 0.4.2)** - RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
+| 233 | (in flight, hardware) one HTTP dispatch instead of picoserve's nested router: fixes the three findings of the first `screeny-probe http` device run (plain-text 405 for unknown verbs, `bad_request` vs `out_of_range` on an unconfirmed reboot), per-route body limits, and measures the RAM it buys; **gates 223** | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
