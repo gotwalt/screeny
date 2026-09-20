@@ -90,14 +90,24 @@ half what it did; `sockets` in status), 183, 182. Browser tooling note: the Chro
 drives a *background* window, so `document.hidden` is true there - since card 120 the page
 then asks for no pictures and the canvas is black; verify frames with a hand-opened
 WebSocket (`/api/v1/ws?fps=30&repeat=false`), and leave judging the picture to the owner.
-**In flight since 2026-09-20 ~09:30 (software session, three Opus workers, worktrees):** 102
-(`card/102-art-panel-model`; scoped to the model, meters and README - piece looks and the
-60-vs-30 question are left for the owner, follow-ups 113-116), 141
-(`card/141-follow-a-moved-panel`, follow-ups 142-144; its real-panel check is the
-orchestrator's after the merge), 196 (`card/196-state-broadcast-pacing`, measure first,
-follow-ups 117-119). If you are reading this after a reset and they are not merged: look at
-`git worktree list` and the branches, save any uncommitted work as a WIP commit, continue
-from there. Other good next cards: 104 (scheduler - design with the owner), 102
+**Done 2026-09-20 midday and deployed together:** 196 (a socket's state messages are paced
+like its frames: a slider drag costs a second browser 20 msg/s, not 60; a single change is
+still immediate), 102 (the art system quantises and previews against
+`screeny_panel::DEVICE` - 1008 duty steps for a held colour, pinned by a test against a copy
+of `firmware/src/gamma.rs`'s table; the 32/16 "Levels" are gone, the page has "Panel:
+Dithered / Bit planes"; palettes up to 256; wire cost measured equal to before), 141 (a
+broadcast `GET_INFO` finds a panel that took a new address - only while a device is unheard,
+on the browse's tick, with backoff; the real DHCP-move check is the owner's), and **115 -
+the owner asked for smoother, thinner clock hand tips**: hands taper (`tip` param on both
+clock pieces, default 0.45, 1.0 = the old blunt hand; numerals taper only while dancing so
+the digits' strokes still join) and the hand ramp's floor went from L 0.32 to 0.16. He is
+judging 115 by eye on the panel; expect a follow-up on the value, or on the numerals' hands
+fattening as they settle. New backlog from these: 113 (cadence history on the page), 114
+(the sim's *window* still draws 64 levels), 117 (two tests flake when several worktrees run
+the suite at once: the studio soak, and `embed.rs` re-binding a fixed port), 118 (one
+refused connection sends a known panel's HTTP poll to the two-minute rate - seen after
+every reflash), 142 (`--probe-to` for a container with no broadcast route).
+Nothing of this session's is in flight. Other good next cards: 104 (scheduler - design with the owner), 102
 (art's panel model vs the device), 120 (preview bandwidth), 141, 182, 183, 190, 191; card 192
 (a sim that can play an unhealthy device) was offered to the firmware session.
 Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
@@ -113,7 +123,10 @@ instead of today's cut); which `rest` treatment he likes on the panel (default `
 quiet`); keep or delete the Reconnects row; should the unasked-for reboot count age out or
 notify (default no); is 30 fps right for the browser preview (default yes); a glance at the
 page in a *visible* tab after card 120 (nobody has seen the drawn picture since); the
-workbench reboot for card 107 (his to run). Check that the firmware session handed the panel
+workbench reboot for card 107 (his to run); from card 102: should `overland` still cut
+colours below L 0.3 to black (now style, not necessity), and does he want a dim-room
+brightness control on the preview; from 197: a mark at 1.00x on the Speed slider, and a
+double-click back to it? Check that the firmware session handed the panel
 back after borrowing it (`player.on` true in `/api/v1/status`) - `on:false` now survives a
 restart.
 
