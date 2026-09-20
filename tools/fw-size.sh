@@ -15,24 +15,31 @@
 # Read both: this script says how much room the linker left, the device says
 # how much of it was used.
 #
-# THE FLOOR IS 28672 (28 KB), raised from 16384 by card 227. The script exits
+# THE FLOOR IS 24576 (24 KB), raised from 16384 by card 227. The script exits
 # non-zero below it. That is not a budget - individual cards set tighter ones -
-# it is the point past which a build should not be flashed at all, and card 227
-# is what makes 28 KB the right number:
+# it is the point past which a build should not be flashed at all.
 #
-#   * The **measured demand** is no longer card 220's 10.7 KB. Real TCP traffic
-#     takes core 0 to ~17.9 KB, because picoserve's nested-`Either` router puts
-#     two frames totalling 7,872 bytes on the stack before a handler runs
-#     (`docs/research/010-stack-and-ram-levers.md`, section 2). The old floor
-#     was *below* the demand: a build could have passed this check and still
-#     have died on the guard.
-#   * 28 KB is that 17.9 KB plus the ~9 KB of `.bss` card 223's soft-AP, DHCP,
-#     DNS and portal need, which is the next thing to be added. A build that
-#     cannot clear the floor cannot clear the next card either.
+# Why it had to move: **the old floor was below the measured demand.** Card 220
+# measured a 10.7 KB high-water mark and 16 KB looked like half as much again.
+# Then card 222 put a web server on the device and real TCP traffic took core 0
+# to ~17.9 KB - picoserve's nested-`Either` router alone puts two frames
+# totalling 7,872 bytes on the stack before a handler runs
+# (`docs/research/010-stack-and-ram-levers.md` section 2). A build could have
+# passed this check with 16,384 bytes of `.stack` against a 17,900-byte demand
+# and died on the guard. A floor under the demand is worse than no floor,
+# because it reads as permission.
 #
-# Raising it is the point: it has to fail for a build that would once have been
-# shipped. If a legitimate build cannot make 28 KB, the answer is a lever from
-# research 010 section 4, not a lower number here.
+# Why 24 KB and not the 28 KB card 227 was asked to consider: card 223 (the
+# soft-AP, DHCP, DNS and the portal) is the next thing to be added and it wants
+# ~9 KB of `.bss`, which comes straight off `.stack`. Card 227 leaves `.stack`
+# in the mid-thirties, so card 223 lands in the mid-twenties - **below 28 KB**.
+# A floor the next planned card cannot clear is not a floor, it is a blocker
+# that somebody will quietly edit, and then it protects nothing. 24 KB is the
+# highest round number card 223 can still pass, and it is 6.6 KB clear of the
+# worst depth ever measured.
+#
+# If a legitimate build cannot make 24 KB, the answer is a lever from research
+# 010 section 5, not a lower number here.
 #
 # Usage:  tools/fw-size.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw
 #
@@ -40,7 +47,7 @@
 
 set -euo pipefail
 
-FLOOR=28672
+FLOOR=24576
 
 elf="${1:-}"
 if [ -z "$elf" ]; then
