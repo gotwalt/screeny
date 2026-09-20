@@ -1,0 +1,36 @@
+[package]
+name = "screeny-device-api"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The device's HTTP API: the route table, every request and reply shape, the urlencoded WiFi form, and a size bound for each. One definition for the firmware, the simulator and the Studio. no_std, no alloc."
+
+# `no_std`, no alloc, no float, no clock, no I/O: this crate is compiled for
+# xtensa-esp32-none-elf by the firmware (card 222) and for the host by the
+# simulator (224) and the Studio, so anything it pulls in, they both pull in.
+# The precedent is `crates/provision`.
+#
+# The versions are the ones `picoserve 0.20.0` itself depends on, read out of
+# its manifest, so the firmware links a single copy of each:
+#   heapless 0.9.3, with `serde` already enabled there
+#   serde 1.0.229, default-features off, `derive`
+#   serde-json-core 0.6.0 (dev-only here; the firmware gets it via picoserve)
+[dependencies]
+screeny-proto = { path = "../proto" }
+# For `FailReason`/`TrialOutcome` only: `GET /api/v1/wifi`'s `reason` string is
+# the portal state machine's, and one enum is better than two that agree today.
+screeny-provision = { path = "../provision" }
+heapless = { version = "0.9.3", features = ["serde"] }
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+
+[features]
+default = []
+# Conveniences only, nothing structural: `std::error::Error` for the error
+# types. The shapes and their sizes are identical with and without it.
+std = []
+
+[dev-dependencies]
+# `default-features = false` drops serde-json-core's own optional heapless 0.8;
+# nothing here needs its `to_string`/`to_vec`, only `to_slice`/`from_slice`.
+serde-json-core = { version = "0.6.0", default-features = false }
+serde_json = "1"
