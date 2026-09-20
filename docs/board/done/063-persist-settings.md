@@ -50,3 +50,7 @@ brightness sweep at 30 changes a second produces at most a handful of flash
 writes.
 
 ## Log
+
+2026-09-20, firmware orchestrator: delivered by card 212 (the settings store in the
+firmware); its acceptance - set, reboot, read back; a 60 s brightness sweep costing a
+handful of writes (it cost one) - is recorded on that card.
