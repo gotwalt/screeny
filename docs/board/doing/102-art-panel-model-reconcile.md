@@ -148,3 +148,102 @@ decoded frame *through the same model* and still passes pixel-for-pixel, indexed
 continuous. All 55 `crates/art` lib tests pass unchanged - including the clocks'
 "every treatment keeps the palette exact" and `overland`'s "no colour lives in the
 shadows", so the finer quantisation splits no palette and merges none.
+
+### Step 3 - the colour budget: 32 is a guarantee, not a ceiling
+
+`frame::MAX_PALETTE` was 32, called "largest palette that is still an exact frame".
+Since card 101 the encoder answers for itself, so the constant is split:
+
+- `GUARANTEED_PALETTE = 32` - exact **whatever the index plane looks like**, because
+  the fixed-rate `PAL5` rung is 1376 bytes for any 32 colours and any 2048 indices,
+  pure noise included.
+- `MAX_PALETTE = 256` - the ceiling. Between the two, exactness is a compression
+  question about the picture, and `Measured::exact` is the measured answer.
+
+`Palette::always_exact()` is that distinction with a name. New test
+`a_large_palette_still_goes_out_exactly`: four 16-step OKLCH ramps (65 colours), a
+terraced gradient mapped onto them, through the real encoder - exact, `pal8-lz`,
+inside the 1464-byte budget.
+
+One constant was doing two jobs: the GPU shader's uniform `palette` array is now
+`gpu::fragment::SCENE_PALETTE` (32, matching `fragment.wgsl`), so raising the frame's
+ceiling does not silently make every GPU piece's uniform 4 KB. **No pixel changes** -
+every piece still builds 31 or 32 colours, and `plasma`'s "Colours" slider still caps
+at 32 (its `ParamSpec` always did).
+
+### Step 4 - the studio: the control, the meter, and the stored setting
+
+- **Panel control.** "Levels per channel 64 / 32 / 16" becomes "Panel: Dithered /
+  Bit planes", with a hint line saying what the second is for. The two are
+  `screeny_panel::DEVICE` and `NOMINAL`.
+- **Stored state.** `settings.levels` leaves the file. No schema bump: the shape did
+  not change, serde ignores the key, and the panel comes up on the device's model.
+  `state::note_retired_levels` reports it once in `repaired` - the same list as every
+  other silent correction - because a setting that quietly stops meaning what the
+  person chose is worse than one sentence on the dashboard. Test
+  `a_retired_levels_setting_loads_and_is_reported` loads a v3 file holding 32, 16 and
+  64 in turn: the rest of the file survives (seed, dither, `panel_model`), the panel is
+  `dithered`, it is said once and not per player, and it is a repair rather than a
+  recovery. The v1 and v2 migration tests now expect that one sentence, because every
+  file of those vintages names `levels`.
+- **Colours meter.** Was 0..64 with "of 32 exact" and ticks at 16 and 32. Now 0..256
+  with the ticks kept at 16 and 32 (6.25% and 12.5%), and a note that says which of
+  three situations the frame is in: guaranteed exact at or under 32, exact because the
+  index image compressed, or requantised. All three come from `Measured`, not a rule.
+- **Frame size meter.** Already measured rather than estimated (card 101): it reads
+  `Measured::bytes` against `meter::PAYLOAD_BYTES`, and names the codec the chooser
+  really picked. The only change is that it now says "lossy" when the frame is.
+
+### Frame rate: what happens today, unchanged
+
+Asked to write it down rather than change it. As it stands:
+
+- The **player renders at `fps`** (1..60, default 60, card 172) and hands every frame
+  to `Link::send`. The link never sleeps.
+- `Cadence::Limit` is the default: the link drops frames that arrive before the next
+  slot on an absolute schedule at the rate it is currently targeting, which starts at
+  `SenderConfig::fps` and follows spec 6.9's ladder down under loss and back up. **A 60
+  fps piece into a 30 fps panel therefore puts 30 on the wire and the device supersedes
+  nothing.** Half the frames come back `Sent::Coalesced`, which is the system working,
+  not a fault. `Cadence::Free` sends everything and lets the device count the surplus
+  as `frames_dropped_superseded`; nothing in the studio selects it.
+- The four counters exist in `PanelStatus` and three are on the page, in the Panel
+  block: `Frames  N sent, M folded, K lost` (`frames_sent`, `frames_coalesced`,
+  `frames_dropped`), plus `Link  up - N fps` (`PanelStatus::fps`, the rate the panel is
+  keeping up with) and `Rendered  N frames at M fps` (the player's own measured rate).
+- **What is missing:** `frames_offered` is carried but not displayed - it is
+  recoverable as sent + folded + lost, so this is cosmetic. Nothing shows the *ladder*
+  moving: `PanelStatus::fps` is the current target, but a step down under loss and the
+  step back up are not distinguishable from a piece being set to a lower rate, and
+  there is no history. That is the one thing a person watching a bad WiFi day would
+  want and cannot see. Written up as card 113 rather than done here.
+
+### Open with the owner
+
+Three things that are now **style rather than necessity**. The dark end is usable -
+only sRGB 0 and 1 are black - so each of these is a choice the panel no longer forces.
+Left exactly as they are; none of them changed a pixel in this card.
+
+1. **`overland` cuts palette colours below OKLCH L 0.3 to true black**
+   (`pieces/overland.rs`, `fn paint`). Its comment says "below this the panel has a
+   handful of levels and they carry colour casts". The first half is no longer true;
+   the second half still is. *What would change if it went:* at dusk the sky would fade
+   through dim bands instead of going out one band at a time, zenith first, and night
+   terrain would be very dark colour rather than silhouette. The test
+   `no_colour_lives_in_the_shadows` encodes the current rule for every hour, so this is
+   a deliberate look, not an oversight. It may well be the better look.
+2. **The clock pieces' hand ramps start at OKLCH L 0.32** (`pieces/clocks/draw.rs`,
+   `const DARK`, with `STEPS = 15`). Comment: "anything dimmer is left black, because
+   the panel has almost no levels down there". *What would change if `DARK` dropped:*
+   anti-aliased hand edges would get dimmer steps, so strokes would look smoother and
+   thinner at the tips; the resting-dial treatment (a fifth of the ink) would land
+   further down its own ramp and could go quieter still. The palette must stay at 31
+   colours to keep the frame exact, so a lower `DARK` means a longer, darker ramp over
+   the same 15 steps, not more steps.
+3. **`Palette::ramps`'s `dark` argument.** Its advice - "keep it around 0.4 or above" -
+   was corrected in the doc comment, but no caller's value was touched. `knot` and
+   `overland` choose their own.
+
+A fourth, smaller one: the **panel-model A/B** now offers "Dithered" and "Bit planes".
+If the owner would rather see a dim room modelled, that is a brightness control on the
+preview (`screeny_panel::oe_light`), not a panel - say so and it is a small card.
