@@ -81,6 +81,14 @@ pub struct DeviceRecord {
     /// [`crate::devhttp::DEFAULT_PORT`]. Live only, never persisted: it is how
     /// a simulator - which cannot bind 80 without root - is talked to.
     pub http_port: Option<u16>,
+    /// When this studio last asked this panel to reboot, and has not yet seen
+    /// it come back (card 195).
+    ///
+    /// Live only, never persisted and never on the wire: it is about this
+    /// process's own last few minutes. A studio that restarts has asked for
+    /// nothing, which is the honest answer - it cannot know what the studio
+    /// before it did.
+    pub reboot_ask: Option<Instant>,
 }
 
 impl DeviceRecord {
@@ -204,30 +212,70 @@ impl Telem {
 
 // --------------------------------------------------- the device's own HTTP ----
 
-/// Bytes of core-0 stack left untouched, below which the page says so.
+/// Bytes of core-0 stack left untouched, below which the margin has started to
+/// go and the page says so quietly.
 ///
-/// The owner's device reads `stack_free 4312` when it is healthy, and firmware
-/// card 222 watched it fall to 5.2 KB while serving requests during a stream -
-/// which is what card 227 was opened for. So "healthy" here is a low number
-/// already, and what matters is the margin, not the absolute. Two kilobytes is
-/// half of the healthy reading: about one exception frame plus picoserve's
-/// buffer, which is the next thing that would want the space. Below it, the
-/// next feature does not fit and the one after that smashes the guard.
-pub const LOW_STACK: u32 = 2048;
+/// **Card 195: these are the firmware session's numbers, measured on the real
+/// device across several builds, and this is their reasoning.** Interrupts land
+/// on core 0's stack at about **256 bytes of context per level**, and
+/// `stack_free` is a *high-water mark*: it only ever falls, so a reading is the
+/// worst moment since boot rather than this moment. A healthy 0.4.3 reads
+/// **17-20 KB**; the 0.4.0 build that worried them read **4-5 KB**. Eight
+/// kilobytes is well below healthy and still well above the build that was in
+/// trouble, which is what makes it a warning rather than a fault.
+///
+/// Card 180's single line at 2048 was chosen from two readings, one of which
+/// (`stack_free 4312`) turned out to be the *unhealthy* build. It was too late
+/// to be worth printing: by then the margin is a few interrupt levels.
+pub const STACK_WARN: u32 = 8192;
+
+/// Bytes of core-0 stack left untouched, below which it is a fault.
+///
+/// Four kilobytes is sixteen levels of interrupt context, or one exception
+/// frame plus picoserve's buffer - the next things that would ask for the
+/// space. Below it the next interrupt is the one that smashes the guard.
+/// This is the level the 0.4.0 build was sitting at.
+pub const STACK_FAULT: u32 = 4096;
+
+/// The old name for the fault level, kept because it is on the wire.
+///
+/// `/api/v1/status` is additive: a field that has been published is not
+/// removed. [`DeviceFacts::low_stack`] is still there and still means what it
+/// said, which is now the fault level.
+pub const LOW_STACK: u32 = STACK_FAULT;
 
 /// Fraction of the heap in use, above which the page says so.
 ///
-/// The owner's device reads `47240/98304` - 48% - when it is healthy, and the
-/// simulator reports 67%. 85% is therefore nowhere near the ordinary state of
-/// either, so a line drawn there is a real change rather than noise, and it
-/// still leaves ~14 KB free, which is more than one TLS-less HTTP connection
-/// and one frame buffer ever ask for.
+/// **The firmware session's line, and a fault** (card 195): steady state is
+/// 45.6 KB of 90 KB - **51%** - and the measured worst instant, with the setup
+/// AP up, is 54 KB (**60%**). 85% is therefore nowhere near either, so a line
+/// drawn there is a real change rather than noise, and it still leaves ~13 KB,
+/// which is more than one connection and one frame buffer ever ask for.
 pub const HIGH_HEAP: f32 = 0.85;
+
+/// How long after the studio asks a panel to reboot a new `boot_id` still
+/// counts as *that* reboot.
+///
+/// The device is back in a few seconds, but the studio does not look that
+/// often: the status poll is [`crate::MIN_DEVICE_HTTP_EVERY`] (10 s) and a read
+/// that fails while the device is down backs the next one off, up to twelve
+/// passes. Two minutes is that cap - the longest the studio can go between
+/// reads - so an ask covers the first read that can possibly see the reboot.
+/// Anything later we would rather count as a crash than excuse as ours.
+pub const REBOOT_ASK_WINDOW: Duration = Duration::from_secs(120);
 
 /// Reset reasons that are the ordinary way this device restarts: power
 /// applied, our own `REBOOT` or `esp_restart`, and the reset pin - which is
 /// `espflash` on this bench. Anything else (brownout, panic, either watchdog)
 /// is something that *happened to* the device and is worth a person's eye.
+///
+/// **`software` cannot be trusted to mean "clean".** The ESP32 cannot tell a
+/// panic from any other software reset, so today `software` covers our own
+/// `REBOOT`, a reflash, *and* a crash-and-restart. That is why it is quiet here
+/// and why [`DeviceFacts::unasked_reboots`] exists: the honest signal is not
+/// the reason but a `boot_id` change the studio did not ask for. When the
+/// firmware reports panics (an RTC breadcrumb, a later firmware card), `panic`
+/// becomes a reason of its own and this comment can go.
 const QUIET_RESETS: [ResetReason; 3] = [ResetReason::PowerOn, ResetReason::Software, ResetReason::External];
 
 /// What only the device knows: `GET /api/v1/status`, plus what the studio can
@@ -259,6 +307,18 @@ pub struct DeviceFacts {
     /// agreement with the firmware session: a device whose link merely flapped
     /// keeps its `boot_id`, and a device that rebooted draws a new one.
     pub reboots: u32,
+    /// How many of those reboots **this studio did not ask for**, and whose
+    /// `reset_reason` is `software` (card 195).
+    ///
+    /// The studio asks for exactly one kind of reboot - its own reboot control,
+    /// `POST /api/v1/device/reboot` - and remembers when it did
+    /// ([`Registry::asked_to_reboot`]). A `boot_id` change with no ask behind
+    /// it, on a chip that says it restarted in software, is the nearest thing
+    /// to "it may have crashed" this firmware can offer: see [`QUIET_RESETS`]
+    /// for why `software` alone means nothing. **A reflash looks exactly the
+    /// same from here**, which is why the page says this quietly and it is
+    /// never a fault, and never a problem in `/healthz`.
+    pub unasked_reboots: u32,
     /// The link is up: a non-null `ip`.
     ///
     /// Until firmware card 223, `wifi_state` can read `failed` on a device
@@ -269,7 +329,15 @@ pub struct DeviceFacts {
     /// `wifi_state` says `failed` and yet there is an address. A note about
     /// the last WiFi change, **never** a fault.
     pub wifi_stale_failure: bool,
-    /// Free stack is below [`LOW_STACK`].
+    /// Free stack is below [`STACK_WARN`]: the margin has started to go.
+    ///
+    /// **Implied by [`DeviceFacts::stack_fault`]** - a device below the fault
+    /// line is also below the warning one - so the page reads the fault first.
+    pub stack_warn: bool,
+    /// Free stack is below [`STACK_FAULT`].
+    pub stack_fault: bool,
+    /// The old name for [`DeviceFacts::stack_fault`], kept because it is on the
+    /// wire: `/api/v1/status` is additive and a published field stays.
     pub low_stack: bool,
     /// The heap is fuller than [`HIGH_HEAP`].
     pub low_heap: bool,
@@ -282,23 +350,41 @@ pub struct DeviceFacts {
 
 impl DeviceFacts {
     /// Read one status reply, carrying forward what only a previous read can
-    /// say - the reboot count.
+    /// say - the reboot counts.
+    ///
+    /// `ask` is the reboot this studio asked for and has not yet seen happen.
+    /// A `boot_id` change **consumes** it, whether or not it was still fresh,
+    /// so that one ask excuses exactly one reboot and a stale ask cannot excuse
+    /// a second one months later.
     #[must_use]
-    pub fn of(reply: StatusReply, previous: Option<&DeviceFacts>) -> Self {
+    pub fn of(reply: StatusReply, previous: Option<&DeviceFacts>, ask: &mut Option<Instant>) -> Self {
         let rebooted = previous.is_some_and(|p| p.reply.boot_id != reply.boot_id);
         let reboots = previous.map_or(0, |p| p.reboots) + u32::from(rebooted);
+
+        // Who asked for it. The ask is taken on any reboot - it was about the
+        // one that has now happened - and only counts if it is inside the
+        // window, because the alternative is an ask from last week quietly
+        // excusing tonight's crash.
+        let asked_for = rebooted && ask.take().is_some_and(|at| at.elapsed() <= REBOOT_ASK_WINDOW);
+        let unasked = rebooted && !asked_for && reply.reset_reason == ResetReason::Software;
+        let unasked_reboots = previous.map_or(0, |p| p.unasked_reboots) + u32::from(unasked);
+
         let link_up = reply.ip.is_some();
         let heap = if reply.heap_size == 0 {
             0.0
         } else {
             reply.heap_used as f32 / reply.heap_size as f32
         };
+        let stack_fault = reply.stack_free < STACK_FAULT;
         DeviceFacts {
             heard_unix: unix_now(),
             reboots,
+            unasked_reboots,
             link_up,
             wifi_stale_failure: link_up && reply.wifi_state == WifiState::Failed,
-            low_stack: reply.stack_free < LOW_STACK,
+            stack_warn: reply.stack_free < STACK_WARN,
+            stack_fault,
+            low_stack: stack_fault,
             low_heap: heap > HIGH_HEAP,
             bad_fw_state: reply.fw_state != FwState::Valid,
             odd_reset: !QUIET_RESETS.contains(&reply.reset_reason),
@@ -319,10 +405,27 @@ impl std::fmt::Debug for DeviceFacts {
             .field("wifi_state", &self.reply.wifi_state)
             .field("ssid", &if self.reply.ssid.is_some() { "<redacted>" } else { "<none>" })
             .field("reboots", &self.reboots)
+            .field("unasked_reboots", &self.unasked_reboots)
             .field("reset_reason", &self.reply.reset_reason)
             .field("store_errors", &self.reply.store_errors)
             .finish_non_exhaustive()
     }
+}
+
+/// What one status read changed, for the caller's log line.
+///
+/// Deliberately only counters and flags: the reply itself carries the SSID and
+/// is never handed back out of [`Registry::heard_http`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Heard {
+    /// Reboots since the studio started.
+    pub reboots: u32,
+    /// How many of those the studio did not ask for.
+    pub unasked_reboots: u32,
+    /// This read is the first since the device rebooted.
+    pub rebooted: bool,
+    /// ...and nobody here asked it to.
+    pub unasked: bool,
 }
 
 /// How reading a device's HTTP API is going.
@@ -603,15 +706,21 @@ impl Registry {
     /// heard from the device, because it is: the studio just had a TCP
     /// conversation with it at the address it thought it was at.
     ///
-    /// Returns `(reboots, this read is the first since a reboot)` and nothing
-    /// from the payload, so the caller can say what happened **without ever
-    /// being handed the reply** - which carries the SSID.
-    pub fn heard_http(&self, id: &str, reply: StatusReply) -> Option<(u32, bool)> {
+    /// Returns [`Heard`] and nothing from the payload, so the caller can say
+    /// what happened **without ever being handed the reply** - which carries
+    /// the SSID.
+    pub fn heard_http(&self, id: &str, reply: StatusReply) -> Option<Heard> {
         let mut devices = self.lock();
         let d = devices.get_mut(id)?;
-        let facts = DeviceFacts::of(reply, d.facts.as_ref());
+        // The ask goes in and out by value: `DeviceFacts::of` consumes it if
+        // this read is the one that saw the reboot.
+        let mut ask = d.reboot_ask;
+        let facts = DeviceFacts::of(reply, d.facts.as_ref(), &mut ask);
+        d.reboot_ask = ask;
         let reboots = facts.reboots;
+        let unasked_reboots = facts.unasked_reboots;
         let rebooted = d.facts.as_ref().is_some_and(|p| p.reboots != reboots);
+        let unasked = d.facts.as_ref().is_some_and(|p| p.unasked_reboots != unasked_reboots);
         d.facts = Some(facts);
         d.seen_unix = Some(unix_now());
         d.http.absent = false;
@@ -620,7 +729,26 @@ impl Registry {
         // A device that is answering again may stop again, and that is worth
         // one more line when it does.
         d.http.said = false;
-        Some((reboots, rebooted))
+        Some(Heard { reboots, unasked_reboots, rebooted, unasked })
+    }
+
+    /// **The studio has just asked this panel to reboot.**
+    ///
+    /// Recorded *before* the request goes out, not after it succeeds: a panel
+    /// that received `REBOOT` and rebooted before its acknowledgement got back
+    /// has still done what we asked, and an ask that turns out to have reached
+    /// nobody costs only that the next two minutes' crash is not named as one
+    /// ([`REBOOT_ASK_WINDOW`]). Crying wolf is the expensive mistake here.
+    ///
+    /// Returns false if there is no such device.
+    pub fn asked_to_reboot(&self, id: &str) -> bool {
+        match self.lock().get_mut(id) {
+            Some(d) => {
+                d.reboot_ask = Some(Instant::now());
+                true
+            }
+            None => false,
+        }
     }
 
     /// Record that a status read did not work.

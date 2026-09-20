@@ -413,12 +413,24 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default();
-                if let Some((reboots, rebooted)) = st.devices.heard_http(&id, reply) {
+                if let Some(heard) = st.devices.heard_http(&id, reply) {
                     if announce {
                         eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
                     }
-                    if rebooted {
-                        eprintln!("studio: `{}` rebooted: {reboots} since the studio started", record.label());
+                    if heard.rebooted {
+                        eprintln!("studio: `{}` rebooted: {} since the studio started", record.label(), heard.reboots);
+                    }
+                    // Card 195, and said plainly rather than alarmingly: on
+                    // this firmware a crash and a reflash are the same three
+                    // bytes of `reset_reason`, so the line says what is known
+                    // and not what it might mean.
+                    if heard.unasked {
+                        eprintln!(
+                            "studio: `{}` rebooted without the studio asking: {} of {} so far",
+                            record.label(),
+                            heard.unasked_reboots,
+                            heard.reboots
+                        );
                     }
                 }
                 backoff.remove(&id);
