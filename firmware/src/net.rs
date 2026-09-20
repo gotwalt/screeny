@@ -48,6 +48,26 @@ const TICK: Duration = Duration::from_millis(20);
 /// How often the idle screen's ambient animation advances.
 const ANIM_MS: u64 = 100;
 
+/// The frame socket's **transmit** buffer, and card 223's RAM lever.
+///
+/// It was `2 * MAX_DATAGRAM` (2,944 bytes) from card 008 to card 223, by
+/// symmetry with the receive side - and the symmetry was false. The frame port
+/// *receives* datagrams of up to [`MAX_DATAGRAM`]; what it **sends** is only
+/// ever one of section 6.2's unsolicited replies, and the largest of those is
+/// the `TELEMETRY` of section 6.4/6.7: an 8-byte control header and a 48-byte
+/// body, 56 bytes on the wire. `BUSY` is shorter still. The shared receive core
+/// enforces that from the other end: every item in its [`Outbox`] is an
+/// [`screeny_receiver::OUT_MAX`]-byte buffer (64), and the outbox holds four,
+/// so **256 bytes is the most that can ever be queued here at once**.
+///
+/// 512 is that with the queue counted twice over, and it is still a
+/// 2,432-byte refund to core 0's stack - which is what card 223's soft-AP,
+/// DHCP server, DNS catch-all and second network stack are spent on. The four
+/// `tx_meta` slots are unchanged: they, not the byte count, are what bounds the
+/// number of datagrams in flight.
+const FRAME_TX_BUF: usize = 8 * screeny_receiver::OUT_MAX;
+const _: () = assert!(FRAME_TX_BUF >= 4 * screeny_receiver::OUT_MAX);
+
 fn now_us() -> u64 {
     Instant::now().as_micros()
 }
@@ -110,7 +130,8 @@ pub async fn frames_task(
     let rx_meta = mk_static!([PacketMetadata; 4], [PacketMetadata::EMPTY; 4]);
     let rx_buf = mk_static!([u8; 4 * MAX_DATAGRAM], [0u8; 4 * MAX_DATAGRAM]);
     let tx_meta = mk_static!([PacketMetadata; 4], [PacketMetadata::EMPTY; 4]);
-    let tx_buf = mk_static!([u8; 2 * MAX_DATAGRAM], [0u8; 2 * MAX_DATAGRAM]);
+    // See [`FRAME_TX_BUF`]: this socket sends telemetry replies, not frames.
+    let tx_buf = mk_static!([u8; FRAME_TX_BUF], [0u8; FRAME_TX_BUF]);
     let mut socket = UdpSocket::new(stack, rx_meta, rx_buf, tx_meta, tx_buf);
     socket.bind(FRAME_PORT).expect("bind frame port");
     info!("net: frames on udp/{}", FRAME_PORT);

@@ -177,3 +177,32 @@ rewrites 8.1/8.3 afterwards); `docs/design/*`; `tools/` other than nothing.
   stream.
 
 ## Log
+
+### The lever, first (deliverable 1)
+
+Baseline, fw 0.4.3 as merged, `tools/fw-size.sh`:
+
+```
+  .data      58380   .bss  103872   .stack  34352   image 910041
+```
+
+**The lever: the frame socket's transmit buffer.** It was `2 * MAX_DATAGRAM`
+(2,944 bytes) since card 008, by symmetry with the receive side - and the
+symmetry is false. The frame port *receives* frames; the only things it ever
+**sends** are section 6.2's unsolicited replies, and spec 6.4/6.7 makes the
+largest of them a `TELEMETRY`: an 8-byte control header plus a 48-byte body =
+**56 bytes on the wire**. `BUSY` is shorter. The shared receive core bounds it
+from the other end too: `screeny_receiver::OUT_MAX` is 64 and the `Outbox` holds
+four of them, so 256 bytes is the most that can ever be queued at once.
+
+Chosen: **512 bytes** (`8 * OUT_MAX`) - the whole queue counted twice over. The
+four `tx_meta` slots are untouched; they, not the byte count, bound how many
+datagrams are in flight.
+
+```
+  .data      58380   .bss  101440   .stack  36784   image 910033
+```
+
+`.stack` 34,352 -> **36,784**, +2,432 bytes, exactly the arithmetic. The
+`fw-size.sh` floor (24,576) is untouched. This is the budget card 223's AP side
+is spent out of.
