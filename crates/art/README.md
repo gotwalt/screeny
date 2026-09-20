@@ -365,7 +365,7 @@ that is held averages **1008 duty steps** per channel.
 | duty steps per channel | 63 | 1008 |
 | distinct levels out of the 256 sRGB codes | 64 | 237 |
 | codes that come out black | 22 | 2 |
-| test card's dark ramp (sRGB 0..63) | 4 levels | 45 levels |
+| test card's dark ramp, over its 64 columns | 4 greys | 43 greys |
 
 So **the dark end is usable**: only sRGB 0 and 1 are black, and slow fades to
 black work. Two things are still true about it. A colour that is *not* held

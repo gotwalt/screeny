@@ -127,12 +127,12 @@ Two **deliberate pixel changes**, both in the dark end:
 
 1. A linear frame is quantised to 1008 duty steps, not 63. The test card's dark
    ramp - row 4, sRGB 0..63 stretched across the 64 columns - goes from **4
-   distinct levels to 45**. That is the card's acceptance in one number: the ramp
-   was four bands and three-quarters black, and it is now a ramp.
+   distinct greys to 43** (step 5 measures it). That is the card's acceptance in one
+   number: the ramp was four bands and a third of it black, and it is now a ramp.
 2. The dither bias is one **duty step**, not one of 64 levels. Above sRGB 38 a duty
    step is a tenth of an 8-bit code, so ordered dither now rounds away to nothing
-   in the midtones - no texture the panel cannot show, and nothing spent on the wire
-   compressing noise. Below 38, where up to four codes share a level, a duty step is
+   in the midtones - at most one code, and only on a code boundary; no texture the
+   panel cannot show, and nothing spent on the wire compressing noise. Below 38, where up to four codes share a level, a duty step is
    bigger than a code and the dither does the whole job. Measured in
    `dither_lands_only_where_the_panel_is_coarser_than_the_codes`: full-amplitude
    dither moves nothing at sRGB 200 and a whole duty step at sRGB 10.
