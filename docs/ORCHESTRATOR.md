@@ -66,16 +66,26 @@ restart. To redeploy: merge, `git push origin main`, run the script, and warn th
 session (the stream drops for a minute or two). Card 107 stays in `review/` until the owner
 allows a workbench reboot to prove the last line of its acceptance.
 
-In flight: **160** (clocks-numerals: resting dials read as colons; the owner wants them
-visible but unobtrusive, format stays four digits with no punctuation; cards 162-164) and
-**165** (the Studio remembers each piece's settings; state schema v2 with a migration;
-166-169; one shared memory, not per context). **Next big one: 170** - the owner corrected the
-product model (2026-09-19): a Studio is attached to one panel and the page is a live window
-onto what that panel shows; no preview/player split, no promote step. 170 unifies them, folds
-the dashboard into the page and makes it work on a phone (absorbs 161; 144 is gone). Launch
-it after 165 merges - both rewrite `crates/studio`. Then 145 (say when there is no GPU), 146, 147.
-The workbench reboot for card 107 is the owner's to run (`ssh workbench.local sudo systemctl
-reboot`): this session's permission guard refuses it, and that is fine.
+Done overnight 2026-09-19/20 and deployed: **160** (numerals rest treatments, `rest` param),
+**165** (per-piece settings memory in `state.json`, schema v2), **146/147/153** (host names as
+targets, platform hints, honest fps), and **170 - the owner's correction of the product: one
+panel, one picture.** The page shows the attached panel's player (the same decoded frames the
+panel gets); its controls act on the panel and persist; panel status and controls are on the
+same page; `/dashboard` redirects; the preview engine, "Send to panel" and "Play my preview"
+are gone; state schema v3. `set_panel {"on":false}` / `{"on":true,"to":...}` act on the
+panel's player (verified against the real device: LIVE -> HOLD -> LIVE) - this is what the
+firmware session uses to borrow the panel. State backups from before each migration are in
+`~/screeny-backups/` on workbench.
+
+In flight: a Studio polish worker (cards 173, 145, 171, 172, 163; range 181-185) and a
+sender/cleanup worker (176 named-browse early return, 125 clippy; range 186-189). Parked
+until the firmware session says its card 222 is on the device: **180** (the Studio reads the
+device's HTTP status via `crates/device-api`; the sim half exists since their card 224).
+Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
+"Reconnects" worth a row; a sandbox control ("try pieces without the panel flickering through
+them") - he has said no sandbox, ask only if he raises it. The workbench reboot for card 107
+is the owner's to run (`ssh workbench.local sudo systemctl reboot`): this session's
+permission guard refuses it, and that is fine.
 
 **Next up, in order:** 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
