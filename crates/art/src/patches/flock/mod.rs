@@ -113,9 +113,11 @@ fn scheme(which: usize, hue: f32, spread: f32, level: f32) -> ([Lch; BANDS], Lch
     for (b, band) in bands.iter_mut().enumerate().take(SKY) {
         let u = b as f32 / (SKY - 1) as f32;
         let (l, c) = if dusk {
-            // A luminous dusk: the whole sky is lit and the birds are cut out
-            // of it.
-            (0.34 + 0.50 * u.powf(0.85), 0.045 + 0.105 * u)
+            // A luminous dusk: the whole sky is lit and the birds are cut
+            // out of it. The range has to be wide - a sky that is all one
+            // bright lavender has nowhere for a silhouette to sit, and it
+            // lights every LED.
+            (0.20 + 0.60 * u.powf(0.9), 0.05 + 0.13 * u)
         } else {
             // A deep sky the panel can hold: the top of the frame goes to true
             // black, the horizon is the one bright thing, and the birds are
@@ -130,7 +132,12 @@ fn scheme(which: usize, hue: f32, spread: f32, level: f32) -> ([Lch; BANDS], Lch
     // colour and there is no halo of unrelated bands around it.
     bands[SKY] = (horizon.0 + if dusk { 0.07 } else { 0.11 }, horizon.1 * 0.62, horizon.2 + 8.0);
     bands[SKY + 1] = (horizon.0 + if dusk { 0.15 } else { 0.28 }, horizon.1 * 0.30, horizon.2 + 14.0);
-    let bird = if dusk { (0.085, 0.02, hue + 200.0) } else { (0.93, 0.05, hue + 40.0) };
+    // A silhouette is the sky *darkened*, not a different colour. Given its
+    // own hue - the complement was the first try - every half-covered pixel
+    // between a pale sky and a dark bird lands on a muddy in-between, which is
+    // precisely the near-grey pastel the brief says this panel cannot show.
+    // Same hue, much lower lightness, and the blends run cleanly down it.
+    let bird = if dusk { (0.05, 0.04, hue) } else { (0.93, 0.05, hue + 40.0) };
     (bands, bird)
 }
 
@@ -369,16 +376,19 @@ impl Patch for Flock {
         let view = View::of(&self.sim, self.sun);
         let ss = (ctx.get("samples") as usize).clamp(1, 6);
         let mut cover = Coverage::new(ss);
-        self.seen = draw_birds(&self.sim, &view, &mut cover);
+        let dusk = ctx.get("scheme") as usize == 1;
+        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { 0.62 } else { 0.20 });
 
         // Sky and birds are quantised separately through the same blue-noise
         // mask: the band is smooth and needs the dither to not stair-step, the
         // ink is a few levels and needs it to keep a wing's edge.
         let dither = Dither::BlueNoise;
+        let sky_dither = Dither::Bayer4;
         let indices = (0..N)
             .map(|i| {
                 let (x, y) = (i % W, i / W);
                 let bias = dither.threshold(x, y);
+                let sky_bias = sky_dither.threshold(x, y);
                 let mut band = 0.0;
                 for j in 0..ss {
                     for k in 0..ss {
@@ -388,7 +398,7 @@ impl Patch for Flock {
                     }
                 }
                 band /= (ss * ss) as f32;
-                let b = (band + bias).round().clamp(0.0, (BANDS - 1) as f32) as usize;
+                let b = (band + sky_bias).round().clamp(0.0, (BANDS - 1) as f32) as usize;
                 let ink = cover.pixel(x, y) * (INK - 1) as f32;
                 let k = (ink + bias).round().clamp(0.0, (INK - 1) as f32) as usize;
                 (b * INK + k) as u8
@@ -401,7 +411,7 @@ impl Patch for Flock {
 
 /// Every bird, far to near, as a body dash and two wing strokes. Returns how
 /// many landed on the panel.
-fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage) -> usize {
+fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32) -> usize {
     let mut order: Vec<(f32, usize)> = Vec::with_capacity(sim.flock().len());
     for (i, b) in sim.flock().iter().enumerate() {
         if let Some((_, _, z)) = view.project(b.pos) {
@@ -446,8 +456,14 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage) -> usize {
         // rather than filling the panel.
         // Depth is carried by contrast far more than by size at this scale:
         // sixteen metres of air already halves how much a bird stands out
-        // from the sky, which is what stops seventy of them reading as fog.
-        let haze = 0.20 + 0.80 * (-(z / 16.0).powf(1.6)).exp();
+        // from the sky, which is what stops fifty of them reading as fog.
+        //
+        // How far that is allowed to go is not the same in the two schemes. A
+        // dim light bird on a near-black sky still reads; a hazed *silhouette*
+        // on a bright sky is a smudge, because it is only a little darker than
+        // what is behind it. So the far end of the haze is held much higher
+        // for the dusk picture.
+        let haze = floor + (1.0 - floor) * (-(z / 16.0).powf(1.6)).exp();
         let ink = haze * smoothstep(0.7, 1.8, z);
         if ink < 0.02 {
             continue;

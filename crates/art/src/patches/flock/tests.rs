@@ -3,6 +3,7 @@
 use super::sim::{bearing, wrap, Sim, Tuning, STEP};
 use super::*;
 use crate::patch::Params;
+use crate::frame::Frame;
 use crate::snapshot::{self, Shot};
 
 /// Ten minutes of flight, with everything worth knowing gathered as it goes.
@@ -238,4 +239,87 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
     let a = snapshot::take(&DEF, &params, &shot);
     let b = snapshot::take(&DEF, &params, &shot);
     assert_eq!(a.wire.rgb, b.wire.rgb);
+}
+
+/// A minute of each scheme, straight through the real pipeline, measured by
+/// the real encoder: **every frame is exact**, and the pictures cost the same.
+///
+/// They cost the same because the two schemes are the same index image with a
+/// different set of 84 colours in front of it - which is the whole point of
+/// making the palette two-dimensional. Only the birds' contrast floor differs,
+/// so the counts are close rather than identical.
+#[test]
+fn every_frame_goes_out_exactly() {
+    for (scheme, name) in [(0.0, "light on dark"), (1.0, "dusk silhouettes")] {
+        let mut params = Params::defaults(PARAMS);
+        params.set(PARAMS, "scheme", scheme);
+        if scheme > 0.5 {
+            // The dusk sky wants a warm horizon; see the README.
+            params.set(PARAMS, "hue", 35.0);
+            params.set(PARAMS, "spread", 95.0);
+        }
+        let mut patch = (DEF.make)(11);
+        let mut pipeline = crate::Pipeline::new(crate::pipeline::Output::default());
+        let dt = 1.0 / 30.0;
+        let (mut worst, mut lossy, mut colours, mut apl, mut gain) = (0, 0, 0, 0.0_f32, 1.0_f32);
+        for i in 0..1800 {
+            let out = pipeline.process(
+                patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
+                dt,
+            );
+            worst = worst.max(out.stats.encoded_bytes);
+            colours = colours.max(out.stats.distinct_colours);
+            apl = apl.max(out.stats.apl);
+            // Not the opening second: a lit sky arriving out of black is a
+            // luminance rise, the limiter holds it down for a few frames, and
+            // that is the limiter working rather than anything about the
+            // picture. What matters is whether it ever bites once flying.
+            if i > 30 {
+                gain = gain.min(out.stats.limiter_gain);
+            }
+            lossy += u32::from(!out.stats.exact);
+        }
+        eprintln!(
+            "{name}: 1800 frames, worst {worst} of {} bytes, up to {colours} colours, \
+             peak APL {:.0}%, limiter down to x{gain:.2} after the first second, {lossy} lossy",
+            crate::meter::PAYLOAD_BYTES,
+            apl * 100.0,
+        );
+        assert_eq!(lossy, 0, "{name}: {lossy} frames of 1800 could not be sent exactly");
+        assert!(colours as usize <= BANDS * INK, "{name}: more colours than the palette has");
+        assert!(worst < crate::meter::PAYLOAD_BYTES, "{name}: {worst} bytes leaves no headroom");
+        assert!(gain > 0.95, "{name}: the limiter had to pull the picture down to x{gain:.2}");
+    }
+}
+
+/// The flight is the same at any render rate.
+///
+/// The simulation runs on a fixed 1/60 s step and the step count comes from
+/// the total simulated time, floored with a small bias - so 30 fps and 60 fps
+/// agree on the integer at a step boundary even though their floating-point
+/// sums differ in the last bits. Without the bias they disagree by one step
+/// roughly every other frame and the two runs drift apart.
+#[test]
+fn the_flight_does_not_depend_on_the_frame_rate() {
+    let params = Params::defaults(PARAMS);
+    let at = |fps: f64| {
+        let mut patch = (DEF.make)(5);
+        let dt = 1.0 / fps;
+        let mut frame = Frame::black();
+        for i in 1..=(60.0 * fps) as usize {
+            frame = patch.render(&Ctx { t: i as f64 * dt, dt, now: 0.0, params: &params });
+        }
+        match frame {
+            Frame::Indexed { palette, indices } => {
+                indices.iter().map(|i| palette[*i as usize]).collect::<Vec<_>>()
+            }
+            Frame::Linear(px) => px,
+        }
+    };
+    let (a, b) = (at(30.0), at(60.0));
+    let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+    eprintln!("a minute flown at 30 and at 60 fps: {differ} of {} pixels differ", a.len());
+    // A minute of flight, 3600 fixed steps, from two different arrival
+    // patterns: the same steps happen, so the same picture comes out.
+    assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }
