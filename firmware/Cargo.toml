@@ -32,6 +32,22 @@ spike-ota = [
   "dep:embassy-embedded-hal",
   "esp-bootloader-esp-idf/embedded-storage",
 ]
+# Card 220's measurement build. Brings up `Config::AccessPointStation` with an
+# open soft-AP and a second embassy-net stack that nothing listens on, so the
+# serial log can answer "what does APSTA cost in heap" with a number. Off by
+# default and never shipped: the default build must be byte-for-byte unaffected
+# by its existence. `internal-heap-stats` rides along because a 5 s sample
+# cannot see the radio's transient allocations and esp-alloc's own `max_usage`
+# can; it costs CPU on every alloc, which is why it is only here.
+# See docs/research/009-ram-headroom.md.
+apsta-probe = ["esp-alloc/internal-heap-stats"]
+# Card 220's A/B, and the only reason the old framebuffer construction still
+# exists: it puts the two 12 KB `FrameBuffer::new()` temporaries back on core
+# 0's main stack so the "before" half of the stack high-water measurement can
+# be reproduced without checking out an older commit. Like `display-on-core0`,
+# it is a thing to measure against, not a configuration to run the panel in.
+fb-on-stack = []
+
 # Card 202's bench tool. It gates `[[bin]] gpio_probe` through
 # `required-features`, so a plain `cargo build --release` never builds it and
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.

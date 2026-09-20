@@ -34,6 +34,9 @@
 #![no_std]
 #![no_main]
 
+/// Card 220's `apsta-probe` build: what APSTA costs in heap. Off by default.
+#[cfg(feature = "apsta-probe")]
+mod apsta_probe;
 mod display;
 mod fb;
 mod gamma;
@@ -45,6 +48,7 @@ mod receiver;
 mod screens;
 #[cfg(feature = "spike-ota")]
 mod spike_ota;
+mod stack_probe;
 mod tidbyt;
 /// Card 201's compile-only spike. Never flashed; see the module docs.
 #[cfg(any(
@@ -144,6 +148,34 @@ const _: () = assert!(
 #[cfg_attr(feature = "display-on-core0", allow(dead_code))]
 static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<16384>> =
     static_cell::ConstStaticCell::new(CoreStack::new());
+
+/// The two DMA framebuffers core 1 swaps between.
+///
+/// `ConstStaticCell`, not `StaticCell::write(FrameBuffer::new())`, and that is
+/// the whole point of card 220. `DmaFrameBuffer::new()` is a `const fn`, so
+/// written this way the 12 KB value is produced by the compiler and placed in
+/// `.data`; written the old way it was produced at runtime as a temporary on
+/// whichever stack ran the constructor, and two of them at once is 24 KB.
+/// Core 1's 16 KB stack did not survive that on the very first flash of this
+/// firmware, and core 0's main stack — which is only the *remainder* of a DRAM
+/// region the linker fills with `.data` and `.bss` first — was carrying the
+/// same 24 KB transient every boot since.
+///
+/// `.data` and `.bss` come out of the same pocket, so moving 24 KB from one to
+/// the other leaves `.stack`'s size exactly where it was. What it removes is
+/// the *transient*: what the region has to be big enough for, as opposed to
+/// what it nominally is. It costs 24 KB of flash, which a 2 MB app slot has.
+///
+/// They still have to come up dimmed: see the `set_oe_slots` call in `main`.
+/// `new()` formats for the widest output-enable window the build can produce,
+/// which is well over the power cap, and letting a single refresh out at that
+/// duty is a bug with a current spike attached to it.
+#[cfg(not(feature = "fb-on-stack"))]
+static FB0: static_cell::ConstStaticCell<FrameBuffer> =
+    static_cell::ConstStaticCell::new(FrameBuffer::new());
+#[cfg(not(feature = "fb-on-stack"))]
+static FB1: static_cell::ConstStaticCell<FrameBuffer> =
+    static_cell::ConstStaticCell::new(FrameBuffer::new());
 
 /// The decoded-frame handoff between core 0 and core 1.
 static SLOTS: fb::Slots = fb::Slots::new();
@@ -308,8 +340,24 @@ async fn display_task(
 // Network
 // ---------------------------------------------------------------------------
 
-#[embassy_executor::task]
-async fn wifi_task(mut controller: WifiController<'static>) {
+/// The station's credentials, in one place: `main` uses it for the initial
+/// `ControllerConfig`, and the `apsta-probe` build hands the same value back
+/// to `set_config` when it switches the radio into APSTA. Nothing here logs,
+/// returns or otherwise leaks the PSK (spec section 8.4).
+fn station_config() -> StationConfig {
+    StationConfig::default()
+        .with_ssid(SSID.try_into().unwrap())
+        .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
+            PASSWORD.try_into().unwrap(),
+        ))
+}
+
+/// Associate, hold the association, report RSSI, reconnect forever.
+///
+/// Extracted from [`wifi_task`] so the `apsta-probe` build can run exactly
+/// this loop before and after it flips the radio into APSTA, instead of
+/// keeping a second, slightly different copy of it. Never returns.
+async fn station_loop(controller: &mut WifiController<'static>) {
     loop {
         WIFI_STATE.store(wifi_state::CONNECTING, Ordering::Relaxed);
         match controller.connect_async().await {
@@ -351,6 +399,11 @@ async fn wifi_task(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
+async fn wifi_task(mut controller: WifiController<'static>) {
+    station_loop(&mut controller).await
+}
+
+#[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
     runner.run().await
 }
@@ -365,11 +418,31 @@ async fn net_task(mut runner: Runner<'static, Interface>) -> ! {
 #[embassy_executor::task]
 async fn telemetry_task() {
     const PERIOD_S: u32 = 5;
+    /// Card 220: one stack line, at one minute. Long enough to include the
+    /// WiFi association, DHCP, mDNS and a minute of the decode path, which is
+    /// every deep call this firmware makes; short enough that a bench session
+    /// sees it. Once, not periodically — the scan is cheap but the number
+    /// only moves when something new goes deep, and a line per period would
+    /// bury the telemetry.
+    const STACK_TICK: u32 = 60 / PERIOD_S;
+
     let mut last_swaps = 0u32;
     let mut last_rx = 0u32;
     let mut last_shown = 0u32;
+    let mut tick = 0u32;
     loop {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
+        tick += 1;
+        if tick == STACK_TICK
+            && let Some(hw) = stack_probe::high_water()
+        {
+            info!(
+                "stack: core 0 main high-water {} of {} bytes, {} free (painted at boot)",
+                hw,
+                stack_probe::size(),
+                stack_probe::headroom().unwrap_or(0),
+            );
+        }
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
         let t = {
@@ -418,6 +491,10 @@ fn assert_pin(pin: &impl Pin, expected: u8) {
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
+    // First, before anything has had a chance to go deep: card 220's paint.
+    // Everything below this line is inside the measurement.
+    stack_probe::paint();
+
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
@@ -426,12 +503,17 @@ async fn main(spawner: Spawner) {
     //
     // Card 007 shipped 64 + 48 KB and measured 45.4 KB in use. Card 008 adds
     // ~40 KB of `.bss` — three 6 KB frame slots, the cross-fade source, core
-    // 1's stack and two more sockets — and on this chip **`.bss` and core 0's
-    // main stack come out of the same pocket**: the stack is whatever is left
-    // between `_bss_end` and 0x3ffe0000. Taking 16 KB back off the heap is
-    // what pays for it. Symptom if this is ever too tight again: a
-    // "write to the stack guard value on ProCpu" panic inside `main`, from
-    // the two 12 KB `FrameBuffer::new()` temporaries just below.
+    // 1's stack and two more sockets — and on this chip **`.data`, `.bss` and
+    // core 0's main stack come out of the same pocket**: the stack is whatever
+    // is left between `_bss_end` and 0x3ffe0000. Taking 16 KB back off the
+    // heap is what pays for it.
+    //
+    // Card 220 took the 24 KB of framebuffer temporaries off that stack (see
+    // [`FB0`]) and then measured what is left: `stack_probe` paints the region
+    // at boot and the telemetry task reports the high-water mark once, at the
+    // 60 s mark. Read that line before moving either number here. The heap
+    // side of the same question — what the radio wants with a soft-AP up —
+    // is the `apsta-probe` build.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 32 * 1024);
 
@@ -503,13 +585,21 @@ async fn main(spawner: Spawner) {
     // interrupt on the core we are trying to keep free.
     let i2s = peripherals.I2S0;
     let dma = peripherals.DMA_I2S0;
-    // The two DMA framebuffers are built *here*, on core 0's generous main
-    // stack, and only their `&'static mut`s cross over. `FrameBuffer::new()`
-    // materialises a 12 KB value before `StaticCell::write` moves it, which
-    // core 1's 16 KB stack will not survive twice — the first flash of this
-    // firmware died exactly there.
-    let fb0 = mk_static!(FrameBuffer, FrameBuffer::new());
-    let fb1 = mk_static!(FrameBuffer, FrameBuffer::new());
+    // Only the `&'static mut`s cross over to core 1; the buffers themselves
+    // are the two statics at the top of this file and are never on anybody's
+    // stack. See [`FB0`].
+    #[cfg(not(feature = "fb-on-stack"))]
+    let (fb0, fb1) = (FB0.take(), FB1.take());
+    // The card 220 A/B: the construction as it was, with a 12 KB temporary on
+    // core 0's main stack for each buffer. Only for measuring against.
+    #[cfg(feature = "fb-on-stack")]
+    let (fb0, fb1) = {
+        warn!("display: BENCH BUILD - framebuffers built on core 0's stack");
+        (
+            mk_static!(FrameBuffer, FrameBuffer::new()),
+            mk_static!(FrameBuffer, FrameBuffer::new()),
+        )
+    };
     // Come up already dimmed. `FrameBuffer::new()` formats for the widest
     // output-enable window the build can produce, which is well over the
     // power cap; letting a single refresh out at that duty would be a bug
@@ -563,18 +653,10 @@ async fn main(spawner: Spawner) {
     }
 
     // --- wifi -------------------------------------------------------------
-    let station = WifiConfig::Station(
-        StationConfig::default()
-            .with_ssid(SSID.try_into().unwrap())
-            .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
-                PASSWORD.try_into().unwrap(),
-            )),
-    );
-
     let mut controller = WifiController::new(
         peripherals.WIFI,
         ControllerConfig::default()
-            .with_initial_config(station)
+            .with_initial_config(WifiConfig::Station(station_config()))
             .with_rx_queue_size(3)
             .with_country_info(*b"US"),
     )
@@ -623,7 +705,18 @@ async fn main(spawner: Spawner) {
         s.as_str()
     };
 
+    // Card 220's measurement build owns the controller instead, because the
+    // switch into APSTA, the re-association and the AP's own stack all have
+    // to happen in order and in one place. The default build is unaffected.
+    #[cfg(not(feature = "apsta-probe"))]
     spawner.spawn(wifi_task(controller).unwrap());
+    #[cfg(feature = "apsta-probe")]
+    {
+        let (ap_stack, ap_runner) = apsta_probe::ap_stack(seed ^ 0x5a5a_5a5a);
+        let _ = ap_stack;
+        spawner.spawn(apsta_probe::probe_task(controller, host, ap_runner).unwrap());
+        spawner.spawn(apsta_probe::heap_task().unwrap());
+    }
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
