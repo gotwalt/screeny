@@ -417,6 +417,32 @@ fn a_real_espflash_image_passes() {
     );
 }
 
+/// The firmware runs check 6 twice: once on the bytes that arrived (the scan)
+/// and once on the bytes that landed in flash ([`Rehash`]). They have to agree
+/// about the same image, or the second one is noise.
+#[test]
+fn rehashing_the_image_gives_the_same_answer_as_the_scan() {
+    let image = Builder::good().build();
+    let out = scan_in_chunks(&image, SLOT, SECTOR).unwrap();
+    // Everything the appended digest covers: the image less the digest itself.
+    let covered = &image[..out.len as usize - 32];
+    let mut h = screeny_fwimage::Rehash::new();
+    for piece in covered.chunks(SECTOR) {
+        h.update(piece);
+    }
+    assert!(h.matches(&out.digest));
+
+    // One byte of what landed is wrong: the scan would not have seen it,
+    // because the scan saw the socket and this sees the flash.
+    let mut damaged = covered.to_vec();
+    damaged[SECTOR] ^= 0x01;
+    let mut h = screeny_fwimage::Rehash::new();
+    for piece in damaged.chunks(SECTOR) {
+        h.update(piece);
+    }
+    assert!(!h.matches(&out.digest));
+}
+
 #[test]
 fn a_version_string_survives_the_round_trip() {
     let mut b = Builder::good();

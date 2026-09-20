@@ -559,7 +559,7 @@ impl Scan {
     /// A body that stops before the image the header describes fails as
     /// [`FirmwareError::BadSha256`]: there is no digest to compare, which is
     /// research 006's own account of what a truncated upload dies of.
-    pub fn finish(self) -> Result<Image, FirmwareError> {
+    pub fn finish(&self) -> Result<Image, FirmwareError> {
         if let Some(e) = self.failed {
             return Err(e);
         }
@@ -585,7 +585,13 @@ impl Scan {
             return Err(FirmwareError::BadSha256);
         }
         // 6: the appended digest against the bytes it covers.
-        let computed: [u8; HASH_LEN] = self.sha.finalize().into();
+        //
+        // The hasher is **cloned** rather than consumed, so that this can take
+        // `&self`: the firmware's `Upload` has a `Drop` impl - it is what gives
+        // the panel and the flash back - and a type with one can never have a
+        // field moved out of it. `Sha256` is `Clone` and its state is 112
+        // bytes.
+        let computed: [u8; HASH_LEN] = self.sha.clone().finalize().into();
         if computed != self.digest {
             return Err(FirmwareError::BadSha256);
         }
@@ -622,6 +628,46 @@ impl Scan {
             return Ok(());
         }
         self.check_app_desc().map(|_| ())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hashing bytes that are somewhere else
+// ---------------------------------------------------------------------------
+
+/// SHA-256 over bytes a caller supplies, for check 6 run a second time against
+/// a copy of the image that is not the one the scanner saw.
+///
+/// The firmware uses it to hash the staged slot **back out of flash**: the
+/// scan verified what came off the socket, and this verifies what came out of
+/// the ROM's program routine, which is the half that catches a flash write
+/// that went wrong. It lives here so that `sha2` is a dependency of one crate
+/// and the firmware links a single copy of it.
+pub struct Rehash(Sha256);
+
+impl Rehash {
+    /// A fresh hasher.
+    #[must_use]
+    pub fn new() -> Self {
+        Rehash(Sha256::new())
+    }
+
+    /// Feed it the next piece.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    /// Whether what it hashed is what `expect` says.
+    #[must_use]
+    pub fn matches(self, expect: &[u8; HASH_LEN]) -> bool {
+        let got: [u8; HASH_LEN] = self.0.finalize().into();
+        &got == expect
+    }
+}
+
+impl Default for Rehash {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
