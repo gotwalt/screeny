@@ -64,3 +64,17 @@ What is not yet known, and is most of the work:
   `PanelStatus::last_error` already.)
 
 ## Log
+
+### Note from card 105 (2026-09-19): there is no bundle any more
+
+Card 105 removed Tauri. `screeny-studio` is now a plain `target/<profile>/screeny-studio`
+executable - the same kind of thing as `screeny` and `screeny-art` - so the two
+questions in the Context about "a Tauri bundle" and "the built app" are moot: there is
+one binary identity to sign, not a bundle to work out. The studio is also now built by
+a plain `cargo build` at the workspace root (it is a default member again), so
+whatever `tools/sign-macos.sh` grows should expect to sign three binaries from one
+build rather than a binary and an app.
+
+The Linux half of this card is unchanged and still matters: `docs/design/studio-vision.md`
+puts the studio in a container where none of the macOS machinery exists, and the
+server must not grow a macOS-shaped answer.

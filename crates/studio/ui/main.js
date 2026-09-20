@@ -1,10 +1,15 @@
 // Screeny Studio front end. The Rust engine owns time and rendering; this file
 // draws the newest frame as LEDs and edits the engine's state.
+//
+// The server is an ordinary HTTP + WebSocket server: every change is a POST to
+// /api/v1/<command>, and frames, state changes and the status heartbeat arrive
+// on one socket. Several browsers may be open at once; each tags its own
+// changes so the server does not echo them back at it.
 
 'use strict';
 
 const W = 64, H = 32;
-const HEADER = 52; // keep in step with studio/src/main.rs
+const HEADER = 52; // keep in step with studio/src/engine.rs
 const PITCH_MM = 3; // LED pitch: the lit area is 192 x 96 mm
 
 const $ = (sel) => document.querySelector(sel);
@@ -174,8 +179,10 @@ function bindRadios(root, { get, set }) {
 }
 
 function bindSwitch(input, { get, set }) {
-  input.checked = get();
+  const refresh = () => { input.checked = get(); };
+  refresh();
   input.addEventListener('change', () => set(input.checked));
+  return { refresh };
 }
 
 const pct = (v) => `${Math.round(v * 100)}%`;
@@ -187,13 +194,70 @@ function notice(message) {
   el.textContent = message || '';
 }
 
+// ---------- talking to the server ----------
+
+// This browser, so the server can leave our own changes out of what it pushes
+// back to us: adopting them would fight with the slider still under the mouse.
+const CLIENT = crypto.randomUUID?.() ?? `c${Math.random().toString(36).slice(2)}`;
+
+// Reads; everything else is a POST carrying its arguments as JSON.
+const GETS = new Set(['bootstrap', 'frame', 'piece_playing', 'panel_status']);
+
+async function invoke(cmd, args) {
+  const init = GETS.has(cmd) ? {} : {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-studio-client': CLIENT },
+    body: JSON.stringify(args ?? {}),
+  };
+  const response = await fetch(`/api/v1/${cmd}`, init);
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try { detail = (await response.json()).error ?? detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+  if ((response.headers.get('content-type') || '').startsWith('application/json')) return response.json();
+  return response.arrayBuffer();
+}
+
+// One socket: binary messages are frames, text messages say what they are.
+// It reconnects by itself, because the server is allowed to be restarted.
+function connect(handlers) {
+  const url = new URL('api/v1/ws', document.baseURI);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('client', CLIENT);
+  let wait = 250;
+  const open = () => {
+    const socket = new WebSocket(url);
+    socket.binaryType = 'arraybuffer';
+    socket.addEventListener('open', () => { wait = 250; notice(''); });
+    socket.addEventListener('message', (e) => {
+      if (e.data instanceof ArrayBuffer) { handlers.frame(e.data); return; }
+      const message = JSON.parse(e.data);
+      handlers[message.type]?.(message);
+    });
+    socket.addEventListener('close', () => {
+      notice('Lost contact with the engine. Reconnecting…');
+      setTimeout(open, wait);
+      wait = Math.min(wait * 2, 5000);
+    });
+    socket.addEventListener('error', () => socket.close());
+  };
+  open();
+}
+
 // ---------- the studio ----------
 
-async function start(invoke) {
+async function start() {
   const canvas = $('#panel');
   const renderer = createRenderer(canvas);
   const boot = await invoke('bootstrap');
   let state = boot.state;
+
+  // Controls that show a value from `state`. Another browser changing
+  // something is the same thing as this one doing it, so both paths end here.
+  const refreshers = [];              // bound once, below
+  let paramControls = [];             // rebuilt whenever the piece changes
+  const bind = (control) => { refreshers.push(control); return control; };
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => notice(`${cmd} failed: ${e}`));
   const pushSettings = () => call('set_settings', { settings: state.settings });
@@ -221,6 +285,7 @@ async function start(invoke) {
     $('#seed').value = state.seed;
     document.querySelectorAll('#pieces input').forEach((i) => { i.checked = i.value === state.piece; });
 
+    paramControls = [];
     $('#params').replaceChildren(...piece.params.map((spec) => {
       const root = document.createElement('div');
       root.className = 'slider';
@@ -230,16 +295,29 @@ async function start(invoke) {
         id, type: 'range', min: spec.min, max: spec.max, step: spec.step,
       });
       root.append(label, document.createElement('output'), input);
-      bindSlider(root, {
+      paramControls.push(bindSlider(root, {
         get: () => state.params[spec.id],
         set: (v) => { state.params[spec.id] = v; call('set_param', { id: spec.id, value: v }); },
         format: (v) => trim(v, spec.step),
-      });
+      }));
       return root;
     }));
     $('#reset-params').hidden = piece.params.length === 0;
+    // Empty until the controls below are bound, which is the first call.
+    for (const control of refreshers) control.refresh();
   }
   adopt(state);
+
+  // A change another browser made: adopt it without rebuilding anything that
+  // does not have to be rebuilt, so a slider being dragged here keeps its grip.
+  function sync(next) {
+    if (!next) return;
+    if (next.piece !== state.piece) { adopt(next); return; }
+    state = next;
+    $('#ro-seed').textContent = state.seed;
+    $('#seed').value = state.seed;
+    for (const control of [...refreshers, ...paramControls]) control.refresh();
+  }
 
   const newSeed = async () => adopt(await call('set_seed', { seed: null }));
   $('#new-seed').addEventListener('click', newSeed);
@@ -260,19 +338,20 @@ async function start(invoke) {
   pauseButton.addEventListener('click', togglePause);
   $('#restart').addEventListener('click', restart);
   showPaused();
-  bindRadios($('#fps'), { get: () => state.fps, set: (v) => { state.fps = Number(v); pushPlayback(); } });
-  bindSlider($('#speed-slider'), {
+  bind({ refresh: showPaused });
+  bind(bindRadios($('#fps'), { get: () => state.fps, set: (v) => { state.fps = Number(v); pushPlayback(); } }));
+  bind(bindSlider($('#speed-slider'), {
     get: () => state.speed,
     set: (v) => { state.speed = v; pushPlayback(); },
     format: (v) => `${v.toFixed(2)}×`,
-  });
+  }));
 
   // Panel model
   const s = () => state.settings;
-  bindRadios($('#levels'), { get: () => s().levels, set: (v) => { s().levels = Number(v); pushSettings(); } });
-  bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushSettings(); } });
-  bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushSettings(); } });
-  bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushSettings(); } });
+  bind(bindRadios($('#levels'), { get: () => s().levels, set: (v) => { s().levels = Number(v); pushSettings(); } }));
+  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushSettings(); } }));
+  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushSettings(); } }));
+  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushSettings(); } }));
 
   // Send to panel. Everything about the link lives in screeny_art::output; this
   // is a switch, a text box and a line of status.
@@ -287,6 +366,9 @@ async function start(invoke) {
   panelTo.addEventListener('change', () => panelSwitch.checked && pushPanel());
 
   function showPanel(p) {
+    // Another browser may have turned it on or off; the address box stays
+    // this browser's own note of where it last sent.
+    if (panelSwitch.checked !== Boolean(p)) panelSwitch.checked = Boolean(p);
     if (!p) { panelNote.textContent = 'Off. Nothing is being sent.'; panelNote.dataset.state = ''; return; }
     const where = p.device || p.target;
     const head = p.connected
@@ -299,23 +381,22 @@ async function start(invoke) {
     panelNote.textContent = `${head} ${counts}${p.last_error ? ` Last error: ${p.last_error}` : ''}`;
     panelNote.dataset.state = p.connected ? '' : 'warn';
   }
-  setInterval(async () => panelSwitch.checked && showPanel(await call('panel_status')), 1000);
 
   // Limiter
-  bindSwitch($('#limiter-on'), {
+  bind(bindSwitch($('#limiter-on'), {
     get: () => s().limiter.enabled,
     set: (v) => { s().limiter.enabled = v; pushSettings(); },
-  });
-  bindSlider($('#apl-slider'), {
+  }));
+  bind(bindSlider($('#apl-slider'), {
     get: () => s().limiter.apl_cap,
     set: (v) => { s().limiter.apl_cap = v; pushSettings(); },
     format: pct,
-  });
-  bindSlider($('#rise-slider'), {
+  }));
+  bind(bindSlider($('#rise-slider'), {
     get: () => s().limiter.max_rise_per_s,
     set: (v) => { s().limiter.max_rise_per_s = v; pushSettings(); },
     format: (v) => `${Math.round(1000 / v)} ms to full`,
-  });
+  }));
 
   // View
   const resize = () => { sizeCanvas(canvas); renderer.draw(); };
@@ -446,15 +527,18 @@ async function start(invoke) {
       return b;
     }));
   }
-  setInterval(async () => showPlaying(await call('piece_playing')), 500);
 
-  // Frame pump. The engine produces 30 frames a second whether or not we ask;
-  // we take the newest one each display refresh and skip it if it is not new.
+  // Frame pump. The engine produces frames whether or not anything is
+  // watching and the socket carries the newest one; we hold on to the last
+  // that arrived and draw it on the next display refresh, so a tab that
+  // cannot keep up drops frames on the floor rather than queueing them.
+  let newest = null;
   let lastSeq = -1;
   let shown = 0;
-  async function pump() {
-    try {
-      const buf = await invoke('frame');
+  function draw() {
+    const buf = newest;
+    if (buf) {
+      newest = null;
       const dv = new DataView(buf);
       const seq = dv.getUint32(0, true);
       if (seq !== lastSeq) {
@@ -477,18 +561,18 @@ async function start(invoke) {
           });
         }
       }
-      notice('');
-    } catch (e) {
-      notice(`Lost contact with the engine: ${e}`);
     }
-    requestAnimationFrame(pump);
+    requestAnimationFrame(draw);
   }
-  pump();
+  draw();
+
+  // Everything the server pushes: frames, somebody else's changes, and the
+  // half-second heartbeat that carries "now playing" and the panel link.
+  connect({
+    frame: (buf) => { newest = buf; },
+    state: (message) => sync(message.state),
+    status: (message) => { showPlaying(message.playing); showPanel(message.panel); },
+  });
 }
 
-const tauriInvoke = window.__TAURI__?.core?.invoke;
-if (tauriInvoke) {
-  start(tauriInvoke).catch((e) => notice(String(e.message || e)));
-} else {
-  notice('This page is the studio window. Start it with: cargo run -p screeny-studio');
-}
+start().catch((e) => notice(String(e.message || e)));

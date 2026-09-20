@@ -18,7 +18,8 @@ next: current state, what is next, and the lessons already paid for. `docs/desig
 - **Rust everywhere.** Firmware is `no_std` embassy / esp-hal on esp-rtos. Host tools
   are std Rust on the stable toolchain, all in the one root cargo workspace
   (`crates/*`). `firmware/` and `lab/` are separate cargo projects. A plain
-  `cargo test` skips only `crates/studio` (Tauri, until card 105); build it with `-p`.
+  `cargo test` covers every host crate, `crates/studio` included: it is an ordinary
+  server crate since card 105 and needs no GUI system libraries.
 - **One implementation of each thing.** Wire format and decoders live in
   `crates/proto` and nowhere else. If you need wire logic, add it there.
 - **Target: 30 fps**, one frame per UDP datagram (<= 1472 byte payload, 1464 for
