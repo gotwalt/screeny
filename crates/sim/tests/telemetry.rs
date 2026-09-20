@@ -14,18 +14,45 @@ mod common;
 use std::time::Duration;
 
 use common::*;
-use screeny_proto::control::{op, Reply};
+use screeny_proto::control::{op, Reply, Telemetry};
 use screeny_proto::dec::codec;
 use screeny_proto::{ControlPacket, F_KEY, F_STATS_REQ};
 use screeny_sim::{Config, Faults, SimDevice, Timing};
 
 const T: Duration = Duration::from_secs(3);
 
+/// Every counter on one line. Which of them moved *is* the subject of the
+/// test below, so its failures print all of them rather than the one that
+/// happened to be compared.
+fn counters(t: &Telemetry) -> String {
+    format!(
+        "frames_rx {}, frames_shown {}, superseded {}, seq_gaps {}, stale {}, rejected {}",
+        t.frames_rx,
+        t.frames_shown,
+        t.frames_dropped_superseded,
+        t.seq_gaps,
+        t.frames_dropped_stale,
+        t.frames_rejected,
+    )
+}
+
 #[test]
 fn a_sender_can_tell_network_loss_from_a_slow_device() {
     // Section 6.9's whole point. Two runs of the same stream, one with 30%
     // of the datagrams lost on the air and one with the device too slow to
     // draw them, and the counters say which is which.
+    //
+    // **It is the proportions that say it, not an exact count** (card 143).
+    // `frames_dropped_superseded` counts two datagrams that landed in one
+    // drain of the frame loop, and with frames 4 ms apart a single scheduling
+    // hiccup on the frame thread does that on a perfectly clean link: card
+    // 141 saw this test fail with "superseded 1, expected 0" under a loaded
+    // parallel suite, and starving this test's threads on purpose reproduces
+    // it (four superseded out of thirty-nine received, with no slow device
+    // anywhere). What separates the two cases is not a zero but an order of
+    // magnitude: a third of the stream missing against none of it, and a
+    // device that drew nine in ten of what reached it against one that drew
+    // one in seven.
     let stream = |faults: Faults| {
         let dev = SimDevice::start(Config {
             faults,
@@ -44,35 +71,80 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
             tx.send(codec::SOLID, F_KEY, &p);
             std::thread::sleep(Duration::from_millis(4));
         }
-        std::thread::sleep(Duration::from_millis(200));
-        (n, sim.telemetry())
+        // Settle on a condition rather than on a clock. The faults come off
+        // and one last frame goes out: loopback delivers in order and the
+        // frame thread drains in order, so the moment that frame is the one
+        // on the panel, every datagram of the stream before it has been
+        // through `offer_frame` and counted. The 200 ms this replaces was a
+        // guess at how long the frame thread would be kept off the CPU by the
+        // rest of the suite, and the counters are read on the frame thread.
+        sim.set_faults(Faults::default());
+        let tail = tx.send(codec::SOLID, F_KEY, &p);
+        let snap = sim
+            .wait_until(T, |s| s.shown.as_ref().map(|m| m.seq) == Some(tail))
+            .unwrap_or_else(|| {
+                panic!(
+                    "frame {tail}, the last of {}, never reached the panel within {T:?}: {}",
+                    n + 1,
+                    counters(&sim.telemetry())
+                )
+            });
+        // That last frame is one of the stream as far as the counters go.
+        (n + 1, snap.telemetry)
     };
 
     let (sent, lossy) = stream(Faults {
         drop_pct: 30.0,
         ..Faults::default()
     });
+    // Network-limited: three datagrams in ten never happened, so they are
+    // simply missing from frames_rx. Both ends of the band matter - too few
+    // would mean the stream was never read, not that it was lost.
     assert!(
-        lossy.frames_rx < (sent as f32 * 0.95) as u32,
-        "network-limited: frames_rx {} out of {sent} sent",
-        lossy.frames_rx
+        lossy.frames_rx > sent / 3 && lossy.frames_rx < sent - sent / 5,
+        "network-limited: about seven in ten of {sent} should have arrived; {}",
+        counters(&lossy)
     );
-    assert_eq!(
-        lossy.frames_dropped_superseded, 0,
-        "a lost packet is not a superseded one"
+    // And the device kept up with what did arrive: a lost packet is not a
+    // superseded one. Against `frames_rx` rather than against zero, because
+    // zero is a statement about the machine's scheduler.
+    assert!(
+        lossy.frames_dropped_superseded * 4 <= lossy.frames_rx,
+        "a lost packet is not a superseded one: next to none of what arrived \
+         should have been superseded; {}",
+        counters(&lossy)
     );
 
     let (sent, slow) = stream(Faults {
         decode_ms: 40,
         ..Faults::default()
     });
-    assert_eq!(
-        slow.frames_rx, sent,
-        "decode-limited: the device got everything"
-    );
+    // Decode-limited: nothing was lost on the way in. The tail frame proves
+    // the drain reached the end of the stream, so a datagram the kernel had
+    // dropped would have left a hole behind it and `seq_gaps` would say so -
+    // which is why this asserts both, and neither needs to be exact.
     assert!(
-        slow.frames_dropped_superseded > 0,
-        "and could not draw it in time"
+        slow.frames_rx >= sent - sent / 20 && slow.seq_gaps <= sent / 20,
+        "decode-limited: the device got everything; {}",
+        counters(&slow)
+    );
+    // But it could not draw it in time: over half of everything that reached
+    // it was superseded before it could be shown, where the lossy run is
+    // under a quarter.
+    assert!(
+        slow.frames_dropped_superseded > slow.frames_rx / 2,
+        "and could not draw it in time; {}",
+        counters(&slow)
+    );
+
+    // The sentence the test's name makes, said in counters: whichever way the
+    // machine's load leans, these two do not look like one another.
+    assert!(
+        slow.frames_rx > lossy.frames_rx
+            && slow.frames_dropped_superseded > lossy.frames_dropped_superseded,
+        "loss and slowness must not look alike: lossy [{}] against slow [{}]",
+        counters(&lossy),
+        counters(&slow)
     );
 }
 
