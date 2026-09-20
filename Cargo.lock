@@ -1894,6 +1894,7 @@ dependencies = [
  "axum",
  "screeny",
  "screeny-art",
+ "screeny-device-api",
  "screeny-proto",
  "screeny-sim",
  "serde",

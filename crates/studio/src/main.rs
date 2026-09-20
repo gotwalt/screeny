@@ -9,6 +9,7 @@ const USAGE: &str = "\
 screeny-studio - play generative pieces on the panels, and design them in a browser
 
     screeny-studio [--listen ADDR] [--state-dir DIR] [--ui-dir DIR] [--no-discover]
+                   [--device-http-port PORT] [--no-device-http]
 
     --listen ADDR    address to serve on (default 127.0.0.1:8787, env
                      SCREENY_LISTEN). Anything other than a loopback address
@@ -21,6 +22,12 @@ screeny-studio - play generative pieces on the panels, and design them in a brow
     --ui-dir DIR     serve the UI from this directory instead of from the
                      binary, so an edit needs a reload rather than a rebuild
     --no-discover    do not browse for panels; use configured addresses only
+    --device-http-port PORT
+                     the port a panel serves its own status API on (default 80,
+                     env SCREENY_DEVICE_HTTP_PORT). Only for pointing a studio
+                     at a simulator, which cannot bind 80 without root
+    --no-device-http do not read a panel's own status API at all; show what UDP
+                     telemetry says and nothing more
     -h, --help       this
 
     SCREENY_STUDIO_FAULTS=1 also offers two pieces that misbehave on purpose
@@ -68,6 +75,11 @@ fn main() -> ExitCode {
         }
         if !cfg.discover {
             println!("studio: not browsing for panels; configured addresses only");
+        }
+        if !cfg.device_http {
+            println!("studio: not reading any panel's own status API (--no-device-http)");
+        } else if cfg.device_http_port != screeny_studio::devhttp::DEFAULT_PORT {
+            println!("studio: reading each panel's own status API on port {}", cfg.device_http_port);
         }
         if cfg.fault_pieces {
             println!("studio: the fault pieces are offered (SCREENY_STUDIO_FAULTS=1)");
@@ -122,6 +134,15 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
     }
     cfg.state_dir = Some(PathBuf::from(env("SCREENY_STATE_DIR").unwrap_or_else(|| DEFAULT_STATE_DIR.to_string())));
     cfg.fault_pieces = env("SCREENY_STUDIO_FAULTS").as_deref() == Some("1");
+    // Card 180: said here rather than inherited, because it is the one number
+    // in this program a real panel can be hurt by. `MIN_DEVICE_HTTP_EVERY`
+    // says why ten seconds; there is deliberately no flag to go faster.
+    cfg.device_http_every = screeny_studio::MIN_DEVICE_HTTP_EVERY;
+    if let Some(v) = env("SCREENY_DEVICE_HTTP_PORT") {
+        cfg.device_http_port = v
+            .parse()
+            .map_err(|_| format!("SCREENY_DEVICE_HTTP_PORT {v}: expected a port number"))?;
+    }
 
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -137,6 +158,11 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
                 cfg.state_dir = Some(PathBuf::from(v));
             }
             "--no-discover" => cfg.discover = false,
+            "--no-device-http" => cfg.device_http = false,
+            "--device-http-port" => {
+                let v = value()?;
+                cfg.device_http_port = v.parse().map_err(|_| format!("--device-http-port {v}: expected a port number"))?;
+            }
             "--ui-dir" => {
                 let v = value()?;
                 let dir = PathBuf::from(&v);
@@ -169,6 +195,7 @@ fn resolve(v: &str) -> Result<SocketAddr, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn parse_args(args: &[&str]) -> Result<Option<Config>, String> {
         parse(args.iter().map(|s| (*s).to_string()), &|_| None)
@@ -210,6 +237,28 @@ mod tests {
     fn a_bad_listen_in_the_environment_names_the_environment() {
         let e = parse_env(&[], &[("SCREENY_LISTEN", "nowhere")]).unwrap_err();
         assert!(e.contains("SCREENY_LISTEN"), "{e}");
+    }
+
+    /// Card 180. The device has one connection worker and no listen backlog,
+    /// so how often the studio reads its status is a number a real panel can
+    /// be hurt by. There is no flag to go faster, and the product says the
+    /// floor rather than inheriting it.
+    #[test]
+    fn the_product_never_reads_a_panels_status_faster_than_the_floor() {
+        let cfg = parse_env(&[], &[]).unwrap().unwrap();
+        assert_eq!(cfg.device_http_every, screeny_studio::MIN_DEVICE_HTTP_EVERY);
+        assert!(cfg.device_http_every >= Duration::from_secs(10), "the firmware session asked for ten seconds");
+        assert!(cfg.device_http, "a panel's own status is read by default");
+        assert_eq!(cfg.device_http_port, 80, "the device serves it on 80");
+        // ...and the same floor is what `Config::default` carries, so a
+        // library caller that says nothing is safe too.
+        assert_eq!(Config::default().device_http_every, screeny_studio::MIN_DEVICE_HTTP_EVERY);
+
+        assert!(!parse_args(&["--no-device-http"]).unwrap().unwrap().device_http);
+        assert_eq!(parse_args(&["--device-http-port", "8080"]).unwrap().unwrap().device_http_port, 8080);
+        assert_eq!(parse_env(&[], &[("SCREENY_DEVICE_HTTP_PORT", "8080")]).unwrap().unwrap().device_http_port, 8080);
+        assert!(parse_args(&["--device-http-port", "no"]).is_err());
+        assert!(parse_env(&[], &[("SCREENY_DEVICE_HTTP_PORT", "no")]).is_err());
     }
 
     #[test]

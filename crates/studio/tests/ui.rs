@@ -219,6 +219,71 @@ fn the_page_says_why_a_gpu_piece_is_not_available() {
     assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable piece has to look unavailable");
 }
 
+/// Card 180: the page has somewhere to put what only the device knows, it is
+/// hidden when there is nothing to put there, and it never invents a threshold
+/// of its own - the server decides what stands out, in one place, beside the
+/// reasoning.
+#[test]
+fn the_page_can_show_what_only_the_device_knows() {
+    assert!(INDEX_HTML.contains("id=\"device-block\""), "the panel section needs a block for the device's own facts");
+    assert!(INDEX_HTML.contains("id=\"device-facts\""), "...and a list inside it");
+    assert!(INDEX_HTML.contains("id=\"device-block\" hidden"), "with no HTTP status API the page is the page it was");
+    assert!(STYLE_CSS.contains(".device-block"), "the block has to look like part of the panel section");
+
+    // Every flag the block draws a tone from is the server's judgement, read
+    // by name. A number here would be a second opinion about a threshold.
+    for decided in ["f.low_stack", "f.low_heap", "f.bad_fw_state", "f.odd_reset", "f.store_errors"] {
+        assert!(MAIN_JS.contains(decided), "the page reads {decided} rather than deciding it");
+    }
+    let block = MAIN_JS.find("function showDevice").expect("the device block");
+    let body = &MAIN_JS[block..block + 2400];
+    for invented in ["2048", "0.85", "< 4312", "98304"] {
+        assert!(!body.contains(invented), "the page must not carry its own copy of a threshold: {invented}");
+    }
+    // The four that are meant to stand out do, and nothing else does.
+    assert_eq!(body.matches("'bad'").count(), 2, "a reset that should not have happened, and a store error");
+}
+
+/// And the studio's `/api/v1/status` carries the thresholds' verdicts rather
+/// than only the raw numbers, so the two cannot drift apart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_with_no_http_status_api_leaves_the_page_as_it_was() {
+    let studio = studio().await;
+    let at = studio.addr;
+    // A panel that will never answer anything: nothing is on that port.
+    let add = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50998","name":"paper panel"}"#).await;
+    assert_eq!(add.status, 200, "{}", String::from_utf8_lossy(&add.body));
+
+    let status = get(at, "/api/v1/status").await.json();
+    let d = &status["devices"][0];
+    assert!(d["facts"].is_null(), "nothing has been read: {d}");
+    assert_eq!(d["http"]["reads"], 0, "{}", d["http"]);
+    assert_eq!(status["ok"], true, "a panel that has never answered is not a server fault: {}", status["problems"]);
+    assert_eq!(get(at, "/healthz").await.status, 200);
+    studio.stop().await;
+}
+
+/// Card 181: with no panel attached, no control in the panel section claims
+/// something is reaching a panel.
+///
+/// The switch stays live, because it is not decorative: `state.on` is what
+/// makes the first panel found start playing without anybody pressing
+/// anything, and disabling it would take that choice away. What changes is
+/// what it says it does - which is card 170's standard, that no control's
+/// effect on the panel is unclear.
+#[test]
+fn the_output_switch_says_what_it_does_when_there_is_no_panel() {
+    assert!(INDEX_HTML.contains("id=\"panel-out-label\""), "the switch's label has to be writable");
+    assert!(
+        MAIN_JS.contains("'Drive a panel as soon as one is found'"),
+        "with no panel attached the switch must not promise one"
+    );
+    assert!(MAIN_JS.contains("'Show it on the panel'"), "and with one attached it says so again");
+    // Still live, and still the same two bodies a script drives it with.
+    assert!(!MAIN_JS.contains("outSwitch.disabled"), "the switch still decides what the first panel found does");
+    assert!(MAIN_JS.contains("{ on: true, to: '' } : { on: false }"), "`set_panel`'s two bodies are unchanged");
+}
+
 /// The same fact over the API, which is what the line is drawn from: with
 /// discovery off, `/api/v1/status` says so rather than looking like a browse
 /// that has found nothing yet.

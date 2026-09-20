@@ -43,7 +43,7 @@ use axum::Json;
 use screeny_art::output::PanelStatus;
 use serde::Serialize;
 
-use crate::devices::{DiscoveryHealth, Telem};
+use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, Telem};
 
 use crate::player::{PlayerStatus, WATCHDOG};
 use crate::state::{unix_now, StoreHealth};
@@ -128,6 +128,18 @@ pub struct DeviceStatus {
     /// The device's own telemetry: uptime, RSSI, drops by cause, brightness.
     pub telemetry: Option<Telem>,
     pub telemetry_ago: Option<f64>,
+    /// Card 180: what the device's own HTTP API says about itself - heap, free
+    /// stack, firmware slot, reset reason, WiFi. `None` on firmware that does
+    /// not serve one, which is normal and is why this is additive: everything
+    /// above it still comes from UDP.
+    ///
+    /// **It carries the network's SSID**, which is why it is on the owner's
+    /// page and in this reply and nowhere else: never a log line, never the
+    /// state file (`CLAUDE.md`).
+    pub facts: Option<DeviceFacts>,
+    pub facts_ago: Option<f64>,
+    /// How reading it is going. Never a reason for a 503.
+    pub http: HttpHealth,
     pub last_error: Option<String>,
     /// What it plays, and how that is going. `None` when no player is
     /// configured for this device.
@@ -237,6 +249,9 @@ pub fn collect(st: &AppState) -> Status {
                 panel_size: info.map(|i| format!("{}x{}", i.w, i.h)),
                 telemetry_ago: d.telemetry.as_ref().map(|t| now.saturating_sub(t.heard_unix) as f64),
                 telemetry: d.telemetry.clone(),
+                facts_ago: d.facts.as_ref().map(|f| now.saturating_sub(f.heard_unix) as f64),
+                facts: d.facts.clone(),
+                http: d.http.clone(),
                 last_error: d.last_error.clone(),
                 player: st.players.get(&d.stored.id).map(|p| p.status()),
             }

@@ -26,6 +26,8 @@
 
 use screeny::proto::control::{state as dev_state, Telemetry};
 use screeny::{ControlClient, Device, Target};
+use screeny_device_api::reply::StatusReply;
+use screeny_device_api::{FwState, ResetReason, WifiState};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -70,6 +72,15 @@ pub struct DeviceRecord {
     pub telemetry: Option<Telem>,
     /// The last control request that failed, if the last one did.
     pub last_error: Option<String>,
+    /// Card 180: what the device's own HTTP API last said about itself.
+    /// `None` on firmware that does not serve one, which is normal.
+    pub facts: Option<DeviceFacts>,
+    /// How reading that is going. Never a fault in `/healthz`.
+    pub http: HttpHealth,
+    /// Which port its HTTP API is on, when it is not
+    /// [`crate::devhttp::DEFAULT_PORT`]. Live only, never persisted: it is how
+    /// a simulator - which cannot bind 80 without root - is talked to.
+    pub http_port: Option<u16>,
 }
 
 impl DeviceRecord {
@@ -115,6 +126,20 @@ impl DeviceRecord {
     #[must_use]
     pub fn control_addr(&self) -> Option<SocketAddr> {
         self.resolved.as_ref().map(|d| d.control)
+    }
+
+    /// Where its HTTP API is: **the resolved address, on port 80**.
+    ///
+    /// Derived rather than stored, because an address is a way of reaching a
+    /// panel and not a name for it - the same reason the registry is keyed by
+    /// id. `default_port` is the studio-wide override (`--device-http-port`);
+    /// [`DeviceRecord::http_port`] is this device's own, and wins.
+    ///
+    /// `None` until the device has been resolved: there is nowhere to ask yet.
+    #[must_use]
+    pub fn http_addr(&self, default_port: u16) -> Option<SocketAddr> {
+        let port = self.http_port.unwrap_or(default_port);
+        self.resolved.as_ref().map(|d| SocketAddr::new(d.frame.ip(), port))
     }
 
     /// True when the device has been heard from recently.
@@ -177,6 +202,150 @@ impl Telem {
     }
 }
 
+// --------------------------------------------------- the device's own HTTP ----
+
+/// Bytes of core-0 stack left untouched, below which the page says so.
+///
+/// The owner's device reads `stack_free 4312` when it is healthy, and firmware
+/// card 222 watched it fall to 5.2 KB while serving requests during a stream -
+/// which is what card 227 was opened for. So "healthy" here is a low number
+/// already, and what matters is the margin, not the absolute. Two kilobytes is
+/// half of the healthy reading: about one exception frame plus picoserve's
+/// buffer, which is the next thing that would want the space. Below it, the
+/// next feature does not fit and the one after that smashes the guard.
+pub const LOW_STACK: u32 = 2048;
+
+/// Fraction of the heap in use, above which the page says so.
+///
+/// The owner's device reads `47240/98304` - 48% - when it is healthy, and the
+/// simulator reports 67%. 85% is therefore nowhere near the ordinary state of
+/// either, so a line drawn there is a real change rather than noise, and it
+/// still leaves ~14 KB free, which is more than one TLS-less HTTP connection
+/// and one frame buffer ever ask for.
+pub const HIGH_HEAP: f32 = 0.85;
+
+/// Reset reasons that are the ordinary way this device restarts: power
+/// applied, our own `REBOOT` or `esp_restart`, and the reset pin - which is
+/// `espflash` on this bench. Anything else (brownout, panic, either watchdog)
+/// is something that *happened to* the device and is worth a person's eye.
+const QUIET_RESETS: [ResetReason; 3] = [ResetReason::PowerOn, ResetReason::Software, ResetReason::External];
+
+/// What only the device knows: `GET /api/v1/status`, plus what the studio can
+/// work out by having watched more than one of them.
+///
+/// The device's own shapes are embedded rather than restated (one
+/// implementation of each thing): the fields of
+/// [`StatusReply`](screeny_device_api::reply::StatusReply) are flattened
+/// straight into this on the wire, so a field the firmware adds reaches the
+/// page in the same commit that adds it.
+///
+/// **`Debug` is written by hand and redacts the SSID.** The status payload
+/// carries the real network name, which is credential-adjacent in this repo
+/// (`CLAUDE.md`): it may be on the owner's page and in the studio's own
+/// `/api/v1/status`, and it must never reach a log line, the state file, a
+/// fixture or a commit message. Deriving `Debug` here would put it one
+/// `{:?}` away from stderr, and [`DeviceRecord`] derives `Debug`.
+#[derive(Clone, Serialize)]
+pub struct DeviceFacts {
+    /// When this was read, so the page can say "3 s ago".
+    pub heard_unix: u64,
+    /// Everything the device said, in the shared shapes.
+    #[serde(flatten)]
+    pub reply: StatusReply,
+    /// How many times `boot_id` has **changed** since this studio started:
+    /// the number of times the device rebooted while we were watching.
+    ///
+    /// Counted from `boot_id` and never inferred from uptime, which is the
+    /// agreement with the firmware session: a device whose link merely flapped
+    /// keeps its `boot_id`, and a device that rebooted draws a new one.
+    pub reboots: u32,
+    /// The link is up: a non-null `ip`.
+    ///
+    /// Until firmware card 223, `wifi_state` can read `failed` on a device
+    /// that is plainly connected, because it is the sticky result of the last
+    /// credentials *attempt*. The address is the honest answer, so it is the
+    /// one the page believes.
+    pub link_up: bool,
+    /// `wifi_state` says `failed` and yet there is an address. A note about
+    /// the last WiFi change, **never** a fault.
+    pub wifi_stale_failure: bool,
+    /// Free stack is below [`LOW_STACK`].
+    pub low_stack: bool,
+    /// The heap is fuller than [`HIGH_HEAP`].
+    pub low_heap: bool,
+    /// The running slot is not `valid`.
+    pub bad_fw_state: bool,
+    /// The chip last restarted for a reason that is not one of
+    /// [`QUIET_RESETS`]: a brownout, a panic or a watchdog.
+    pub odd_reset: bool,
+}
+
+impl DeviceFacts {
+    /// Read one status reply, carrying forward what only a previous read can
+    /// say - the reboot count.
+    #[must_use]
+    pub fn of(reply: StatusReply, previous: Option<&DeviceFacts>) -> Self {
+        let rebooted = previous.is_some_and(|p| p.reply.boot_id != reply.boot_id);
+        let reboots = previous.map_or(0, |p| p.reboots) + u32::from(rebooted);
+        let link_up = reply.ip.is_some();
+        let heap = if reply.heap_size == 0 {
+            0.0
+        } else {
+            reply.heap_used as f32 / reply.heap_size as f32
+        };
+        DeviceFacts {
+            heard_unix: unix_now(),
+            reboots,
+            link_up,
+            wifi_stale_failure: link_up && reply.wifi_state == WifiState::Failed,
+            low_stack: reply.stack_free < LOW_STACK,
+            low_heap: heap > HIGH_HEAP,
+            bad_fw_state: reply.fw_state != FwState::Valid,
+            odd_reset: !QUIET_RESETS.contains(&reply.reset_reason),
+            reply,
+        }
+    }
+}
+
+/// Hand-written, and deliberately blind to the SSID. See the type's docs.
+impl std::fmt::Debug for DeviceFacts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceFacts")
+            .field("fw", &self.reply.fw.as_str())
+            .field("boot_id", &self.reply.boot_id)
+            .field("uptime_ms", &self.reply.uptime_ms)
+            .field("heap", &format_args!("{}/{}", self.reply.heap_used, self.reply.heap_size))
+            .field("stack_free", &self.reply.stack_free)
+            .field("wifi_state", &self.reply.wifi_state)
+            .field("ssid", &if self.reply.ssid.is_some() { "<redacted>" } else { "<none>" })
+            .field("reboots", &self.reboots)
+            .field("reset_reason", &self.reply.reset_reason)
+            .field("store_errors", &self.reply.store_errors)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How reading a device's HTTP API is going.
+///
+/// **None of this is ever a problem in `/healthz`.** A panel with no HTTP
+/// server is normal - older firmware, or the portable profile pointed at a
+/// simulator started with `--no-http` - and a panel that is switched off is
+/// normal life for a thing that runs for months.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct HttpHealth {
+    /// True once the studio has decided this device serves no HTTP API. It
+    /// keeps looking, slowly, because a firmware update changes the answer.
+    pub absent: bool,
+    /// The last failure, in words; `None` when the last read worked.
+    pub last_error: Option<String>,
+    /// Status reads that worked, since the studio started.
+    pub reads: u64,
+    /// Whether the one line about this device has been said. Not on the wire:
+    /// it is about this process's stderr, not about the device.
+    #[serde(skip)]
+    pub said: bool,
+}
+
 fn state_name(s: u8) -> &'static str {
     match s {
         dev_state::IDLE => "idle",
@@ -232,7 +401,7 @@ impl Registry {
             }
             devices.insert(
                 s.id.clone(),
-                DeviceRecord { stored: s, resolved: None, seen_unix: None, telemetry: None, last_error: None },
+                DeviceRecord { stored: s, ..DeviceRecord::default() },
             );
         }
     }
@@ -305,7 +474,7 @@ impl Registry {
             address: to.to_string(),
             manual: true,
         };
-        devices.insert(id.clone(), DeviceRecord { stored, resolved: None, seen_unix: None, telemetry: None, last_error: None });
+        devices.insert(id.clone(), DeviceRecord { stored, ..DeviceRecord::default() });
         Ok(id)
     }
 
@@ -423,6 +592,67 @@ impl Registry {
     pub fn control_failed(&self, id: &str, why: String) {
         if let Some(d) = self.lock().get_mut(id) {
             d.last_error = Some(why);
+        }
+    }
+
+    /// Record one `GET /api/v1/status`.
+    ///
+    /// The reply is **merged, not substituted**: the frame counters and the
+    /// link state stay where they were (UDP telemetry and the link object),
+    /// and this adds what only the device knows. It also counts as having
+    /// heard from the device, because it is: the studio just had a TCP
+    /// conversation with it at the address it thought it was at.
+    ///
+    /// Returns `(reboots, this read is the first since a reboot)` and nothing
+    /// from the payload, so the caller can say what happened **without ever
+    /// being handed the reply** - which carries the SSID.
+    pub fn heard_http(&self, id: &str, reply: StatusReply) -> Option<(u32, bool)> {
+        let mut devices = self.lock();
+        let d = devices.get_mut(id)?;
+        let facts = DeviceFacts::of(reply, d.facts.as_ref());
+        let reboots = facts.reboots;
+        let rebooted = d.facts.as_ref().is_some_and(|p| p.reboots != reboots);
+        d.facts = Some(facts);
+        d.seen_unix = Some(unix_now());
+        d.http.absent = false;
+        d.http.last_error = None;
+        d.http.reads += 1;
+        // A device that is answering again may stop again, and that is worth
+        // one more line when it does.
+        d.http.said = false;
+        Some((reboots, rebooted))
+    }
+
+    /// Record that a status read did not work.
+    ///
+    /// Returns true the **first** time it is worth saying out loud for this
+    /// device, and never again until a read succeeds: a panel with no HTTP
+    /// server would otherwise write a line every ten seconds for months.
+    pub fn http_failed(&self, id: &str, absent: bool, why: String) -> bool {
+        let mut devices = self.lock();
+        let Some(d) = devices.get_mut(id) else { return false };
+        d.http.absent = absent;
+        d.http.last_error = Some(why);
+        // The facts are left where they were on purpose: "the last thing it
+        // said about itself" stays readable, with its own age beside it, the
+        // same way telemetry does.
+        let say = !d.http.said;
+        d.http.said = true;
+        say
+    }
+
+    /// Point this device's HTTP API at a port other than
+    /// [`crate::devhttp::DEFAULT_PORT`]. Live only; nothing is persisted.
+    pub fn set_http_port(&self, id: &str, port: Option<u16>) -> bool {
+        match self.lock().get_mut(id) {
+            Some(d) => {
+                d.http_port = port;
+                // A different port is a different server: whatever we decided
+                // about the old one does not apply.
+                d.http = HttpHealth::default();
+                true
+            }
+            None => false,
         }
     }
 

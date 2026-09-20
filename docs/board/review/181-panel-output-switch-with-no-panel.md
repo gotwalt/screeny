@@ -4,8 +4,8 @@ title: "Show it on the panel" is switched on when there is no panel
 type: build
 hardware: no
 depends: [170, 173]
-owner:
-branch:
+owner: worker-180
+branch: card/180-device-http-status
 ---
 
 ## Goal
@@ -60,3 +60,32 @@ section claims something is reaching a panel. Attach one: the switch means
 what it says, and `{"on":false}` / `{"on":true}` still work unchanged.
 
 ## Log
+
+- **2026-09-20, worker-180.** Folded into card 180's branch: same section of the page,
+  and both change what that section says rather than what it does.
+
+  **Chose the second option: keep it live, change what it says.** With no panel
+  attached the switch reads *"Drive a panel as soon as one is found"*; with one, *"Show
+  it on the panel"*.
+
+  Why not disable it. The switch is not decorative when there is no panel - `state.on`
+  on the unbound player is precisely what makes the first panel found start playing
+  without anybody pressing anything, which is the zero-click case the owner asked for.
+  Greying it out would take that choice away from the one person who might want to make
+  it before plugging anything in, and the page would *still* have had to explain the
+  behaviour in a hint somewhere. Relabelling puts the explanation in the control, which
+  is card 170's standard read forwards: a control whose name is what it does.
+
+  One line of HTML (`<span id="panel-out-label">`) and three of `main.js`, inside
+  `showPanel()` where the pill and the help line are already decided. `set_panel`'s two
+  bodies are untouched - the change handler still posts `{on:true,to:''}` and
+  `{on:false}` - and `tests/panel.rs::set_panel_hands_the_panel_over_and_takes_it_back`,
+  which asserts on what the *device* sees, passes unchanged.
+
+  Test: `tests/ui.rs::the_output_switch_says_what_it_does_when_there_is_no_panel` pins
+  both labels, that the switch is never disabled, and the exact `set_panel` bodies.
+
+  Evidence: `docs/research/img/181-no-panel-switch.png` - a studio started with
+  `--no-discover` and no state, in Chrome. The section reads `PANEL [NO PANEL] / NO
+  PANEL YET / Nothing is being sent… / Not looking for panels… / (•==) Drive a panel as
+  soon as one is found`. Nothing in it claims anything is reaching a panel.

@@ -66,7 +66,11 @@
            that finds nothing is normal - but never silent either. -->
       <p class="hint" id="discovery-note" hidden></p>
 
-      <label class="switch"><input type="checkbox" id="panel-out"><span>Show it on the panel</span></label>
+      <!-- Card 181: the label is written by the script. With a panel attached
+           it is "Show it on the panel"; with none it says what the switch
+           really does, which is decide whether the first panel found starts
+           playing. `set_panel` is untouched either way. -->
+      <label class="switch"><input type="checkbox" id="panel-out"><span id="panel-out-label">Show it on the panel</span></label>
 
       <div class="slider" id="bright-slider">
         <label for="bright">Brightness</label><output></output>
@@ -75,6 +79,18 @@
       <p class="hint" id="bright-note"></p>
 
       <dl class="facts" id="panel-facts"></dl>
+
+      <!-- Card 180: what only the device knows - heap, free stack, firmware
+           slot, WiFi, why it last restarted. It comes from the panel's own
+           GET /api/v1/status, which firmware older than 0.4.0 does not serve;
+           then this block is not here at all and the page above is exactly
+           the page it was. -->
+      <div class="device-block" id="device-block" hidden>
+        <h3>Device</h3>
+        <dl class="facts" id="device-facts"></dl>
+        <p class="hint" id="device-note" hidden></p>
+      </div>
+
       <p class="hint" id="panel-repairs" hidden></p>
 
       <div class="row row--actions">

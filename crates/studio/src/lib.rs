@@ -31,6 +31,7 @@
 //! found is adopted into that same player without the picture restarting.
 
 pub mod api;
+pub mod devhttp;
 pub mod devices;
 pub mod fleet;
 pub mod health;
@@ -64,6 +65,16 @@ const STATUS_EVERY: Duration = Duration::from_millis(500);
 /// How long after starting a player is allowed to not be running yet before
 /// that counts against `/healthz`.
 pub const START_GRACE: Duration = Duration::from_secs(15);
+/// **The fastest a device's own HTTP status API may be read** (card 180).
+///
+/// Not a preference: the device has one connection worker and no listen
+/// backlog (firmware card 222), so every request costs it a socket nothing
+/// else can have while it is open. The firmware session measured 200 requests
+/// in 60 s during a 30 fps stream costing no frame, and asked for ten seconds.
+/// [`Config::default`] carries this and `main` clamps to it, so nothing that
+/// can reach a real panel can go faster; a test against the simulator on
+/// loopback sets its own.
+pub const MIN_DEVICE_HTTP_EVERY: Duration = Duration::from_secs(10);
 
 /// How to run.
 ///
@@ -84,6 +95,17 @@ pub struct Config {
     pub discover_every: Duration,
     /// How often to ask each known device for its telemetry.
     pub telemetry_every: Duration,
+    /// Read each device's own HTTP status API at all (card 180). On by
+    /// default: a device that does not serve one costs one refused connection
+    /// and is then left alone.
+    pub device_http: bool,
+    /// How often to read it. Never below [`MIN_DEVICE_HTTP_EVERY`] on anything
+    /// that can reach a real panel; see that constant.
+    pub device_http_every: Duration,
+    /// Which port to read it on, for every device that does not say otherwise
+    /// ([`devices::DeviceRecord::http_port`]). The device serves 80; a
+    /// simulator cannot bind 80 without root, hence the override.
+    pub device_http_port: u16,
     /// How often the supervisor looks at the players.
     pub supervise_every: Duration,
     /// How long a device may go unheard before the studio throws away where
@@ -106,6 +128,9 @@ impl Default for Config {
             discover: false,
             discover_every: Duration::from_secs(30),
             telemetry_every: Duration::from_secs(5),
+            device_http: true,
+            device_http_every: MIN_DEVICE_HTTP_EVERY,
+            device_http_port: devhttp::DEFAULT_PORT,
             supervise_every: Duration::from_secs(1),
             stale_after: Duration::from_secs(120),
             fault_pieces: false,
@@ -303,6 +328,7 @@ impl Studio {
         fleet::spawn_supervisor(state.clone());
         fleet::spawn_discovery(state.clone());
         fleet::spawn_telemetry(state.clone());
+        fleet::spawn_device_http(state.clone());
 
         Ok(Studio { addr, listener, state, stop })
     }

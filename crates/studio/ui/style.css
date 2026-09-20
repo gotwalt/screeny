@@ -389,6 +389,13 @@ select:hover { border-color: var(--dim); }
 .facts dd[data-tone="warn"] { color: var(--amber); }
 .facts dd[data-tone="bad"] { color: var(--over); }
 
+/* Card 180: the panel's own account of itself, under a rule so that "what the
+   studio sees" and "what the device says" are visibly two different things.
+   Quiet: the same facts grid, the same tones, one more heading. */
+.device-block { border-top: 1px solid var(--rule); margin-top: 14px; padding-top: 12px; }
+.device-block h3 { margin-bottom: 10px; }
+.device-block .facts + .hint { margin-top: 10px; }
+
 /* Changing which panel is a setup action, not a daily one: folded away. */
 .setup { border-top: 1px solid var(--rule); padding-top: 14px; }
 .setup summary {

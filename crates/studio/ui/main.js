@@ -220,6 +220,28 @@ function duration(seconds) {
   return `${Math.round(seconds)} s`;
 }
 
+/** A snake_case name from the device's API, as a person reads it. */
+const words = (s) => String(s).replace(/_/g, ' ');
+
+const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
+
+/** What the panel does when nothing is streaming, spelled out. The keys are
+ *  `screeny_device_api::IdleMode`; anything else falls back to the raw name,
+ *  so firmware that grows a mode says something rather than nothing. */
+const IDLE = {
+  status: 'shows its status screen',
+  hold_forever: 'holds the last frame',
+  dim: 'dims the last frame',
+  black: 'goes black',
+};
+
+/** The WiFi line. A non-null address means the link is up whatever
+ *  `wifi_state` says - see `wifi_stale_failure` in devices.rs. */
+function wifiLine(f) {
+  const where = f.ssid || 'no network';
+  return `${where} · ${f.link_up ? `${f.rssi_dbm} dBm` : words(f.wifi_state)}`;
+}
+
 /** Fill a <dl> from [label, value, tone] triples, reusing its rows. */
 function facts(dl, rows) {
   while (dl.children.length > rows.length * 2) { dl.lastElementChild.remove(); }
@@ -712,12 +734,17 @@ async function start() {
         rows.push(['Faults', `${player.health.panics} panics, ${player.health.stalls} stalls, ${player.health.restarts} restarts`, 'warn']);
       }
     }
+    // Card 180: the device's own account of itself, when the firmware serves
+    // one. Where a row would be said twice - uptime, signal - it is said in
+    // the Device block below and left out here, so nothing is repeated and a
+    // panel with no HTTP API shows exactly what it always did.
+    const f = d && d.facts;
     if (d) {
       rows.push(['Heard', ago(d.last_seen_ago), d.last_seen_ago > 60 ? 'dim' : null]);
       if (t) {
         rows.push(['Panel', `${t.state} · ${nf.format(t.frames_shown)} shown`]);
-        rows.push(['Up', duration(t.uptime_s)]);
-        rows.push(['Signal', `${t.rssi_dbm} dBm`, t.rssi_dbm < -75 ? 'warn' : null]);
+        if (!f) rows.push(['Up', duration(t.uptime_s)]);
+        if (!f) rows.push(['Signal', `${t.rssi_dbm} dBm`, t.rssi_dbm < -75 ? 'warn' : null]);
         const drops = t.drops.stale + t.drops.superseded + t.drops.decode + t.drops.rejected;
         rows.push([
           'Dropped',
@@ -731,6 +758,15 @@ async function start() {
       if (d.last_error) rows.push(['Last error', d.last_error, 'bad']);
     }
     facts($('#panel-facts'), rows);
+    showDevice(d);
+
+    // Card 181: the switch is still live with no panel attached, and it still
+    // means something - `state.on` is what makes the first panel found start
+    // playing without anybody pressing anything. What it cannot say while
+    // there is no panel is "show it on the panel", because two lines above,
+    // the page has just said nothing is being sent.
+    const outLabel = attachedId() ? 'Show it on the panel' : 'Drive a panel as soon as one is found';
+    if ($('#panel-out-label').textContent !== outLabel) $('#panel-out-label').textContent = outLabel;
 
     const looking = discoveryLine(Boolean(attachedId()));
     $('#discovery-note').textContent = looking;
@@ -750,6 +786,52 @@ async function start() {
     showFound();
   }
   bind({ refresh: showPanel });
+
+  /** Card 180: the panel's own account of itself, read by the server from
+   *  GET /api/v1/status on the device and cached there - the browser never
+   *  talks to the panel, which has one connection worker and would drop a
+   *  second caller at SYN.
+   *
+   *  Absent is normal: firmware older than 0.4.0 serves no HTTP at all, and
+   *  then this whole block is hidden and the page above is the page it was.
+   *
+   *  **Quiet by default.** Everything here is a plain number in the ordinary
+   *  tone. The four things meant to catch an eye are the four that mean
+   *  something happened to the panel rather than in it: a reset that was not a
+   *  power-on or a reboot we asked for, a settings-store error, a firmware
+   *  slot that is not valid, and memory running out. Which is which is decided
+   *  once, on the server, beside the reasoning for the thresholds
+   *  (`devices::LOW_STACK`, `devices::HIGH_HEAP`) - never a number written out
+   *  twice. */
+  function showDevice(d) {
+    const f = d && d.facts;
+    $('#device-block').hidden = !f;
+    if (!f) { $('#device-note').hidden = true; return; }
+
+    const rows = [
+      ['Slot', `${words(f.fw_slot)} · ${words(f.fw_state)}`, f.bad_fw_state ? 'warn' : null],
+      // uptime_ms wraps at 49.7 days, like telemetry's. So does the panel's.
+      ['Up', duration(f.uptime_ms / 1000)],
+      ['Memory', `${kb(f.heap_used)} of ${kb(f.heap_size)}`, f.low_heap ? 'warn' : null],
+      ['Free stack', `${nf.format(f.stack_free)} B`, f.low_stack ? 'warn' : null],
+      ['WiFi', wifiLine(f), f.link_up ? (f.rssi_dbm < -75 ? 'warn' : null) : 'warn'],
+      ['Reboots', f.reboots ? `${nf.format(f.reboots)} since the studio started` : 'none since the studio started'],
+      ['Last reset', words(f.reset_reason), f.odd_reset ? 'bad' : null],
+    ];
+    if (f.store_errors) rows.push(['Store errors', nf.format(f.store_errors), 'bad']);
+    rows.push(['When idle', IDLE[f.idle_mode] || words(f.idle_mode)]);
+    facts($('#device-facts'), rows);
+
+    const notes = [];
+    // Until firmware card 223 `wifi_state` is the sticky result of the last
+    // credentials attempt, not the link. A panel with an address is on the
+    // network whatever that field says, so this is a note and never a fault.
+    if (f.wifi_stale_failure) notes.push('The last WiFi change failed; it is still on the network it had.');
+    if (f.portal) notes.push('Its setup portal is up.');
+    if (d.facts_ago > 120) notes.push(`This is what it last said about itself, ${ago(d.facts_ago)}.`);
+    $('#device-note').textContent = notes.join(' ');
+    $('#device-note').hidden = notes.length === 0;
+  }
 
   /** Card 173: which of the three "nothing here yet" this is.
    *
