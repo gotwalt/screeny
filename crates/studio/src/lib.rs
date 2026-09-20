@@ -18,7 +18,9 @@
 //! (or stops doing) can slow the engine or the panel link down.
 
 pub mod api;
+pub mod devices;
 pub mod engine;
+pub mod state;
 pub mod ui;
 pub mod ws;
 

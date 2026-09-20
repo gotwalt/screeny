@@ -1686,6 +1686,7 @@ name = "screeny-studio"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "screeny",
  "screeny-art",
  "screeny-proto",
  "screeny-sim",

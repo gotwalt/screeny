@@ -14,7 +14,7 @@
 use crate::frame::{Frame, N};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LimiterSettings {
     pub enabled: bool,

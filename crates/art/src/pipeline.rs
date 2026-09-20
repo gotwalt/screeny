@@ -19,7 +19,7 @@ use crate::panel::{Panel, NATIVE_LEVELS};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// Levels per channel the panel is assumed to have. 64 native; try 32.
