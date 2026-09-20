@@ -50,8 +50,9 @@
 //! core does the work and hands back no datagram.
 //!
 //! Out of scope here and named where they belong: the soft-AP, DHCP, DNS and
-//! the captive-portal catch-all (card 223), `GET /api/v1/networks` (also 223,
-//! it needs the scan), and `POST /api/v1/firmware` (card 240). The last two
+//! the captive-portal catch-all (card 223), `GET /api/v1/networks` (card 229,
+//! **dropped** by device-web decision 10 - the route stays and keeps answering
+//! `unavailable`), and `POST /api/v1/firmware` (card 240). The last two
 //! answer `ErrorCode::Unavailable` today rather than 404, because the route
 //! exists and the device is simply not able to serve it yet.
 
@@ -1085,7 +1086,12 @@ const PORTAL_FORM: &str = concat!(
     "<label><span>Wi-Fi network name</span>",
     "<input name=ssid maxlength=32 required autocapitalize=none autocorrect=off spellcheck=false></label>",
     "<label><span>Password (leave empty for an open network)</span>",
-    "<input name=psk type=password maxlength=63 autocapitalize=none autocorrect=off></label>",
+    // 64, not 63: spec 8.2 types `psk_len` as `0..=64` and
+    // `screeny_proto::control::MAX_PSK_LEN` is 64, which is the length of a
+    // WPA2 PSK typed as 64 hex characters. A `maxlength` of 63 silently ate
+    // the last one in a captive mini-browser, where there is no other way to
+    // find out (card 243).
+    "<input name=psk type=password maxlength=64 autocapitalize=none autocorrect=off></label>",
     "<button type=submit>Join</button></form>"
 );
 

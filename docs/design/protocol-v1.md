@@ -828,7 +828,11 @@ screen and moves `HOLD` -> `IDLE`.
   so any sender may take over instantly.
 - `IDENTIFY` and `PROVISIONING` are display overlays, not stream states: frame
   handling continues underneath and the state byte in telemetry reports the
-  overlay.
+  overlay. A frame that arrives under the **setup-screen** overlay is admitted,
+  decoded and **counted** by §7.4 exactly as it would be otherwise, and is not
+  shown: the panel belongs to the QR for as long as the portal screen is up
+  (§8.1). So `frames_rx` advancing while `frames_shown` does not is the
+  expected reading in `PROVISIONING`, and not a fault.
 
 ### 7.4 Frame admission rule
 
@@ -1166,6 +1170,15 @@ shape here bumps it and moves the prefix, a new optional field does not.
   `fw_state` and `reset_reason`. Its `wifi_state` is **the link** -
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
+  It also carries the device's **panic breadcrumb**: `boot_count` and
+  `panic_count` since the device last lost power, and `last_panic`, which is
+  `null` or `{uptime_ms, boot, file, line, consecutive}` - `file` being the base
+  name of a source file and `consecutive` how many panics in a row, each within
+  a minute of a boot, that one made. A device that panics prints a backtrace and
+  reboots itself, so this is what a reader who was not watching the serial port
+  can still see; `reset_reason` alone says only `software`, because that is all
+  the chip's register knows. All three MAY be absent, and a reader MUST treat an
+  absent one as `0` / `null`: firmware older than 0.5.2 does not send them.
 - **`telemetry`** is the 48 bytes of §6.7 as named fields, so a browser and a
   UDP sender see the same numbers (rule 10). It is the numbers and not an
   interpretation of them: `state` and `last_codec` are the raw bytes here,

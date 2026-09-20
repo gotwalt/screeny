@@ -62,7 +62,10 @@ impl From<IdleMode> for ProtoIdleMode {
     }
 }
 
-/// The station's join state: the `GET_WIFI` byte of spec section 8.3.
+/// The station's join state: the `GET_WIFI` byte of spec section 6.3.
+///
+/// (Section 8.3 is the *join sequence* - what the device tries and in what
+/// order. The byte itself is in the opcode table.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WifiState {

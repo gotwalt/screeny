@@ -177,7 +177,7 @@ fn with<R>(f: impl FnOnce(&Provisioner) -> R) -> Option<R> {
     MACHINE.lock(|c| c.borrow().as_ref().map(f))
 }
 
-/// The trailing byte of a `GET_WIFI` reply (spec section 8.3), straight from
+/// The trailing byte of a `GET_WIFI` reply (spec section 6.3), straight from
 /// the machine - including its sticky `FAILED` after a posted pair did not work.
 #[must_use]
 pub fn wifi_state() -> u8 {
@@ -636,7 +636,16 @@ const DHCP_WAIT: Duration = Duration::from_secs(20);
 
 /// Feed the machine one event, carry nothing out: the actions are returned.
 fn step(ev: Event<'_>, now_ms: u32) -> screeny_provision::Actions {
-    MACHINE.lock(|c| {
+    // The state change is *noted* inside the critical section and **logged
+    // outside it** (card 243, from card 234's reading). This module's own rules
+    // at the top of the file forbid formatting while `MACHINE` is held, because
+    // a critical section masks the interrupt core 1's HUB75 DMA runs on, and
+    // this was the one place the file contradicted itself: a formatted line at
+    // 115200 baud is milliseconds of frozen dither. It only fires on a state
+    // change, so it was a latency bug and never a stall - but it is the kind of
+    // thing that is true until the day something makes the line longer.
+    let mut transition: Option<(&'static str, &'static str)> = None;
+    let actions = MACHINE.lock(|c| {
         let mut b = c.borrow_mut();
         let Some(p) = b.as_mut() else {
             return screeny_provision::Actions::new();
@@ -645,7 +654,7 @@ fn step(ev: Event<'_>, now_ms: u32) -> screeny_provision::Actions {
         let actions = p.step(ev, now_ms);
         let after = p.state();
         if after != before {
-            info!("provision: {} -> {}", before.name(), after.name());
+            transition = Some((before.name(), after.name()));
         }
         // **`AP_UP` is deliberately not written here.** The machine flips its
         // own `ap_up` *inside* this call and then asks for `RaiseAp`/`DropAp`;
@@ -654,7 +663,11 @@ fn step(ev: Event<'_>, now_ms: u32) -> screeny_provision::Actions {
         // actions own this flag, which is also what makes it mean "the radio
         // and the services agree" rather than "the machine intends to".
         actions
-    })
+    });
+    if let Some((before, after)) = transition {
+        info!("provision: {} -> {}", before, after);
+    }
+    actions
 }
 
 /// Sort a radio disconnect reason into the machine's three buckets.

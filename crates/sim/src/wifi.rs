@@ -170,7 +170,7 @@ impl WifiModel {
         self.p.state()
     }
 
-    /// The `GET_WIFI` state byte (spec section 8.3), straight from the machine.
+    /// The `GET_WIFI` state byte (spec section 6.3), straight from the machine.
     #[must_use]
     pub fn wifi_state(&self) -> u8 {
         self.p.wifi_state()
@@ -268,7 +268,7 @@ impl WifiModel {
     /// share, so they cannot drift apart again.
     ///
     /// In `Portal` the machine's own byte is used: there is no link to
-    /// describe, and that is also what `GET_WIFI` (spec 8.3) answers - which
+    /// describe, and that is also what `GET_WIFI` (spec 6.3) answers - which
     /// this method deliberately does **not** change.
     pub(crate) fn link_state(&self) -> screeny_device_api::WifiState {
         use screeny_device_api::WifiState;

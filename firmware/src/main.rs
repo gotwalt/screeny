@@ -129,8 +129,14 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// dispatch instead of nine nested router futures, every refusal in the API's
 /// error shape (a verb the API has no method for is now `method_not_allowed`
 /// and not picoserve's plain text), a reboot without the magic word is
-/// `out_of_range`, and each route's own `max_request_len` is enforced.
-pub const FW_VERSION: &str = "0.5.1";
+/// `out_of_range`, and each route's own `max_request_len` is enforced. 0.5.0 is
+/// card 223 (the soft-AP, the portal and the setup page), 0.5.1 its five
+/// phone-test fixes, and **0.5.2 is card 243: a panic prints, leaves a
+/// breadcrumb in RTC memory and reboots the chip** instead of spinning core 0
+/// for ever with the panel still lit - plus the crash-loop guard, the
+/// breadcrumb in `GET /api/v1/status`, and one partition-table read for the
+/// whole boot path.
+pub const FW_VERSION: &str = "0.5.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -500,7 +506,7 @@ pub fn current_ssid() -> &'static str {
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-/// The join state `GET_WIFI` reports (spec section 8.3).
+/// The join state `GET_WIFI` reports (spec section 6.3).
 ///
 /// Card 223: straight from the one `Provisioner`, sticky `FAILED` and all.
 /// The firmware no longer keeps a second opinion about it.
