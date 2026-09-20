@@ -747,14 +747,25 @@ async fn telemetry_task() {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
         tick += 1;
         if tick == STACK_TICK
-            && let Some(hw) = stack_probe::high_water()
+            && let Some(hw) = stack_probe::CORE0.high_water()
         {
             info!(
                 "stack: core 0 main high-water {} of {} bytes, {} free (painted at boot)",
                 hw,
-                stack_probe::size(),
-                stack_probe::headroom().unwrap_or(0),
+                stack_probe::CORE0.size(),
+                stack_probe::CORE0.headroom().unwrap_or(0),
             );
+            // Card 227: the same line for core 1, which until this card had
+            // never been measured at all. Its stack is ordinary `.bss`, so
+            // whatever it does not use is core 0's `.stack` being held hostage.
+            if let Some(hw1) = stack_probe::CORE1.high_water() {
+                info!(
+                    "stack: core 1 display high-water {} of {} bytes, {} free (painted before the core started)",
+                    hw1,
+                    stack_probe::CORE1.size(),
+                    stack_probe::CORE1.headroom().unwrap_or(0),
+                );
+            }
         }
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
@@ -806,7 +817,7 @@ fn assert_pin(pin: &impl Pin, expected: u8) {
 async fn main(spawner: Spawner) {
     // First, before anything has had a chance to go deep: card 220's paint.
     // Everything below this line is inside the measurement.
-    stack_probe::paint();
+    stack_probe::paint_core0();
 
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
@@ -957,10 +968,24 @@ async fn main(spawner: Spawner) {
     };
 
     #[cfg(not(feature = "display-on-core0"))]
+    let app_core_stack = {
+        let s = APP_CORE_STACK.take();
+        // Card 227: paint it here, from core 0, while the core it belongs to
+        // has not started and therefore nothing is live on it. `bottom()` and
+        // `top()` want `&mut`, which is why the `take()` is hoisted out of the
+        // `start_second_core` call it used to be an argument of.
+        let (bottom, top) = (s.bottom() as usize, s.top() as usize);
+        // SAFETY: core 1 is not running yet - `start_second_core` is the next
+        // statement - so no frame is live anywhere in this region.
+        unsafe { stack_probe::paint_core1(bottom, top) };
+        s
+    };
+
+    #[cfg(not(feature = "display-on-core0"))]
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL,
         peripherals.FROM_CPU_INTR1,
-        APP_CORE_STACK.take(),
+        app_core_stack,
         move || {
             let hub75 = build_hub75();
             let executor = mk_static!(
@@ -1084,6 +1109,9 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     spawner.spawn(telemetry_task().unwrap());
+    // Card 227: says when a stack goes deeper than it ever has, at 4 Hz, so
+    // the line lands next to whatever caused it. See `stack_probe`.
+    spawner.spawn(stack_probe::watch_task().unwrap());
 
     // Card 222: the LAN web server. `init` first - the handlers reach the
     // stack, the id and the host name through it, and it must be set before a

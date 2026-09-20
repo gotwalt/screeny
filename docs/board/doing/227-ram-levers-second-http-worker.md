@@ -117,3 +117,95 @@ The soft-AP, DHCP, DNS, the portal (card 223); OTA; the button; `crates/*`; the 
   times, conformance 60/0/4.
 
 ## Log
+
+### worker-227
+
+**Step 1 - the card, the reading, and the static picture.**
+
+Branch `card/227-ram-levers-second-http-worker`, merged `main` (the worktree was
+based on 72d9646, before the card existed). Read `CLAUDE.md`, `docs/README.md`,
+the card, `docs/research/009-ram-headroom.md`, the full Log of
+`docs/board/done/222-firmware-http-lan.md`, `firmware/src/{main,http,stack_probe}.rs`
+and `tools/fw-size.sh`; and, from `~/.cargo/registry/src/`, `esp-rtos 0.4.0`
+(`lib.rs`, `task/mod.rs`, `scheduler.rs`), `esp-hal 1.2.2`'s
+`system/multi_core.rs`, `xtensa-lx-rt 0.23.0`'s `exception/asm.rs` and
+`picoserve 0.20.0`'s `lib.rs`.
+
+**Before**, default `cargo build --release` at e3a146c (fw 0.4.0):
+
+```
+  .data      58164  (incl. .data.wifi 540)
+  .bss      115192
+  .stack     23240   <- the remainder of main DRAM; floor 16384
+  .rwtext    66548  (incl. .rwtext.wifi 51416)  IRAM
+  image     956357  (loadable sections only)
+```
+
+**Do interrupts land on core 0's main stack? Yes, and it is not incidental.**
+`xtensa-lx-rt 0.23.0`, `src/exception/asm.rs`, `SAVE_CONTEXT`:
+
+```
+    mov     a0, a1                     // save a1/sp
+    addmi   sp, sp, -XT_STK_FRMSZ      // XT_STK_FRMSZ = 256
+```
+
+There is no separate interrupt stack anywhere in `esp-rtos 0.4.0` (grepped:
+the only stack bookkeeping it has is the per-task guard word at
+`stack_bottom + ESP_HAL_CONFIG_STACK_GUARD_OFFSET`). So every interrupt level
+costs a **256-byte context frame plus its handler's own frames, on whichever
+stack was running** - core 0's main stack for WiFi and the timer, core 1's for
+the HUB75 DMA completion.
+
+**Where the stack goes, statically.** `xtensa-esp32-elf-objdump -d` and `entry
+a1, N` per symbol. (Worth writing down: objdump prints that immediate in
+**hex** once it is over 255, so a first pass that parsed decimal reported a
+largest frame of 240 bytes for the whole binary and missed every interesting
+one.) The frames on the request path, largest first:
+
+| frame | bytes |
+|---|---|
+| `TaskStorage<http_task>::poll` | 5968 |
+| router `Either<..>` poll, outer (settings/wifi/firmware/telemetry/status/page/404) | 5680 |
+| router `Either<..>` poll, inner tail (telemetry/status/page/404) | 2192 |
+| `Result<Json<()>, ApiError>::write_to_with_state` | 1104 |
+| `Router::handle_request::poll` | 800 |
+| `get_page` | 608 |
+| `ApiError::write_to` | 464 |
+
+and the rest of core 0, for comparison: `main`'s poll closure 5104,
+`store::find_partition` 3200, `TaskStorage<frames_task>::poll` 3008,
+`smoltcp Interface::poll` 2480, `esp_storage FlashStorage::read` 4160 /
+`NorFlashRegion::read` 4144 (boot only), `TxTokenAdapter::consume` 1584,
+`dispatch_ethernet` 1536, `TaskStorage<control_task>::poll` 1216.
+
+Nothing here is one fat buffer: the HTTP depth is picoserve's **nested-`Either`
+router**, where each `Route` layer's `poll` gets a frame big enough to hold the
+whole remaining chain by value, so the two router frames alone are 7,872 bytes
+before a handler has run.
+
+`.bss`/`.data` fat, `xtensa-esp32-elf-nm -S --size-sort`: the 64 KB reclaimed
+heap (free, above 0x3ffe0000), `APP_CORE_STACK` **16,400**, the 32 KB arena
+**32,768**, `SLOTS` 18,440 (`.data`), `FB0`/`FB1` 12,316 each (`.data`),
+`frames_task`'s cells 6,145 + 5,889 + 2,945 + 1,473 x2, `http_task::POOL`
+7,504, `mdns` 4,640 + 3,184, `main`'s cell 5,056.
+
+**Step 2 - the instrumentation.**
+
+`firmware/src/stack_probe.rs` rewritten around a `Region` (bottom, top, a
+remembered scan cursor, the last mark reported), with two of them: `CORE0`
+from the linker symbols as before, and **`CORE1`**, painted from core 0 in
+`main` while the second core has not started and nothing is live on its
+region. `APP_CORE_STACK.take()` is hoisted out of the `start_second_core`
+call so `bottom()`/`top()` can be asked for the bounds.
+
+The cursor is what makes a high rate affordable: a painted word is destroyed
+by a frame and never painted again, so the mark is monotonic and a scan can
+resume where the last one stopped. A sample that finds no growth is one
+`read_volatile`. So `watch_task` samples both cores at 4 Hz and logs **only on
+growth**, with the delta - bounded log volume, and the line lands next to
+whatever caused it (picoserve logs every accepted connection; the WiFi task
+logs every join and disconnect). That is the tool for the orchestrator's
+observation that `stack_free` keeps falling with uptime: a single 60 s reading
+cannot say what went deep.
+
+Cost of the instrumentation: **96 bytes** of `.bss` (`.stack` 23240 -> 23144).

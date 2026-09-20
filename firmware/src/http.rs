@@ -541,7 +541,7 @@ async fn status() -> StatusReply {
         uptime_ms: crate::now_ms(),
         heap_used: heap.current_usage as u32,
         heap_size: heap.size as u32,
-        stack_free: crate::stack_probe::headroom().unwrap_or(0) as u32,
+        stack_free: crate::stack_probe::CORE0.headroom().unwrap_or(0) as u32,
         rssi_dbm: crate::RSSI_DBM.load(Ordering::Relaxed),
         brightness: crate::BRIGHTNESS.load(Ordering::Relaxed),
         idle_mode,
@@ -1428,7 +1428,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // rather than silently dropped.
     let mut out = [0u8; 640];
     let mut worst_us = 0u32;
-    let hw_before = crate::stack_probe::high_water().unwrap_or(0);
+    let hw_before = crate::stack_probe::CORE0.high_water().unwrap_or(0);
     for (label, request, expect) in SELFTEST_ROUTES {
         let (status, bytes, us) = selftest_one(request, &mut out).await;
         worst_us = worst_us.max(us);
@@ -1460,8 +1460,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
         "selftest: slowest in-memory request {} us | core 0 stack high-water {} -> {} of {} bytes",
         worst_us,
         hw_before,
-        crate::stack_probe::high_water().unwrap_or(0),
-        crate::stack_probe::size(),
+        crate::stack_probe::CORE0.high_water().unwrap_or(0),
+        crate::stack_probe::CORE0.size(),
     );
 
     let after = {

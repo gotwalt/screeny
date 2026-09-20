@@ -191,12 +191,12 @@ pub async fn probe_task(
     info!("apsta-probe: stage 3, AP stack at {} with nothing listening", AP_IP);
     let stack_line = async {
         Timer::after(Duration::from_secs(STAGE3_STACK_S)).await;
-        if let Some(hw) = stack_probe::high_water() {
+        if let Some(hw) = stack_probe::CORE0.high_water() {
             info!(
                 "stack: core 0 main high-water {} of {} bytes after APSTA, {} free",
                 hw,
-                stack_probe::size(),
-                stack_probe::headroom().unwrap_or(0),
+                stack_probe::CORE0.size(),
+                stack_probe::CORE0.headroom().unwrap_or(0),
             );
         }
         heap_line("stage 3: APSTA idle");
