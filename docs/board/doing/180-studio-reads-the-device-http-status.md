@@ -125,3 +125,31 @@ with firmware 0.2.0 it looks exactly as it does today.
   that would otherwise be one `{:?}` from stderr; the poller hands the reply straight
   to the registry and never holds it; `heard_http` returns counts rather than the
   payload so the log lines cannot reach it; and nothing new is persisted.
+
+- **The tests.** `crates/studio/tests/device_status.rs` (5) and `tests/ssid.rs` (2), all
+  against the simulator on loopback, ports 50800-51440, mDNS off, every wait on a
+  condition with a deadline:
+
+  - *with HTTP*, one read carries heap, free stack, slot, state, reset reason, WiFi and
+    the device's own `boot_id`, **and** the UDP telemetry beside it - asserted out of the
+    same read, because a wait satisfied by the HTTP half alone is a different moment;
+  - *without HTTP* (`http: false`, the sim's `--no-http`), `facts` is null, telemetry
+    carries on alone, `last_error` stays null, `problems` is empty and `/healthz` is 200;
+  - *a reboot* - the simulator stopped and another put on the same ports, which draws a
+    fresh `boot_id` - is counted once, and reading the same device again is not a second;
+  - *one connection at a time*: a counting server that holds each connection open for
+    400 ms against a 100 ms poll period. If the poller started a request per tick rather
+    than awaiting the last, it would overlap immediately. Measured: **at most 1 open at
+    once**, every request carrying `Connection: close` and a `Host` naming the device;
+  - *an endless reply* (a server that sends `x` for ever with no `Content-Length`) is
+    refused at the 4 KB ceiling rather than read into this process.
+
+  The SSID test is run **against the real binary as a subprocess**, because `eprintln!`
+  goes to a file descriptor and reading that descriptor is the only honest test of "it
+  never reaches the log". A studio with `--no-discover`, its own temp state dir, an
+  ephemeral port and `--device-http-port` at the sim; the network is called
+  `Zzyzx-Not-A-Real-Network-41`, which appears nowhere else in the repo. It asserts the
+  name **is** on `/api/v1/status` (that is the point) and is in neither stdout, stderr
+  nor `state.json` - and that no device fact at all is in `state.json`, since these are
+  live data. A `Guard` with a `Drop` kills the child however the test ends; it is stopped
+  with SIGTERM, as `docker stop` does, so the state file is written the way it is in life.

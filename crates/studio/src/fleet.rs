@@ -1,9 +1,11 @@
-//! The three background tasks that make the studio worth leaving alone: the
-//! supervisor, the discovery browse and the telemetry poll.
+//! The four background tasks that make the studio worth leaving alone: the
+//! supervisor, the discovery browse, the telemetry poll and - card 180 - the
+//! read of each device's own HTTP status API.
 //!
-//! All three are *slow* loops - once a second, once every thirty seconds, once
-//! every five - and all three are bounded: one browse at a time, one control
-//! request at a time, one pass over a list whose length is the number of panels
+//! All four are *slow* loops - once a second, once every thirty seconds, once
+//! every five, once every ten - and all four are bounded: one browse at a time,
+//! one control request at a time, one HTTP connection at a time across the
+//! whole fleet, one pass over a list whose length is the number of panels
 //! in the house. Anything that talks to the network does so on a blocking
 //! thread, because a UDP round trip with retries takes over a second in the bad
 //! case and a runtime worker has better things to do.
@@ -400,7 +402,11 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                 // The reply is handed straight to the registry and never held
                 // here: it carries the SSID, and nothing below may print it.
                 let fw = reply.fw.to_string();
-                let slot = format!("{:?}", reply.fw_slot).to_lowercase();
+                // The API's own spelling ("ota_0"), not the enum variant's.
+                let slot = serde_json::to_value(reply.fw_slot)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
                 if let Some((reboots, rebooted)) = st.devices.heard_http(&id, reply) {
                     if first {
                         eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
