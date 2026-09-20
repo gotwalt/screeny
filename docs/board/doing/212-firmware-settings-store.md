@@ -4,8 +4,8 @@ title: Firmware - settings live in flash: loaded at boot, saved with debounce, S
 type: build
 hardware: yes
 depends: [210, 211, 220]
-owner:
-branch:
+owner: worker-212
+branch: card/212-firmware-settings-store
 ---
 
 ## Goal
