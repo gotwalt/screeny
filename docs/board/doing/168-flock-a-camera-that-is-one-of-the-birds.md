@@ -4,8 +4,8 @@ title: flock - birds in slow motion, seen by a camera that is one of them
 type: build
 hardware: no
 depends: [150, 162]
-owner:
-branch:
+owner: worker (card 168)
+branch: card/168-flock
 ---
 
 ## Goal
@@ -114,3 +114,27 @@ On the panel, by the owner's eye. Before that: the orchestrator looks at the str
 two LEDs with a wingbeat read as a bird, and the view reads as flying with them.
 
 ## Log
+
+### 2026-09-20 - claimed
+
+Branch `card/168-flock`, cut from `main` at 531ffed. Read the card twice, then
+`docs/design/generative-art-brief.md`, `crates/art/README.md`, `patches/clocks/dials.rs`
+(the `wheel` hue drift, choice parameters, palette-only animation),
+`patches/metaballs.rs` (`Frame::supersample`, house style for a CPU patch) and
+`patches/overland.rs` (sky, time of day, `paint()`'s "below L 0.3 is true black" rule,
+`mix_hue`). Also `frame.rs`, `palette.rs`, `dither.rs`, `limiter.rs`, `pipeline.rs`,
+`snapshot.rs` and `bin/screeny-art.rs` so the snapshot recipes and the `bytes=` line are
+the real ones.
+
+Plan settled before writing code:
+
+- `patches/flock/sim.rs`: `V3`, boids, the invisible world, the camera-as-a-bird.
+  Fixed internal timestep of 1/60 s, driven by an accumulator over `ctx.dt * pace`, with
+  the step count taken as `floor(warped / STEP + 1e-6)` so 30 fps and 60 fps land on the
+  same integer number of steps at a boundary instead of differing by one.
+- `patches/flock/mod.rs`: the patch, the palette and the drawing.
+- Drawing into a **two-dimensional palette**: a sky value (one scalar per pixel, from the
+  view ray's elevation plus the sun's glow) x an ink level (how much bird is over it).
+  Both quantised with the blue-noise ordered dither, so the frame is indexed and exact
+  and the anti-aliasing survives. Birds go into a supersampled coverage buffer, drawn as
+  strokes with a bounding box, not by testing every sample against every bird.
