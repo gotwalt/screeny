@@ -728,8 +728,9 @@ async fn main(spawner: Spawner) {
     // a chance to wedge: that is the one failure the bootloader's rollback
     // cannot see, because a device that never resets never asks it anything.
     // Everything else about the trial needs `otadata` and waits for the store.
+    ota::hold_watchdog(esp_hal::rtc_cntl::Rtc::new(peripherals.RTC_TIMER)).await;
     if panic::ota_trial_armed() {
-        ota::arm_watchdog(esp_hal::rtc_cntl::Rtc::new(peripherals.RTC_TIMER)).await;
+        ota::arm_watchdog().await;
     }
 
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
@@ -790,8 +791,12 @@ async fn main(spawner: Spawner) {
     // (the commonest reason being that the bootloader already rolled the
     // update back on the reset that got us here), turn it off now, a second
     // into a boot that has 239 to spare.
+    // A power cycle between the activation and the trial boot zeroes RTC
+    // memory, so a boot can be a trial with the bit clear: arm it here too.
     let on_trial = ota::boot_class().on_trial();
-    if !on_trial {
+    if on_trial {
+        ota::arm_watchdog().await;
+    } else {
         ota::disarm_watchdog().await;
     }
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);

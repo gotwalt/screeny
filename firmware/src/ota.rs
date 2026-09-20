@@ -1073,33 +1073,67 @@ pub fn note_boot(
 // The watchdog
 // ---------------------------------------------------------------------------
 
-/// Arm the RTC watchdog for [`TRIAL_WDT_S`], before anything else can hang.
+/// Take the RTC peripheral, without arming anything.
 ///
-/// Called from `main` immediately after `esp_hal::init`, and only when RTC
-/// memory says the boot that is starting is a trial - which is early enough to
-/// cover `esp_hal::init`'s own work, the heap, the store and the panel, i.e.
-/// everything a newly written image could wedge in before it could read
-/// `otadata` and find out it was on trial.
-pub async fn arm_watchdog(mut rtc: Rtc<'static>) {
+/// Called from `main` on every boot, because the handle has to be somewhere
+/// [`arm_watchdog`] can reach and `esp_hal`'s `Rwdt` is a zero-sized token only
+/// `Rtc` can hand out. It costs a `Peripherals` field and nothing else: the
+/// watchdog `esp_hal::init` disabled stays disabled until somebody asks.
+pub async fn hold_watchdog(rtc: Rtc<'static>) {
+    *WDT.lock().await = Some(rtc);
+}
+
+/// Arm the RTC watchdog for [`TRIAL_WDT_S`].
+///
+/// Called **twice**, and both times matter:
+///
+/// 1. From `main` immediately after `esp_hal::init`, when RTC memory says the
+///    boot that is starting is a trial. That is early enough to cover
+///    `esp_hal::init`'s own work, the heap, the store and the panel - i.e.
+///    everything a newly written image could wedge in before it could read
+///    `otadata` and find out what it was.
+/// 2. From `main` again once `otadata` has been read, if that says this is a
+///    trial after all. RTC memory is zeroed by a power cycle, so a device
+///    unplugged between the activation and the trial boot arrives here with the
+///    bit clear and the trial still very much on; this is the second chance,
+///    and it covers everything after the store comes up.
+///
+/// Arming twice is harmless - it is two register writes - and the log line
+/// only appears the first time, because the second is the uninteresting one.
+pub async fn arm_watchdog() {
+    let mut guard = WDT.lock().await;
+    let Some(rtc) = guard.as_mut() else {
+        warn!("ota: no RTC handle - this trial has no watchdog");
+        return;
+    };
+    let first = !ARMED.swap(true, Ordering::Relaxed);
     rtc.rwdt.set_timeout(
         RwdtStage::Stage0,
         esp_hal::time::Duration::from_secs(TRIAL_WDT_S),
     );
     rtc.rwdt.enable();
-    *WDT.lock().await = Some(rtc);
-    warn!(
-        "ota: trial boot - RTC watchdog armed for {} s (it is never fed; confirming turns it off)",
-        TRIAL_WDT_S
-    );
+    if first {
+        warn!(
+            "ota: trial boot - RTC watchdog armed for {} s (it is never fed; confirming turns it off)",
+            TRIAL_WDT_S
+        );
+    }
 }
 
 /// Turn it off again: this boot is not a trial, or the trial has confirmed.
 pub async fn disarm_watchdog() {
+    if !ARMED.swap(false, Ordering::Relaxed) {
+        return;
+    }
     if let Some(rtc) = WDT.lock().await.as_mut() {
         rtc.rwdt.disable();
         info!("ota: RTC watchdog disabled");
     }
 }
+
+/// Whether [`arm_watchdog`] has run since boot, so that arming twice says so
+/// once and disarming an unarmed watchdog says nothing at all.
+static ARMED: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Confirm and revert: the image on trial decides its own fate

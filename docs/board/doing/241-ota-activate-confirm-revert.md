@@ -452,12 +452,12 @@ hangs; and card 240's validator for one that is structurally broken.
 
 | build | `.stack` 0.6.0 | `.stack` 0.7.0 | `.bss` | image |
 |---|---|---|---|---|
-| default | 26,944 | **26,240** | 110,464 | 1,013,501 |
-| `panic-test` | 26,880 | **26,176** | 110,528 | 1,014,321 |
-| `http-selftest` | 26,528 | **25,824** | 110,848 | 1,048,253 |
-| `start-in-portal` | 26,944 | **26,240** | 110,464 | 1,013,369 |
-| `ota-test-unhealthy` | - | **26,240** | 110,464 | 1,013,605 |
-| `ota-test-panic` | - | **26,176** | 110,528 | 1,013,973 |
+| default | 26,944 | **26,240** | 110,464 | 1,013,841 |
+| `panic-test` | 26,880 | **26,176** | 110,528 | 1,014,681 |
+| `http-selftest` | 26,528 | **25,824** | 110,848 | 1,048,589 |
+| `start-in-portal` | 26,944 | **26,240** | 110,464 | 1,013,757 |
+| `ota-test-unhealthy` | - | **26,240** | 110,464 | 1,013,941 |
+| `ota-test-panic` | - | **26,176** | 110,528 | 1,014,333 |
 
 `.bss` 110,208 -> 110,464 (**+256**), `.data` 59,444 -> 59,892 (+448),
 `.rwtext` (IRAM) unchanged at 66,932: nothing new is `#[ram]`. The ceiling
@@ -569,9 +569,9 @@ curl -s -X POST http://workbench.local:8787/api/v1/player/set \
 | file | `esp_app_desc.version` | bytes | what |
 |---|---|---|---|
 | `screeny-fw-0.7.0-default.elf` | `0.7.0` | - | **the build to serial-flash** |
-| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,013,552 | a good update: must confirm |
-| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,013,376 | never reports healthy: must revert at 180 s |
-| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,013,984 | panics at 20 s: must be rolled back by the bootloader |
+| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,013,904 | a good update: must confirm |
+| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,013,696 | never reports healthy: must revert at 180 s |
+| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,014,400 | panics at 20 s: must be rolled back by the bootloader |
 | `screeny-fw-0.7.1-good.elf`, `-unhealthy.elf`, `-panic.elf` | | | the ELFs, for symbolising a backtrace |
 
 The three `.bin`s were made from those ELFs with, from the repository root and
@@ -650,7 +650,7 @@ restarting"** for two seconds, then the boot.
 
 ```
 HTTP 200 in 25.x s (39 KB/s)
-  ok true written 1013552 error None activating true
+  ok true written 1013904 error None activating true
   waiting for the device to come back (up to 90 s)...
   back after ~45 s: fw 0.7.1 slot Ota1 state PendingVerify boot_id N uptime ~20000 ms
   waiting for the trial to end (up to 240 s)...
@@ -663,7 +663,7 @@ HTTP 200 in 25.x s (39 KB/s)
 are this card's whole deliverable:
 
 ```
-ota: staged image accepted - 1013552 bytes, 5 segments, version "0.7.1"
+ota: staged image accepted - 1013904 bytes, 5 segments, version "0.7.1"
 ota: ACTIVATED 0x210000 - restarting into it on trial. If it does not prove itself within 180 s, or resets before it does, the bootloader brings fw 0.7.0 back.
 <the ROM banner and the bootloader>
 boot: #1 since power-on, reset reason software (...)
@@ -843,3 +843,98 @@ bound expires.
 two-second window between the reply and the `otadata` write (interruption 5b),
 or in the ~60 ms of a confirm write. Both are covered by the host model, neither
 is a repeatable bench step, and both fail safe by construction.
+
+### 4. Closing out
+
+**One gap found while re-reading, and closed.** The watchdog was armed from the
+RTC bit and from nowhere else, so a device **power-cycled between the activation
+and the trial boot** arrived with the bit zeroed and the trial still very much
+on - `otadata` says `PENDING_VERIFY`, RTC memory says nothing - and would have
+run its trial with no watchdog at all. `main` now holds the `Rtc` handle on
+every boot and arms **twice**: once from the bit, before anything can hang, and
+again once `otadata` has been read, if that says this is a trial. The second
+arming covers everything after the store comes up; the first covers everything
+before it; and the only uncovered window is now "power cycled, *and* the image
+hangs before `store::init`", whose recovery is the power cycle the owner would
+try anyway. It costs one `AtomicBool` and no `.stack` at all.
+
+**The safety property, stated plainly.** Card 240's writer could address only
+the inactive slot, by type. This card adds exactly one more target, the
+`otadata` partition, reached through an entry that `Ota::new` refuses unless it
+is 0x2000 bytes and typed `Data(Ota)`. So the complete set of flash this
+firmware can write is `{the app slot it is not running from, otadata, the
+screeny settings partition}` - and the third is reached only through
+`store::Flash`'s own methods, none of which this card calls. **The WiFi
+credentials cannot be touched by any path here**: not by activate, not by
+confirm, not by revert, not by the boot-time promotion, and not by the
+bootloader's own `write_otadata`, which writes one sector at
+`ota_info.offset + 0x1000 * i`. The bench check that proves it is that the
+device rejoins its network by itself after each of the three steps above, from
+credentials it read out of that partition - three times, across five reboots
+and two rollbacks.
+
+**Workspace tests.** `timeout 1200 cargo test` from the repository root:
+**788 passed, 1 failed**, and the one failure is `screeny-studio`'s
+`the_status_poll_follows_a_panel_that_moved` - the wall-clock test this card's
+Exit section names. It passes on its own immediately afterwards
+(`cargo test -p screeny-studio --test moved`: 2/2), it is in a crate this card
+does not touch, and it is the same flake cards 236 and 240 recorded.
+`cargo clippy --workspace --all-targets`: **silent**. Firmware clippy: the same
+warnings as `main`, **none of them new**.
+
+`screeny-probe http` against the simulator: **41 passed, 0 failed, 4 skipped,
+0 connects refused** (45 rules; 44 and 45 are this card's).
+
+**Final `fw-size.sh`, all six builds** (floor 24,576): default **26,240**,
+`panic-test` **26,176**, `http-selftest` **25,824**, `start-in-portal`
+**26,240**, `ota-test-unhealthy` **26,240**, `ota-test-panic` **26,176**.
+
+**Shared crates touched** (all additive; the `software` session builds Studio
+support from this list):
+
+* `crates/device-api`: `FirmwareReply.activating: bool`
+  (`#[serde(default)]`, always serialised) and `FirmwareReply::activating(n)`;
+  `PanicReply.update: Option<UpdateRecord>` (`#[serde(default)]`);
+  `reply::UpdateRecord { outcome, reason, slot, version }`; `enums::UpdateOutcome`
+  (`trial` / `confirmed` / `reverted`) and `enums::RevertReason`
+  (`deadline` / `aborted` / `rejected`); `route::parse_activate`,
+  `route::ACTIVATE_KEY`, `route::BadActivate`. Four new goldens
+  (`firmware_activating`, `panic_update_trial`, `panic_update_reverted`, and
+  `firmware_ok`/`firmware_failed`/`panic`/`panic_none` gained their new fields).
+  `MAX_JSON_LEN`: firmware 57 -> 76, panic 231 -> 410.
+* `crates/fwimage`: `pub fn version_of(front: &[u8]) -> Option<Version>` and
+  `HEAD_LEN` made public. No shape change.
+* `crates/provision`: `Screen::Installing` (the enum is `#[non_exhaustive]`).
+* `crates/sim`: parses the query flag with the shared function and refuses the
+  same spellings; an accepted image answers `activating: false`; `panic`'s
+  `update` is `null`. No shape invented.
+* `crates/probe`: `fw-upload --activate` and the bounded wait after it; rules
+  44 and 45; every firmware rule skips rather than fails on `busy`.
+* `crates/otastate` is **new** and is the firmware's, the tests' and nobody
+  else's; `crates/proto`, `crates/receiver`, `crates/settings`, `crates/art` and
+  `crates/studio` are untouched.
+
+**Open questions for the orchestrator, in the order they matter:**
+
+1. **Does the bootloader really roll back?** Step 3 is the whole card. The
+   evidence is `http: fw slot Ota1 state Aborted` on the boot after the panic:
+   nothing in this firmware writes `ABORTED`, so if it says that, card 242's
+   bootloader has the option compiled in and 006 section 6's hole is closed for
+   good.
+2. **Is `TRIAL_WDT_S` really 240 s on this chip?** `set_timeout` converts
+   through the calibrated RTC slow clock, so it should be, but nothing here has
+   run it. A premature fire shows up as `reset reason rtc_wdt` in a boot line
+   and reverts a good update - safe, visible, and worth reporting with the
+   uptime it fired at.
+3. **`ACTIVATE_DELAY_MS` is 2,000 and is reasoned, not measured.** It is
+   `CLOSE_ACK_MS` (1,500) plus margin. If the bench ever sees `fw-upload` lose
+   its reply to the reboot, that is the number, and it is a constant with its
+   reasoning beside it.
+4. **The 60 s confirm floor means a good update takes ~85 s end to end**
+   (25 s upload + 20 s boot + 60 s). That is 006's number and the owner may
+   think it is long; halving it would halve the protection it buys, which is
+   the trade to put to him rather than to guess at.
+5. **`fw-upload`'s default is staging and the API's is activating.** They are
+   deliberately opposite, for the reason in the code, but it is the sort of
+   asymmetry somebody trips over once. Worth a sentence in `README.md` if the
+   owner uses the command directly.
