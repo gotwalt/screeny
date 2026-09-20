@@ -24,7 +24,7 @@ use embassy_net::{IpEndpoint, Stack};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{with_timeout, Duration, Instant, Timer};
 use log::{info, warn};
 
 use crate::display::Frame;
@@ -108,6 +108,71 @@ enum Drained {
     Empty,
 }
 
+/// How long one datagram is given to reach a socket's transmit queue.
+///
+/// Generous: what these two sockets send is a handful of 56-byte datagrams a
+/// second, and the queue is four slots deep, so under any healthy condition
+/// [`send_bounded`] returns on its first poll.
+const SEND_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Consecutive timeouts on one socket before it is closed and re-bound.
+const SEND_TIMEOUTS_BEFORE_REBIND: u32 = 3;
+
+/// Queue one datagram, and never wait forever for it (card 234).
+///
+/// `UdpSocket::send_to` waits for room in the transmit queue, and **smoltcp
+/// will not make room by itself**. A datagram whose destination never answers
+/// ARP is not discarded: `udp::Socket::dispatch` hands it to the interface,
+/// the interface cannot resolve the hardware address and returns
+/// `DispatchError::NeighborPending`, and `dequeue_with` consumes *zero* bytes
+/// on an error - so the datagram stays at the head of the queue and is retried
+/// once a second, forever (smoltcp 0.13.1, `socket/udp.rs` and
+/// `iface/interface/mod.rs`'s `EgressError::Dispatch`). Four of those fill
+/// `tx_meta` and the bare `.await` these two tasks used to do never returns
+/// again - on the control port that is every reply to every peer, silently,
+/// until a reset.
+///
+/// A timeout is not a lost MUST. Both datagrams the frame socket sends are
+/// *unsolicited* (section 6.2), and a control reply is something a sender
+/// retries - `screeny-probe` tries four times. After
+/// [`SEND_TIMEOUTS_BEFORE_REBIND`] in a row the socket is closed and re-bound,
+/// which resets both buffers and is the only way to drop a wedged head-of-line
+/// datagram; the port answers again on the next request.
+async fn send_bounded(
+    socket: &mut UdpSocket<'_>,
+    port: u16,
+    what: &str,
+    stuck: &mut u32,
+    bytes: &[u8],
+    to: IpEndpoint,
+) {
+    // Bound to a `let`, not a `match` scrutinee: the send future borrows the
+    // socket, and the re-bind below needs it back.
+    let r = with_timeout(SEND_TIMEOUT, socket.send_to(bytes, to)).await;
+    match r {
+        Ok(Ok(())) => *stuck = 0,
+        Ok(Err(e)) => warn!("net: {} send to {} failed: {:?}", what, to, e),
+        Err(_) => {
+            *stuck += 1;
+            warn!(
+                "net: {} send to {} did not fit the transmit queue in {} ms ({} in a row)",
+                what,
+                to,
+                SEND_TIMEOUT.as_millis(),
+                *stuck
+            );
+            if *stuck >= SEND_TIMEOUTS_BEFORE_REBIND {
+                *stuck = 0;
+                socket.close();
+                match socket.bind(port) {
+                    Ok(()) => warn!("net: udp/{} was wedged; closed and re-bound", port),
+                    Err(e) => warn!("net: udp/{} could not be re-bound: {:?}", port, e),
+                }
+            }
+        }
+    }
+}
+
 fn try_recv(socket: &UdpSocket<'_>, buf: &mut [u8]) -> Drained {
     // A no-op waker is safe here only because every `Pending` this produces is
     // followed, in the loop below, by an `await` on `recv_from`, which
@@ -162,6 +227,7 @@ pub async fn frames_task(
     let mut portal_at_ms = 0u64;
     let mut phase = 0u32;
     let mut link_was_up = true;
+    let mut stuck_sends = 0u32;
 
     loop {
         let mut keep_len = 0usize;
@@ -318,9 +384,15 @@ pub async fn frames_task(
         // Section 6.2: both unsolicited packets leave by the frame socket,
         // addressed to the frame datagram's source address and port.
         for o in out.iter() {
-            if socket.send_to(o.bytes(), o.to).await.is_err() {
-                warn!("net: frame-socket send to {} failed", o.to);
-            }
+            send_bounded(
+                &mut socket,
+                FRAME_PORT,
+                "frame-socket",
+                &mut stuck_sends,
+                o.bytes(),
+                o.to,
+            )
+            .await;
         }
     }
 }
@@ -361,6 +433,7 @@ pub async fn control_task(stack: Stack<'static>) {
 
     let buf = mk_static!([u8; 512], [0u8; 512]);
     let reply = mk_static!([u8; 512], [0u8; 512]);
+    let mut stuck_sends = 0u32;
 
     loop {
         let (n, meta) = match socket.recv_from(&mut buf[..]).await {
@@ -416,9 +489,15 @@ pub async fn control_task(stack: Stack<'static>) {
             INFO_CHANGED.signal(());
         }
         if let Some(len) = len {
-            if socket.send_to(&reply[..len], meta.endpoint).await.is_err() {
-                warn!("net: control reply to {} failed", meta.endpoint);
-            }
+            send_bounded(
+                &mut socket,
+                CONTROL_PORT,
+                "control reply",
+                &mut stuck_sends,
+                &reply[..len],
+                meta.endpoint,
+            )
+            .await;
         }
         // Section 8.2: **after** the reply is on the air, because after the
         // disconnect it could not be sent. `send_to` returning only means the
