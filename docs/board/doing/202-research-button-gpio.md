@@ -4,8 +4,8 @@ title: Research - find the Tidbyt's button GPIO, and design the WiFi-reset gestu
 type: research
 hardware: no
 depends: [001]
-owner:
-branch:
+owner: worker-202
+branch: card/202-research-button-gpio
 ---
 
 ## Goal
