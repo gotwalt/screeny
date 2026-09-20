@@ -152,8 +152,12 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   retry the stored credentials (the 3 a.m. router reboot heals itself). Telemetry
   state is `PROVISIONING` in PORTAL and TRIAL.
 - **Captive-portal rules**: DNS answers everything with 192.168.4.1; unknown hosts get
-  a 302 **with a non-empty body** (Android treats `Content-Length <= 4` as failure;
-  iOS needs content). The iOS mini-browser only re-probes on a full-page navigation, so
+  **the setup page itself - `200`, `text/html`, `no-store`, no `Location`** - with a
+  non-empty body (Android treats `Content-Length <= 4` as failure; iOS needs content).
+  *The research said a 302 with a body; the phone test overruled it (card 223's Log,
+  finding 3: iOS does not retry the connection a redirect makes it open, and smoltcp has
+  no backlog). `crates/sim` answers the same way since card 235.*
+  The iOS mini-browser only re-probes on a full-page navigation, so
   the provisioning path uses a plain form post and `setTimeout(location.href=...)`, no
   `fetch()` polling. File inputs do not work in captive mini-browsers: **firmware
   upload is on the LAN page only.**
