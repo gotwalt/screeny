@@ -1,5 +1,9 @@
 //! The front end, compiled into the binary.
 //!
+//! **One page** since card 170: the panel, what it is playing, and everything
+//! that changes either. `/dashboard` - card 106's separate app - is folded into
+//! it and now redirects, so an old bookmark still works.
+//!
 //! Three files, listed by name rather than globbed: there is no Node
 //! toolchain, no bundler and no build script in this crate, and `include_str!`
 //! is a build dependency rustc records for us, so editing `ui/style.css`
@@ -7,7 +11,7 @@
 //! names off disk instead, which is what live editing wants.
 
 use axum::http::{header, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use std::path::PathBuf;
 
 /// `(path, content type, bytes)`. Add a file here when the UI grows one.
@@ -15,16 +19,13 @@ const EMBEDDED: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
     ("main.js", "text/javascript; charset=utf-8", include_bytes!("../ui/main.js")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
-    // The dashboard (card 106): what each panel is playing, and how to change
-    // it. It borrows `style.css` and adds only what a scrolling page of cards
-    // needs, so the design view is not touched by it.
-    ("dashboard.html", "text/html; charset=utf-8", include_bytes!("../ui/dashboard.html")),
-    ("dashboard.js", "text/javascript; charset=utf-8", include_bytes!("../ui/dashboard.js")),
-    ("dashboard.css", "text/css; charset=utf-8", include_bytes!("../ui/dashboard.css")),
 ];
 
-/// Tidy URLs, so the dashboard is `/dashboard` rather than `/dashboard.html`.
-const PAGES: &[(&str, &str)] = &[("", "index.html"), ("dashboard", "dashboard.html")];
+/// Tidy URLs. There is one page, so this is one entry.
+const PAGES: &[(&str, &str)] = &[("", "index.html")];
+
+/// Paths that used to be a page of their own and are now part of `/`.
+const FOLDED_IN: &[&str] = &["dashboard", "dashboard.html"];
 
 /// Where the UI is read from: the binary, or a directory being edited.
 #[derive(Clone, Debug, Default)]
@@ -70,6 +71,12 @@ fn content_type(name: &str) -> &'static str {
 /// than the index: a mistyped asset should say so, not arrive as HTML.
 pub async fn serve(axum::extract::State(st): axum::extract::State<crate::AppState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/').trim_end_matches('/');
+    // The dashboard is the same page now. A permanent redirect would be
+    // cached for ever by a browser that had the old bookmark, which is a
+    // nuisance the day somebody wants `/dashboard` back for something else.
+    if FOLDED_IN.contains(&path) {
+        return Redirect::temporary("/").into_response();
+    }
     let name = PAGES.iter().find(|(url, _)| *url == path).map_or(path, |(_, file)| *file);
     // A served name is one file in one directory: no traversal, no
     // subdirectories, whether the bytes come from the binary or from disk.

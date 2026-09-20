@@ -13,9 +13,13 @@
 //! changes in a broadcast channel of fixed capacity whose overflow is handled
 //! by sending the current state instead of the missed ones. A browser that
 //! stops reading therefore cannot make the server hold anything on its
-//! behalf, and cannot slow the engine thread or the panel link down: the
-//! engine writes into the cell and never waits for a reader. If a single send
+//! behalf, and cannot slow a player or the panel link down: the render loop
+//! writes into the cell and never waits for a reader. If a single send
 //! cannot complete within [`STALL`] the socket is closed and forgotten.
+//!
+//! Since card 170 the frames are the **attached panel's**: the same decoded
+//! datagrams the panel is being sent, so what the browser draws and what the
+//! panel shows are the same bytes by construction.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -44,13 +48,15 @@ pub async fn upgrade(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(st): 
 }
 
 async fn run(mut socket: WebSocket, st: AppState, me: Option<String>) {
-    let mut frames = st.frames.subscribe();
+    // Subscribing is also how a player knows somebody is watching: a panel
+    // that is away with no browser open drops to `player::IDLE_FPS`.
+    let mut frames = st.screen.watch();
     let mut states = st.states.subscribe();
     let mut status = st.status.subscribe();
     let mut stop = st.stop.clone();
 
     // What the browser would otherwise have to ask for on connecting.
-    let hello = st.state_event(None, crate::engine::lock(&st.engine).snapshot());
+    let hello = st.state_event(None, st.page_state());
     if !send_json(&mut socket, &hello).await {
         return;
     }
@@ -72,7 +78,7 @@ async fn run(mut socket: WebSocket, st: AppState, me: Option<String>) {
                 }
                 // Too far behind to know what it missed: give it the truth.
                 Err(RecvError::Lagged(_)) => {
-                    let now = st.state_event(None, crate::engine::lock(&st.engine).snapshot());
+                    let now = st.state_event(None, st.page_state());
                     if !send_json(&mut socket, &now).await { break }
                 }
                 Err(RecvError::Closed) => break,

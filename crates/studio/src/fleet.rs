@@ -14,16 +14,61 @@
 //! storm for a month".
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::devices::{self, PENDING};
-use crate::player::BrightnessJob;
-use crate::state::{unix_now, StoredPlayer};
+use crate::devices::{self, Reach, PENDING};
+use crate::player::{BrightnessJob, Player, PlayerChange};
+use crate::state::{unix_now, StoredPlayer, UNBOUND};
 use crate::AppState;
 
 /// The longest a failing device's poll is backed off to, as a multiple of the
 /// telemetry period.
 const MAX_BACKOFF: u32 = 12;
+
+// ----------------------------------------------------------- attachment ----
+
+/// **Attach the page to a panel**, and hand back the player that drives it.
+///
+/// This is the one place a panel becomes "the panel this studio is connected
+/// to", and the rule that matters is the middle branch: if the page is showing
+/// the *unbound* player - a studio that has not met a panel yet - that same
+/// player is renamed onto the device. The thread, the core and the piece carry
+/// on, so the picture the browser is watching simply starts reaching the
+/// panel instead of restarting on it.
+pub fn attach(st: &AppState, device: &str) -> Arc<Player> {
+    if let Some(p) = st.players.get(device) {
+        st.players.set_focus(device);
+        return p;
+    }
+    if st.players.get(UNBOUND).is_some() {
+        st.players.rekey(UNBOUND, device);
+    } else {
+        st.players.ensure(device, st.cfg.fault_pieces, StoredPlayer::default);
+    }
+    st.players.set_focus(device);
+    st.players.get(device).unwrap_or_else(|| st.page())
+}
+
+/// The player for one device, for a caller naming a panel rather than asking
+/// for the page's.
+///
+/// A studio that has never been attached to anything treats this as the
+/// attachment - it is the first panel somebody has named, and leaving the page
+/// showing an unbound player beside it would be two pictures and a puzzle.
+/// Once there is an attached panel, this simply makes a second player.
+pub fn player_for(st: &AppState, device: &str) -> Arc<Player> {
+    if st.players.bound().is_empty() {
+        return attach(st, device);
+    }
+    st.players.ensure(device, st.cfg.fault_pieces, StoredPlayer::default)
+}
+
+/// Point a player's link at wherever its device is now, or at nothing.
+pub fn aim_at_device(st: &AppState, player: &Arc<Player>) {
+    let reach = st.devices.get(&player.device()).map_or(Reach::Unknown, |r| r.reach());
+    player.aim(&reach);
+}
 
 /// The watchdog, the aim of every link, and the brightness policy. Once a
 /// second.
@@ -32,9 +77,9 @@ pub fn spawn_supervisor(st: AppState) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(st.cfg.supervise_every);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // If the state file already had players, the studio is not fresh and
+        // If the state file already had a panel, the studio is not fresh and
         // must not adopt anything on its own.
-        let mut adopted = !st.players.ids().is_empty();
+        let mut adopted = !st.players.bound().is_empty();
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
@@ -51,33 +96,44 @@ pub fn spawn_supervisor(st: AppState) {
     });
 }
 
-/// A fresh studio with no state file plays something on the first panel it
-/// finds. That is the card's "sane default", and it happens **once** per
-/// process: a human who deletes the only player has deleted it.
+/// A studio that has never been attached to a panel attaches itself to the
+/// first one it finds. That is the zero-click case the owner asked for: plug
+/// the panel in, open the page, and the picture the page was already showing
+/// is on the panel.
+///
+/// It happens **once** per process: a human who detaches the only panel has
+/// detached it.
 fn adopt_first_device(st: &AppState) -> bool {
+    if !st.players.bound().is_empty() {
+        return true;
+    }
     let Some(first) = st.devices.ids().into_iter().next() else { return false };
-    let faults = st.cfg.fault_pieces;
-    let p = st.players.ensure(&first, faults, StoredPlayer::default);
-    eprintln!("studio: no player was configured; `{}` will play `{}`", first, p.stored().piece);
+    let player = attach(st, &first);
+    let _ = player.configure(&PlayerChange { on: Some(true), ..PlayerChange::default() });
+    aim_at_device(st, &player);
+    player.ensure_running();
+    eprintln!("studio: attaching to the first panel found: `{}` will play `{}`", first, player.stored().piece);
     st.persist();
     true
 }
 
 async fn supervise(st: &AppState) {
     let known = st.devices.ids();
-    // A player whose device has been forgotten goes with it.
-    for id in st.players.ids() {
-        if !known.contains(&id) {
-            st.players.remove(&id);
+    // A player whose device has been forgotten goes with it. The unbound
+    // player is nobody's device and stays.
+    for player in st.players.all() {
+        let device = player.device();
+        if device != UNBOUND && !known.contains(&device) {
+            st.players.remove(&device);
         }
     }
+    // The page always has something to show, whatever just happened.
+    st.players.ensure_page(st.cfg.fault_pieces);
 
     let mut jobs: Vec<BrightnessJob> = Vec::new();
-    for id in &known {
-        let Some(player) = st.players.get(id) else { continue };
-        if let Some(record) = st.devices.get(id) {
-            player.aim(&record.reach());
-        }
+    for player in st.players.all() {
+        aim_at_device(st, &player);
+        let device = player.device();
         match player.supervise() {
             Some(job) => jobs.push(job),
             // The link noticing a new session is not the only way a panel
@@ -86,14 +142,19 @@ async fn supervise(st: &AppState) {
             // at full. The device's own telemetry is the honest check, and
             // comparing against what it *said it applied* - not what was asked
             // for - is what stops this retrying for ever against a cap.
-            None => {
+            None if device != UNBOUND => {
                 if let (Some(want), Some(applied)) = player.brightness_policy() {
-                    let heard = st.devices.get(id).and_then(|d| d.telemetry).filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30);
+                    let heard = st
+                        .devices
+                        .get(&device)
+                        .and_then(|d| d.telemetry)
+                        .filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30);
                     if heard.is_some_and(|t| t.brightness != applied) {
-                        jobs.push(BrightnessJob { device: id.clone(), level: want });
+                        jobs.push(BrightnessJob { device, level: want });
                     }
                 }
             }
+            None => {}
         }
     }
 

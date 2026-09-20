@@ -1,4 +1,11 @@
-//! Players: one per device, each rendering a piece onto one panel.
+//! Players: **the only thing in the studio that renders.**
+//!
+//! Card 106 built one player per panel and left the design view its own
+//! engine. Card 170 deleted that engine: there is one picture, the panel shows
+//! it, and the page is a window onto it. So a player now does everything the
+//! design view used to do as well - pause, speed, restart, a piece's own
+//! actions - and the frames the browser draws are the same decoded datagrams
+//! the panel is being sent.
 //!
 //! A player is the thing that is meant to be forgotten. It renders on its own
 //! OS thread, sends through [`screeny::Link`] (which reconnects by itself), and
@@ -11,29 +18,38 @@
 //!   thread can be killed in Rust, and a *new* core is started on the fallback.
 //!   The panel link is deliberately owned by the player rather than by the
 //!   core, so abandoning a core leaks a piece's render state and one thread and
-//!   never a socket, a link thread or the device itself;
+//!   never a socket, a link thread or the device itself. The core is behind no
+//!   shared lock at all, which is why a wedged piece cannot take `/healthz` or
+//!   `/api/v1/status` with it (card 143, closed by construction);
 //! - **a piece that does either repeatedly** is refused: after
 //!   [`MAX_FAULTS`] the player stops trying, says so once, and `/healthz` goes
 //!   503. A restart loop is worse than a stopped player.
 //!
+//! **Changes are drained, not thrown at a new thread.** The page's sliders act
+//! on the player, and dragging one is sixty changes a second; a change goes
+//! into a one-slot [`Pending`] that the render loop applies between frames.
+//! Only a panic or a stall replaces the thread, so `health.restarts` counts
+//! faults rather than how often somebody changed their mind.
+//!
 //! Nothing here grows without bound. One core thread per player, one link, one
-//! control request in flight, a fixed fallback ladder, and every fault logged
-//! once rather than per frame. While the panel is away the player renders at
-//! [`IDLE_FPS`] instead of its configured rate: a panel that is unplugged for a
-//! month should not cost a core for a month.
+//! control request in flight, a one-slot pending mailbox, a fixed fallback
+//! ladder, and every fault logged once rather than per frame. A player renders
+//! at its configured rate while its panel is connected **or** a browser is
+//! watching, and at [`IDLE_FPS`] otherwise: a panel that is unplugged for a
+//! month, with nobody looking, should not cost a core for a month.
 
-use screeny_art::frame::WireFrame;
 use screeny_art::output::{Output, PanelStatus, SenderOutput};
 use screeny_art::piece::{local_now, Ctx, Params, Piece, PieceDef, Playing};
 use screeny_art::{Pipeline, Settings};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::devices::Reach;
-use crate::state::{unix_now, StoredPlayer};
+use crate::page::{self, Screen, StudioState};
+use crate::state::{unix_now, StoredPlayer, UNBOUND};
 
 /// Write down what this player's current piece is set to, in the studio's one
 /// settings memory. An unknown piece has no specs to compare against, so its
@@ -46,10 +62,10 @@ fn remember_current(cfg: &StoredPlayer, memory: &crate::state::SharedMemory, fau
 }
 
 /// Put `cfg` on `def`, restoring whatever that piece was last left set to -
-/// here, on another panel, or in the design view. One memory, one answer.
+/// here, or on another panel. One memory, one answer.
 fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, memory: &crate::state::SharedMemory, device: &str) {
     cfg.piece = def.id.to_string();
-    let (params, seed) = memory.recall(def, &format!("panel {device}"));
+    let (params, seed) = memory.recall(def, &format!("panel {}", label(device)));
     cfg.params = params;
     if let Some(seed) = seed {
         cfg.seed = seed;
@@ -61,12 +77,15 @@ fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, memory: &crate::s
 pub const WATCHDOG: Duration = Duration::from_secs(5);
 /// Faults - panics or stalls - before a player gives up rather than looping.
 pub const MAX_FAULTS: u32 = 3;
-/// The rate a player renders at while its panel is not connected. Enough to
-/// drive reconnection and to be ready the instant the panel comes back.
+/// The rate a player renders at when its panel is not connected **and** no
+/// browser is watching. Enough to drive reconnection and to be ready the
+/// instant either of those changes.
 pub const IDLE_FPS: f64 = 5.0;
 /// Frames per second a player may be asked for.
 pub const MIN_FPS: f64 = 1.0;
 pub const MAX_FPS: f64 = 60.0;
+/// How fast a piece may be played. Card 105's clamp, unchanged.
+pub const MAX_SPEED: f64 = 8.0;
 
 // ------------------------------------------------------------ the pieces ---
 
@@ -145,6 +164,15 @@ pub fn fallback_piece(avoid: &str) -> &'static PieceDef {
     screeny_art::pieces::ALL.iter().find(|d| d.id != avoid).unwrap_or(&screeny_art::pieces::ALL[0])
 }
 
+/// A device id for a log line. The unbound player has none.
+fn label(device: &str) -> &str {
+    if device.is_empty() {
+        "(no panel yet)"
+    } else {
+        device
+    }
+}
+
 // ----------------------------------------------------------------- health ---
 
 /// What a player has been through. Everything on `/api/v1/status`.
@@ -156,7 +184,8 @@ pub struct PlayerHealth {
     pub panics: u64,
     /// Frames that never came back, caught by the watchdog.
     pub stalls: u64,
-    /// Core threads started after the first: the count of recoveries.
+    /// Core threads started after the first: the count of recoveries. Since
+    /// card 170 a piece change does *not* start one, so this counts faults.
     pub restarts: u64,
     /// Wedged threads still out there. They go away when (if) their frame
     /// returns; each one is a piece's render state, never a socket or a link.
@@ -178,33 +207,41 @@ pub struct PlayerHealth {
     /// may be lower than what was asked for).
     pub brightness_applied: Option<u8>,
     /// The device's own ceiling, learned the only way there is: ask for more
-    /// than it will give and see what comes back. The dashboard's slider never
+    /// than it will give and see what comes back. The page's slider never
     /// goes above this.
     pub brightness_cap: Option<u8>,
     /// The last thing that went wrong here, if anything has.
     pub last_error: Option<String>,
 }
 
-/// A player, as the dashboard and `/api/v1/status` see it.
+/// A player, as the page and `/api/v1/status` see it.
 #[derive(Clone, Debug, Serialize)]
 pub struct PlayerStatus {
+    /// The device id, or empty for the player that has no panel yet.
     pub device: String,
+    /// Panel output: false means the link is released and the panel is on its
+    /// own idle screen. The player keeps rendering either way.
     pub on: bool,
     pub piece: String,
     pub piece_name: String,
     pub seed: u32,
+    /// Only what has been set away from the piece's defaults.
     pub params: BTreeMap<String, f32>,
     pub fps: f64,
+    pub paused: bool,
+    pub speed: f64,
     pub brightness: Option<u8>,
     pub settings: Settings,
     /// True when a core thread is alive and ticking.
     pub running: bool,
+    /// True when this is the player the page is a window onto.
+    pub focused: bool,
     /// The rate the render loop is actually achieving.
     pub fps_measured: f32,
     /// What a composing piece says it is performing.
     pub playing: Option<Playing>,
     pub health: PlayerHealth,
-    /// The link, or `None` when the player is off.
+    /// The link, or `None` when panel output is off.
     pub panel: Option<PanelStatus>,
 }
 
@@ -216,22 +253,44 @@ struct Core {
     piece: Box<dyn Piece>,
     params: Params,
     pipeline: Pipeline,
+    seed: u32,
     t: f64,
     last: Instant,
     fps: f32,
 }
 
 impl Core {
-    fn tick(&mut self) -> WireFrame {
+    /// One frame: the piece, the pipeline, and what the page is shown.
+    ///
+    /// `paused` and `speed` are card 105's, moved here with the rest of the
+    /// design view: the piece's clock is scaled, the pipeline's is not,
+    /// because the limiter measures wall-clock rise.
+    fn tick(&mut self, paused: bool, speed: f64) -> screeny_art::pipeline::Output {
         let now = Instant::now();
         let wall = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        let frame = self.piece.render(&Ctx { t: self.t, dt: wall, now: local_now(), params: &self.params });
-        self.t += wall;
+        let dt = if paused { 0.0 } else { wall * speed };
+        self.t += dt;
+        let frame = self.piece.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
         if wall > 0.0 {
             self.fps += (1.0 / wall as f32 - self.fps) * 0.1;
         }
-        self.pipeline.process(frame, wall).wire
+        self.pipeline.process(frame, wall)
+    }
+
+    /// The piece's parameters, as the configuration now says.
+    fn reload_params(&mut self, cfg: &StoredPlayer) {
+        self.params = Params::defaults(self.def.params);
+        for (id, v) in &cfg.params {
+            self.params.set(self.def.params, id, *v);
+        }
+    }
+
+    /// Build the piece again from its seed and start its clock over.
+    fn restart(&mut self) {
+        self.piece = (self.def.make)(u64::from(self.seed));
+        self.pipeline.reset();
+        self.t = 0.0;
     }
 }
 
@@ -258,25 +317,56 @@ pub struct BrightnessJob {
     pub level: u8,
 }
 
+/// What the render loop must do before its next frame.
+///
+/// One slot, newest wins, like every other mailbox in this server. A slider
+/// being dragged sets `params` sixty times a second and costs one re-read of
+/// the parameter map per frame rather than sixty thread restarts.
+#[derive(Default)]
+struct Pending {
+    /// The piece or the seed changed: a fresh core.
+    rebuild: bool,
+    /// Re-read the parameters into the running core.
+    params: bool,
+    /// Re-read the pipeline settings.
+    settings: bool,
+    /// Rebuild the piece from its seed, keeping everything else.
+    restart: bool,
+    /// One action a composing piece offered (card 140).
+    action: Option<String>,
+}
+
+impl Pending {
+    fn anything(&self) -> bool {
+        self.rebuild || self.params || self.settings || self.restart || self.action.is_some()
+    }
+}
+
 // --------------------------------------------------------------- a player ---
 
-/// One panel's player.
+/// One panel's player - and, when it is the focused one, the page's picture.
 pub struct Player {
-    /// The device id this plays to. Never an address.
-    pub device: String,
     cfg: Mutex<StoredPlayer>,
     /// The panel link, outside the core on purpose: a core can be abandoned
     /// without losing the link, the device or the source lock.
     link: Mutex<LinkSlot>,
     core: Mutex<Option<Arc<CoreHandle>>>,
     health: Mutex<PlayerHealth>,
+    pending: Mutex<Pending>,
     stop: Arc<AtomicBool>,
     faults: bool,
     gen: AtomicU64,
     /// Frames rendered, across every core this player has had.
     ticks: Arc<AtomicU64>,
-    /// The studio's one settings memory (card 165), shared with the design
-    /// view and with every other panel.
+    /// The frame packet's sequence number, across cores for the same reason.
+    seq: Arc<AtomicU32>,
+    /// True when this is the player the page is showing. Only the focused
+    /// player fills the page's frame cell.
+    focused: AtomicBool,
+    /// The page's one frame cell, and how many browsers are reading it.
+    screen: Arc<Screen>,
+    /// The studio's one settings memory (card 165), shared with every other
+    /// player.
     memory: crate::state::SharedMemory,
     /// Faults since the last good run: the brake on a restart loop.
     consecutive: AtomicU64,
@@ -297,20 +387,35 @@ struct LinkSlot {
 
 impl Player {
     #[must_use]
-    pub fn new(cfg: StoredPlayer, faults: bool, memory: crate::state::SharedMemory) -> Arc<Player> {
+    pub fn new(cfg: StoredPlayer, faults: bool, memory: crate::state::SharedMemory, screen: Arc<Screen>) -> Arc<Player> {
         Arc::new(Player {
-            device: cfg.device.clone(),
             memory,
             cfg: Mutex::new(cfg),
             link: Mutex::new(LinkSlot::default()),
             core: Mutex::new(None),
             health: Mutex::new(PlayerHealth::default()),
+            pending: Mutex::new(Pending::default()),
             stop: Arc::new(AtomicBool::new(false)),
             faults,
             gen: AtomicU64::new(0),
             ticks: Arc::new(AtomicU64::new(0)),
+            seq: Arc::new(AtomicU32::new(0)),
+            focused: AtomicBool::new(false),
+            screen,
             consecutive: AtomicU64::new(0),
         })
+    }
+
+    /// The device this plays to. Empty while no panel is attached.
+    #[must_use]
+    pub fn device(&self) -> String {
+        self.cfg().device.clone()
+    }
+
+    /// True when this is the player the page is a window onto.
+    #[must_use]
+    pub fn is_focused(&self) -> bool {
+        self.focused.load(Ordering::Relaxed)
     }
 
     fn cfg(&self) -> MutexGuard<'_, StoredPlayer> {
@@ -325,22 +430,63 @@ impl Player {
         self.health.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn pending_mut(&self) -> MutexGuard<'_, Pending> {
+        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn take_pending(&self) -> Pending {
+        std::mem::take(&mut *self.pending_mut())
+    }
+
     /// The desired configuration, as persisted.
     #[must_use]
     pub fn stored(&self) -> StoredPlayer {
         self.cfg().clone()
     }
 
+    /// What the page draws itself from: the piece, the seed, **every**
+    /// parameter at its effective value, the pipeline settings and the
+    /// playback state.
+    #[must_use]
+    pub fn state(&self) -> StudioState {
+        let cfg = self.cfg().clone();
+        let params = match find_piece(&cfg.piece, self.faults) {
+            Some(def) => {
+                let mut p = Params::defaults(def.params);
+                for (id, v) in &cfg.params {
+                    p.set(def.params, id, *v);
+                }
+                p.iter().map(|(k, v)| (k.to_string(), v)).collect()
+            }
+            // A piece this build has not got: the page shows no sliders for
+            // it rather than inventing some.
+            None => BTreeMap::new(),
+        };
+        StudioState {
+            piece: cfg.piece,
+            seed: cfg.seed,
+            params,
+            settings: cfg.settings,
+            paused: cfg.paused,
+            speed: cfg.speed,
+            fps: cfg.fps,
+            on: cfg.on,
+            device: cfg.device,
+        }
+    }
+
     /// Change what it plays. Anything `None` is left alone.
     ///
-    /// A piece change restarts the core, because a piece owns its own state
-    /// and there is no meaningful way to carry it across.
+    /// Nothing here stops a thread: what has to change is written into the
+    /// one-slot [`Pending`] and applied by the render loop before its next
+    /// frame, so the page's sliders cost one re-read per frame rather than a
+    /// thread each.
     ///
     /// # Errors
     ///
-    /// If no piece has that id.
+    /// If no piece has that id, or the current piece has no such parameter.
     pub fn configure(self: &Arc<Self>, change: &PlayerChange) -> Result<(), String> {
-        let mut restart = false;
+        let mut want = Pending::default();
         {
             let mut cfg = self.cfg();
             if let Some(id) = &change.piece {
@@ -350,8 +496,9 @@ impl Player {
                     // whoever last touched it (card 165). Nothing to write down
                     // on the way out: every change went into the memory when it
                     // was made.
-                    recall_into(&mut cfg, def, &self.memory, &self.device);
-                    restart = true;
+                    let device = cfg.device.clone();
+                    recall_into(&mut cfg, def, &self.memory, &device);
+                    want.rebuild = true;
                 }
                 // Asking for a piece again clears its refusal: a human saying
                 // "try it" outranks the brake.
@@ -364,7 +511,7 @@ impl Player {
             if let Some(seed) = change.seed {
                 cfg.seed = seed;
                 remember_current(&cfg, &self.memory, self.faults);
-                restart = true;
+                want.rebuild = true;
             }
             if let Some((id, value)) = &change.param {
                 let def = find_piece(&cfg.piece, self.faults);
@@ -373,7 +520,7 @@ impl Player {
                 };
                 cfg.params.insert(id.clone(), spec.sanitise(*value));
                 remember_current(&cfg, &self.memory, self.faults);
-                restart = true;
+                want.params = true;
             }
             // "Back to the defaults, and stay there": the remembered
             // parameters go with them, or the next switch back would hand the
@@ -381,14 +528,20 @@ impl Player {
             if change.reset_params {
                 cfg.params.clear();
                 self.memory.forget_params(&cfg.piece);
-                restart = true;
+                want.params = true;
             }
             if let Some(fps) = change.fps {
                 cfg.fps = fps.clamp(MIN_FPS, MAX_FPS);
             }
+            if let Some(paused) = change.paused {
+                cfg.paused = paused;
+            }
+            if let Some(speed) = change.speed {
+                cfg.speed = speed.clamp(0.0, MAX_SPEED);
+            }
             if let Some(s) = change.settings {
                 cfg.settings = s;
-                restart = true;
+                want.settings = true;
             }
             if let Some(b) = change.brightness {
                 cfg.brightness = b;
@@ -396,34 +549,40 @@ impl Player {
                 self.slot().sessions = 0;
             }
             if let Some(on) = change.on {
-                if cfg.on != on {
-                    cfg.on = on;
-                    restart = true;
-                }
+                cfg.on = on;
             }
-            if change.replace.is_some() {
-                let r = change.replace.clone().expect("checked");
-                let def = find_piece(&r.piece, self.faults).ok_or_else(|| format!("no piece called `{}`", r.piece))?;
-                cfg.piece = def.id.to_string();
-                cfg.seed = r.seed;
-                cfg.params = r.params;
-                cfg.settings = r.settings;
-                cfg.fps = r.fps.clamp(MIN_FPS, MAX_FPS);
-                // No copy step: the design view and this panel share one
-                // memory, so what was being previewed is already what this
-                // piece is remembered as.
-                restart = true;
-                let mut h = self.health_mut();
-                h.refused.clear();
-                h.gave_up = None;
-                h.fell_back_from = None;
-                self.consecutive.store(0, Ordering::Relaxed);
+            if change.restart {
+                want.restart = true;
             }
         }
-        if restart {
-            self.restart_core("configured");
+        if let Some(action) = &change.act {
+            want.action = Some(action.clone());
         }
+        if want.anything() {
+            let mut p = self.pending_mut();
+            p.rebuild |= want.rebuild;
+            p.params |= want.params;
+            p.settings |= want.settings;
+            p.restart |= want.restart;
+            if want.action.is_some() {
+                // One slot: a burst of button presses is the newest one.
+                p.action = want.action;
+            }
+        }
+        // Deliberately *not* `ensure_running`: starting a thread is the
+        // supervisor's job (and the API's, right after a change, so a browser
+        // does not wait a second for a player that had given up). A change is
+        // arithmetic on what would play, and stays that way in a test.
         Ok(())
+    }
+
+    /// Rename this player onto a device - the moment a panel is found and
+    /// adopted, or a `pending:` id becomes the device's real one.
+    ///
+    /// **The core is not touched**, which is the whole point: the picture the
+    /// page is showing carries straight on to the panel.
+    pub fn rename(&self, device: &str) {
+        self.cfg().device = device.to_string();
     }
 
     /// Point the link at a device, or at nothing. Rebuilds it only when what
@@ -435,7 +594,7 @@ impl Player {
         if !on || matches!(reach, Reach::Unknown) {
             if let Some(out) = slot.out.as_mut() {
                 // FINAL: the panel is released now rather than after its
-                // stream timeout.
+                // stream timeout, and goes back to its own idle screen.
                 out.close();
             }
             slot.out = None;
@@ -454,11 +613,11 @@ impl Player {
     }
 
     /// Start the render loop if it should be running and is not.
+    ///
+    /// Since card 170 this does not depend on `on`: panel output being off
+    /// releases the link, it does not stop the picture.
     pub fn ensure_running(self: &Arc<Self>) {
-        if self.stop.load(Ordering::Relaxed) || !self.cfg().on {
-            return;
-        }
-        if self.health_mut().gave_up.is_some() {
+        if self.stop.load(Ordering::Relaxed) || self.health_mut().gave_up.is_some() {
             return;
         }
         let alive = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -476,11 +635,6 @@ impl Player {
     /// request can take a second and the render loop must never wait for one.
     pub fn supervise(self: &Arc<Self>) -> Option<BrightnessJob> {
         if self.stop.load(Ordering::Relaxed) {
-            return None;
-        }
-        let on = self.cfg().on;
-        if !on {
-            self.stop_core();
             return None;
         }
 
@@ -510,7 +664,10 @@ impl Player {
         // Drive reconnection and read the link even when frames are not
         // flowing, and notice a new session.
         let mut job = None;
-        let want = self.cfg().brightness;
+        let (want, device) = {
+            let cfg = self.cfg();
+            (cfg.brightness, cfg.device.clone())
+        };
         let mut slot = self.slot();
         if let Some(out) = slot.out.as_mut() {
             out.poll();
@@ -519,7 +676,7 @@ impl Player {
             if up && sessions != slot.sessions {
                 slot.sessions = sessions;
                 if let Some(level) = want {
-                    job = Some(BrightnessJob { device: self.device.clone(), level });
+                    job = Some(BrightnessJob { device, level });
                 }
             }
             self.health_mut().sessions = u64::from(sessions);
@@ -540,7 +697,7 @@ impl Player {
         }
         // Do not keep asking for something this panel will not give: the
         // policy becomes what it actually does, so the state file and the
-        // dashboard both say the true number.
+        // page both say the true number.
         let mut cfg = self.cfg();
         if cfg.brightness == Some(asked) && applied < asked {
             cfg.brightness = Some(applied);
@@ -557,7 +714,7 @@ impl Player {
         (self.cfg().brightness, self.health_mut().brightness_applied)
     }
 
-    /// Everything the dashboard shows.
+    /// Everything `/api/v1/status` shows.
     #[must_use]
     pub fn status(&self) -> PlayerStatus {
         let cfg = self.cfg().clone();
@@ -586,16 +743,19 @@ impl Player {
         };
         let name = find_piece(&cfg.piece, self.faults).map_or("", |d| d.name).to_string();
         PlayerStatus {
-            device: self.device.clone(),
+            device: cfg.device,
             on: cfg.on,
             piece: cfg.piece,
             piece_name: name,
             seed: cfg.seed,
             params: cfg.params,
             fps: cfg.fps,
+            paused: cfg.paused,
+            speed: cfg.speed,
             brightness: cfg.brightness,
             settings: cfg.settings,
             running,
+            focused: self.is_focused(),
             fps_measured,
             playing,
             health,
@@ -603,12 +763,11 @@ impl Player {
         }
     }
 
-    /// An action offered by a composing piece.
-    pub fn act(&self, _action: &str) {
-        // Reaching into a running piece from another thread would need the
-        // core's lock on the render path, which is exactly what card 105's
-        // handover said to avoid. The design view is where pieces are played
-        // with; a device player is left alone. (Card 142.)
+    /// What a composing piece says it is performing, from the last frame.
+    #[must_use]
+    pub fn playing(&self) -> Option<Playing> {
+        let core = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        core.as_ref().and_then(|h| h.playing.lock().ok().and_then(|p| p.clone()))
     }
 
     /// Stop for good: the core ends and the panel is released.
@@ -631,11 +790,6 @@ impl Player {
         }
     }
 
-    fn restart_core(self: &Arc<Self>, _why: &str) {
-        self.stop_core();
-        self.ensure_running();
-    }
-
     /// One fault: log it once, count it, and either fall back or give up.
     fn fault(self: &Arc<Self>, piece: &str, what: &str) {
         let n = self.consecutive.fetch_add(1, Ordering::Relaxed) + 1;
@@ -645,7 +799,7 @@ impl Player {
         h.last_error = Some(what.to_string());
         if n >= u64::from(MAX_FAULTS) {
             let msg = format!("{what}; giving up after {n} faults");
-            eprintln!("studio: player {}: {msg}", self.device);
+            eprintln!("studio: player {}: {msg}", label(&cfg.device));
             h.gave_up = Some(msg);
             if !h.refused.iter().any(|r| r == piece) {
                 h.refused.push(piece.to_string());
@@ -655,7 +809,7 @@ impl Player {
             drop(cfg);
             return;
         }
-        eprintln!("studio: player {}: {what}; falling back to `{}`", self.device, fallback.id);
+        eprintln!("studio: player {}: {what}; falling back to `{}`", label(&cfg.device), fallback.id);
         if !h.refused.iter().any(|r| r == piece) {
             h.refused.push(piece.to_string());
         }
@@ -663,17 +817,17 @@ impl Player {
         // The fallback arrives set up the way it was last left, like any other
         // piece change. The failing piece's memory is untouched: a fault is not
         // a reason to forget how somebody had it set.
-        recall_into(&mut cfg, fallback, &self.memory, &self.device);
+        let device = cfg.device.clone();
+        recall_into(&mut cfg, fallback, &self.memory, &device);
     }
 
-    fn start_core(self: &Arc<Self>) {
-        let (def, seed, params_map, settings, on) = {
+    /// A core on whatever the configuration says, or on the fallback when that
+    /// cannot be run. Never fails: a player always has something to show.
+    fn make_core(&self) -> Core {
+        let (def, seed, params_map, settings, device) = {
             let cfg = self.cfg();
-            (cfg.piece.clone(), cfg.seed, cfg.params.clone(), cfg.settings, cfg.on)
+            (cfg.piece.clone(), cfg.seed, cfg.params.clone(), cfg.settings, cfg.device.clone())
         };
-        if !on {
-            return;
-        }
         // A piece that is unknown, or one this player has refused, becomes the
         // fallback rather than a reason not to run.
         let refused = self.health_mut().refused.clone();
@@ -684,7 +838,7 @@ impl Player {
                 if find_piece(&def, self.faults).is_none() {
                     let mut h = self.health_mut();
                     if h.fell_back_from.as_deref() != Some(def.as_str()) {
-                        eprintln!("studio: player {}: no piece called `{def}`; playing `{}`", self.device, f.id);
+                        eprintln!("studio: player {}: no piece called `{def}`; playing `{}`", label(&device), f.id);
                     }
                     h.fell_back_from = Some(def.clone());
                 }
@@ -696,16 +850,20 @@ impl Player {
         for (id, v) in &params_map {
             params.set(chosen.params, id, *v);
         }
-        let core = Core {
+        Core {
             def: chosen,
             piece: (chosen.make)(u64::from(seed)),
             params,
             pipeline: Pipeline::new(settings),
+            seed,
             t: 0.0,
             last: Instant::now(),
             fps: 0.0,
-        };
+        }
+    }
 
+    fn start_core(self: &Arc<Self>) {
+        let core = self.make_core();
         let gen = self.gen.fetch_add(1, Ordering::Relaxed) + 1;
         let handle = Arc::new(CoreHandle {
             gen,
@@ -728,12 +886,12 @@ impl Player {
 
         let me = Arc::clone(self);
         let started = std::thread::Builder::new()
-            .name(format!("play-{}", short(&self.device)))
+            .name(format!("play-{}", short(&self.device())))
             .spawn(move || run_core(&me, &handle, core));
         if let Err(e) = started {
             let mut h = self.health_mut();
             h.gave_up = Some(format!("could not start a render thread: {e}"));
-            eprintln!("studio: player {}: could not start a render thread: {e}", self.device);
+            eprintln!("studio: player: could not start a render thread: {e}");
         }
     }
 }
@@ -741,34 +899,34 @@ impl Player {
 /// What a change asks for. Everything optional; `None` leaves it alone.
 #[derive(Clone, Debug, Default)]
 pub struct PlayerChange {
+    /// Panel output. False releases the link; the picture carries on.
     pub on: Option<bool>,
     pub piece: Option<String>,
     pub seed: Option<u32>,
     pub param: Option<(String, f32)>,
-    /// The player's "Reset": back to the piece's defaults, and forget what was
-    /// remembered for it here (card 165).
+    /// "Reset": back to the piece's defaults, and forget what was remembered
+    /// for it (card 165).
     pub reset_params: bool,
     pub fps: Option<f64>,
+    pub paused: Option<bool>,
+    pub speed: Option<f64>,
     pub settings: Option<Settings>,
     /// `Some(None)` clears the brightness policy; `Some(Some(n))` sets it.
     pub brightness: Option<Option<u8>>,
-    /// "Make what I am previewing what this panel plays": everything at once.
-    pub replace: Option<Adopt>,
-}
-
-/// A whole configuration to adopt, as the preview hands it over.
-#[derive(Clone, Debug)]
-pub struct Adopt {
-    pub piece: String,
-    pub seed: u32,
-    pub params: BTreeMap<String, f32>,
-    pub settings: Settings,
-    pub fps: f64,
+    /// Start the piece again from its seed.
+    pub restart: bool,
+    /// An action a composing piece offered (card 140).
+    pub act: Option<String>,
 }
 
 /// The render loop of one core.
-fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, mut core: Core) {
-    let piece_id = core.def.id.to_string();
+///
+/// Everything that can change about what is being played arrives through the
+/// player's one-slot [`Pending`] and is applied here, between frames, so
+/// nothing a browser does costs a thread.
+fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
+    let mut core = core;
+    let mut piece_id = core.def.id.to_string();
     let mut next = Instant::now();
     let mut limits_at = Instant::now() - Duration::from_secs(10);
     let mut panicked = false;
@@ -776,11 +934,43 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, mut core: Core) {
     while !handle.stop.load(Ordering::Relaxed) && !player.stop.load(Ordering::Relaxed) {
         handle.beat.store(unix_millis(), Ordering::Relaxed);
 
-        // The piece is the only code here that can panic. Catching it is what
-        // keeps one bad piece from taking the process - and the other panels -
-        // down with it.
-        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.tick()));
-        let Ok(wire) = rendered else {
+        let (fps, paused, speed) = {
+            let cfg = player.cfg();
+            (cfg.fps, cfg.paused, cfg.speed)
+        };
+
+        // Apply whatever has been asked for since the last frame, then render.
+        // The piece is the only code in here that can panic - `act` as much as
+        // `render` - so both are inside the same `catch_unwind`, which is what
+        // keeps one bad piece from taking the process, and the panel, with it.
+        let want = player.take_pending();
+        if want.rebuild {
+            core = player.make_core();
+            piece_id = core.def.id.to_string();
+        }
+        // Read the configuration once, and only when something needs it: this
+        // runs sixty times a second.
+        let reconf = (want.params || want.settings).then(|| player.stored());
+        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if !want.rebuild {
+                if let Some(cfg) = &reconf {
+                    if want.params {
+                        core.reload_params(cfg);
+                    }
+                    if want.settings {
+                        core.pipeline.settings = cfg.settings;
+                    }
+                }
+                if want.restart {
+                    core.restart();
+                }
+            }
+            if let Some(action) = &want.action {
+                core.piece.act(action);
+            }
+            core.tick(paused, speed)
+        }));
+        let Ok(out) = rendered else {
             panicked = true;
             break;
         };
@@ -790,32 +980,41 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, mut core: Core) {
             *p = core.piece.playing();
         }
 
+        // The page, if this is the player it is a window onto. One slot,
+        // replaced in place: a browser that is not keeping up misses frames
+        // and costs nothing, and this never blocks, so a browser cannot hold
+        // the render loop or the panel link back.
+        if player.is_focused() {
+            let seq = player.seq.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+            player.screen.show(page::pack(seq, core.t, &out.stats, core.fps, &out.preview));
+        }
+
         // Hand it to the panel. The link is the player's, not the core's.
         let connected = {
             let mut slot = player.slot();
             let mut landed = false;
             let up = match slot.out.as_mut() {
-                Some(out) => {
+                Some(link) => {
                     if limits_at.elapsed() >= Duration::from_secs(1) {
                         limits_at = Instant::now();
-                        let lim = out.limits();
+                        let lim = link.limits();
                         if lim.connected {
                             core.pipeline.meter().set_limits(lim.budget, lim.codecs.clone());
                         }
                     }
-                    let before = out.link().stats().frames_sent;
-                    if let Err(e) = out.send(&wire) {
+                    let before = link.link().stats().frames_sent;
+                    if let Err(e) = link.send(&out.wire) {
                         // Only our own errors can get here; the network cannot
                         // fail a send. Logged once.
                         let mut h = player.health_mut();
                         let msg = format!("sending to the panel: {e}");
                         if h.last_error.as_deref() != Some(msg.as_str()) {
-                            eprintln!("studio: player {}: {msg}", player.device);
+                            eprintln!("studio: player {}: {msg}", label(&player.device()));
                         }
                         h.last_error = Some(msg);
                     }
-                    landed = out.link().stats().frames_sent > before;
-                    out.link().state().is_up()
+                    landed = link.link().stats().frames_sent > before;
+                    link.link().state().is_up()
                 }
                 None => false,
             };
@@ -830,8 +1029,11 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, mut core: Core) {
             player.consecutive.store(0, Ordering::Relaxed);
         }
 
-        // While the panel is away there is nothing to be fast for.
-        let rate = if connected { player.cfg().fps } else { IDLE_FPS };
+        // Full rate while the panel is connected or a browser is watching.
+        // Otherwise there is nothing to be fast for: a panel unplugged for a
+        // month, with nobody looking, must not cost a core for a month.
+        let watched = player.is_focused() && player.screen.watchers() > 0;
+        let rate = if connected || watched { fps } else { IDLE_FPS };
         next += Duration::from_secs_f64(1.0 / rate.clamp(MIN_FPS, MAX_FPS));
         let now = Instant::now();
         if next > now {
@@ -884,6 +1086,9 @@ fn reach_key(reach: &Reach) -> String {
 }
 
 fn short(id: &str) -> String {
+    if id.is_empty() {
+        return "page".into();
+    }
     id.chars().take(8).collect()
 }
 
@@ -896,29 +1101,45 @@ pub fn unix_millis() -> u64 {
 
 // ------------------------------------------------------------ the fleet ----
 
-/// Every player, keyed by device id. A collection from day one.
-#[derive(Default)]
+/// Every player, keyed by device id. A collection from day one, with one panel
+/// as the expected case: the page shows the **focused** one, and with a single
+/// panel nobody ever has to choose.
 pub struct Players {
     inner: Mutex<BTreeMap<String, Arc<Player>>>,
+    /// Which player the page is a window onto.
+    focus: Mutex<String>,
     /// The studio's one settings memory, handed to every player made here.
     memory: crate::state::SharedMemory,
+    /// The page's one frame cell, likewise.
+    screen: Arc<Screen>,
 }
 
 impl Players {
     #[must_use]
-    pub fn new(memory: crate::state::SharedMemory) -> Self {
-        Players { inner: Mutex::new(BTreeMap::new()), memory }
+    pub fn new(memory: crate::state::SharedMemory, screen: Arc<Screen>) -> Self {
+        Players { inner: Mutex::new(BTreeMap::new()), focus: Mutex::new(UNBOUND.to_string()), memory, screen }
     }
 
-    /// The studio's one settings memory, as handed to every player here. The
-    /// design view's engine holds the same one.
+    /// The studio's one settings memory, as handed to every player here.
     #[must_use]
     pub fn memory(&self) -> crate::state::SharedMemory {
         self.memory.clone()
     }
 
+    /// The page's frame cell.
+    #[must_use]
+    pub fn screen(&self) -> Arc<Screen> {
+        Arc::clone(&self.screen)
+    }
+
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Arc<Player>>> {
         self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The lock order everywhere in this type: `inner`, then `focus`. Never
+    /// the other way round, so these two cannot be half of a deadlock.
+    fn focus_mut(&self) -> MutexGuard<'_, String> {
+        self.focus.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[must_use]
@@ -936,6 +1157,63 @@ impl Players {
         self.lock().keys().cloned().collect()
     }
 
+    /// Device ids that actually name a panel: everything but the unbound
+    /// player. "Has this studio been attached to anything yet?"
+    #[must_use]
+    pub fn bound(&self) -> Vec<String> {
+        self.lock().keys().filter(|k| *k != UNBOUND).cloned().collect()
+    }
+
+    /// Which player the page is showing.
+    #[must_use]
+    pub fn focus(&self) -> String {
+        self.focus_mut().clone()
+    }
+
+    /// The player the page is a window onto: the focused one, or whatever
+    /// there is if the focus has gone stale.
+    #[must_use]
+    pub fn page(&self) -> Option<Arc<Player>> {
+        let all = self.lock();
+        let want = self.focus_mut().clone();
+        all.get(&want).cloned().or_else(|| all.values().next().cloned())
+    }
+
+    /// Show this player on the page. False when there is no such player.
+    pub fn set_focus(&self, device: &str) -> bool {
+        let all = self.lock();
+        if !all.contains_key(device) {
+            return false;
+        }
+        for (id, p) in all.iter() {
+            p.focused.store(id == device, Ordering::Relaxed);
+        }
+        *self.focus_mut() = device.to_string();
+        true
+    }
+
+    /// Make sure there is a player for the page to show, and that exactly one
+    /// of them is focused.
+    ///
+    /// A studio always has a picture: with no panel found yet that is the
+    /// *unbound* player, which renders for the page and has no link.
+    pub fn ensure_page(&self, faults: bool) -> Arc<Player> {
+        if self.lock().is_empty() {
+            self.ensure(UNBOUND, faults, StoredPlayer::default);
+        }
+        let want = {
+            let all = self.lock();
+            let focus = self.focus_mut().clone();
+            if all.contains_key(&focus) {
+                focus
+            } else {
+                all.keys().next().cloned().unwrap_or_else(|| UNBOUND.to_string())
+            }
+        };
+        self.set_focus(&want);
+        self.page().expect("a studio always has a player")
+    }
+
     /// The player for a device, made if it is not there yet.
     pub fn ensure(&self, device: &str, faults: bool, default: impl FnOnce() -> StoredPlayer) -> Arc<Player> {
         let mut all = self.lock();
@@ -944,36 +1222,43 @@ impl Players {
         }
         let mut cfg = default();
         cfg.device = device.to_string();
-        let p = Player::new(cfg, faults, self.memory.clone());
+        let p = Player::new(cfg, faults, self.memory.clone(), Arc::clone(&self.screen));
         all.insert(device.to_string(), Arc::clone(&p));
         p
     }
 
     /// Adopt a player from the state file.
     pub fn load(&self, cfg: StoredPlayer, faults: bool) {
-        if cfg.device.is_empty() {
-            return;
-        }
         let device = cfg.device.clone();
-        let memory = self.memory.clone();
-        self.lock().insert(device, Player::new(cfg, faults, memory));
+        let p = Player::new(cfg, faults, self.memory.clone(), Arc::clone(&self.screen));
+        self.lock().insert(device, p);
     }
 
-    /// A device's id changed when it told us its real one. The player follows
-    /// it: the same panel keeps playing the same thing.
+    /// A player moves onto a device: a panel was found and adopted, or a
+    /// device told us its real id.
+    ///
+    /// **Renamed in place**, not replaced. The thread, the core and the piece
+    /// carry on, which is what "a panel is adopted without the picture
+    /// restarting" means. The link is left to [`Player::aim`], which rebuilds
+    /// it only if what it is pointed at has actually changed.
     pub fn rekey(&self, from: &str, to: &str) {
-        let mut all = self.lock();
         if from == to {
             return;
         }
-        if let Some(old) = all.remove(from) {
-            let mut cfg = old.stored();
-            cfg.device = to.to_string();
-            old.shutdown();
+        {
+            let mut all = self.lock();
+            let Some(p) = all.remove(from) else { return };
             // If the destination already had a player, the one that was
-            // actually configured wins.
-            let memory = self.memory.clone();
-            all.insert(to.to_string(), Player::new(cfg, old.faults, memory));
+            // actually configured wins, and the other is stopped rather than
+            // left rendering into nothing.
+            if let Some(old) = all.remove(to) {
+                old.shutdown();
+            }
+            p.rename(to);
+            all.insert(to.to_string(), p);
+        }
+        if self.focus() == from {
+            self.set_focus(to);
         }
     }
 
@@ -1020,13 +1305,13 @@ mod tests {
 
     #[test]
     fn a_player_keeps_what_it_was_configured_with() {
-        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, mem());
+        let p = idle_player();
         p.configure(&PlayerChange { piece: Some("plasma".into()), seed: Some(9), ..PlayerChange::default() })
             .expect("a real piece");
         let s = p.stored();
         assert_eq!(s.piece, "plasma");
         assert_eq!(s.seed, 9);
-        assert!(!s.on, "configuring must not turn a stopped player on");
+        assert!(!s.on, "configuring must not turn panel output on");
 
         assert!(p.configure(&PlayerChange { piece: Some("nope".into()), ..PlayerChange::default() }).is_err());
         assert!(p
@@ -1037,11 +1322,80 @@ mod tests {
 
     #[test]
     fn an_fps_outside_the_range_is_clamped_not_refused() {
-        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, false, mem());
+        let p = idle_player();
         p.configure(&PlayerChange { fps: Some(1000.0), ..PlayerChange::default() }).expect("clamped");
         assert_eq!(p.stored().fps, MAX_FPS);
         p.configure(&PlayerChange { fps: Some(0.0), ..PlayerChange::default() }).expect("clamped");
         assert_eq!(p.stored().fps, MIN_FPS);
+        p.configure(&PlayerChange { speed: Some(99.0), ..PlayerChange::default() }).expect("clamped");
+        assert_eq!(p.stored().speed, MAX_SPEED, "card 105's speed clamp, now the player's");
+    }
+
+    /// Card 170: the page draws its sliders from `state()`, so it must carry
+    /// **every** parameter at its effective value - not just the sparse set
+    /// that has been moved away from the defaults.
+    #[test]
+    fn the_page_state_carries_every_parameter() {
+        let p = idle_player();
+        p.configure(&PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
+        let def = find_piece("plasma", false).expect("plasma");
+        let state = p.state();
+        assert_eq!(state.params.len(), def.params.len(), "one entry per parameter of the piece");
+        assert_eq!(state.params["scale"], 2.5, "the one that was moved");
+        for spec in def.params {
+            if spec.id != "scale" {
+                assert_eq!(state.params[spec.id], spec.default, "`{}` should still be its default", spec.id);
+            }
+        }
+        assert_eq!(p.stored().params.len(), 1, "and the file still keeps only what was moved");
+    }
+
+    /// Changing a parameter must not rebuild the piece: the page's sliders are
+    /// sixty changes a second, and a rebuild would restart the animation on
+    /// every one of them.
+    #[test]
+    fn a_parameter_change_does_not_rebuild_the_piece() {
+        let p = idle_player();
+        p.configure(&PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.take_pending();
+        p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
+        let want = p.take_pending();
+        assert!(want.params, "the running core re-reads its parameters");
+        assert!(!want.rebuild, "and the piece is not built again");
+
+        // A seed or a piece is a different matter: those are what a piece is
+        // made from, so they do rebuild it.
+        p.configure(&PlayerChange { seed: Some(3), ..PlayerChange::default() }).expect("a seed");
+        assert!(p.take_pending().rebuild);
+    }
+
+    /// Panel output off releases the link and leaves the picture running,
+    /// because the page is still showing it.
+    #[test]
+    fn panel_output_off_does_not_stop_the_picture() {
+        let p = idle_player();
+        p.configure(&PlayerChange { on: Some(true), ..PlayerChange::default() }).expect("on");
+        p.aim(&Reach::Addr("127.0.0.1:50999".parse().expect("an address")));
+        assert!(p.status().panel.is_some(), "a link while output is on");
+
+        p.configure(&PlayerChange { on: Some(false), ..PlayerChange::default() }).expect("off");
+        p.aim(&Reach::Addr("127.0.0.1:50999".parse().expect("an address")));
+        assert!(p.status().panel.is_none(), "the link is released");
+        assert!(!p.stop.load(Ordering::Relaxed), "but the player is not stopped");
+        p.shutdown();
+    }
+
+    /// An action a composing piece offers goes into a one-slot mailbox rather
+    /// than reaching into a running piece from another thread (card 140).
+    #[test]
+    fn an_action_is_a_one_slot_mailbox() {
+        let p = idle_player();
+        p.configure(&PlayerChange { act: Some("next".into()), ..PlayerChange::default() }).expect("an action");
+        p.configure(&PlayerChange { act: Some("again".into()), ..PlayerChange::default() }).expect("another");
+        let want = p.take_pending();
+        assert_eq!(want.action.as_deref(), Some("again"), "newest wins; a burst costs one slot");
+        assert!(p.take_pending().action.is_none(), "and it is taken, not repeated");
     }
 
     // ------------------------- the per-piece memory (card 165) -------------------------
@@ -1054,7 +1408,21 @@ mod tests {
     /// A player that is configured but not running: no thread, no socket, and
     /// every change is pure arithmetic on what it would play.
     fn idle_player() -> Arc<Player> {
-        Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, mem())
+        Player::new(
+            StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() },
+            true,
+            mem(),
+            Screen::new(),
+        )
+    }
+
+    fn player_on(device: &str, memory: crate::state::SharedMemory) -> Arc<Player> {
+        Player::new(
+            StoredPlayer { device: device.into(), on: false, ..StoredPlayer::default() },
+            false,
+            memory,
+            Screen::new(),
+        )
     }
 
     fn change(c: PlayerChange) -> PlayerChange {
@@ -1101,15 +1469,14 @@ mod tests {
         assert!(p.stored().params.is_empty(), "Reset means the old value does not come back on the next switch");
     }
 
-    /// There is **one** memory, not one per panel. The orchestrator reversed
-    /// the card here on 2026-09-19: the browser is a window onto what the panel
-    /// is doing, so "how plasma is set" is one fact about the studio rather
-    /// than one fact per context. Tuning it on one panel tunes it everywhere.
+    /// There is **one** memory, not one per panel: "how plasma is set" is one
+    /// fact about the studio. With card 170 the page is one of the panels
+    /// rather than a context of its own, so this is now simply about panels.
     #[test]
     fn every_panel_shares_the_one_memory() {
         let memory = mem();
-        let a = Player::new(StoredPlayer { device: "a".into(), on: false, ..StoredPlayer::default() }, false, memory.clone());
-        let b = Player::new(StoredPlayer { device: "b".into(), on: false, ..StoredPlayer::default() }, false, memory);
+        let a = player_on("a", memory.clone());
+        let b = player_on("b", memory);
         for p in [&a, &b] {
             p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         }
@@ -1120,39 +1487,6 @@ mod tests {
         b.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
         b.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
         assert_eq!(b.stored().params["scale"], 2.5, "one memory, one answer");
-    }
-
-    /// "Play my preview on panel X" needs no copy step now that there is one
-    /// memory: what was being previewed already *is* what this piece is
-    /// remembered as, so the panel comes back to it.
-    #[test]
-    fn promoting_the_preview_needs_no_copy() {
-        let memory = mem();
-        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, memory.clone());
-
-        // Tuning the design view is what writes the memory; this is that,
-        // without an engine thread.
-        let plasma = find_piece("plasma", false).expect("plasma");
-        memory.remember(plasma, &BTreeMap::from([("scale".to_string(), 3.0)]), 77);
-
-        p.configure(&change(PlayerChange {
-            replace: Some(Adopt {
-                piece: "plasma".into(),
-                seed: 77,
-                params: BTreeMap::from([("scale".to_string(), 3.0)]),
-                settings: Settings::default(),
-                fps: 30.0,
-            }),
-            ..PlayerChange::default()
-        }))
-        .expect("adopted");
-        assert_eq!(p.stored().params["scale"], 3.0);
-
-        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
-        let s = p.stored();
-        assert_eq!(s.params["scale"], 3.0, "what was promoted is what the panel comes back to");
-        assert_eq!(s.seed, 77);
     }
 
     /// A value a later build cannot use is corrected rather than obeyed, and it
@@ -1172,7 +1506,7 @@ mod tests {
                 ]),
             },
         )]));
-        let p = Player::new(cfg, false, memory);
+        let p = Player::new(cfg, false, memory, Screen::new());
         p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         let s = p.stored();
         assert_eq!(s.seed, 5);
@@ -1190,23 +1524,106 @@ mod tests {
             "from-the-future".to_string(),
             crate::state::PieceMemory { seed: Some(3), params: BTreeMap::new() },
         )]));
-        let p = Player::new(cfg, false, memory.clone());
+        let p = Player::new(cfg, false, memory.clone(), Screen::new());
         p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         assert!(memory.knows("from-the-future"));
     }
 
+    // ------------------------------- the fleet -------------------------------
+
+    fn fleet() -> Players {
+        Players::new(mem(), Screen::new())
+    }
+
     #[test]
     fn a_fleet_is_a_collection_and_a_rekey_carries_the_player_over() {
-        let players = Players::new(mem());
-        players.load(StoredPlayer { device: "pending:192.0.2.7".into(), piece: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() }, false);
+        let players = fleet();
+        players.load(
+            StoredPlayer { device: "pending:192.0.2.7".into(), piece: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() },
+            false,
+        );
         assert_eq!(players.ids(), vec!["pending:192.0.2.7".to_string()]);
+        let before = players.get("pending:192.0.2.7").expect("there");
         players.rekey("pending:192.0.2.7", "abc123");
         assert_eq!(players.ids(), vec!["abc123".to_string()]);
         let p = players.get("abc123").expect("moved");
+        assert!(Arc::ptr_eq(&before, &p), "the same player, renamed - not a replacement, or the picture would restart");
         assert_eq!(p.stored().piece, "plasma");
         assert_eq!(p.stored().seed, 5);
         assert_eq!(p.stored().device, "abc123");
         players.remove("abc123");
         assert!(players.ids().is_empty());
+    }
+
+    /// A studio always has a picture to show: with no panel found yet, that is
+    /// the unbound player.
+    #[test]
+    fn a_studio_with_no_panel_still_has_a_player() {
+        let players = fleet();
+        let page = players.ensure_page(false);
+        assert_eq!(page.device(), UNBOUND);
+        assert!(page.is_focused());
+        assert!(players.bound().is_empty(), "and it is not pretending to be a panel");
+        assert_eq!(players.focus(), UNBOUND);
+        players.shutdown();
+    }
+
+    /// Adopting the first panel found renames that same player, so the picture
+    /// the page is showing carries straight on to the panel.
+    #[test]
+    fn adopting_a_panel_keeps_the_same_player_and_the_focus() {
+        let players = fleet();
+        let page = players.ensure_page(false);
+        page.configure(&change(PlayerChange { piece: Some("plasma".into()), seed: Some(42), ..PlayerChange::default() }))
+            .expect("plasma");
+
+        players.rekey(UNBOUND, "4a00a4");
+        let now = players.page().expect("still a page");
+        assert!(Arc::ptr_eq(&page, &now));
+        assert_eq!(now.device(), "4a00a4");
+        assert_eq!(now.stored().piece, "plasma", "the picture did not restart");
+        assert_eq!(now.stored().seed, 42);
+        assert!(now.is_focused());
+        assert_eq!(players.focus(), "4a00a4");
+        players.shutdown();
+    }
+
+    /// With two panels, exactly one is on the page, and the chooser moves it.
+    #[test]
+    fn exactly_one_player_is_on_the_page() {
+        let players = fleet();
+        players.ensure("a", false, StoredPlayer::default);
+        players.ensure("b", false, StoredPlayer::default);
+        players.ensure_page(false);
+        let focused: Vec<String> = players.all().iter().filter(|p| p.is_focused()).map(|p| p.device()).collect();
+        assert_eq!(focused.len(), 1, "{focused:?}");
+
+        assert!(players.set_focus("b"));
+        assert_eq!(players.page().expect("a page").device(), "b");
+        assert_eq!(players.all().iter().filter(|p| p.is_focused()).count(), 1);
+        assert!(!players.set_focus("nope"), "a device with no player cannot be shown");
+        assert_eq!(players.focus(), "b");
+        players.shutdown();
+    }
+
+    /// The page never goes blank because the panel it was showing was
+    /// forgotten: the focus falls back to whatever is left.
+    #[test]
+    fn forgetting_the_focused_panel_moves_the_page_on() {
+        let players = fleet();
+        players.ensure("a", false, StoredPlayer::default);
+        players.ensure("b", false, StoredPlayer::default);
+        players.ensure_page(false);
+        players.set_focus("b");
+        players.remove("b");
+        let page = players.ensure_page(false);
+        assert_eq!(page.device(), "a");
+        assert!(page.is_focused());
+
+        // And forgetting the last one leaves an unbound player behind.
+        players.remove("a");
+        let page = players.ensure_page(false);
+        assert_eq!(page.device(), UNBOUND);
+        players.shutdown();
     }
 }

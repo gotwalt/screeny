@@ -3,40 +3,38 @@
 //!
 //! One program, two ways of running it (`docs/design/studio-vision.md`): on a
 //! laptop with a browser tab open on `127.0.0.1:8787`, or in a container on
-//! the network. There is no desktop window. The engine thread renders whether
-//! or not anything is watching - that is the property the whole plan rests on
-//! - and a browser is a remote control and a preview, never the clock.
+//! the network. There is no desktop window.
+//!
+//! **One panel, one picture** (card 170). A Studio is set up once against a
+//! panel and is then almost always connected to it, and the web page is a
+//! window onto what that panel is doing - for when the panel is not within
+//! eyesight. So there is exactly one thing that renders, the player for the
+//! attached panel, and the frames the browser draws are the same decoded
+//! datagrams the panel is being sent. Changing a piece, a slider or a seed in
+//! the browser changes the panel, at once.
 //!
 //! ```text
-//!  engine thread ──frame watch (one slot, newest wins)──┐
-//!       │                                               ├── /api/v1/ws ── browsers
-//!       ├── screeny::Link ──UDP──> panel                │
-//!  HTTP /api/v1/* ──state broadcast (fixed capacity)────┘
+//!   state file (atomic, versioned) ──> device registry ──> one player per panel
+//!                                            ^                     │
+//!   mDNS browse + manual addresses ──────────┘                     ├── screeny::Link ──UDP──> panel
+//!   supervisor (1 Hz): watchdog, fallback, reconnect, brightness   │
+//!                                                                  └── the page's frame cell
+//!                                                                          │ (one slot, newest wins)
+//!   HTTP /api/v1/* ──> the focused player   ──state broadcast──> /api/v1/ws ──> browsers
 //! ```
 //!
 //! Nothing in that picture can grow without bound, and nothing a browser does
-//! (or stops doing) can slow the engine or the panel link down.
+//! (or stops doing) can slow a player or the panel link down.
 //!
-//! Card 106 added the other half - the part that has to survive months with
-//! nobody looking:
-//!
-//! ```text
-//!   state file (atomic, versioned) ──> device registry ──> one player per device
-//!                                            ^                     │
-//!   mDNS browse + manual addresses ──────────┘                     └── screeny::Link ──> panel
-//!   supervisor (1 Hz): watchdog, fallback, reconnect, brightness policy
-//!   /healthz 200/503, /api/v1/status: what each panel is playing and whether it is well
-//! ```
-//!
-//! The design view keeps its own *preview* player (the engine above); a device
-//! player is a separate thing, and promoting what you are previewing to what a
-//! panel plays is an explicit action.
+//! A studio always has a player, because the page always has a picture: with
+//! no panel found yet it is *unbound* and has no link, and the first panel
+//! found is adopted into that same player without the picture restarting.
 
 pub mod api;
 pub mod devices;
-pub mod engine;
 pub mod fleet;
 pub mod health;
+pub mod page;
 pub mod player;
 pub mod state;
 pub mod ui;
@@ -45,16 +43,16 @@ pub mod ws;
 use axum::Router;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
 use crate::api::{StateEvent, StatusEvent};
 use crate::devices::Registry;
-use crate::engine::{lock, Engine, Shared, StudioState};
-use crate::player::Players;
+use crate::page::{Screen, StudioState};
+use crate::player::{Player, Players};
 use crate::state::{SharedMemory, Store};
 
 /// State changes a browser may be behind by before it is resynced instead.
@@ -115,46 +113,11 @@ impl Default for Config {
     }
 }
 
-/// How the design view's own player is doing.
-///
-/// The preview engine is card 105's, unchanged in substance: one thread, one
-/// piece. What card 106 adds is a heartbeat, a panic count and a fallback, so
-/// that "is the server well" has an answer that includes it.
-#[derive(Default)]
-pub struct PreviewHealth {
-    /// Milliseconds since the epoch, stamped before every frame.
-    pub beat: AtomicU64,
-    pub ticks: AtomicU64,
-    pub panics: AtomicU64,
-    pub alive: AtomicBool,
-    /// Set when the preview has panicked [`player::MAX_FAULTS`] times in a
-    /// row, fallback included. The thread stays up and idle; `/healthz` says
-    /// the server is not well.
-    pub gave_up: Mutex<Option<String>>,
-    /// The piece it fell back from, if it did.
-    pub fell_back_from: Mutex<Option<String>>,
-    /// The last readable view of the engine, refreshed by the status
-    /// heartbeat. `/api/v1/status` reads this rather than the engine itself,
-    /// so a piece that has stopped returning cannot take the dashboard down
-    /// with it - which is exactly the moment somebody wants the dashboard.
-    pub seen: Mutex<Option<EngineView>>,
-}
-
-/// What the status heartbeat last managed to read out of the engine.
-#[derive(Clone)]
-pub struct EngineView {
-    pub state: StudioState,
-    pub panel_on: bool,
-    pub panel_to: String,
-    pub panel: Option<screeny_art::output::PanelStatus>,
-}
-
 /// Everything a request handler can reach. Cheap to clone.
 #[derive(Clone)]
 pub struct AppState {
-    pub engine: Shared,
-    /// The newest frame packet. One slot: a frame nobody read is overwritten.
-    pub frames: watch::Sender<Arc<Vec<u8>>>,
+    /// The page's frame cell: one slot, filled by the focused player.
+    pub screen: Arc<Screen>,
     /// State changes, `STATE_BACKLOG` deep. Overflow is not an error here: a
     /// listener that falls behind is sent the current state instead.
     pub states: broadcast::Sender<StateEvent>,
@@ -162,23 +125,21 @@ pub struct AppState {
     pub status: watch::Sender<Arc<StatusEvent>>,
     pub ui: Arc<ui::Ui>,
     /// True once the studio has been asked to stop. Everything that would
-    /// otherwise run for ever - the engine thread, the status task, every
-    /// open preview socket - watches this, so a shutdown is not held up by a
+    /// otherwise run for ever - every player, the status task, every open
+    /// preview socket - watches this, so a shutdown is not held up by a
     /// browser that is perfectly happy.
     pub stop: watch::Receiver<bool>,
     /// Every panel this studio knows about, keyed by its own stable id.
     pub devices: Arc<Registry>,
-    /// One player per device.
+    /// One player per panel, plus the unbound one when there is no panel yet.
     pub players: Arc<Players>,
     /// The state file.
     pub store: Arc<Store>,
     /// The studio's one per-piece settings memory (card 165): what each piece
-    /// was last left set to, wherever it was left. The design view and every
-    /// panel share it, and it is written to `state.json` and nowhere else.
+    /// was last left set to, wherever it was left. Every panel shares it, and
+    /// it is written to `state.json` and nowhere else.
     pub memory: SharedMemory,
     pub cfg: Arc<Config>,
-    /// How the preview engine is doing.
-    pub preview: Arc<PreviewHealth>,
     /// When the process started, for `/api/v1/status` and for the grace period
     /// `/healthz` gives a player that has not started yet.
     pub started: Instant,
@@ -187,7 +148,6 @@ pub struct AppState {
 
 impl AppState {
     fn new(
-        engine: Shared,
         ui: ui::Ui,
         stop: watch::Receiver<bool>,
         cfg: Arc<Config>,
@@ -195,13 +155,12 @@ impl AppState {
         devices: Arc<Registry>,
         players: Arc<Players>,
     ) -> Self {
-        let packet = lock(&engine).packet();
         let memory = players.memory();
+        let screen = players.screen();
         AppState {
-            frames: watch::Sender::new(packet),
+            screen,
             states: broadcast::Sender::new(STATE_BACKLOG),
             status: watch::Sender::new(Arc::new(StatusEvent { kind: "status", playing: None, panel: None })),
-            engine,
             ui: Arc::new(ui),
             stop,
             devices,
@@ -209,10 +168,21 @@ impl AppState {
             store,
             memory,
             cfg,
-            preview: Arc::new(PreviewHealth::default()),
             started: Instant::now(),
             rev: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The player the page is a window onto, made if the studio has none yet.
+    #[must_use]
+    pub fn page(&self) -> Arc<Player> {
+        self.players.ensure_page(self.cfg.fault_pieces)
+    }
+
+    /// What the page is showing, which is what the panel is showing.
+    #[must_use]
+    pub fn page_state(&self) -> StudioState {
+        self.page().state()
     }
 
     /// Write everything worth keeping to the state file.
@@ -221,27 +191,11 @@ impl AppState {
     /// has a one-slot mailbox and the newest state wins, so a slider being
     /// dragged costs one write rather than sixty.
     pub fn persist(&self) {
-        let preview = {
-            let e = lock(&self.engine);
-            let snap = e.snapshot();
-            let (panel_on, panel_to) = e.panel_aim();
-            state::StoredPreview {
-                piece: snap.piece.to_string(),
-                seed: snap.seed,
-                params: snap.params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
-                settings: snap.settings,
-                paused: snap.paused,
-                speed: snap.speed,
-                fps: snap.fps,
-                panel_on,
-                panel_to,
-            }
-        };
         self.store.save(state::Persisted {
             version: state::SCHEMA_VERSION,
             devices: self.devices.stored(),
             players: self.players.stored(),
-            preview,
+            focus: self.players.focus(),
             // Card 165. It lives here and nowhere else: the state file in
             // `SCREENY_STATE_DIR` is the volume the container keeps across a
             // rebuild, so this is what makes the memory survive a deploy.
@@ -272,9 +226,9 @@ pub struct Studio {
     stop: watch::Sender<bool>,
 }
 
-/// Stops the studio when dropped: the engine thread ends, the panel link
-/// sends `FINAL`, and the server stops accepting. Tests hold one of these so
-/// that a finished test leaves nothing running.
+/// Stops the studio when dropped: every player ends, the panel link sends
+/// `FINAL`, and the server stops accepting. Tests hold one of these so that a
+/// finished test leaves nothing running.
 pub struct Running {
     pub addr: SocketAddr,
     stop: watch::Sender<bool>,
@@ -302,7 +256,7 @@ impl Drop for Running {
 }
 
 impl Studio {
-    /// Bind the port and start the engine.
+    /// Bind the port and start the players.
     ///
     /// # Errors
     ///
@@ -313,24 +267,22 @@ impl Studio {
         let devices = Arc::new(Registry::new());
         devices.load(saved.devices);
         devices.set_discovery_enabled(cfg.discover);
-        // One settings memory for the whole studio: the design view and every
-        // panel read and write the same map (card 165, as the orchestrator
-        // revised it - the browser is a window onto what the panel is doing).
+        // One settings memory for the whole studio: every panel reads and
+        // writes the same map (card 165).
         let memory = SharedMemory::new(saved.pieces);
-        let players = Arc::new(Players::new(memory.clone()));
+        let players = Arc::new(Players::new(memory.clone(), Screen::new()));
         for p in saved.players {
             players.load(p, cfg.fault_pieces);
         }
-
-        let engine: Shared = Arc::new(Mutex::new(Engine::new()));
-        lock(&engine).allow_faults(cfg.fault_pieces);
-        lock(&engine).use_memory(memory.clone());
-        restore_preview(&engine, &saved.preview, cfg.fault_pieces, memory.knows(&saved.preview.piece));
+        if !saved.focus.is_empty() {
+            players.set_focus(&saved.focus);
+        }
+        // There is always a picture, even before there is a panel.
+        players.ensure_page(cfg.fault_pieces);
 
         let (stop, _) = watch::channel(false);
         let cfg = Arc::new(cfg);
         let state = AppState::new(
-            engine,
             ui::Ui { dir: cfg.ui_dir.clone() },
             stop.subscribe(),
             Arc::clone(&cfg),
@@ -341,7 +293,12 @@ impl Studio {
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
 
-        spawn_engine(state.clone());
+        // Start rendering at once rather than on the supervisor's first tick,
+        // so a browser that opens immediately is not shown a black panel.
+        for p in players.all() {
+            p.ensure_running();
+        }
+
         spawn_status(state.clone());
         fleet::spawn_supervisor(state.clone());
         fleet::spawn_discovery(state.clone());
@@ -393,7 +350,6 @@ impl Studio {
             .await?;
         // Let every panel go at once rather than after its stream timeout, and
         // make sure the last thing that changed is on disk before we go.
-        lock(&st.engine).close_panel();
         st.players.shutdown();
         st.persist();
         st.store.flush();
@@ -427,43 +383,6 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Put the design view back the way it was before the restart.
-///
-/// Deliberately forgiving: a piece that no longer exists, a parameter that has
-/// been renamed and an fps that is no longer offered are each ignored rather
-/// than fatal. A state file from an older build must never stop the server.
-fn restore_preview(engine: &Shared, saved: &state::StoredPreview, faults: bool, remembered: bool) {
-    let mut e = lock(engine);
-    // The engine already has the studio's one memory, so putting the saved
-    // piece back is an ordinary switch: it arrives set up the way it was left,
-    // and so does every *other* piece the moment somebody asks for one. That
-    // is the half of card 165 that a restart has to carry.
-    let restored = player::find_piece(&saved.piece, faults).is_some() && e.set_piece(&saved.piece).is_ok();
-    if restored && !remembered {
-        // Only when the memory has nothing for this piece - a file written
-        // before card 165 has already been migrated, so this is the
-        // hand-edited case. The memory is otherwise the one answer, and
-        // preferring these would undo the v1 merge's "the panel's values win".
-        e.set_seed(Some(saved.seed));
-        for (id, v) in &saved.params {
-            let _ = e.set_param(id, *v);
-        }
-    } else if !restored && !saved.piece.is_empty() {
-        // Its memory is kept, so a piece that comes back in a later build
-        // comes back set up the way it was left.
-        eprintln!(
-            "studio: the saved piece `{}` is not in this build; starting on `{}` and keeping its settings",
-            saved.piece,
-            e.snapshot().piece
-        );
-    }
-    e.set_settings(saved.settings);
-    e.set_playback(saved.paused, saved.speed, saved.fps);
-    if saved.panel_on {
-        e.set_panel(true, &saved.panel_to);
-    }
-}
-
 /// Ctrl-C, or `SIGTERM`.
 async fn signalled() {
     #[cfg(unix)]
@@ -480,86 +399,13 @@ async fn signalled() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// The clock. A plain OS thread, not a tokio task: a frame is several
-/// milliseconds of arithmetic and has no business on a runtime worker.
-fn spawn_engine(st: AppState) {
-    let stop = st.stop.clone();
-    st.preview.alive.store(true, Ordering::Relaxed);
-    std::thread::Builder::new()
-        .name("engine".into())
-        .spawn(move || {
-            let mut next = std::time::Instant::now();
-            let mut consecutive = 0u32;
-            while !*stop.borrow() {
-                st.preview.beat.store(player::unix_millis(), Ordering::Relaxed);
-                if st.preview.gave_up.lock().is_ok_and(|g| g.is_some()) {
-                    // Idle rather than loop: the server and the device players
-                    // carry on, and `/healthz` says the preview is broken.
-                    std::thread::sleep(Duration::from_millis(500));
-                    next = std::time::Instant::now();
-                    continue;
-                }
-                // A piece that panics must not take the process - or the other
-                // panels - with it. Caught, counted, and replaced by a safe
-                // fallback; said once, not once a frame.
-                let ticked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lock(&st.engine).tick()));
-                if ticked.is_err() {
-                    consecutive += 1;
-                    st.preview.panics.fetch_add(1, Ordering::Relaxed);
-                    let failed = lock(&st.engine).snapshot().piece;
-                    if consecutive >= player::MAX_FAULTS {
-                        let msg = format!("`{failed}` panicked {consecutive} times in a row; the preview has stopped");
-                        eprintln!("studio: preview: {msg}");
-                        if let Ok(mut g) = st.preview.gave_up.lock() {
-                            *g = Some(msg);
-                        }
-                        continue;
-                    }
-                    let fallback = player::fallback_piece(failed);
-                    eprintln!("studio: preview: `{failed}` panicked while rendering; falling back to `{}`", fallback.id);
-                    if let Ok(mut f) = st.preview.fell_back_from.lock() {
-                        *f = Some(failed.to_string());
-                    }
-                    let _ = lock(&st.engine).set_piece(fallback.id);
-                    st.publish_state(None, lock(&st.engine).snapshot());
-                    st.persist();
-                } else {
-                    st.preview.ticks.fetch_add(1, Ordering::Relaxed);
-                    if st.preview.ticks.load(Ordering::Relaxed).is_multiple_of(300) {
-                        consecutive = 0;
-                    }
-                }
-                // One slot, replaced in place: a browser that is not keeping
-                // up misses frames and costs nothing. This never blocks, so a
-                // browser cannot hold the engine or the panel link back.
-                st.frames.send_replace(lock(&st.engine).packet());
-                next += Duration::from_secs_f64(1.0 / lock(&st.engine).rate());
-                let now = std::time::Instant::now();
-                if next > now {
-                    std::thread::sleep(next - now);
-                } else {
-                    next = now;
-                }
-            }
-            lock(&st.engine).close_panel();
-            st.preview.alive.store(false, Ordering::Relaxed);
-        })
-        .expect("spawn engine thread");
-}
-
-/// One look at the engine, if it can be had without waiting.
+/// The heartbeat: read once here however many browsers are watching.
 ///
-/// A function of its own so that no lock guard can be alive across an `await`
-/// in the caller - which would make the status task's future `!Send`, and is
-/// also exactly the bug that would make a wedged piece wedge the heartbeat.
-fn peek(st: &AppState) -> Option<(Option<screeny_art::piece::Playing>, EngineView)> {
-    let mut e = engine::try_lock(&st.engine)?;
-    let (panel_on, panel_to) = e.panel_aim();
-    let panel = e.panel_status();
-    Some((e.playing(), EngineView { state: e.snapshot(), panel_on, panel_to, panel }))
-}
-
-/// The heartbeat: polled once here however many browsers are watching.
+/// Since card 170 this cannot be held up by a wedged piece. A player's core is
+/// owned by its own render thread and is behind no shared lock, so "what is it
+/// performing and what is the link doing" is always answerable - which is what
+/// card 106's `try_lock` dance around the design view's engine was for, and
+/// what card 143 was going to fix.
 fn spawn_status(st: AppState) {
     let mut stop = st.stop.clone();
     tokio::spawn(async move {
@@ -568,26 +414,13 @@ fn spawn_status(st: AppState) {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    // Never *wait* for the engine: at 60 fps it is mid-render
-                    // a good fraction of the time, and if a piece has stopped
-                    // returning it is mid-render for ever. A few short tries,
-                    // then leave the last view standing and come back in half
-                    // a second.
-                    let mut got = None;
-                    for _ in 0..10 {
-                        got = peek(&st);
-                        if got.is_some() {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                    if let Some((playing, view)) = got {
-                        let panel = view.panel.clone();
-                        if let Ok(mut seen) = st.preview.seen.lock() {
-                            *seen = Some(view);
-                        }
-                        st.status.send_replace(Arc::new(StatusEvent { kind: "status", playing, panel }));
-                    }
+                    let page = st.page();
+                    let status = page.status();
+                    st.status.send_replace(Arc::new(StatusEvent {
+                        kind: "status",
+                        playing: status.playing.clone(),
+                        panel: status.panel.clone(),
+                    }));
                 }
                 // Discarded inside the block: the borrow `wait_for` hands back
                 // is not `Send` and this future has to be.
