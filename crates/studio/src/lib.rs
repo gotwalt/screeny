@@ -88,6 +88,11 @@ pub struct Config {
     pub telemetry_every: Duration,
     /// How often the supervisor looks at the players.
     pub supervise_every: Duration,
+    /// How long a device may go unheard before the studio throws away where
+    /// it thought the device was and finds out again. Long on purpose: a
+    /// panel rebooting is not a panel that has moved, and re-resolving means
+    /// a new link and a lost session.
+    pub stale_after: Duration,
     /// Offer the deliberately broken pieces (`fault-panic`, `fault-stall`).
     /// The containment tests, and `SCREENY_STUDIO_FAULTS=1` for a human who
     /// wants to watch it happen. Never in the normal piece list.
@@ -104,6 +109,7 @@ impl Default for Config {
             discover_every: Duration::from_secs(30),
             telemetry_every: Duration::from_secs(5),
             supervise_every: Duration::from_secs(1),
+            stale_after: Duration::from_secs(120),
             fault_pieces: false,
         }
     }

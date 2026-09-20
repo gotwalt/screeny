@@ -49,16 +49,16 @@ pub const MAX_FPS: f64 = 60.0;
 
 // ------------------------------------------------------------ the pieces ---
 
+/// How long `fault-stall` stops returning for. Comfortably past the watchdog
+/// and past `/healthz`'s patience, and then over.
+pub const STALL_FOR: Duration = Duration::from_secs(30);
+
 /// Pieces that misbehave on purpose, for the containment tests.
 ///
 /// **Not in `screeny_art::pieces::ALL`** and not offered by `/api/v1/bootstrap`
 /// unless the studio was started with fault pieces enabled, which only a test
 /// and `SCREENY_STUDIO_FAULTS=1` do. They exist so that "a piece that panics is
 /// contained" can be a test rather than a claim.
-/// How long `fault-stall` stops returning for. Comfortably past the watchdog
-/// and past `/healthz`'s patience, and then over.
-pub const STALL_FOR: Duration = Duration::from_secs(30);
-
 pub static FAULT_PIECES: &[PieceDef] = &[
     PieceDef {
         id: "fault-panic",
@@ -223,7 +223,10 @@ struct CoreHandle {
     alive: AtomicBool,
     /// Milliseconds since the epoch, stamped before every frame.
     beat: AtomicU64,
-    ticks: AtomicU64,
+    /// Frames this player has rendered, **shared with the player**: a core
+    /// that is replaced must not reset the count, or a restart would look
+    /// like a render loop that had stopped.
+    ticks: Arc<AtomicU64>,
     fps: Mutex<f32>,
     playing: Mutex<Option<Playing>>,
 }
@@ -249,6 +252,8 @@ pub struct Player {
     stop: Arc<AtomicBool>,
     faults: bool,
     gen: AtomicU64,
+    /// Frames rendered, across every core this player has had.
+    ticks: Arc<AtomicU64>,
     /// Faults since the last good run: the brake on a restart loop.
     consecutive: AtomicU64,
 }
@@ -278,6 +283,7 @@ impl Player {
             stop: Arc::new(AtomicBool::new(false)),
             faults,
             gen: AtomicU64::new(0),
+            ticks: Arc::new(AtomicU64::new(0)),
             consecutive: AtomicU64::new(0),
         })
     }
@@ -528,7 +534,7 @@ impl Player {
             }
         };
         let mut health = self.health_mut().clone();
-        health.ticks = health.ticks.max(ticks);
+        health.ticks = ticks;
         health.last_tick_ago = {
             let core = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             core.as_ref().map(|h| (unix_millis().saturating_sub(h.beat.load(Ordering::Relaxed))) as f64 / 1000.0)
@@ -664,7 +670,7 @@ impl Player {
             stop: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             beat: AtomicU64::new(unix_millis()),
-            ticks: AtomicU64::new(self.health_mut().ticks),
+            ticks: Arc::clone(&self.ticks),
             fps: Mutex::new(0.0),
             playing: Mutex::new(None),
         });

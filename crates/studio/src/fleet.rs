@@ -195,6 +195,14 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
 
     for record in devices_now {
         let id = record.stored.id.clone();
+
+        // A resolution we have not been able to confirm for a long time is a
+        // guess about last hour's network. Throw it away and find out again.
+        let unheard = record.seen_unix.map_or(u64::MAX, |s| unix_now().saturating_sub(s));
+        if record.resolved.is_some() && unheard > st.cfg.stale_after.as_secs() {
+            st.devices.stale(&id);
+            continue;
+        }
         if let Some((_, left)) = backoff.get_mut(&id) {
             if *left > 0 {
                 *left -= 1;

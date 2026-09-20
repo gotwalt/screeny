@@ -309,6 +309,43 @@ impl Registry {
         Ok(id)
     }
 
+    /// This device is somewhere else now.
+    ///
+    /// The one case a typed address cannot handle by itself: an address is a
+    /// way of reaching a panel, not a name for it, so when the panel moves
+    /// somebody has to say where to. The device keeps its id, and therefore
+    /// its player and everything it was playing; only the way there changes.
+    /// Clearing the resolution makes the next poll ask the new address who it
+    /// is, which is also how a wrong address is caught.
+    pub fn set_address(&self, id: &str, to: &str) -> bool {
+        let to = to.trim();
+        match self.lock().get_mut(id) {
+            Some(d) => {
+                d.stored.address = to.to_string();
+                if parse_addr(to).is_none() {
+                    d.stored.instance = to.to_string();
+                }
+                d.resolved = None;
+                d.last_error = None;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A device we have not heard from in a long time: throw away where we
+    /// thought it was and find out again.
+    ///
+    /// An address from an hour ago is worse than no address at all. For a
+    /// device known by name this is what sends the next browse looking; for
+    /// one known by address it costs a `GET_INFO` and catches the case where
+    /// something else has taken that address.
+    pub fn stale(&self, id: &str) {
+        if let Some(d) = self.lock().get_mut(id) {
+            d.resolved = None;
+        }
+    }
+
     /// Forget a device entirely. The caller stops its player.
     pub fn forget(&self, id: &str) -> bool {
         self.lock().remove(id).is_some()

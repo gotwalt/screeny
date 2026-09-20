@@ -277,9 +277,21 @@ struct AddDevice {
     /// Start playing on it straight away. The dashboard's "add and play".
     #[serde(default)]
     play: bool,
+    /// A device id: this panel has *moved*, rather than being a new one.
+    /// It keeps its id, its player and everything it was playing; only the
+    /// way there changes.
+    #[serde(default)]
+    device: String,
 }
 
 async fn devices_add(State(st): State<AppState>, Json(req): Json<AddDevice>) -> ApiResult<Json<serde_json::Value>> {
+    if !req.device.is_empty() {
+        if !st.devices.set_address(&req.device, &req.to) {
+            return Err(ApiError::not_found(format!("no device `{}`", req.device)));
+        }
+        st.persist();
+        return Ok(Json(serde_json::json!({ "id": req.device, "moved": req.to.trim() })));
+    }
     let id = st.devices.add_manual(&req.to, &req.name).map_err(ApiError::bad_request)?;
     if req.play {
         st.players.ensure(&id, st.cfg.fault_pieces, crate::state::StoredPlayer::default);
