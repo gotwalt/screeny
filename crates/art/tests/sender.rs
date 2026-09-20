@@ -11,17 +11,17 @@
 //! implementation of the protocol. It owes `screeny-encode` nothing, which is
 //! the only reason an exactness claim checked here is worth anything.
 //!
-//! **No test in this file may touch the bench device.** Loopback, a fixed
-//! local port pair, mDNS off, and every wait has a deadline.
+//! **No test in this file may touch the bench device.** Loopback, ephemeral
+//! ports, mDNS off, and every wait has a deadline.
 
 #![cfg(feature = "sender")]
 
 use std::sync::mpsc::{channel, Receiver, Sender as Tx};
 use std::time::{Duration, Instant};
 
-use screeny::{Cadence, LinkConfig, Sent};
+use screeny::{Cadence, Device, LinkConfig, Sent};
 use screeny_art::frame::WireFrame;
-use screeny_art::output::{target_for, Output, SenderOutput};
+use screeny_art::output::{Output, SenderOutput};
 use screeny_art::piece::{self, local_now, Ctx, Params};
 use screeny_art::{Measured, Pipeline, Settings};
 use screeny_sim::{Config, SimDevice};
@@ -44,28 +44,30 @@ struct Shown {
     decoded: Vec<u8>,
 }
 
-/// Start a simulator on loopback with **consecutive** ports, mDNS off.
+/// Start a simulator on loopback with **ephemeral** ports, mDNS off, and
+/// return a `Device` pointing at both of them.
 ///
-/// Consecutive on purpose: `Target { addr: .. }` resolves through
-/// `Device::from_addr`, which takes the control port to be frame + 1. That is
-/// true of the spec's defaults and never true of an ephemeral pair, so a test
-/// that wants to reach a simulator by address has to choose the pair itself.
-/// (Noted as API feedback on the card.)
-fn start_sim() -> (SimDevice, u16, Receiver<Shown>) {
+/// No port is chosen, guessed or incremented here. `Config::for_test` binds
+/// port 0 for each socket and the kernel answers, so nothing in this file can
+/// collide with another test process or reach the bench device's 49374/49375
+/// even in principle. Card 111 is what makes that possible: `SenderOutput::
+/// attach` hands the link a device it has already resolved, control port and
+/// all, instead of `Device::from_addr`'s frame + 1 guess.
+fn start_sim() -> (SimDevice, Device, Receiver<Shown>) {
     let (tx, rx): (Tx<Shown>, Receiver<Shown>) = channel();
-    // Well above the spec's 49374/49375 so a stray packet cannot reach the
-    // bench device's ports even in principle.
-    for port in 50_600u16..50_680 {
-        let cfg = Config { frame_port: port, control_port: port + 1, ..Config::for_test() };
-        let tx = tx.clone();
-        let sink = Box::new(move |f: &screeny_proto::Rgb888Frame, m: &screeny_sim::FrameMeta| {
-            let _ = tx.send(Shown { seq: m.seq, codec: m.codec, bytes: m.bytes, decoded: f.to_vec() });
-        });
-        if let Ok(dev) = SimDevice::start_with(cfg, Some(sink)) {
-            return (dev, port, rx);
-        }
-    }
-    panic!("no free consecutive port pair in 50600..50680");
+    let sink = Box::new(move |f: &screeny_proto::Rgb888Frame, m: &screeny_sim::FrameMeta| {
+        let _ = tx.send(Shown { seq: m.seq, codec: m.codec, bytes: m.bytes, decoded: f.to_vec() });
+    });
+    let dev = SimDevice::start_with(Config::for_test(), Some(sink)).expect("the simulator starts");
+    let device = Device {
+        instance: "screeny-sim".into(),
+        host: None,
+        frame: dev.frame_addr(),
+        control: dev.control_addr(),
+        addresses: vec![dev.frame_addr().ip()],
+        info: None,
+    };
+    (dev, device, rx)
 }
 
 /// Render `frames` frames of `id` through the pipeline and send every one of
@@ -78,7 +80,7 @@ fn start_sim() -> (SimDevice, u16, Receiver<Shown>) {
 /// same frames. One in, one out is what makes "the preview is what the panel
 /// shows" a checkable statement rather than a usually-true one.
 fn run(id: &str) -> (Vec<WireFrame>, Vec<Vec<u8>>, Vec<Measured>, Vec<Sent>, Vec<Shown>) {
-    let (_dev, port, rx) = start_sim();
+    let (_dev, device, rx) = start_sim();
     let def = piece::find(id).unwrap_or_else(|| panic!("no piece called `{id}`"));
     let params = Params::defaults(def.params);
     let mut piece = (def.make)(7);
@@ -90,8 +92,8 @@ fn run(id: &str) -> (Vec<WireFrame>, Vec<Vec<u8>>, Vec<Measured>, Vec<Sent>, Vec
     let mut pipeline = Pipeline::new(settings);
 
     let cfg = LinkConfig { cadence: Cadence::Free, ..LinkConfig::default() };
-    let mut out = SenderOutput::open_with(target_for(&format!("127.0.0.1:{port}")), cfg)
-        .expect("the simulator is on loopback and answers");
+    let mut out =
+        SenderOutput::attach(device, cfg).expect("the simulator is on loopback and answers");
 
     // Measure against the device that is actually connected, exactly as
     // `screeny-art play` does.

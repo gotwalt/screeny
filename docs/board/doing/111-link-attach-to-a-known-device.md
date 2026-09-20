@@ -130,3 +130,23 @@ guessed or incremented anywhere in the three new tests.
 `crates/screeny/README.md`: "Embedding" gained the paragraph (what `attach` is for,
 and the "pinned sockets, no browse, no DHCP lease" sentence), and both API blocks and
 the `tests/embed.rs` row of the testing table list the new calls.
+
+### 2026-09-19 - the art test drops its port walk
+
+`crates/art/tests/sender.rs` used to loop `50600..50680` looking for a free
+*consecutive* pair, because `SenderOutput` could only be given a `Target`. It now
+starts one simulator on `Config::for_test()` (both ports ephemeral), builds the
+`Device` that describes it, and hands that to a new
+`SenderOutput::attach(Device, LinkConfig)` - three lines of fixture instead of a
+retry loop, and no port chosen, guessed or incremented in the file at all. The
+`start_sim` doc comment that used to explain the frame + 1 guess now explains why
+there is nothing to explain.
+
+`SenderOutput::attach` is the one addition to `crates/art/src/output/sender.rs`: the
+same one-line wrapper `open_with` is, over `Link::attach` instead of `Link::open`,
+with the pinned-reconnect caveat repeated in its doc comment. `target_for` and
+`SenderOutput::open_with` are untouched and still used by `screeny-art play` and by
+the studio (card 105), so nothing existing moved.
+
+`cargo test --release -p screeny-art --features sender --test sender`: 3 passed,
+0 failed, 2.06 s.
