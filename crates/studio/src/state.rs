@@ -30,9 +30,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The schema this build writes and is willing to read.
 ///
-/// v2 (card 165) adds the per-piece settings memory to the preview and to
-/// every player. v1 files are migrated: what a context was playing at the time
-/// becomes that piece's first memory, so nobody loses what they have today.
+/// v2 (card 165) adds `pieces`: one settings memory for the whole studio,
+/// keyed by piece id. v1 files are migrated - what each context was playing at
+/// the time is merged into it, so nobody loses what they have today.
 pub const SCHEMA_VERSION: u32 = 2;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
@@ -68,6 +68,10 @@ pub struct Persisted {
     pub players: Vec<StoredPlayer>,
     /// The design view's own player, which is not tied to a device.
     pub preview: StoredPreview,
+    /// What every piece was last left set to, anywhere in the studio
+    /// (card 165). One map for the whole studio, keyed by piece id.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub pieces: Memory,
 }
 
 impl Default for Persisted {
@@ -77,6 +81,7 @@ impl Default for Persisted {
             devices: Vec::new(),
             players: Vec::new(),
             preview: StoredPreview::default(),
+            pieces: Memory::new(),
         }
     }
 }
@@ -122,9 +127,6 @@ pub struct StoredPlayer {
     /// or `None` to leave whatever the device has. Never raised above the cap
     /// the device reports back.
     pub brightness: Option<u8>,
-    /// This panel's own per-piece settings memory (card 165). Schema v2.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub memory: Memory,
 }
 
 impl Default for StoredPlayer {
@@ -138,7 +140,6 @@ impl Default for StoredPlayer {
             fps: 60.0,
             settings: Settings::default(),
             brightness: None,
-            memory: Memory::new(),
         }
     }
 }
@@ -161,9 +162,6 @@ pub struct StoredPreview {
     pub panel_on: bool,
     /// A device id, a name or an address. Empty means "the first panel found".
     pub panel_to: String,
-    /// The design view's own per-piece settings memory (card 165). Schema v2.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub memory: Memory,
 }
 
 impl Default for StoredPreview {
@@ -178,14 +176,13 @@ impl Default for StoredPreview {
             fps: 60.0,
             panel_on: false,
             panel_to: String::new(),
-            memory: Memory::new(),
         }
     }
 }
 
 // ----------------------------------------------- the per-piece memory (165) ---
 
-/// What one context remembers about one piece.
+/// What the studio remembers about one piece.
 ///
 /// Only what *differs* from the piece's defaults is kept, so a piece whose
 /// defaults improve in a later release improves for everybody who never
@@ -210,12 +207,70 @@ impl PieceMemory {
     }
 }
 
-/// One context's memory: piece id -> what it was left set to.
+/// The settings memory: piece id -> what that piece was left set to.
 ///
-/// There is one of these for the design view and one for each device player,
-/// because "what panel X plays" and "what I am fiddling with" are different
-/// things (card 106 made that split explicit).
+/// **One of these for the whole studio**, shared by the design view and by
+/// every panel's player. Tuning a piece anywhere updates it; switching to a
+/// piece anywhere restores from it. (The card asked for one per context; the
+/// orchestrator reversed that on 2026-09-19 after the owner explained that the
+/// browser is meant to be a window onto what the panel is doing, and that the
+/// preview/player split is being unified in card 170. A per-context memory
+/// would have been built for a distinction that is about to go away.)
 pub type Memory = BTreeMap<String, PieceMemory>;
+
+/// The one memory, as the engine and every player hold it.
+///
+/// A handle rather than a field: there is exactly one map, and everything that
+/// tunes a piece writes to it. The lock is only ever taken *inside* one of
+/// these methods, and never while another of the studio's locks is being
+/// taken, so it cannot be half of a deadlock.
+#[derive(Clone, Default)]
+pub struct SharedMemory(Arc<Mutex<Memory>>);
+
+impl SharedMemory {
+    #[must_use]
+    pub fn new(memory: Memory) -> SharedMemory {
+        SharedMemory(Arc::new(Mutex::new(memory)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Memory> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What to write to the state file.
+    #[must_use]
+    pub fn snapshot(&self) -> Memory {
+        self.lock().clone()
+    }
+
+    /// See [`remember`].
+    pub fn remember(&self, def: &PieceDef, params: &BTreeMap<String, f32>, seed: u32) {
+        remember(&mut self.lock(), def, params, seed);
+    }
+
+    /// See [`recall`].
+    #[must_use]
+    pub fn recall(&self, def: &PieceDef, who: &str) -> (BTreeMap<String, f32>, Option<u32>) {
+        recall(&mut self.lock(), def, who)
+    }
+
+    /// See [`forget_params`].
+    pub fn forget_params(&self, piece: &str) {
+        forget_params(&mut self.lock(), piece);
+    }
+
+    /// Whether anything is remembered for this piece at all.
+    #[must_use]
+    pub fn knows(&self, piece: &str) -> bool {
+        self.lock().contains_key(piece)
+    }
+}
+
+impl std::fmt::Debug for SharedMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SharedMemory({} pieces)", self.lock().len())
+    }
+}
 
 /// Write down what `def` is set to now.
 ///
@@ -313,7 +368,7 @@ pub fn usable_params(remembered: &BTreeMap<String, f32>, specs: &[ParamSpec]) ->
     (usable, repaired)
 }
 
-/// Read a `memory` object out of a file as forgivingly as the card asks.
+/// Read the `pieces` object out of a file as forgivingly as the card asks.
 ///
 /// This runs on `serde_json::Value` rather than through serde's `f32`
 /// deliberately: `BTreeMap<String, f32>` refuses a `null`, a string or an
@@ -472,7 +527,10 @@ fn load(path: &Path) -> Loaded {
     }
 
     let mut repaired = Vec::new();
-    let memories = lift_memories(&mut raw, &mut repaired);
+    let pieces = clean_memory(raw.get("pieces"), &mut repaired);
+    if let Some(o) = raw.as_object_mut() {
+        o.remove("pieces");
+    }
 
     let mut state: Persisted = match serde_json::from_value(raw) {
         Ok(p) => p,
@@ -480,7 +538,7 @@ fn load(path: &Path) -> Loaded {
     };
     let was = state.version;
     state.version = SCHEMA_VERSION;
-    put_memories_back(&mut state, memories);
+    state.pieces = pieces;
     if was < 2 {
         migrate_v1_to_v2(&mut state);
     }
@@ -490,55 +548,25 @@ fn load(path: &Path) -> Loaded {
     Loaded { state, recovered, repaired }
 }
 
-/// Take every `memory` object out of the raw JSON and clean it.
+/// v1 -> v2: what the studio was playing becomes the memory it starts from.
 ///
-/// `None` for the preview, then one per player in the order they appear, which
-/// is the order [`put_memories_back`] hands them out again.
-fn lift_memories(raw: &mut serde_json::Value, repaired: &mut Vec<String>) -> (Memory, Vec<Memory>) {
-    let preview = raw.get_mut("preview").map(|p| {
-        let m = clean_memory(p.get("memory"), repaired);
-        if let Some(o) = p.as_object_mut() {
-            o.remove("memory");
-        }
-        m
-    });
-    let players = raw.get_mut("players").and_then(serde_json::Value::as_array_mut).map(|list| {
-        list.iter_mut()
-            .map(|p| {
-                let m = clean_memory(p.get("memory"), repaired);
-                if let Some(o) = p.as_object_mut() {
-                    o.remove("memory");
-                }
-                m
-            })
-            .collect()
-    });
-    (preview.unwrap_or_default(), players.unwrap_or_default())
-}
-
-fn put_memories_back(state: &mut Persisted, (preview, players): (Memory, Vec<Memory>)) {
-    state.preview.memory = preview;
-    for (player, memory) in state.players.iter_mut().zip(players) {
-        player.memory = memory;
-    }
-}
-
-/// v1 -> v2: what each context was playing becomes that piece's first memory.
-///
-/// v1 kept one `params` map per context, for the *current* piece only. That is
-/// exactly one entry's worth of memory, so nobody loses the tuning they have
-/// today - and because [`remember`] drops anything equal to the piece's
+/// v1 kept one `params` map per context, for that context's *current* piece
+/// only. Those are merged into the one map, so nobody loses the tuning they
+/// have today. **When the design view and a panel were on the same piece with
+/// different values, the panel's win**: the panel is what was actually being
+/// looked at. And because [`remember`] drops anything equal to the piece's
 /// default, a v1 file's full parameter dump comes out of the migration as just
 /// the values that were actually moved.
 fn migrate_v1_to_v2(state: &mut Persisted) {
-    for player in &mut state.players {
-        if let Some(def) = screeny_art::piece::find(&player.piece) {
-            remember(&mut player.memory, def, &player.params, player.seed);
-        }
-    }
-    let preview = &mut state.preview;
+    let preview = &state.preview;
     if let Some(def) = screeny_art::piece::find(&preview.piece) {
-        remember(&mut preview.memory, def, &preview.params, preview.seed);
+        remember(&mut state.pieces, def, &preview.params, preview.seed);
+    }
+    // Second, so a panel overwrites the design view on a shared piece.
+    for player in &state.players {
+        if let Some(def) = screeny_art::piece::find(&player.piece) {
+            remember(&mut state.pieces, def, &player.params, player.seed);
+        }
     }
 }
 
@@ -1035,18 +1063,15 @@ mod tests {
         let dir = Temp::new("memory-roundtrip");
         let (store, _) = Store::open(Some(&dir.0));
         let mut want = Persisted::default();
-        want.preview.memory.insert("plasma".into(), PieceMemory { seed: Some(3), params: BTreeMap::from([("scale".into(), 2.5)]) });
-        want.players.push(StoredPlayer {
-            device: "abc".into(),
-            memory: Memory::from([("metaballs".to_string(), PieceMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]) })]),
-            ..StoredPlayer::default()
-        });
+        want.pieces.insert("plasma".into(), PieceMemory { seed: Some(3), params: BTreeMap::from([("scale".into(), 2.5)]) });
+        want.pieces.insert("metaballs".into(), PieceMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]) });
+        want.players.push(StoredPlayer { device: "abc".into(), ..StoredPlayer::default() });
         store.save(want.clone());
         store.flush();
         store.stop();
 
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
-        assert!(text.contains("\"memory\""), "the memory is in the state file, not somewhere else:\n{text}");
+        assert!(text.contains("\"pieces\""), "the memory is in the state file, not somewhere else:\n{text}");
         let (_s2, back) = Store::open(Some(&dir.0));
         assert_eq!(back, want);
         assert_eq!(back.version, SCHEMA_VERSION);
@@ -1109,18 +1134,37 @@ mod tests {
         assert_eq!(loaded.preview.panel_to, "screeny-4a00a4");
         assert!(loaded.preview.panel_on);
 
-        // And what each context was playing is now its first memory - only the
-        // values that were actually moved, not the whole v1 parameter dump.
-        let player = &loaded.players[0].memory;
-        assert_eq!(player["plasma"].seed, Some(4242));
-        assert_eq!(player["plasma"].params, BTreeMap::from([("scale".to_string(), 2.5)]), "only `scale` was off its default");
-        let preview = &loaded.preview.memory;
-        assert_eq!(preview["metaballs"].seed, Some(7));
-        assert_eq!(preview["metaballs"].params, BTreeMap::from([("count".to_string(), 7.0)]));
+        // And what each context was playing is merged into the one memory -
+        // only the values that were actually moved, not the whole v1 dump.
+        let m = &loaded.pieces;
+        assert_eq!(m["plasma"].seed, Some(4242), "what the panel was playing");
+        assert_eq!(m["plasma"].params, BTreeMap::from([("scale".to_string(), 2.5)]), "only `scale` was off its default");
+        assert_eq!(m["metaballs"].seed, Some(7), "and what the design view was showing");
+        assert_eq!(m["metaballs"].params, BTreeMap::from([("count".to_string(), 7.0)]));
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v1")), "the migration says so once");
         assert!(store.health().repaired.is_empty(), "a good v1 file needs no repairs");
         assert!(!dir.0.join(BAD_FILE).exists(), "a v1 file is migrated, not condemned");
+    }
+
+    /// The one rule the merge needs: when a v1 file's design view and a panel
+    /// were on the *same* piece with different values, the panel's win. The
+    /// panel is what was actually being looked at.
+    #[test]
+    fn a_v1_merge_prefers_what_the_panel_was_playing() {
+        let dir = Temp::new("v1-conflict");
+        std::fs::write(
+            dir.0.join(FILE),
+            r#"{
+              "version": 1,
+              "players": [ { "device": "4a00a4", "piece": "plasma", "seed": 2, "params": { "scale": 3.0 } } ],
+              "preview":   { "piece": "plasma", "seed": 1, "params": { "scale": 2.0 } }
+            }"#,
+        )
+        .expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.pieces["plasma"].params["scale"], 3.0, "the panel's value");
+        assert_eq!(loaded.pieces["plasma"].seed, Some(2), "and the panel's seed");
     }
 
     /// A hand-edited file full of rubbish in the memory. Every one of these is
@@ -1132,15 +1176,13 @@ mod tests {
         let file = format!(
             r#"{{
   "version": {SCHEMA_VERSION},
-  "preview": {{
-    "piece": "plasma",
-    "memory": {{
-      "plasma":   {{ "seed": 11, "params": {{ "scale": 2.5, "drift": null, "cycle": "fast", "bands": {{}}, "colours": [] }} }},
-      "metaballs": {{ "seed": "not a seed", "params": {{ "count": 8.0 }} }},
-      "no-such-piece": {{ "seed": 4, "params": {{ "whatever": 1.0 }} }},
-      "testcard": "not an object at all",
-      "clocks-dials": {{ "params": "not an object either" }}
-    }}
+  "preview": {{ "piece": "plasma" }},
+  "pieces": {{
+    "plasma":    {{ "seed": 11, "params": {{ "scale": 2.5, "drift": null, "cycle": "fast", "bands": {{}}, "colours": [] }} }},
+    "metaballs": {{ "seed": "not a seed", "params": {{ "count": 8.0 }} }},
+    "no-such-piece": {{ "seed": 4, "params": {{ "whatever": 1.0 }} }},
+    "testcard": "not an object at all",
+    "clocks-dials": {{ "params": "not an object either" }}
   }}
 }}"#
         );
@@ -1148,7 +1190,7 @@ mod tests {
         let (store, loaded) = Store::open(Some(&dir.0));
 
         assert!(!dir.0.join(BAD_FILE).exists(), "a bad value must never condemn the file");
-        let m = &loaded.preview.memory;
+        let m = &loaded.pieces;
         assert_eq!(m["plasma"].seed, Some(11));
         assert_eq!(m["plasma"].params, BTreeMap::from([("scale".to_string(), 2.5)]), "one good value, four bad ones dropped");
         assert_eq!(m["metaballs"].seed, None, "a seed that is not a seed is forgotten");
@@ -1169,12 +1211,12 @@ mod tests {
         let entries: Vec<String> =
             (0..MAX_UNKNOWN_PIECES + 20).map(|i| format!(r#""ghost-{i:03}": {{"seed": {i}}}"#)).collect();
         let file = format!(
-            r#"{{"version":{SCHEMA_VERSION},"preview":{{"piece":"plasma","memory":{{{},"plasma":{{"seed":1}}}}}}}}"#,
+            r#"{{"version":{SCHEMA_VERSION},"preview":{{"piece":"plasma"}},"pieces":{{{},"plasma":{{"seed":1}}}}}}"#,
             entries.join(",")
         );
         std::fs::write(dir.0.join(FILE), &file).expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
-        let m = &loaded.preview.memory;
+        let m = &loaded.pieces;
         assert_eq!(m.len(), MAX_UNKNOWN_PIECES + 1, "the known piece plus the cap: {}", m.len());
         assert!(m.contains_key("plasma"), "a known piece is never dropped to make room");
     }

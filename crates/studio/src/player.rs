@@ -35,21 +35,21 @@ use std::time::{Duration, Instant};
 use crate::devices::Reach;
 use crate::state::{unix_now, StoredPlayer};
 
-/// Write down what this player's current piece is set to, if it is a piece
-/// this build has. An unknown piece has no specs to compare against, so its
+/// Write down what this player's current piece is set to, in the studio's one
+/// settings memory. An unknown piece has no specs to compare against, so its
 /// entry is left exactly as the file had it (card 165: "unknown piece id ->
 /// entry ignored, kept in the file").
-fn remember_current(cfg: &mut StoredPlayer, faults: bool) {
+fn remember_current(cfg: &StoredPlayer, memory: &crate::state::SharedMemory, faults: bool) {
     if let Some(def) = find_piece(&cfg.piece, faults) {
-        let (params, seed) = (cfg.params.clone(), cfg.seed);
-        crate::state::remember(&mut cfg.memory, def, &params, seed);
+        memory.remember(def, &cfg.params, cfg.seed);
     }
 }
 
-/// Put `cfg` on `def`, restoring whatever this player last left it set to.
-fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, device: &str) {
+/// Put `cfg` on `def`, restoring whatever that piece was last left set to -
+/// here, on another panel, or in the design view. One memory, one answer.
+fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, memory: &crate::state::SharedMemory, device: &str) {
     cfg.piece = def.id.to_string();
-    let (params, seed) = crate::state::recall(&mut cfg.memory, def, &format!("panel {device}"));
+    let (params, seed) = memory.recall(def, &format!("panel {device}"));
     cfg.params = params;
     if let Some(seed) = seed {
         cfg.seed = seed;
@@ -275,6 +275,9 @@ pub struct Player {
     gen: AtomicU64,
     /// Frames rendered, across every core this player has had.
     ticks: Arc<AtomicU64>,
+    /// The studio's one settings memory (card 165), shared with the design
+    /// view and with every other panel.
+    memory: crate::state::SharedMemory,
     /// Faults since the last good run: the brake on a restart loop.
     consecutive: AtomicU64,
 }
@@ -294,9 +297,10 @@ struct LinkSlot {
 
 impl Player {
     #[must_use]
-    pub fn new(cfg: StoredPlayer, faults: bool) -> Arc<Player> {
+    pub fn new(cfg: StoredPlayer, faults: bool, memory: crate::state::SharedMemory) -> Arc<Player> {
         Arc::new(Player {
             device: cfg.device.clone(),
+            memory,
             cfg: Mutex::new(cfg),
             link: Mutex::new(LinkSlot::default()),
             core: Mutex::new(None),
@@ -342,10 +346,11 @@ impl Player {
             if let Some(id) = &change.piece {
                 let def = find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
                 if cfg.piece != def.id {
-                    // Leave the old piece where it was left, and arrive at the
-                    // new one where *it* was left (card 165).
-                    remember_current(&mut cfg, self.faults);
-                    recall_into(&mut cfg, def, &self.device);
+                    // Arrive at the new piece set up the way it was left, by
+                    // whoever last touched it (card 165). Nothing to write down
+                    // on the way out: every change went into the memory when it
+                    // was made.
+                    recall_into(&mut cfg, def, &self.memory, &self.device);
                     restart = true;
                 }
                 // Asking for a piece again clears its refusal: a human saying
@@ -358,7 +363,7 @@ impl Player {
             }
             if let Some(seed) = change.seed {
                 cfg.seed = seed;
-                remember_current(&mut cfg, self.faults);
+                remember_current(&cfg, &self.memory, self.faults);
                 restart = true;
             }
             if let Some((id, value)) = &change.param {
@@ -367,7 +372,7 @@ impl Player {
                     return Err(format!("{} has no parameter `{id}`", cfg.piece));
                 };
                 cfg.params.insert(id.clone(), spec.sanitise(*value));
-                remember_current(&mut cfg, self.faults);
+                remember_current(&cfg, &self.memory, self.faults);
                 restart = true;
             }
             // "Back to the defaults, and stay there": the remembered
@@ -375,8 +380,7 @@ impl Player {
             // old values straight over again.
             if change.reset_params {
                 cfg.params.clear();
-                let piece = cfg.piece.clone();
-                crate::state::forget_params(&mut cfg.memory, &piece);
+                self.memory.forget_params(&cfg.piece);
                 restart = true;
             }
             if let Some(fps) = change.fps {
@@ -400,18 +404,14 @@ impl Player {
             if change.replace.is_some() {
                 let r = change.replace.clone().expect("checked");
                 let def = find_piece(&r.piece, self.faults).ok_or_else(|| format!("no piece called `{}`", r.piece))?;
-                // Leaving the piece it was on: write that one down too, so
-                // "play my preview" does not cost this panel what it had.
-                remember_current(&mut cfg, self.faults);
                 cfg.piece = def.id.to_string();
                 cfg.seed = r.seed;
                 cfg.params = r.params;
                 cfg.settings = r.settings;
                 cfg.fps = r.fps.clamp(MIN_FPS, MAX_FPS);
-                // The card: promoting the preview copies its values into this
-                // player's memory *for that piece*, so they are what the panel
-                // comes back to next time it is asked for this piece.
-                remember_current(&mut cfg, self.faults);
+                // No copy step: the design view and this panel share one
+                // memory, so what was being previewed is already what this
+                // piece is remembered as.
                 restart = true;
                 let mut h = self.health_mut();
                 h.refused.clear();
@@ -660,10 +660,10 @@ impl Player {
             h.refused.push(piece.to_string());
         }
         h.fell_back_from = Some(piece.to_string());
-        // The fallback arrives set up the way it was last left here, like any
-        // other piece change. The failing piece's own memory is untouched: it
-        // is already current, and a fault is not a reason to forget it.
-        recall_into(&mut cfg, fallback, &self.device);
+        // The fallback arrives set up the way it was last left, like any other
+        // piece change. The failing piece's memory is untouched: a fault is not
+        // a reason to forget how somebody had it set.
+        recall_into(&mut cfg, fallback, &self.memory, &self.device);
     }
 
     fn start_core(self: &Arc<Self>) {
@@ -900,12 +900,21 @@ pub fn unix_millis() -> u64 {
 #[derive(Default)]
 pub struct Players {
     inner: Mutex<BTreeMap<String, Arc<Player>>>,
+    /// The studio's one settings memory, handed to every player made here.
+    memory: crate::state::SharedMemory,
 }
 
 impl Players {
     #[must_use]
-    pub fn new() -> Self {
-        Players::default()
+    pub fn new(memory: crate::state::SharedMemory) -> Self {
+        Players { inner: Mutex::new(BTreeMap::new()), memory }
+    }
+
+    /// The studio's one settings memory, as handed to every player here. The
+    /// design view's engine holds the same one.
+    #[must_use]
+    pub fn memory(&self) -> crate::state::SharedMemory {
+        self.memory.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Arc<Player>>> {
@@ -935,7 +944,7 @@ impl Players {
         }
         let mut cfg = default();
         cfg.device = device.to_string();
-        let p = Player::new(cfg, faults);
+        let p = Player::new(cfg, faults, self.memory.clone());
         all.insert(device.to_string(), Arc::clone(&p));
         p
     }
@@ -946,7 +955,8 @@ impl Players {
             return;
         }
         let device = cfg.device.clone();
-        self.lock().insert(device, Player::new(cfg, faults));
+        let memory = self.memory.clone();
+        self.lock().insert(device, Player::new(cfg, faults, memory));
     }
 
     /// A device's id changed when it told us its real one. The player follows
@@ -962,7 +972,8 @@ impl Players {
             old.shutdown();
             // If the destination already had a player, the one that was
             // actually configured wins.
-            all.insert(to.to_string(), Player::new(cfg, old.faults));
+            let memory = self.memory.clone();
+            all.insert(to.to_string(), Player::new(cfg, old.faults, memory));
         }
     }
 
@@ -1009,7 +1020,7 @@ mod tests {
 
     #[test]
     fn a_player_keeps_what_it_was_configured_with() {
-        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true);
+        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, mem());
         p.configure(&PlayerChange { piece: Some("plasma".into()), seed: Some(9), ..PlayerChange::default() })
             .expect("a real piece");
         let s = p.stored();
@@ -1026,7 +1037,7 @@ mod tests {
 
     #[test]
     fn an_fps_outside_the_range_is_clamped_not_refused() {
-        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, false);
+        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, false, mem());
         p.configure(&PlayerChange { fps: Some(1000.0), ..PlayerChange::default() }).expect("clamped");
         assert_eq!(p.stored().fps, MAX_FPS);
         p.configure(&PlayerChange { fps: Some(0.0), ..PlayerChange::default() }).expect("clamped");
@@ -1035,10 +1046,15 @@ mod tests {
 
     // ------------------------- the per-piece memory (card 165) -------------------------
 
+    /// A settings memory of this test's own.
+    fn mem() -> crate::state::SharedMemory {
+        crate::state::SharedMemory::default()
+    }
+
     /// A player that is configured but not running: no thread, no socket, and
     /// every change is pure arithmetic on what it would play.
     fn idle_player() -> Arc<Player> {
-        Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true)
+        Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, mem())
     }
 
     fn change(c: PlayerChange) -> PlayerChange {
@@ -1077,7 +1093,7 @@ mod tests {
         let p = idle_player();
         p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
-        p.configure(&change(PlayerChange { reset_params: true, ..PlayerChange::default() }));
+        p.configure(&change(PlayerChange { reset_params: true, ..PlayerChange::default() })).expect("reset");
         assert!(p.stored().params.is_empty());
 
         p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
@@ -1085,27 +1101,40 @@ mod tests {
         assert!(p.stored().params.is_empty(), "Reset means the old value does not come back on the next switch");
     }
 
-    /// Each panel has its own memory: what panel X plays and what somebody is
-    /// fiddling with in the design view are different things (card 106).
+    /// There is **one** memory, not one per panel. The orchestrator reversed
+    /// the card here on 2026-09-19: the browser is a window onto what the panel
+    /// is doing, so "how plasma is set" is one fact about the studio rather
+    /// than one fact per context. Tuning it on one panel tunes it everywhere.
     #[test]
-    fn two_panels_do_not_share_a_memory() {
-        let a = Player::new(StoredPlayer { device: "a".into(), on: false, ..StoredPlayer::default() }, false);
-        let b = Player::new(StoredPlayer { device: "b".into(), on: false, ..StoredPlayer::default() }, false);
-        for (p, v) in [(&a, 2.5f32), (&b, 0.5)] {
+    fn every_panel_shares_the_one_memory() {
+        let memory = mem();
+        let a = Player::new(StoredPlayer { device: "a".into(), on: false, ..StoredPlayer::default() }, false, memory.clone());
+        let b = Player::new(StoredPlayer { device: "b".into(), on: false, ..StoredPlayer::default() }, false, memory);
+        for p in [&a, &b] {
             p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
-            p.configure(&change(PlayerChange { param: Some(("scale".into(), v)), ..PlayerChange::default() })).expect("scale");
-            p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-            p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
         }
-        assert_eq!(a.stored().params["scale"], 2.5);
-        assert_eq!(b.stored().params["scale"], 0.5);
+        a.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
+
+        // b is already on plasma, so it does not move until it is asked for a
+        // piece again - but when it is, it gets what a set.
+        b.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+        b.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        assert_eq!(b.stored().params["scale"], 2.5, "one memory, one answer");
     }
 
-    /// "Play my preview on panel X" copies the preview's values into *that
-    /// panel's* memory for that piece, so the panel comes back to them later.
+    /// "Play my preview on panel X" needs no copy step now that there is one
+    /// memory: what was being previewed already *is* what this piece is
+    /// remembered as, so the panel comes back to it.
     #[test]
-    fn promoting_the_preview_writes_into_that_panels_memory() {
-        let p = idle_player();
+    fn promoting_the_preview_needs_no_copy() {
+        let memory = mem();
+        let p = Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true, memory.clone());
+
+        // Tuning the design view is what writes the memory; this is that,
+        // without an engine thread.
+        let plasma = find_piece("plasma", false).expect("plasma");
+        memory.remember(plasma, &BTreeMap::from([("scale".to_string(), 3.0)]), 77);
+
         p.configure(&change(PlayerChange {
             replace: Some(Adopt {
                 piece: "plasma".into(),
@@ -1131,9 +1160,9 @@ mod tests {
     /// `clocks-numerals` is the live version of the middle row.
     #[test]
     fn a_remembered_value_this_build_cannot_use_is_corrected() {
-        let mut cfg = StoredPlayer { device: "abc".into(), on: false, piece: "metaballs".into(), ..StoredPlayer::default() };
-        cfg.memory.insert(
-            "plasma".into(),
+        let cfg = StoredPlayer { device: "abc".into(), on: false, piece: "metaballs".into(), ..StoredPlayer::default() };
+        let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
+            "plasma".to_string(),
             crate::state::PieceMemory {
                 seed: Some(5),
                 params: BTreeMap::from([
@@ -1142,8 +1171,8 @@ mod tests {
                     ("drift".to_string(), 999.0), // out of the range this build allows
                 ]),
             },
-        );
-        let p = Player::new(cfg, false);
+        )]));
+        let p = Player::new(cfg, false, memory);
         p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         let s = p.stored();
         assert_eq!(s.seed, 5);
@@ -1156,16 +1185,19 @@ mod tests {
     /// away: a piece that comes back in a later release gets its settings back.
     #[test]
     fn a_memory_for_a_piece_that_is_not_here_is_kept() {
-        let mut cfg = StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() };
-        cfg.memory.insert("from-the-future".into(), crate::state::PieceMemory { seed: Some(3), params: BTreeMap::new() });
-        let p = Player::new(cfg, false);
+        let cfg = StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() };
+        let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
+            "from-the-future".to_string(),
+            crate::state::PieceMemory { seed: Some(3), params: BTreeMap::new() },
+        )]));
+        let p = Player::new(cfg, false, memory.clone());
         p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
-        assert!(p.stored().memory.contains_key("from-the-future"));
+        assert!(memory.knows("from-the-future"));
     }
 
     #[test]
     fn a_fleet_is_a_collection_and_a_rekey_carries_the_player_over() {
-        let players = Players::new();
+        let players = Players::new(mem());
         players.load(StoredPlayer { device: "pending:192.0.2.7".into(), piece: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() }, false);
         assert_eq!(players.ids(), vec!["pending:192.0.2.7".to_string()]);
         players.rekey("pending:192.0.2.7", "abc123");

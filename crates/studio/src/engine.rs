@@ -48,10 +48,10 @@ pub struct Engine {
     /// Whether the deliberately broken pieces are on the menu here too, so a
     /// human can watch the containment work in the design view.
     faults: bool,
-    /// What each piece was last left set to *here* (card 165). The design view
-    /// has one of these; every device player has its own, because what a panel
-    /// plays and what somebody is fiddling with are different things.
-    memory: crate::state::Memory,
+    /// What each piece was last left set to (card 165). **The whole studio
+    /// shares one of these** - tuning a piece here is tuning it on the panel
+    /// too - because the browser is a window onto what the panel is doing.
+    memory: crate::state::SharedMemory,
 }
 
 impl Engine {
@@ -79,7 +79,7 @@ impl Engine {
             panel_to: String::new(),
             limits_at: Instant::now(),
             faults: false,
-            memory: crate::state::Memory::new(),
+            memory: crate::state::SharedMemory::default(),
         }
     }
 
@@ -173,15 +173,9 @@ impl Engine {
 
     // ---- the per-piece settings memory (card 165) ----
 
-    /// What this context remembers, for the state file.
-    #[must_use]
-    pub fn memory(&self) -> &crate::state::Memory {
-        &self.memory
-    }
-
-    /// Adopt a memory read back out of the state file. Done before the saved
+    /// Use the studio's one settings memory. Handed over before the saved
     /// piece is restored, so restoring it is an ordinary switch.
-    pub fn load_memory(&mut self, memory: crate::state::Memory) {
+    pub fn use_memory(&mut self, memory: crate::state::SharedMemory) {
         self.memory = memory;
     }
 
@@ -190,7 +184,7 @@ impl Engine {
     fn remember(&mut self) {
         let values: std::collections::BTreeMap<String, f32> =
             self.params.iter().map(|(k, v)| (k.to_string(), v)).collect();
-        crate::state::remember(&mut self.memory, self.def, &values, self.seed);
+        self.memory.remember(self.def, &values, self.seed);
     }
 
     // ---- what the API does to the engine. One method per command. ----
@@ -206,10 +200,10 @@ impl Engine {
     /// If no piece has that id.
     pub fn set_piece(&mut self, id: &str) -> Result<(), String> {
         let def = crate::player::find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
-        // Leaving a piece is the moment to write down where it was left.
-        self.remember();
+        // Nothing to write down on the way out: every change to a piece went
+        // into the memory when it was made, here or on a panel.
         self.def = def;
-        let (remembered, seed) = crate::state::recall(&mut self.memory, def, "the design view");
+        let (remembered, seed) = self.memory.recall(def, "the design view");
         self.params = Params::defaults(def.params);
         for (id, v) in &remembered {
             self.params.set(def.params, id, *v);
@@ -241,7 +235,7 @@ impl Engine {
     /// hand the old values straight back.
     pub fn reset_params(&mut self) {
         self.params = Params::defaults(self.def.params);
-        crate::state::forget_params(&mut self.memory, self.def.id);
+        self.memory.forget_params(self.def.id);
     }
 
     /// `seed: None` picks a new one.
