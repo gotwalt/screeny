@@ -303,6 +303,8 @@ async function start() {
       return root;
     }));
     $('#reset-params').hidden = piece.params.length === 0;
+    // Empty until the controls below are bound, which is the first call.
+    for (const control of refreshers) control.refresh();
   }
   adopt(state);
 

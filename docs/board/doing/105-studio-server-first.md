@@ -270,3 +270,67 @@ close. The test client saw `ECONNRESET` once in about ten runs; a browser would 
 seen a failed `fetch` just as rarely. Both handlers now read and discard the body.
 Three consecutive full runs of the studio's 15 tests after the fix: green, green,
 green.
+
+### Step 5 - how far the front end was actually checked, and two cards
+
+The Claude browser extension was **not connected** in this worker's environment, so
+the page was never rendered. What was checked instead:
+
+- `node --check main.js` (a one-off syntax check from the shell - the crate still has
+  no Node toolchain and no build step);
+- every `#id` `main.js` reaches for exists in `index.html`: **none missing**. Every
+  command it calls is a route the server has: **none missing**. Three routes are no
+  longer called by the UI - `frame`, `piece_playing`, `panel_status` - which is
+  intentional: frames and status come over the socket now, and the routes stay for
+  parity, for tests, and for anything that would rather poll;
+- the server's tests pin every message shape the page consumes.
+
+That covers wiring, not rendering. `docs/board/backlog/121-studio-front-end-check.md`
+is the card for closing it; the orchestrator opening the tab for the panel run is the
+immediate answer.
+
+One fix came out of the review pass: `adopt()` now refreshes the bound controls as
+well as rebuilding the parameter sliders, so a piece change made in *another* browser
+updates this one's playback and panel-model controls too, not only its sliders.
+
+**Cards written, not done (reserved range 120-124):**
+
+- **120 - Preview bandwidth.** Every socket gets every frame: 6196 B at 60 fps =
+  372 KB/s per open tab, visible or not. Safe (one slot, newest wins) but wasteful,
+  and it will be the studio's idle cost in `docker stats` once card 107 lands. Also
+  notes the slider-drag broadcast rate.
+- **121 - Something that checks the front end.** Above. Written with the "no Node
+  toolchain" rule stated as the constraint it is, because the obvious answers all
+  break it.
+
+**Handover notes for card 106**, which owns players, devices and state - all
+deliberately left alone here:
+
+- Whether the panel is on, and what address it is pointed at, are **not** in
+  `StudioState`. The switch's state reaches other browsers only through the
+  half-second heartbeat, and the address lives in each browser's `localStorage`. That
+  is exactly the state that belongs in 106's store; when it moves, `set_panel` should
+  publish like the other changes do and the address box should stop being a local
+  secret.
+- `AppState` is already the shape a registry wants: `Arc<Mutex<Engine>>` plus three
+  channels. A player per device is another engine and another frame cell; the WS
+  handler would then need to say *which* player a socket is watching (a query
+  parameter, next to `?client=`).
+- `Studio::bind` / `serve` / `spawn` and the `Running` guard are the lifecycle hooks:
+  `stop_on_signal()` already does the SIGTERM half of "restart the container and it
+  resumes", and `close_panel()` is where `FINAL` goes out.
+- `StateEvent.rev` is a monotonic counter. It is enough to notice a missed change but
+  not to resolve one; if 106 needs stronger ordering it should replace it rather than
+  lean on it. One known edge: two changes from two browsers inside one socket's poll
+  are coalesced by the broadcast only on lag, but the `from` filter means the browser
+  that made the *newer* one will not be told about the older one it missed. Harmless
+  for a design tool, wrong for anything that must converge.
+- The engine holds a `std::sync::Mutex` across a render (several milliseconds), and
+  every request takes it. Fine for one engine and a handful of requests; worth
+  rethinking before there are several players.
+
+**Nothing left running.** Every simulator was started with `--exit-after` and every
+run under `timeout`; `ps` at the end of the session shows no `screeny-studio`, no
+`screeny-sim`, no stray cargo belonging to this worktree. One `screeny-sim
+--exit-after 400` was seen during the work and left alone: `lsof` shows its working
+directory is `.claude/worktrees/agent-a49893d8d2978104f`, another worker's.
