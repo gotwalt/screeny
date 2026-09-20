@@ -138,3 +138,62 @@ Plan settled before writing code:
   Both quantised with the blue-noise ordered dither, so the frame is indexed and exact
   and the anti-aliasing survives. Birds go into a supersampled coverage buffer, drawn as
   strokes with a bounding box, not by testing every sample against every bird.
+
+### 2026-09-20 - paused by the orchestrator
+
+Stopped on request (at most two workers on this machine). Nothing was running;
+`ps` is clear.
+
+**Where I am.** The patch is written, registered and compiles, and
+`snapshot flock --seed 3 --at 12 --warmup 12` renders. Its first stderr line,
+the only measurement so far:
+
+```
+patch=flock seed=3 t=12.00  colours=44 bytes=1295/1464 (pal8-lz, exact)  apl=13% (patch 13%)
+```
+
+So the two-dimensional palette works as intended: **an exact frame** on the
+`PAL8_LZ` rung at 1295 of 1464 bytes, 44 distinct colours of the 84 the palette
+offers, 13% APL in the light-on-dark scheme (well under the limiter's 40% cap,
+which is left idle at x1.00). That is level flight, default parameters, before
+any tuning.
+
+**I have not looked at a single picture yet.** Nothing below is judged: the
+shapes, the wingbeat, the seat in the flock, the band count, the horizon step,
+the dither choice and every default are all still first guesses.
+
+**Next step when resumed**, in order:
+
+1. Read `first.png`, then render sequences (`--at` stepped by 1/30 s) and stack
+   them into contact strips with PIL; judge whether two LEDs with a wingbeat
+   read as a bird and whether the view reads as flying *with* the flock.
+2. Instrument the long run: birds in frame (min/median), nearest bird's size,
+   view yaw and roll rates (deg/s, p95), clearance from the blobs,
+   non-periodicity by autocorrelation of the centroid path and heading.
+3. Both tonal schemes, level flight and a banked turn, with `bytes=`, codec,
+   `exact` and APL for each.
+4. The rest of the test suite, README entry, clippy, `cargo test --release`.
+
+**Things learned that are not yet written down elsewhere:**
+
+- The sky is one ramp that is **brightest at the horizon** and falls off both
+  upwards and downwards, with a small step at the horizon so it is a line and
+  not just the top of a gradient. That was not the first plan: a zenith->horizon
+  ramp cannot also carry the ground, and a separate ground ramp doubles the
+  palette. One ramp is also what a hazy sky at altitude really looks like.
+- The sun has to sit **near the horizon**. The sun is the top two entries of
+  that same ramp, and the glow blends the band coordinate from sky to sun; if
+  the sun were high, that blend would sweep through every intermediate band and
+  draw a rainbow ring round it. Near the horizon the sky is already at the top
+  of the ramp, so the sweep is two bands long and reads as a halo.
+- `terrain` must not re-roll the world. All five blobs are laid out from the
+  seed at birth and `terrain` only says how many of them are real this frame,
+  so the slider can be moved live without the world changing under the flock.
+- Rate-independence is bought with one line: the step count is
+  `floor(simulated_seconds / STEP + 1e-6)` rather than a drained accumulator, so
+  30 fps and 60 fps agree on the integer at a step boundary even though their
+  float sums differ in the last bits. Untested as yet.
+- Avoidance is a push **across** the flight path, not back along it, with a
+  reach of `6 + 1.1 * vmax / turn` metres, so it scales with how tightly the
+  flock is allowed to turn. Whether that is enough to keep every bird outside
+  every blob is exactly what the long run has to show.
