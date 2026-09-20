@@ -309,10 +309,48 @@ zero; the registry had already banked the first one's 126 datagrams. **This is e
 the case the difference-not-copy design exists for**, and it happens on every panel within
 seconds of it being added - so it is the common case, not an edge.
 
-On the page those numbers read:
+### In a browser: `/panel` at 390 px and 1400 px
+
+Chrome, against that same loopback pair (studio restarted with `--ui-dir` so the UI is
+served off disk), in card 198's same-origin iframe harness - the extension's own window
+cannot be resized - and **measured** as well as looked at: `innerWidth`,
+`matchMedia('(min-width: 1100px)')`, `scrollWidth === clientWidth`, and each row's
+rendered height against the 17 px line box.
+
+| | 390 px | 1400 px |
+|---|---|---|
+| layout | one column, `twoColumn: false` | two columns, `twoColumn: true` |
+| horizontal scroll | none (`scrollWidth === clientWidth === 390`) | none (both 1400) |
+| `Network` | `39.9 KB/s out · 0.1 KB/s in` - **one line** | `40.0 KB/s out · 0.2 KB/s in` - one line |
+| `By path` | wraps to **two** lines (35 px), in the `dim` tone | one line |
+| `Sent` | wraps to **two** lines | one line |
+
+So the three rows wrap rather than overflow at phone width, which is what the check was
+for. **`ui/style.css` is still untouched by this card** - they are ordinary `facts()` rows
+and the existing `<dl>` handles them. Console clean, no errors and no `NaN`.
+
+**One change the browser earned.** At 390 px the By path line first read
+`frames 40 · control 0.0 · http 0.0`, because `kbs()` was dropping the decimal at 10 KB/s
+and up. The card says *"one decimal under 10"*, but its own example is `36.4 KB/s out` and
+`frames 36.1 · control 0.1 · http 0.2` - every figure with a decimal. A row mixing `40`
+with `0.0` reads like two different kinds of number, so `kbs()` now gives one decimal
+throughout (and two on the `MB/s` branch above 1000 KB/s), which matches the card's example
+exactly. Flagging the ambiguity rather than quietly picking: if the owner meant the literal
+reading, it is one line in `common.js`.
+
+**Two browsers, one number**, seen rather than only asserted: two independent iframes on
+the same server, read three seconds apart from their own polls, gave byte-identical rows -
+`40.0 KB/s out · 0.1 KB/s in`, `frames 40.0 · control 0.0 · http 0.0`, `2.7 MB out ·
+10.0 KB in`. That is the whole point of computing the rate on the server, and it is the
+browser-side twin of the assertion in `tests/traffic.rs`.
+
+On the page the numbers read:
 
 ```
 Network   39.9 KB/s out · 0.1 KB/s in
 By path   frames 39.9 · control 0.0 · http 0.0 KB/s out, averaged over 5 s
-Sent      1.4 MB out · 5.4 KB in since the studio started
+Sent      1.4 MB out · 5.2 KB in since the studio started
 ```
+
+...and `Sent` was watched climbing 1.4 MB -> 2.0 MB -> 2.7 MB across the three probes,
+which is "totals only grow" with a person's eye on it rather than an assertion.

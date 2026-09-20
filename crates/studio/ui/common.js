@@ -73,14 +73,15 @@ export const size = (bytes) => (bytes < 1024 * 1024 ? kb(bytes) : `${(bytes / 10
  * are deliberately different functions rather than one with a flag, because
  * getting them confused is how a page ends up 2.4% wrong and nobody notices. */
 
-/** A rate: KB/s, one decimal under 10 so a small number is still a number.
- *  `unit` false leaves the suffix off for a list of figures that share one,
- *  and that form is **always kilobytes**, whatever the size. */
+/** A rate: KB/s, one decimal - the card's own example is `36.4 KB/s out`, and
+ *  a "By path" line reading `frames 40 · control 0.0` looks like two different
+ *  kinds of number rather than one. `unit` false leaves the suffix off for a
+ *  list of figures that share one, and that form is **always kilobytes**,
+ *  whatever the size. */
 export function kbs(bytesPerSecond, unit = true) {
   const k = (bytesPerSecond || 0) / 1000;
   if (unit && k >= 1000) return `${(k / 1000).toFixed(2)} MB/s`;
-  const n = k < 10 ? k.toFixed(1) : k.toFixed(0);
-  return unit ? `${n} KB/s` : n;
+  return unit ? `${k.toFixed(1)} KB/s` : k.toFixed(1);
 }
 
 /** A total, in the same powers of ten: "2.1 GB" is the number that answers
