@@ -65,6 +65,56 @@ fn pattern_bars_drives_a_receiver_at_thirty_fps() {
     assert!(state.control_requests >= 1);
 }
 
+/// `screeny clock` is the built-in demo that authors its own palette, and
+/// card 092's whole point: it must reach the panel as `PAL4_LZ` carrying that
+/// palette, never expanded to RGB and requantised on the way.
+///
+/// The fixed `--at` keeps the phrase and its colour ramp deterministic; the
+/// sheen and the progress marker still move, so these are twenty different
+/// frames, not one repeated.
+#[test]
+fn clock_streams_its_own_palette_exactly() {
+    let rx = Receiver::start_adjacent(RxConfig {
+        keep_pixels: true,
+        ..RxConfig::default()
+    });
+    let addr = rx.frame_addr.to_string();
+    let (ok, stdout, stderr) = run(&[
+        "clock",
+        "--at",
+        "11:42:50",
+        "--addr",
+        &addr,
+        "--fps",
+        "30",
+        "--duration",
+        "1",
+    ]);
+    assert!(ok, "screeny failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("streaming clock"), "{stdout}");
+    // The summary says the exactness claim out loud, and says nothing about
+    // requantised frames.
+    assert!(
+        stdout.contains("indexed frames exact on the wire"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("requantised"), "{stdout}");
+    assert!(stdout.contains("pal4-lz 100%"), "{stdout}");
+
+    let state = rx.shutdown();
+    assert!(state.decode_errors.is_empty(), "{:?}", state.decode_errors);
+    let n = state.frames.len();
+    assert!((25..=35).contains(&n), "{n} frames in 1 s, expected about 30");
+    for f in &state.frames {
+        assert_eq!(f.codec, screeny::proto::dec::codec::PAL4_LZ);
+        // Eleven colours: one black, a 7-step text ramp, a 3-step accent.
+        let px = f.pixels.as_ref().unwrap();
+        let frame = screeny::Frame::from_bytes(&px[..]).expect("6144 bytes");
+        let colours = frame.distinct_colours();
+        assert!(colours <= 11, "{colours} colours in a clock frame");
+    }
+}
+
 #[test]
 fn info_prints_what_the_device_advertises() {
     let rx = Receiver::start_adjacent(RxConfig::default());

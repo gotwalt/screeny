@@ -181,3 +181,29 @@ indexed door:
 
 and, if any frame had to be requantised, how many and how big its palette was.
 That is the line to read after `screeny clock` against the real panel.
+
+### The tests
+
+`crates/screeny/tests/indexed.rs` (the file that already owns the exactness
+claim, checked by `screeny-sim` - the other implementation of the protocol):
+
+- `the_word_clock_arrives_exactly_at_every_kind_of_moment` - six awkward
+  moments (settled phrase, the turnover minute, mid-roll with sub-pixel
+  offsets, NOON, MIDNIGHT, a three-line phrase). Each one asserts the
+  simulator's decoded 6144 bytes equal the clock's own `palette[index]`, that
+  the codec was `PAL4_LZ`, and `indexed_exact == 1`, `indexed_fallback == 0`.
+- `streaming_the_word_clock_is_exact_for_every_frame` - twenty paced frames
+  through `Sender::run_indexed`: 21 sent (20 + `FINAL`), `indexed_exact == 20`,
+  `indexed_fallback == 0`, `PAL4_LZ` for all 21, and the frame the simulator is
+  showing (located by its sequence number) is bit-identical to the one the
+  source produced.
+
+Both use a `ClockSource` that counts every use of the **RGB** branch. That
+counter being zero is the card's "the encoder never sees an expanded frame",
+stated as an assertion rather than as a hope.
+
+`crates/screeny/tests/cli.rs::clock_streams_its_own_palette_exactly` runs the
+real binary - `screeny clock --at 11:42:50 --addr 127.0.0.1:PORT --fps 30
+--duration 1` - against the loopback receiver and checks every arriving frame
+is `PAL4_LZ` with 11 colours or fewer, that stdout says `pal4-lz 100%` and
+`N indexed frames exact on the wire`, and that it never says `requantised`.
