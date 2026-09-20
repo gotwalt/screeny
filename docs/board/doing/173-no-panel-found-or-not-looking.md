@@ -4,8 +4,8 @@ title: "No panel yet" does not say whether the studio is even looking
 type: build
 hardware: no
 depends: [170]
-owner:
-branch:
+owner: worker-173
+branch: card/studio-page-tells-the-truth
 ---
 
 ## Goal

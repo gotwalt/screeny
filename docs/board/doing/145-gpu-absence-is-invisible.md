@@ -4,6 +4,8 @@ title: A missing GPU is only visible on stderr; the UI shows black and says noth
 type: build
 hardware: no
 depends: [106, 107]
+owner: worker-173
+branch: card/studio-page-tells-the-truth
 ---
 
 ## Goal

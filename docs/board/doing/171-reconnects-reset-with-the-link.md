@@ -4,8 +4,8 @@ title: The page's "Reconnects" count resets whenever the link is rebuilt
 type: build
 hardware: no
 depends: [170]
-owner:
-branch:
+owner: worker-173
+branch: card/studio-page-tells-the-truth
 ---
 
 ## Goal

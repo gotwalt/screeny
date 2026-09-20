@@ -4,8 +4,8 @@ title: parameters that are a list of choices are sliders with the list in their 
 type: build
 hardware: no
 depends: [100, 106]
-owner:
-branch:
+owner: worker-173
+branch: card/studio-page-tells-the-truth
 ---
 
 ## Goal
