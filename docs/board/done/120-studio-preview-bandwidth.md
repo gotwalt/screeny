@@ -174,3 +174,14 @@ merges.
 
 Console: clean, on load and after a reload.
 
+
+### Orchestrator: merged and deployed (2026-09-20)
+
+Merged to `main` cleanly beside card 195. Root `cargo test --release --no-fail-fast`: 717 passed, 0 failed;
+clippy silent. Deployed to workbench with card 195 in one batch (state backed up; untouched). Nine seconds
+after the deploy: link up on `overland` seed 4242, device facts read (fw 0.5.0, stack_free 12488, no warning
+flags), `sockets` present in `/api/v1/status`. From a real Chrome tab on the deployed page (a background
+window, so `document.hidden` was true and - correctly - the page asked for no pictures and its canvas
+stayed black): a hand-opened socket asking `fps=30&repeat=false` received 144 frames in 4 s of 6196 bytes
+each, ~218 KB/s, the last with 939 of 2048 pixels lit; no console errors. Not judged by anyone yet: the
+picture drawn in a *visible* tab after this change - the owner's first glance is that check.
