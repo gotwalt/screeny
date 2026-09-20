@@ -4,8 +4,8 @@ title: clocks-numerals - 21:12 reads as "2:1:12"; resting dials look like colons
 type: build
 hardware: no
 depends: [100]
-owner:
-branch:
+owner: worker-160
+branch: card/160-numerals-rest-pose
 ---
 
 ## Goal
