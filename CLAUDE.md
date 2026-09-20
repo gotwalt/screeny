@@ -48,7 +48,9 @@ next: current state, what is next, and the lessons already paid for. `docs/desig
   worker prompt; tests use the dummies `Example-Wifi1` / `password9`. The plan for
   provisioning is a captive-portal setup with an HTTP settings page; do not build
   other schemes.
-- Camera captures are for "is it showing the right thing", not colour measurement:
+- **The camera is disconnected (owner, 2026-09-19): do not capture or verify with it.**
+  The owner judges the picture by eye; `screeny stats` is the device-side evidence.
+  When it is back, camera captures are for "is it showing the right thing", not colour measurement:
   the bench camera's colour response is unknown and it cannot photograph the
   temporally dithered panel honestly. The Claude app has no camera permission;
   captures go through `tools/cam-request.sh` (daemon in Terminal.app).

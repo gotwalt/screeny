@@ -56,8 +56,13 @@ measurement are deferred.
 - [x] 100 art system merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
   tests, art 31 tests, and `screeny-art pipe clocks-numerals | screeny pipe --fps 60`
   into the simulator at 60 fps, 304 B/frame, `PAL4_LZ` exact, 0 drops
-- 101 art sends through `crates/screeny` (after 011) - in progress on `card/101-art-sender-output`.
-  Owner's acceptance (2026-09-19): it is done when it actually runs on the real panel, not only the sim.
+- [x] 101 art sends through `screeny::Link` (0dd4bae): `SenderOutput` behind the `sender` feature,
+  `screeny-art play <piece> --to <name-or-addr>`, a "send to panel" switch in the Studio, and
+  `budget.rs` replaced by a meter that runs the real encoder and the firmware's decoder (the preview
+  is the decoded datagram). Accepted on the real panel, the owner's bar (2026-09-19):
+  `clocks-numerals`, `overland` and `metaballs` at 30 fps, 0 drops, indexed frames 100% exact, device
+  error counters all 0. Follow-ups: 110 (macOS LAN permission for the new binaries), 111
+  (`Link` from a `Device`), 112 (is `sender` default-on)
 - 102 reconcile art's panel model and colour rules with the measured device - art session
 - 104 piece runner / scheduler (design with the owner) - art session
 

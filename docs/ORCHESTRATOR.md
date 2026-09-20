@@ -27,8 +27,11 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
   owner's Linux box, that decides what streams to the panel and runs unattended for
   months.
 
-**Next up, in order:** 101 (the Studio / art pipeline streams to the real panel through
-`screeny::Link` - the owner's next milestone) -> 105 (server-first Studio, Tauri
+Card 101 is done (2026-09-19): `screeny-art play <piece> --to screeny-4a00a4` streams
+the art system to the real panel through `screeny::Link` (build with `--features
+sender`; a plain `cargo test --release` rebuilds the binary without it - card 112).
+
+**Next up, in order:** 105 (server-first Studio, Tauri
 removed) -> 106 (players, devices, state; built to be forgotten) -> 107
 (docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
@@ -82,6 +85,11 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   free disk. `SendMessage` reaches a running worker between its tool calls; a worker
   the user stopped cannot be resumed - save its uncommitted work as a WIP commit and
   start a new worker on a new branch from that commit.
+- **Workers cannot reach the LAN.** A worker's environment lets mDNS browsing through
+  but drops unicast to LAN addresses (card 101 measured it), so a worker can prove
+  things against `screeny-sim` on localhost only. Anything on the real panel, WiFi
+  streaming included, is the orchestrator's step after the merge. The owner's bar for a
+  workstream is that it runs on the real panel, not only the sim: plan that step.
 - **Two independent implementations find spec bugs.** The simulator (second receiver)
   found 17 ambiguities; the firmware (third) found none. Keep doing that: when a spec
   matters, have it implemented twice before trusting it.
@@ -117,7 +125,9 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   gitignored `firmware/wifi.env`), read by `firmware/build.rs`. Never write real ones
   into tracked files, fixtures, logs or prompts. Tests use `Example-Wifi1`/`password9`
   (same lengths as the originals; golden byte vectors depend on that).
-- Camera: the Claude desktop app cannot get macOS camera permission. Captures go
+- Camera: **disconnected by the owner on 2026-09-19 - do not try to capture or verify
+  with it** until he says it is back; he judges the picture by eye, and `screeny stats`
+  is the device-side evidence. (When it is connected:) the Claude desktop app cannot get macOS camera permission. Captures go
   through `tools/cam-daemon.sh` running in Terminal.app (`open -a Terminal
   tools/cam-daemon.sh`), requested with `tools/cam-request.sh NAME [clip N]`. It is
   for "is it showing the right thing" only: the camera's colour response is unknown
