@@ -312,7 +312,11 @@ fi
 # --------------------------------------------------------------- reachable?
 
 step "can we reach $HOST?"
-run_remote "echo connected as \$(id -un)@\$(hostname) && docker --version && docker compose version --short"
+run_remote "echo connected as \$(id -un)@\$(hostname) && docker --version && docker compose version --short" \
+  || die "cannot ssh to $HOST, or it has no usable docker.
+    ssh $HOST -- true                 # is the host there and is your key on it?
+    ssh $HOST -- docker ps            # are you in the docker group there?
+  --host NAME points this somewhere else."
 
 # ----------------------------------------------------------------- get code
 
@@ -330,11 +334,17 @@ fi
 
 if [ "$DO_BUILD" -eq 1 ]; then
   step "building the image on $HOST (slow the first time: Rust + wgpu + Mesa)"
-  run_remote "$(compose build)"
+  run_remote "$(compose build)" \
+    || die "the image did not build on $HOST. The error is above; nothing was started,
+  and whatever was running before is still running untouched."
 fi
 
 step "starting the stack"
-run_remote "$(compose 'up -d --remove-orphans')"
+run_remote "$(compose 'up -d --remove-orphans')" \
+  || die "docker compose up failed on $HOST. The error is above. If it is about
+  /dev/dri or a group, check the render gid:
+    ssh $HOST -- stat -c '%G %g' /dev/dri/renderD128
+    tools/deploy-workbench.sh --render-gid <gid>"
 
 step "waiting for it to answer"
 run_remote "for i in \$(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:$PORT/healthz && { echo \"healthz: ok after \${i}s\"; exit 0; }; sleep 1; done; echo 'healthz: NO ANSWER after 60s'; exit 1" \
