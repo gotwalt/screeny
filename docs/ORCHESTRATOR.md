@@ -80,10 +80,14 @@ firmware session uses to borrow the panel. State backups from before each migrat
 Also done and deployed by the morning of 2026-09-20: the page-polish cards 173, 145, 171,
 172, 163 (discovery state, missing GPU, honest reconnects, any frame rate, named choices),
 176 (named browse 3.0 s -> 0.07 s), 125 + 186 (the whole workspace is clippy-silent).
-**In flight: 180** (the Studio reads the device's HTTP status via `crates/device-api`, plus
-card 181; range 190-194) - firmware 0.4.x serves that API on the panel's port 80; the device
-has one connection worker, so poll gently (the card has the rules). The real SSID is in that
-payload: keep it out of every tracked file, log and screenshot.
+**180 + 181 done and deployed**: the Studio polls the panel's own `GET /api/v1/status`
+(one poller, one connection in flight, every 10 s) and the page has a Device block. The real
+SSID is in that payload and therefore in the Studio's `/api/v1/status`: keep it out of every
+tracked file, log, card and screenshot - never screenshot the deployed page. Do not `curl` the
+panel's port 80 by hand any more; read `workbench.local:8787/api/v1/status` instead. Nothing
+of this session's is in flight. Good next cards: 104 (scheduler - design with the owner), 102
+(art's panel model vs the device), 120 (preview bandwidth), 141, 182, 183, 190, 191; card 192
+(a sim that can play an unhealthy device) was offered to the firmware session.
 Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
 "Reconnects" worth a row; a sandbox control ("try pieces without the panel flickering through
 them") - he has said no sandbox, ask only if he raises it. The workbench reboot for card 107
