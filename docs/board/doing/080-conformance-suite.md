@@ -4,8 +4,8 @@ title: A wire-level conformance suite the firmware can be run against too
 type: test
 hardware: no
 depends: [006, 008]
-owner:
-branch:
+owner: worker-080
+branch: card/080-conformance-suite
 ---
 
 ## Goal
