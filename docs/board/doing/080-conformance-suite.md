@@ -231,3 +231,122 @@ failed** - and all fourteen failures were `Connection refused` because the
 simulator I had started with `--exit-after 180` exited underneath the run at
 rule 50. The suite reported that honestly rather than passing, which is the
 right failure mode. Re-running with a longer-lived simulator next.
+
+### 4. Evidence against the simulator (2026-09-19)
+
+All against `screeny-sim --headless --bind 127.0.0.1 --no-mdns`, every
+instance with a bounded `--exit-after`, none left running.
+
+| What | Result |
+|---|---|
+| `conformance --slow --cap-probe` | **64 passed, 0 failed, 0 skipped**, 89 s |
+| `conformance` (the default) | **61 passed, 0 failed, 3 skipped**, 37 s |
+| exit code, clean run | 0 |
+| exit code, rules failing (against a `--drop 100` simulator, `--only 3.2`) | 1, and each rule shows both attempts |
+| ctrl-c 4 s into a run | exit 130, `interrupted: restoring the device / brightness 200 restored` |
+| in process, `cargo test -p screeny-sim --test conformance` | ok, 36.5 s |
+
+**Restore, shown rather than asserted.** A simulator started at brightness
+137 with `--idle dim`, run with `--verbose`, logged exactly this over one
+default run: `brightness 137 -> 137` (the opcode sweep), `brightness 68 -> 68`
+(the step-down rule), `brightness 137 -> 137` (its own restore), `idle mode
+3, 2, 1, 0` (the `SET_IDLE` rule), then `brightness 137 -> 137` and `idle mode
+0` from the suite's exit restore. The run printed `restored: brightness 137
+(found 137), idle mode 0, lock released, state HOLD`, and a fresh `stats`
+afterwards read 137. `--restore-idle 2` puts it back to 2 instead, confirmed
+the same way.
+
+Note what that last line also demonstrates: the simulator was started in
+`DIM` and was left in `STATUS`, because **nothing on the wire reports the
+current idle mode** (card 131). `--restore-idle` is a stated intention, not a
+restore, and the suite says so in its output.
+
+### 5. What moved out of `crates/sim/tests`
+
+Criterion: a test is wire-level duplication when *every* assertion it makes is
+on bytes the device sends back - reply datagrams, or the telemetry counters,
+which `SimHandle::telemetry()` returns verbatim - and so could be made by an
+outside client. Anything asserting decoded pixels, `shown`, `active_source`,
+the event stream, `render_display()` or injected faults stays.
+
+| File | Before | After | Removed |
+|---|---|---|---|
+| `control.rs` | 10 | 5 | the `ERR_UNKNOWN_OP`/`ERR_BAD_LENGTH`/`ERR_BAD_ARG` tables, the malformed-header errors, the `GET_INFO` rate limit, the `REPLY` bit, `FRAME` on the control port, `CONTROL` on the frame port |
+| `telemetry.rs` | 5 | 2 | `STATS_REQ` on the frame port, the 100 ms limit, `RESET_STATS` zeroing |
+| `sequence.rs` | 6 | 4 | `seq_gaps` arithmetic, the interarrival EWMA |
+| `arbitration.rs` | 11 | 9 | `IDENTIFY 0`, and the spec-constants test |
+| `malformed.rs` | 5 | 5 | - (it asserts the `Reject` *reason* per case, which the wire cannot distinguish - see card 130) |
+| `codecs.rs` | 6 | 6 | - (bit-exact pixels; not observable from outside) |
+| `core_rules.rs` | 13 | 13 | - (virtual clock: `LOCK_MS` to the microsecond, two senders on different IPs) |
+| `faults.rs`, `cli.rs` | 11 | 11 | - |
+
+**Eleven removed, one added back, one added new.** Added back:
+`the_reboot_magic_that_does_work_is_accepted` - the suite checks the *guard*
+(`REBOOT` without the magic word is `ERR_BAD_ARG`, safe to ask a panel) and
+the word that works can only be sent to something that will not act on it.
+`a_request_id_of_zero_means_no_reply_wanted` kept only its in-process half and
+is renamed `a_request_with_no_reply_wanted_is_still_carried_out`. Added new:
+`tests/conformance.rs`, which runs the whole catalogue in process.
+
+Nothing was lost in the move. The one case that would have been -
+`SET_WIFI` cut short earning `ERR_BAD_LENGTH` - is now folded into the suite's
+`LOOPBACK_ONLY` `SET_WIFI` rule, alongside its two `ERR_BAD_ARG` cases.
+
+Deleting `the_spec_s_own_constants_behave_the_same_way` deserves a word,
+because it was load-bearing: it existed so that `arbitration.rs`'s compressed
+timings were not the only evidence. `tests/conformance.rs` now drives the
+whole of section 7 at `LOCK_MS` 500 and `STREAM_TIMEOUT_MS` 1000 through the
+same rules the bench uses, which is a strictly better version of that
+argument.
+
+### 6. Coverage, after
+
+Every row the table in section 1 marked "nowhere today, and worth adding" is
+now a rule: 12, 21, 32, 33, 34, 37's bound, 39, 40, 41's missing four, 49, 50,
+51/52, 57, 59, 61/62, 63/64. Counting by spec section, as
+`conformance --list` prints them: **1 -> 1 rule, 2.x -> 10, 3.x -> 11,
+4.x -> 6, 5.x -> 2, 6.x -> 22, 7.x -> 11, 8.x -> 1** - 64 in all, of which 3
+are loopback-only, 2 need `--slow` and 1 needs `--cap-probe`.
+
+Rows 25, 66, 67 and 68 remain out of reach of any wire protocol - the pixels
+on the panel, the panel model, and telling network loss from a slow device
+without injecting the faults yourself - and stay in `crates/sim`, which is
+what the card said they would.
+
+### 7. Root test run
+
+`cargo test --release --no-fail-fast` - green, 40 test binaries, 0 failures.
+The `crates/screeny` pacing tests (card 093) passed first time under a loaded
+host. `cargo clippy -p screeny-probe --all-targets` is clean apart from two
+`is_multiple_of` suggestions in code this card did not touch.
+
+### 8. Out of scope, carded
+
+- **130** telemetry cannot say *why* a datagram was rejected: one counter for
+  six faults, so a device-side framing rule can only assert "something was
+  rejected".
+- **131** the idle mode is write-only over the wire.
+- **132** sections 1 and 2.3's oversize rules cannot be observed over WiFi -
+  the radio fragments the datagram away and the device counts nothing, which
+  is exactly what a violation looks like. The spec should say so.
+- **133** `screeny-probe --name` resolves a host name where `crates/screeny`
+  browses for a DNS-SD instance; they stop agreeing after a `SET_NAME`.
+
+134 is left unused. **No spec/implementation disagreement was found**: all 64
+rules pass against `screeny-sim`, so `crates/receiver` and `crates/sim` agree
+with `protocol-v1.md` on every MUST this suite can express. Whether the
+firmware does is the orchestrator's run.
+
+### 9. For the orchestrator
+
+```
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 conformance --slow
+```
+
+About 70 s (45 s without `--slow`). Exit 0 or non-zero, one line per rule.
+Expect **3 SKIP** lines with `loopback only` as the reason - those are card
+132's two oversize rules plus `len > 1464`, which no real link can deliver -
+and `--cap-probe` left off, because it would drive the panel to the firmware's
+brightness cap, which may be brighter than what the suite found. The last two
+lines say what it restored and the tally. `--restore-idle N` if the panel
+should be left in an idle mode other than 0 `STATUS`.

@@ -121,6 +121,17 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   control 49375. It does not answer ping; ARP and UDP are fine. `screeny-probe`
   (`conformance`, `lock-test`, `stream`) is the bench instrument; prove changes
   against `screeny-sim` first.
+- The device conformance run, since card 080, is one command and about 70 s:
+  `cargo run --release -p screeny-probe -- --addr 192.168.7.221 conformance --slow`.
+  64 rules, one line each, exit non-zero on any failure. It is safe to point at
+  the panel: no `SET_WIFI`, no valid `REBOOT`, brightness only ever steps *down*
+  from what it found, and brightness, the idle mode and the lock are restored on
+  every exit path including ctrl-c - the last line says what it restored to.
+  Drop `--slow` (about 45 s) to skip the two rules that wait out `HOLD_MS`.
+  Three rules cannot be honest over WiFi and print `SKIP` with the reason.
+  `lock-test` is now an alias for `conformance --only 7`. The same 64 rules run
+  against the simulator in `cargo test -p screeny-sim --test conformance`, so a
+  regression should be caught before the bench.
 - WiFi credentials are outside git: `~/.config/screeny/wifi.env` (or env vars, or a
   gitignored `firmware/wifi.env`), read by `firmware/build.rs`. Never write real ones
   into tracked files, fixtures, logs or prompts. Tests use `Example-Wifi1`/`password9`
