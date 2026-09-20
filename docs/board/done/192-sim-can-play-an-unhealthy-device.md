@@ -132,3 +132,30 @@ device page drawing the three rows in the fault tone. That needs the Studio and 
 and belongs to the other orchestrator's track - this worker owns `crates/sim` only. The
 simulator half is now ready for it: point the Studio at a sim started with the command
 above and the unhappy rows are there to photograph.
+
+### The acceptance screenshot, from card 195 (2026-09-20, worker-195)
+
+The one thing this card left owed: the Studio's page, in Chrome, drawing an unhappy
+panel. The simulator is the one this card built, started with the acceptance command
+plus the two extra rows card 195 wanted to see at the same time:
+
+```
+screeny-sim --headless --no-mdns --bind 127.0.0.1 \
+    --frame-port 51900 --control-port 51901 --http-port 51950 \
+    --reset-reason brownout --store-errors 3 --stack-free 900 \
+    --heap-used 90000 --heap-size 98304 --fw-state pending_verify --exit-after 540
+screeny-studio --no-discover --listen 127.0.0.1:8791 --state-dir <tmp> \
+    --ui-dir crates/studio/ui --device-http-port 51950
+```
+
+![the unhappy rows](../../research/img/195-fault-rows.png)
+
+`docs/research/img/195-fault-rows.png`: **Slot** `ota 0 · pending verify` in the warning
+tone, **Memory** `88 KB of 96 KB`, **Free stack** `900 B`, **Last reset** `brownout` and
+**Store errors** `3` in the fault tone - and Up, WiFi, Reboots and When idle still
+perfectly ordinary beside them. Loopback only; the only network name in the picture is
+the simulator's dummy, `simulated`. Console clean on a reload with the console watched
+from before navigation; tab closed; nothing left running.
+
+That is the last acceptance item, so this card goes to `done/`. Everything else in it was
+already merged (`c7ef4c6`).

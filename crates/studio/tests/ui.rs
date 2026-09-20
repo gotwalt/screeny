@@ -232,16 +232,46 @@ fn the_page_can_show_what_only_the_device_knows() {
 
     // Every flag the block draws a tone from is the server's judgement, read
     // by name. A number here would be a second opinion about a threshold.
-    for decided in ["f.low_stack", "f.low_heap", "f.bad_fw_state", "f.odd_reset", "f.store_errors"] {
+    // Card 195: two levels for the stack, and the reboot nobody asked for.
+    for decided in [
+        "f.stack_warn",
+        "f.stack_fault",
+        "f.low_heap",
+        "f.bad_fw_state",
+        "f.odd_reset",
+        "f.store_errors",
+        "f.unasked_reboots",
+    ] {
         assert!(MAIN_JS.contains(decided), "the page reads {decided} rather than deciding it");
     }
-    let block = MAIN_JS.find("function showDevice").expect("the device block");
-    let body = &MAIN_JS[block..block + 2400];
-    for invented in ["2048", "0.85", "< 4312", "98304"] {
+    let body = device_block();
+    // Every threshold that has ever been one, including the ones card 195
+    // replaced: none of them belongs in a browser.
+    for invented in ["2048", "4096", "8192", "0.85", "< 4312", "98304"] {
         assert!(!body.contains(invented), "the page must not carry its own copy of a threshold: {invented}");
     }
-    // The four that are meant to stand out do, and nothing else does.
-    assert_eq!(body.matches("'bad'").count(), 2, "a reset that should not have happened, and a store error");
+    // The four that are meant to be loud are loud, and nothing else is: a
+    // reset that should not have happened, a store error, a stack past the
+    // fault line and a heap past it (card 195 made both of those faults).
+    assert_eq!(body.matches("'bad'").count(), 4, "the four fault tones, and only those: {body}");
+    // ...and the reboot the studio did not ask for is *not* one of them.
+    let reboots = body.find("['Reboots'").expect("the reboots row");
+    let row = &body[reboots..body[reboots..].find('\n').map_or(body.len(), |n| reboots + n)];
+    assert!(!row.contains("'bad'") && !row.contains("'warn'"), "an unasked-for reboot is said quietly: {row}");
+}
+
+/// `showDevice` and its helpers, from its doc comment to the next one. Sliced
+/// by hand because "the page carries no threshold of its own" is a claim about
+/// this block and not about the whole file - `main.js` is full of numbers that
+/// are layout.
+fn device_block() -> &'static str {
+    let start = MAIN_JS.find("function showDevice").expect("the device block");
+    let rest = &MAIN_JS[start..];
+    // The next top-level doc comment after `rebootLine`, which is the last
+    // helper this block owns.
+    let after = rest.find("function rebootLine").expect("the reboots row helper");
+    let end = rest[after..].find("\n  /**").map_or(rest.len(), |n| after + n);
+    &rest[..end]
 }
 
 /// And the studio's `/api/v1/status` carries the thresholds' verdicts rather

@@ -796,13 +796,18 @@ async function start() {
    *  then this whole block is hidden and the page above is the page it was.
    *
    *  **Quiet by default.** Everything here is a plain number in the ordinary
-   *  tone. The four things meant to catch an eye are the four that mean
-   *  something happened to the panel rather than in it: a reset that was not a
-   *  power-on or a reboot we asked for, a settings-store error, a firmware
-   *  slot that is not valid, and memory running out. Which is which is decided
-   *  once, on the server, beside the reasoning for the thresholds
-   *  (`devices::LOW_STACK`, `devices::HIGH_HEAP`) - never a number written out
-   *  twice. */
+   *  tone. The things meant to catch an eye are the ones that mean something
+   *  happened to the panel rather than in it: a reset that was not a power-on
+   *  or a reboot we asked for, a settings-store error, a firmware slot that is
+   *  not valid, and memory running out. Which is which is decided once, on the
+   *  server, beside the reasoning for the thresholds (`devices::STACK_WARN`,
+   *  `devices::STACK_FAULT`, `devices::HIGH_HEAP`, measured on the real device
+   *  by the firmware session) - never a number written out twice.
+   *
+   *  Card 195: free stack has two levels, because the margin going is worth a
+   *  different noise from the margin being gone, and a reboot nobody here
+   *  asked for is said quietly rather than as a fault: on this firmware a
+   *  crash and a reflash are the same `reset_reason`. */
   function showDevice(d) {
     const f = d && d.facts;
     $('#device-block').hidden = !f;
@@ -812,10 +817,11 @@ async function start() {
       ['Slot', `${words(f.fw_slot)} · ${words(f.fw_state)}`, f.bad_fw_state ? 'warn' : null],
       // uptime_ms wraps at 49.7 days, like telemetry's. So does the panel's.
       ['Up', duration(f.uptime_ms / 1000)],
-      ['Memory', `${kb(f.heap_used)} of ${kb(f.heap_size)}`, f.low_heap ? 'warn' : null],
-      ['Free stack', `${nf.format(f.stack_free)} B`, f.low_stack ? 'warn' : null],
+      ['Memory', `${kb(f.heap_used)} of ${kb(f.heap_size)}`, f.low_heap ? 'bad' : null],
+      // The fault first: a panel below it is below the warning line too.
+      ['Free stack', `${nf.format(f.stack_free)} B`, f.stack_fault ? 'bad' : f.stack_warn ? 'warn' : null],
       ['WiFi', wifiLine(f), f.link_up ? (f.rssi_dbm < -75 ? 'warn' : null) : 'warn'],
-      ['Reboots', f.reboots ? `${nf.format(f.reboots)} since the studio started` : 'none since the studio started'],
+      ['Reboots', rebootLine(f)],
       ['Last reset', words(f.reset_reason), f.odd_reset ? 'bad' : null],
     ];
     if (f.store_errors) rows.push(['Store errors', nf.format(f.store_errors), 'bad']);
@@ -823,6 +829,12 @@ async function start() {
     facts($('#device-facts'), rows);
 
     const notes = [];
+    // Said once, under the block, rather than shouted in the row: the studio
+    // knows the panel restarted and knows it did not ask, and that is all it
+    // knows. Never a fault tone, and never in /healthz.
+    if (f.unasked_reboots) {
+      notes.push('A crash and a reflash look the same from here.');
+    }
     // Until firmware card 223 `wifi_state` is the sticky result of the last
     // credentials attempt, not the link. A panel with an address is on the
     // network whatever that field says, so this is a note and never a fault.
@@ -831,6 +843,21 @@ async function start() {
     if (d.facts_ago > 120) notes.push(`This is what it last said about itself, ${ago(d.facts_ago)}.`);
     $('#device-note').textContent = notes.join(' ');
     $('#device-note').hidden = notes.length === 0;
+  }
+
+  /** Card 195: the Reboots row.
+   *
+   *  The studio asks for exactly one kind of reboot - the Reboot button above -
+   *  and writes down when it did. A restart it did not ask for is the honest
+   *  "it may have crashed" this firmware can give: the chip cannot tell a
+   *  panic from any other software reset, so the row says what is known and
+   *  the note under the block says what it does not mean. Counted by the
+   *  server, from `boot_id`, never from uptime. */
+  function rebootLine(f) {
+    if (!f.reboots) return 'none since the studio started';
+    const since = `${nf.format(f.reboots)} since the studio started`;
+    if (!f.unasked_reboots) return since;
+    return `${since} · ${nf.format(f.unasked_reboots)} the studio did not ask for`;
   }
 
   /** Card 173: which of the three "nothing here yet" this is.

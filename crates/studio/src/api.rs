@@ -635,10 +635,18 @@ struct Reboot {
     confirm: bool,
 }
 
+/// **The only reboot this studio asks for.** Card 195: the ask is written down
+/// here, so that when the panel comes back with a new `boot_id` the studio can
+/// tell its own reboot from one it knows nothing about - which, on firmware
+/// that cannot report a panic, is the nearest thing to "it may have crashed"
+/// there is (`devices::DeviceFacts::unasked_reboots`).
+///
+/// Written down *before* the request goes out: see `Registry::asked_to_reboot`.
 async fn device_reboot(State(st): State<AppState>, Json(req): Json<Reboot>) -> ApiResult<Json<serde_json::Value>> {
     if !req.confirm {
         return Err(ApiError::bad_request("rebooting a panel needs `confirm: true`".into()));
     }
+    st.devices.asked_to_reboot(&req.device);
     on_device(&st, &req.device, "rebooting", |c| c.reboot().map_err(|e| e.to_string())).await?;
     Ok(Json(serde_json::json!({ "rebooting": req.device })))
 }

@@ -255,6 +255,30 @@ points it somewhere other than 80, which is how a simulator is talked to.
 redacts it, and nothing about a device is written to the state file, because these are
 live facts and not state. `tests/ssid.rs` checks both.
 
+### What counts as trouble, and what only looks like it (card 195)
+
+**The thresholds are the firmware session's**, measured on the real device across
+several builds, and they live in `devices.rs` beside their reasoning - the page carries
+no copy of any of them and `tests/ui.rs` keeps it that way. Free stack has two levels,
+because it is a high-water mark that only ever falls and interrupts eat it 256 bytes at
+a time: `STACK_WARN` 8192 (healthy 0.4.3 reads 17-20 KB) and `STACK_FAULT` 4096 (the
+0.4.0 build that worried them read 4-5 KB). The heap's one line, `HIGH_HEAP` 85%, is a
+fault: steady state is 51% and the worst instant they measured, with the setup AP up, is
+60%. `low_stack` is still on the wire and now means the fault level - `/api/v1/status`
+is additive.
+
+**"A reboot the studio did not ask for."** The chip cannot tell a panic from any other
+software reset, so `reset_reason: software` covers our own `REBOOT`, a reflash *and* a
+crash. The studio therefore asks the only question it can answer: it writes down its own
+ask (the reboot control, `POST /api/v1/device/reboot`, before the request goes out) and
+consumes it when the panel comes back with a new `boot_id` - one ask, one reboot, inside
+`REBOOT_ASK_WINDOW` (two minutes, the status poller's own backoff cap and so the longest
+it can go between reads). A `boot_id` change with no ask behind it counts in
+`unasked_reboots`, and the page says so quietly: *N the studio did not ask for*, with
+"a crash and a reflash look the same from here" under it. **Not a fault tone, and never
+in `/healthz`** - a panel that may have crashed is not a sick server. When the firmware
+reports panics, `panic` becomes a reason of its own and this gets simpler.
+
 ## The API
 
 Everything the two pages do is one of these, under `/api/v1`. Reads are `GET`, changes
@@ -393,6 +417,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
 | `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
+| `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |

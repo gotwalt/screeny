@@ -210,7 +210,7 @@ async fn debug_output_redacts_the_ssid() {
     let ssid = golden.ssid.clone().expect("the golden has an SSID");
 
     // The type the page is drawn from.
-    let facts = DeviceFacts::of(golden.clone(), None);
+    let facts = DeviceFacts::of(golden.clone(), None, &mut None);
     let printed = format!("{facts:?}");
     assert!(!printed.contains(ssid.as_str()), "DeviceFacts::fmt printed the network's name: {printed}");
     assert!(printed.contains("<redacted>"), "...and it should say that it did not: {printed}");
