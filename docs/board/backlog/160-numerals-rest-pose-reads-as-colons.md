@@ -33,20 +33,27 @@ It is not specific to hours 20-23: any time containing a `1` (or `4`, `7`) shows
 `10:15`, `11:11` (worst case: four fake colons). The owner noticed it at 21:xx because that
 is when he looked.
 
-**Confirm the intended reading with the owner before building** (the orchestrator asked
-him; see the card Log for his answer). The orchestrator's reading of "[blank] 2[number] :
-[number][number]": the unused dials should look *blank*, and the only separator-looking
-thing on the panel should be a real one between hours and minutes.
+**The owner's answer (2026-09-19)**: "unused dials should mostly function as if they were
+hands on a clock - that is to say, still visible, just in an unobtrusive rest position."
+So: do **not** blank or hide resting dials, and do not dim them into invisibility. They stay
+real clock hands; the job is a rest position (and, if needed, a modest presentation
+difference) that the eye does not read as a colon or as part of a digit. Whether he also
+wants a real hours:minutes separator is still open - ask with snapshots in hand.
 
 ## Deliverables
 
-- A rest presentation that cannot be read as a glyph. Candidates, to be judged in the
-  Studio preview and then on the panel by the owner: (a) resting dials drawn much dimmer
-  than digit dials (a brightness role for "not part of the digit", which the dances can
-  still animate through); (b) a rest pose that is visually minimal at this scale (hands
-  overlapped pointing straight down or up reads as part of a stroke - check each against
-  its neighbours); (c) both. Do not break the dances: rest is a pose the choreography
-  passes through, so it must stay a valid pose for the servo model.
+- A rest position that stays visible as clock hands but cannot be read as a glyph. Produce
+  a contact sheet of candidates at the awkward times below and let the owner pick - on the
+  panel, not only in the preview. Things to try and to be honest about: both hands
+  overlapped at other angles (straight down or up sits beside the `1`'s bar and reads as
+  `11`; horizontal stacks into `=`; the current 225 stacks into a colon - so look at 135,
+  at angles that do not repeat identically down the column, and at the two hands slightly
+  apart rather than overlapped so it reads as "a clock at rest" rather than "a stroke");
+  rest dials that differ per row so three of them never line up into punctuation; a modest
+  brightness or weight difference between digit hands and resting hands (modest: they must
+  stay clearly visible). Do not break the dances: rest is a pose the choreography passes
+  through, so it must stay a valid pose for the servo model, and a per-dial rest angle
+  must not make the dances' formations asymmetric by accident.
 - If the owner wants a real hours:minutes separator, find the room honestly: 4 digits x 2
   columns fill all 8 columns, so a separator means either narrower digits, a gap column
   stolen from a `1`, or drawing it between dials in the LED grid (the grid is 64 x 24
