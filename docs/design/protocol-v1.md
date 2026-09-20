@@ -49,6 +49,21 @@ the bytes it has are not the bytes that were sent, and a `len` that happens to
 fit the truncation would be a lie. (Card 006: a receiver that simply passes the
 short read to the parser reports `ERR_BAD_LENGTH`-shaped nonsense instead.)
 
+**Neither this rule nor §2.3's 1464-byte `len` ceiling can be observed over
+WiFi.** A UDP payload over 1472 bytes is an IP packet over a 1500-byte MTU, so
+it is fragmented; the device does not reassemble fragments, as the paragraph
+above says, so the stack drops it before the receiver is ever offered it and
+**nothing counts it**. `frames_rejected` stays where it was - which is exactly
+what a violation of the rule looks like from outside. A sender that sets
+`IP_DONTFRAG` as §9.2 advises cannot even transmit such a datagram. Both rules
+are therefore verifiable only over loopback, or across a link whose MTU exceeds
+1500: `screeny-probe conformance` marks them `LOOPBACK_ONLY` and prints
+`SKIP  loopback only: the radio fragments it away` rather than a pass it cannot
+justify, and `crates/sim` keeps the real assertions, where the rejection reason
+is visible in process. This is a property of the rules, not a gap in either
+implementation, and it is written here so that the next device-side test for
+them is not written at all. (Card 132.)
+
 A sender MUST NOT send frame data to a broadcast or multicast address. Unicast
 only. (802.11 sends multicast unacknowledged, at the lowest basic rate, buffered
 to the DTIM beacon - see RFC 9119.) Multicast is used only for mDNS.
@@ -116,7 +131,11 @@ counter useless.
 Number of bytes of payload/body following the 8-byte header. A receiver MUST
 check `8 + len <= datagram_length` and discard the packet otherwise. Bytes
 beyond `8 + len` are padding and MUST be ignored; a sender MAY pad. For a
-`FRAME`, `len` MUST be `<= 1464`.
+`FRAME`, `len` MUST be `<= 1464`. That last one is the rule §1 says cannot be
+observed over WiFi: a `len` of 1465 that the datagram really backs up makes a
+1473-byte datagram, which the radio fragments away. A `len` the datagram does
+*not* back up is the `8 + len <= datagram_length` check above, and that one is
+observable anywhere.
 
 `len` is deliberately redundant with the UDP datagram length. It gives the
 `no_std` decoder a bound to validate before indexing, it allows fixed-size
@@ -872,29 +891,59 @@ On Wi-Fi disconnection the device goes to `HOLD` immediately and, after
 
 ---
 
-## 8. Runtime Wi-Fi provisioning
+## 8. Runtime provisioning and the device's HTTP API
 
-v1 ships two paths. Both write to the same store: `esp-storage` +
-`sequential-storage` on a dedicated flash partition.
+v1 ships three ways to put credentials on the device, and they all write one
+store: `esp-storage` + `sequential-storage` on the dedicated `screeny`
+partition, through `crates/settings`. The setup portal (§8.1) is the one a
+person uses; `SET_WIFI` (§8.2) is the one on the control port; the settings
+page is the HTTP API (§8.5-§8.9), which serves the rest of the device's web
+surface as well. §8.3 is the order the device tries what it has and §8.4 is
+the security posture.
 
-### 8.1 Serial console (primary)
+### 8.1 The setup portal (primary)
 
-A line-oriented reader on the existing USB-UART at **115200** baud (the bench
-rule is <= 230400; 115200 is what espflash monitors at):
+A device that has no network (§8.3) raises a **soft-AP** and serves a setup
+page on it. The radio is in APSTA mode, so the station half keeps doing
+whatever it was doing; the ESP32 has one PHY, so the AP follows the station's
+channel and a client on the AP MAY lose it for the length of a trial join.
 
-```
-wifi set <ssid> <psk>     store credentials and rejoin
-wifi get                  print the stored SSID (never the PSK) and join state
-wifi clear                erase stored credentials
-info                      the GET_INFO key/value pairs, one per line
-stats                     telemetry, one field per line
-reboot
-```
+| | |
+|---|---|
+| AP name | `screeny-<xxxxxx>`, the §5.1 device id. **Never the friendly name**: the QR below carries 14 characters and `screeny-4a00a4` is exactly 14. |
+| Authentication | **open** (device-web decision 2). The home PSK crosses it in clear; §8.4. |
+| Address | 192.168.4.1/24, static. The portal answers on that address only. |
+| DHCP | `192.168.4.50`-`.53`, four leases, 600 s, router and DNS both 192.168.4.1. **No RFC 8910 option 114** (see below). |
+| DNS | a catch-all: every name answers 192.168.4.1, TTL 10 s. |
+| HTTP | §8.5, port 80, with the captive catch-all of §8.9. |
+| Panel | the portal screen: a version 2-L QR of `WIFI:T:nopass;S:<ap name>;;`, the name and `192.168.4.1`. It does not alternate with anything. |
+| Telemetry `state` | `PROVISIONING` (§6.7). While the portal screen is up a decoded frame is still counted but does not reach the panel. |
 
-Implement the parser so it can later be wrapped in Improv Serial framing
-(`IMPROV` + version `0x01` + type + length + data + checksum, RPC command `0x01`
-= send Wi-Fi settings) without restructuring. That is the v1.1 upgrade and buys
-a browser-based installer.
+The page is `GET /setup`, and `GET /` on the AP interface is the same page. It
+takes an ordinary urlencoded `ssid=&psk=` form (§8.7) and answers **HTML**, not
+JSON: what posts to it is a `<form>` in a captive mini-browser with no
+JavaScript, and a browser handed `{"result":"trying"}` shows a person a page of
+JSON. Posting starts a trial join (§8.3) and the page reports the result on a
+full-page reload, which is the only navigation the iOS mini-browser re-probes
+on. The page has **no file input**: they do not work in a captive mini-browser,
+so a firmware upload is on the LAN page only.
+
+Two things the portal deliberately does not do, both measured on the owner's
+phone (iOS 18.7, card 223): it does not send DHCP option 114, because RFC
+8910/8908 want an HTTPS API endpoint on a hostname answering
+`application/captive+json` and this device can offer neither; and it does not
+redirect a captive probe. The catch-all answers with the setup page itself
+(§8.9). The DNS catch-all and the HTTP catch-all carry the whole weight.
+
+**The serial console this section used to specify does not exist and will not
+be built.** There is no line reader on the UART: `wifi set` / `wifi get` /
+`wifi clear` / `info` / `stats` / `reboot` were never implemented, and neither
+was the Improv Serial framing they were shaped for. The portal above, the
+settings page (§8.5) and `SET_WIFI` (§8.2) replaced the `wifi` commands;
+`GET_INFO` and `TELEMETRY` on the control port, and `GET /api/v1/status` and
+`GET /api/v1/telemetry` over HTTP, replaced `info` and `stats`; `REBOOT` and
+`POST /api/v1/reboot` replaced `reboot`. The serial port is a log, not an
+interface (device-web decision 5).
 
 ### 8.2 `SET_WIFI` control packet (secondary)
 
@@ -910,7 +959,11 @@ a browser-based installer.
 The device MUST send the reply **before** disconnecting, because after
 disconnecting it cannot. Then:
 
-1. Disconnect and attempt to join the new network, up to 3 attempts.
+1. Disconnect and attempt to join the new network. This is §8.3's **trial**,
+   and §8.3 has the attempt count, the exception for an authentication failure
+   and what a failure falls back to. `POST /api/v1/wifi` and `POST /setup`
+   (§8.6) enter the same path, with `persist` implied set - they carry no such
+   bit - so there is one trial machine and three front doors.
 2. On success, **then** store the credentials if `persist`, and re-announce over
    mDNS from the new address. Credentials MUST NOT be stored before they have
    joined: firmware 0.4.0 stored first, and one wrong `SET_WIFI` replaced a working
@@ -920,19 +973,112 @@ disconnecting it cannot. Then:
 3. On failure, fall back per §8.3 to the credentials it had, leave the store
    untouched, and set the join state so `GET_WIFI` reports `ERR_WIFI`.
 
-### 8.3 Fallback rule
+### 8.3 Joining a network
 
-1. Try stored credentials, 3 attempts.
-2. If that fails, try the compile-time credentials.
-3. If that also fails, display the failure on the panel: the SSID tried, the
-   error, and "hold the button / connect serial". The device is a display; it
-   should say why it is not working rather than requiring a serial monitor.
+The order, the counts and the timeouts are one state machine -
+`crates/provision`'s `Provisioner`, which the firmware and `crates/sim` both
+drive - and the constants below are its `Timing::SPEC`, named as it names them.
+The machine never sees a password: an event carries the SSID and the caller
+holds the credential until the machine asks for it to be committed, which is
+§8.4's invariant made structural.
+
+**At boot**, in order:
+
+1. the **stored** credentials, if the store holds a pair;
+2. the build's **compile-time** credentials, if it has any. A default build has
+   none and its `build.rs` does not look for any; the one build that does is
+   the off-by-default `bench-wifi` build, for testing (device-web decision 6).
+   A compile-time pair that joins **seeds an empty store**; it never replaces a
+   stored pair that failed, which is the owner's to replace and not a test
+   build's to overwrite;
+3. otherwise - nothing stored and nothing compiled in, or both exhausted - the
+   **portal** of §8.1. The portal is never terminal.
+
+Each target gets `join_attempts` = 3 attempts and each attempt is bounded by
+`join_attempt_ms` = 15 s, so a target is ~45 s. The deadline is the machine's
+own, so a radio that never answers still advances. **A join is not a join until
+there is an address**: an association with no DHCP answer is a failed attempt.
+
+**Credentials posted** - to `POST /api/v1/wifi`, to `POST /setup` or by
+`SET_WIFI` - start a **trial**, from whatever state the device is in:
+
+- **Nothing is written to the store.** The pair is held in RAM and committed
+  only after the join has succeeded (§8.2 records what it cost to learn that).
+- A trial makes up to `trial_attempts` = 3 attempts, **except that an
+  authentication failure is not retried at all**: a wrong password is
+  deterministic, and three attempts is 45 s of somebody holding a phone for the
+  same answer.
+- A trial posted **to the portal** keeps the AP up throughout, so the page that
+  posted can be told what happened; a failure returns to the portal, which
+  shows the reason.
+- A trial posted **while the device is online or joining** raises no AP: there
+  is one station, so it drops the association it has, and there is nobody on a
+  setup network to inform. A failure goes back to the **stored** credentials
+  (then the compile-time pair, then the portal only if there is nothing at
+  all) and **never clears the store**. The panel stays the stream's, the
+  telemetry `state` byte takes **no** `PROVISIONING` overlay - nothing about
+  this device is in setup - and `ip` is `None` for the length of the trial.
+- A failed online-origin trial is **sticky**: `GET_WIFI` reads `FAILED` and
+  `GET /api/v1/wifi` carries the reason until the next post, a credentials wipe
+  or a reboot - the previous network reconnecting is not an answer to "did the
+  pair I just gave you work".
+- A second post while a trial is in flight cancels it and starts again with the
+  new pair, down the channel the second post arrived on.
+
+On success the credentials are committed, mDNS re-announces (§5.3), and:
+
+- a soft-AP that is up stays up for `ap_grace_ms` = 30 s, whatever raised it,
+  so a phone standing on the portal can reload the page and read the new
+  address; and
+- after a **portal** trial only, the acquired address goes on the panel for
+  `connected_screen_ms` = 60 s. It yields to a stream: the phone's page carries
+  the address too, and a panel that is being sent a picture shows the picture.
+
+**While the portal is up**, if the store holds credentials and **no station is
+associated to the AP**, the stored pair is retried every `portal_retry_ms` =
+10 minutes, so the 3 a.m. router reboot heals itself. A retry is suppressed
+while somebody is on the AP, because it would cost them a ~45 s outage, and
+suppressing it does not reset the timer: it fires on the first tick after the
+last client leaves. The AP stays up across the retry.
+
+**While online**, a link that goes down and stays down for `link_down_ms` =
+60 s returns the device to step 1. A link that comes back inside that window is
+not an event. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
+once.)
+
+A credentials wipe - the button's five-second hold - erases the store and opens
+the portal from any state, and after one `GET_WIFI` reads `DISCONNECTED` rather
+than `FAILED`, because a wipe is not a failure. The machine defines it; no
+event in firmware 0.5.1 produces one yet (card 230).
+
+`GET_WIFI`'s state byte (§6.3) is this machine's, with the sticky trial result
+folded in:
+
+| Machine state | `GET_WIFI` `state` |
+|---|---|
+| before the first decision | 0 `DISCONNECTED` |
+| joining, or a trial in flight | 1 `CONNECTING` |
+| online | 2 `CONNECTED` |
+| portal, nothing having failed to get there | 0 `DISCONNECTED` |
+| portal after a failure, or a sticky failed trial | 3 `FAILED` |
+
+`GET /api/v1/status`'s `wifi_state` is **the link** and takes no sticky value
+(§8.6); the sticky result belongs to `GET /api/v1/wifi` alone.
 
 ### 8.4 Security posture for v1
 
 The project owner has stated the Wi-Fi password is not a secret, so `SET_WIFI`
-and `REBOOT` are unauthenticated on the LAN in v1. This is a deliberate
-simplification, not an oversight.
+and `REBOOT` are unauthenticated on the LAN in v1, and so is **every route of
+the HTTP API**, settings and the reserved firmware upload included
+(device-web decision 3). The setup AP of §8.1 is **open**, so the home PSK
+crosses it in clear while setup is happening (decision 2). All of this is a
+deliberate simplification, not an oversight.
+
+The API is nevertheless *shaped* for a PIN: every mutating request may carry a
+`pin` and a monotonic `counter`, which are parsed and ignored today, and
+`crates/device-api`'s `request::check_auth` is the single hook every mutating
+route already calls. The error code `unauthorized` (401) is reserved for it and
+nothing returns it.
 
 What an untrusted-LAN deployment would need, recorded now so it is not
 rediscovered later (card 041):
@@ -946,8 +1092,231 @@ rediscovered later (card 041):
   drawing on the panel, and the `LOCK_MS` rule already bounds that to an
   annoyance rather than a takeover.
 - Invariant that holds in **all** versions including v1: the PSK is never
-  returned by `GET_WIFI`, never appears in telemetry, and is never shown on the
-  panel or printed by the serial console.
+  returned by `GET_WIFI`, never appears in telemetry, is never carried by any
+  HTTP reply, and is never shown on the panel or written to a log line. It is
+  enforced rather than remembered: no reply type in `crates/device-api` has a
+  field for one (`tests/no_psk.rs` serialises a worst-case value of every reply
+  and greps the bytes, and `screeny-probe http` rule 38 does the same over the
+  wire), the one request type that holds a PSK prints its length and not its
+  bytes, and `crates/provision`'s machine has nowhere to put one at all.
+
+### 8.5 The HTTP API: transport
+
+The device serves one HTTP API and two HTML pages. The routes, the request and
+reply bodies, the error shape and every bound are **one crate**,
+`crates/device-api` (`screeny-device-api`), which the firmware, `crates/sim`
+and the Studio all link; `crates/device-api/tests/golden/` holds a checked-in
+example of every body, and `screeny-probe http` holds a device to the 38 rules
+of `crates/probe/src/http/rules.rs`. Rule numbers are cited below where one
+pins a sentence.
+
+| | |
+|---|---|
+| Transport | **TCP 80**, fixed. No TLS. |
+| Version | HTTP/1.1. Every response carries `Connection: close`; keep-alive is off. |
+| Authentication | none (§8.4). |
+| Advertised | `_http._tcp.local.` on port 80, sharing the instance name, host name and `A` record of §5.1's `_screeny._udp`. |
+| Concurrency | a device SHOULD serve at least **two** connections at once. |
+| Timeouts | 3 s to send a request line, 5 s to finish a request that has started, 5 s for the response to be accepted. |
+
+Keep-alive is off on purpose: with a handful of workers, one browser polling a
+page would hold one of them for as long as the tab is open, and closing after
+each response bounds the worst wait to one response time. Two workers is a
+floor rather than a detail because smoltcp has **no listen backlog** - a
+connection arriving while every worker is busy is *refused*, not queued - and
+iOS does not retry a refused connection where macOS retries after a second.
+
+**Which interface.** Every worker follows the soft-AP: while the AP of §8.1 is
+up the API is served on 192.168.4.1 and **not** on the station address, and the
+rest of the time it is served on the station address. The station has no
+network while the portal is up, so there is nobody on the LAN for the borrowed
+worker to have served; the window where both exist is §8.3's 30 s grace.
+
+The request line, the headers and the body of a buffered route MUST fit the
+server's request buffer together (1,536 bytes in firmware 0.5.1, against a
+desktop browser's ~700 bytes of headers and §8.8's 384-byte body bound). A
+request that overruns it is **answered** `payload_too_large`, not dropped.
+
+### 8.6 The HTTP API: routes
+
+| Method | Path | Request | Reply | Request <= |
+|---|---|---|---|---|
+| GET | `/` | - | the status page, or the setup page on the AP (§8.9) | - |
+| GET | `/setup` | - | the setup page (§8.9) | - |
+| POST | `/setup` | urlencoded `ssid=&psk=` | the setup page, saying what is happening | 384 |
+| GET | `/api/v1/status` | - | `StatusReply` | - |
+| GET | `/api/v1/telemetry` | - | `TelemetryReply` | - |
+| GET | `/api/v1/networks` | - | `NetworksReply` | - |
+| GET | `/api/v1/wifi` | - | `WifiReply` | - |
+| POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
+| POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
+| POST | `/api/v1/firmware` | **reserved**, see below | - | - |
+| POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
+| POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |
+
+`GET` and `POST` are the only methods this API defines; §8.8 says what any
+other verb gets. `api` is the first field of `StatusReply` and is
+`API_VERSION` = 1, the same 1 as the path prefix: a breaking change to any
+shape here bumps it and moves the prefix, a new optional field does not.
+
+- **`status`** is the `GET_INFO` and telemetry numbers a person or the Studio
+  wants in one request, plus `boot_id` (a random `u32` drawn once at boot, so a
+  reader can tell a reboot from a link flap without inferring it from uptime
+  going backwards), `stack_free`, `store_errors`, `portal`, `fw_slot`,
+  `fw_state` and `reset_reason`. Its `wifi_state` is **the link** -
+  `connected` / `connecting` / `disconnected` - and never the sticky result of
+  the last credentials attempt (§8.3; probe rule 8).
+- **`telemetry`** is the 48 bytes of §6.7 as named fields, so a browser and a
+  UDP sender see the same numbers (rule 10). It is the numbers and not an
+  interpretation of them: `state` and `last_codec` are the raw bytes here,
+  where `status.state` is the same byte as a word.
+- **`networks`** is a scan: at most 16 entries, strongest first, one really
+  performed scan per `SCAN_MIN_INTERVAL_MS` = 10 s (rules 11, 12). A scan takes
+  the radio off its channel for the better part of a second per band, which on
+  a device that is also receiving frames is a visible stall, so a caller that
+  asks sooner gets `rate_limited` and SHOULD be told in `detail` how long to
+  wait; being refused does not push the window out. An SSID that is not UTF-8
+  is left out of the list rather than shown wrongly.
+- **`GET wifi`** is what the setup page's reload reads: `{state, ssid, ip,
+  reason}`, where a trial in flight or just finished wins over the station's
+  own state for as long as §8.3 says it is current, and `reason` is
+  `auth` / `not_found` / `other`. `reason` is non-null exactly when `state` is
+  `failed` (rule 14).
+- **`POST wifi`** and **`POST /setup`** take the same bytes and start the same
+  trial (§8.3); one answers JSON and the other HTML. The reply goes out
+  **before** the radio work starts, for §8.2's reason, and the credentials
+  reach flash only after they have joined. Neither carries a `persist` bit.
+- **`settings`** changes any subset of the three live settings; an absent field
+  means "leave it alone" and an empty request is a no-op, not an error. The
+  reply is the whole settings state after clamping, not an echo, so a caller
+  that moved only the brightness still learns the name and a caller whose
+  brightness was capped learns the cap. `name: ""` means "go back to
+  `screeny-<id>`" - a rule of this route only; `SET_NAME` (§6.3) takes the
+  string literally.
+- **`reboot`** takes the same four bytes as §6.3's `REBOOT` magic, spelled
+  `"RBOO"`, so that a crawler, a prefetcher or a captive probe cannot restart
+  the panel. A body that parses with the wrong word is `out_of_range`, not
+  `bad_request`: what is wrong is the value (rule 34). The reply goes out
+  before the restart.
+- **`identify`** mirrors `IDENTIFY`, whose wire field is a `u16` of
+  milliseconds, so a `duration_ms` above 65535 is `out_of_range` (rule 22).
+- **`firmware`** is **reserved for cards 240/241** and is not specified here.
+  Until it lands, a device MUST answer it `unavailable` rather than accepting
+  an upload it cannot vouch for (§8.8).
+
+`settings` and `identify` are carried out by building the control request of
+§6.3 and handing it to the same code the control port calls, with `req_id` 0 -
+§6.1's "no reply wanted". The brightness cap, the name truncation, the idle
+mode, the debounced store write and the mDNS re-announce are therefore one
+implementation with two front doors.
+
+### 8.7 The HTTP API: bodies and errors
+
+Request bodies are JSON, **except** `POST /api/v1/wifi` and `POST /setup`,
+which are `application/x-www-form-urlencoded`. That is not a style choice: an
+802.11 SSID is a byte string and not text, and the form is what an iOS captive
+mini-browser can post at all. The parser takes bytes, decodes `+` and `%XX`,
+ignores unknown keys so a page can carry a hidden field without a firmware
+change, treats a missing or empty `psk` as an open network, refuses an empty
+`ssid` (§8.2 says `ssid_len` is `1..=32`), and **refuses a duplicate key**
+rather than taking the last one: `psk=right&psk=wrong` must not be a coin toss
+about what reaches flash.
+
+An SSID is bytes on the way in and text on the way out. One that is not UTF-8
+is reported as `null` rather than lossily converted, because a lossy conversion
+changes its length and misleads whoever is comparing it with what they typed.
+
+Everything that fails answers **one shape** on every route, including the 404
+for an unknown path:
+
+```json
+{"error":"<code>"}
+{"error":"<code>","detail":"<a short sentence, <= 48 characters>"}
+```
+
+`detail` is for the person and is absent - not `null` - when there is nothing
+useful to add; a sentence that does not fit is dropped rather than truncated.
+The code is for the program and the HTTP status is a property of the code, so
+that a browser switching on the status and a caller switching on the code
+cannot disagree (rules 37, 27):
+
+| Status | Codes |
+|---|---|
+| 400 | `bad_request`, `bad_form`, `bad_json`, `out_of_range` |
+| 401 | `unauthorized` (reserved, §8.4) |
+| 403 | `forbidden` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 409 | `busy` |
+| 413 | `payload_too_large` |
+| 429 | `rate_limited` |
+| 500 | `storage`, `wifi`, `internal` |
+| 503 | `unavailable` |
+
+That is the closed set. A refusal a sender would have met on the control port
+has the same name here: §6.5's `ERR_BAD_LENGTH` and `ERR_VERSION` are
+`bad_request`, `ERR_UNKNOWN_OP` is `not_found`, `ERR_BUSY` is `busy`,
+`ERR_BAD_ARG` is `out_of_range`, `ERR_STORAGE` is `storage`, `ERR_WIFI` is
+`wifi`, `ERR_NOT_PERMITTED` is `forbidden` and `ERR_RATE_LIMITED` is
+`rate_limited`.
+
+### 8.8 The HTTP API: limits, methods and paths
+
+- **Every route declares its own request bound** (§8.6's last column) and it is
+  enforced on that route, not only at the global maximum of 384 bytes: a
+  153-byte body to `identify` is `payload_too_large`, although 153 is well
+  inside 384 (rules 28, 29). The global bound is the WiFi form's, which is the
+  longest body any route takes.
+- **Reply bounds are documentation, not buffers.** A JSON reply is measured
+  into a counting writer and then streamed, so no reply needs a buffer; the
+  bounds exist for callers deserialising into fixed arrays and for the honest
+  answer to "how big can this get" (rule 36). Worst case: `status` 1,039,
+  `telemetry` 426, `networks` 3,710, `wifi` 345, `settings` 247,
+  `{"result":...}` 24. They assume every byte of every name escaping to six
+  characters, which is why a real status reply is about 385 bytes.
+- **A route this build cannot serve answers `unavailable` (503)**, not 404 and
+  not a qualified success: the route exists and the device cannot serve it in
+  this state, and retrying later is the right behaviour. Firmware 0.5.1 answers
+  it for `GET /api/v1/networks` and `POST /api/v1/firmware`.
+- **A known path with a method it does not have is 405; an unknown path is
+  404** (rules 25, 27), and a verb this API has no method for at all - `PUT`,
+  `DELETE`, `HEAD` - is 405 **in the error shape above**, not a server's
+  built-in plain text (rule 26). `HEAD /` is a 405 by that rule.
+- **A path is matched decoded and exactly**: `/api/v1/%73tatus` is `status`,
+  and `/api/v1/status/` is not a route.
+
+### 8.9 The HTTP API: the pages and the captive catch-all
+
+`GET /` on the station interface is the **status page**: one self-contained
+HTML file with its status table already rendered by the server, so that it
+works with JavaScript disabled, and with no external stylesheet, script, font
+or image - a device on a network with no route out must not be waiting on a CDN
+(rule 30). With JavaScript the page replaces the same table every few seconds
+from `GET /api/v1/status`.
+
+`GET /` on the **AP** interface is the setup page of §8.1 instead: a client
+that was dragged there by the QR code or by the catch-all is there to type a
+network name, not to read a status table. `/setup` itself answers on both
+interfaces, so the form is reachable over the LAN too.
+
+**The captive catch-all.** On the AP interface, and only while the AP is
+actually up, a request for a path this server does not have is answered with
+**the setup page itself, `200`, `Cache-Control: no-store`** - not a redirect to
+it, and not a 404. `/`, `/setup` and every route of §8.6 are unaffected, so a
+phone on the setup network can still read the API. On the station interface the
+same request is an ordinary 404: the catch-all is a property of the **listener**
+and not of the `Host:` header.
+
+It is a `200` and not a `302` because of what the owner's phone did on
+2026-09-20 (iOS 18.7, card 223). The captive sheet fetches
+`hotspot-detect.html` on one connection and opens a second it never uses, which
+holds a worker for its read timeout; a redirect made it open a *third* within
+milliseconds, while the worker that had just answered was between `close` and
+`accept`; smoltcp refused the SYN and iOS did not retry it, so the sheet said
+it could not connect to the server. Any reply that is not Apple's `Success`
+page, not a `204` and not Microsoft's text marks the network as captive, so the
+form does that job from the connection the sheet already has. `no-store` is
+there because a cached captive probe is a sheet that never opens again.
 
 ---
 
@@ -1161,6 +1530,25 @@ implementation is for. None of them changes a byte on the wire.
 29. **A datagram larger than 1472 bytes** - discarded and counted, not parsed
     from its truncated prefix (section 1).
 30. **What `frames_rejected` counts** - the frame port only (section 2.2).
+
+Closed by card 225 (2026-09-20), bringing section 8 in line with what firmware
+0.5.1 does and giving the HTTP API a normative home. Nothing here changes a
+byte on the wire; `txtvers` and `proto` are unaffected.
+
+31. **The serial console of 8.1** - struck. It was never built and will not be:
+    the portal, the settings page and `SET_WIFI` are the three paths
+    (device-web decision 5, section 8.1).
+32. **Compile-time credentials** - step 2 of the join order, present only in a
+    `bench-wifi` build, and they seed an **empty** store rather than replacing
+    a stored pair that failed (device-web decision 6, section 8.3).
+33. **What a posted pair does** - one trial machine behind three front doors,
+    committing nothing until it has joined, not retrying an authentication
+    failure, and falling back to the stored network with a sticky `FAILED`
+    when it was posted to a device that was already online (section 8.3).
+34. **The HTTP API** - sections 8.5-8.9: transport, the route table, the
+    bodies, the one error shape and its statuses, the limits, the two pages
+    and the captive catch-all. `POST /api/v1/firmware` is **reserved** for
+    cards 240/241 and is deliberately not specified.
 
 Still open (do not block implementation):
 
