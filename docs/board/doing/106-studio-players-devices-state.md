@@ -228,3 +228,103 @@ here could reach the bench panel even in principle.
 One card 105 test (`the_socket_carries_the_heartbeat`) was made non-flaky: it took the
 first heartbeat, which can legitimately arrive between a piece being rebuilt and its
 first frame. It now waits for one that carries "now playing", which is what it meant.
+
+### Step 4 - the dashboard, and the first time any of this was rendered
+
+`crates/studio/ui/dashboard.{html,css,js}`, served at `/dashboard`, with one link to it
+from the design view's readout row. `dashboard.css` borrows `style.css` whole - the same
+tokens, type and controls - and overrides only what a scrolling page of cards needs that
+a fixed two-column bench did not; the design view itself gains one link and two CSS
+rules and nothing else.
+
+One card per panel: **what it plays** (piece, seed, rate, on/off), **is it healthy**
+(link state and fps, frames sent/folded/lost, last codec and size, reconnects, rendered
+frames and measured fps, faults; then the device's own telemetry - state, frames shown,
+uptime, RSSI, drops by cause and seq gaps - and firmware and panel size), and **let me
+change it** (brightness, identify, rename, reboot behind a `confirm()`, forget, and
+"Play my preview"). Plus adding a panel by name or address, and a server card with
+health, the state file, discovery and what the design view is doing.
+
+Decisions worth recording:
+
+- **It does not open the preview socket.** One `GET /api/v1/status` every two seconds,
+  and polling stops when the tab is hidden. A dashboard left open on a phone must not
+  cost 372 KB/s of frames it does not draw (card 120). That is also why there are no
+  thumbnails yet - card 142.
+- Cards are built once per device and updated in place, and anything with focus is left
+  alone: rebuilding would fight a slider under a thumb.
+- **Brightness**: the slider's lowest non-zero stop is 6 (`BRIGHTNESS_FLOOR`), because
+  1..=5 light nothing while `applied` echoes them - card 136. One constant and one
+  helper, and `tests/ui.rs` asserts it stays that way so 136 can delete it in one edit.
+  The maximum is the device's own cap, which is learned the only way there is: ask for
+  more than it will give and see what comes back.
+- Static files only. A test asserts neither page contains `http://`, `https://`, `cdn.`,
+  `unpkg` or `jsdelivr`: the box it runs on has no promise of internet.
+
+`tests/ui.rs` (4): both pages and all four assets are served (and traversal still 404s);
+the design view links to the dashboard; **every `$('#id')` and `$('.class')` the script
+reaches for exists in the page**; **every `api('...')` it calls is a route the server
+has**. Both of those are silent failures in a browser and loud ones here.
+
+**Rendered in a real browser.** Unlike cards 105 and 121, the Chrome extension *was*
+connected in this worker's environment. With a simulator on loopback the dashboard drew
+correctly, updated live, and the controls worked; the design view rendered too. No
+console errors. Three things the render caught that no test would have:
+
+1. `attempt()`'s default message overwrote the handler's own, so "this panel caps
+   brightness at 120" never reached the notice line. A handler that returns a string now
+   says that instead.
+2. "Frames per second" wrapped to two lines in the label column. It is "Rate".
+3. Cards stretched across the whole window; they cap at 400px.
+
+And one server-side correction it prompted: when a panel caps what was asked for, the
+**stored policy becomes what the panel actually does**, so the state file and the
+dashboard both say the true number rather than asking for 200 for ever and being given
+120.
+
+### Step 5 - the soak, and two more bugs
+
+`crates/studio/tests/soak.rs`, one test, bounded by construction: a fixed deadline
+(`SCREENY_SOAK_SECS`, 60 s by default), a deadline on every wait, and simulators that go
+away with the test. Four kinds of round, repeated until the deadline:
+
+| round | fault |
+|---|---|
+| 1 | 25% of frames never arrive, for three seconds |
+| 2 | the panel is unplugged for seven seconds - past the silence watchdog - and comes back on the same address |
+| 3 | the panel *moves* to another address |
+| 4 | a run of operator changes: three pieces, three rates, new seeds, on both the player and the design view |
+
+After each: the link is up again, frames are flowing again, and `/healthz` is 200. At the
+end: memory, and that each of the four long-lived things is still alive - the render
+thread (frames advancing, `running`), the telemetry poll (telemetry seconds old), the
+state writer (writes > 0, no error) and the preview engine (`alive`, not `wedged`).
+
+The moved-panel round is the one that needs telling. An address is a way of reaching a
+panel and not a name for it, so `POST /api/v1/devices/add {to, device}` moves a device
+that is already known: it keeps its id, its player and its piece, and only the way there
+changes. Following a move *without* being told is what an instance name is for, and card
+141 is the card for doing it without mDNS.
+
+**Two more bugs the soak found:**
+
+5. **A player's frame count restarted with its core.** So every piece change looked like
+   a render loop that had stopped, and "nothing died" could not be asserted. The counter
+   is the player's now, shared with whichever core is running.
+6. **A resolution was thrown away after two seconds unheard**, which rebuilt the link and
+   lost the session - churn on every brief silence, and lifetime counters that reset. How
+   long a resolution may go unconfirmed is `Config::stale_after` now, two minutes by
+   default: a panel rebooting is not a panel that has moved.
+
+### Cards written, not done (reserved range 140-144)
+
+- **140** - a device player's composing pieces cannot be acted on (`Player::act` is a
+  deliberate no-op; it needs a one-slot mailbox the render loop drains, not a lock).
+- **141** - follow a panel that has moved, without being told: the broadcast `GET_INFO`
+  probe (spec 5.5) matched by device id, for the deployments where mDNS is not available.
+- **142** - the dashboard says what each panel plays but does not show it. Thumbnails,
+  after card 120.
+- **143** - the design view's engine has no stall recovery, because that means touching
+  all thirteen of card 105's routes and should not be mixed into a behavioural change.
+- **144** - the preview and a player can fight over the same panel (spec 7.4's source
+  lock). Two candidate answers; the owner should pick.
