@@ -217,6 +217,26 @@ reads `wifi_state: failed` while plainly connected - it looks like a fault and i
 Also for 223: `GET /api/v1/wifi`'s `reason` is `null` after a failed attempt in 0.4.0;
 it must carry `auth` / `not_found` / `other` from the state machine.
 
+**Credentials are stored only after they have joined** (fw 0.4.1, spec 8.2 corrected
+2026-09-20). Firmware 0.4.0 and the spec stored first; the orchestrator's own
+wrong-credentials test over HTTP replaced the working pair in flash, the device ran on
+its in-RAM fallback until the next reboot and then could join nothing. The handlers now
+hand `NewWifi { wifi, persist }` to the WiFi task, which commits after a successful join;
+a store failure then is counted (`store_errors`), not reported in the reply. Recovery, if
+a device ever has a bad pair in flash: flash a `--features bench-wifi` build (stored pair
+fails three times, the built-ins join), send `screeny-probe set-wifi SSID PSK --persist`,
+flash the default build. **Bench rule that follows: after any wrong-credentials test,
+reboot the device and see it rejoin before calling the test passed.**
+
+Where core 0's stack goes (card 227, `docs/research/010-stack-and-ram-levers.md`): not a
+buffer - picoserve's router is nine nested `Either` futures, each layer's `poll` frame
+holding the rest by value: 5,968 (the http task) + 800 + 5,680 + 2,192 + 1,104 = 15.7 KB,
+of which 7.9 KB is dispatch before any handler runs. Interrupts land on the interrupted
+stack (256 bytes of context per level; esp-rtos has no interrupt stack), which is why
+`stack_free` creeps down for an hour: a high-water mark records the unluckiest
+coincidence so far. **Card 233 (one router future instead of nine nested ones, ~7.8 KB)
+goes before card 223.**
+
 What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
@@ -272,6 +292,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | **done, on the device (fw 0.4.0)**: http://192.168.7.221/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
 | 227 | (in flight, hardware) RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
+| 233 | firmware: one router future instead of picoserve's nine nested ones (~7.8 KB of stack depth back); **gates 223** | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
