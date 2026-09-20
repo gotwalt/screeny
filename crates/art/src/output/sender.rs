@@ -91,7 +91,7 @@ pub struct PanelStatus {
 pub struct SenderOutput {
     link: Link,
     label: String,
-    last: Option<(u8, u32, bool)>,
+    last: Option<Sent>,
 }
 
 impl SenderOutput {
@@ -104,12 +104,17 @@ impl SenderOutput {
     ///
     /// If the panel cannot be found or does not answer the handshake.
     pub fn open(target: Target) -> io::Result<Self> {
+        Self::open_with(target, LinkConfig::default())
+    }
+
+    /// As [`SenderOutput::open`], with the link configured by the caller.
+    ///
+    /// # Errors
+    ///
+    /// If the panel cannot be found or does not answer the handshake.
+    pub fn open_with(target: Target, cfg: LinkConfig) -> io::Result<Self> {
         let label = label_of(&target);
-        Ok(SenderOutput {
-            link: Link::open(target, LinkConfig::default())?,
-            label,
-            last: None,
-        })
+        Ok(SenderOutput { link: Link::open(target, cfg)?, label, last: None })
     }
 
     /// Start without a panel and pick one up whenever it appears.
@@ -163,11 +168,23 @@ impl SenderOutput {
         &self.link
     }
 
+    /// What became of the last frame that reached the wire: codec, bytes,
+    /// exactness and the sequence number the panel will report it under.
+    /// `None` until one has.
+    #[must_use]
+    pub fn last_sent(&self) -> Option<Sent> {
+        self.last
+    }
+
     /// Everything worth putting on a status strip, in one read.
     #[must_use]
     pub fn status(&self) -> PanelStatus {
         let s = self.link.stats();
         let lim = self.link.limits();
+        let last = match self.last {
+            Some(Sent::Frame { codec, bytes, exact, .. }) => Some((codec, bytes as u32, exact)),
+            _ => None,
+        };
         PanelStatus {
             target: self.label.clone(),
             state: state_name(self.link.state()),
@@ -182,10 +199,10 @@ impl SenderOutput {
             frames_dropped: s.frames_dropped,
             indexed_exact: s.indexed_exact,
             indexed_fallback: s.indexed_fallback,
-            codec: self.last.map(|l| l.0),
-            codec_name: self.last.map(|l| screeny::codec_name(l.0)),
-            bytes: self.last.map(|l| l.1),
-            exact: self.last.map(|l| l.2),
+            codec: last.map(|l| l.0),
+            codec_name: last.map(|l| screeny::codec_name(l.0)),
+            bytes: last.map(|l| l.1),
+            exact: last.map(|l| l.2),
             last_error: s.last_error.clone(),
         }
     }
@@ -210,8 +227,12 @@ impl Output for SenderOutput {
         };
         // The only errors are ours - a frame of the wrong size, or an index
         // outside its palette. The network cannot get here.
-        if let Sent::Frame { codec, bytes, exact, .. } = self.link.send(px)? {
-            self.last = Some((codec, bytes as u32, exact));
+        let sent = self.link.send(px)?;
+        // A coalesced or dropped frame leaves the last *sent* one standing:
+        // the status strip should keep showing what the panel has, not blank
+        // out every other frame at 60 into 30.
+        if sent.is_sent() {
+            self.last = Some(sent);
         }
         Ok(())
     }

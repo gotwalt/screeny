@@ -148,3 +148,64 @@ colours, because `bc1-dual` is a block codec rather than a palette one.
 
 `cargo build -p screeny-art --no-default-features` and `--features sender` both clean;
 `cargo test --release -p screeny-art --features sender` 37 passed.
+
+### Step 2 - the simulator acceptance, and one environmental finding
+
+`crates/art/tests/sender.rs` (3 tests, all green first time, 2.0 s):
+
+| test | what it pins |
+|---|---|
+| `an_indexed_piece_arrives_pixel_exact` | `clocks-numerals` and `plasma`: every displayed pixel is `palette[index]`, expanded independently of the pipeline, and the preview equals it |
+| `a_continuous_piece_matches_the_preview` | `metaballs`: the device's decoded frame **is** the preview, byte for byte, and its codec and size are the ones the meter reported |
+| `the_meter_agrees_with_the_link` | codec, bytes and exactness identical between `Meter` and `Sent`, every frame |
+
+Per-piece numbers over 30 frames each, from the test's own output (device-side codec
+and size, from `SimDevice::start_with`'s frame sink - the *receiver's* view, not ours):
+
+| piece | displayed | exact / fallback | mean bytes | codec |
+|---|---|---|---|---|
+| `clocks-numerals` | 30/30 | 30 / 0 | 471 | `pal8-lz` |
+| `plasma` | 30/30 | 30 / 0 | 1365 | `pal8-lz` |
+| `metaballs` | 30/30 | 0 exact | 1164 | `pal8-lz` |
+
+The tests send with `Cadence::Free` deliberately. The meter and the sender each hold
+their own `Encoder`, and the chooser's hysteresis means two encoders agree only if they
+are shown the same frames; one in, one out is what makes "the preview is what the panel
+shows" checkable rather than usually-true. Under the default `Cadence::Limit` a 60 fps
+piece coalesces half its frames and the meter's history would drift from the sender's -
+worth knowing, harmless in practice (the drift can only change a *marginal* frame's
+codec, never its exactness), and the reason the comparison is pinned this way.
+
+`screeny-art play` against a headless `screeny-sim` on loopback, `--exit-after` on the
+sim and `timeout` on the run, nothing left behind (`ps` clean):
+
+```
+screeny-art play plasma          --to 127.0.0.1:50600 --seconds 10 --seed 7
+  600 offered, 300 sent, 300 coalesced, 0 dropped; exact 300 / fallback 0; pal8-lz ~1365 B
+  device: rx 300 shown 300 gaps 0 stale 0 super 0 dec 0 rej 0, 30 fps
+screeny-art play clocks-numerals --to 127.0.0.1:50604 --seconds 8  --seed 7
+  480 offered, 240 sent, 240 coalesced, 0 dropped; exact 240 / fallback 0; pal8-lz ~600 B
+  device: rx 240 shown 240, all counters 0, 30 fps
+screeny-art play metaballs       --to 127.0.0.1:50602 --seconds 8  --seed 7
+  456 offered, 228 sent, 228 coalesced, 0 dropped; exact 0; pal8-lz ~1100 B, bc1-dual on some frames
+  device: rx 228 shown 228, all counters 0, 30 fps
+screeny-art play clocks-numerals --to screeny-sim-101 --seconds 6  --seed 7   # by mDNS name
+  360 offered, 180 sent, 180 coalesced, 0 dropped; exact 180 / fallback 0
+  device: "lock released by 127.0.0.1:51695: Final", Live -> Hold
+```
+
+The thing worth reading twice: **`super 0`**. The piece renders at 60, the link puts 30
+on the wire, and the device never superseded a frame. That is section 5's promise,
+measured. `metaballs` offered 456 rather than 480 in eight seconds because
+supersampling it costs more than a 60 Hz slot; the loop skips rather than bursting, as
+it should.
+
+**Finding: LAN unicast does not work from this worker's environment.** Sending to the
+simulator at this Mac's own LAN address fails where loopback succeeds, and the
+*reference* `screeny` binary fails identically - `screeny info --addr
+192.168.7.203:50608` returns "no reply ... after 4 tries" and prints its own Local
+Network hint, while `--addr 127.0.0.1:50608` answers instantly. So it is not this
+card's code: it is macOS Local Network permission for processes this session starts.
+mDNS browsing works (the name resolved to the right host and port); only the unicast
+that follows is dropped. Consequence for the real-panel step: see the note at the end
+of this log.
