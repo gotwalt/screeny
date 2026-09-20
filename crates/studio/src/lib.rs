@@ -55,7 +55,7 @@ use crate::api::{StateEvent, StatusEvent};
 use crate::devices::Registry;
 use crate::engine::{lock, Engine, Shared, StudioState};
 use crate::player::Players;
-use crate::state::Store;
+use crate::state::{SharedMemory, Store};
 
 /// State changes a browser may be behind by before it is resynced instead.
 /// Small on purpose: the newest state is always the right answer, so there is
@@ -172,6 +172,10 @@ pub struct AppState {
     pub players: Arc<Players>,
     /// The state file.
     pub store: Arc<Store>,
+    /// The studio's one per-piece settings memory (card 165): what each piece
+    /// was last left set to, wherever it was left. The design view and every
+    /// panel share it, and it is written to `state.json` and nowhere else.
+    pub memory: SharedMemory,
     pub cfg: Arc<Config>,
     /// How the preview engine is doing.
     pub preview: Arc<PreviewHealth>,
@@ -192,6 +196,7 @@ impl AppState {
         players: Arc<Players>,
     ) -> Self {
         let packet = lock(&engine).packet();
+        let memory = players.memory();
         AppState {
             frames: watch::Sender::new(packet),
             states: broadcast::Sender::new(STATE_BACKLOG),
@@ -202,6 +207,7 @@ impl AppState {
             devices,
             players,
             store,
+            memory,
             cfg,
             preview: Arc::new(PreviewHealth::default()),
             started: Instant::now(),
@@ -236,6 +242,10 @@ impl AppState {
             devices: self.devices.stored(),
             players: self.players.stored(),
             preview,
+            // Card 165. It lives here and nowhere else: the state file in
+            // `SCREENY_STATE_DIR` is the volume the container keeps across a
+            // rebuild, so this is what makes the memory survive a deploy.
+            pieces: self.memory.snapshot(),
         });
     }
 
@@ -303,14 +313,19 @@ impl Studio {
         let devices = Arc::new(Registry::new());
         devices.load(saved.devices);
         devices.set_discovery_enabled(cfg.discover);
-        let players = Arc::new(Players::new());
+        // One settings memory for the whole studio: the design view and every
+        // panel read and write the same map (card 165, as the orchestrator
+        // revised it - the browser is a window onto what the panel is doing).
+        let memory = SharedMemory::new(saved.pieces);
+        let players = Arc::new(Players::new(memory.clone()));
         for p in saved.players {
             players.load(p, cfg.fault_pieces);
         }
 
         let engine: Shared = Arc::new(Mutex::new(Engine::new()));
         lock(&engine).allow_faults(cfg.fault_pieces);
-        restore_preview(&engine, &saved.preview, cfg.fault_pieces);
+        lock(&engine).use_memory(memory.clone());
+        restore_preview(&engine, &saved.preview, cfg.fault_pieces, memory.knows(&saved.preview.piece));
 
         let (stop, _) = watch::channel(false);
         let cfg = Arc::new(cfg);
@@ -321,7 +336,7 @@ impl Studio {
             Arc::clone(&cfg),
             store,
             devices,
-            players,
+            Arc::clone(&players),
         );
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
@@ -417,14 +432,30 @@ fn router(state: AppState) -> Router {
 /// Deliberately forgiving: a piece that no longer exists, a parameter that has
 /// been renamed and an fps that is no longer offered are each ignored rather
 /// than fatal. A state file from an older build must never stop the server.
-fn restore_preview(engine: &Shared, saved: &state::StoredPreview, faults: bool) {
+fn restore_preview(engine: &Shared, saved: &state::StoredPreview, faults: bool, remembered: bool) {
     let mut e = lock(engine);
-    if player::find_piece(&saved.piece, faults).is_some() && e.set_piece(&saved.piece).is_err() {
-        eprintln!("studio: the saved piece `{}` could not be loaded; starting on the default", saved.piece);
-    }
-    e.set_seed(Some(saved.seed));
-    for (id, v) in &saved.params {
-        let _ = e.set_param(id, *v);
+    // The engine already has the studio's one memory, so putting the saved
+    // piece back is an ordinary switch: it arrives set up the way it was left,
+    // and so does every *other* piece the moment somebody asks for one. That
+    // is the half of card 165 that a restart has to carry.
+    let restored = player::find_piece(&saved.piece, faults).is_some() && e.set_piece(&saved.piece).is_ok();
+    if restored && !remembered {
+        // Only when the memory has nothing for this piece - a file written
+        // before card 165 has already been migrated, so this is the
+        // hand-edited case. The memory is otherwise the one answer, and
+        // preferring these would undo the v1 merge's "the panel's values win".
+        e.set_seed(Some(saved.seed));
+        for (id, v) in &saved.params {
+            let _ = e.set_param(id, *v);
+        }
+    } else if !restored && !saved.piece.is_empty() {
+        // Its memory is kept, so a piece that comes back in a later build
+        // comes back set up the way it was left.
+        eprintln!(
+            "studio: the saved piece `{}` is not in this build; starting on `{}` and keeping its settings",
+            saved.piece,
+            e.snapshot().piece
+        );
     }
     e.set_settings(saved.settings);
     e.set_playback(saved.paused, saved.speed, saved.fps);

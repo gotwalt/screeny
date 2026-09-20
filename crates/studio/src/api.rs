@@ -348,6 +348,11 @@ struct SetPlayer {
     seed: Option<u32>,
     #[serde(default)]
     param: Option<ParamChange>,
+    /// "Reset": this piece back to its defaults on this panel, and forget what
+    /// was remembered for it here (card 165). The design view's equivalent is
+    /// `POST /reset_params`.
+    #[serde(default)]
+    reset_params: bool,
     #[serde(default)]
     fps: Option<f64>,
     #[serde(default)]
@@ -382,6 +387,7 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
             piece: req.piece,
             seed: req.seed,
             param: req.param.map(|p| (p.id, p.value)),
+            reset_params: req.reset_params,
             fps: req.fps,
             settings: req.settings,
             brightness: req.brightness,

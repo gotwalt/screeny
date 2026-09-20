@@ -97,6 +97,58 @@ moved aside rather than parsed or deleted. **Missing, empty, truncated, corrupt,
 wrong-typed or from the future all start a sane default and say why once** - a state
 file is never a reason for the server not to run.
 
+**What each piece was left set to** (card 165, schema v2) is in that same file and
+**nowhere else**: no second file, nothing in the working directory, nothing in the
+browser's `localStorage`. That matters operationally - the container mounts a volume at
+`SCREENY_STATE_DIR` and only what is written there survives an image rebuild - and it is
+why switching pieces and switching back gives you what you had, before and after a
+`docker restart`.
+
+```jsonc
+"preview": { "piece": "metaballs", ... },   // what the design view is showing
+"players": [ { "device": "4a00a4", "piece": "plasma", ... } ],
+"pieces": {                                 // and how each piece is set, once
+  "plasma":    { "seed": 111, "params": { "scale": 2.5 } },
+  "metaballs": { "seed": 222, "params": { "count": 8 } }
+}
+```
+
+There is **one** memory for the whole studio, not one per context: tuning a piece
+anywhere updates it, switching to a piece anywhere restores from it. (The card asked for
+one per context; the orchestrator reversed that on 2026-09-19 because the browser is
+meant to be a window onto what the panel is doing, and card 170 unifies the preview and
+the player into one engine. A per-context memory would have been built for a distinction
+that is about to go away.) Which piece is showing where is still per context - the design
+view and a panel can be on different pieces - it is only *how a piece is set* that is one
+fact.
+
+**Only what differs from the piece's defaults is stored**, so a later release's better
+default still reaches everybody who never moved that slider, and the file stays small.
+The seed is remembered with the parameters; the pipeline `settings` (levels, dither,
+limiter) are not - those are about the panel, not about the piece.
+
+**A remembered value can never break a piece.** Pieces gain, lose and re-range
+parameters between releases, so every value is checked against this build's own spec on
+the way in, one value at a time: a parameter that has gone away is ignored, one outside
+the range is clamped to it (which is what the slider would do), and one that is not a
+finite number at all goes back to the piece's default. One bad value never costs the
+rest of that piece's memory, and - this is the part worth stating, because it is the
+difference between a repair and card 106's `state.bad.json` - it never costs the rest of
+the file. An entry for a piece this build has not got is **kept**, so a piece that comes
+back in a later release comes back set up the way it was left; at most 64 such entries
+are kept, so a hand-edited file cannot grow for ever. Whatever had to be corrected is
+said once, on the way in, and appears under `state.repaired` in `/api/v1/status`. It is
+not a fault and never a 503.
+
+"Reset" (`POST /reset_params`, or `player/set {reset_params: true}`) means *back to the
+defaults and stay there*: it forgets that piece's parameters rather than handing them
+back on the next switch. It leaves the seed alone, which is what Reset is about.
+
+A **v1** state file - what a service deployed before this card has - is migrated: what
+the design view and each panel were playing is merged into the one map, so nobody loses
+the tuning they have. Where the design view and a panel were on the same piece with
+different values, **the panel's win**: the panel is what was being looked at.
+
 **Stopping is clean.** Ctrl-C and `SIGTERM` (what `docker stop` sends) release every
 panel with `FINAL` and flush the state file, rather than leaving the panels on the last
 frame until their stream timeout.
@@ -170,7 +222,7 @@ switch on answers at once whether or not the panel is there. Every change is per
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |
 | `POST /devices/forget` | `{device}` | the player and the settings go with it |
 | `POST /devices/refresh` | `{}` | ask every unresolved panel who it is, now |
-| `POST /player/set` | `{device, on?, piece?, seed?, param?, fps?, settings?, brightness?}` | the player |
+| `POST /player/set` | `{device, on?, piece?, seed?, param?, reset_params?, fps?, settings?, brightness?}` | the player |
 | `POST /player/adopt_preview` | `{device}` | the player - "play what I am previewing" |
 | `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the policy |
 | `POST /device/identify` | `{device, ms?}` | |
@@ -220,4 +272,5 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
 | `tests/ui.rs` | both pages are served, every element the dashboard reaches for exists, and every route it calls exists |
+| `tests/memory.rs` | card 165: switch away and back in the design view and on a panel; a second browser sees the restored values; one memory shared by the browser and the panel; Reset stays reset; promoting the preview needs no copy; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |
