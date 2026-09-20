@@ -312,6 +312,7 @@ fn status(shared: &Shared) -> Response {
         id: screeny_device_api::text::text(&ident.id).unwrap_or_default(),
         name: screeny_device_api::text::text(core.name()).unwrap_or_default(),
         fw: screeny_device_api::text::text(&ident.fw).unwrap_or_default(),
+        boot_id: ident.boot_id,
         uptime_ms: t.uptime_ms,
         heap_used: ident.heap_used,
         heap_size: ident.heap_size,

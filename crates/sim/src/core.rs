@@ -102,6 +102,7 @@ struct Sim<'a> {
     env: &'a Env,
     panel: &'a mut Panel,
     wifi: &'a mut WifiModel,
+    ident: &'a mut Ident,
     /// The time the caller was given. `Host::micros` measures from the core's
     /// own epoch; this is the device's, and it is what the provisioning
     /// machine has to be driven with so every part of the simulator agrees
@@ -140,6 +141,13 @@ impl rx::Host for Sim<'_> {
                 self.panel.brightness = applied;
                 self.panel.apply(&self.env.panel_model);
             }
+        }
+        // A reboot the simulator does not carry out still has to be visible:
+        // `boot_id` is the one thing a client can tell a restart by, and both
+        // `REBOOT` over UDP and `POST /api/v1/reboot` arrive here, so drawing
+        // it once in this arm covers both by construction.
+        if matches!(e, rx::Event::Reboot) {
+            self.ident.boot_id = draw_boot_id();
         }
         if let Some(e) = Event::from_shared(&e) {
             self.out.events.push(e);
@@ -214,6 +222,10 @@ pub struct Core {
 pub struct Ident {
     /// The stable short device id.
     pub id: String,
+    /// A random number drawn once at boot, and again whenever the device
+    /// reboots. Same id as last time means the link flapped; a different one
+    /// means it restarted. See [`draw_boot_id`].
+    pub boot_id: u32,
     /// The firmware version string.
     pub fw: String,
     /// Heap in use, bytes. A plausible constant.
@@ -270,6 +282,7 @@ impl Core {
             wifi: WifiModel::new(cfg, display_addr(cfg.bind), events),
             ident: Ident {
                 id: cfg.id.clone(),
+                boot_id: draw_boot_id(),
                 fw: cfg.fw.clone(),
                 heap_used: 64 * 1024,
                 heap_size: 96 * 1024,
@@ -425,6 +438,7 @@ impl Core {
             panel,
             survivor,
             wifi,
+            ident,
             ..
         } = self;
         let mut h = Sim {
@@ -432,6 +446,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             now_us,
         };
         if rx.offer_frame(&mut h, now_us, from, data) == rx::Offer::Keep {
@@ -451,6 +466,7 @@ impl Core {
             back,
             survivor,
             wifi,
+            ident,
             ..
         } = self;
         let kept = survivor.take();
@@ -459,6 +475,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             now_us,
         };
         rx.flush_frames(&mut h, now_us, kept.as_deref(), back);
@@ -472,6 +489,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             ..
         } = self;
         let mut h = Sim {
@@ -479,6 +497,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             now_us,
         };
         rx.tick(&mut h, now_us);
@@ -494,6 +513,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             ..
         } = self;
         let mut h = Sim {
@@ -501,6 +521,7 @@ impl Core {
             env,
             panel,
             wifi,
+            ident,
             now_us,
         };
         if down {
@@ -528,6 +549,7 @@ impl Core {
                 env,
                 panel,
                 wifi,
+                ident,
                 ..
             } = self;
             let mut h = Sim {
@@ -535,6 +557,7 @@ impl Core {
                 env,
                 panel,
                 wifi,
+                ident,
                 now_us,
             };
             rx.control(&mut h, now_us, from, data, &mut buf)
@@ -547,6 +570,25 @@ impl Core {
 
 /// The stream state of spec section 7.3.
 pub use crate::event::State;
+
+/// A fresh `boot_id`.
+///
+/// The clock's nanoseconds mixed with a counter, through splitmix64's
+/// finaliser. Not cryptography and not a dependency: it has to be different
+/// from the last one, and two draws in the same nanosecond still are.
+#[must_use]
+pub fn draw_boot_id() -> u32 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut x = nanos ^ SEQ.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::SeqCst);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((x ^ (x >> 31)) >> 16) as u32
+}
 
 /// The SSID the simulator claims to be on. Not a real network; `GET_WIFI`
 /// has to answer something and the spec forbids it answering with a PSK.

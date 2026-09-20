@@ -291,6 +291,14 @@ impl SimHandle {
         self.shared.bus.publish(&events);
     }
 
+    /// The random number drawn at boot, and again at every reboot. A client
+    /// that sees a new one knows the device restarted rather than that the
+    /// link flapped.
+    #[must_use]
+    pub fn boot_id(&self) -> u32 {
+        self.shared.core.lock().unwrap().ident().boot_id
+    }
+
     /// Where the provisioning machine is.
     #[must_use]
     pub fn wifi_phase(&self) -> crate::WifiPhase {
