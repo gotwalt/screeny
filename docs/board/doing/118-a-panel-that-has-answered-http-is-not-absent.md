@@ -105,3 +105,15 @@ Every one of these assertions prints the measured seconds and the poll count.
 the "HTTP comes up later" half is a hand-rolled acceptor in the test - with
 `set_nonblocking(false)` on the accepted socket, which the file already did for the macOS
 trap.
+
+**Runs.** `device_status` 10/10 alone (4-5 s), and passing with two copies of the binary
+running at once under a cold `cargo build --release` (load average 7-11), where the two
+measurements were 2.0 s and 1.1 s - the same as idle, because they are counts of polls
+rather than of milliseconds. `cargo test --release --no-fail-fast` at the root: 744
+passed, 0 failed. `cargo clippy --workspace --all-targets`: nothing.
+
+**Still open, and only the owner can close it:** the card's acceptance is the *bench*
+panel rebooting. No hardware was touched here (this card is `hardware: no`), so what is
+proved is the simulator's version of it. The firmware session reflashing the panel is the
+next chance to watch the Device block follow a real reboot; at the product's 10 s poll it
+should be one or two polls behind the picture coming back, not twelve.

@@ -168,6 +168,40 @@ what can be shown is that the test was asserting on an instant nothing had promi
 
 `crates/studio/tests/fleet.rs`, 12 tests, passes; run 10 times in a row below.
 
+### 2026-09-20: what was run, and what it said
+
+Alone, in a row, `--release`:
+
+- `soak`: **10/10** after the telemetry-catch-up fix, 60-67 s each. (The run before it was
+  9/10 - that failure is the second entry above, and it is the reason the count restarted.)
+- `fleet` (studio): **10/10**, 10.2 s each.
+- `embed` (screeny): **10/10**, 1.0 s each.
+- `device_status` (studio): **10/10**, 4-5 s each.
+- `screeny-studio --lib`: 57 passed (the new `uptime_going_backwards...` among them).
+
+Under deliberate load - a cold `cargo build --release --workspace` into a scratch target
+directory, load average 7-11 on this machine, plus **two copies of the same test binary at
+once**, which is the parallel-worktree case the embed flake came from:
+
+- two copies of `embed` simultaneously: 19 passed, twice, 1.0 s;
+- two copies of `device_status` simultaneously: 7 passed, twice, 5.1 s;
+- `soak` and `fleet` side by side: soak 60 s / 14 rounds / 1 rebuild, fleet 12 passed;
+- `soak`, `device_status` and `embed` side by side under a second cold build: all passed,
+  and card 118's two measurements held at 2.0 s and 1.1 s.
+
+The whole suite, at the root: `cargo test --release --no-fail-fast` -> **744 passed, 0
+failed** (exit 0). `cargo clippy --workspace --all-targets` says nothing.
+
+The scratch target directories (820 MB and 827 MB) were deleted afterwards, and `ps` shows
+no simulator, studio or cargo process left behind.
+
+**Two new cards**, both found here and neither done: **143** (`crates/sim`'s
+`a_sender_can_tell_network_loss_from_a_slow_device`, the third sighting - it asserts
+`frames_rx == sent` exactly after a fixed 200 ms settle against a deliberately slow
+device; left alone because another worker owns `crates/sim`) and **144** (`frames_sent` is
+the link's count and restarts when the studio rebuilds the link, which is the *cause* of
+the first soak flake and is visible on the page).
+
 ### Note from the orchestrator (2026-09-20)
 
 A second one of the same family, seen once while merging 196 with two other worktrees
