@@ -5,7 +5,7 @@
 
 use super::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
 use crate::dither::Dither;
-use crate::frame::{Frame, MAX_PALETTE};
+use crate::frame::Frame;
 use crate::palette::Palette;
 use crate::piece::{Ctx, ParamSpec, Piece};
 use crate::rng::Rng;
@@ -14,6 +14,12 @@ const HARNESS_WGSL: &str = include_str!("fragment.wgsl");
 /// `Uniforms.params` holds this many.
 const MAX_PARAMS: usize = 16;
 pub const MAX_EXTRA: usize = 16;
+/// Palette entries a shader can paint with, and the length of the `palette`
+/// array in `fragment.wgsl`. Its own number since card 102: a *frame* may have
+/// up to `frame::MAX_PALETTE` colours, but a shader uniform is a fixed-size
+/// array and this is the one place the two used to be the same constant by
+/// accident. Raise it here and in the shader together.
+pub const SCENE_PALETTE: usize = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -25,7 +31,7 @@ struct Uniforms {
     _pad: [f32; 3],
     params: [f32; MAX_PARAMS],
     extra: [f32; MAX_EXTRA],
-    palette: [[f32; 4]; MAX_PALETTE],
+    palette: [[f32; 4]; SCENE_PALETTE],
 }
 
 /// What a piece's scene function works out on the CPU each frame.
@@ -34,7 +40,14 @@ pub struct Scene {
     /// phase of a cycle, camera state. Read in the shader as `X(i)`.
     pub extra: [f32; MAX_EXTRA],
     /// If set, the shader can paint with it (`PAL(i)`, `ramp()`), and the
-    /// rendered frame is mapped onto it, so it is sent as an exact indexed frame.
+    /// rendered frame is mapped onto it, so it is sent as an indexed frame.
+    ///
+    /// At most [`SCENE_PALETTE`] entries reach the shader - the rest are black
+    /// in `PAL(i)` - even though a `Palette` may hold up to
+    /// `frame::MAX_PALETTE`. Up to 32 the frame is exact whatever the indices
+    /// look like; beyond that it is exact when the index image compresses,
+    /// which for flat-shaded scene work it usually does. `Measured::exact`
+    /// answers it per frame.
     pub palette: Option<Palette>,
     /// Strength of the ordered dither used by that mapping, 0..1.
     pub dither: f32,

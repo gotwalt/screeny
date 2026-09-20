@@ -1,7 +1,7 @@
 //! Piece frame in, hand-over frame + faithful preview + statistics out.
 //!
 //! ```text
-//! piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> outputs
+//! piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
 //!                                                              \-> meter -> encode
 //!                                                                        -> decode -> preview
 //! ```
@@ -15,20 +15,30 @@ use crate::dither::Dither;
 use crate::frame::{Frame, WireFrame, MAX_PALETTE, N, W};
 use crate::limiter::{Limiter, LimiterSettings};
 use crate::meter::{Measured, Meter};
-use crate::panel::{Panel, NATIVE_LEVELS};
+use crate::panel::Panel;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Levels per channel the panel is assumed to have. 64 native; try 32.
-    pub levels: u32,
-    /// Dither used when a linear frame is quantised to those levels.
+    /// Which panel a frame is quantised to and previewed through: the device,
+    /// or the same panel without its temporal dither (card 102).
+    ///
+    /// This replaces `levels`, a number with 64, 32 and 16 to choose from. 32
+    /// and 16 were "the panel when it is dimmed", which the device has not
+    /// done since card 020 and never will again; 64 was the panel before its
+    /// temporal dither. A state file that still names `levels` loads - the key
+    /// is ignored and the studio says so in its `repaired` list.
+    pub panel: Panel,
+    /// Dither used when a linear frame is quantised to the panel's duty steps.
+    /// The bias is one duty step, so this only bites in the dark end, where
+    /// the panel is coarser than the 8-bit hand-over. See [`Panel::quantise`].
     pub dither: Dither,
     pub limiter: LimiterSettings,
-    /// Preview only: show the frame as the panel would (quantised). Off shows
-    /// the unquantised framebuffer, for comparison.
+    /// Preview only: show the frame as the panel would - quantised to its duty
+    /// steps, and with the dark end collapsed onto the levels it really has.
+    /// Off shows the unquantised framebuffer, for comparison.
     pub panel_model: bool,
     /// Preview only: show the frame after the real encoder and the real
     /// decoder have been round it, so codec damage is visible. Off shows the
@@ -41,7 +51,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            levels: NATIVE_LEVELS,
+            panel: Panel::DEVICE,
             dither: Dither::default(),
             limiter: LimiterSettings::default(),
             panel_model: true,
@@ -112,7 +122,7 @@ impl Pipeline {
     /// `dt` is wall-clock seconds since the previous frame.
     pub fn process(&mut self, mut frame: Frame, dt: f64) -> Output {
         let s = self.settings;
-        let panel = Panel::new(s.levels);
+        let panel = s.panel;
         if let Frame::Indexed { palette, .. } = &mut frame {
             palette.truncate(MAX_PALETTE);
         }
@@ -124,12 +134,12 @@ impl Pipeline {
                 let mut rgb = Vec::with_capacity(N * 3);
                 for (i, c) in px.iter().enumerate() {
                     let bias = s.dither.threshold(i % W, i / W);
-                    rgb.extend_from_slice(&panel.snap(*c, bias).to_srgb8());
+                    rgb.extend_from_slice(&panel.snap8(*c, bias));
                 }
                 WireFrame { rgb, indexed: None }
             }
             Frame::Indexed { palette, indices } => {
-                let pal: Vec<[u8; 3]> = palette.iter().map(|c| panel.snap(*c, 0.0).to_srgb8()).collect();
+                let pal: Vec<[u8; 3]> = palette.iter().map(|c| panel.snap8(*c, 0.0)).collect();
                 let mut rgb = Vec::with_capacity(N * 3);
                 for &i in indices {
                     rgb.extend_from_slice(pal.get(i as usize).unwrap_or(&[0, 0, 0]));
@@ -145,10 +155,14 @@ impl Pipeline {
 
         let preview = if !s.panel_model {
             (0..N).flat_map(|i| frame.pixel(i).to_srgb8()).collect()
-        } else if s.codec_preview {
-            self.meter.decoded().to_vec()
         } else {
-            wire.rgb.clone()
+            let mut px = if s.codec_preview { self.meter.decoded().to_vec() } else { wire.rgb.clone() };
+            // The last thing that happens to a frame is the panel itself. Above
+            // sRGB 38 this is the identity; below it, codes the device cannot
+            // tell apart arrive on the level it really has. Card 102: without
+            // it the preview was flattering the darks by three codes.
+            panel.show(&mut px);
+            px
         };
 
         self.clock += dt;

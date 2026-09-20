@@ -461,6 +461,44 @@ fn clean_memory(raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> 
     memory
 }
 
+/// Card 102: `settings.levels` is not a setting any more.
+///
+/// It named a number of levels per channel, with 64, 32 and 16 to choose from.
+/// 32 and 16 were "the panel when it is dimmed", which this device has not
+/// done since card 020 - it dims the output-enable window and keeps every duty
+/// step - and 64 was the panel before its temporal dither. The setting is now
+/// `settings.panel`, one of `dithered` or `bit_planes`.
+///
+/// A file that still names `levels` **loads**: serde ignores the key and the
+/// panel comes up at its default, which is the device. This is only how the
+/// studio *says so*, once, in the same breath as everything else it had to
+/// correct - the alternative is a setting that silently stops meaning what the
+/// person chose. No schema bump: nothing about the file's shape changed.
+fn note_retired_levels(raw: &serde_json::Value, repaired: &mut Vec<String>) {
+    let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut look = |block: Option<&serde_json::Value>| {
+        if let Some(v) = block.and_then(|b| b.get("settings")).and_then(|s| s.get("levels")) {
+            found.insert(v.to_string());
+        }
+    };
+    look(raw.get("preview"));
+    if let Some(serde_json::Value::Array(players)) = raw.get("players") {
+        for p in players {
+            look(Some(p));
+        }
+    }
+    if found.is_empty() {
+        return;
+    }
+    let values: Vec<&str> = found.iter().map(String::as_str).collect();
+    repaired.push(format!(
+        "`settings.levels` ({}) is not a setting any more: 32 and 16 modelled a dimming this device has never done \
+         and 64 was the panel before its temporal dither (card 102); the panel model is now `settings.panel`, \
+         which starts at `dithered` - what the device really shows",
+        values.join(", ")
+    ));
+}
+
 /// A file that did not name a schema version at all.
 fn no_version() -> u32 {
     0
@@ -560,6 +598,7 @@ fn load(path: &Path) -> Loaded {
 
     let mut repaired = Vec::new();
     let pieces = clean_memory(raw.get("pieces"), &mut repaired);
+    note_retired_levels(&raw, &mut repaired);
     // The `preview` block of a v1/v2 file, lifted out for the same reason as
     // `pieces`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
@@ -1252,7 +1291,17 @@ mod tests {
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v1")), "the migration says so once");
         assert_eq!(loaded.version, SCHEMA_VERSION);
-        assert!(store.health().repaired.is_empty(), "a good v1 file needs no repairs");
+        // The one thing a good v1 file now needs said about it: every one of
+        // them names `settings.levels`, and card 102 retired it.
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "a good v1 file needs no other repair: {said:?}");
+        assert!(said[0].contains("`settings.levels` (64)"), "{}", said[0]);
+        assert!(said[0].contains("`settings.panel`"), "and says what replaced it: {}", said[0]);
+        assert_eq!(
+            loaded.players[0].settings.panel,
+            screeny_art::panel::Panel::Dithered,
+            "and the panel comes up at what the device really shows"
+        );
         assert!(!dir.0.join(BAD_FILE).exists(), "a v1 file is migrated, not condemned");
     }
 
@@ -1356,8 +1405,46 @@ mod tests {
         assert!(loaded.pieces["clocks-numerals"].params.is_empty(), "including its parameters");
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v2")), "it says so once");
-        assert!(store.health().repaired.is_empty());
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "only the retired `levels` (card 102): {said:?}");
+        assert!(said[0].contains("`settings.levels`"), "{}", said[0]);
         assert!(!dir.0.join(BAD_FILE).exists(), "a v2 file is migrated, not condemned");
+    }
+
+    /// Card 102. A current file that still names the retired `levels` - 32 or
+    /// 16, the settings that modelled a dimming this device has never done -
+    /// loads, keeps everything else it says, comes up on the device's own
+    /// panel model, and is told about **once**. No schema bump: the shape of
+    /// the file did not change, only what one key means.
+    #[test]
+    fn a_retired_levels_setting_loads_and_is_reported() {
+        for level in ["32", "16", "64"] {
+            let dir = Temp::new(&format!("levels-{level}"));
+            std::fs::write(
+                dir.0.join(FILE),
+                format!(
+                    r#"{{"version":{SCHEMA_VERSION},"players":[{{"device":"","piece":"plasma","seed":9,
+                       "settings":{{"levels":{level},"dither":"bayer8","panel_model":false}}}}]}}"#
+                ),
+            )
+            .expect("write the file");
+            let (store, loaded) = Store::open(Some(&dir.0));
+
+            assert_eq!(loaded.players[0].seed, 9, "levels {level}: the rest of the file survives");
+            assert_eq!(loaded.players[0].settings.dither, screeny_art::dither::Dither::Bayer8);
+            assert!(!loaded.players[0].settings.panel_model, "levels {level}: and the other settings");
+            assert_eq!(
+                loaded.players[0].settings.panel,
+                screeny_art::panel::Panel::Dithered,
+                "levels {level}: the panel model is the device's"
+            );
+
+            let said = store.health().repaired;
+            assert_eq!(said.len(), 1, "levels {level}: said once, not per player: {said:?}");
+            assert!(said[0].contains(&format!("`settings.levels` ({level})")), "{}", said[0]);
+            assert!(store.health().recovered.is_none(), "levels {level}: not a recovery, the file was used");
+            assert!(!dir.0.join(BAD_FILE).exists(), "levels {level}: and certainly not condemned");
+        }
     }
 
     /// The design view's piece is only merged into the memory where the memory

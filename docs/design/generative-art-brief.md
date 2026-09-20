@@ -63,6 +63,16 @@ frame), so in-between values are shown as a time average. **[measured, card 007]
 the darkest visible value moved from sRGB 34 to about 6, mean luminance wobble is
 1.7% with no periodic structure, and nothing is visible as flicker to the eye.
 
+**How much resolution that is, exactly [measured, card 102]**: the firmware keeps four
+fractional bits below a duty level and spends the remainder over a **16-phase** cycle,
+one phase per refresh, with a Bayer 4x4 offset per pixel so the panel does not beat in
+unison. So a colour that is *held* - from about 104 ms, three 30 fps frames - averages
+1008 duty steps per channel, of which the 256 sRGB codes reach 237, and only sRGB 0 and
+1 emit nothing at all. A colour on screen for a single frame gets about five of those
+sixteen phases and resolves ~195 levels, which is the number card 002 measured and what
+the codec chooser scores against. The model is `screeny_panel::DEVICE`, checked entry by
+entry against the firmware's own gamma table.
+
 What that changes for you, and what it does not:
 
 - Dark gradients are **much better than the table suggests, but still the panel's
@@ -326,10 +336,15 @@ what your framebuffer contains. It should:
 
 1. Take your frame (RGB or indexed).
 2. Apply the **panel model**: sRGB -> linear -> quantise each channel -> back to sRGB
-   for display. With device-side temporal dithering the effective level count is
-   about 190 rather than 64 (card 002 measured ~195); make it a parameter and look at
-   both, because the dark end behaves like the coarser number.
-   Optionally apply the 32-colour / lossy path so you see codec damage too.
+   for display. **[built, card 102]** `screeny_panel::DEVICE` is that model and
+   `crates/art/src/panel.rs` is the art side's reading of it, so nobody writes a
+   second one. A held colour resolves 1008 duty steps (237 of the 256 codes); the
+   preview also applies the dark end's *collapse*, where up to four codes below sRGB
+   39 share a level. `Panel::BitPlanes` is the same panel without the temporal
+   dither - 64 levels, nothing under sRGB 34 - and the studio offers both, because
+   the darks behave like the coarser number for anything that does not hold still.
+   Optionally apply the lossy path so you see codec damage too; since card 101 that
+   is the real encoder and real decoder rather than a model of them.
 3. Draw each pixel as a **round dot on black with gaps** (dot diameter ~60-70% of
    pitch), upscaled at least 12x. A plain nearest-neighbour upscale lies to you: it
    makes dither look coarser and thin lines look more solid than the real thing.

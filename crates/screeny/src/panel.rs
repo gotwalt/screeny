@@ -7,4 +7,4 @@
 //!
 //! This module is the path the chooser, the CLI and the art already use.
 
-pub use screeny_panel::model::{Lut, Panel, DEEP, DIM, DIMMED, NOMINAL, TEMPORAL};
+pub use screeny_panel::model::{Lut, Panel, DEEP, DEVICE, DIM, DIMMED, DITHER_PHASES, NOMINAL, TEMPORAL};

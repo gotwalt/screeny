@@ -96,14 +96,15 @@ Studio keys: `Space` pause, `R` restart, `N` new seed, `1` `2` `3` LEDs / squint
 ## Pipeline
 
 ```text
-piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> outputs
+piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
                                                              \-> meter: real encode
                                                                       -> real decode -> preview
 ```
 
 - A **piece** turns (wall-clock `t`, seed, parameters) into a `Frame`: either
-  linear-light RGB, or a palette of up to 32 colours plus indices. Indexed frames
-  pass through exactly; prefer them.
+  linear-light RGB, or a palette of up to 256 colours plus indices. Indexed
+  frames pass through exactly - 32 colours whatever the indices do, more when
+  the index image compresses (see the assumptions section). Prefer them.
 - The **limiter** caps average picture level and the rate at which mean
   luminance (and mean red) may rise, so no piece can strobe the panel.
 - The **meter** (`meter.rs`) runs the sender's own chooser and the firmware's
@@ -323,9 +324,12 @@ Things to know:
 - Shaders are WGSL. wgpu can also take GLSL (its `glsl` feature and
   `ShaderSource::Glsl`) if porting existing GLSL matters more than one language.
 - Smoothly shaded 3D makes hundreds of colours per frame, which would take the
-  lossy path. `palette::Palette` fixes that: build up to 32 colours in OKLCH
+  lossy path. `palette::Palette` fixes that: build a palette in OKLCH
   (`Palette::ramps`), then `map` the downsampled frame onto them (nearest in
   OKLab, fixed ordered dither). The result is an indexed frame, sent exactly.
+  A *shader* palette is capped at `gpu::fragment::SCENE_PALETTE` (32) by the
+  uniform's array; a CPU-mapped one may go to 256 and is exact when the index
+  image compresses.
   `knot` does this; set its Palette steps to 0 to compare with the raw render.
   Map after the downsample, never in the shader: averaging samples creates new
   colours.
@@ -346,10 +350,56 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 | Assumption | Where |
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
-| 64 linear levels per channel (fewer when dimmed) | `panel.rs`: `NATIVE_LEVELS`; a runtime setting everywhere else |
 | The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). Players and `pipe` default to 60; the studio's page offers the whole 1..60 range (card 172) | `crates/studio/src/player.rs`: `MIN_FPS`/`MAX_FPS`; `screeny-art pipe --fps` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
+
+Two more left the table in card 102, because they stopped being assumptions.
+
+**The panel model is measured, and it is `crates/panel`.** `panel.rs` is a
+reading of `screeny_panel`, not a second copy, and `screeny_panel::DEVICE` is
+checked entry by entry against `firmware/src/gamma.rs`'s own table. What it
+says: the firmware knows each sRGB code's wanted duty to a sixteenth of a level
+and spends the remainder across sixteen successive panel refreshes, so a colour
+that is held averages **1008 duty steps** per channel.
+
+| | `Panel::BitPlanes` | the device (`Panel::Dithered`) |
+|---|---|---|
+| duty steps per channel | 63 | 1008 |
+| distinct levels out of the 256 sRGB codes | 64 | 237 |
+| codes that come out black | 22 | 2 |
+| test card's dark ramp, over its 64 columns | 4 greys | 43 greys |
+
+So **the dark end is usable**: only sRGB 0 and 1 are black, and slow fades to
+black work. Two things are still true about it. A colour that is *not* held
+only gets about five of the sixteen phases, which is `screeny_panel::TEMPORAL`
+and 195 levels - that is what the codec chooser scores against, and it is why
+large areas of very dark colour sparkle faintly rather than sitting still. And
+the three channels step at different sRGB values, so low greys pick up colour
+casts (brief 2.2). Dark work is a choice with a texture, not a thing to avoid.
+
+The old "fewer levels when dimmed" was simply wrong: the device dims by
+shortening the output-enable window, so every duty step survives at every
+brightness and only the light goes away (card 066). A dim room is the table
+above times `screeny_panel::oe_light(brightness)`.
+
+**Dither is in duty steps, so it lands where the panel needs it.**
+`Settings::dither`'s bias is one duty step, which above sRGB 38 is a tenth of
+an 8-bit code - it rounds away, and no noise the panel cannot show is spent on
+the wire. Below 38, where up to four codes share a level, a duty step is bigger
+than a code and the dither does the whole job of mixing the two levels either
+side. Quantising to 64 levels, as this used to, put dither everywhere.
+
+**Colours: 32 is a guarantee, not a ceiling.** `frame::GUARANTEED_PALETTE` (32)
+is the size that goes out exactly *whatever the index plane looks like*,
+because the fixed-rate `PAL5` rung is 1376 bytes for any 32 colours and any
+2048 indices, noise included. `frame::MAX_PALETTE` (256) is the ceiling, and
+between the two a frame is exact **when its index image compresses** - which
+for flat-shaded, terraced and palette-cycled work it usually does. Nobody
+models that any more: `meter.rs` runs the sender's own chooser, and
+`Measured::exact` is the answer for the frame in hand. The thing to design
+around is **spatial coherence, not colour count**: a 200-colour smooth gradient
+fits where a 40-colour field of confetti does not.
 
 One thing to know about the meter rather than assume: it and the sender each
 hold their own `Encoder`, and the chooser gives the previous frame's codec a

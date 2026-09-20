@@ -655,7 +655,7 @@ async function start() {
   // ---- panel model ----
 
   const s = () => state.settings;
-  bind(bindRadios($('#levels'), { get: () => s().levels, set: (v) => { s().levels = Number(v); pushSettings(); } }));
+  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushSettings(); } }));
   bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushSettings(); } }));
   bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushSettings(); } }));
   bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushSettings(); } }));
@@ -1091,19 +1091,29 @@ async function start() {
   const CODECS = { 0x02: 'pal5', 0x10: 'pal8-lz', 0x11: 'pal4-lz', 0x28: 'bc1-dual', 0x7f: 'solid' };
 
   function showStats(st) {
+    // Card 102. Colour count is not the thing that decides exactness, so this
+    // meter no longer pretends it is: 32 is the size that is exact whatever
+    // the indices do (the fixed-rate rung), up to 256 is exact when the index
+    // image compresses, and `st.exact` is the encoder's own answer for the
+    // frame in hand. Spatial coherence is what costs bytes - a 200-colour
+    // smooth gradient fits where 40 colours of confetti does not - so the note
+    // says which of those three situations this is.
     mColours.out.textContent = st.colours;
-    width(mColours.fill, st.colours / 64);
+    width(mColours.fill, st.colours / 256);
     mColours.root.dataset.state = st.exact ? '' : 'warn';
-    mColours.note.textContent = st.exact
-      ? 'Sent exactly: every pixel reaches the panel as drawn.'
-      : 'Too many to send exactly. The encoder is quantising this frame.';
+    mColours.note.textContent = !st.exact
+      ? 'Not exact: too many colours for the structure in this frame, so the encoder is requantising it.'
+      : st.colours <= 32
+        ? 'Exact, and guaranteed: up to 32 colours fit whatever the pixels do.'
+        : 'Exact: the index image compressed. Up to 256 can, when the picture is coherent.';
 
     mBytes.out.textContent = st.bytes;
     mBytes.of.textContent = `of ${boot.payload_bytes} bytes`;
     width(mBytes.fill, st.bytes / boot.payload_bytes);
     mBytes.root.dataset.state = st.exact ? '' : 'warn';
-    // Measured, not estimated: this is what the encoder really produced.
-    mBytes.note.textContent = `${CODECS[st.codec] || `codec ${st.codec}`}, measured.`;
+    // Measured, not estimated: this is the codec the sender's own chooser
+    // picked and the size it really produced, for this frame.
+    mBytes.note.textContent = `${CODECS[st.codec] || `codec ${st.codec}`}, measured${st.exact ? '' : ', lossy'}.`;
 
     const cap = s().limiter.apl_cap;
     const limiting = st.gain < 0.995;

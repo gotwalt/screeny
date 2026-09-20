@@ -30,4 +30,4 @@
 pub mod color;
 pub mod model;
 
-pub use model::{Lut, Panel, DEEP, DIM, DIMMED, NOMINAL, TEMPORAL};
+pub use model::{Lut, Panel, DEEP, DEVICE, DIM, DIMMED, DITHER_PHASES, NOMINAL, TEMPORAL};

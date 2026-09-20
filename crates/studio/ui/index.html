@@ -154,12 +154,24 @@
 
     <section id="sec-model">
       <h2>Panel model</h2>
-      <fieldset class="seg" id="levels">
-        <legend>Levels per channel</legend>
-        <label><input type="radio" name="levels" value="64"><span>64</span></label>
-        <label><input type="radio" name="levels" value="32"><span>32</span></label>
-        <label><input type="radio" name="levels" value="16"><span>16</span></label>
+      <!-- Card 102. This was "Levels per channel: 64 / 32 / 16". 32 and 16
+           modelled the panel being dimmed by scaling pixel values, which this
+           device has not done since card 020 - it shortens the output-enable
+           window instead, so every duty step survives at every brightness. 64
+           was the panel before card 030 taught the firmware to spend the
+           sub-level remainder across sixteen refreshes. What is left is the
+           one comparison the brief actually asks for. -->
+      <fieldset class="seg" id="panel-kind">
+        <legend>Panel</legend>
+        <label title="What the device shows: 1008 duty steps per channel, only sRGB 0 and 1 black">
+          <input type="radio" name="panel" value="dithered"><span>Dithered</span></label>
+        <label title="The same panel without its temporal dither: 64 levels, nothing below sRGB 34">
+          <input type="radio" name="panel" value="bit_planes"><span>Bit planes</span></label>
       </fieldset>
+      <p class="hint">The firmware spreads each colour's sub-level remainder over sixteen panel
+        refreshes, so a held colour resolves 1008 duty steps and only sRGB 0 and 1 are black.
+        <em>Bit planes</em> is the same panel without that - 64 levels, nothing under sRGB 34 -
+        which is how the darks behave for anything that does not hold still for about 100 ms.</p>
       <fieldset class="seg" id="dither">
         <legend>Dither</legend>
         <label><input type="radio" name="dither" value="none"><span>None</span></label>
@@ -217,10 +229,16 @@
   </aside>
 
   <section class="meters" aria-label="Frame statistics">
+    <!-- Card 102: the scale is 256, not 64, and the ticks are 16 and 32.
+         "of 32 exact" was true when 32 was the only size that could go out
+         losslessly. Since card 101 the encoder answers for itself: up to 256
+         colours are exact whenever the index image compresses, and what costs
+         bytes is spatial incoherence rather than colour count. 32 is still
+         where the *guarantee* stops, so it keeps a tick. -->
     <div class="meter" id="m-colours">
       <h2>Colours</h2>
-      <p class="meter__value"><output></output><span class="meter__of">of 32 exact</span></p>
-      <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:25%"></i><i class="tick" style="left:50%"></i></div>
+      <p class="meter__value"><output></output><span class="meter__of">of 256</span></p>
+      <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:6.25%"></i><i class="tick" style="left:12.5%"></i></div>
       <p class="meter__note"></p>
     </div>
     <div class="meter" id="m-bytes">
