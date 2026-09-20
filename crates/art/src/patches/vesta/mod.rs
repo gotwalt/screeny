@@ -770,22 +770,43 @@ mod tests {
         assert!(lit_edge > 5, "the falling card's edge is never lit: {lit_edge} of 31 frames");
     }
 
+    /// The angle a single-card module - the hours' tens, 0 to 1 - is at on
+    /// frame `frame` of a run pinned to 09:59:59, driven through the same
+    /// `step` and the same clock as the renderer. Nothing here interpolates
+    /// the fall curve by hand, which is how the README's table came to be
+    /// written down against the wrong frame the first time.
+    fn theta_at(flip: f64, frame: i32) -> f32 {
+        let clock = at("09:59:59");
+        let dt = 1.0 / crate::snapshot::FPS;
+        let mut m = Module { shown: 0, to: 0, began: 0.0, state: State::Still };
+        for i in 0..=frame {
+            let t = f64::from(i) * dt;
+            let minute = (clock.now(t) / 60.0).floor() as i64;
+            m.step(t, (digits(minute, true).0 / 10) as u8, flip, true);
+        }
+        m.pose(f64::from(frame) * dt, flip).theta
+    }
+
     /// The README's table of snapshot recipes, checked rather than believed.
     ///
-    /// `--time 09:59:59` starts the run at 09:59:59 and the snapshot steps at
-    /// 30 fps, so 10:00:00 first arrives at frame 31 and a card is `n` frames
-    /// into its fall at `--at (31 + n) / 30`. With `--set flip=0.6` a fall is
-    /// eighteen frames, which is what makes the five angles reachable.
+    /// `--time 09:59:59` starts the run there and the snapshot steps at 30
+    /// fps, so 10:00:00 lands exactly on frame 30 and a card is `n` frames
+    /// into its fall at `--at (30 + n) / 30`. With `--set flip=0.6` a fall is
+    /// eighteen frames, which is what makes the five angles reachable at all.
     #[test]
     fn the_snapshot_recipes_in_the_readme_land_where_they_say() {
-        for (at, frame, want) in [(1.2333, 37, 29.7), (1.3667, 41, 61.4), (1.4667, 44, 97.2), (1.5333, 46, 127.5), (1.6, 48, 161.9)] {
-            assert_eq!((at * crate::snapshot::FPS).round() as i32, frame, "--at {at} is not frame {frame}");
-            let got = flap::angle((frame - 31) as f32 / 18.0);
-            assert!((got - want).abs() < 0.6, "--at {at} is {got:.1} degrees, not {want}");
+        assert_eq!(theta_at(0.6, 29), 0.0, "nothing moves before the minute");
+        assert_eq!(theta_at(0.6, 30), 0.0, "the minute turns on frame 30 and the card lets go");
+        assert!(theta_at(0.6, 31) > 0.0, "and it is moving on frame 31");
+        for (secs, frame, want) in [(1.2, 36, 29.7), (1.3333, 40, 61.4), (1.4333, 43, 97.1), (1.5, 45, 127.4), (1.5333, 46, 144.3)] {
+            assert_eq!((secs * crate::snapshot::FPS).round() as i32, frame, "--at {secs} is not frame {frame}");
+            let got = theta_at(0.6, frame);
+            assert!((got - want).abs() < 0.15, "--at {secs} is {got:.1} degrees, not {want}");
         }
-        // And at the default fall the panel gets these six frames. This is the
-        // sequence the owner actually sees; it is the one to argue with.
-        let real_time: Vec<f32> = (0..=6).map(|n| flap::angle(n as f32 / 6.0).round()).collect();
+        // And at the default fall these are the six frames the panel gets.
+        // This is the sequence the owner actually sees; it is the one to
+        // argue with.
+        let real_time: Vec<f32> = (30..=36).map(|f| theta_at(0.2, f).round()).collect();
         assert_eq!(real_time, vec![0.0, 13.0, 30.0, 52.0, 84.0, 127.0, 180.0]);
         assert_eq!((f64::from(params().get("flip")) * crate::snapshot::FPS).round(), 6.0, "six frames a card");
     }
@@ -835,3 +856,4 @@ mod tests {
         }
     }
 }
+

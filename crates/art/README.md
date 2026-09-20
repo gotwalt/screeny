@@ -381,21 +381,25 @@ cargo run --release -p screeny-art -- snapshot vesta --time 21:12 --out settled.
 cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1667 --out flipping.png
 ```
 
-The minute turns at engine `t = 31/30 = 1.0333` with `--time 09:59:59` (the
-snapshot steps at 30 fps and the first frame past 10:00:00 is frame 31), so a
-card is `n` frames into its fall at `--at (31 + n) / 30`. At the default
-`flip` of 0.2 that is six frames; `--set flip=0.6` stretches it to eighteen and
-gives the angles worth looking at:
+With `--time 09:59:59` the snapshot steps at 30 fps from 09:59:59, so 10:00:00
+lands exactly on frame 30 and a card is `n` frames into its fall at
+`--at (30 + n) / 30`. At the default `flip` of 0.2 that is six frames - the
+whole flip is `--at 1.0` to `1.2`, at 0, 13, 30, 52, 84, 127 and 180 degrees.
+`--set flip=0.6` stretches it to eighteen, which is what makes a five-angle
+study possible at all:
 
-| flap at | `--at` | actual |
+| flap at | `--at` (all with `--time 09:59:59 --set flip=0.6`) | actually |
 |---|---|---|
-| ~30 deg | `--time 09:59:59 --at 1.2333 --set flip=0.6` | 29.7 |
-| ~60 deg | `--time 09:59:59 --at 1.3667 --set flip=0.6` | 61.4 |
-| ~90 deg | `--time 09:59:59 --at 1.4667 --set flip=0.6` | 97.2 |
-| ~120 deg | `--time 09:59:59 --at 1.5333 --set flip=0.6` | 127.5 |
-| ~150 deg | `--time 09:59:59 --at 1.6 --set flip=0.6` | 161.9 |
+| ~30 deg | `--at 1.2` | 29.7 |
+| ~60 deg | `--at 1.3333` | 61.4 |
+| ~90 deg | `--at 1.4333` | 97.1 |
+| ~120 deg | `--at 1.5` | 127.4 |
+| ~150 deg | `--at 1.5333` | 144.3 |
 
-(`the_snapshot_recipes_in_the_readme_land_where_they_say` checks that table.)
+`the_snapshot_recipes_in_the_readme_land_where_they_say` drives a module
+through the patch's own `step` and checks every row of that table, including
+which frame the minute turns on. It was written against frame 31 first, and
+the PNGs from that mistake were a perfectly good study of the wrong angles.
 
 `--warmup` defaults to the whole run under `--time`, which is what a clock
 needs; no `--seed`, because there is no randomness in the patch at all.

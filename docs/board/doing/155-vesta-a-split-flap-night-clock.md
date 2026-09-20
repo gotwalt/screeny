@@ -159,7 +159,7 @@ has landed since the last frame.
 |---|---|---|
 | `01-settled-2112.png` | settled on 21:12, scale 12 | Reads at a glance. The seam is two black rows on the panel's own centre line and it is the signature it was supposed to be. |
 | `02-numerals-contact-sheet.png` | all ten numerals (01:23 / 04:56 / 07:08 / 09:09) | All ten distinct. `1` has a foot and a flag and does not look lonely; `4` is open-topped, `7` has no crossbar, `6` and `9` have spines that leave the bowl, `0` is a stadium against `8`'s pinch. |
-| `03-flap-five-angles.png` | the five angles, `flip=0.6` | **This is the one that matters and it reads.** 30: the old top halves squashed and dimmed. 61: a lit bar near the module top with the new top half showing above it. 97: the bar has travelled to the axle, `10:00` is readable in the top halves and `09:59` still in the bottom ones. 127: the card is below the axle showing the new bottom halves at half light, bar at its leading edge. 162: nearly landed. Not a wipe, not a squash - a card falling. |
+| `03-flap-five-angles.png` | 29.7, 61.4, 97.1, 127.4 and 144.3 degrees, `flip=0.6` | **This is the one that matters and it reads.** 30: the old top halves squashed and dimmed, no highlight yet. 61: a lit bar near the module top with the new top half just showing above it. 97: the bar has travelled down to the axle, `10:00` is now readable in the top halves and `09:59` still in the bottom ones. 127: the card is below the axle carrying the new bottom halves at half light, bar at its leading edge, the shadow a dark band between it and the old bottom halves. 144: nearly landed. Not a wipe, not a squash - a card falling about a horizontal axle. |
 | `04-first-card-at-30fps.png` | one card at the default `flip`, all seven frames the panel gets | The same read in six frames. Every frame moves. |
 | `05-halftone-off-on.png` | `fill` 0 against 0.5 | Halves the light (APL 0.95% -> 0.48%) and keeps the size. The strokes do become a screen texture; that is what it is for. |
 | `06-size-full-and-modest.png` | 11:11 at `size` 1 and 0.7 | Full size is the design. 0.7 is there for comparison and for an owner who disagrees. |
@@ -177,3 +177,75 @@ the fixed-rate rung is never needed.
 
 `cargo test --release -p screeny-art`: 86 lib + 4 sender + 3 pinned-time, all green.
 `cargo clippy --workspace --all-targets`: silent.
+
+**Step 4: the recipe was written down against the wrong frame.** Two snapshots that
+should have been different came out byte-identical, which looked like a bug and was
+not - `flip=0.6 --at 1.5` and `flip=0.2 --at 1.1667` are both exactly 0.8333 of a
+fall. Chasing it did turn up a real mistake, though: with `--time 09:59:59` the minute
+turns on frame **30**, not 31, because the snapshot's 30 fps grid hits t = 1.0 exactly.
+The five-angle strip was therefore a study of 36, 72, 112, 144 and 180 degrees under
+five wrong labels. Re-rendered at the right frames, and
+`the_snapshot_recipes_in_the_readme_land_where_they_say` now drives a module through
+the patch's own `step` and the patch's own clock and checks every row of the README's
+table, including which frame the minute turns on - no hand interpolation of the fall
+curve anywhere, which is what got it wrong the first time.
+
+| flap at | `--at`, with `--time 09:59:59 --set flip=0.6` | actually |
+|---|---|---|
+| ~30 | `--at 1.2` | 29.7 |
+| ~60 | `--at 1.3333` | 61.4 |
+| ~90 | `--at 1.4333` | 97.1 |
+| ~120 | `--at 1.5` | 127.4 |
+| ~150 | `--at 1.5333` | 144.3 |
+
+At the default `flip` the whole fall is `--at 1.0` to `1.2`, six frames, at 0, 13, 30,
+52, 84, 127 and 180 degrees - and `04-first-card-at-30fps.png` is all seven of them.
+
+`12-shadow-runs-ahead.png` was added: 111.6 degrees, where the card is barely below the
+axle and its shadow leads it by about 1.1 LEDs down the plate.
+
+## Open with the owner
+
+Everything below is taste, and none of it is settled.
+
+1. **Brightness.** The card asks the question and this patch cannot answer it: a patch
+   cannot set the panel's brightness, and for a night clock that is the control that
+   matters most - it costs no colour depth (card 066) where `light` does. `light` is
+   an sRGB code (default 120, card 102's sparkle floor is 38) and it is the wrong knob
+   to be reaching for at 3 a.m. Whether a patch should be able to *ask* for a
+   brightness, or whether a named piece (card 151) should carry one, is his call;
+   nothing was built.
+2. **The numeral level itself**: 120 was chosen in the preview, not in a dark bedroom.
+   It may want to be half that.
+3. **The lit edge.** `EDGE_BOOST` is 3, so the falling card's edge is about sRGB 217
+   over roughly 1.2 x 14 LEDs, for four or five frames a minute. It is the single cue
+   that sells the 3D and it is also the brightest thing the patch ever draws. If it is
+   too much at night it should come down, or become a parameter.
+4. **The shadow** (`SHADOW` 0.22, `PENUMBRA` 0.6 LEDs) and the **light's elevation**
+   (6 degrees, against `tilt`'s 16). The light being *below* the eye is what makes the
+   shadow visible at all; how much shadow is taste.
+5. **The fall's shape**, `flap::PUSH` = 0.12 - how hard the drum throws the card off
+   the pin. Lower is more of a hang-then-slam, higher is more of a sweep.
+6. **`flip` = 0.2 s a card**, so `:59 -> :00` takes up to 1.0 s on the minutes' tens.
+   A real board is quicker and noisier.
+7. **Leading zeros.** `09:05` shows a `0` in the hours' tens; a real board would show a
+   blank card there, and in 12-hour mode that is most of the day. Easy to add as a
+   choice; not built because nothing said to.
+8. **The colon** is two 2-LED dots at a fifth and four fifths of the module, at 85% of
+   the numeral level, and does not blink by default. `blink` exists because the card
+   allowed it; the default is off because nothing in a bedroom should blink.
+9. **`1` has a foot.** It is what keeps it from being a lonely stroke in a 14-LED
+   module (`06-size-full-and-modest.png`, 11:11), but it is a decision, and a
+   grotesque would not normally have one.
+10. **The module window clips the falling card.** Perspective widens its free edge by
+    about a quarter as it passes edge-on, which would put it into its neighbour across
+    a 1-LED gap, so the card is clipped to its own window as a real bezel would clip
+    it. The widening is then visible in the numeral on the card rather than in the
+    card's silhouette.
+11. **Thirteen parameters** is already a long page. `weight` and `pace` are the two
+    that could go; `pace` is there because without it a flip is a once-a-minute event
+    and the studio would be a bad place to judge one.
+
+## Follow-up
+
+None that needs a card. Everything above is a conversation, not work.
