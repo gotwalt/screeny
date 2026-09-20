@@ -118,7 +118,6 @@ pub struct WifiModel {
     /// not move when a trial fails.
     commits: u32,
     ip: Ipv4Addr,
-    started: bool,
 }
 
 impl WifiModel {
@@ -145,7 +144,6 @@ impl WifiModel {
             stored_ssid: stored,
             commits: 0,
             ip,
-            started: false,
         };
         m.step(ProvEvent::Boot, 0, out);
         // The boot join, and only the boot join, is instant when it is going
@@ -157,7 +155,6 @@ impl WifiModel {
             m.pending = None;
             m.step(ProvEvent::Joined { ip: m.ip.octets() }, 0, out);
         }
-        m.started = true;
         m
     }
 
@@ -366,7 +363,7 @@ impl WifiModel {
         let before = self.p.state();
         let actions = self.p.step(ev, now_ms);
         for a in &actions {
-            self.carry_out(*a, now_ms, out);
+            self.carry_out(*a, now_ms);
             out.push(Event::WifiAction { action: *a });
         }
         let after = self.p.state();
@@ -378,7 +375,7 @@ impl WifiModel {
         }
     }
 
-    fn carry_out(&mut self, a: Action, now_ms: u32, out: &mut Vec<Event>) {
+    fn carry_out(&mut self, a: Action, now_ms: u32) {
         match a {
             Action::StartJoin { .. } => {
                 // `Slow` still arms the timer so that `StopJoin` has something
@@ -411,7 +408,6 @@ impl WifiModel {
             Action::RaiseAp | Action::DropAp | Action::Announce => {}
             _ => {}
         }
-        let _ = out;
     }
 }
 

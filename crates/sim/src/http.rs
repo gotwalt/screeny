@@ -238,16 +238,10 @@ fn accept_loop(
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                workers.retain(|w| {
-                    if w.is_finished() {
-                        // `retain` cannot move out of the handle, so a
-                        // finished worker is joined on the next sweep instead;
-                        // keeping it costs a `JoinHandle` and nothing else.
-                        false
-                    } else {
-                        true
-                    }
-                });
+                // Reap the finished ones. Dropping a `JoinHandle` whose
+                // thread has already exited detaches nothing: the thread is
+                // over. The ones still running are joined at shutdown.
+                workers.retain(|w| !w.is_finished());
                 let handler = Arc::clone(handler);
                 let wants_stream = Arc::clone(wants_stream);
                 match thread::Builder::new()
