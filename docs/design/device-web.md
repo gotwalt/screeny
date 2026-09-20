@@ -1,11 +1,14 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status (2026-09-20, late): research done (200-202); on the device: the partition
-table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
-strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
-(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); fw 0.4.2 (227: RAM levers, two HTTP workers); `screeny-probe http` (228); fw 0.4.3 (233: one HTTP dispatch); in flight: 223 (the setup portal, hardware).** This file is the
-source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
-Claude session): decisions, what the research settled, and the build order at the end.
+**Status (2026-09-20, end of day one): the device runs fw 0.5.0 - settings and WiFi
+credentials in flash, an HTTP status/settings page and JSON API on the LAN, the setup
+portal (open soft-AP, DHCP, DNS catch-all, QR screen, trial join before commit), a
+rollback-capable bootloader and two OTA slots. Pending on 0.5.0: the UDP conformance
+re-run and the phone test (see card 223). Next: 229 (network scan list), 230/231 (the
+button), 240-243 (OTA), the boot-path stack lever, and 225 (spec sections 8.1/8.3).**
+This file is the source of truth for the device-web track (cards 200-249, coordinated by
+the `firmware` Claude session): decisions, what the research settled, and the build
+order at the end.
 
 ## What the owner asked for (2026-09-20)
 
@@ -307,7 +310,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 228 | `screeny-probe http`: 38 rules over the HTTP API, the same suite against the sim and the device - **done**; `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http` is the check after every flash, beside the UDP `conformance`. Known firmware-0.4.x gaps are skips behind one constant, `screeny_probe::http::CARD_223_LANDED` | no |
 | 227 | **done (fw 0.4.2)** - RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
 | 233 | **done (fw 0.4.3)** - HTTP conformance 30/0/8, `stack_free` 20 KB and no longer creeping, 47 KB of flash back; the RAM target missed by ~500 bytes, so 223 takes the frame-socket tx buffer lever first. Was: one HTTP dispatch instead of picoserve's nested router: fixes the three findings of the first `screeny-probe http` device run (plain-text 405 for unknown verbs, `bad_request` vs `out_of_range` on an unconfirmed reboot), per-route body limits, and measures the RAM it buys; **gates 223** | yes |
-| 223 | (in flight, hardware; scanning split out to 229) firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
+| 223 | **done, on the device (fw 0.5.0)** - HTTP suite green with the 223 rules enforced; **pending: the 64-rule UDP suite (this Mac's network was unstable: re-run when `ping 192.168.7.1` is clean) and the phone test with the owner** (steps and build command in the card's Log). Scanning split out to 229. Was: firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
 | 225 | spec: strike 8.1, rewrite 8.3 to end at the portal, add the HTTP API section (shared surface: notice to the software session) | no |
