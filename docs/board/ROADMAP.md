@@ -83,11 +83,24 @@ Then, small and optional:
 - 080 wire conformance suite that can target sim and firmware (grow it from `screeny-probe`)
 - 065 decoder throughput nit (`SOLID`); 082 sim squint view
 
+## Device-web track (firmware session, cards 200-249) - started 2026-09-20
+
+The owner un-deferred WiFi setup and widened it: an HTTP server on the device (status,
+network settings, safe firmware update), a captive-portal soft-AP with a QR code on the
+panel when there is no network, and the button as a WiFi reset. Decisions and the design
+live in `docs/design/device-web.md`. A separate `firmware` Claude session coordinates it
+and owns `firmware/`, the serial port and flashing.
+
+- 200 research: partition table, settings store, OTA with rollback (in flight)
+- 201 research: HTTP server, soft-AP, captive portal, the portal screen, RAM budget (in flight)
+- 202 research: the button's GPIO from the stock image + a probe firmware (in flight)
+- then the orchestrator writes the design and the build cards (210-249). 063 (persist
+  settings) and 081 (sim WiFi states) come out of `parked/` as part of it.
+
 ## Deferred by the owner
 
-- **WiFi setup**: eventually a captive-portal flow with an HTTP settings UI on the
-  device. Until then credentials are compiled in. Supersedes the serial/`SET_WIFI`
-  plan (old card 014) and parks 063 (persist settings) and 081 (sim WiFi states).
+- **WiFi setup**: no longer deferred - see the device-web track above. Until it lands,
+  credentials are compiled in. It supersedes the serial console plan (old card 014).
 - **Camera measurement** (old cards 012, 013, 061): the bench camera's colour
   accuracy is unknown; the owner will give visual feedback directly instead.
 

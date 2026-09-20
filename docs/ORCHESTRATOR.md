@@ -179,6 +179,17 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
 - Firmware memory trap: `.bss` and core 0's main stack share one region; adding static
   buffers shrinks the stack. `esp_rtos` reports overflows with the guard address.
 
+## Two orchestrators since 2026-09-20
+
+The owner split the work: the `software` session (application side: Studio, sender, art,
+workbench deployment; cards 100-199) and the `firmware` session (`firmware/`, the serial
+port, flashing, the device-web track; cards 200-249). Both share the main checkout, so:
+commit by explicit path, never `git add -A`, check `git status` first, and wait if the
+other is mid-merge. `crates/proto`, `crates/receiver` and the protocol spec are shared
+surface - tell the other session before changing them. **If you are the firmware session
+after a context reset, read `docs/design/device-web.md` next**: decisions, the working
+agreement, and where the track stands.
+
 ## Working with another Claude session
 
 The art system was built by a separate session with the owner. Cross-session messages
