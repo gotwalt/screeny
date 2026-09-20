@@ -86,3 +86,26 @@ Survey before touching anything - where a rate is named today:
   limiter tick's `state.fps` in `picture.js`.
 - `crates/screeny`'s cadence ladder, `crates/proto`, `crates/sim`, `firmware/`,
   `screeny stream --fps`: **not touched**, by the card's instruction.
+
+### Before: what 60 costs, measured
+
+Release build, loopback only: one `screeny-sim --headless --no-mdns --no-http --frame-port
+49474 --control-port 49475`, one `screeny-studio --listen 127.0.0.1:8781 --no-discover
+--no-device-http --state-dir <scratch>`, one panel added with `devices/add {play:true}`, the
+default patch (`clocks-numerals`), no browser attached, both under `timeout 180`. Settled for
+11 s, then a 30 s window off two reads of `/api/v1/status`:
+
+| | per second |
+| --- | --- |
+| frames rendered (`player.health.ticks`) | **59.62** |
+| `frames_offered` | 59.62 |
+| `frames_sent` | 29.99 |
+| `frames_coalesced` | **29.63** |
+| `frames_dropped` | 0 |
+| the sim's `frames_rx` | 29.96 |
+
+`fps_measured` 62.8, the sim's interarrival 33.5 ms. **Half of everything rendered is thrown
+away by the link's cadence ceiling** - exactly what the card says.
+
+Process CPU over the same window, `ps -o cputime=` on the studio's own pid (not the `timeout`
+wrapper): 3.83 core-seconds in 30 s = **12.8% of one core** on this M4.
