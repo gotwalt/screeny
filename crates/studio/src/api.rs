@@ -272,19 +272,49 @@ struct SetPanel {
     to: String,
 }
 
+/// What `set_panel` answers: what happened, in a form a script can read.
+///
+/// Card 106 answered `null` for "off", which was true and useless: another
+/// session drove `{"on":false}` from a shell script to borrow the panel for
+/// firmware tests, got a 200, and ran a conformance suite against a panel the
+/// studio was still streaming to at 30 fps - because back then this route only
+/// switched the *preview's* link and the device's own player carried on. The
+/// answer now says whether the panel is being driven, which panel, and what
+/// the page is showing, like every other change route.
+#[derive(Serialize)]
+struct PanelOutcome {
+    /// Panel output, after this change. **False means the panel has been let
+    /// go**: `FINAL` has been sent and it is back on its own idle screen.
+    on: bool,
+    /// Which panel, by id. Empty when none is attached.
+    device: String,
+    /// What to call it.
+    label: String,
+    /// The link, or `null` when output is off.
+    panel: Option<PanelStatus>,
+    /// What the page is showing, which carries on either way.
+    state: StudioState,
+}
+
 /// **Panel output**, and which panel the page is attached to.
 ///
 /// Two bodies matter and are kept exactly, because another session drives them
 /// from a script to borrow the panel for firmware tests:
 ///
 /// - `{"on":false}` - the link is released with `FINAL`, the panel goes back to
-///   its own idle screen, and the page carries on showing the piece.
+///   its own idle screen and **stops receiving frames**, and the page carries
+///   on showing the piece.
 /// - `{"on":true,"to":"screeny-4a00a4"}` - attach to that panel and drive it.
 ///   `to` may be a device id from the registry, an mDNS instance name or an
 ///   address; one that is not known yet is added, exactly as
 ///   `POST /devices/add` would. An empty `to` means "the panel already
 ///   attached", so `{"on":true}` simply turns output back on.
-async fn set_panel(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPanel>) -> ApiResult<Json<Option<PanelStatus>>> {
+///
+/// Off is off for **every** player, not only the one on the page: a script
+/// that says "let the panel go" means the panel, and a second panel's player
+/// quietly holding the first one's lock would be exactly the surprise this is
+/// here to prevent.
+async fn set_panel(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPanel>) -> ApiResult<Json<PanelOutcome>> {
     let player = if req.on {
         let device = match req.to.trim() {
             "" => st.page().device(),
@@ -292,6 +322,12 @@ async fn set_panel(State(st): State<AppState>, headers: HeaderMap, Json(req): Js
         };
         crate::fleet::attach(&st, &device)
     } else {
+        // Everything stops driving a panel, and the page's player is the one
+        // whose answer comes back.
+        for p in st.players.all() {
+            let _ = p.configure(&PlayerChange { on: Some(false), ..PlayerChange::default() });
+            crate::fleet::aim_at_device(&st, &p);
+        }
         st.page()
     };
     player
@@ -299,8 +335,15 @@ async fn set_panel(State(st): State<AppState>, headers: HeaderMap, Json(req): Js
         .map_err(ApiError::bad_request)?;
     crate::fleet::aim_at_device(&st, &player);
     player.ensure_running();
-    publish(&st, &headers, &player);
-    Ok(Json(player.status().panel))
+    let state = publish(&st, &headers, &player);
+    let status = player.status();
+    Ok(Json(PanelOutcome {
+        on: status.on,
+        device: status.device.clone(),
+        label: st.devices.get(&status.device).map(|d| d.label()).unwrap_or_default(),
+        panel: status.panel,
+        state,
+    }))
 }
 
 /// Turn "whatever the human meant" into a device id, adding the device if this

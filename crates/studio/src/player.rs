@@ -308,7 +308,20 @@ struct CoreHandle {
     /// like a render loop that had stopped.
     ticks: Arc<AtomicU64>,
     fps: Mutex<f32>,
-    playing: Mutex<Option<Playing>>,
+    /// What is being performed, **and by which piece**.
+    ///
+    /// The pair matters: a change is applied by the render loop before its
+    /// *next* frame, so for up to one frame period the configuration says one
+    /// piece and the core is still running another. "What is it performing"
+    /// is only true of the piece performing it, and answering with the old
+    /// piece's answer would put the wrong thing on the page.
+    playing: Mutex<(&'static str, Option<Playing>)>,
+}
+
+/// What a core is performing, if it is running the piece that was asked for.
+fn performing(handle: &CoreHandle, want: &str) -> Option<Playing> {
+    let slot = handle.playing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    (slot.0 == want).then(|| slot.1.clone()).flatten()
 }
 
 /// A brightness the caller should apply, off the render thread.
@@ -725,7 +738,7 @@ impl Player {
                     h.alive.load(Ordering::Relaxed),
                     h.ticks.load(Ordering::Relaxed),
                     *h.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-                    h.playing.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+                    performing(h, &cfg.piece),
                 ),
                 None => (false, 0, 0.0, None),
             }
@@ -764,10 +777,14 @@ impl Player {
     }
 
     /// What a composing piece says it is performing, from the last frame.
+    ///
+    /// `None` while the render loop has yet to pick up a piece change: what
+    /// the *previous* piece was performing is not an answer to this question.
     #[must_use]
     pub fn playing(&self) -> Option<Playing> {
+        let want = self.cfg().piece.clone();
         let core = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        core.as_ref().and_then(|h| h.playing.lock().ok().and_then(|p| p.clone()))
+        core.as_ref().and_then(|h| performing(h, &want))
     }
 
     /// Stop for good: the core ends and the panel is released.
@@ -872,7 +889,7 @@ impl Player {
             beat: AtomicU64::new(unix_millis()),
             ticks: Arc::clone(&self.ticks),
             fps: Mutex::new(0.0),
-            playing: Mutex::new(None),
+            playing: Mutex::new((core.def.id, None)),
         });
         {
             let mut slot = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -977,7 +994,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         handle.ticks.fetch_add(1, Ordering::Relaxed);
         *handle.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = core.fps;
         if let Ok(mut p) = handle.playing.lock() {
-            *p = core.piece.playing();
+            *p = (core.def.id, core.piece.playing());
         }
 
         // The page, if this is the player it is a window onto. One slot,

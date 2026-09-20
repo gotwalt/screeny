@@ -141,7 +141,7 @@ async fn the_memory_survives_a_restart_including_a_piece_that_is_not_showing() {
     // What is on disk, before anything reads it back.
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 2, "schema v2");
+    assert_eq!(file["version"], 3, "schema v3");
     assert_eq!(file["pieces"]["plasma"]["params"]["scale"], 2.5, "in state.json and nowhere else:\n{text}");
     assert_eq!(file["pieces"]["plasma"]["seed"], 111);
 
@@ -157,10 +157,14 @@ async fn the_memory_survives_a_restart_including_a_piece_that_is_not_showing() {
     assert_eq!(param(&back, "scale"), 2.5, "a new process restored a piece it was not playing: {back}");
 }
 
-/// A panel's player restores settings the same way, reached the way the
-/// dashboard reaches it. The device here is an address nothing answers on: a
-/// player that is off opens no link and starts no render thread, so this is
-/// the configuration and nothing else.
+/// A panel's player restores settings the same way, reached the way a script
+/// reaches it. The device here is an address nothing answers on, and panel
+/// output is off, so nothing leaves the process: this is the configuration and
+/// nothing else.
+///
+/// The second half is card 170's: that panel is the one the page is a window
+/// onto, so the page says exactly the same thing. Before this card the two
+/// were different contexts and this test had to say so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_panel_restores_a_pieces_settings_too() {
     let studio = studio().await;
@@ -170,9 +174,12 @@ async fn a_panel_restores_a_pieces_settings_too() {
     let id = added.json()["id"].as_str().expect("an id").to_string();
     let set = |body: String| async move { post(at, "/api/v1/player/set", &body).await };
 
-    // Off first: nothing to send, nothing to render.
+    // Panel output off: nothing is sent anywhere. The picture carries on,
+    // because the page is still showing it.
     let off = set(format!(r#"{{"device":"{id}","on":false}}"#)).await;
     assert_eq!(off.status, 200, "{}", String::from_utf8_lossy(&off.body));
+    assert_eq!(off.json()["on"], false);
+    assert_eq!(off.json()["panel"], serde_json::Value::Null, "no link while output is off");
 
     set(format!(r#"{{"device":"{id}","piece":"plasma","seed":11}}"#)).await;
     set(format!(r#"{{"device":"{id}","param":{{"id":"scale","value":2.5}}}}"#)).await;
@@ -184,13 +191,15 @@ async fn a_panel_restores_a_pieces_settings_too() {
     assert_eq!(back["seed"], 11);
     assert_eq!(param(&back, "scale"), 2.5);
 
-    // The design view is still showing its own piece - a panel's piece is not
-    // the design view's - but the *settings* are one memory, so asking the
-    // design view for plasma gets what the panel was tuned to.
+    // One panel, one picture: the page is a window onto that player, so what
+    // it says is what the panel says - the piece, the seed, the parameter and
+    // the fact that output is off.
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["piece"], screeny_studio::state::default_piece());
-    let preview = set_piece(at, "plasma").await;
-    assert_eq!(param(&preview, "scale"), 2.5, "one memory: what the panel was tuned to is what the browser shows");
+    assert_eq!(boot["state"]["piece"], "plasma", "the page shows the attached panel: {}", boot["state"]);
+    assert_eq!(boot["state"]["device"], id);
+    assert_eq!(boot["state"]["seed"], 11);
+    assert_eq!(boot["state"]["on"], false);
+    assert_eq!(param(&boot["state"], "scale"), 2.5);
 
     // The player's Reset, and it stays reset.
     let reset = set(format!(r#"{{"device":"{id}","reset_params":true}}"#)).await.json();
@@ -200,67 +209,50 @@ async fn a_panel_restores_a_pieces_settings_too() {
     assert!(after["params"].as_object().expect("params").is_empty(), "Reset on a panel means it stays reset: {after}");
 }
 
-/// "Play my preview on panel X" needs no copy step now that there is one
-/// memory: what was being previewed already *is* what that piece is
-/// remembered as, so the panel comes back to it later.
+/// **One memory for the whole studio**, which is what card 165 settled once
+/// the orchestrator reversed its per-context decision. With card 170 the page
+/// *is* one of the panels, so the interesting version of this is two panels:
+/// tuning a piece on one is tuning it everywhere.
+///
+/// (This replaces `promoting_the_preview_needs_no_copy_step` and
+/// `the_design_view_and_the_panel_share_one_memory`. Both were about the
+/// preview being a context of its own, which it no longer is; what they were
+/// really pinning - one memory, no copy step - is here.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn promoting_the_preview_needs_no_copy_step() {
+async fn two_panels_share_the_one_memory() {
     let studio = studio().await;
     let at = studio.addr;
-    let id = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50998","name":"bench","play":false}"#)
-        .await
-        .json()["id"]
-        .as_str()
-        .expect("an id")
-        .to_string();
-    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","on":false}}"#)).await;
+    let add = |to: &str| {
+        let body = format!(r#"{{"to":"{to}","name":"bench","play":false}}"#);
+        async move { post(at, "/api/v1/devices/add", &body).await.json()["id"].as_str().expect("an id").to_string() }
+    };
+    let first = add("127.0.0.1:50997").await;
+    let second = add("127.0.0.1:50998").await;
+    let set = |body: String| async move { post(at, "/api/v1/player/set", &body).await };
+    for id in [&first, &second] {
+        set(format!(r#"{{"device":"{id}","on":false}}"#)).await;
+    }
 
-    set_piece(at, "plasma").await;
-    set_seed(at, 77).await;
-    set_param(at, "scale", 3.0).await;
-    let adopted = post(at, "/api/v1/player/adopt_preview", &format!(r#"{{"device":"{id}"}}"#)).await;
-    assert_eq!(adopted.status, 200, "{}", String::from_utf8_lossy(&adopted.body));
-    assert_eq!(param(&adopted.json(), "scale"), 3.0);
-
-    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","on":false}}"#)).await;
-    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","piece":"metaballs"}}"#)).await;
-    let back = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","piece":"plasma"}}"#)).await.json();
-    assert_eq!(param(&back, "scale"), 3.0, "the promoted values are what that panel comes back to");
-    assert_eq!(back["seed"], 77);
-}
-
-/// **One memory, not one per context** (the orchestrator's revision of the
-/// card, 2026-09-19: the browser is a window onto what the panel is doing, and
-/// card 170 unifies the two engines). Tuning a piece in the design view is
-/// tuning it on the panel, and the other way round.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_design_view_and_the_panel_share_one_memory() {
-    let studio = studio().await;
-    let at = studio.addr;
-    let id = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50997","name":"bench","play":false}"#)
-        .await
-        .json()["id"]
-        .as_str()
-        .expect("an id")
-        .to_string();
-    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","on":false}}"#)).await;
-
-    // Tuned in the browser...
+    // The page is a window onto the first one, so tuning it through the
+    // design view's own routes is tuning that panel.
     set_piece(at, "plasma").await;
     set_param(at, "scale", 2.5).await;
     set_seed(at, 505).await;
+    let on_the_first = set(format!(r#"{{"device":"{first}","piece":"plasma"}}"#)).await.json();
+    assert_eq!(param(&on_the_first, "scale"), 2.5, "the page and the panel it shows are one player");
 
-    // ...and the panel, asked for that piece, plays it that way.
-    let on_the_panel =
-        post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","piece":"plasma"}}"#)).await.json();
-    assert_eq!(param(&on_the_panel, "scale"), 2.5);
-    assert_eq!(on_the_panel["seed"], 505);
+    // The *other* panel, asked for that piece, plays it the same way: there is
+    // one answer to "how is plasma set", not one per panel.
+    let on_the_second = set(format!(r#"{{"device":"{second}","piece":"plasma"}}"#)).await.json();
+    assert_eq!(param(&on_the_second, "scale"), 2.5);
+    assert_eq!(on_the_second["seed"], 505);
 
-    // Tuned on the panel, and the browser follows it on the next switch.
-    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{id}","param":{{"id":"scale","value":0.6}}}}"#)).await;
+    // And the other way round: tune it there, and the page follows on the
+    // next switch back.
+    set(format!(r#"{{"device":"{second}","param":{{"id":"scale","value":0.6}}}}"#)).await;
     set_piece(at, "metaballs").await;
     let back = set_piece(at, "plasma").await;
-    assert_eq!(param(&back, "scale"), 0.6, "the browser is a window onto what the panel is doing: {back}");
+    assert_eq!(param(&back, "scale"), 0.6, "one memory, one answer: {back}");
 }
 
 /// The card's second acceptance, end to end: *"a hand-edited state file with
@@ -370,11 +362,11 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     assert_eq!(back["seed"], 4242, "what v1 was playing became that piece's first memory");
     assert_eq!(param(&back, "scale"), 2.5);
 
-    // The file it rewrites is v2, and the v1 file was not condemned.
+    // The file it rewrites is v3, and the v1 file was not condemned.
     studio.stop().await;
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     assert!(!dir.0.join("state.bad.json").exists());
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 2);
+    assert_eq!(file["version"], 3);
     assert_eq!(file["pieces"]["plasma"]["params"]["scale"], 2.5, "{text}");
 }
