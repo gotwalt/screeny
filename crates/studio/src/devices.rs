@@ -59,7 +59,7 @@ pub enum Reach {
 }
 
 /// A device as the studio knows it right now.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DeviceRecord {
     pub stored: StoredDevice,
     /// The last resolution: exact addresses and ports.
@@ -414,12 +414,6 @@ impl Registry {
             }
         }
         changes
-    }
-}
-
-impl Default for DeviceRecord {
-    fn default() -> Self {
-        DeviceRecord { stored: StoredDevice::default(), resolved: None, seen_unix: None, telemetry: None, last_error: None }
     }
 }
 

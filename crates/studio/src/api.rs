@@ -500,7 +500,7 @@ async fn device_name(State(st): State<AppState>, Json(req): Json<SetName>) -> Ap
     let on_the_device = if name.is_empty() {
         Ok(())
     } else {
-        on_device(&st, &req.device, "renaming", move |c| c.set_name(&name).map_err(|e| e.to_string())).await.map(|()| ())
+        on_device(&st, &req.device, "renaming", move |c| c.set_name(&name).map_err(|e| e.to_string())).await
     };
     Ok(Json(serde_json::json!({
         "name": req.name.trim(),

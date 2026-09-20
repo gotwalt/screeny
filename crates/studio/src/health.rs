@@ -36,7 +36,7 @@ use serde::Serialize;
 use std::sync::atomic::Ordering;
 
 use crate::devices::{DiscoveryHealth, Telem};
-use crate::engine::lock;
+
 use crate::player::{PlayerStatus, WATCHDOG};
 use crate::state::{unix_now, StoreHealth};
 use crate::{AppState, START_GRACE};
@@ -58,9 +58,13 @@ pub struct Status {
 }
 
 /// The design view's player.
+///
+/// Read from the last view the status heartbeat managed to take, never from
+/// the engine itself: this route has to answer when the engine is wedged,
+/// because that is when somebody is looking.
 #[derive(Serialize)]
 pub struct PreviewStatus {
-    pub piece: &'static str,
+    pub piece: String,
     pub seed: u32,
     pub fps: f64,
     pub paused: bool,
@@ -68,6 +72,9 @@ pub struct PreviewStatus {
     pub panics: u64,
     pub alive: bool,
     pub last_tick_ago: f64,
+    /// True when the engine has not produced a frame for longer than the
+    /// watchdog: a piece that has stopped returning.
+    pub wedged: bool,
     pub gave_up: Option<String>,
     pub fell_back_from: Option<String>,
     /// Whether the preview is being sent to a panel, and to which.
@@ -160,27 +167,23 @@ pub async fn status(State(st): State<AppState>) -> Json<Status> {
 #[must_use]
 pub fn collect(st: &AppState) -> Status {
     let problems = problems(st);
-    let (snapshot, panel_on, panel_to, panel) = {
-        let mut e = lock(&st.engine);
-        let snap = e.snapshot();
-        let (on, to) = e.panel_aim();
-        let p = e.panel_status();
-        (snap, on, to, p)
-    };
+    let seen = st.preview.seen.lock().ok().and_then(|s| s.clone());
+    let last_tick_ago = (crate::player::unix_millis().saturating_sub(st.preview.beat.load(Ordering::Relaxed))) as f64 / 1000.0;
     let preview = PreviewStatus {
-        piece: snapshot.piece,
-        seed: snapshot.seed,
-        fps: snapshot.fps,
-        paused: snapshot.paused,
+        piece: seen.as_ref().map_or_else(String::new, |v| v.state.piece.to_string()),
+        seed: seen.as_ref().map_or(0, |v| v.state.seed),
+        fps: seen.as_ref().map_or(0.0, |v| v.state.fps),
+        paused: seen.as_ref().is_some_and(|v| v.state.paused),
         ticks: st.preview.ticks.load(Ordering::Relaxed),
         panics: st.preview.panics.load(Ordering::Relaxed),
         alive: st.preview.alive.load(Ordering::Relaxed),
-        last_tick_ago: (crate::player::unix_millis().saturating_sub(st.preview.beat.load(Ordering::Relaxed))) as f64 / 1000.0,
+        last_tick_ago,
+        wedged: last_tick_ago > WATCHDOG.as_secs_f64(),
         gave_up: st.preview.gave_up.lock().ok().and_then(|g| g.clone()),
         fell_back_from: st.preview.fell_back_from.lock().ok().and_then(|g| g.clone()),
-        panel_on,
-        panel_to,
-        panel,
+        panel_on: seen.as_ref().is_some_and(|v| v.panel_on),
+        panel_to: seen.as_ref().map_or_else(String::new, |v| v.panel_to.clone()),
+        panel: seen.and_then(|v| v.panel),
     };
 
     let now = unix_now();

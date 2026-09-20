@@ -45,6 +45,9 @@ pub struct Engine {
     panel_to: String,
     /// When the meter last took the connected device's budget and codec set.
     limits_at: Instant,
+    /// Whether the deliberately broken pieces are on the menu here too, so a
+    /// human can watch the containment work in the design view.
+    faults: bool,
 }
 
 impl Engine {
@@ -71,7 +74,14 @@ impl Engine {
             panel_on: false,
             panel_to: String::new(),
             limits_at: Instant::now(),
+            faults: false,
         }
+    }
+
+    /// Offer the deliberately broken pieces here as well. Off unless the
+    /// studio was started with them (`SCREENY_STUDIO_FAULTS=1`).
+    pub fn allow_faults(&mut self, on: bool) {
+        self.faults = on;
     }
 
     /// Rebuild the piece from its seed and start its clock again.
@@ -162,7 +172,7 @@ impl Engine {
     ///
     /// If no piece has that id.
     pub fn set_piece(&mut self, id: &str) -> Result<(), String> {
-        let def = screeny_art::piece::find(id).ok_or_else(|| format!("no piece called `{id}`"))?;
+        let def = crate::player::find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
         self.def = def;
         self.params = Params::defaults(def.params);
         self.rebuild();
@@ -283,6 +293,21 @@ pub fn lock(engine: &Shared) -> MutexGuard<'_, Engine> {
     engine.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The same, but never waits.
+///
+/// `None` means somebody else has it - usually the engine thread mid-render,
+/// occasionally a piece that has stopped returning. The status heartbeat and
+/// `/api/v1/status` use this so that a wedged piece cannot take the dashboard
+/// down with it: the one moment you most want to read the status is the moment
+/// something is stuck.
+pub fn try_lock(engine: &Shared) -> Option<MutexGuard<'_, Engine>> {
+    match engine.try_lock() {
+        Ok(g) => Some(g),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 #[derive(Serialize)]
 pub struct ParamInfo {
     pub id: &'static str,
@@ -322,8 +347,11 @@ pub struct Bootstrap {
 
 #[must_use]
 pub fn bootstrap(engine: &Shared) -> Bootstrap {
+    let faults = lock(engine).faults;
+    let extra = if faults { crate::player::FAULT_PIECES } else { &[] };
     let pieces = pieces::ALL
         .iter()
+        .chain(extra.iter())
         .map(|d| PieceInfo {
             id: d.id,
             name: d.name,

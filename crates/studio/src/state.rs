@@ -250,8 +250,15 @@ struct Slot {
     /// costs one write, and a save never waits for the disk.
     pending: Option<Persisted>,
     stop: bool,
-    /// Bumped every time the writer finishes a pass, so `flush` can wait.
-    passes: u64,
+    /// Saves asked for, and saves dealt with. `flush` waits for the second to
+    /// catch up with the first.
+    ///
+    /// A pair rather than a single counter because coalescing makes them jump:
+    /// three saves and one write is the normal case, and a `flush` that only
+    /// looked at "is anything pending" would return in the gap between the
+    /// writer taking the work and finishing it.
+    queued: u64,
+    done: u64,
 }
 
 struct Inner {
@@ -303,7 +310,7 @@ impl Store {
 
         let inner = Arc::new(Inner {
             path,
-            slot: Mutex::new(Slot { pending: None, stop: false, passes: 0 }),
+            slot: Mutex::new(Slot { pending: None, stop: false, queued: 0, done: 0 }),
             wake: Condvar::new(),
             done: Condvar::new(),
             health: Mutex::new(health),
@@ -327,6 +334,7 @@ impl Store {
         if slot.stop {
             return;
         }
+        slot.queued += 1;
         slot.pending = Some(state);
         self.inner.wake.notify_all();
     }
@@ -338,8 +346,8 @@ impl Store {
             return;
         }
         let mut slot = self.inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let want = slot.passes + u64::from(slot.pending.is_some());
-        while !slot.stop && slot.passes < want {
+        let want = slot.queued;
+        while !slot.stop && slot.done < want {
             let (g, t) = self
                 .inner
                 .done
@@ -390,13 +398,14 @@ fn write_loop(inner: &Arc<Inner>) {
     let Some(path) = inner.path.clone() else { return };
     let mut written: Option<String> = None;
     loop {
-        let next = {
+        let (next, upto) = {
             let mut slot = inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             while slot.pending.is_none() && !slot.stop {
                 slot = inner.wake.wait(slot).unwrap_or_else(std::sync::PoisonError::into_inner);
             }
+            let upto = slot.queued;
             match slot.pending.take() {
-                Some(p) => p,
+                Some(p) => (p, upto),
                 // Stopping, and nothing left to write.
                 None => break,
             }
@@ -409,6 +418,7 @@ fn write_loop(inner: &Arc<Inner>) {
             }
             Err(e) => {
                 note_error(inner, format!("serialising the state: {e}"));
+                finish_pass(inner, upto);
                 continue;
             }
         };
@@ -416,7 +426,7 @@ fn write_loop(inner: &Arc<Inner>) {
         // one state change per frame and most of them are identical by the
         // time the writer gets here.
         if written.as_deref() == Some(text.as_str()) {
-            finish_pass(inner);
+            finish_pass(inner, upto);
             continue;
         }
         match write_atomically(&path, text.as_bytes()) {
@@ -429,20 +439,25 @@ fn write_loop(inner: &Arc<Inner>) {
             }
             Err(e) => note_error(inner, format!("writing {}: {e}", path.display())),
         }
-        finish_pass(inner);
+        finish_pass(inner, upto);
     }
     // Last wishes: whatever was asked for on the way out.
-    let last = inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pending.take();
+    let (last, upto) = {
+        let mut slot = inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        (slot.pending.take(), slot.queued)
+    };
     if let Some(p) = last {
         if let Ok(t) = serde_json::to_string_pretty(&p) {
             let _ = write_atomically(&path, format!("{t}\n").as_bytes());
         }
     }
-    finish_pass(inner);
+    finish_pass(inner, upto);
 }
 
-fn finish_pass(inner: &Arc<Inner>) {
-    inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).passes += 1;
+/// Everything asked for up to `upto` has now been dealt with.
+fn finish_pass(inner: &Arc<Inner>, upto: u64) {
+    let mut slot = inner.slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    slot.done = slot.done.max(upto);
     inner.done.notify_all();
 }
 

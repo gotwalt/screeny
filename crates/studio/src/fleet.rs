@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use crate::devices::{self, PENDING};
 use crate::player::BrightnessJob;
-use crate::state::StoredPlayer;
+use crate::state::{unix_now, StoredPlayer};
 use crate::AppState;
 
 /// The longest a failing device's poll is backed off to, as a multiple of the
@@ -67,7 +67,7 @@ async fn supervise(st: &AppState) {
     let known = st.devices.ids();
     // A player whose device has been forgotten goes with it.
     for id in st.players.ids() {
-        if !known.iter().any(|k| *k == id) {
+        if !known.contains(&id) {
             st.players.remove(&id);
         }
     }
@@ -78,8 +78,22 @@ async fn supervise(st: &AppState) {
         if let Some(record) = st.devices.get(id) {
             player.aim(&record.reach());
         }
-        if let Some(job) = player.supervise() {
-            jobs.push(job);
+        match player.supervise() {
+            Some(job) => jobs.push(job),
+            // The link noticing a new session is not the only way a panel
+            // comes back at its own brightness: a power cut short enough that
+            // UDP never noticed leaves the link perfectly happy and the panel
+            // at full. The device's own telemetry is the honest check, and
+            // comparing against what it *said it applied* - not what was asked
+            // for - is what stops this retrying for ever against a cap.
+            None => {
+                if let (Some(want), Some(applied)) = player.brightness_policy() {
+                    let heard = st.devices.get(id).and_then(|d| d.telemetry).filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30);
+                    if heard.is_some_and(|t| t.brightness != applied) {
+                        jobs.push(BrightnessJob { device: id.clone(), level: want });
+                    }
+                }
+            }
         }
     }
 
@@ -188,9 +202,19 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
             }
         }
 
-        // A device we have only ever been told the address of: ask it who it
-        // is, so it can be keyed by its own id like everything else.
-        if id.starts_with(PENDING) {
+        // A device whose exact ports we do not know: ask it who it is.
+        //
+        // Two cases, and the second is the one that matters after a restart.
+        // A *pending* id has never been reached at all. But a device read back
+        // out of the state file has its real id and no resolution - an address
+        // from last month is worse than no address - so it needs the same
+        // `GET_INFO` before there is a control port to talk to.
+        if record.resolved.is_none() {
+            if !id.starts_with(PENDING) && record.stored.address.is_empty() {
+                // Known by instance name only: discovery is the way in.
+                fail(backoff, &id);
+                continue;
+            }
             let Some(addr) = devices::parse_addr(&record.stored.address) else {
                 // A name, and discovery is the only way to resolve one.
                 fail(backoff, &id);
@@ -243,9 +267,9 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
 /// that are all off does not poll in lockstep.
 fn fail(backoff: &mut BTreeMap<String, (u32, u32)>, id: &str) {
     let entry = backoff.entry(id.to_string()).or_insert((0, 0));
-    entry.0 = (entry.0.saturating_mul(2).max(1)).min(MAX_BACKOFF);
+    entry.0 = entry.0.saturating_mul(2).clamp(1, MAX_BACKOFF);
     // Jitter: 0 or 1 extra pass, from the clock rather than a random number
     // generator this crate does not otherwise need.
-    let jitter = u32::from(crate::player::unix_millis() % 2 == 0);
+    let jitter = u32::from(crate::player::unix_millis().is_multiple_of(2));
     entry.1 = entry.0 + jitter;
 }

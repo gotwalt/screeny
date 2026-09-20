@@ -179,3 +179,52 @@ file; `main` turns both on.
 Measured: `cargo test -p screeny-studio` - 6 bin, 18 lib, 13 integration, all green.
 Card 105's 13 tests were untouched and still pass, including the panel and stalled-browser
 ones.
+
+### Step 3 - the acceptance tests, and four real bugs they found
+
+`crates/studio/tests/fleet.rs`, 12 tests against `screeny-sim` on loopback. Ports
+50800..50900, mDNS off, discovery off, every target an explicit `127.0.0.1`; nothing
+here could reach the bench panel even in principle.
+
+| test | what it pins |
+|---|---|
+| `a_typed_address_becomes_a_device_and_starts_playing` | `pending:127.0.0.1:P` -> the panel's own id `aa11bb`; the typed name survives the adoption; telemetry arrives; the player streams |
+| **`the_panel_comes_back_whatever_is_restarted`** | **the card's acceptance.** Four rounds: kill the simulator; kill the server; both, server first; both, panel first. Every time the panel comes back playing `metaballs` seed 4242 at 30 fps with nobody doing anything |
+| `the_design_view_resumes_where_it_was` | piece, seed, paused, speed, fps - and `panel_on`/`panel_to`, which card 105 left out of its state on purpose |
+| `promoting_the_preview_is_explicit` | playing with the design view does not touch a panel's player; `adopt_preview` does |
+| `a_bad_piece_is_contained_and_the_rest_carries_on` | a panicking piece and a stalling one, each replaced by the fallback, with a second panel playing throughout and never disturbed; `/healthz` stays 200 |
+| `the_fault_pieces_are_not_on_the_menu` | a normal studio refuses them and does not list them |
+| `a_missing_panel_is_never_unhealthy` | no panel, a panel that never existed, and a panel that vanished mid-stream: all 200 |
+| `a_wedged_preview_is_a_503_and_the_dashboard_still_answers` | 503 with a reason, **and `/api/v1/status` answers in under 3 s while the engine's lock is held by a piece that will not give it back** |
+| `a_state_directory_that_cannot_be_used_is_a_503` | the other 503; and the server still serves and still plays |
+| `the_device_controls_reach_the_device` | brightness (asked 200, applied 120 - the simulator's cap), identify, name (on the device and here), stats, reboot; reboot without `confirm` is a 400, an unknown device a 404, an unreachable one a 409 |
+| `the_brightness_policy_survives_the_panel_rebooting` | the panel comes back at its own 120 and the studio puts it back to 33 |
+| `a_broken_state_file_starts_a_working_server` | corrupt, truncated and future-version files, end to end |
+
+**Four bugs these found, all real, none cosmetic:**
+
+1. **`Store::flush` could return before the write landed.** It waited on "is anything
+   pending", so it returned in the gap between the writer taking the work and finishing
+   it - and a restart then read the *previous* state. Now a queued/done pair of counters:
+   `flush` waits for `done >= queued`. This is the bug that would have made "resumes
+   exactly" quietly false about the last change before a restart.
+2. **A device read back out of the state file was never re-resolved.** Only a
+   `pending:` id triggered the `GET_INFO`, so after a restart a device had its real id,
+   no resolution and therefore no control port - brightness, identify, name, stats and
+   reboot would all have been 409 for ever after the first restart. Now anything
+   unresolved with an address is asked.
+3. **A wedged piece took the dashboard with it.** `/api/v1/status` read the engine
+   directly, so the one moment somebody wants the dashboard was the one moment it
+   hung. The status heartbeat now uses `try_lock` and keeps the last readable view;
+   `/healthz` and `/api/v1/status` read that. `Running::stop` also grew so a restart
+   test can wait for the previous server to *finish*, rather than sleeping and hoping.
+4. **The brightness policy only re-applied when the link noticed a new session.** A
+   panel that power-cycles quickly enough that UDP never notices comes back at full
+   brightness with the link perfectly happy. The supervisor now also compares the
+   device's own telemetry against *what the device said it applied* - not against what
+   was asked for, which would retry for ever against a cap.
+
+`cargo clippy -p screeny-studio --all-targets`: clean.
+One card 105 test (`the_socket_carries_the_heartbeat`) was made non-flaky: it took the
+first heartbeat, which can legitimately arrive between a piece being rebuilt and its
+first frame. It now waits for one that carries "now playing", which is what it meant.

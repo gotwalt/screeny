@@ -55,6 +55,10 @@ pub const MAX_FPS: f64 = 60.0;
 /// unless the studio was started with fault pieces enabled, which only a test
 /// and `SCREENY_STUDIO_FAULTS=1` do. They exist so that "a piece that panics is
 /// contained" can be a test rather than a claim.
+/// How long `fault-stall` stops returning for. Comfortably past the watchdog
+/// and past `/healthz`'s patience, and then over.
+pub const STALL_FOR: Duration = Duration::from_secs(30);
+
 pub static FAULT_PIECES: &[PieceDef] = &[
     PieceDef {
         id: "fault-panic",
@@ -88,9 +92,10 @@ impl Piece for FaultPiece {
         if self.frames >= 4 {
             match self.kind {
                 Fault::Panic => panic!("fault-panic: this piece panics on purpose"),
-                // Long, but not for ever: an abandoned thread must eventually
-                // go away even in a test that is itself stuck.
-                Fault::Stall => std::thread::sleep(Duration::from_secs(60)),
+                // Long enough to be a stall by any measure (the watchdog is
+                // 5 s), short enough that an abandoned thread eventually goes
+                // away even in a test that is itself stuck.
+                Fault::Stall => std::thread::sleep(STALL_FOR),
             }
         }
         screeny_art::Frame::black()
@@ -478,6 +483,16 @@ impl Player {
         self.health_mut().brightness_applied = Some(applied);
     }
 
+    /// The brightness policy, and what the device last said it applied.
+    ///
+    /// Compared against the device's own telemetry once a second, which is how
+    /// a panel that came back at its own default gets put right again without
+    /// waiting for the link to notice anything.
+    #[must_use]
+    pub fn brightness_policy(&self) -> (Option<u8>, Option<u8>) {
+        (self.cfg().brightness, self.health_mut().brightness_applied)
+    }
+
     /// Everything the dashboard shows.
     #[must_use]
     pub fn status(&self) -> PlayerStatus {
@@ -597,7 +612,7 @@ impl Player {
         // fallback rather than a reason not to run.
         let refused = self.health_mut().refused.clone();
         let chosen = match find_piece(&def, self.faults) {
-            Some(d) if !refused.iter().any(|r| *r == def) => d,
+            Some(d) if !refused.contains(&def) => d,
             _ => {
                 let f = fallback_piece(&def);
                 if find_piece(&def, self.faults).is_none() {
@@ -742,7 +757,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, mut core: Core) {
         };
 
         // A run of good frames clears the fault brake.
-        if handle.ticks.load(Ordering::Relaxed) % 300 == 0 {
+        if handle.ticks.load(Ordering::Relaxed).is_multiple_of(300) {
             player.consecutive.store(0, Ordering::Relaxed);
         }
 

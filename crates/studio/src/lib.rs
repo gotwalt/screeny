@@ -127,6 +127,20 @@ pub struct PreviewHealth {
     pub gave_up: Mutex<Option<String>>,
     /// The piece it fell back from, if it did.
     pub fell_back_from: Mutex<Option<String>>,
+    /// The last readable view of the engine, refreshed by the status
+    /// heartbeat. `/api/v1/status` reads this rather than the engine itself,
+    /// so a piece that has stopped returning cannot take the dashboard down
+    /// with it - which is exactly the moment somebody wants the dashboard.
+    pub seen: Mutex<Option<EngineView>>,
+}
+
+/// What the status heartbeat last managed to read out of the engine.
+#[derive(Clone)]
+pub struct EngineView {
+    pub state: StudioState,
+    pub panel_on: bool,
+    pub panel_to: String,
+    pub panel: Option<screeny_art::output::PanelStatus>,
 }
 
 /// Everything a request handler can reach. Cheap to clone.
@@ -248,6 +262,21 @@ pub struct Studio {
 pub struct Running {
     pub addr: SocketAddr,
     stop: watch::Sender<bool>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Running {
+    /// Stop, and wait until the server has finished stopping - the panels
+    /// released and the state file written.
+    ///
+    /// A restart test needs this rather than a sleep: "kill the server and
+    /// start it again" is only a fair test if the first one really did finish.
+    pub async fn stop(mut self) {
+        let _ = self.stop.send(true);
+        if let Some(t) = self.task.take() {
+            let _ = t.await;
+        }
+    }
 }
 
 impl Drop for Running {
@@ -274,6 +303,7 @@ impl Studio {
         }
 
         let engine: Shared = Arc::new(Mutex::new(Engine::new()));
+        lock(&engine).allow_faults(cfg.fault_pieces);
         restore_preview(&engine, &saved.preview, cfg.fault_pieces);
 
         let (stop, _) = watch::channel(false);
@@ -352,13 +382,14 @@ impl Studio {
     /// Serve in the background, and stop when the returned handle is dropped.
     #[must_use]
     pub fn spawn(self) -> Running {
-        let running = Running { addr: self.addr, stop: self.stop.clone() };
-        tokio::spawn(async move {
+        let addr = self.addr;
+        let stop = self.stop.clone();
+        let task = tokio::spawn(async move {
             if let Err(e) = self.serve().await {
                 eprintln!("studio: serving: {e}");
             }
         });
-        running
+        Running { addr, stop, task: Some(task) }
     }
 }
 
@@ -457,7 +488,7 @@ fn spawn_engine(st: AppState) {
                     st.persist();
                 } else {
                     st.preview.ticks.fetch_add(1, Ordering::Relaxed);
-                    if st.preview.ticks.load(Ordering::Relaxed) % 300 == 0 {
+                    if st.preview.ticks.load(Ordering::Relaxed).is_multiple_of(300) {
                         consecutive = 0;
                     }
                 }
@@ -479,6 +510,18 @@ fn spawn_engine(st: AppState) {
         .expect("spawn engine thread");
 }
 
+/// One look at the engine, if it can be had without waiting.
+///
+/// A function of its own so that no lock guard can be alive across an `await`
+/// in the caller - which would make the status task's future `!Send`, and is
+/// also exactly the bug that would make a wedged piece wedge the heartbeat.
+fn peek(st: &AppState) -> Option<(Option<screeny_art::piece::Playing>, EngineView)> {
+    let mut e = engine::try_lock(&st.engine)?;
+    let (panel_on, panel_to) = e.panel_aim();
+    let panel = e.panel_status();
+    Some((e.playing(), EngineView { state: e.snapshot(), panel_on, panel_to, panel }))
+}
+
 /// The heartbeat: polled once here however many browsers are watching.
 fn spawn_status(st: AppState) {
     let mut stop = st.stop.clone();
@@ -488,13 +531,30 @@ fn spawn_status(st: AppState) {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let (playing, panel) = {
-                        let mut e = lock(&st.engine);
-                        (e.playing(), e.panel_status())
-                    };
-                    st.status.send_replace(Arc::new(StatusEvent { kind: "status", playing, panel }));
+                    // Never *wait* for the engine: at 60 fps it is mid-render
+                    // a good fraction of the time, and if a piece has stopped
+                    // returning it is mid-render for ever. A few short tries,
+                    // then leave the last view standing and come back in half
+                    // a second.
+                    let mut got = None;
+                    for _ in 0..10 {
+                        got = peek(&st);
+                        if got.is_some() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    if let Some((playing, view)) = got {
+                        let panel = view.panel.clone();
+                        if let Ok(mut seen) = st.preview.seen.lock() {
+                            *seen = Some(view);
+                        }
+                        st.status.send_replace(Arc::new(StatusEvent { kind: "status", playing, panel }));
+                    }
                 }
-                _ = stop.wait_for(|s| *s) => break,
+                // Discarded inside the block: the borrow `wait_for` hands back
+                // is not `Send` and this future has to be.
+                () = async { drop(stop.wait_for(|s| *s).await) } => break,
             }
         }
     });
