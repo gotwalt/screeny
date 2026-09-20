@@ -259,6 +259,28 @@ something else on this machine - four workers share it. Nothing of mine was
 running by then, and it is after the measurement.)
 
 `cargo test -p screeny -p screeny-demos`: 105 tests, all pass (`pacing` 18.4 s,
-first try, no flake). `cargo doc -p screeny-encode -p screeny --no-deps`:
-silent. `cargo clippy -p screeny -p screeny-encode --all-targets`: clean (the
-five warnings it does print are `screeny-demos`' pre-existing ones, card 125).
+first try, no flake, in both debug and release). `cargo doc -p screeny-encode
+-p screeny --no-deps`: silent. `cargo clippy -p screeny -p screeny-encode
+--all-targets`: clean (the five warnings it does print are `screeny-demos`'
+pre-existing ones, card 125). Root `cargo test --release --no-fail-fast`: 238
+tests across 30 targets, 0 failed, exit 0.
+
+### Not done, on purpose
+
+- **No new cards.** Nothing was found that is worth one; the reserved range
+  150-152 is unused.
+- **Card 067** ("let a Piece render straight into the sender's frame buffer")
+  has had its prize taken from the other end: its literal acceptance test,
+  `grep -n copy_from_slice crates/screeny/src/main.rs` finding nothing in
+  `PieceSource`, now passes, because a piece's own buffer is lent to the
+  encoder rather than copied into the sender's. What 067 still describes -
+  `Piece::render` taking a borrowed frame instead of an owning one - is undone
+  and now buys nothing on the streaming path (only `demos`' preview and tests
+  still call it). I have not edited that card; the orchestrator should decide
+  whether to park it.
+- **Porting the demos into `crates/art`** is explicitly a later piece of work
+  and was not started.
+- **`Link`** was not given a pull API. It is a push API by design and
+  `Link::send(Pixels::indexed(..))` is already exact.
+- **No `FnIndexedSource`** (a closure adapter like `FnSource`): nothing wants
+  one yet, and a seam with no consumer is what card 011 deliberately avoided.
