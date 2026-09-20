@@ -1,7 +1,9 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status (2026-09-20): research done (cards 200, 201, 202), the partition table is on
-the device (210), the first build cards are in flight (211, 220).** This file is the
+**Status (2026-09-20, late): research done (200-202); on the device: the partition
+table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
+strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
+(221); in flight: 212 (the store in the firmware, hardware) and 226 (`crates/device-api`).** This file is the
 source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
 Claude session): decisions, what the research settled, and the build order at the end.
 
@@ -173,8 +175,8 @@ Orchestrator's defaults for card 201's open questions (the owner can overrule): 
 portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
 **does answer while a sender is streaming**, and a bench card proves it costs no frame;
 the device advertises **`_http._tcp`** in mDNS; JSON shapes for the HTTP API live in
-`crates/proto` behind a feature so the Studio and the sim share them (notice to the
-software session before that change).
+their own crate, `crates/device-api` (card 226), which the firmware, the sim and the
+Studio all depend on - `crates/proto` is not touched.
 
 ## Build order
 
@@ -182,10 +184,11 @@ software session before that change).
 |---|---|---|
 | 210 | partition table + `tools/fw-run.sh` flags - **done**, on the device, conformance 60/0/4 | yes (orchestrator) |
 | 211 | `crates/settings`, host-tested against the real map - **done** (42 tests) | no |
-| 220 | framebuffers off core 0's stack; APSTA heap measured on the device (in flight) - **gates everything below** | yes |
+| 220 | framebuffers off core 0's stack; APSTA heap measured - **done**: stack high-water 26.5 KB -> ~6 KB of 37.5 KB; APSTA costs 3.3 KB of heap (44 KB free at the worst instant); keep the 64 + 32 KB heap; the full track leaves ~20 KB of stack against ~6 KB of demand (`docs/research/009-ram-headroom.md`) | yes |
 | 203 | bench: GPIO15 confirmed with the probe, owner pressing - **done** | yes (orchestrator + owner) |
-| 212 | firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 212 | (in flight) firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
+| 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio (in flight; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi states (delivers 081) | no |
@@ -194,7 +197,7 @@ software session before that change).
 | 231 | hold ladder with the on-panel countdown; 5 s wipes WiFi -> portal; held-at-boot | yes |
 | 240 | OTA staging over HTTP into the inactive slot, the five-check validator, per-sector timing (the esp-radio interrupt-window measurement) | yes |
 | 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
-| 242 | rollback-capable bootloader (needs the owner's decision) | yes |
+| 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | panic breadcrumb in RTC memory, shown on the status page | yes |
 
 Firmware cards touch the same files and share one device, so they run one at a time;
