@@ -382,12 +382,20 @@ impl Patch for Flock {
         // Sky and birds are quantised separately through the same blue-noise
         // mask: the band is smooth and needs the dither to not stair-step, the
         // ink is a few levels and needs it to keep a wing's edge.
-        let dither = Dither::BlueNoise;
+        // Two masks, because the two axes are not the same problem. The sky
+        // is a smooth gradient across the whole frame, so its dither is most
+        // of the index plane and what it costs on the wire matters: an
+        // ordered pattern tiles and compresses where a random one does not,
+        // and Bayer 4x4 came out 200 bytes cheaper than blue noise for a
+        // picture I could not tell apart (card 168's Log). The ink is a
+        // handful of levels over small, moving shapes, where blue noise's
+        // lack of structure is worth having and there is hardly any of it.
+        let ink_dither = Dither::BlueNoise;
         let sky_dither = Dither::Bayer4;
         let indices = (0..N)
             .map(|i| {
                 let (x, y) = (i % W, i / W);
-                let bias = dither.threshold(x, y);
+                let bias = ink_dither.threshold(x, y);
                 let sky_bias = sky_dither.threshold(x, y);
                 let mut band = 0.0;
                 for j in 0..ss {
