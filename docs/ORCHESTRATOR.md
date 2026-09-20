@@ -90,7 +90,14 @@ half what it did; `sockets` in status), 183, 182. Browser tooling note: the Chro
 drives a *background* window, so `document.hidden` is true there - since card 120 the page
 then asks for no pictures and the canvas is black; verify frames with a hand-opened
 WebSocket (`/api/v1/ws?fps=30&repeat=false`), and leave judging the picture to the owner.
-Nothing of this session's is in flight. Good next cards: 104 (scheduler - design with the owner), 102
+**In flight since 2026-09-20 ~09:30 (software session, three Opus workers, worktrees):** 102
+(`card/102-art-panel-model`; scoped to the model, meters and README - piece looks and the
+60-vs-30 question are left for the owner, follow-ups 113-116), 141
+(`card/141-follow-a-moved-panel`, follow-ups 142-144; its real-panel check is the
+orchestrator's after the merge), 196 (`card/196-state-broadcast-pacing`, measure first,
+follow-ups 117-119). If you are reading this after a reset and they are not merged: look at
+`git worktree list` and the branches, save any uncommitted work as a WIP commit, continue
+from there. Other good next cards: 104 (scheduler - design with the owner), 102
 (art's panel model vs the device), 120 (preview bandwidth), 141, 182, 183, 190, 191; card 192
 (a sim that can play an unhealthy device) was offered to the firmware session.
 Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
