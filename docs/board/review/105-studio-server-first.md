@@ -334,3 +334,67 @@ run under `timeout`; `ps` at the end of the session shows no `screeny-studio`, n
 `screeny-sim`, no stray cargo belonging to this worktree. One `screeny-sim
 --exit-after 400` was seen during the work and left alone: `lsof` shows its working
 directory is `.claude/worktrees/agent-a49893d8d2978104f`, another worker's.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| axum server, UI embedded at build time, `--ui-dir` override | `src/ui.rs`, `src/lib.rs`; `the_ui_is_served_from_the_binary` |
+| `--listen`, default `127.0.0.1:8787` | `src/main.rs`, 3 unit tests; compose can pass `0.0.0.0:8787` |
+| the 11 commands 1:1, names kept, under `/api/v1` | `src/api.rs` - 13 routes, card 101's two included; `the_api_round_trips` |
+| preview frames over a WebSocket, binary, newest-wins, drop if slow | `src/ws.rs`; `the_socket_delivers_frames`, `a_stalled_browser_does_not_hold_up_the_engine_or_the_panel` |
+| UI: `invoke()` -> `fetch()`/WS, two browsers in sync | `ui/main.js`; `two_browsers_see_each_others_changes`, `a_late_browser_starts_in_step` |
+| Tauri, config, icons, capabilities, build script gone | deleted in step 1; the generated `gen/` directory and its `.gitignore` line too |
+| dependency tree and build time before/after | step 3: 292 -> 160 crates, 296.7 -> 189.3 CPU-seconds |
+| tests: API round-trips, WS frames, stalled client, two clients | 15 tests in `crates/studio` |
+| bounded by construction: no unbounded channels or buffers | one-slot `watch` for frames and status, 32-deep `broadcast` for state, 3 s send timeout; measured in step 2 |
+| "send to panel" to a localhost sim, sim shows what the preview shows | `send_to_panel_streams_the_preview_to_the_device` |
+| no GUI system libraries needed to build | step 3; and `--no-default-features` has no graphics driver in the tree at all |
+| `crates/studio` a normal workspace member; `CLAUDE.md` updated | step 3 |
+| `cargo test --release --no-fail-fast` green at the root | **303 passed, 0 failed** |
+
+Not done here, on purpose: players, devices and persistent state (106), Docker (107),
+a scheduler (104), `Link::measure` (111/112). No hardware was touched and no LAN
+packet was sent: every target in every run was an explicit `127.0.0.1`.
+
+### For the orchestrator: the real-panel run, from a browser
+
+The panel step is yours - a worker's environment cannot reach the LAN (card 101
+measured that; card 110 is the cause). From the main checkout after merging:
+
+```sh
+cargo run --release -p screeny-studio
+#   studio: http://127.0.0.1:8787/
+```
+
+Open that URL. The studio starts on `clocks-numerals` at 60 fps. In the inspector's
+**Panel** section, type `screeny-4a00a4` into the address box and turn **Send to
+panel** on; the status line under it should go from `Connecting: screeny-4a00a4.` to
+`Sending to screeny-4a00a4 at ... at 30 fps.`, with `exact` climbing and `fallback` at
+0 for an indexed piece. Pick pieces from the list as usual; `metaballs` is the
+continuous one, where the frame-size meter should sit near 1464 bytes.
+
+The same thing without a browser, if the picture is all you want to check:
+
+```sh
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":true,"to":"screeny-4a00a4"}' http://127.0.0.1:8787/api/v1/set_panel
+curl -s http://127.0.0.1:8787/api/v1/panel_status          # the status line, as JSON
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"id":"overland"}' http://127.0.0.1:8787/api/v1/set_piece
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":false,"to":""}' http://127.0.0.1:8787/api/v1/set_panel
+```
+
+and `screeny --name screeny-4a00a4 stats -n 20` for the device side, read-only, as
+card 101 ran it.
+
+Ctrl-C is safe and is now the tidy way to stop: it sends `FINAL` and the device goes
+`LIVE -> HOLD` at once (measured against the simulator in step 4). Nothing here
+touches serial, flash, the camera, `reboot` or `brightness`.
+
+**Two things to expect.** `screeny-studio` is a new binary identity, so macOS may ask
+for Local Network permission the first time it sends - that is card 110, and the note
+appended to it records that there is no longer a bundle to worry about. And the engine
+renders at 60 while the link puts 30 on the wire, so about half the offered frames
+come back `coalesced`: that pair is the result, not a fault.
