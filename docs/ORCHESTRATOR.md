@@ -56,17 +56,24 @@ owner opening the tab is the first real render - card 121). Follow-up cards: 120
 130-133, 135, 136 (**136 needs the owner**: brightness has 25 real steps and 1..=5 is
 black while `applied` echoes the value).
 
-In flight since 2026-09-20, four Opus workers: **106** (players, devices, state, the
-dashboard; cards 140-144), **107** (Dockerfile, compose, `tools/deploy-workbench.sh`; the
-worker builds and proves the artifacts locally, the orchestrator deploys to workbench over
-the no-GitHub route - a bare repo on workbench as git remote `workbench`, never `origin`;
-145-149), **092** (150-152), **093** (153-155). Agreed between 106 and 107: state volume at
-`/data`, `SCREENY_STATE_DIR`, `SCREENY_LISTEN`; `/healthz` must never go 503 just because
-the panel is unplugged. The owner asked (2026-09-20) for the Studio "running on workbench as
-a service with a web dashboard for controlling it".
+Done 2026-09-19 late: **106** (devices, players, state, `/healthz` that means something,
+`/dashboard`), **107** artifacts (Dockerfile, compose, `tools/deploy-workbench.sh`,
+`docs/design/deployment.md`), **092**, **093**. **The Studio runs as a service on
+workbench.local** - http://workbench.local:8787/ and `/dashboard` - built there from
+`origin/main` by `tools/deploy-workbench.sh` (compose project `screeny`, state volume at
+`/data`). It adopts the panel by itself and resumed the same piece ~6 s after a container
+restart. To redeploy: merge, `git push origin main`, run the script, and warn the firmware
+session (the stream drops for a minute or two). Card 107 stays in `review/` until the owner
+allows a workbench reboot to prove the last line of its acceptance.
 
-**Next up, in order:** 106 (players, devices, state; built to be forgotten) -> 107
-(docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
+In flight: **160** (clocks-numerals: resting dials read as colons; the owner wants them
+visible but unobtrusive, format stays four digits with no punctuation; cards 162-164) and
+**165** (the Studio remembers each piece's settings; state schema v2 with a migration;
+166-169). Waiting for the owner: card 144 (does aiming the design view at a panel take it
+over from its player, or is it refused?). Worth doing next: 161 (narrow-window layout, from
+the owner's first screenshot), 145 (say in the UI when there is no GPU), 146, 147.
+
+**Next up, in order:** 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
 on the owner's say-so: WiFi provisioning (will be a captive portal + HTTP settings
