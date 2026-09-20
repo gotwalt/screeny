@@ -183,3 +183,13 @@ crate (was 685 at card 180's merge). `cargo clippy --workspace --all-targets`: s
 new `#[allow]` anywhere. `crates/studio` on its own after the last commit: 128 passed, 0
 failed. `tests/ssid.rs` unchanged but for the one call that gained a parameter, and
 passing. `ps` shows nothing of mine running.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny-studio`: 128 passed, 0 failed (the worker's root
+run: 711 passed, 0 failed; clippy silent). Looked at `195-fault-rows.png`: Memory, Free stack, Last reset
+and Store errors in the fault tone, Slot `pending verify` in the warn tone, the rest ordinary. Card 192
+closed with that screenshot, as agreed with the firmware session. Goes to the live service with the next
+deploy (batched with cards 120/183/182 to spare the panel a second stream gap while the firmware session's
+portal worker has it). The three open questions (should the unasked count age out; asks forgotten on a
+Studio restart; should it ever notify) go to the owner.
