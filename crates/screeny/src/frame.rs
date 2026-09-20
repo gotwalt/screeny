@@ -319,6 +319,62 @@ pub trait FrameSource {
     }
 }
 
+/// A renderer that owns its palette: the exact half of the [`FrameSource`]
+/// seam.
+///
+/// A [`FrameSource`] renders into an RGB [`Frame`], so a palette-authored
+/// piece - a word clock with eleven colours, say - is expanded to 6144 bytes
+/// and then has its palette rediscovered by the encoder's histogram. The
+/// picture is the same, because the ladder finds the same colours and
+/// `PAL4_LZ` carries them losslessly, but the producer's own palette is the
+/// thing that should go on the wire (`docs/design/generative-art-brief.md`
+/// section 5). This trait is how a pull-model source says so.
+///
+/// It is a **second trait rather than a method on `FrameSource`** so that no
+/// existing implementor changes: a source is one or the other, or both, and
+/// [`Sender::run`](crate::Sender::run) and
+/// [`Sender::run_indexed`](crate::Sender::run_indexed) are the two doors.
+/// Push-model callers need neither - [`crate::Link::send`] and
+/// [`crate::Sender::send`] have taken [`Pixels::Indexed`] since card 011, and
+/// this trait ends up in exactly the same place:
+/// [`crate::Sender::send_indexed`].
+///
+/// ```
+/// use screeny::{FrameTime, IndexedSource, Pixels};
+///
+/// /// Two colours, swapped every second: nothing here ever builds an RGB frame.
+/// struct Blink { palette: [[u8; 3]; 2], indices: Vec<u8> }
+///
+/// impl IndexedSource for Blink {
+///     fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>> {
+///         let on = (t.secs() as u64 % 2) as u8;
+///         self.indices.fill(on);
+///         Some(Pixels::indexed(&self.palette, &self.indices))
+///     }
+///     fn name(&self) -> &str { "blink" }
+/// }
+/// ```
+pub trait IndexedSource {
+    /// Render the frame for `t` and hand it back as borrowed pixels.
+    ///
+    /// `None` ends the stream, the way `false` does for
+    /// [`FrameSource::render`]; the sender then sends its `FINAL` frame and
+    /// stops.
+    ///
+    /// The returned [`Pixels`] borrows the source's own buffers, so a 30 fps
+    /// stream allocates nothing and the encoder reads the palette the producer
+    /// built rather than one it rediscovered. Returning [`Pixels::Rgb`] is
+    /// allowed and simply takes the ordinary lossy chooser, which is what a
+    /// source that is only *sometimes* palette-authored wants.
+    fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>>;
+
+    /// A short name, for `--verbose` output and stats.
+    #[allow(clippy::unnecessary_literal_bound)] // implementors may borrow
+    fn name(&self) -> &str {
+        "frames"
+    }
+}
+
 /// Adapts a closure into a [`FrameSource`].
 pub struct FnSource<F> {
     f: F,

@@ -90,3 +90,45 @@ those docs who cannot see them is reading a sentence with a hole in it.
 Before: `cargo doc -p screeny-encode --no-deps` = 4 warnings
 (`rustdoc::private_intra_doc_links`, quant.rs:23, 29, 154, 155).
 After: `cargo doc -p screeny-encode -p screeny --no-deps` = silent.
+
+### The seam: `IndexedSource`, and one pacing loop
+
+`crates/screeny/src/frame.rs`:
+
+```rust
+pub trait IndexedSource {
+    fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>>;
+    fn name(&self) -> &str { "frames" }
+}
+```
+
+Three decisions worth recording.
+
+1. **A second trait, not a method on `FrameSource`.** The card suggested it and
+   it is right: no existing implementor changes, and the two are genuinely
+   different shapes - one renders *into* a buffer the sender owns, the other
+   *lends* buffers it owns itself.
+2. **It returns `Option<Pixels<'_>>` rather than filling an
+   `&mut SomeOwnedIndexedFrame`.** That is what stops this card adding a
+   fourth owned "palette + indices" type to a tree that already has three
+   (proto's borrowed `IndexedFrame`, `screeny_demos::Indexed`,
+   `art::Frame::Indexed`). The source keeps its own buffers - which every
+   producer already does - and hands out a borrow, so the public surface grows
+   by one trait and nothing else, and the frame lands in `Pixels::indexed` /
+   `Sender::send_indexed` exactly as the card's "one implementation" rule
+   demands. `None` ends the stream, the way `false` does for `FrameSource`.
+   Returning `Pixels::Rgb` is allowed and documented: it takes the ordinary
+   chooser, which is what a source that is only *sometimes* palette-authored
+   wants - and that is precisely the fractal.
+3. **One pacing loop, not two.** `Sender::run_with` and the new
+   `Sender::run_indexed_with` both call a private `Sender::drive`, whose body
+   is the old loop with `src.render(t, &mut frame); self.send_frame(..)`
+   replaced by `src.produce(t, self)?` on a private `Driver` trait (two
+   implementors, eight lines each). Copying spec 9.1's schedule into a second
+   function to serve a second seam would have been the real duplication. **Card
+   093 note:** none of the timing changed - `sleep_until`, `period_of`, the
+   absolute schedule and the skip-never-burst arithmetic are byte for byte
+   what they were; only the two lines that produce a frame moved.
+
+`Link` needed nothing, as recorded above: it is push-only and
+`Link::send(Pixels::Indexed { .. })` is already the exact path.
