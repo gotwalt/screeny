@@ -77,15 +77,16 @@ pub mod pins {
 /// Tidbyt's forum says the same thing independently. `docs/research/008-button.md`
 /// has the evidence, the gesture design and the build cards.
 ///
-/// Still `None`, deliberately: nothing here has been confirmed on this unit yet.
-/// `firmware/src/bin/gpio_probe.rs` settles it in one minute with the owner
-/// pressing the button; the card that runs it sets this to `Some(15)`. Do not
-/// set it from the reading alone.
+/// **Confirmed on this unit** (card 203, 2026-09-20): with the owner pressing the
+/// button, `gpio_probe` logged edges on GPIO15 and on no other candidate, HIGH at
+/// rest and LOW while held. It reads the same with the internal pull-down selected,
+/// so something on the board holds the pin up; use the internal pull-up anyway, as
+/// the stock firmware does. One ~11 ms bounce was seen in eleven presses: debounce.
 ///
 /// Note that GPIO15 is also [`pins::BOARD_ID_ADC_B`]: the newer stock build
 /// ADC-reads it (ADC2 channel 3) for the hardware revision *and* uses it as the
 /// button. Both facts are true; see the research doc before using either.
-pub const BUTTON_GPIO: Option<u8> = None;
+pub const BUTTON_GPIO: Option<u8> = Some(15);
 
 /// Stock firmware brightness, as an 8-bit value handed to the HUB75 library's
 /// `setBrightness8()`, which turns it into output-enable duty across the row.

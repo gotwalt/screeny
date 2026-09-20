@@ -457,3 +457,30 @@ to exist first. Depends on 200 and 201.
 **Fallback: the power-cycle gesture.** Only if the confirmation card says the
 button is unusable. Implements section 6, gated on a power-on reset reason, with
 the panel showing the count. Parked by default.
+
+---
+
+## Bench confirmation (card 203, 2026-09-20)
+
+The orchestrator flashed `gpio_probe` with the owner at the panel pressing the button
+(about 1 s down, 2 s up, with longer holds) for 80 s, across phase A (pull-up, 0-25 s),
+phase B (pull-down, 25-50 s) and phase A again.
+
+- **Edges were logged on GPIO15 and on no other candidate**: 11 HIGH -> LOW
+  transitions, each followed by LOW -> HIGH, with hold times from 1.7 s to 8.4 s that
+  match what the owner did. `BUTTON_GPIO` is now `Some(15)`.
+- **The press works in phase B too** (e.g. `[30264 ms] HIGH -> LOW`, `[32170 ms] LOW ->
+  HIGH`), and in an earlier run with nobody pressing GPIO15 rested HIGH in both phases.
+  So the open question above is answered: something external holds the pin up (the
+  board-ID strap network), the button pulls it firmly to ground against that, and the
+  internal pull-up is belt and braces rather than the only thing keeping the pin high.
+  GPIO0, 13 and 14 also rested HIGH under the internal pull-down in that run; 0 and 13
+  have known external pull-ups, 14 was not expected to - not needed for anything here.
+- **One bounce in eleven presses**: `[61643 ms] LOW -> HIGH`, `[61654 ms] HIGH -> LOW`,
+  `[61795 ms] LOW -> HIGH` - an 11 ms glitch on release. The 30 ms debounce in the
+  gesture design covers it.
+- Owner's decision the same day: the gesture ladder as proposed, **including** the
+  15 s factory reset.
+
+Logs: `captures/card203-gpio-probe.log` (no presses) and
+`captures/card203-gpio-probe-2.log` (git-ignored).
