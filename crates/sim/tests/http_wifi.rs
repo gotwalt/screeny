@@ -15,10 +15,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use common::http;
-use screeny_device_api::reply::{StatusReply, WifiReply};
+use screeny_device_api::reply::{AcceptedReply, StatusReply, WifiReply};
 use screeny_device_api::{route, FailReason, StreamState, WifiState};
 use screeny_proto::control::{wifi_state, Reply, Request, SetWifi};
-use screeny_sim::{Config, Event, SimDevice, SimHandle, WifiOutcome, WifiPhase, WifiTiming};
+use screeny_sim::{
+    Config, Event, Posted, SimDevice, SimHandle, WifiOutcome, WifiPhase, WifiTiming,
+};
 
 /// Long enough for a scripted join and a few 10 ms ticks, short enough that a
 /// broken test fails rather than hangs.
@@ -285,22 +287,140 @@ fn the_outcome_can_be_changed_between_attempts() {
     dev.shutdown();
 }
 
+// ---------------------------------------------------------------------------
+// Card 232: a post that arrives while the device is already on the network.
+//
+// Card 224 answered `503 unavailable` here and said so loudly, because
+// `screeny_provision` had no transition for it. It has one now. These tests
+// are that 503's replacement: the trial really runs, and a failure really
+// falls back.
+// ---------------------------------------------------------------------------
+
+/// A device that is `Online` with a stored network, with timings compressed
+/// and the scripted radio set to `outcome` for the *next* join.
+fn online(outcome: WifiOutcome) -> SimDevice {
+    let dev = SimDevice::start(Config {
+        wifi_join_ms: 40,
+        wifi_timing: quick_timing(),
+        ..Config::for_test()
+    })
+    .expect("bind loopback");
+    assert_eq!(dev.handle().wifi_phase(), WifiPhase::Online);
+    dev.handle().set_wifi_outcome(outcome);
+    dev
+}
+
 #[test]
-fn credentials_posted_while_online_are_refused_rather_than_silently_dropped() {
-    // `screeny_provision`'s machine honours `CredentialsPosted` only in
-    // `Portal` and `Trial`. The simulator does not invent a transition it does
-    // not have; it says so, with the state in the sentence. See card 224's log
-    // - this is the one real gap the card found in `crates/provision`.
-    let dev = SimDevice::start(Config::for_test()).expect("bind loopback");
+fn credentials_posted_while_online_run_a_real_trial() {
+    let dev = online(WifiOutcome::Ok);
     let addr = api(&dev);
-    let res = http::post_form(addr, route::WIFI, &format!("ssid={SSID}&psk={PSK}"));
-    assert_eq!(res.status, 503);
-    assert_eq!(res.error_code(), "unavailable");
+    let sim = dev.handle();
+    let commits_before = sim.wifi_commits();
+
+    let res = http::post_form(addr, route::WIFI, "ssid=Second-Network&psk=password9");
+    assert_eq!(res.status, 200, "{}", res.text());
+    let accepted: AcceptedReply = res.parse();
+    assert_eq!(accepted, AcceptedReply::TRYING);
+
+    assert!(wait_phase(&sim, WifiPhase::Online), "the trial joined");
+    assert_eq!(sim.stored_ssid().as_deref(), Some("Second-Network"));
+    assert_eq!(sim.wifi_commits(), commits_before + 1, "committed once");
+    assert_eq!(sim.snapshot().wifi_state, wifi_state::CONNECTED);
+    // No AP was ever raised, so nothing on the panel says PROVISIONING.
+    assert!(!sim.snapshot().portal);
+    dev.shutdown();
+}
+
+#[test]
+fn a_trial_posted_while_online_that_fails_goes_back_to_the_old_network() {
+    let dev = online(WifiOutcome::Fail);
+    let addr = api(&dev);
+    let sim = dev.handle();
+    let commits_before = sim.wifi_commits();
+    let stored_before = sim.stored_ssid();
+
+    let res = http::post_form(addr, route::WIFI, "ssid=Typo-Network&psk=wrong");
+    assert_eq!(res.status, 200, "no 503 any more: {}", res.text());
+
+    // The failure is reported, and it is *sticky*: the old network coming
+    // back must not read as "your new network worked".
     assert!(
-        res.json()["detail"].as_str().unwrap().contains("online"),
-        "the detail should name the state: {}",
-        res.text()
+        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED)
+            .is_some(),
+        "an auth error is not retried"
     );
+    let wifi: WifiReply = http::get(addr, route::WIFI).parse();
+    assert_eq!(wifi.state, WifiState::Failed);
+    assert_eq!(wifi.reason, Some(FailReason::Auth));
+    assert_eq!(wifi.ssid.as_deref(), Some("Typo-Network"));
+
+    // The old credentials are tried again - the portal is *not* raised.
+    assert!(!sim.snapshot().portal, "no AP on this path");
+    sim.set_wifi_outcome(WifiOutcome::Ok);
+    assert!(
+        wait_phase(&sim, WifiPhase::Online),
+        "back on the old network"
+    );
+    assert_eq!(
+        sim.stored_ssid(),
+        stored_before,
+        "the store was not touched"
+    );
+    assert_eq!(sim.wifi_commits(), commits_before, "and not written");
+
+    // Still `failed`, because the question was about the posted credentials.
+    let wifi: WifiReply = http::get(addr, route::WIFI).parse();
+    assert_eq!(wifi.state, WifiState::Failed);
+    assert_eq!(wifi.ssid.as_deref(), Some("Typo-Network"));
+    assert_eq!(sim.snapshot().wifi_state, wifi_state::FAILED);
+
+    // The next post clears it.
+    sim.post_wifi(SSID);
+    let wifi: WifiReply = http::get(addr, route::WIFI).parse();
+    assert_eq!(wifi.state, WifiState::Connecting);
+    dev.shutdown();
+}
+
+/// The same thing without an HTTP request: `SimHandle::post_wifi` is the
+/// handle method card 232 asked to work in every state too.
+#[test]
+fn the_handle_posts_credentials_while_online_as_well() {
+    let dev = online(WifiOutcome::Ok);
+    let sim = dev.handle();
+    assert_eq!(sim.post_wifi("Second-Network"), Posted::Trial);
+    assert_eq!(sim.wifi_phase(), WifiPhase::Trial);
+    assert!(wait_phase(&sim, WifiPhase::Online));
+    assert_eq!(sim.stored_ssid().as_deref(), Some("Second-Network"));
+    dev.shutdown();
+}
+
+/// UDP is **deliberately** left where it was. Card 232 owns `crates/sim` but
+/// not what the simulator does on the wire: `SET_WIFI` has always been
+/// accepted, logged and not acted on when the device is already online, and
+/// other sessions' tests are written against that. The asymmetry with HTTP is
+/// on purpose and is card 238's to close.
+#[test]
+fn udp_set_wifi_while_online_is_still_accepted_and_not_acted_on() {
+    let dev = online(WifiOutcome::Fail);
+    let sim = dev.handle();
+    let stored_before = sim.stored_ssid();
+
+    let ctrl = common::Ctrl::new(sim.control_addr());
+    let d = ctrl
+        .call(
+            &Request::SetWifi(SetWifi {
+                ssid: "Typo-Network",
+                psk: "wrong",
+                persist: true,
+            }),
+            7,
+        )
+        .expect("a reply");
+    assert!(matches!(common::parse_reply(&d).1, Ok(Reply::SetWifi)));
+
+    assert_eq!(sim.wifi_phase(), WifiPhase::Online, "no trial was started");
+    assert_eq!(sim.stored_ssid(), stored_before);
+    assert_eq!(sim.snapshot().wifi_state, wifi_state::CONNECTED);
     dev.shutdown();
 }
 

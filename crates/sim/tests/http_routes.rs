@@ -493,6 +493,56 @@ fn shutdown_releases_the_port() {
     );
 }
 
+/// Two simulators started with the *default* HTTP settings both come up.
+///
+/// The binary's default port is 8080, and several sessions run two or three
+/// simulators at once without ever asking for HTTP. Before this, the second
+/// one failed to start on a port nobody had chosen. Now the default port is a
+/// preference: when it is taken, an ephemeral one is bound instead and a line
+/// on stderr says so. The UDP ports here are ephemeral, so nothing but the
+/// HTTP port is under test.
+#[test]
+fn two_simulators_with_default_http_settings_both_start() {
+    let cfg = || Config {
+        http_port: screeny_sim::DEFAULT_HTTP_PORT,
+        ..Config::for_test()
+    };
+    // The first may itself fall back, if another process on this machine
+    // already holds 8080. That is the behaviour, not a caveat.
+    let a = SimDevice::start(cfg()).expect("the first simulator starts");
+    let b = SimDevice::start(cfg()).expect("and so does the second");
+
+    let (aa, ba) = (api(&a), api(&b));
+    assert_ne!(aa, ba, "two servers cannot share one port");
+    assert_eq!(http::get(aa, route::STATUS).status, 200);
+    assert_eq!(http::get(ba, route::STATUS).status, 200);
+
+    a.shutdown();
+    b.shutdown();
+}
+
+/// ...but a port somebody named is a promise, so a busy one is an error.
+#[test]
+fn a_named_http_port_that_is_busy_is_an_error() {
+    let first = SimDevice::start(Config::for_test()).expect("bind loopback");
+    let taken = api(&first).port();
+
+    let started = SimDevice::start(Config {
+        http_port: taken,
+        http_port_explicit: true,
+        ..Config::for_test()
+    });
+    match started {
+        Ok(dev) => {
+            dev.shutdown();
+            panic!("the port was asked for by name and is busy; it must not fall back");
+        }
+        Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::AddrInUse, "{e}"),
+    }
+
+    first.shutdown();
+}
+
 #[test]
 fn the_http_server_can_be_turned_off() {
     let dev = SimDevice::start(Config {

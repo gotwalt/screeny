@@ -441,9 +441,31 @@ impl SettingsReply {
 ///
 /// `written` is how many bytes reached the sink, so a truncated upload can say
 /// where it stopped. `error` is absent on success.
+///
+/// # What `ok: true` promises
+///
+/// **Every check the implementation claims to run, ran and passed** - not
+/// "some of them". Research 006 names five: the `0xE9` image magic, the chip
+/// in the header, the app descriptor's project name, the segment checksum and
+/// the appended SHA-256, and [`FirmwareError`] has an arm for each. There is
+/// deliberately no `checks_run` field and no partial `ok`: a caller that has
+/// to ask which checks ran cannot act on the answer, and an `ok` that means
+/// different things on different builds is worse than no `ok` at all.
+///
+/// So a build that cannot run all five - card 224's simulator, and the
+/// firmware before card 240 - must **not** answer `ok: true` for an image it
+/// only partly checked. It answers with this crate's
+/// [`ErrorCode::Unavailable`](crate::ErrorCode::Unavailable) instead, and says
+/// in its `detail` which checks it is missing. Refusing an upload it cannot
+/// vouch for costs a developer one clear sentence; accepting one costs a
+/// bricked panel on a bench nobody can reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FirmwareReply {
-    /// True only if the whole image arrived and passed every check.
+    /// True only if the whole image arrived and **every check this build runs
+    /// at all** passed. See the type's docs: a build that cannot run all five
+    /// of research 006's checks answers
+    /// [`ErrorCode::Unavailable`](crate::ErrorCode::Unavailable) rather than
+    /// claiming a qualified success here.
     pub ok: bool,
     /// Bytes written to the inactive slot.
     pub written: u32,
@@ -582,6 +604,10 @@ mod tests {
             ssid: crate::text::text("Example-Wifi1").unwrap(),
             outcome: TrialOutcome::Trying,
             ip: None,
+            // The reply is the same shape whichever door the post came in by:
+            // `origin` decides what the *machine* does next, not what the
+            // page is told. Card 232.
+            origin: screeny_provision::TrialOrigin::Portal,
         };
         let r = WifiReply::from(&t);
         assert_eq!(r.state, WifiState::Connecting);

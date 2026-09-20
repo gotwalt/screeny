@@ -100,7 +100,7 @@ pub use enums::{
     WifiState,
 };
 pub use error::{ErrorCode, ErrorReply};
-pub use route::{Method, Route, ROUTES};
+pub use route::{Method, RateLimit, Route, ROUTES};
 
 /// The version in every path, and the `api` field of
 /// [`StatusReply`](reply::StatusReply).

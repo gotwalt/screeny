@@ -35,6 +35,47 @@ drive it, so the behaviour cannot drift between them. Card 221; the design is
 Event::ButtonWipe, from any state: ClearCredentials, then Portal.
 ```
 
+### A post that arrives from the LAN, not from the portal
+
+Spec 8.2 says `SET_WIFI` works from any state, and card 223's LAN settings page posts
+credentials to a device that is already on the network. `Event::CredentialsPosted` is
+therefore honoured in `Joining` and `Online` too, and `Trial::origin` remembers which
+door it came in by (card 232):
+
+```
+   ┌───────────┐ CredentialsPosted  ┌───────────────────────┐ Joined  ┌──────────┐
+   │  Online   │───────────────────▶│  Trial, origin=Online │────────▶│  Online  │
+   │ or Joining│  StopJoin if one   │  NO AP, no portal, no │ commit  │ new net  │
+   └───────────┘  is in flight,     │  PROVISIONING overlay,│ announce└──────────┘
+         ▲        then StartJoin    │  panel left alone     │
+         │        { Trial, 1 }      └───────────┬───────────┘
+         │                                      │ failed (auth at once,
+         │  StartJoin { Stored, 1 }              │ otherwise 3 attempts)
+         └──────────────────────────────────────┘
+            back to the PREVIOUS network, store untouched;
+            wifi_state() reads FAILED until the next post or a reboot
+```
+
+* **The AP is never raised on this path.** There is one station: the device drops the
+  association it has to try the new network, and there is nobody standing on a setup
+  network to keep informed.
+* **A failure goes back, not to the portal.** The store still holds the network that was
+  working a moment ago. If *those* credentials then fail three times, the ordinary
+  `Joining` -> `Portal` rule takes over. With an empty store the built-in credentials are
+  tried, and with neither the portal is the only way back in.
+* **The failure is sticky.** `wifi_state()` reads `FAILED` and `trial_is_current()` stays
+  true even once the old network is back, until the next post or a reboot - otherwise the
+  old network reconnecting a few seconds later reads as "your new network worked".
+  Firmware 0.3.0's `SET_WIFI` behaves the same way.
+* **No overlay, no panel.** `overlay_state()` gives `PROVISIONING` for a portal trial
+  only, and `screen()` returns `None` throughout an `Online`-origin trial *and* after it
+  succeeds: frames may still be arriving around the rejoin, the poster is reading the
+  reply in a browser, and nothing about the panel is "in setup".
+* `Boot` + `CredentialsPosted` is still ignored: nothing is serving before `Event::Boot`
+  has been processed, so it cannot happen.
+* A post that arrives while the soft-AP is still in its 30 s post-trial grace window is
+  an `Online`-origin post all the same: the state decides, not the radio.
+
 ## Actions
 
 `step` returns up to four of these, in the order to carry them out.
@@ -72,7 +113,10 @@ loop {
   call `step`.
 * `p.overlay_state()` is the telemetry `state` byte overlay (`PROVISIONING`),
   `p.wifi_state()` is the `GET_WIFI` byte, and `p.trial()` is what `GET /api/v1/wifi`
-  reports to the portal page's full-page reload.
+  reports to the portal page's full-page reload. `p.trial_is_current()` says whether
+  `p.trial()` is still the answer that route should give, rather than the station's own
+  state - it stays true for a failed LAN-side trial, which is the whole point of the
+  sticky `FAILED` above.
 * `p.screen(now)` returns `None` when the panel belongs to the normal idle/stream path,
   and never returns a screen `render` cannot draw.
 

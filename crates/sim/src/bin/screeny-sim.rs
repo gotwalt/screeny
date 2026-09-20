@@ -59,7 +59,10 @@ NETWORK
     --name NAME            friendly name, the name= TXT key
     --id HEX               short device id, the id= TXT key
     --http-port N          HTTP API port, 0 for an ephemeral one [8080]
-                           (never 80: binding it needs root)
+                           (never 80: binding it needs root. Without this
+                           flag a busy 8080 falls back to an ephemeral
+                           port, so a second simulator still starts; with
+                           it, a busy port is an error)
     --no-http              do not serve the HTTP API
 
 WIFI (there is no radio; all of this is scripted)
@@ -142,7 +145,12 @@ impl Opts {
                 "--no-http" => o.cfg.http = false,
                 "--start-in-portal" => o.cfg.start_in_portal = true,
                 "--link-down" => o.link_down = true,
-                "--http-port" => o.cfg.http_port = num(&value()?, "--http-port")?,
+                "--http-port" => {
+                    o.cfg.http_port = num(&value()?, "--http-port")?;
+                    // Named, so a busy port is an error rather than a quiet
+                    // fallback: this one is going to be connected to.
+                    o.cfg.http_port_explicit = true;
+                }
                 "--wifi-ssid" => o.cfg.wifi_ssid = value()?,
                 "--ap-ssid" => o.cfg.ap_ssid = value()?,
                 "--wifi-join-ms" => o.cfg.wifi_join_ms = num(&value()?, "--wifi-join-ms")?,

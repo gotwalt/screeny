@@ -5,8 +5,8 @@
 //! No radio, no clock, no sleeping: the whole table runs in microseconds.
 
 use screeny_provision::{
-    Action, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, TrialOutcome,
-    UriForm,
+    Action, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, TrialOrigin,
+    TrialOutcome, UriForm,
 };
 use screeny_proto::control::{state as tstate, wifi_state};
 
@@ -869,4 +869,496 @@ fn the_firmware_knows_exactly_what_this_crate_costs_it() {
         "Actions is {} bytes",
         size_of::<screeny_provision::Actions>()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Card 232: credentials posted while the device is already on a network.
+//
+// Spec section 8.2 says `SET_WIFI` works from any state, and card 223's LAN
+// settings page posts while `Online`. These are the rows 007 section 5.2 did
+// not have, because it only ever drew the portal.
+// ---------------------------------------------------------------------------
+
+/// A device on the network with stored credentials, at `now = 1_000`. Unlike
+/// [`provisioned_through_the_portal`] no AP was ever raised, which is the
+/// ordinary case for a post from the LAN settings page.
+fn online_from_stored() -> Provisioner {
+    let (mut p, _) = booted(true, false);
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, 1_000);
+    assert_eq!(p.state(), State::Online);
+    assert!(!p.ap_up());
+    p
+}
+
+/// `ONLINE` + `CredentialsPosted` -> `TRIAL`, and **no AP**.
+#[test]
+fn a_post_while_online_starts_a_trial_without_raising_the_ap() {
+    let mut p = online_from_stored();
+    let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
+    assert_eq!(p.state(), State::Trial);
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Trial,
+            attempt: 1
+        }],
+        "no StopJoin: nothing was in flight; and above all no RaiseAp"
+    );
+    assert!(
+        !p.ap_up(),
+        "there is nobody on a setup network to keep informed"
+    );
+    assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
+    assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Trying);
+    assert!(p.has_stored(), "nothing is committed and nothing is cleared");
+    assert_eq!(p.ip(), None, "the station left the network it was on");
+    assert_eq!(p.wifi_state(), wifi_state::CONNECTING);
+}
+
+/// The telemetry overlay and the panel both stay the stream's: no AP was
+/// raised, so nothing about this device is "in setup".
+#[test]
+fn an_online_origin_trial_is_not_provisioning() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
+    assert_eq!(p.state(), State::Trial);
+    assert_eq!(p.overlay_state(), None);
+    assert!(p.screen(1_100).is_none());
+    assert!(p.screen(1_100 + T.screen_alternate_ms).is_none());
+
+    // ...whereas a portal trial is, exactly as it always was.
+    let (mut q, _) = booted(false, false);
+    q.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
+    assert_eq!(q.trial().unwrap().origin, TrialOrigin::Portal);
+    assert_eq!(q.overlay_state(), Some(tstate::PROVISIONING));
+    assert!(q.screen(10).is_some());
+}
+
+/// `TRIAL` (online origin) + joined -> `ONLINE`: commit, announce, and no
+/// grace window because no AP was ever up.
+#[test]
+fn an_online_origin_trial_that_works_commits_and_needs_no_grace() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
+    let a = p.step(Event::Joined { ip: [192, 168, 7, 9] }, 1_200);
+    assert_eq!(p.state(), State::Online);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::CommitCredentials {
+                which: JoinTarget::Trial
+            },
+            Action::Announce,
+        ]
+    );
+    assert!(!p.ap_up());
+    assert_eq!(p.ip(), Some([192, 168, 7, 9]));
+    assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Connected);
+    assert_eq!(p.wifi_state(), wifi_state::CONNECTED);
+    // The browser that posted is being told the address in its own reply, so
+    // the panel is not taken over the way a portal trial takes it.
+    assert!(p.screen(1_200).is_none());
+    // And nothing is left to expire: no DropAp, ever.
+    for t in [1_300, 1_200 + T.ap_grace_ms, 100_000] {
+        assert!(p.step(Event::Tick, t).is_empty(), "nothing pending at {t}");
+    }
+}
+
+/// `TRIAL` (online origin) + failed -> **back to the previous network**, not
+/// to the portal, with the store untouched.
+#[test]
+fn an_online_origin_trial_that_fails_goes_back_to_the_old_network() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    let a = p.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        1_150,
+    );
+    assert_eq!(p.state(), State::Joining, "not Portal");
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Stored,
+            attempt: 1
+        }]
+    );
+    assert!(!p.ap_up(), "no portal was raised on the way");
+    assert!(p.has_stored(), "a failed trial must not touch the store");
+    let t = p.trial().unwrap();
+    assert_eq!(t.outcome, TrialOutcome::Failed(FailReason::AuthError));
+    assert_eq!(t.ssid.as_str(), "Typo-Network");
+    assert_eq!(t.origin, TrialOrigin::Online);
+}
+
+/// The failure is **sticky**: the old network reconnecting a few seconds
+/// later must not read as "your new network worked".
+#[test]
+fn a_failed_online_origin_trial_still_reads_failed_once_the_old_network_is_back() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    // Not an auth error, so it is retried the full `trial_attempts` times.
+    fail_n(&mut p, 3, FailReason::NetworkNotFound, 1_150);
+    assert_eq!(p.state(), State::Joining);
+    assert_eq!(p.wifi_state(), wifi_state::FAILED);
+    assert!(p.trial_is_current());
+
+    // The old network comes back. We are `Online` again - and still FAILED.
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, 1_200);
+    assert_eq!(p.state(), State::Online);
+    assert_eq!(p.ip(), Some([192, 168, 7, 221]));
+    assert_eq!(
+        p.wifi_state(),
+        wifi_state::FAILED,
+        "the question was whether the posted credentials worked"
+    );
+    assert!(p.trial_is_current());
+    assert_eq!(
+        p.trial().unwrap().outcome,
+        TrialOutcome::Failed(FailReason::NetworkNotFound)
+    );
+    // Time alone does not clear it.
+    p.step(Event::Tick, 500_000);
+    assert_eq!(p.wifi_state(), wifi_state::FAILED);
+
+    // The next post does.
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500_100);
+    assert_eq!(p.wifi_state(), wifi_state::CONNECTING);
+    assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Trying);
+}
+
+/// A transient failure is retried `trial_attempts` times before the fallback,
+/// exactly as a portal trial is; an auth error is not retried at all.
+#[test]
+fn an_online_origin_trial_retries_a_transient_failure_and_not_a_bad_password() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
+    for attempt in 2..=T.trial_attempts {
+        let a = p.step(
+            Event::JoinFailed {
+                reason: FailReason::Other,
+            },
+            1_100 + u32::from(attempt),
+        );
+        assert_eq!(p.state(), State::Trial);
+        assert_eq!(
+            a.as_slice(),
+            [Action::StartJoin {
+                which: JoinTarget::Trial,
+                attempt
+            }]
+        );
+    }
+    let a = p.step(
+        Event::JoinFailed {
+            reason: FailReason::Other,
+        },
+        1_200,
+    );
+    assert_eq!(p.state(), State::Joining);
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Stored,
+            attempt: 1
+        }]
+    );
+
+    // An auth error skips all of that and falls back at once.
+    let mut q = online_from_stored();
+    q.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    let a = q.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        1_110,
+    );
+    assert_eq!(q.state(), State::Joining);
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Stored,
+            attempt: 1
+        }]
+    );
+}
+
+/// And if the stored credentials then fail too, the ordinary `JOINING` ->
+/// `PORTAL` rule applies: three attempts and the portal goes up.
+#[test]
+fn stored_credentials_failing_after_the_fallback_still_reach_the_portal() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    p.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        1_150,
+    );
+    assert_eq!(p.state(), State::Joining);
+    let a = fail_n(&mut p, 3, FailReason::AuthError, 1_200);
+    assert_eq!(p.state(), State::Portal);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::StartJoin {
+                which: JoinTarget::Stored,
+                attempt: 2
+            },
+            Action::StartJoin {
+                which: JoinTarget::Stored,
+                attempt: 3
+            },
+            Action::RaiseAp,
+        ]
+    );
+    assert_eq!(p.wifi_state(), wifi_state::FAILED);
+    assert!(p.has_stored(), "reaching the portal never clears the store");
+}
+
+/// `JOINING` + `CredentialsPosted`: the attempt in flight is cancelled first.
+/// There is one station; it cannot chase two networks.
+#[test]
+fn a_post_while_joining_cancels_the_attempt_in_flight() {
+    let (mut p, _) = booted(true, false);
+    assert_eq!(p.state(), State::Joining);
+    let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 50);
+    assert_eq!(p.state(), State::Trial);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::StopJoin,
+            Action::StartJoin {
+                which: JoinTarget::Trial,
+                attempt: 1
+            }
+        ]
+    );
+    assert!(!p.ap_up());
+    assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
+    // The attempt window restarts with the trial rather than running out of
+    // the join it replaced.
+    assert!(p.step(Event::Tick, 50 + T.join_attempt_ms - 1).is_empty());
+}
+
+/// A `JOINING` device with no store to fall back to - a bench build trying
+/// its compile-time credentials - falls back to those instead.
+#[test]
+fn a_failed_post_while_joining_an_empty_store_falls_back_to_the_builtin() {
+    let (mut p, _) = booted(false, true);
+    assert_eq!(p.state(), State::Joining);
+    assert!(!p.has_stored());
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 50);
+    let a = p.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        60,
+    );
+    assert_eq!(p.state(), State::Joining);
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Builtin,
+            attempt: 1
+        }]
+    );
+    assert!(!p.has_stored());
+    assert_eq!(p.wifi_state(), wifi_state::FAILED, "sticky, as ever");
+}
+
+/// A post to the portal is a portal trial whatever the store holds, so the
+/// wiped-and-reprovisioned path is untouched by any of this.
+#[test]
+fn a_post_to_the_portal_is_a_portal_trial_even_with_an_empty_store() {
+    let (mut p, _) = booted(true, false);
+    p.step(Event::ButtonWipe, 1);
+    assert_eq!(p.state(), State::Portal);
+    assert!(!p.has_stored());
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 10);
+    assert_eq!(p.trial().unwrap().origin, TrialOrigin::Portal);
+    let a = p.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        20,
+    );
+    assert_eq!(p.state(), State::Portal);
+    assert!(a.is_empty(), "the AP never went down");
+    assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
+}
+
+/// A second post while an online-origin trial is running keeps the origin: it
+/// arrived down the same channel the first one did.
+#[test]
+fn a_second_post_during_an_online_origin_trial_keeps_its_origin() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_110);
+    assert_eq!(p.state(), State::Trial);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::StopJoin,
+            Action::StartJoin {
+                which: JoinTarget::Trial,
+                attempt: 1
+            }
+        ]
+    );
+    assert_eq!(p.trial().unwrap().ssid.as_str(), "Example-Wifi1");
+    assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
+    assert!(!p.ap_up(), "still no AP");
+    // And failing now goes back to the old network, not to the portal.
+    p.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        1_120,
+    );
+    assert_eq!(p.state(), State::Joining);
+}
+
+/// The button's five-second hold wins over an online-origin trial, the same
+/// way it wins over everything else: the store is cleared and the portal goes
+/// up, and the sticky failure goes with it.
+#[test]
+fn button_wipe_during_an_online_origin_trial_still_reaches_the_portal() {
+    let mut p = online_from_stored();
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
+    let a = p.step(Event::ButtonWipe, 1_150);
+    assert_eq!(p.state(), State::Portal);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::StopJoin,
+            Action::ClearCredentials,
+            Action::RaiseAp
+        ]
+    );
+    assert!(!p.has_stored());
+    assert!(p.trial().is_none());
+    assert!(!p.trial_is_current());
+    assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED);
+
+    // ...and after a trial that already failed, the sticky FAILED goes too.
+    let mut q = online_from_stored();
+    q.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
+    q.step(
+        Event::JoinFailed {
+            reason: FailReason::AuthError,
+        },
+        1_150,
+    );
+    assert_eq!(q.wifi_state(), wifi_state::FAILED);
+    q.step(Event::ButtonWipe, 1_200);
+    assert_eq!(q.wifi_state(), wifi_state::DISCONNECTED);
+}
+
+/// The whole online-origin path across the 49.7-day `u32` wrap.
+#[test]
+fn an_online_origin_trial_survives_the_49_day_wrap() {
+    const NEAR: u32 = u32::MAX - 50;
+    let (mut p, _) = booted(true, false);
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, NEAR);
+    assert_eq!(p.state(), State::Online);
+
+    // Post 10 ms before the wrap; the attempt window straddles it.
+    p.step(
+        Event::CredentialsPosted { ssid: "Example-Wifi1" },
+        NEAR.wrapping_add(10),
+    );
+    assert_eq!(p.state(), State::Trial);
+    assert!(
+        p.step(Event::Tick, NEAR.wrapping_add(10 + T.join_attempt_ms - 1))
+            .is_empty(),
+        "the window has not expired, wrap or no wrap"
+    );
+    // One millisecond later it has, and a timed-out trial attempt is a
+    // transient failure, so it is retried.
+    let a = p.step(Event::Tick, NEAR.wrapping_add(10 + T.join_attempt_ms));
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Trial,
+            attempt: 2
+        }]
+    );
+    // Let it run out for good, past the wrap.
+    let a = fail_n(&mut p, 2, FailReason::Other, NEAR.wrapping_add(200));
+    assert_eq!(p.state(), State::Joining);
+    assert_eq!(
+        a.last(),
+        Some(&Action::StartJoin {
+            which: JoinTarget::Stored,
+            attempt: 1
+        })
+    );
+    assert_eq!(p.wifi_state(), wifi_state::FAILED);
+    // The old network comes back after the wrap and the failure is still
+    // readable.
+    p.step(
+        Event::Joined { ip: [192, 168, 7, 221] },
+        NEAR.wrapping_add(400),
+    );
+    assert_eq!(p.state(), State::Online);
+    assert_eq!(p.wifi_state(), wifi_state::FAILED);
+}
+
+/// `BOOT` + `CredentialsPosted` cannot happen - nothing is serving before
+/// `Event::Boot` is processed - and is ignored rather than mishandled.
+#[test]
+fn a_post_before_boot_is_ignored() {
+    let mut p = Provisioner::new(&cfg(true, false));
+    assert_eq!(p.state(), State::Boot);
+    assert!(p
+        .step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 0)
+        .is_empty());
+    assert_eq!(p.state(), State::Boot);
+    assert!(p.trial().is_none());
+    assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED);
+    // And `Boot` still does what it always did.
+    let a = p.step(Event::Boot, 1);
+    assert_eq!(
+        a.as_slice(),
+        [Action::StartJoin {
+            which: JoinTarget::Stored,
+            attempt: 1
+        }]
+    );
+}
+
+/// A post that arrives while the AP is in its post-trial grace window is
+/// still an online-origin post: the state, not the radio, is what decides.
+#[test]
+fn a_post_during_the_ap_grace_window_is_an_online_origin_trial() {
+    let (mut p, _) = booted(false, false);
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 100);
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, 200);
+    assert_eq!(p.state(), State::Online);
+    assert!(p.ap_up(), "the grace window is running");
+
+    p.step(Event::CredentialsPosted { ssid: "Second-Network" }, 210);
+    assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
+    // The grace timer is only read in `Online`, so it does not fire while the
+    // trial is running - not even past the deadline it had.
+    let a = p.step(Event::Tick, 200 + T.ap_grace_ms + 1);
+    assert!(!a.contains(&Action::DropAp), "{a:?}");
+    assert!(p.ap_up());
+    // It restarts from the moment the new network came up, and then fires.
+    let a = p.step(Event::Joined { ip: [192, 168, 7, 9] }, 520);
+    assert_eq!(
+        a.as_slice(),
+        [
+            Action::CommitCredentials {
+                which: JoinTarget::Trial
+            },
+            Action::Announce,
+        ]
+    );
+    assert!(p.step(Event::Tick, 520 + T.ap_grace_ms - 1).is_empty());
+    let a = p.step(Event::Tick, 520 + T.ap_grace_ms);
+    assert_eq!(a.as_slice(), [Action::DropAp], "the AP is still dropped");
+    assert!(!p.ap_up());
 }
