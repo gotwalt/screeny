@@ -179,3 +179,53 @@ acceptance used, on a consecutive port pair in 50700..50780, mDNS off:
 `socket2` is a dev-dependency for that 2 KB receive buffer - it is how the stall is
 made to happen in a second rather than after a megabyte of kernel buffer fills - and
 `screeny-proto` for the type in the simulator's frame sink.
+
+### Step 3 - an ordinary workspace member, and what Tauri cost
+
+`crates/studio` no longer needs GUI system libraries, so the root manifest's
+`default-members` list is **gone**: `members = ["crates/*"]` is now the whole default
+build, and a plain `cargo build` / `cargo test` covers all ten host crates. The
+sentence in `CLAUDE.md` that said otherwise is updated, and so is the studio's row in
+the root `README.md`.
+
+One consequence worth knowing, because it lands in card 112's lap: with the studio in
+the default build, cargo unifies features across the workspace, so a plain `cargo
+test` now compiles `screeny-art` **with `sender`** - which means `crates/art/tests/
+sender.rs` runs by default instead of reporting "0 tests", and `target/*/screeny-art`
+keeps its `play` subcommand instead of losing it to the next plain build. That is the
+trap the orchestrator recorded at the end of card 101, closed as a side effect. It
+does not decide card 112: `cargo test -p screeny-art` on its own still has `sender`
+off.
+
+**What Tauri cost, measured.** Cold builds of `cargo build -p screeny-studio` into an
+empty target directory on this (shared, and busy) bench, `--timings` both times:
+
+| | before (Tauri v2) | after (axum) | |
+|---|---|---|---|
+| crates in the dependency tree | **292** | **160** | `cargo tree -e normal,build`, deduplicated |
+| compilation units | 434 | 209 | build scripts and proc-macro builds included |
+| CPU-seconds of compilation | **296.7** | **189.3** | sum of every unit, from the `--timings` report |
+| wall clock, cold, 12 cores | 46.2 s | 34.8 s | noisy: three other workers are building on this machine |
+| direct dependencies | `tauri`, `tauri-build`, `screeny-art`, `serde`, `serde_json` | `axum`, `tokio`, `screeny-art`, `serde`, `serde_json` | |
+| slowest units | `tauri-utils` 12 s, `objc2-app-kit` 9 s | `tokio` 10 s, `wgpu-core` 8 s | |
+
+**No GUI system libraries.** `webkit2gtk`, `gtk`, `tao`, `wry`, `winit` and
+`objc2-app-kit` are all gone from the tree. What is left of the platform crates is
+`objc2-metal`/`objc2-quartz-core` under **wgpu**, which is `screeny-art`'s GPU pieces
+(Vulkan on the Linux box, per the vision document) and not a window toolkit - and
+`objc2` under `ctrlc`. To make that checkable rather than a claim, the studio now has
+a `gpu` feature, default on, that forwards to `screeny-art/gpu`:
+
+```
+cargo tree -p screeny-studio                        160 crates
+cargo tree -p screeny-studio --no-default-features   120 crates, no graphics driver at all
+cargo build -p screeny-studio --no-default-features  clean, 16 s
+```
+
+so a box with no usable adapter (or a container image that would rather not carry
+Mesa) has a build that cannot want one. The CPU pieces are all still there.
+
+`cargo test --release --no-fail-fast` at the workspace root: **302 passed, 0 failed**
+(283 before this card, plus the studio's 11 and 8 that the feature unification above
+now runs). `crates/screeny`'s timing-sensitive pacing tests passed first time; card
+093's flake did not appear.
