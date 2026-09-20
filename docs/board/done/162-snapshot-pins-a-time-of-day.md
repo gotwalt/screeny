@@ -115,3 +115,11 @@ full run.
 **Out of scope, left alone.** The pieces' `offset` parameter is untouched. Nothing
 outside `crates/art` was changed: `crates/studio/src/player.rs` still builds its own
 `Ctx { now: local_now(), .. }` and compiles unchanged, because `Ctx` gained no field.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed (art-only, `Ctx` unchanged, so the Studio compiles untouched) and merged `--no-ff`.
+`cargo test --release -p screeny-art`: 63 + 4 + 3 pass; clippy silent; the full root suite
+runs with the rest of this batch. Ran the acceptance command twice with random seeds:
+the same PNG hash both times, and it reads 21:12. First real use, minutes later: the same
+mid-dance frame of `clocks-numerals` at `tip=1` and `tip=0.45` for the owner (card 115).
