@@ -508,3 +508,149 @@ even by accident.
 small additive changes to `crates/art` or `crates/screeny`; none turned out to be
 needed, because `Pipeline::process` already returned everything the player had been
 throwing away.)
+
+### For the orchestrator: the deployed service
+
+This is a **schema change against production data** and a **behaviour change to a route
+another session drives**. The live `/data/state.json` is v2 today.
+
+**Before the upgrade**, take a copy and note what the panel is playing:
+
+```sh
+docker exec screeny-studio cat /data/state.json > ~/screeny-backups/state-v2-$(date +%s).json
+python3 -m json.tool < ~/screeny-backups/state-v2-*.json | head -40
+#   "version": 2
+#   players[0].piece / .seed / .params / .brightness   <- what the panel is playing
+#   preview.piece    / .seed  / .params                <- what the design view was on
+#   pieces{...}                                        <- the settings memory (card 165)
+```
+
+**After `tools/deploy-workbench.sh`:**
+
+```sh
+curl -s localhost:8787/healthz                         # ok
+docker logs screeny-studio 2>&1 | grep 'studio: state'
+#   "the state file was schema v2; migrated to v3"     <- expected, once
+docker exec screeny-studio cat /data/state.json | python3 -m json.tool
+```
+
+In the new file, check:
+
+1. **`"version": 3`**, a new top-level **`"focus"`** holding the panel's id (`4a00a4`),
+   and **no `"preview"` block**.
+2. `players[0]` says the same piece, seed, params, settings and brightness the v2 copy
+   said, plus `"paused": false` and `"speed": 1.0`.
+3. `pieces` is **unchanged** from the v2 copy, except possibly one added entry for
+   whatever `preview.piece` was - and only if `pieces` had nothing for it. If an entry
+   that existed in v2 has different values in v3, the migration is wrong: stop and say so.
+4. `/api/v1/status` -> `state.repaired` is `[]`, and `state.bad.json` / `state.v4.json`
+   do **not** exist in `/data`. Either would mean the file was not used.
+
+Then the behaviour, in the browser at `workbench.local:8787`:
+
+- The page is one page now. `/dashboard` redirects to it.
+- The picture is the **panel's own frames**. Change the piece: the panel follows at once,
+  with nothing to promote. Drag a parameter slider and watch the panel, not a preview.
+- Open it on a phone as well: both show the same picture and change together.
+- Unplug the panel: the page says "<name> is away. It will pick this up again by itself
+  when it comes back", keeps drawing, and `/healthz` stays 200. Plug it in: it resumes.
+- `docker restart screeny-studio`: everything back as it was in a few seconds.
+
+**The `set_panel` change the firmware session needs to know about.** Its script is
+unchanged - the same two bodies - but the effect is now what it always said:
+
+```sh
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":false}' localhost:8787/api/v1/set_panel
+#  -> {"on":false,"device":"4a00a4","label":"...","panel":null,"state":{...}}
+#     FINAL is sent; screeny stats should show the device leave LIVE for HOLD and
+#     then IDLE, and frames_rx stop moving. Before this card it answered 200 and
+#     kept streaming at 30 fps.
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":true,"to":"screeny-4a00a4"}' localhost:8787/api/v1/set_panel
+#  -> {"on":true,...,"panel":{"state":"connecting"|"up",...}}
+```
+
+Worth telling that session that the reply body changed shape (it was `null` / a bare
+`PanelStatus`; it is now `{on, device, label, panel, state}`), and that "off" now stops
+**every** player rather than only the one the page shows.
+
+**Rolling back.** A v2 binary handed a v3 file takes card 106's from-the-future path: it
+does **not** parse it, renames it to `/data/state.v3.json`, says so once, and starts from
+defaults - which on that box means discovery adopts `screeny-4a00a4` and plays the
+default piece. Nothing is destroyed. To undo a rollback: put the v3 image back and
+`mv /data/state.v3.json /data/state.json`. To go back further than that, the v2 backup
+taken above is what a v2 binary wants. (Not run against the live service; it is what
+`a_state_file_from_the_future_is_kept_not_parsed` pins, unchanged by this card.)
+
+**Running it by hand on the bench**, for anybody reproducing the browser session:
+
+```sh
+# The simulator's binary also serves HTTP on a fixed 8080 since the firmware
+# session's merge, so --no-http is needed whenever two of them run side by side.
+./target/release/screeny-sim --bind 127.0.0.1 --frame-port 50881 --control-port 50882 \
+    --no-mdns --no-http --headless --id d0ca5e --instance sim-desk --brightness-cap 120 &
+./target/release/screeny-studio --listen 127.0.0.1:8899 --no-discover \
+    --ui-dir crates/studio/ui --state-dir /tmp/studio-state &
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"to":"127.0.0.1:50881","name":"Desk","play":true}' localhost:8899/api/v1/devices/add
+```
+
+`--ui-dir` matters: without it the binary serves the UI it was **compiled** with, which
+cost half an hour of confusion in this card when an edited `main.js` appeared to change
+nothing.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| one engine per panel; the page's canvas shows the attached panel's player, by the same WebSocket | `player.rs` is the only renderer; `page::Screen` is the one frame cell; `ws.rs` unchanged. `tests/panel.rs::send_to_panel_streams_the_picture_to_the_device` compares the socket's bytes to the simulator's decode |
+| piece, params, seed, playback, settings act on that player, reach the panel at once, persist | `api.rs::on_page`; `the_page_and_the_panel_are_one`; by hand, a twelve-step slider drag |
+| the preview engine, its state, "Send to panel" and "Play my preview" go away | `Engine`, `PreviewHealth`, `EngineView`, `StoredPreview`, `adopt_preview` and the panel section of `index.html` all deleted; `adopt_preview` is a 404 and a test says so |
+| two browsers still stay in step | `two_browsers_see_each_others_changes`, `a_second_browser_sees_the_restored_values`, and two real tabs |
+| with no panel: say so, offer what mDNS found plus an address box | the unbound player, the pill's "No panel", and the chooser, which opens itself once when nothing is attached. `a_studio_with_no_panel_still_plays_something` |
+| the first panel found is still adopted automatically | `fleet::adopt_first_device` -> `attach`, once per process; `a_typed_address_becomes_a_device_and_starts_playing` asserts `attached`/`focused` |
+| panel away: keep rendering and showing the picture, say so plainly, come back by itself | `a_missing_panel_is_never_unhealthy`, the soak's round 2, and by hand ([`170-panel-away.png`](../../research/img/170-panel-away.png)) |
+| changing which panel is possible but tucked away | a `<details>` at the bottom of the Panel section |
+| panel status and controls on the same page | the Panel section: connection, fps, frames, codec, reconnects, rendered, heard, device state, uptime, RSSI, drops by cause, firmware, last error; brightness, identify, rename, reboot behind a `confirm()` |
+| `/dashboard` folded in, kept as a redirect | `ui.rs::FOLDED_IN`, a 307; `the_dashboard_is_folded_in_and_redirects` |
+| several panels get a plain chooser, nothing more | `Players::set_focus`, the chooser's "Use this"; `exactly_one_player_is_on_the_page` |
+| no sandbox mode; "panel output off" is the one exception | `on: false` releases the link and nothing else; `set_panel_hands_the_panel_over_and_takes_it_back` asserts it on the device |
+| works at 390/600/900/1400, screenshots in the Log | the table in step 6; `the_two_column_layout_is_behind_a_breakpoint` and `the_page_is_in_the_order_it_should_stack_in` keep it from being undone |
+| static files, no CDN, keep the design language | three files, `the_page_keeps_its_promises` (also checks no web font from the network); `style.css`'s tokens, type and controls unchanged |
+| state: migrate v2, the player is the truth, the preview's piece merged into the memory, same recovery rules | `migrate_to_v3`; four migration tests including one built from the live v2 shape |
+| API: `set_panel`, `status`, `healthz`, `player/set` keep working; document the surface | the compatibility table in step 1; `crates/studio/README.md`; the exact-bodies test |
+| tests against `screeny-sim`; card 106's restart/reboot acceptance still passes | `the_panel_comes_back_whatever_is_restarted`, four rounds, unchanged in substance |
+| card 165's memory tests still pass | `tests/memory.rs`, 8 tests; two rewritten because the contexts they contrasted are one thing now, and said so |
+| bounded by construction | one render thread per player, one link, one control request, one browse, a one-slot pending mailbox per player, a one-slot frame cell, a fixed-depth state broadcast, a one-slot state-file mailbox, capped jittered backoff, every fault logged once |
+| root `cargo test --release --no-fail-fast` green; clippy clean | 560 passed, 0 failed, 1 ignored; no clippy warnings in this crate |
+
+**Tests changed rather than kept, and why:**
+
+| was | now | why |
+|---|---|---|
+| `promoting_the_preview_is_explicit` | `the_page_and_the_panel_are_one` | it pinned the *opposite* behaviour - that the design view must not touch the panel - which is the thing the owner corrected. Inverted rather than deleted, so it cannot come back |
+| `a_wedged_preview_is_a_503_and_the_dashboard_still_answers` | `a_wedged_piece_is_replaced_and_the_status_route_never_stalls` | there is no preview engine to wedge. What survives is the half that mattered (status answers while a piece is stuck) plus card 143's acceptance (it recovers by itself), and `/healthz` now stays 200 throughout |
+| `promoting_the_preview_needs_no_copy_step`, `the_design_view_and_the_panel_share_one_memory` | `two_panels_share_the_one_memory` | both contrasted the preview with a panel; the page *is* a panel now, so the honest version of "one memory" needs two panels |
+| `the_engine_runs_with_nobody_watching` | `a_player_renders_with_nobody_watching` + `a_watching_browser_gets_the_full_rate` | with nobody watching a player idles at 5 fps on purpose, so 300 ms was not enough time to see a frame; split into the two claims |
+| `a_panel_restores_a_pieces_settings_too` | same name, second half rewritten | it asserted the design view was on a *different* piece from the panel. It now asserts they are the same, which is the card |
+| `the_design_view_resumes_where_it_was` | `the_page_resumes_where_it_was` | same test, plus the playback state, which used to be the preview's |
+
+**Not done here, on purpose**: a scheduler (104), auth (041), preview bandwidth (120),
+GPU-absent messaging (145), following a panel that moved without being told (141), named
+parameter stops (163), the art pieces themselves.
+
+### Cards written, not done (reserved range 171-175)
+
+- **171** - the page's "Reconnects" count resets whenever the link is rebuilt, so a panel
+  that has really reconnected three times can read 0. Card 106 wrote this down as a
+  footnote; card 170's acceptance ("no readout whose meaning is unclear") makes it a bug.
+- **172** - the rate control offers 30 and 60, but a player may be on any rate from 1 to
+  60 and `player/set {fps}` will put it there. A panel a script set to 10 fps shows a
+  control with neither stop lit. Related to card 163 - both are controls whose shape does
+  not match their values.
+- **173** - "No panel yet" does not say whether the studio is even looking. Discovery off,
+  mDNS broken and "the first browse has not finished" all look identical, and they need
+  three different things from the person reading them. `/api/v1/status` already knows.
+
+174 and 175 are unused.
