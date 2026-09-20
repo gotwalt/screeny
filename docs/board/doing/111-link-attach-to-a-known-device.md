@@ -60,3 +60,73 @@ port-pair guess without adding a constructor.
   stay green.
 
 ## Log
+
+### 2026-09-19 - the shape: `attach`, not a control port on `Target`
+
+Took the card's suggested shape (`Link::attach` / `Link::attach_deferred`) over the
+`Target { control: Option<SocketAddr> }` alternative:
+
+- `Target` is *how to find a device* - it is parsed straight from the CLI's
+  `--addr`/`--name`/`--timeout`/`--broadcast` flags. A control port is not a way of
+  finding anything; putting one there makes `Target` a half-resolved `Device` and
+  leaves `resolve()` with a new combination to explain (a name *and* a control port -
+  which wins?).
+- A resolved `Device` carries more than the two addresses: `instance`, `host`,
+  every address it resolved to, and the `DeviceInfo` from the TXT record. A caller
+  that browsed once - card 106's "players and devices" - has all of it and would
+  have to throw it away to squeeze back into a `Target`.
+- It matches `Sender::connect(Device, SenderConfig)` exactly, so `Link` is now the
+  same two doors as `Sender` with reconnection above them. Nothing existing changed
+  shape; `open`/`open_deferred` keep their signatures and their behaviour.
+
+**Reconnect behaviour, stated as the card demands:** an attached link reuses the
+`Device` verbatim on every retry. It never browses, so it comes back after a reboot
+at the same address and does **not** follow a DHCP lease. The doc comment says so and
+says what to use instead (`Link::open` with `Target { name }`). Deliberately *not*
+re-browsing on the device's `instance`: for a device built by `Device::from_addr`
+that field is a synthesised `"127.0.0.1:53551"`, so browsing on it would silently
+turn an address the caller chose into a name it never asked for.
+
+Implementation: one private `enum Aim { Find(Target), Known(Device) }` is what a
+connection attempt carries (it is what gets moved onto the connect thread), and
+`Link` holds `attached: Option<Device>` beside the target it already had. Both
+connect paths - `connect_now` for the blocking constructors and `spawn_attempt` for
+the background retry - go through it, so there is one resolution rule and not two.
+
+Three small additions beyond the two constructors, each because leaving it out would
+have been a hole rather than restraint:
+
+- `Link::attached() -> Option<&Device>`: reads the pinned device back, control port
+  and all, which `target()` cannot express.
+- `Link::reattach(Device)`: `retarget`'s counterpart. `retarget` had to learn to
+  clear the pin anyway (otherwise it would silently do nothing to an attached link),
+  and once that existed, the symmetric move-the-pin case is three lines.
+- `target()` for an attached link answers `Target { addr: Some(device.frame) }`, so
+  it is still honest rather than empty.
+
+`cargo clippy -p screeny --all-targets` is clean; `large_enum_variant` on `Aim` is
+allowed with a reason (boxing would buy an allocation on a value that lives for one
+connect attempt).
+
+### 2026-09-19 - tests, with no port arithmetic anywhere
+
+`crates/screeny/tests/embed.rs` gained three tests, all against
+`SimDevice::start(sim_config(0, 0))` - the fixture's ephemeral pair, mDNS off:
+
+- `an_attached_link_reaches_a_device_on_ephemeral_ports` - asserts up front that the
+  control port is *not* frame + 1, so the test would be vacuous if it ever became a
+  consecutive pair, then pushes a frame and checks the simulator drew it
+  palette-exact.
+- `an_attached_link_reconnects_to_the_same_two_ports` - the sim is dropped and
+  restarted on the pair it had; the link notices, reconnects and lands on the same
+  control port, with the frame accounting invariant intact.
+- `reattach_moves_a_pinned_link_to_another_known_device` - two simulators, the pin
+  moved between them mid-stream, lifetime totals carried over, then `retarget` puts
+  it back on the discovery path and `attached()` goes to `None`.
+
+`cargo test -p screeny --test embed`: 17 passed, 0 failed, 1.02 s. No port is chosen,
+guessed or incremented anywhere in the three new tests.
+
+`crates/screeny/README.md`: "Embedding" gained the paragraph (what `attach` is for,
+and the "pinned sockets, no browse, no DHCP lease" sentence), and both API blocks and
+the `tests/embed.rs` row of the testing table list the new calls.

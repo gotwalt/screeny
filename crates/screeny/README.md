@@ -80,6 +80,18 @@ stalls your loop. `Link::open_deferred` starts without a panel at all, which is
 what a service wants: a panel that is off at boot is not a different case from
 one unplugged an hour later. `Link::retarget` moves a live link elsewhere.
 
+If you have already resolved the device - a service that browsed once and keeps
+its own `Device`s, or a test pointing at a simulator - `Link::attach(device,
+cfg)` and `Link::attach_deferred` skip discovery and take both ports as given.
+That matters because `Target { addr }` resolves through `Device::from_addr`,
+which guesses the control port as frame + 1: true of the spec's defaults
+(49374/49375) and never true of an ephemeral pair. **An attached link
+reconnects to those exact sockets and never browses**, so it survives a reboot
+at the same address but does *not* follow a DHCP lease; following a lease is
+what an instance name is for. `Link::reattach(device)` moves a pinned link to
+another known device, `Link::retarget(target)` puts it back on the discovery
+path, and `Link::attached()` reads the pinned device back.
+
 **4. Pacing is yours; overrunning is handled.** `Link` never sleeps. Render
 when you like. By default (`Cadence::Limit`) frames that arrive before the next
 slot is due are dropped and counted rather than sent, on an absolute schedule
@@ -118,10 +130,12 @@ struct Backoff { first: Duration, max: Duration, factor: f64 }
 struct Link;
     Link::open(Target, LinkConfig) -> Result<Link>        // blocking; may fail
     Link::open_deferred(Target, LinkConfig) -> Link       // never fails
+    Link::attach(Device, LinkConfig) -> Result<Link>      // already resolved; pinned
+    Link::attach_deferred(Device, LinkConfig) -> Link     // never fails
     fn send(&mut self, Pixels) -> Result<Sent>            // network cannot fail it
     fn poll()                     // drain telemetry while frames are not flowing
     fn close()                    // FINAL; Drop does this too
-    fn retarget(Target) / target()
+    fn retarget(Target) / target() / reattach(Device) / attached()
     fn state() -> LinkState { Up, Connecting, Waiting, Closed }
     fn stats() -> &LinkStats      // lifetime, across sessions
     fn session() -> Option<&SendStats>        // this socket's detail
@@ -242,7 +256,9 @@ enum Sent { Frame { codec, bytes, exact, seq }, Coalesced, Dropped }
 // --- embedding (card 011); see "Embedding" at the top -------------------
 struct Link;                                   // reconnects, paces, FINAL on drop
     Link::open(Target, LinkConfig) / open_deferred(..) / send(Pixels) / poll()
-    close() retarget(Target) state() stats() session() limits() fps() pacer()
+    Link::attach(Device, LinkConfig) / attach_deferred(..)   // pinned to a device
+    close() retarget(Target) reattach(Device) attached() target()
+    state() stats() session() limits() fps() pacer() device() config()
 struct LinkConfig { sender, cadence, reconnect, silence, backoff }
 struct LinkStats; struct Limits; struct Pace;
 enum Cadence { Free, Limit }   enum LinkState { Up, Connecting, Waiting, Closed }
@@ -457,7 +473,7 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 | `tests/cli.rs` | the binary end to end: `pattern` at 30 fps, `pipe`, `encode-stats`, the control subcommands, and the failure messages |
 | `tests/color.rs` | the fast cube root against libm, and the panel model against card 001's measurements |
 | `tests/indexed.rs` | indexed frames are bit-exact end to end through `screeny-sim`: palettes of 2, 16, 17 and 32 colours, structured and incompressible, over a stream; the over-budget fallback and both malformed-frame errors |
-| `tests/embed.rs` | `Link`: the device rebooting on the same ports and moving to new ones mid-stream, the silence watchdog, reconnection off, a deferred link, `FINAL` on drop, and a 60 fps producer decimated to 30 with nothing superseded |
+| `tests/embed.rs` | `Link`: the device rebooting on the same ports and moving to new ones mid-stream, the silence watchdog, reconnection off, a deferred link, `FINAL` on drop, a 60 fps producer decimated to 30 with nothing superseded, and `attach` reaching a device on an ephemeral, non-consecutive port pair and reconnecting to exactly those ports |
 
 `SCREENY_PACING_SECS` shortens the ten-second run while iterating.
 
