@@ -4,8 +4,8 @@ title: Research - an HTTP server, a soft-AP and a captive portal on the firmware
 type: research
 hardware: no
 depends: [008]
-owner:
-branch:
+owner: worker-201
+branch: card/201-research-http-softap-portal
 ---
 
 ## Goal
