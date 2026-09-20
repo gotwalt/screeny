@@ -1,0 +1,25 @@
+[package]
+name = "screeny-settings"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The device's persisted settings: the key set, the value encoding, the schema version and the load/save policy over sequential-storage's map. no_std, no alloc, no clock, no I/O of its own."
+
+# `no_std`, no alloc, no float, no clock: this crate is compiled for
+# xtensa-esp32-none-elf by the firmware, so anything it pulls in, the firmware
+# pulls in. The precedent is `crates/receiver`.
+#
+# `sequential-storage` is pinned exactly: research 006 is written against 8.0.1
+# and the API moved a long way between major versions.
+[dependencies]
+screeny-proto = { path = "../proto" }
+sequential-storage = { version = "=8.0.1", default-features = false }
+embedded-storage-async = "0.4.1"
+heapless = "0.9.3"
+
+# `_test` is what gates `sequential_storage::mock_flash`; it pulls in `std`.
+# With resolver = "2" that feature is not unified into the non-test build, so
+# `cargo check --target thumbv7em-none-eabi -p screeny-settings` still compiles
+# the dependency as `no_std`.
+[dev-dependencies]
+sequential-storage = { version = "=8.0.1", features = ["_test"] }
