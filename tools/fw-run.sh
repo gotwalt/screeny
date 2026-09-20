@@ -21,8 +21,11 @@ mkdir -p captures
 # OTA selection survives a serial flash and the device boots the *other* slot.
 # With it, a serial flash always wins. --flash-size: the table needs more than
 # espflash's 4 MB assumption; say so rather than rely on detection.
+# --bootloader: ESP-IDF v6.1 with app rollback enabled (firmware/bootloader/README.md);
+# espflash's bundled bootloader never rolls a bad OTA image back.
 espflash flash --chip esp32 --port "$PORT" --baud 230400 --non-interactive \
   --flash-size 8mb --partition-table firmware/partitions.csv --erase-data-parts ota \
+  --bootloader firmware/bootloader/esp32-rollback-bootloader.bin \
   "$ELF" 2>&1 | tail -2
 
 espflash monitor --chip esp32 --port "$PORT" --non-interactive --elf "$ELF" \

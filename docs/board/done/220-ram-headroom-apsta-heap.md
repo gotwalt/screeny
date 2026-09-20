@@ -357,3 +357,17 @@ headroom is 30 KB either way.
 - Scope: `firmware/` plus this card and `docs/research/009-ram-headroom.md`.
   Nothing under `crates/`, `tools/`, `docs/design/` or any other card was
   touched. `tidbyt.rs` (card 202's `BUTTON_GPIO`) left alone as instructed.
+
+### Orchestrator, after the merge (2026-09-20)
+
+- Merged build flashed (with the rollback bootloader, card 242): stack high-water 6,000
+  of 37,512, 30 fps, zero drops; conformance 60 passed, 0 failed, 4 skipped; survives a
+  warm `REBOOT`.
+- **The "24 dB RSSI step at the APSTA switch" is explained, and it is not APSTA.** The
+  home network is a mesh: across five boots today the station associated with five
+  different BSSIDs, all on channel 1, and RSSI tracks the BSSID (-53..-59 on two of
+  them, -69..-78 on the other three). In the APSTA run the radio restart re-associated
+  with a different, weaker node. The real finding: **the firmware joins the first node
+  that answers, not the strongest.** Folded into card 212 (connect by signal if
+  `esp-radio` exposes it). Proposed card "reproduce the RSSI step" is dropped.
+  (BSSIDs deliberately not recorded here.)
