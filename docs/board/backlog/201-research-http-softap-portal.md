@@ -1,0 +1,141 @@
+---
+id: 201
+title: Research - an HTTP server, a soft-AP and a captive portal on the firmware's stack
+type: research
+hardware: no
+depends: [008]
+owner:
+branch:
+---
+
+## Goal
+
+The owner wants (2026-09-20) three things from the firmware:
+
+1. a web server on the device for diagnostics/status, network settings and firmware
+   upload;
+2. when the device has no network to join (no credentials, or they stopped working),
+   it brings up its own WiFi network with a captive portal, and the panel shows the
+   network name and instructions (a QR code if 64x32 allows it);
+3. a button-driven WiFi reset (card 202).
+
+Find out how to build 1 and 2 on *this* stack, prove the pieces link and fit in RAM,
+and recommend a design the build cards can follow.
+
+This is the device-web track: cards 200-249, coordinated by the `firmware` session.
+Sibling research cards running in parallel: 200 (partition table, settings store,
+OTA - it owns everything about flash) and 202 (the button). Stay out of their
+questions; where you need the store, assume a `load_wifi() -> Option<(ssid, psk)>`
+/ `save_wifi(..)` API exists.
+
+## Context
+
+Read first: `CLAUDE.md`, `firmware/src/main.rs`, `firmware/src/net.rs`,
+`firmware/src/mdns.rs`, `firmware/src/screens.rs`, `firmware/Cargo.toml`,
+`docs/research/001-firmware-stack.md`, `docs/design/protocol-v1.md` sections 6.3,
+6.7, 7.3 and 8, `docs/board/parked/081-sim-wifi-and-provisioning.md`.
+
+What is already known:
+
+- `no_std` embassy: `esp-hal =1.2.2`, `esp-rtos =0.4.0`, `esp-radio =1.0.0-beta.1`
+  (pinned: beta.2 conflicts with `esp-hub75 0.17`, see research 001),
+  `embassy-net 0.9.1` with `udp` only today, `StackResources<6>`, `edge-mdns 0.8` +
+  `edge-nal-embassy 0.9` already in the tree. Read crate sources in
+  `~/.cargo/registry`; do not trust memory of other versions' APIs.
+- Core 0 does WiFi, net, decode, control, mDNS; core 1 only renders. The 30 fps UDP
+  frame path is the product: **an HTTP request must never cost a frame**. Say how
+  you know (task priorities, socket buffer sizes, what blocks).
+- Memory trap: `.bss` and core 0's main stack share one region; heap is 64 KB
+  reclaimed + 32 KB and telemetry reports ~45 KB in use. TCP sockets, an HTTP
+  server's buffers and AP mode all cost RAM. The budget is the central risk here.
+- CLAUDE.md: "The plan for provisioning is a captive-portal setup with an HTTP
+  settings page; do not build other schemes." The serial console of spec 8.1 is
+  superseded and will be struck from the spec; `SET_WIFI` (8.2) stays.
+- The PSK invariant of spec 8.4 holds for HTTP too: never returned, never logged,
+  never on the panel.
+- Workers cannot reach the LAN or the device. Everything here is source reading and
+  compile-only proof; the orchestrator does device runs after the build cards.
+
+## Questions to answer
+
+1. **HTTP server.** `picoserve` vs `edge-http` (we already carry the edge-* family)
+   vs hand-rolled. For each: `no_std`/no-alloc fit, embassy-net 0.9 compatibility at
+   the versions we can use, RAM per connection, streaming request bodies (a ~1 MB
+   firmware upload must stream to a sink in chunks - card 200 owns the sink),
+   concurrent connections, keep-alive, and how a captive-portal redirect is
+   expressed. Recommend one. How many TCP sockets, what buffer sizes, the new
+   `StackResources<N>`.
+2. **Soft-AP in `esp-radio 1.0.0-beta.1`.** The AP config API in this exact version;
+   whether AP+STA (`ApSta`/mixed mode) exists and is sound, or whether the design
+   should be exclusive modes (STA *or* AP, switching by re-configuring or by
+   reboot). Can the controller scan for networks while in AP mode (the settings
+   page wants a network list)? Can `embassy-net` run a second stack on the AP
+   interface with a static address (192.168.4.1/24)? What it costs in RAM to have
+   both interfaces alive versus switching.
+3. **DHCP server and DNS catch-all.** `edge-dhcp` / `edge-captive` (same family as
+   `edge-mdns`) or minimal hand-written ones; versions compatible with
+   `edge-nal-embassy 0.9`. DHCP option 114 (captive-portal URI, RFC 8910) - worth it?
+4. **Captive-portal detection.** What iOS, Android, macOS and Windows probe for
+   (`captive.apple.com/hotspot-detect.html`, `connectivitycheck.gstatic.com/generate_204`,
+   `msftconnecttest.com`, ...) and what the device must answer so the OS pops the
+   sign-in sheet: DNS answers everything with 192.168.4.1, HTTP answers unknown
+   hosts with a 302 to `http://192.168.4.1/`. Known traps (HTTPS probes, iOS's
+   mini-browser limits: no JS popups, small viewport; Android's "no internet, stay
+   connected?" prompt).
+5. **State machine.** Propose it: boot -> stored credentials? -> join (N attempts,
+   how long) -> connected / fall to portal; portal -> credentials submitted ->
+   try them *while telling the user what happened* (the phone is on the AP, which
+   may drop when the radio changes mode - how do other firmwares (WLED, Tasmota,
+   ESPHome, Tidbyt itself) report success or failure?); a network that disappears
+   for an hour at 3 am must **not** leave the device sitting in portal mode forever
+   - how does it get back (periodic retry of stored credentials while the AP is
+   idle)? Map this onto the `PROVISIONING` telemetry state byte and `GET_WIFI`
+   states in the spec.
+6. **AP security.** The default the orchestrator intends: an open AP named
+   `screeny-<id>` (the home PSK then crosses an open network in clear; spec 8.4
+   records that the owner does not treat it as a secret). Give the cost of the
+   alternative (WPA2 AP with a per-device passphrase shown on the panel / in the
+   QR) so the owner can choose.
+7. **The page.** One self-contained HTML page (no external assets, works in the iOS
+   captive mini-browser), gzip-embedded or plain, size budget. Sections: status
+   (the `GET_INFO` and telemetry numbers, uptime, heap, RSSI, reset reason, firmware
+   version, partition/slot), network (scan list, SSID, PSK, name), firmware upload
+   with progress, reboot. A JSON API underneath (`GET /api/v1/status`,
+   `POST /api/v1/wifi`, `POST /api/v1/firmware`, ...) so the Studio can show device
+   health later: propose the routes and shapes. mDNS: advertise `_http._tcp` too?
+   Auth: the orchestrator is asking the owner; design so a PIN can be added.
+8. **The portal screen.** 64x32 pixels. Feasibility of a WiFi QR
+   (`WIFI:T:nopass;S:screeny-4a00a4;;` is 32 bytes: version 2-L is 25x25 modules and
+   holds exactly 32 bytes in byte mode; version 3-L is 29x29) at one LED per module
+   with a reduced quiet zone, beside the SSID in the 4x6-ish font `screens.rs`
+   already has. A `no_std`, no-alloc QR encoder (`qrcodegen-no-heap`?) and its code
+   size. Propose the layout(s) as ASCII art or a PNG rendered by a host test; the
+   owner will judge a real one on the panel with a phone (the orchestrator is
+   testing scan-ability separately by streaming a QR frame).
+9. **Host-testability.** Workers and CI have no device. What can live in a `no_std`
+   crate under `crates/` and be tested on the host (routing, form parsing, JSON,
+   the state machine as a pure function of events, the portal screen renderer), and
+   can `crates/sim` serve the same HTTP API so senders and the Studio can be
+   developed against it? Keep "one implementation of each thing" in mind.
+10. **Proof it links.** A compile-only spike in your worktree: enable `tcp` (and
+    whatever else) in embassy-net, add the HTTP server crate and AP config, spawn a
+    trivial server task, build release (`. ~/export-esp.sh && cd firmware && cargo
+    build --release`), and report image size and `.bss`/`.data` growth
+    (`xtensa-esp32-elf-size`) against `main`. Do not flash. Keep the spike on your
+    branch behind a cargo feature or under `lab/`; it is evidence, not the
+    implementation.
+
+## Deliverables
+
+- `docs/research/007-device-web-and-portal.md`: conclusions first, then evidence with
+  file and line references into the crate sources you read. End with a recommended
+  design, the RAM budget table, and a list of proposed build cards (titles + one
+  paragraph each; do not write the card files).
+- The compile-only spike, on your branch.
+
+## Acceptance
+
+The orchestrator can write the build cards from the research doc alone, and every
+claim about a crate's behaviour cites the source line that shows it.
+
+## Log
