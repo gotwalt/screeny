@@ -106,3 +106,44 @@ believing a failure there), `cargo clippy -p screeny-provision` clean, the crate
 for a `no_std` target, and the PNGs look like 007's mock-ups.
 
 ## Log
+
+**2026-09-19, worker-221.** Merged `main` (my worktree's base predated ffdd514), branched
+`card/221-provision-crate`, card to `doing/`.
+
+Read in order: `CLAUDE.md`, `docs/README.md`, `docs/design/device-web.md`, research 007
+sections 5, 8 and 9, `crates/receiver/src/lib.rs` (the precedent), `firmware/src/screens.rs`,
+`firmware/src/web_spike/qr.rs`, `lab/src/bin/portal-mock.rs`, `crates/proto/src/lib.rs` and
+`control.rs`. Read `qrcodegen-no-heap 1.8.1` and `rqrr 0.11.0` from
+`~/.cargo/registry/src/` rather than from memory.
+
+Crate skeleton landed: `crates/provision` (`screeny-provision`), `#![no_std]`,
+`#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`, four modules - `uri`, `qr`, `screen`,
+`machine`. Dependencies exactly as the card says: `screeny-proto` (for `Rgb888Frame`, `W`,
+`H`, and the `state`/`wifi_state` constants, read only), `heapless 0.9.3`,
+`embedded-graphics 0.8.2` and `qrcodegen-no-heap =1.8.1` - the versions
+`firmware/Cargo.toml` already pins. Dev-dependencies: `rqrr 0.11` with
+`default-features = false` (the `img` feature would drag in the whole `image` crate; the
+`prepare_from_greyscale` entry point needs none of it) and `png 0.18.1`.
+
+Measurements and decisions so far:
+
+- `Version::new(2).buffer_len()` is **80**, so the encoder's two scratch buffers are
+  80 bytes each on the caller's stack; the `Qr` value it returns owns a 79-byte bitmap
+  (625 modules) and borrows nothing. Total QR cost is **239 bytes of stack, no `.bss`,
+  no allocator**.
+- Used `QrCode::encode_binary`, not `encode_text`. `encode_text` picks
+  numeric/alphanumeric/byte by inspecting the string, so an all-upper-case future AP
+  name would silently change the code's shape; byte mode is what the card specifies and
+  what the owner scanned. For the measured payload the two agree module for module -
+  `tests/render.rs` will prove it.
+- `SSID_MAX_NOPASS = 14` and `SSID_MAX_SHORT = 23` are `const`-derived from the form's
+  frame length against the 32-byte version 2-L budget, with `const _: () = assert!(...)`
+  on both, so the numbers in 007 section 9.1 are compiler-checked rather than copied.
+- `UriForm` is an enum with `NoPass` (shipped, measured) and `ShortOpen` (the 9-bytes
+  shorter form a later bench card may promote), so that switch is the one-line change
+  the card asked for.
+- Escaping cost is counted in **bytes, not characters**: an SSID of 14 characters one of
+  which is a ZXing metacharacter escapes to 15 bytes and is refused. Tested, along with
+  multi-byte UTF-8.
+
+19 unit tests green on the first build.
