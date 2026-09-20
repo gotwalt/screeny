@@ -234,3 +234,11 @@ with firmware 0.2.0 it looks exactly as it does today.
 - **Green.** `cargo clippy --workspace --all-targets`: silent. `cargo test --release
   --no-fail-fast`: every crate, 0 failed. `ps` shows nothing of mine running; every
   simulator and studio started by hand was under `timeout` and has been stopped.
+
+- **One correction, after reading the log rule again.** The one-line-per-device rule was
+  once *ever*: a panel switched off at night and on in the morning would have said "has
+  no HTTP status API" once and never mentioned it again. It is now once per **transition**
+  - a successful read clears the flag, and a read that succeeds after a failure says
+  "serves its own status API" - which is card 106's rule read properly ("logged once per
+  device rather than per attempt"). Two lines a day for a panel that is switched off at
+  night, each of which is worth reading, and still nothing per attempt.

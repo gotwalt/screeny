@@ -617,6 +617,9 @@ impl Registry {
         d.http.absent = false;
         d.http.last_error = None;
         d.http.reads += 1;
+        // A device that is answering again may stop again, and that is worth
+        // one more line when it does.
+        d.http.said = false;
         Some((reboots, rebooted))
     }
 

@@ -398,7 +398,13 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
         let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status(addr, crate::devhttp::TIMEOUT)).await;
         match read {
             Ok(Ok(reply)) => {
-                let first = record.http.reads == 0;
+                // Said on the first read ever, and again when a device starts
+                // answering after it had stopped - which is a panel coming
+                // back, or firmware that has grown the API since we last
+                // looked. Per *transition*, never per attempt: card 106's
+                // rule, and the two lines a day a panel switched off at night
+                // produces are each worth reading.
+                let announce = record.http.reads == 0 || record.http.last_error.is_some();
                 // The reply is handed straight to the registry and never held
                 // here: it carries the SSID, and nothing below may print it.
                 let fw = reply.fw.to_string();
@@ -408,7 +414,7 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default();
                 if let Some((reboots, rebooted)) = st.devices.heard_http(&id, reply) {
-                    if first {
+                    if announce {
                         eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
                     }
                     if rebooted {
