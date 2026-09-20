@@ -148,6 +148,39 @@ mod tests {
     }
 
     #[test]
+    fn forcing_byte_mode_matches_what_the_owner_scanned() {
+        // The bench code, `firmware/src/web_spike/qr.rs` and
+        // `lab/src/bin/portal-mock.rs` all used `encode_text`, which picks
+        // numeric / alphanumeric / byte by inspecting the string. This crate
+        // forces byte mode so a future all-upper-case AP name cannot change
+        // the code's shape - but for the payload that was actually measured,
+        // the two must agree module for module, or "measured on the panel"
+        // would no longer be a claim about this code.
+        let uri = wifi_uri(UriForm::NoPass, "screeny-4a00a4").unwrap();
+        let mine = encode(&uri).unwrap();
+
+        let mut tmp = [0u8; QR_BUF];
+        let mut out = [0u8; QR_BUF];
+        let theirs = QrCode::encode_text(
+            &uri,
+            &mut tmp,
+            &mut out,
+            QrCodeEcc::Low,
+            Version::new(1),
+            Version::new(3),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(theirs.size(), 25, "version 2, as 007 section 9.1 measured");
+        for y in 0..QR_MODULES as i32 {
+            for x in 0..QR_MODULES as i32 {
+                assert_eq!(mine.dark(x, y), theirs.get_module(x, y), "module {x},{y}");
+            }
+        }
+    }
+
+    #[test]
     fn out_of_range_modules_are_light() {
         let qr = encode("WIFI:S:x;;").unwrap();
         assert!(!qr.dark(-1, 0));
@@ -158,7 +191,7 @@ mod tests {
 
     #[test]
     fn a_33_byte_payload_is_refused() {
-        let long: heapless::String<40> = core::iter::repeat('a').take(33).collect();
+        let long: heapless::String<40> = core::iter::repeat_n('a', 33).collect();
         assert_eq!(encode(&long), Err(QrError::TooLong));
     }
 

@@ -155,8 +155,8 @@ mod tests {
 
     #[test]
     fn fourteen_fits_and_fifteen_is_refused() {
-        let ok: String<16> = core::iter::repeat('a').take(14).collect();
-        let too: String<16> = core::iter::repeat('a').take(15).collect();
+        let ok: String<16> = core::iter::repeat_n('a', 14).collect();
+        let too: String<16> = core::iter::repeat_n('a', 15).collect();
         assert!(fits(UriForm::NoPass, &ok));
         assert_eq!(
             wifi_uri(UriForm::NoPass, &too),
@@ -170,8 +170,8 @@ mod tests {
         let short = wifi_uri(UriForm::ShortOpen, "screeny-4a00a4").unwrap();
         assert_eq!(short.as_str(), "WIFI:S:screeny-4a00a4;;");
         assert_eq!(short.len(), 23);
-        let n23: String<32> = core::iter::repeat('a').take(23).collect();
-        let n24: String<32> = core::iter::repeat('a').take(24).collect();
+        let n23: String<32> = core::iter::repeat_n('a', 23).collect();
+        let n24: String<32> = core::iter::repeat_n('a', 24).collect();
         assert!(fits(UriForm::ShortOpen, &n23));
         assert!(!fits(UriForm::ShortOpen, &n24));
     }
@@ -188,9 +188,9 @@ mod tests {
     fn an_escape_costs_a_byte_of_the_budget() {
         // 14 plain characters fit; 14 characters one of which is a semicolon
         // escapes to 15 and does not.
-        let plain: String<16> = core::iter::repeat('a').take(14).collect();
+        let plain: String<16> = core::iter::repeat_n('a', 14).collect();
         assert!(fits(UriForm::NoPass, &plain));
-        let mut meta: String<16> = core::iter::repeat('a').take(13).collect();
+        let mut meta: String<16> = core::iter::repeat_n('a', 13).collect();
         meta.push(';').unwrap();
         assert!(!fits(UriForm::NoPass, &meta));
     }

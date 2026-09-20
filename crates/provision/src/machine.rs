@@ -545,10 +545,8 @@ impl Provisioner {
             State::Joining => match ev {
                 Event::Joined { ip } => self.go_online(now_ms, ip, &mut out),
                 Event::JoinFailed { reason } => self.attempt_failed(now_ms, reason, &mut out),
-                Event::Tick => {
-                    if self.attempt_expired(now_ms) {
-                        self.attempt_failed(now_ms, FailReason::Other, &mut out);
-                    }
+                Event::Tick if self.attempt_expired(now_ms) => {
+                    self.attempt_failed(now_ms, FailReason::Other, &mut out);
                 }
                 _ => {}
             },
@@ -556,10 +554,8 @@ impl Provisioner {
             State::Trial => match ev {
                 Event::Joined { ip } => self.go_online(now_ms, ip, &mut out),
                 Event::JoinFailed { reason } => self.attempt_failed(now_ms, reason, &mut out),
-                Event::Tick => {
-                    if self.attempt_expired(now_ms) {
-                        self.attempt_failed(now_ms, FailReason::Other, &mut out);
-                    }
+                Event::Tick if self.attempt_expired(now_ms) => {
+                    self.attempt_failed(now_ms, FailReason::Other, &mut out);
                 }
                 // A second POST while the first is still being tried: the
                 // user corrected a typo. Start over with the new one.
@@ -572,16 +568,16 @@ impl Provisioner {
 
             State::Portal => match ev {
                 Event::CredentialsPosted { ssid } => self.begin_trial(now_ms, ssid, &mut out),
-                Event::Tick => {
-                    // The 3 a.m. router reboot heals itself - but only while
-                    // nobody is standing on the portal, because a retry costs
-                    // them a ~45 s outage.
+                // The 3 a.m. router reboot heals itself - but only while
+                // nobody is standing on the portal, because a retry costs
+                // them a ~45 s outage.
+                Event::Tick
                     if self.has_stored
                         && self.ap_clients == 0
-                        && now_ms.wrapping_sub(self.portal_since) >= self.timing.portal_retry_ms
-                    {
-                        self.start_join(JoinTarget::Stored, now_ms, &mut out);
-                    }
+                        && now_ms.wrapping_sub(self.portal_since)
+                            >= self.timing.portal_retry_ms =>
+                {
+                    self.start_join(JoinTarget::Stored, now_ms, &mut out);
                 }
                 _ => {}
             },

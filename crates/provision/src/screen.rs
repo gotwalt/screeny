@@ -14,10 +14,10 @@
 //!   switches channel, and Chrome on Android does not resolve `.local`, so
 //!   this is how the user finds the device afterwards.
 //!
-//! Nothing here allocates, floats or reads a clock. The frame is the caller's
-//! - on the device it is the same triple buffer every other screen draws
-//! into, so this module costs no RAM of its own beyond the QR encoder's two
-//! 80-byte scratch buffers.
+//! Nothing here allocates, floats or reads a clock. The frame is the
+//! caller's: on the device it is the same triple buffer every other screen
+//! draws into, so this module costs no RAM of its own beyond the QR encoder's
+//! two 80-byte scratch buffers.
 //!
 //! Polarity is the measured one and **must not change**: the quiet zone and
 //! the light modules are lit white, the dark modules are off. That is what
@@ -143,23 +143,23 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             let title = MonoTextStyle::new(&FONT_5X7, TITLE);
             let label = MonoTextStyle::new(&FONT_4X6, LABEL);
             let value = MonoTextStyle::new(&FONT_4X6, VALUE);
-            text(&mut t, "join wifi", 1, 0, title);
-            text(&mut t, cut(ssid, W / 4), 1, 9, value);
-            text(&mut t, "then open", 1, 16, label);
-            text(&mut t, PORTAL_IP, 1, 23, value);
+            text(&mut t, "join wifi", 1, 1, title);
+            text(&mut t, cut(ssid, W / 4), 1, 10, value);
+            text(&mut t, "then open", 1, 17, label);
+            text(&mut t, PORTAL_IP, 1, 24, value);
         }
         Screen::Connected { ip } => {
             let title = MonoTextStyle::new(&FONT_5X7, OK);
             let label = MonoTextStyle::new(&FONT_4X6, LABEL);
             let value = MonoTextStyle::new(&FONT_4X6, VALUE);
-            text(&mut t, "connected", 1, 0, title);
-            text(&mut t, "find me at", 1, 11, label);
+            text(&mut t, "connected", 1, 3, title);
+            text(&mut t, "find me at", 1, 14, label);
             let mut line: heapless::String<16> = heapless::String::new();
             let _ = core::fmt::write(
                 &mut line,
                 format_args!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
             );
-            text(&mut t, &line, 1, 19, value);
+            text(&mut t, &line, 1, 22, value);
         }
     }
     Ok(())
@@ -351,7 +351,7 @@ mod tests {
         ] {
             let mut f = [0u8; NBYTES];
             render(&s, &mut f).unwrap();
-            let full = f.chunks_exact(3).filter(|p| p == &[0xff, 0xff, 0xff]).count();
+            let full = f.as_chunks::<3>().0.iter().filter(|p| *p == &[0xff, 0xff, 0xff]).count();
             assert!(
                 full * 100 / (W * H) <= 50,
                 "more than half the panel is full white"
@@ -372,18 +372,22 @@ mod tests {
 
     #[test]
     fn a_long_name_on_the_text_screen_is_cut_not_wrapped() {
-        let mut f = [0u8; NBYTES];
+        // 16 characters of `FONT_4X6` is the full 64-pixel width. A longer
+        // name is trimmed to that, not wrapped onto the line below - which
+        // is the line that says where to point a browser.
+        let long = "screeny-an-extremely-long-name-indeed";
+        let mut a = [0u8; NBYTES];
+        let mut b = [0u8; NBYTES];
         render(
-            &Screen::Portal {
-                ssid: "screeny-an-extremely-long-name-indeed",
-                layout: Layout::Text,
-                form: UriForm::NoPass,
-            },
-            &mut f,
+            &Screen::Portal { ssid: long, layout: Layout::Text, form: UriForm::NoPass },
+            &mut a,
         )
         .unwrap();
-        // 16 characters of FONT_4X6 is the full width; nothing spills past it
-        // into the line below, because `cut` trimmed it.
-        assert!(!lit(&f, 63, 14));
+        render(
+            &Screen::Portal { ssid: &long[..16], layout: Layout::Text, form: UriForm::NoPass },
+            &mut b,
+        )
+        .unwrap();
+        assert_eq!(a, b);
     }
 }

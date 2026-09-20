@@ -147,3 +147,97 @@ Measurements and decisions so far:
   multi-byte UTF-8.
 
 19 unit tests green on the first build.
+
+**The state machine.** `Provisioner::step(Event, now_ms) -> Actions` (a
+`heapless::Vec<Action, 4>`), plus queries: `state`, `overlay_state`, `wifi_state`,
+`screen(now_ms)`, `trial`, `ap_ssid`, `ap_up`, `ap_clients`, `has_stored`, `ip`.
+Seven actions: `StartJoin{which,attempt}`, `StopJoin`, `RaiseAp`, `DropAp`,
+`CommitCredentials{which}`, `ClearCredentials`, `Announce`. Timings are a `Timing`
+struct with `Timing::SPEC` (the 007 numbers, with the reasoning in the field docs) and
+an override for tests - the `crates/receiver` precedent, and the reason the whole table
+runs in microseconds instead of an hour.
+
+**The machine never sees a PSK.** `Event::CredentialsPosted { ssid }` carries the SSID
+alone; the caller holds the credential and writes it when the machine answers
+`CommitCredentials`. So the card's "the PSK never appears in `Debug`" is structural
+rather than a rule to remember: no type in the crate has a field for one. A test dumps
+the machine, the actions and the trial result and asserts the SSID is there and nothing
+else could be.
+
+**Where research 007 was ambiguous or silent, and what I decided** (all logged in code
+comments too):
+
+1. *`BOOT` with an empty store but compile-time credentials.* 007's table says "store
+   empty -> PORTAL" but also makes the compile-time credentials spec 8.3's step 2.
+   Device-web decision 6 ("when present they seed an empty store") settles it: an empty
+   store with a built-in credential goes to `Joining{Builtin}`, and success emits
+   `CommitCredentials{Builtin}`, which *is* the seeding. A build with neither boots
+   straight to the portal, which is what a public repo needs.
+2. *"TRIAL / 3 tries" in the diagram.* A wrong password is deterministic; retrying it
+   three times only makes the person holding the phone wait 45 s for the same answer.
+   Implemented as: `AuthError` fails the trial immediately, any other reason is retried
+   up to `trial_attempts` (3). `Joining` at boot still takes all three attempts, because
+   nobody is waiting.
+3. *Who counts the "~45 s"?* Nothing in 007 says. The machine owns a per-attempt
+   deadline (`join_attempt_ms = 15_000`), so a radio that never answers still advances;
+   `3 x 15 s = 45 s` is a `const _: () = assert!(...)`, and a test drives it with
+   one-second ticks and asserts the portal comes up at exactly 45000 ms.
+4. *Does the 10-minute portal retry drop the AP?* 007 says the retry "costs the phone on
+   the portal a ~45 s outage", which only makes sense if the AP stays up (APSTA). It
+   stays up; `DropAp` is only ever emitted after a successful join, and then only after
+   the 30 s grace.
+5. *Suppressed retry: reset the timer or not?* 007 only says "while no client is
+   associated". If the timer reset on every suppression, a phone that sat there for 11
+   minutes would push the retry out by another 10. It does not reset: the retry fires on
+   the first tick after both conditions hold, i.e. as soon as the last client leaves.
+6. *A second `POST` while a trial is in flight* (the user spotted a typo) is not in the
+   table. `StopJoin` + restart the trial with the new name, rather than ignoring the
+   correction.
+7. *Is `PORTAL` after a wipe `FAILED` or `DISCONNECTED`?* 007 gives `FAILED` after a
+   failed join and `DISCONNECTED` for "PORTAL with an empty store". A `ButtonWipe`
+   produces both conditions at once. The machine carries a `portal_after_failure` flag:
+   a wipe is not a failure, so it reads `DISCONNECTED`.
+8. *Layout C's wording.* 007's mock says "set up wifi / join network / <ssid> /
+   192.168.4.1"; card 221's decided list says "join wifi", the SSID, "then open",
+   "192.168.4.1". Followed the card.
+9. *AP grace after a non-trial join.* 007 only specifies the 30 s hold on the trial
+   path. A portal *retry* that succeeds also has the AP up; dropping it instantly would
+   be no kinder, so the grace is uniform. Only the trial path puts the address on the
+   panel, though - after a boot-time join nobody is standing there, and the idle screen
+   already shows the IP.
+
+Tests: **60 green** - 20 unit (`uri`, `qr`, `screen`), 8 `tests/render.rs`, 31
+`tests/transitions.rs`, 1 doctest. Every row of 007's table has a named test, plus the
+six the card listed (retry suppressed with a client, no retry on an empty store, trial
+failure leaves the store alone, compile-time fallback order, `ButtonWipe` from all five
+states, and the `u32` wrap at 49.7 days - which is tested against *five* separate timers,
+not just one).
+
+**The decode check works.** `rqrr 0.11` - which has never seen our encoder - reads the
+rendered 64x32 frame (upscaled 8x nearest-neighbour, because a detector needs several
+samples per module exactly as a phone camera does) back as
+`WIFI:T:nopass;S:screeny-4a00a4;;`, byte for byte. Also checked: the short open form
+round-trips, the ZXing escaping round-trips (`a;b,c` comes back as `a\;b\,c`), the
+*inverted* frame decodes to nothing (so the polarity test is proving something), and
+neither text screen contains a QR.
+
+**PNGs**: `docs/research/img/221-portal-a-qr-and-name.png`, `221-portal-c-text-only.png`,
+`221-connected.png`, regenerated by `cargo run -p screeny-provision --example portal-png`
+(the successor to `lab/src/bin/portal-mock.rs`, which drew its own picture; this one asks
+the crate, so the layout stops existing twice). Layout A is pixel-for-pixel 007's mock.
+`tests/render.rs` pins an FNV-1a of each frame's 6144 bytes and checks the files exist.
+
+**RAM, for card 220 and card 223:** this crate has **no `static` and no `.bss` of its
+own**. `Provisioner` is 168 bytes (two 32-byte `heapless::String`s carry most of it),
+`Qr` is 79, `Actions` is 16, and `render` puts two 80-byte QR scratch buffers on the
+caller's stack - **about 400 bytes of stack at its peak**, and the 6144-byte frame is the
+caller's existing triple buffer, not a new one. That is the 6 KB `Frame` scaffold
+research 007 section 6 lever 1 wanted removed: it is gone, because nothing here owns a
+frame. Flash should be close to the spike's ~10.5 KB for `qrcodegen-no-heap` plus the
+`embedded-graphics` text path the firmware already links.
+
+**Checks:** `cargo test -p screeny-provision` green, `cargo clippy -p screeny-provision
+--all-targets` **zero warnings**, and `cargo build -p screeny-provision --target
+thumbv7em-none-eabi` builds clean - a stock no_std target that was already installed
+(`rustup target list --installed`), so no toolchain was added and the esp toolchain was
+not needed.
