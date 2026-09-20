@@ -114,8 +114,12 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// flash before proving them. 0.4.2 is card 227: core 1's stack measured and
 /// cut to fit, the heap arena trimmed, and a **second HTTP connection
 /// worker** - which is the part visible from outside, because back-to-back
-/// connections no longer pay a 1 s SYN retransmit.
-pub const FW_VERSION: &str = "0.4.2";
+/// connections no longer pay a 1 s SYN retransmit. 0.4.3 is card 233: one HTTP
+/// dispatch instead of nine nested router futures, every refusal in the API's
+/// error shape (a verb the API has no method for is now `method_not_allowed`
+/// and not picoserve's plain text), a reboot without the magic word is
+/// `out_of_range`, and each route's own `max_request_len` is enforced.
+pub const FW_VERSION: &str = "0.4.3";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

@@ -4,8 +4,8 @@ title: Firmware - one HTTP dispatch instead of nine nested router futures; every
 type: build
 hardware: yes
 depends: [227, 228]
-owner:
-branch:
+owner: worker-233
+branch: card/233-one-router-future
 ---
 
 ## Goal
@@ -136,3 +136,126 @@ The soft-AP, DHCP, DNS, the portal, scanning (223); OTA; the button; `crates/*`;
   `render` max unchanged), `stack_free` >= 16 KB afterwards, back-to-back connects fast.
 
 ## Log
+
+### 2026-09-20 - the design, and why
+
+Read `picoserve 0.20.0`'s `src/routing.rs` before deciding. Three shapes were on the
+table; the one that won is **`Router::from_service(Dispatch)`**, where `Dispatch` is a
+single `PathRouterService`.
+
+* **Hand-written `PathRouter`** - not possible, and this is worth recording: `PathRouter`
+  is *sealed* (`routing::sealed::PathRouterIsSealed`, "Only `picoserve` may create types
+  which implement PathRouter"). `PathRouterService` is **not** sealed, and
+  `Router::from_service` wraps one in the `ServicePathRouter` that `picoserve::Server`
+  takes. So the supported way to own the dispatch is exactly the one the library
+  provides, and `Server::new(&app, ..)` / `listen_and_serve` are untouched.
+* **A `Router` with a single catch-all route** - `route()` needs a `PathDescription`, and
+  the only wildcard is `parse_path_segment`, which captures *one* segment. There is no
+  "match everything" path description, so this would have needed one route per depth.
+  Worse, it keeps the `Route<..>` layer that is the thing being removed.
+* **What was chosen**: `Router::from_service(Dispatch)` - one `PathRouterService` whose
+  `call_path_router_service` reads `parts.method()` and `parts.path()`, calls
+  `route_request(..) -> Reply`, then writes that one `Reply`. The router value is a ZST,
+  the route table is `route::ROUTES`, and the 404/405 split is `known_path` +
+  `route::find`, the same pair the simulator and the probe use.
+
+**What picoserve still does** (all of it, unchanged): the listener and accept loop, the
+four per-phase timeouts, parsing the request line and headers, buffering the body,
+`entire_body_fits_into_buffer` / `read_all`, measuring every reply with a counting writer,
+writing `Content-Type` / `Content-Length` / `Connection: close`, streaming the body, and
+draining an unread request body in `finalize()`. Nothing in `http.rs` parses or formats
+HTTP. The card's "do not write an HTTP parser" is met by construction.
+
+**Second decision, worth as much as the first: one reply type.** Nine nested routing
+layers were only half the shape. Each handler also returned its own
+`Result<Json<T>, ApiError>`, so picoserve monomorphised "measure it, write the headers,
+stream it" **seven** times, and the request path's frame held whichever one was in flight.
+`ApiBody` is now one enum with a hand-written untagged `Serialize` (each variant
+serialises exactly as the reply type it holds, so **nothing changes on the wire**), and
+`Reply` is `Page | Api(u16, ApiBody)` - two arms, one frame. `ApiError` is gone: it was a
+newtype over `ErrorReply` that existed only to carry an `IntoResponse`, and `Reply::error`
+does that now.
+
+Collapsing the seven writers to two was worth **8,000 bytes of flash and ~530 bytes of
+frame** on its own, measured as a separate build step before the percent-decoding fix.
+
+**Percent-decoding kept.** picoserve's `Route` matched paths through
+`PartialEq<&str> for Path`, which decodes as it goes, so `/api/v1/%73tatus` was
+`/api/v1/status`. A plain `&str ==` on `path.encoded()` would have quietly changed that,
+so `known_path()` canonicalises with picoserve's own comparison and everything downstream
+works on `route::ROUTES`'s `&'static str`. Costs 1,400 bytes of flash; keeps the card's
+"wire behaviour identical".
+
+**HEAD: a deliberate, documented change.** picoserve's generated method router answered
+`HEAD` by running the `GET` handler through a body-discarding `ResponseWriter`
+(`routing::head_method_util::ignore_body`). That module is private *and cannot be
+reimplemented outside picoserve*: `Response`'s `status_code` / `headers` / `body` fields
+are `pub(crate)`, so no foreign `ResponseWriter` can rebuild a response with an empty
+body, and `Json`'s `write_to`/`JsonBody` are private too, so the `Content` route to the
+same end is closed. The dispatch therefore answers `HEAD` the way `screeny-device-api`
+says to: `route::Method` is `Get` and `Post` and nothing else, and probe rule 26 says a
+verb this API has no method for is `405 method_not_allowed`. So `HEAD /` is now
+`405 {"error":"method_not_allowed"}` instead of `200` with headers and no body. It is
+consistent with rules 26 and 37 and with the error-shape rule, it is the only refusal
+shape on this server, and it deletes one of the two copies of the whole response path.
+Flagged as follow-up **236** if the owner wants RFC-conformant HEAD back - it would need
+an upstream change or a fork.
+
+### 2026-09-20 - built, measured on the host
+
+`.` `~/export-esp.sh` then `cargo build --release`, `tools/fw-size.sh`, and
+`xtensa-esp32-elf-objdump -d --demangle` (largest `entry a1, N` per symbol, **N parsed as
+hex above 255**, research 010's method).
+
+**`tools/fw-size.sh`, default build:**
+
+| | `.data` | `.bss` | `.stack` | image |
+|---|---|---|---|---|
+| before (fw 0.4.2, this worktree) | 58,388 | 105,136 | **33,072** | 957,185 |
+| after (fw 0.4.3) | 58,380 | 103,872 | **34,352** | 910,041 |
+| delta | -8 | **-1,264** | **+1,280** | **-47,144** |
+
+**`http_task::POOL`** (`nm -S`), the two workers' `.bss`:
+
+| | pool | per worker |
+|---|---|---|
+| before | 14,576 (0x38f0) | **7,288** |
+| after | 13,312 (0x3400) | **6,656** |
+| delta | **-1,264** | **-632** |
+
+`.stack` and `.bss` are the same 1,264 bytes seen from the two ends of one DRAM region -
+they are **not** two separate wins, and the report says so.
+
+**The request path, before:**
+
+| # | frame | bytes |
+|---|---|---|
+| 1 | `TaskStorage<http_task>::poll` (accept loop, `serve_and_shutdown` inlined) | 5,536 |
+| 2 | `Router::handle_request::poll` | 784 |
+| 3 | router `Either<..>::poll`, outer (settings/wifi/firmware/telemetry/status/page/404) | 2,416 |
+| 4 | router `Either<..>::poll`, inner tail (telemetry/status/page/404) | 2,192 |
+| 5 | `Result<Json<AcceptedReply>, ApiError>::write_to_with_state` | 1,040 |
+| 5' | same, `Json<()>` + `IgnoreBody` (the HEAD copy) | 1,104 |
+| 6 | `ApiError::write_to` / `get_page` | 464 / 608 |
+| | **deepest chain 1+2+3+5+6** | **~10,240** |
+
+**The request path, after:**
+
+| # | frame | bytes |
+|---|---|---|
+| 1 | `TaskStorage<http_task>::poll` | **4,400** |
+| 2 | `Router::handle_request::poll` (`Dispatch` and `Reply::write_to` inlined into it) | **1,712** |
+| 3 | `route_request::poll` (the `match`, all handler bodies unioned) | **1,488** |
+| 4 | `status()` / `apply_control()` / `get_wifi` | 368 / 208 / 176 |
+| | **deepest chain 1+2+3** | **~7,600** |
+
+Frames 2 and 3 are the whole router now. `Reply::write_to` and `route_request` are
+alternatives in time, not a chain - the reply is computed, the handler future is dropped,
+*then* it is written - so the worst case is 1+2+max(3, inlined writer), i.e. **7,600
+against 10,240: -2,640 bytes of depth.** (Research 010's warning applies: a column of
+objdump frames is an upper bound per function, not a call chain. The comparison is
+like-for-like, which is what makes it worth quoting.)
+
+Nine `call_method_handler` monomorphisations, two `Either::poll`s, seven
+`write_to_with_state`s and the whole `IgnoreBody` duplicate of the response path are gone
+from the disassembly. That is where the 47 KB of flash went.
