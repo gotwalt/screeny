@@ -6,9 +6,10 @@
 //! * [`Layout::QrAndName`] (007's layout A) - the version 2-L QR hard left
 //!   with its 3-pixel lit quiet zone in columns 0..=30, and the 32 columns
 //!   that are left carrying eight `FONT_4X6` characters per line.
-//! * [`Layout::Text`] (007's layout C) - no QR at all. This is not only the
-//!   fallback for a name a QR cannot carry; it is what a user whose phone
-//!   will not scan needs, so the two alternate on a slow timer.
+//! * [`Layout::Text`] (007's layout C) - no QR at all: the fallback for a
+//!   name a QR cannot carry. The two used to alternate every four seconds;
+//!   a code that keeps leaving the panel does not scan, and layout A names
+//!   the network for whoever joins by hand, so the machine no longer does.
 //! * [`Screen::Connected`] - the acquired IP address after a successful trial
 //!   join. The panel is the one channel that cannot be lost when the radio
 //!   switches channel, and Chrome on Android does not resolve `.local`, so
@@ -81,7 +82,7 @@ pub enum Screen<'a> {
     Portal {
         /// The soft-AP's name, always `screeny-<id>`.
         ssid: &'a str,
-        /// Which of the two alternating layouts this tick wants.
+        /// The QR layout, or the text one for a name no QR can carry.
         layout: Layout,
         /// Which `WIFI:` spelling the QR carries.
         form: UriForm,

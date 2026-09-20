@@ -127,7 +127,7 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// error shape (a verb the API has no method for is now `method_not_allowed`
 /// and not picoserve's plain text), a reboot without the magic word is
 /// `out_of_range`, and each route's own `max_request_len` is enforced.
-pub const FW_VERSION: &str = "0.5.0";
+pub const FW_VERSION: &str = "0.5.1";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

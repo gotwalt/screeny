@@ -24,7 +24,6 @@ const T: Timing = Timing {
     portal_retry_ms: 1_000,
     link_down_ms: 600,
     connected_screen_ms: 700,
-    screen_alternate_ms: 40,
 };
 
 fn cfg(stored: bool, builtin: bool) -> Config<'static> {
@@ -197,14 +196,21 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
     assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Connected);
     assert_eq!(p.trial().unwrap().ip, Some([192, 168, 7, 221]));
 
-    // The AP is still up while the page reports the new address.
+    // The AP is still up while the page reports the new address - and the
+    // trial is still *the answer*, or the page's reload gets the empty form
+    // back (which is what the owner's phone got on 2026-09-20).
     assert!(p.ap_up());
+    assert!(p.trial_is_current());
     assert!(p.step(Event::Tick, 600 + T.ap_grace_ms - 1).is_empty());
     assert!(p.ap_up());
+    assert!(p.trial_is_current());
 
     let a = p.step(Event::Tick, 600 + T.ap_grace_ms, );
     assert_eq!(a.as_slice(), [Action::DropAp]);
     assert!(!p.ap_up());
+    // With the AP gone nobody is on the portal, and the station speaks for
+    // itself again.
+    assert!(!p.trial_is_current());
     // And it is dropped exactly once.
     assert!(p.step(Event::Tick, 10_000).is_empty());
 }
@@ -615,7 +621,7 @@ fn every_timer_survives_the_49_day_wrap() {
     p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms));
     assert_eq!(p.state(), State::Joining);
 
-    // And the screen's alternation, which divides rather than subtracts.
+    // And the screen, at both ends of the clock.
     let (p, _) = booted(false, false);
     assert!(p.screen(u32::MAX).is_some());
     assert!(p.screen(0).is_some());
@@ -752,15 +758,16 @@ fn the_state_bytes_match_007_section_5_2() {
     assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
 }
 
-/// The panel: the two portal layouts alternate, and the acquired address is
-/// shown for `connected_screen_ms` after a successful trial and then handed
-/// back to the normal idle path.
+/// The panel: the QR layout **stays put** for as long as the portal is up (a
+/// code that alternates with a text screen does not scan: the owner's phone
+/// test, 2026-09-20), and the acquired address is shown for
+/// `connected_screen_ms` after a successful trial and then handed back to the
+/// normal idle path.
 #[test]
 fn the_panel_shows_the_portal_then_the_address_then_nothing() {
     use screeny_provision::{Layout, Screen};
 
     let (mut p, _) = booted(false, false);
-    // Alternating on the caller's clock, `screen_alternate_ms` each.
     let layout_at = |p: &Provisioner, t: u32| match p.screen(t) {
         Some(Screen::Portal { layout, ssid, .. }) => {
             assert_eq!(ssid, "screeny-4a00a4");
@@ -768,10 +775,9 @@ fn the_panel_shows_the_portal_then_the_address_then_nothing() {
         }
         other => panic!("expected the portal screen, got {other:?}"),
     };
-    assert_eq!(layout_at(&p, 0), Layout::QrAndName);
-    assert_eq!(layout_at(&p, T.screen_alternate_ms - 1), Layout::QrAndName);
-    assert_eq!(layout_at(&p, T.screen_alternate_ms), Layout::Text);
-    assert_eq!(layout_at(&p, T.screen_alternate_ms * 2), Layout::QrAndName);
+    for t in [0, 39, 40, 80, 3_999, 4_000, 8_000, 600_000, u32::MAX] {
+        assert_eq!(layout_at(&p, t), Layout::QrAndName, "t={t}");
+    }
 
     // The trial keeps the portal screen up: the phone is still on it.
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 100);
@@ -810,7 +816,7 @@ fn a_name_that_cannot_be_a_qr_gets_the_text_layout_every_time() {
         ..cfg(false, false)
     });
     p.step(Event::Boot, 0);
-    for t in 0..(T.screen_alternate_ms * 4) {
+    for t in [0, 40, 4_000, 8_000, u32::MAX] {
         match p.screen(t) {
             Some(Screen::Portal { layout, .. }) => assert_eq!(layout, Layout::Text),
             other => panic!("expected the portal screen, got {other:?}"),
@@ -924,7 +930,7 @@ fn an_online_origin_trial_is_not_provisioning() {
     assert_eq!(p.state(), State::Trial);
     assert_eq!(p.overlay_state(), None);
     assert!(p.screen(1_100).is_none());
-    assert!(p.screen(1_100 + T.screen_alternate_ms).is_none());
+    assert!(p.screen(1_100 + 4_000).is_none());
 
     // ...whereas a portal trial is, exactly as it always was.
     let (mut q, _) = booted(false, false);

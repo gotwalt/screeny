@@ -50,10 +50,11 @@ const ANIM_MS: u64 = 100;
 
 /// How often the portal screen is recomposed while it is up.
 ///
-/// Its content changes every [`screeny_provision::Timing::screen_alternate_ms`]
-/// (four seconds), so anything faster is wasted work - and this one is not
-/// free: it re-encodes a version 2-L QR each time. 250 ms keeps the layout
-/// swap looking instant without putting a QR encode inside every 20 ms tick.
+/// Its content only changes when the machine's state does (the layouts no
+/// longer alternate: a QR that keeps leaving the panel does not scan), so
+/// anything faster is wasted work - and this one is not free: it re-encodes a
+/// version 2-L QR each time. 250 ms keeps the change to the `connected`
+/// screen looking instant without putting a QR encode inside every 20 ms tick.
 const PORTAL_MS: u64 = 250;
 
 /// The frame socket's **transmit** buffer, and card 223's RAM lever.

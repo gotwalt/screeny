@@ -84,8 +84,6 @@ pub struct Timing {
     /// trial. The panel is the only channel that survives the radio changing
     /// channel, and Chrome on Android will not resolve `.local`.
     pub connected_screen_ms: u32,
-    /// How long each portal layout is shown before the other one.
-    pub screen_alternate_ms: u32,
 }
 
 impl Timing {
@@ -98,7 +96,6 @@ impl Timing {
         portal_retry_ms: 600_000,
         link_down_ms: 60_000,
         connected_screen_ms: 60_000,
-        screen_alternate_ms: 4_000,
     };
 }
 
@@ -518,20 +515,30 @@ impl Provisioner {
     /// [`wifi_state`](Self::wifi_state) reads `FAILED` - so the page that
     /// posted the credentials keeps being told they did not work, whatever the
     /// station reconnected to in the meantime.
+    ///
+    /// **And true in `Online` for as long as the AP's grace window runs.** A
+    /// trial that worked leaves `Trial` for `Online` at once, and the AP is
+    /// held up for [`Timing::ap_grace_ms`] for one reason: so the page on the
+    /// phone can reload and be told the new address. Without this the reload
+    /// got the empty form back, which reads as "that did not take" (the
+    /// owner's phone test, 2026-09-20: he posted the same pair twice).
     #[must_use]
     pub fn trial_is_current(&self) -> bool {
         self.trial.is_some()
-            && (matches!(self.state, State::Trial | State::Portal) || self.trial_failed_sticky)
+            && (matches!(self.state, State::Trial | State::Portal)
+                || self.trial_failed_sticky
+                || (self.state == State::Online && self.ap_up))
     }
 
     /// What the panel should show, or `None` when the panel belongs to the
     /// normal idle/stream path.
     ///
-    /// The two portal layouts alternate every
-    /// [`Timing::screen_alternate_ms`]; the caller drives that by passing the
-    /// clock, exactly as it drives every other timeout here. A name no
-    /// version 2-L code can carry never gets [`Layout::QrAndName`], so
-    /// [`crate::render`] cannot fail on what this returns.
+    /// The portal screen is [`Layout::QrAndName`] and **stays put**: the two
+    /// layouts used to alternate every four seconds, and a phone camera
+    /// cannot lock on to a code that keeps leaving (the owner's phone test,
+    /// 2026-09-20). [`Layout::Text`] is only the fallback for a name no
+    /// version 2-L code can carry, so [`crate::render`] cannot fail on what
+    /// this returns. `now_ms` times the `Connected` screen.
     #[must_use]
     pub fn screen(&self, now_ms: u32) -> Option<Screen<'_>> {
         match self.state {
@@ -539,11 +546,10 @@ impl Provisioner {
             // portal to point anybody at: the panel stays the stream's.
             State::Trial if self.trial_origin() == Some(TrialOrigin::Online) => None,
             State::Portal | State::Trial => {
-                let alternate = (now_ms / self.timing.screen_alternate_ms) % 2 == 1;
-                let layout = if alternate || !uri::fits(self.form, &self.ap_ssid) {
-                    Layout::Text
-                } else {
+                let layout = if uri::fits(self.form, &self.ap_ssid) {
                     Layout::QrAndName
+                } else {
+                    Layout::Text
                 };
                 Some(Screen::Portal {
                     ssid: &self.ap_ssid,

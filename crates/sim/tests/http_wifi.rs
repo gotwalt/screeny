@@ -40,7 +40,6 @@ fn quick_timing() -> WifiTiming {
         portal_retry_ms: 1_000,
         link_down_ms: 200,
         connected_screen_ms: 1_000,
-        screen_alternate_ms: 4_000,
     }
 }
 
@@ -554,27 +553,21 @@ fn in_the_portal_the_panel_is_the_provision_crates_own_screen() {
     let shown = sim.render_display();
 
     // Rebuild the same screen from `screeny_provision` alone and compare. The
-    // two layouts alternate on a timer, so whichever of them the device is
-    // showing, one of these two is it.
+    // QR layout stays put (the layouts no longer alternate: a code that keeps
+    // leaving the panel does not scan), so that is the one it must be.
     let mut a = [0u8; screeny_proto::NBYTES];
-    let mut b = [0u8; screeny_proto::NBYTES];
-    for (layout, buf) in [
-        (screeny_provision::Layout::QrAndName, &mut a),
-        (screeny_provision::Layout::Text, &mut b),
-    ] {
-        screeny_provision::render(
-            &screeny_provision::Screen::Portal {
-                ssid: ap,
-                layout,
-                form: screeny_provision::UriForm::NoPass,
-            },
-            buf,
-        )
-        .expect("the portal screen renders");
-    }
+    screeny_provision::render(
+        &screeny_provision::Screen::Portal {
+            ssid: ap,
+            layout: screeny_provision::Layout::QrAndName,
+            form: screeny_provision::UriForm::NoPass,
+        },
+        &mut a,
+    )
+    .expect("the portal screen renders");
     assert!(
-        shown[..] == a[..] || shown[..] == b[..],
-        "the panel is not one of screeny_provision's two portal layouts"
+        shown[..] == a[..],
+        "the panel is not screeny_provision's QR portal layout"
     );
     // ...and it is not the ordinary status screen.
     assert_ne!(shown[..], [0u8; screeny_proto::NBYTES][..]);
