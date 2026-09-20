@@ -75,14 +75,18 @@ pub const SLOT_LEN: u64 = 0x20_0000;
 /// The captive-portal answer's address, from `screeny_provision`.
 const PORTAL_IP: &str = screeny_provision::PORTAL_IP;
 
-/// The body of the captive-portal redirect.
+/// What a captive probe gets while the portal is up: the setup page itself.
 ///
-/// **Not decoration.** ESP-IDF's own example says iOS needs content in the
-/// response to detect a portal, and Android classifies a `Content-Length <= 4`
-/// answer as *failed* rather than as a portal (research 007 section 4.2).
-const REDIRECT_BODY: &str = concat!(
+/// A stand-in for the firmware's real form, which the simulator deliberately
+/// does not serve (`docs/design/device-web.md`, decision 10) - what matters
+/// here is the *answer*, not the markup. **The body is not decoration.**
+/// ESP-IDF's own example says iOS needs content in the response to detect a
+/// portal, and Android classifies a `Content-Length <= 4` answer as *failed*
+/// rather than as a portal (research 007 section 4.2).
+const PORTAL_PAGE: &str = concat!(
     "<html><head><title>screeny setup</title></head><body>",
-    "<a href=\"http://192.168.4.1/\">Open the screeny setup page</a>",
+    "<h1>screeny setup</h1>",
+    "<p>This is the simulator standing in for the panel's setup page.</p>",
     "</body></html>\n"
 );
 
@@ -260,8 +264,8 @@ pub(crate) fn wants_stream() -> Arc<WantsStream> {
 fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> Response {
     // The captive-portal catch-all comes first, before routing: research 007
     // section 4.3's rule is about the `Host`, not about the path, and
-    // Microsoft's portal guidance is explicit that a portal must not redirect
-    // some requests and drop others.
+    // Microsoft's portal guidance is explicit that a portal must not answer
+    // some probes and drop others.
     if !host_is_ours(head.host.as_deref(), shared.instance()) {
         let in_portal = {
             let core = shared.core().lock().unwrap();
@@ -271,7 +275,13 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
             )
         };
         return if in_portal {
-            Response::redirect(&format!("http://{PORTAL_IP}/"), REDIRECT_BODY)
+            // **The setup page itself, `200`, never a `302` to it**, which is
+            // what fw 0.5.1 does after the owner's phone test (card 223's Log,
+            // finding 3): a redirect made iOS open a *further* connection, and
+            // smoltcp has no backlog, so the SYN was refused and iOS - unlike
+            // macOS - does not retry one. `Cache-Control: no-store` is on
+            // every response this server writes.
+            Response::html(200, PORTAL_PAGE)
         } else {
             // Not provisioning: there is no portal to send anybody to, so the
             // honest answer is that the simulator does not serve that host.

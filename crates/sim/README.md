@@ -140,16 +140,22 @@ Three things the simulator does **not** pretend about:
 
 ### The captive-portal catch-all
 
-A request whose `Host` is not the device's own gets research 007 section 4.3's
-answer: while the portal is up, `302` to `http://192.168.4.1/` **with a
-non-empty body** (iOS needs content to pop the sheet; Android calls a
-`Content-Length <= 4` answer a failure rather than a portal); otherwise `404`.
-The rule is about the shape of the `Host` - the portal IP, any bare IP
-literal, `localhost`, `<instance>.local` - and no probe domain is named
-anywhere in the code.
+A request whose `Host` is not the device's own gets what fw 0.5.1 answers:
+while the portal is up, **the setup page itself - `200`, `text/html`,
+`Cache-Control: no-store`, no `Location`** - and otherwise `404`. It is not a
+`302`: the owner's phone test (card 223's Log, finding 3) found that the
+redirect made iOS open a further connection, which smoltcp - with no backlog -
+refused, and iOS does not retry a refused connection. The body is non-empty
+because iOS needs content to pop the sheet and Android calls a
+`Content-Length <= 4` answer a failure rather than a portal. The rule is about
+the shape of the `Host` - the portal IP, any bare IP literal, `localhost`,
+`<instance>.local` - and no probe domain is named anywhere in the code.
+
+The page is a stand-in, not the firmware's form: the simulator does not serve
+that (`docs/design/device-web.md`, decision 10).
 
 ```
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+curl -s -o /dev/null -w '%{http_code}\n' \
      -H 'Host: captive.apple.com' localhost:8080/hotspot-detect.html
 ```
 

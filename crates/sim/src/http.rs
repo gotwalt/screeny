@@ -109,18 +109,6 @@ impl Response {
         }
     }
 
-    /// A redirect with a body, which is the only kind a captive portal may
-    /// send (research 007 section 4.3).
-    #[must_use]
-    pub fn redirect(location: &str, body: &str) -> Self {
-        Response {
-            status: 302,
-            content_type: "text/html; charset=utf-8",
-            body: body.as_bytes().to_vec(),
-            headers: vec![("Location", location.to_string())],
-        }
-    }
-
     /// The reason phrase for the status. Only the codes this API uses are
     /// named; anything else gets a generic one, which is legal and which no
     /// client reads.
@@ -129,7 +117,6 @@ impl Response {
         match self.status {
             200 => "OK",
             204 => "No Content",
-            302 => "Found",
             400 => "Bad Request",
             401 => "Unauthorized",
             403 => "Forbidden",
@@ -465,7 +452,6 @@ mod tests {
     fn a_response_names_the_statuses_this_api_uses() {
         for (status, reason) in [
             (200, "OK"),
-            (302, "Found"),
             (400, "Bad Request"),
             (404, "Not Found"),
             (405, "Method Not Allowed"),
@@ -475,16 +461,5 @@ mod tests {
         ] {
             assert_eq!(Response::json(status, Vec::new()).reason(), reason);
         }
-    }
-
-    #[test]
-    fn a_redirect_always_carries_a_body() {
-        // Research 007 section 4.3: iOS needs content to pop the sheet, and
-        // Android calls a `Content-Length <= 4` answer a failure, not a
-        // portal. An empty redirect would satisfy neither.
-        let r = Response::redirect("http://192.168.4.1/", "<html>go to the portal</html>");
-        assert_eq!(r.status, 302);
-        assert!(r.body.len() > 4);
-        assert_eq!(r.headers[0].0, "Location");
     }
 }

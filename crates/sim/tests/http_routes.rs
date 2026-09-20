@@ -396,25 +396,35 @@ const PROBES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn in_the_portal_a_foreign_host_gets_a_redirect_with_a_body() {
+fn in_the_portal_a_foreign_host_gets_the_setup_page_not_a_redirect() {
+    // fw 0.5.1's answer, after the owner's phone test (card 223's Log, finding
+    // 3): the page itself, so the captive sheet needs no further connection.
     let dev = portal_device();
     let addr = api(&dev);
     for (host, path) in PROBES {
         let res = http::get_with_host(addr, path, host);
-        assert_eq!(res.status, 302, "{host}{path}");
-        assert_eq!(
-            res.header("location"),
-            Some("http://192.168.4.1/"),
-            "{host}{path}"
+        assert_eq!(res.status, 200, "{host}{path}");
+        assert_eq!(res.header("location"), None, "{host}{path}: a redirect");
+        assert!(
+            res.header("content-type")
+                .is_some_and(|c| c.starts_with("text/html")),
+            "{host}{path}: {:?}",
+            res.header("content-type")
         );
         // Not decoration: iOS needs content to pop the sheet, and Android
         // calls a Content-Length <= 4 answer a *failure* rather than a
         // portal (research 007 section 4.2).
-        assert!(res.body.len() > 4, "{host}{path}: empty redirect body");
+        assert!(res.body.len() > 4, "{host}{path}: empty page");
         assert_eq!(
             res.header("content-length").map(str::parse::<usize>),
             Some(Ok(res.body.len())),
             "{host}{path}: the length has to be there for Android to read it"
+        );
+        // The sheet must not cache the setup page: it changes on every post.
+        assert_eq!(
+            res.header("cache-control"),
+            Some("no-store"),
+            "{host}{path}"
         );
     }
     dev.shutdown();
@@ -422,7 +432,7 @@ fn in_the_portal_a_foreign_host_gets_a_redirect_with_a_body() {
 
 #[test]
 fn off_the_portal_a_foreign_host_is_simply_not_found() {
-    // There is no portal to send anybody to, so a redirect would be a lie.
+    // There is no portal, so a setup page would be a lie.
     let dev = online_device();
     let addr = api(&dev);
     for (host, path) in PROBES {
@@ -434,7 +444,7 @@ fn off_the_portal_a_foreign_host_is_simply_not_found() {
 }
 
 #[test]
-fn our_own_hosts_are_never_redirected_even_in_the_portal() {
+fn our_own_hosts_never_get_the_catch_all_even_in_the_portal() {
     let dev = portal_device();
     let addr = api(&dev);
     for host in [
@@ -444,7 +454,14 @@ fn our_own_hosts_are_never_redirected_even_in_the_portal() {
         format!("{}.local", screeny_sim::DEFAULT_INSTANCE),
     ] {
         let res = http::get_with_host(addr, route::STATUS, &host);
-        assert_eq!(res.status, 200, "{host} was redirected");
+        assert_eq!(res.status, 200, "{host}");
+        // Both answers are a 200 now, so the *body* is what tells them apart:
+        // the real route, not the setup page standing in for it.
+        assert_eq!(
+            res.header("content-type"),
+            Some("application/json"),
+            "{host} got the catch-all"
+        );
     }
     dev.shutdown();
 }
@@ -559,7 +576,7 @@ fn the_http_server_can_be_turned_off() {
 }
 
 #[test]
-fn a_request_with_no_host_header_is_served_rather_than_redirected() {
+fn a_request_with_no_host_header_is_served_rather_than_caught() {
     // HTTP/1.0, or a script on a raw socket. Not a captive-portal probe.
     let dev = portal_device();
     let addr = api(&dev);
@@ -567,7 +584,9 @@ fn a_request_with_no_host_header_is_served_rather_than_redirected() {
         addr,
         format!("GET {} HTTP/1.1\r\nConnection: close\r\n\r\n", route::STATUS).as_bytes(),
     );
-    assert_eq!(http::parse(&wire).status, 200);
+    let res = http::parse(&wire);
+    assert_eq!(res.status, 200);
+    assert_eq!(res.header("content-type"), Some("application/json"));
     dev.shutdown();
 }
 
