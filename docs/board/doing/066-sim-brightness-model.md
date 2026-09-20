@@ -4,6 +4,8 @@ title: The simulator dims the panel the way the device used to, not the way it d
 type: build
 hardware: no
 depends: [016, 020]
+owner: worker-066
+branch: card/066-sim-brightness-model
 ---
 
 ## Goal
