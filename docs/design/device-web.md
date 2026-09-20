@@ -150,6 +150,25 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   use is unmeasured (~45 of 96 KB is used in station mode). Card 220 fixes the first
   and measures the second before anything else is built.
 
+Refinements made while building the state machine (card 221, `crates/provision`; its
+README has the diagram and the action list) - these are now the design:
+
+- Empty store + compile-time credentials: join with the built-ins, and success commits
+  them to the store (that is the seeding of decision 6). Neither present: portal.
+- A trial join fails **immediately** on an authentication error (a wrong password is
+  deterministic); other reasons retry up to 3 times. Boot-time joins always take 3.
+- The machine owns a 15 s per-attempt deadline (3 x 15 s = the 45 s), so a silent radio
+  still advances.
+- The AP stays up during the 10-minute retry; it is only ever dropped 30 s after a
+  successful join (uniformly, not just after a trial). A suppressed retry does not
+  reset its timer: it fires on the first tick after the last phone leaves.
+- A second credentials POST during a trial cancels and restarts with the new values.
+- After a button wipe `GET_WIFI` reads `DISCONNECTED`, not `FAILED`: a wipe is not a
+  failure.
+- The machine never sees a PSK: events carry the SSID only, and the caller holds the
+  credential until `CommitCredentials`.
+- Footprint: no statics; `Provisioner` 168 B, ~400 B of stack at peak in `render`.
+
 Orchestrator's defaults for card 201's open questions (the owner can overrule): the
 portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
 **does answer while a sender is streaming**, and a bench card proves it costs no frame;
@@ -162,11 +181,11 @@ software session before that change).
 | card | what | hardware |
 |---|---|---|
 | 210 | partition table + `tools/fw-run.sh` flags - **done**, on the device, conformance 60/0/4 | yes (orchestrator) |
-| 211 | `crates/settings`, host-tested against the real map (in flight) | no |
+| 211 | `crates/settings`, host-tested against the real map - **done** (42 tests) | no |
 | 220 | framebuffers off core 0's stack; APSTA heap measured on the device (in flight) - **gates everything below** | yes |
-| 203 | bench: confirm GPIO15 with the probe, owner pressing; set `BUTTON_GPIO` | yes (orchestrator + owner) |
+| 203 | bench: GPIO15 confirmed with the probe, owner pressing - **done** | yes (orchestrator + owner) |
 | 212 | firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
-| 221 | `crates/provision`: the join/portal state machine as a pure function, the `WIFI:` URI builder, the portal-screen renderer (QR + text); host-tested | no |
+| 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
 | 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi states (delivers 081) | no |
