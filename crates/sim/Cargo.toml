@@ -26,3 +26,8 @@ minifb = { version = "0.28.0", optional = true }
 [dev-dependencies]
 # The CLI test reads back the PNGs the binary wrote.
 png = "0.18.1"
+# Card 080: the shared sender, the section-4 encoders and the wire-level
+# conformance suite. The probe's library half depends on `screeny-proto` and
+# nothing else, so this is not a cycle - and `tests/conformance.rs` runs the
+# whole suite against an in-process simulator.
+screeny-probe = { path = "../probe" }

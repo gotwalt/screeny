@@ -36,6 +36,13 @@ impl Control {
         Ok(Control { sock, next_id: 1 })
     }
 
+    /// [`connect`](Self::connect), panicking. For integration tests, where
+    /// binding an ephemeral loopback socket cannot plausibly fail and an
+    /// `unwrap` at every call site is noise.
+    pub fn new(addr: SocketAddr) -> Self {
+        Self::connect(addr).expect("bind control")
+    }
+
     /// This client's address.
     pub fn local(&self) -> io::Result<SocketAddr> {
         self.sock.local_addr()

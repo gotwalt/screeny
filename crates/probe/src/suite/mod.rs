@@ -497,7 +497,10 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     match guard.inner.apply() {
         Ok(t) => println!(
             "restored: brightness {} (found {}), idle mode {}, lock released, state {}",
-            t.brightness, found.brightness, opts.restore_idle, t.state
+            t.brightness,
+            found.brightness,
+            opts.restore_idle,
+            crate::state_name(t.state)
         ),
         Err(e) => {
             println!("RESTORE FAILED: {e}");
