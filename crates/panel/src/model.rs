@@ -144,27 +144,69 @@ pub const NOMINAL: Panel = Panel::new(6);
 /// per received frame. **Codec selection scores against this** (card 002,
 /// `enc/hybrid.rs`), and since card 030 it is also what the device does.
 pub const TEMPORAL: Panel = Panel::dithered(6, 5);
-/// Today's dimmed behaviour: brightness is taken out of bit depth.
+/// What dimming used to cost, before card 020: brightness scaled the pixel
+/// values, so a 30/255 cap left a 6-bit channel using values 0-7. **The device
+/// has not behaved like this since card 020** - it dims the output-enable
+/// window instead (see [`oe_slots`]) and keeps all six bits at every
+/// brightness. Kept as the name of the loss, for `lab`'s comparison tables and
+/// for anyone reading the old research.
 pub const DIMMED: Panel = Panel::new(3);
 /// A dim room in the art brief's terms: half the levels (brief section 2.1).
 /// Every piece is checked at 32 levels as well as at 64.
 pub const DIM: Panel = Panel::levels(32);
-/// Reference, and the ceiling if the driver ever gets OE-duty brightness.
+/// Reference: 8 bitplanes. More depth than this panel has at any brightness.
 pub const DEEP: Panel = Panel::new(8);
+
+// ---------------------------------------------------------------------------
+// Output-enable dimming: how the device gets darker (card 020)
+// ---------------------------------------------------------------------------
+
+/// Hard ceiling on output-enable duty, in pixel-clock slots per 64-slot scan
+/// row, mirroring `firmware/src/display.rs`'s `MAX_OE_SLOTS`. 25/64 is 39%
+/// duty, Tidbyt's own documented maximum, and it is the USB power budget
+/// rather than a tuning knob.
+pub const MAX_OE_SLOTS: u32 = 25;
+
+/// Runtime brightness 0..=255 -> lit output-enable slots, exactly
+/// `firmware::display::slots_for`.
+///
+/// The real resolution of the brightness control is [`MAX_OE_SLOTS`] steps,
+/// not 256: the panel is lit for a whole number of pixel clocks or not at all,
+/// so e.g. 129 and 130 are the same picture. Modelling that is the difference
+/// between a preview that predicts the device and one that is merely close.
+#[must_use]
+pub const fn oe_slots(brightness: u8) -> u32 {
+    (brightness as u32 * MAX_OE_SLOTS + 127) / 255
+}
+
+/// The fraction of full light the panel emits at `brightness`.
+///
+/// Linear in duty and therefore linear in light, and applied *after*
+/// quantisation: dimming costs light, not bit depth.
+#[must_use]
+pub fn oe_light(brightness: u8) -> f32 {
+    oe_slots(brightness) as f32 / MAX_OE_SLOTS as f32
+}
 
 // ---------------------------------------------------------------------------
 // Brightness
 // ---------------------------------------------------------------------------
 
-/// The 256-entry lookup a receiver would burn into flash: the panel model of
-/// `docs/design/generative-art-brief.md` section 5, with brightness applied in
-/// linear light because that is where a duty cycle lives.
+/// The 256-entry lookup that turns a sent sRGB8 code into the sRGB8 code a
+/// preview should draw: the panel model of
+/// `docs/design/generative-art-brief.md` section 5, at one brightness.
 ///
 /// One per brightness value, rebuilt whenever brightness or the panel changes,
-/// which on a real device is only when someone sends `SET_BRIGHTNESS`. The
-/// firmware does the same thing with an integer gamma/brightness LUT, and does
-/// it with the same loss: scaling before quantising is what card 020 changed
-/// on the device, so this models the panel as `crates/sim` has always shown it.
+/// which on a real device is only when someone sends `SET_BRIGHTNESS`.
+///
+/// **Order matters, and this is the whole of card 066.** The device quantises
+/// at full depth - `firmware/src/gamma.rs`'s table is the sRGB EOTF and
+/// nothing else, with brightness deliberately kept out of it - and then dims
+/// by shortening the output-enable window ([`oe_slots`], card 020). So
+/// brightness costs light and not bit depth: [`Lut::new`] quantises first and
+/// scales the *emitted* light afterwards, and [`Lut::distinct_levels`] does
+/// not fall as the panel gets dimmer. [`Lut::value_scaled`] is the other
+/// order, which is what the device did before card 020.
 #[derive(Debug, Clone)]
 pub struct Lut {
     table: [u8; 256],
@@ -173,21 +215,57 @@ pub struct Lut {
 }
 
 impl Lut {
-    /// Build the lookup for one brightness.
+    /// Build the lookup for one brightness, the way the device behaves:
+    /// quantise to a duty step, then emit that step for a shorter window.
     #[must_use]
     pub fn new(panel: Panel, brightness: u8) -> Self {
+        let light = oe_light(brightness);
+        Self::build(panel, brightness, |v| {
+            // The panel has a fixed number of duty steps per channel and
+            // nothing in between; round to the nearest one. The output-enable
+            // window then scales every step by the same factor, which moves no
+            // code onto another code's step.
+            panel.quant_lin(SRGB_TO_LIN[v]) * light
+        })
+    }
+
+    /// The pre-card-020 model: scale the value, *then* quantise, so dimming
+    /// spends bit depth. The device did this while it dimmed by scaling pixel
+    /// values into the framebuffer, and a receiver built on a driver without
+    /// output-enable control would still have to.
+    ///
+    /// Nothing renders through it today - the simulator uses [`Lut::new`] -
+    /// but it is what [`DIMMED`] describes, and keeping it is what lets a test
+    /// show how much banding the old model invented.
+    #[must_use]
+    pub fn value_scaled(panel: Panel, brightness: u8) -> Self {
         let scale = brightness as f32 / 255.0;
+        Self::build(panel, brightness, |v| panel.quant_lin(SRGB_TO_LIN[v] * scale))
+    }
+
+    fn build(panel: Panel, brightness: u8, emit: impl Fn(usize) -> f32) -> Self {
         let mut table = [0u8; 256];
         for (v, slot) in table.iter_mut().enumerate() {
-            // The panel has a fixed number of duty steps per channel and
-            // nothing in between; round to the nearest one.
-            *slot = lin_to_srgb8(panel.quant_lin(SRGB_TO_LIN[v] * scale));
+            *slot = lin_to_srgb8(emit(v));
         }
         Lut {
             table,
             panel,
             brightness,
         }
+    }
+
+    /// `(distinct codes this lookup can output, how many of the 256 inputs
+    /// land on black)` - [`Panel::distinct_levels`] with brightness applied.
+    ///
+    /// Counted in the 8-bit codes a preview actually draws, so at a low enough
+    /// brightness two duty steps can round onto one screen colour. That is the
+    /// preview window running out of resolution, not the panel banding.
+    #[must_use]
+    pub fn distinct_levels(&self) -> (usize, usize) {
+        let seen: std::collections::BTreeSet<u8> = self.table.iter().copied().collect();
+        let crushed = self.table.iter().filter(|&&v| v == 0).count();
+        (seen.len(), crushed)
     }
 
     /// True if this lookup is still the right one.
@@ -262,6 +340,54 @@ mod tests {
         };
         assert_eq!(n(&a), 32);
         assert_eq!(n(&b), 64);
+    }
+
+    /// Card 066. The device dims by shortening the output-enable window, so
+    /// every code keeps its own duty step and only the light goes away. The
+    /// simulator used to scale before quantising and so predicted banding the
+    /// panel does not have - at the bench cap of 160, exactly where it shows.
+    #[test]
+    fn dimming_costs_light_not_bit_depth() {
+        let full = Lut::new(NOMINAL, 255);
+        let (levels, _) = full.distinct_levels();
+        assert_eq!(levels, 64, "64 duty steps at full brightness");
+        for b in [160u8, 128] {
+            let dim = Lut::new(NOMINAL, b);
+            assert_eq!(
+                dim.distinct_levels(),
+                full.distinct_levels(),
+                "brightness {b} keeps every duty step"
+            );
+            assert!(dim.map(255) < full.map(255), "brightness {b} is dimmer");
+        }
+    }
+
+    /// And the model it replaced did not: this is the difference card 066 is
+    /// about, kept as a number rather than a claim.
+    #[test]
+    fn the_pre_card_020_model_spent_depth_on_brightness() {
+        let (new, _) = Lut::new(NOMINAL, 128).distinct_levels();
+        let (old, _) = Lut::value_scaled(NOMINAL, 128).distinct_levels();
+        assert_eq!(new, 64);
+        assert_eq!(old, 33, "scaling before quantising halves the steps");
+    }
+
+    /// `oe_slots` is `firmware::display::slots_for` and has to stay that way;
+    /// the comments quoted here are the firmware's own.
+    #[test]
+    fn oe_slots_is_the_firmwares_slots_for() {
+        assert_eq!(oe_slots(0), 0);
+        assert_eq!(oe_slots(255), MAX_OE_SLOTS);
+        assert_eq!(oe_slots(96), 9, "the firmware's DEFAULT_BRIGHTNESS is 9 slots");
+        assert_eq!(oe_light(255), 1.0);
+        // The control has 25 steps, not 256: neighbouring brightnesses are
+        // often the same picture, on the device and now in the preview.
+        assert_eq!(oe_slots(129), oe_slots(130));
+        let a = Lut::new(NOMINAL, 129);
+        let b = Lut::new(NOMINAL, 130);
+        for v in 0..=255u8 {
+            assert_eq!(a.map(v), b.map(v), "same OE window, same picture at {v}");
+        }
     }
 
     #[test]
