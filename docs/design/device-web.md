@@ -3,7 +3,7 @@
 **Status (2026-09-20, late): research done (200-202); on the device: the partition
 table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
 strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
-(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); in flight: 222 (HTTP on the LAN, hardware) and 232 (state-machine and API refinements).** This file is the
+(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); in flight: 227 (RAM levers, hardware) and 232 (state-machine and API refinements).** This file is the
 source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
 Claude session): decisions, what the research settled, and the build order at the end.
 
@@ -241,7 +241,8 @@ Studio all depend on - `crates/proto` is not touched.
 | 212 | **done, on the device (fw 0.3.0)** - firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
-| 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
+| 222 | **done, on the device (fw 0.4.0)**: http://192.168.7.221/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
+| 227 | (in flight, hardware) RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | (in flight) from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
