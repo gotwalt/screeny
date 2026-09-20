@@ -50,6 +50,10 @@ next to what the UDP telemetry already gives it.
   the link. Rule until then: a non-null `ip` means connected; show "last WiFi change failed"
   only as a note, never as a fault. After 223 it means the link (connected / connecting /
   disconnected) and the attempt's outcome lives in `GET /api/v1/wifi`.
+- 2026-09-20: `screeny-probe --addr HOST http --list` (firmware card 228) documents, rule by
+  rule, what a conforming device HTTP server does (38 rules, run against the sim in
+  `crates/sim/tests/http_conformance.rs`); read it before writing the client. The sim's
+  `/api/v1/status` now reports the *link* in `wifi_state`, as the design says.
 - **The status payload contains the real WiFi SSID.** Show it on the owner's page; never write
   it into a tracked file, a fixture, a log line, a card or a screenshot (`CLAUDE.md`). Tests
   use the simulator, whose SSID is a dummy.
