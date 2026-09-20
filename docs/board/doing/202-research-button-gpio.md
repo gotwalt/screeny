@@ -97,3 +97,56 @@ check, or the doc says exactly why it cannot be and the probe binary builds and 
 ready to settle it. The normal firmware build is untouched.
 
 ## Log
+
+### 2026-09-19 — static analysis of the stock image: it is GPIO15
+
+Worked in the session scratch dir, never in the tree. Steps:
+
+- `otadata` at 0x e000: slot0 `ota_seq=11` (CRC valid), slot1 `ota_seq=10` (CRC valid),
+  both `ota_state=VALID`. Boot slot = `(11-1) % 2 = 0` → **app0 at 0x10000 is the
+  running app**. `esptool image-info`: project `tidbyt`, version 33426, built
+  Feb 20 2024, ESP-IDF 5.1.2. app1 is version 35369, Aug 6 2024 — newer build,
+  older ota_seq. Analysed both.
+- Surprise worth recording: the flash MMU maps the DROM/IROM segments 8 bytes
+  lower than the load addresses in the segment headers. Empirically (scored 5410
+  candidate pointers against string starts) `DROM VA = 0x3f400000 + app_file_offset`
+  and `IROM VA = 0x400d0000 + app_file_offset - 0x60000`. My first pass used the
+  header addresses, found zero references to any string, and looked like a dead end.
+- `tidbyt/button` is at DROM 0x3f402a7c (app0). One literal referencing it:
+  IROM 0x400d0538. Xtensa `.literal` sections are all collected at the head of
+  `.flash.text`, so the whole module's pool sits at 0x400d0538..0x400d0548.
+- Decoded every `l32r` in IROM/IRAM by hand to find the users of that pool, then
+  disassembled with `xtensa-esp32-elf-objdump -D -b binary -m xtensa`.
+
+**The decisive artefact** is a 24-byte `gpio_config_t` template in DROM at
+0x3f402ac0 (app0) / 0x3f402ce8 (app1) — byte-for-byte identical in both builds:
+
+    00 80 00 00 00 00 00 00 | 01 00 00 00 | 01 00 00 00 | 00 00 00 00 | 03 00 00 00
+    pin_bit_mask = 0x8000 (GPIO15), mode = GPIO_MODE_INPUT,
+    pull_up_en = 1, pull_down_en = 0, intr_type = GPIO_INTR_ANYEDGE
+
+`tidbyt_button_init` (app0 0x400d57a0) `memcpy`s those 24 bytes onto its stack and
+passes them to `gpio_config`, and the press test (0x400d57c0) is
+`gpio_get_level(15) == 0` — verified by disassembling the callee at 0x4012182c and
+seeing it index `GPIO_IN_REG` at GPIO base + 0x3c. Scanning all of DROM for
+plausible input-mode `gpio_config_t` structs turns up exactly one isolated hit:
+GPIO15.
+
+Stock flow, from the `tidbyt/boot` function at 0x400d3838: timers → button init →
+if pressed at boot, WARN "Reset button is being held. Keep holding for 5 seconds"
+(`%d` is a literal `movi.n a15, 5`), poll until either release (WARN "Reset button
+released. Reset sequence aborted.") or the uptime double reaches 5 000 000 µs
+(literal 0x415312d0_00000000 = 5e6 as an IEEE-754 double), then WARN "Erasing NVS."
+and `nvs_flash_erase`. Runtime presses go through `gpio_isr_handler_add` (a per-pin
+callback table at 0x400d0850) into a handler that delays 100 ms, re-reads the pin,
+and only then logs "reset button event pressed" — a 100 ms software debounce.
+
+Web research (a parallel search) landed on the same pin independently, from a stock
+boot log a user posted on Tidbyt's forum: `GPIO[15]| InputEn: 1| OutputEn: 0|
+Pullup: 1| Pulldown: 0| Intr:3` at the exact millisecond as `Reset button is being
+held`. Two independent lines of evidence, same answer. URLs are in the write-up.
+
+Conflict to flag for the orchestrator: `firmware/src/tidbyt.rs` calls GPIO15
+`BOARD_ID_ADC_B`. That is also true — but only in app1 (Aug 2024), which has
+`Couldn't adc read IO13` **and** `Couldn't adc read IO15`. app0, the running image,
+has neither string. So GPIO15 is dual-purpose on this board. Detail in the doc.
