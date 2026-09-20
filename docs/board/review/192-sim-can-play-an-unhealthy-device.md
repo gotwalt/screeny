@@ -123,7 +123,9 @@ nothing else about the device.
 
 Both conformance suites are **unmodified and green**: `tests/conformance.rs` (1 test, the
 64-rule UDP suite) and `tests/http_conformance.rs` (5 tests, the 38-rule HTTP suite).
-`cargo clippy -p screeny-sim --all-targets` says nothing.
+`cargo clippy -p screeny-sim --all-targets` says nothing. The whole workspace - a plain
+`cargo test` from the root, every crate and every doc-test - passed first time, including
+`crates/screeny`'s soak and pacing tests, with no re-run needed.
 
 **Not done here, on purpose.** The acceptance also asks for a screenshot of the Studio's
 device page drawing the three rows in the fault tone. That needs the Studio and a browser
