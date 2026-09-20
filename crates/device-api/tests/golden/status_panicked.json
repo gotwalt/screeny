@@ -3,8 +3,8 @@
   "id": "4a00a4",
   "name": "Studio panel",
   "fw": "0.2.0",
-  "boot_id": 3054198966,
-  "uptime_ms": 3600000,
+  "boot_id": 2244121910,
+  "uptime_ms": 42000,
   "heap_used": 46112,
   "heap_size": 98304,
   "stack_free": 14016,
@@ -18,9 +18,15 @@
   "portal": false,
   "fw_slot": "ota_0",
   "fw_state": "valid",
-  "reset_reason": "power_on",
+  "reset_reason": "software",
   "store_errors": 0,
-  "boot_count": 1,
-  "panic_count": 0,
-  "last_panic": null
+  "boot_count": 2,
+  "panic_count": 1,
+  "last_panic": {
+    "uptime_ms": 94312,
+    "boot": 1,
+    "file": "net.rs",
+    "line": 321,
+    "consecutive": 1
+  }
 }

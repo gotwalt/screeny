@@ -132,7 +132,7 @@ impl Mutating for SettingsRequest {
 
 /// `POST /api/v1/reboot`: `{"confirm":"RBOO"}`.
 ///
-/// The magic word is there for the same reason `REBOOT`'s is (spec 6.9): a
+/// The magic word is there for the same reason `REBOOT`'s is (spec 6.3): a
 /// stray POST from a crawler, a prefetcher or a captive-portal probe must not
 /// reboot the panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

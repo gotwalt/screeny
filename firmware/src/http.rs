@@ -50,8 +50,9 @@
 //! core does the work and hands back no datagram.
 //!
 //! Out of scope here and named where they belong: the soft-AP, DHCP, DNS and
-//! the captive-portal catch-all (card 223), `GET /api/v1/networks` (also 223,
-//! it needs the scan), and `POST /api/v1/firmware` (card 240). The last two
+//! the captive-portal catch-all (card 223), `GET /api/v1/networks` (card 229,
+//! **dropped** by device-web decision 10 - the route stays and keeps answering
+//! `unavailable`), and `POST /api/v1/firmware` (card 240). The last two
 //! answer `ErrorCode::Unavailable` today rather than 404, because the route
 //! exists and the device is simply not able to serve it yet.
 
@@ -70,7 +71,7 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    AcceptedReply, PanicRecord, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
     IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
@@ -216,44 +217,39 @@ const FW_UNKNOWN: u8 = 0xff;
 ///
 /// Once rather than per request, for three reasons: nothing can change it
 /// before card 241 ships the confirm/revert state machine; it needs the
-/// `STORE` lock and a 3 KB partition-table buffer, neither of which belongs in
-/// an HTTP handler; and a status request should not touch flash.
+/// `STORE` lock, which does not belong in an HTTP handler; and a status request
+/// should not touch flash.
 ///
 /// Call it from `main` after [`crate::store::init`] and before the panel is
-/// lit - it is a read, and at that point core 1 is not running, so nothing is
+/// lit: it is a read, and at that point core 1 is not running, so nothing is
 /// parked.
+///
+/// **It no longer reads the partition table itself** (card 243). It used to,
+/// and the 3 KB buffer that took stayed alive underneath `Ota::new` and
+/// `current_ota_state` - i.e. underneath esp-storage's read path, the deepest
+/// chain the boot path has. `store::read_partitions` reads the table once for
+/// everybody and keeps the 32-byte entries beside the flash handle; what is
+/// left here is two flash reads of `otadata` with nothing large below them.
 pub async fn read_fw_health() {
     use esp_bootloader_esp_idf::ota::{Ota, OtaImageState};
-    use esp_bootloader_esp_idf::partitions::{
-        self, AppPartitionSubType, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
-    };
+    use esp_bootloader_esp_idf::partitions::AppPartitionSubType;
 
     let mut guard = store::STORE.lock().await;
     let Some(f) = guard.as_mut() else {
         warn!("http: no flash handle - fw_slot and fw_state report unknown");
         return;
     };
+    let parts = f.parts();
     let flash = f.raw();
-
-    // 3 KB, on `main`'s stack, once, before the framebuffers are lit and long
-    // before any task future exists. It is deliberately not a static.
-    let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let table = match partitions::read_partition_table(flash, &mut buf) {
-        Ok(t) => t,
-        Err(e) => {
-            warn!("http: partition table unreadable ({:?}) - fw health is unknown", e);
-            return;
-        }
-    };
 
     // The *booted* partition, not otadata's selection: after a rollback the
     // bootloader may run one while otadata still names the other.
-    if let Ok(Some(p)) = table.booted_partition() {
+    if let Some(offset) = parts.booted_offset {
         // By offset, from `firmware/partitions.csv`, and not by asking the
         // entry for its subtype: `PartitionEntry::partition_type()` `unwrap!`s
         // the conversion, and a panic in the boot path to put a word in a
         // status reply is a bad trade (research 006 section 3).
-        let slot = match p.offset() {
+        let slot = match offset {
             0x10000 => FwSlot::Ota0 as u8,
             0x210000 => FwSlot::Ota1 as u8,
             _ => FW_UNKNOWN,
@@ -261,8 +257,7 @@ pub async fn read_fw_health() {
         FW_SLOT.store(slot, Ordering::Relaxed);
     }
 
-    let Ok(Some(ota_part)) = table.find_partition(PartitionType::Data(DataPartitionSubType::Ota))
-    else {
+    let Some(ota_part) = parts.otadata else {
         warn!("http: no otadata partition - fw_state reports unknown");
         return;
     };
@@ -568,6 +563,11 @@ fn wifi_state() -> WifiState {
 /// The `CORE` lock is held for the three reads that need it and dropped before
 /// anything is serialised, let alone written to a socket.
 async fn status() -> StatusReply {
+    // Card 243. A dozen volatile reads of RTC memory, no lock and no flash, so
+    // it is read per request rather than cached: the panic record does not
+    // change while the device runs, but reading it here is cheaper than a
+    // second copy of it that could disagree.
+    let crumb = crate::panic::report();
     let (name, idle_mode, state) = {
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core exists");
@@ -602,6 +602,15 @@ async fn status() -> StatusReply {
         fw_state: fw_state(),
         reset_reason: reset_reason(),
         store_errors: store::FAILURES.load(Ordering::Relaxed),
+        boot_count: crumb.boots,
+        panic_count: crumb.panics,
+        last_panic: crumb.last.map(|p| PanicRecord {
+            uptime_ms: p.uptime_ms,
+            boot: p.boot,
+            file: text::text(p.file()).unwrap_or_default(),
+            line: p.line,
+            consecutive: p.consecutive,
+        }),
     }
 }
 
@@ -922,6 +931,30 @@ impl core::fmt::Display for Page {
             format_args!("{} / {}", slot_word(s.fw_slot), state_word(s.fw_state)),
         )?;
         row(f, "reset", format_args!("{}", reset_word(s.reset_reason)))?;
+        // Card 243, one line: the whole breadcrumb. "none" is the answer this
+        // row should almost always give, and the boot count beside it is what
+        // says whether a device has been restarting quietly.
+        match &s.last_panic {
+            None => row(
+                f,
+                "panic",
+                format_args!("none in {} boot(s) since power-on", s.boot_count),
+            )?,
+            Some(p) => row(
+                f,
+                "panic",
+                format_args!(
+                    "{}:{} at {} s, boot {} of {} ({} in a row, {} total)",
+                    p.file,
+                    p.line,
+                    p.uptime_ms / 1000,
+                    p.boot,
+                    s.boot_count,
+                    p.consecutive,
+                    s.panic_count,
+                ),
+            )?,
+        }
         f.write_str(self.tail)
     }
 }
@@ -1053,7 +1086,12 @@ const PORTAL_FORM: &str = concat!(
     "<label><span>Wi-Fi network name</span>",
     "<input name=ssid maxlength=32 required autocapitalize=none autocorrect=off spellcheck=false></label>",
     "<label><span>Password (leave empty for an open network)</span>",
-    "<input name=psk type=password maxlength=63 autocapitalize=none autocorrect=off></label>",
+    // 64, not 63: spec 8.2 types `psk_len` as `0..=64` and
+    // `screeny_proto::control::MAX_PSK_LEN` is 64, which is the length of a
+    // WPA2 PSK typed as 64 hex characters. A `maxlength` of 63 silently ate
+    // the last one in a captive mini-browser, where there is no other way to
+    // find out (card 243).
+    "<input name=psk type=password maxlength=64 autocapitalize=none autocorrect=off></label>",
     "<button type=submit>Join</button></form>"
 );
 
@@ -1530,6 +1568,30 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
     let mut rx = [0u8; TCP_RX];
     let mut tx = [0u8; TCP_TX];
 
+    // Card 222's bench self-test, on worker 0, with this worker's buffers
+    // (card 243 - see [`selftest`] for what it used to cost as a task of its
+    // own). It serves the LAN for the 75 s the self-test wants to wait, so the
+    // device is answering normally right up to the moment it runs, and then
+    // falls into the ordinary loop below for the rest of its life.
+    #[cfg(feature = "http-selftest")]
+    if id == 0 {
+        let _ = select(
+            serve_on(
+                id,
+                stack,
+                false,
+                &lan,
+                &config,
+                &mut http_buf[..],
+                &mut rx[..],
+                &mut tx[..],
+            ),
+            Timer::after(Duration::from_secs(75)),
+        )
+        .await;
+        selftest(stack, &mut http_buf[..], &mut rx[..], &mut tx[..]).await;
+    }
+
     loop {
         // Cancelling `listen_and_serve` drops whatever connection it was
         // serving, which is right in both directions: the AP going up means
@@ -1747,9 +1809,19 @@ fn clip(s: &str, max: usize) -> &str {
 
 /// Run one canned request through the real router and report what came back.
 ///
+/// `http_buf` and `out` are **the calling worker's own buffers** (card 243):
+/// this runs on HTTP worker 0 while it is not listening, so its 1,536-byte
+/// request buffer and its 1,024-byte receive buffer are free, and a second set
+/// would be `.bss` - which is core 0's stack.
+///
 /// Returns `(status, body_len, micros)`.
 #[cfg(feature = "http-selftest")]
-async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u32) {
+async fn selftest_one(
+    ap: bool,
+    request: &str,
+    out: &mut [u8],
+    http_buf: &mut [u8],
+) -> (u16, usize, u32) {
     let app = router(ap);
     let config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Duration::from_secs(3),
@@ -1763,14 +1835,6 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
     let mut overflow = 0usize;
     let t0 = Instant::now();
     {
-        // Not `HTTP_BUF`: the canned requests below are request line, headers
-        // and body, and this buffer is `.bss` in a build that already carries
-        // a second copy of the whole serve machinery. 768 rather than card
-        // 222's 512 because card 233 added the two oversize-body cases, and
-        // the longest of them is ~515 bytes on the wire. The `413` is decided
-        // from `Content-Length` before the body is read, so this only has to
-        // hold what picoserve buffers while parsing the head.
-        let mut http_buf = [0u8; 768];
         let socket = mem_socket::MemSocket {
             r: mem_socket::Reader {
                 data: request.as_bytes(),
@@ -1781,9 +1845,7 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
                 overflow: &mut overflow,
             },
         };
-        let _ = Server::new(&app, &config, &mut http_buf[..])
-            .serve(socket)
-            .await;
+        let _ = Server::new(&app, &config, http_buf).serve(socket).await;
     }
     let us = t0.elapsed().as_micros() as u32;
 
@@ -1800,9 +1862,31 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
 ///
 /// Off by default. See the feature's comment in `Cargo.toml` for why it exists
 /// and what its fallback is.
+///
+/// **Not a task of its own since card 243, and this is the whole point of the
+/// change.** As a task it cost **5,640 bytes of `.bss`** - its own `rx`, `tx`,
+/// read and reply buffers, its own picoserve request buffer, and a second copy
+/// of picoserve's whole `serve` future held across an `await` - and `.bss` is
+/// core 0's stack, so the `http-selftest` build had `.stack` at 20,552 against
+/// a floor of 24,576 and could not honestly be flashed. It runs on **HTTP
+/// worker 0**, after that worker has served for 75 s and before it goes back to
+/// listening, and borrows the worker's buffers. Nothing here is a byte the
+/// shipping build does not already own: the only `.bss` the feature still costs
+/// is whatever the worker's own future grows by, and the two halves of a
+/// generator that never run at once share the same bytes.
+///
+/// What is different about the device under test while this runs: worker 0 is
+/// busy for the length of the self-test (a couple of seconds), so the server is
+/// worker 1 alone. That is the same one-worker configuration card 222 shipped
+/// and card 227 measured, and it is the price of not adding 5.6 KB of `.bss`
+/// to a build whose whole purpose is to report how much room is left.
 #[cfg(feature = "http-selftest")]
-#[embassy_executor::task]
-pub async fn selftest_task(stack: Stack<'static>) {
+async fn selftest(
+    stack: Stack<'static>,
+    http_buf: &mut [u8],
+    rx: &mut [u8],
+    tx: &mut [u8],
+) {
     use embassy_net::tcp::TcpSocket;
     use embedded_io_async::Write as _;
 
@@ -1814,10 +1898,11 @@ pub async fn selftest_task(stack: Stack<'static>) {
     const REQ: &[u8] =
         b"GET /api/v1/status HTTP/1.1\r\nHost: selftest\r\nConnection: close\r\n\r\n";
 
-    // After the telemetry task's 60 s `stack:` line, not before it: that line
-    // is the baseline this run is compared against, and it should be measured
-    // with the server idle.
-    Timer::after(Duration::from_secs(75)).await;
+    // The 75 s wait is the caller's (`http_task`), which spends it *serving*
+    // rather than idling, and it is after the telemetry task's 60 s `stack:`
+    // line on purpose: that line is the baseline this run is compared against
+    // and it should be measured with the server quiet.
+    //
     // **Not an early return** (card 223). A `start-in-portal` build has no
     // station address at all - that is the whole point of it - and the TCP
     // half of this self-test was never the interesting half. Skipping it and
@@ -1835,9 +1920,6 @@ pub async fn selftest_task(stack: Stack<'static>) {
     crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
     let t_window = Instant::now();
 
-    let mut rx = [0u8; 256];
-    let mut tx = [0u8; 192];
-    let mut buf = [0u8; 256];
     let mut ok = 0usize;
     let mut failed = 0usize;
     let mut bytes_total = 0usize;
@@ -1848,8 +1930,12 @@ pub async fn selftest_task(stack: Stack<'static>) {
     for i in (0..REQUESTS).take_while(|_| me.is_some()) {
         let target = IpEndpoint::new(IpAddress::Ipv4(me.expect("checked")), HTTP_PORT);
         let t0 = Instant::now();
-        let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
+        // The worker's own smoltcp buffers, and its request buffer to read the
+        // reply into: this worker is not listening while this runs, so all
+        // three are free. See this function's docs.
+        let mut sock = TcpSocket::new(stack, &mut rx[..], &mut tx[..]);
         sock.set_timeout(Some(Duration::from_secs(3)));
+        let buf = &mut http_buf[..];
         let r = async {
             embassy_time::with_timeout(Duration::from_secs(3), sock.connect(target))
                 .await
@@ -1882,7 +1968,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
                 bytes_total += n;
                 ok += 1;
                 if first_status.is_empty() {
-                    let line = core::str::from_utf8(&buf[..n.min(16)]).unwrap_or("");
+                    let line = core::str::from_utf8(&http_buf[..n.min(16)]).unwrap_or("");
                     let _ = first_status.push_str(line.trim_end());
                 }
             }
@@ -1913,8 +1999,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
     );
     if ok == 0 {
         info!(
-            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, station address {:?}, soft-AP {}",
-            HTTP_TASKS,
+            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{} while this runs, station address {:?}, soft-AP {}",
+            HTTP_TASKS - 1,
             HTTP_PORT,
             me,
             if crate::provision::ap_up() { "up" } else { "down" },
@@ -1928,15 +2014,17 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // a `picoserve::io::Socket`. This one is two byte slices, so every route
     // below is the real router, the real handlers, the real locks and the real
     // JSON, running while the Studio streams.
-    // 640 bytes: every JSON reply fits (the largest, `status`, is under 450).
-    // `GET /` does not - the page is ~5.5 KB - and that is fine: the status
-    // line is what is being checked and the overflow is counted and reported
-    // rather than silently dropped.
-    let mut out = [0u8; 640];
+    // The reply lands in the worker's 1,024-byte receive buffer (card 243:
+    // nothing here has a buffer of its own). Every JSON reply fits - the
+    // largest, `status`, is 520 bytes once it carries a panic record. `GET /`
+    // does not, the page being ~5.5 KB, and that is fine: the status line is
+    // what is being checked and the overflow is counted and reported rather
+    // than silently dropped.
+    let out = &mut rx[..];
     let mut worst_us = 0u32;
     let hw_before = crate::stack_probe::CORE0.high_water().unwrap_or(0);
     for (label, request, expect) in SELFTEST_ROUTES {
-        let (status, bytes, us) = selftest_one(false, request, &mut out).await;
+        let (status, bytes, us) = selftest_one(false, request, out, http_buf).await;
         worst_us = worst_us.max(us);
         let body = core::str::from_utf8(&out[..bytes.min(out.len())])
             .ok()
@@ -1985,7 +2073,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     let ap_now = crate::provision::ap_up();
     info!("selftest: portal pass, soft-AP is {}", if ap_now { "up" } else { "down" });
     for (label, ap, request, expect) in SELFTEST_PORTAL {
-        let (status, bytes, us) = selftest_one(*ap, request, &mut out).await;
+        let (status, bytes, us) = selftest_one(*ap, request, out, http_buf).await;
         // The catch-all only fires while the AP is actually up, so the
         // expected code for those two rows depends on the device's state and
         // not on the table.

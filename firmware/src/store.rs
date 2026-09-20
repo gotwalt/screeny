@@ -19,10 +19,13 @@
 //! 2. **No big buffer lives across an `await`.** An embassy task's future is a
 //!    `static`, so anything held across a suspension point is `.bss`, and on this
 //!    chip `.bss` comes straight out of core 0's main stack. The 3 KB partition
-//!    table is therefore read inside [`find_partition`], which is deliberately
+//!    table is therefore read inside [`read_partitions`], which is deliberately
 //!    **not** `async` and `#[inline(never)]`: its buffer is on a real stack frame
-//!    that is gone before anything suspends. All that survives is the 32-byte
-//!    [`PartitionEntry`]. (Card 200 lost 11 KB of stack to exactly this.)
+//!    that is gone before anything suspends. All that survives is a handful of
+//!    32-byte [`PartitionEntry`]s. (Card 200 lost 11 KB of stack to exactly
+//!    this.) Since card 243 it is also read **once for the whole boot**, because
+//!    a second copy of that buffer sat underneath the deepest chain the boot
+//!    path has.
 //! 3. **The PSK is never logged.** Nothing in this file formats a [`Psk`], and
 //!    `Psk`'s own `Debug` prints only a byte count. The SSID is not printed here
 //!    either: the one place the firmware says an SSID out loud is the Wi-Fi
@@ -70,6 +73,12 @@ use screeny_settings::{
 /// `PartitionEntry::partition_type()` `unwrap!`s the conversion, so asking the
 /// wrong question would panic on the device (research 006 section 3).
 const LABEL: &str = "screeny";
+
+/// The label of the OTA selection partition in `firmware/partitions.csv`.
+///
+/// By label for the same reason as [`LABEL`], and read in the same pass since
+/// card 243: see [`read_partitions`].
+const OTADATA_LABEL: &str = "otadata";
 
 // ---------------------------------------------------------------------------
 // Counters — what a status page (card 222) reads
@@ -178,6 +187,12 @@ pub struct Flash {
     flash: FlashStorage<'static>,
     entry: PartitionEntry,
     scratch: Scratch,
+    /// The rest of what the one partition-table read found (card 243). It
+    /// lives here, behind the `STORE` lock, rather than travelling through
+    /// `main` as a local: a local would be held across `main`'s first `await`
+    /// and therefore be `.bss` twice over, and everything that wants a
+    /// partition has to take this lock anyway.
+    parts: Parts,
 }
 
 /// The one flash handle. `None` until [`init`] has run, and `None` forever if
@@ -234,6 +249,7 @@ macro_rules! with_store {
             flash,
             entry,
             scratch,
+            ..
         } = $self;
         let len = entry.len();
         let mut region = entry.as_flash_region(flash);
@@ -268,12 +284,22 @@ impl Flash {
         &mut self.flash
     }
 
+    /// The partition entries the boot-time table read found, by value.
+    ///
+    /// 68 bytes of `Copy`, so a caller takes them and stops borrowing this -
+    /// which is what lets [`crate::http::read_fw_health`] hold the entry and
+    /// the raw flash handle at the same time.
+    pub fn parts(&self) -> Parts {
+        self.parts
+    }
+
     /// Read every setting. Never fails; see [`Store::load`].
     pub async fn load(&mut self) -> (Settings, LoadReport) {
         let Flash {
             flash,
             entry,
             scratch,
+            ..
         } = self;
         let len = entry.len();
         let mut region = entry.as_flash_region(flash);
@@ -352,25 +378,64 @@ impl Flash {
 // Boot
 // ---------------------------------------------------------------------------
 
-/// Find the `screeny` partition.
+/// What the boot path needs out of the partition table, all of it, once.
 ///
-/// **Not `async`, and `#[inline(never)]`, on purpose.** The partition table is
+/// 68 bytes of `Copy`, passed by value from `main` to whoever wants a
+/// partition. See [`read_partitions`] for why this exists rather than each
+/// caller reading the table for itself.
+#[derive(Clone, Copy, Default)]
+pub struct Parts {
+    /// The settings partition, `screeny`.
+    pub settings: Option<PartitionEntry>,
+    /// `otadata`, which card 222 reads for `fw_state` and card 241 will write.
+    pub otadata: Option<PartitionEntry>,
+    /// Flash offset of the partition this image is running from, read from
+    /// the MMU. That is the *booted* slot and not otadata's selection, and the
+    /// two differ exactly when a rollback has happened.
+    pub booted_offset: Option<u32>,
+}
+
+/// Read the partition table **once for the whole boot**, and keep only the
+/// 32-byte entries.
+///
+/// **Not `async`, and `#[inline(never)]`, on purpose.** The table is
 /// `PARTITION_TABLE_MAX_LEN` = 3072 bytes; read inside an `async fn` that later
 /// suspends, that buffer would be part of a task future, which is `.bss`, which
 /// on this chip is taken out of core 0's main stack. Here it is an ordinary
-/// stack frame that is gone before the caller's first `await`, and the 32-byte
-/// `PartitionEntry` is all that survives.
+/// stack frame that is gone before the caller's first `await`.
+///
+/// **And once rather than twice (card 243's stack lever).** Until 0.5.2 this
+/// function found the `screeny` partition for [`init`] and
+/// [`crate::http::read_fw_health`] read the whole table again for `fw_slot` and
+/// `fw_state` - and the second copy was worse than the duplication suggests,
+/// because that 3 KB buffer stayed alive *underneath* `Ota::new` and
+/// `current_ota_state`, i.e. underneath esp-storage's own read path, which is
+/// where the boot path's 13 KB high-water mark is made. Reading everything here
+/// and handing on [`Parts`] means the buffer is gone before any of that runs,
+/// and the deepest chain in the boot path loses 3,072 bytes from under it.
+///
+/// Everything is looked up **by label**, never by `partition_type()`, which
+/// `unwrap!`s its conversion and would panic on a table entry with a subtype
+/// this crate's enums do not know (research 006 section 3 - the same reason the
+/// settings partition has always been found this way).
 #[inline(never)]
-fn find_partition(flash: &mut FlashStorage<'static>) -> Option<PartitionEntry> {
+fn read_partitions(flash: &mut FlashStorage<'static>) -> Parts {
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
     let table = match partitions::read_partition_table(flash, &mut buf) {
         Ok(t) => t,
         Err(e) => {
             warn!("store: cannot read the partition table: {:?}", e);
-            return None;
+            return Parts::default();
         }
     };
-    table.iter().find(|e| e.label_as_str() == LABEL)
+    Parts {
+        settings: table.iter().find(|e| e.label_as_str() == LABEL),
+        otadata: table.iter().find(|e| e.label_as_str() == OTADATA_LABEL),
+        // `Err` here is "the MMU said something this crate could not map to a
+        // partition", which is not a reason to fail a boot: `fw_slot` falls
+        // back to otadata's selection and says `unknown` if that fails too.
+        booted_offset: table.booted_partition().ok().flatten().map(|p| p.offset()),
+    }
 }
 
 /// Open the store and read every setting.
@@ -388,7 +453,11 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
     // boot write costs nothing and a later one is correct.
     let mut flash = FlashStorage::new(flash).multicore_auto_park();
 
-    let Some(entry) = find_partition(&mut flash) else {
+    // The one partition-table read of the whole boot (card 243). What the rest
+    // of the firmware wants out of it travels as 68 bytes of `Parts`.
+    let parts = read_partitions(&mut flash);
+
+    let Some(entry) = parts.settings else {
         warn!(
             "store: no '{}' partition - settings are defaults and nothing will be saved",
             LABEL
@@ -407,6 +476,7 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
         flash,
         entry,
         scratch: Scratch::new(),
+        parts,
     };
     let (mut settings, mut report) = f.load().await;
     if let Some((s, r)) = repair(&mut f, &report).await {

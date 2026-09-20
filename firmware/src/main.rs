@@ -45,6 +45,10 @@ mod http;
 mod mdns;
 mod net;
 mod panel_init;
+/// Card 243: the `#[panic_handler]`, the RTC breadcrumb and the crash-loop
+/// guard. It is this crate's panic handler, so it is not optional and not
+/// feature-gated.
+mod panic;
 mod patterns;
 mod receiver;
 mod screens;
@@ -74,7 +78,6 @@ use embassy_net::{Runner, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
-use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
 use esp_hal::interrupt::Priority;
@@ -126,8 +129,14 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// dispatch instead of nine nested router futures, every refusal in the API's
 /// error shape (a verb the API has no method for is now `method_not_allowed`
 /// and not picoserve's plain text), a reboot without the magic word is
-/// `out_of_range`, and each route's own `max_request_len` is enforced.
-pub const FW_VERSION: &str = "0.5.1";
+/// `out_of_range`, and each route's own `max_request_len` is enforced. 0.5.0 is
+/// card 223 (the soft-AP, the portal and the setup page), 0.5.1 its five
+/// phone-test fixes, and **0.5.2 is card 243: a panic prints, leaves a
+/// breadcrumb in RTC memory and reboots the chip** instead of spinning core 0
+/// for ever with the panel still lit - plus the crash-loop guard, the
+/// breadcrumb in `GET /api/v1/status`, and one partition-table read for the
+/// whole boot path.
+pub const FW_VERSION: &str = "0.5.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -497,7 +506,7 @@ pub fn current_ssid() -> &'static str {
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-/// The join state `GET_WIFI` reports (spec section 8.3).
+/// The join state `GET_WIFI` reports (spec section 6.3).
 ///
 /// Card 223: straight from the one `Provisioner`, sticky `FAILED` and all.
 /// The firmware no longer keeps a second opinion about it.
@@ -655,6 +664,11 @@ async fn main(spawner: Spawner) {
     stack_probe::paint_core0();
 
     esp_println::logger::init_logger_from_env();
+    // Card 243, and **before anything that can fail**: count this boot, say
+    // what the last one left in RTC memory, and learn whether the crash-loop
+    // guard has latched. A panic in the boot path below is then counted like
+    // any other, which is the case the guard exists for.
+    let crumb = panic::boot();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
@@ -703,9 +717,11 @@ async fn main(spawner: Spawner) {
     // This is a read, and core 1 is not running yet, so nothing is parked.
     let (settings, _report) = store::init(peripherals.FLASH).await;
     // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
-    // here rather than per request - it needs the `STORE` lock and a 3 KB
-    // partition-table buffer, and nothing can change the answer until card
-    // 241's confirm/revert lands.
+    // here rather than per request - it needs the `STORE` lock, and nothing can
+    // change the answer until card 241's confirm/revert lands. Card 243: it
+    // takes the partition entries `store::init` already read, from beside the
+    // flash handle, instead of reading the 3 KB table a second time underneath
+    // esp-storage's own frames.
     http::read_fw_health().await;
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
@@ -856,6 +872,37 @@ async fn main(spawner: Spawner) {
         spawner.spawn(display_task(build_hub75(), fb1, consumer).unwrap());
     }
 
+    // --- the crash-loop guard's last stop (card 243) -----------------------
+    //
+    // The breadcrumb says this device has panicked `CRASH_LOOP_MAX` times in a
+    // row, each within a minute of a boot. It stops here: the panel says so and
+    // nothing else is started - no radio, no HTTP, no stream - because a panel
+    // that reboots for ever on USB power is worse than one that says it is
+    // broken (card 243, the owner's "pretty crash proof").
+    //
+    // **Here** and not earlier, because this is the first point at which there
+    // is a panel to say it on, and not later, because everything below is a
+    // thing that could panic again. A power cycle clears the breadcrumb - the
+    // RTC region is zeroed on a power-on reset and on nothing else - so the
+    // recovery is the one the owner would try anyway.
+    if crumb.halt {
+        let last = crumb.last;
+        let (file, line) = match &last {
+            Some(p) => (p.file(), p.line),
+            None => ("?", 0),
+        };
+        let mut producer = producer;
+        screens::crashed(producer.back(), file, line, crumb.panics);
+        producer.publish();
+        warn!(
+            "boot: stopped after {} panics ({}:{}). The panel says CRASHED; power-cycle to clear.",
+            crumb.panics, file, line
+        );
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+        }
+    }
+
     // --- wifi -------------------------------------------------------------
     //
     // The controller is built with whatever `StationConfig::default()` is; the
@@ -989,8 +1036,14 @@ async fn main(spawner: Spawner) {
         spawner.spawn(http::http_task(i, stack, ap_stack).unwrap());
     }
     spawner.spawn(http::deferred_task().unwrap());
-    #[cfg(feature = "http-selftest")]
-    spawner.spawn(http::selftest_task(stack).unwrap());
+    // Card 222's `http-selftest` used to be spawned here. Card 243 moved it
+    // into HTTP worker 0, where it borrows that worker's buffers instead of
+    // carrying 5.6 KB of `.bss` of its own - which is what put the build 4 KB
+    // under the `fw-size.sh` floor. `http::selftest` has the arithmetic.
+    // Card 243's bench build: one deliberate panic on core 0, once per
+    // power-on. See the feature's comment in `Cargo.toml`.
+    #[cfg(feature = "panic-test")]
+    spawner.spawn(panic::panic_test_task().unwrap());
 
     // Card 200 spike: reachable from `main` so the linker keeps it and
     // `xtensa-esp32-elf-size` measures something real. Off by default. Its

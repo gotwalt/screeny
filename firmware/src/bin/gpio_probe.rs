@@ -50,7 +50,16 @@
 #![no_std]
 #![no_main]
 
-use esp_backtrace as _;
+// The firmware's own panic handler (card 243), by path: a `[[bin]]` is its own
+// crate, so it cannot reach `crate::panic` and it needs a `#[panic_handler]` of
+// its own. `esp-backtrace` no longer provides one (`firmware/Cargo.toml` says
+// why), and sharing the file rather than writing a second one means this probe
+// leaves the same breadcrumb and prints the same backtrace the firmware does.
+// Most of the module is unused here, which is what the `allow` is for.
+#[allow(dead_code)]
+#[path = "../panic.rs"]
+mod panic;
+
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{AnyPin, Input, InputConfig, Level, Pin, Pull};
 use esp_hal::time::Instant;

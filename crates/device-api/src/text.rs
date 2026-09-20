@@ -29,6 +29,17 @@ pub const MAX_DETAIL_LEN: usize = 48;
 /// The PIN of decision 3 (parked card 041), parsed and ignored today.
 pub const MAX_PIN_LEN: usize = 16;
 
+/// The source file a panic came from, as the device's RTC breadcrumb holds it
+/// (card 243): twelve bytes of the file's **base name**, e.g. `"net.rs"`.
+///
+/// Twelve because that is what fits in three words of a breadcrumb that must
+/// stay small, and the base name rather than the path because the path would
+/// carry a `/`, which picoserve escapes as `\/` and the other two JSON writers
+/// do not. `"provision.rs"` is exactly twelve; a longer name keeps its *last*
+/// twelve bytes, so the extension survives. The backtrace on the serial log is
+/// where an exact answer lives; this is the part that survives the reboot.
+pub const MAX_PANIC_FILE_LEN: usize = 12;
+
 /// The stable short device id.
 pub type IdText = String<MAX_ID_LEN>;
 /// A firmware version string.
@@ -44,6 +55,8 @@ pub type IpText = String<MAX_IP_LEN>;
 pub type DetailText = String<MAX_DETAIL_LEN>;
 /// The PIN of decision 3.
 pub type PinText = String<MAX_PIN_LEN>;
+/// The base name of the source file a panic came from.
+pub type PanicFileText = String<MAX_PANIC_FILE_LEN>;
 
 /// Copy `s` into a bounded string, or `None` if it does not fit.
 ///
