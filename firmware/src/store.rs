@@ -385,9 +385,13 @@ impl Flash {
 /// caller reading the table for itself.
 #[derive(Clone, Copy, Default)]
 pub struct Parts {
-    /// The settings partition, `screeny`.
-    pub settings: Option<PartitionEntry>,
     /// `otadata`, which card 222 reads for `fw_state` and card 241 will write.
+    ///
+    /// The `screeny` entry is **not** here: [`Flash::entry`] is that entry, and
+    /// a second copy behind the same lock would be 36 bytes of `.bss` - which
+    /// is core 0's stack - for a value that is already in scope wherever it is
+    /// wanted. [`read_partitions`] returns it separately for that one boot-time
+    /// caller.
     pub otadata: Option<PartitionEntry>,
     /// Flash offset of the partition this image is running from, read from
     /// the MMU. That is the *booted* slot and not otadata's selection, and the
@@ -419,23 +423,24 @@ pub struct Parts {
 /// this crate's enums do not know (research 006 section 3 - the same reason the
 /// settings partition has always been found this way).
 #[inline(never)]
-fn read_partitions(flash: &mut FlashStorage<'static>) -> Parts {
+fn read_partitions(flash: &mut FlashStorage<'static>) -> (Option<PartitionEntry>, Parts) {
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
     let table = match partitions::read_partition_table(flash, &mut buf) {
         Ok(t) => t,
         Err(e) => {
             warn!("store: cannot read the partition table: {:?}", e);
-            return Parts::default();
+            return (None, Parts::default());
         }
     };
-    Parts {
-        settings: table.iter().find(|e| e.label_as_str() == LABEL),
+    let settings = table.iter().find(|e| e.label_as_str() == LABEL);
+    let parts = Parts {
         otadata: table.iter().find(|e| e.label_as_str() == OTADATA_LABEL),
         // `Err` here is "the MMU said something this crate could not map to a
         // partition", which is not a reason to fail a boot: `fw_slot` falls
         // back to otadata's selection and says `unknown` if that fails too.
         booted_offset: table.booted_partition().ok().flatten().map(|p| p.offset()),
-    }
+    };
+    (settings, parts)
 }
 
 /// Open the store and read every setting.
@@ -455,9 +460,9 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
 
     // The one partition-table read of the whole boot (card 243). What the rest
     // of the firmware wants out of it travels as 68 bytes of `Parts`.
-    let parts = read_partitions(&mut flash);
+    let (settings_entry, parts) = read_partitions(&mut flash);
 
-    let Some(entry) = parts.settings else {
+    let Some(entry) = settings_entry else {
         warn!(
             "store: no '{}' partition - settings are defaults and nothing will be saved",
             LABEL

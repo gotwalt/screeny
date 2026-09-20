@@ -71,7 +71,7 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, PanicRecord, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    AcceptedReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
     IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
@@ -362,6 +362,9 @@ fn reset_reason() -> ResetReason {
 /// still spelt once.
 enum ApiBody {
     Status(StatusReply),
+    /// The RTC breadcrumb (card 243). Smaller than [`ApiBody::Status`], so it
+    /// costs this enum - and every frame that holds one - nothing.
+    Panic(PanicReply),
     Telemetry(TelemetryReply),
     Wifi(WifiReply),
     Settings(SettingsReply),
@@ -377,6 +380,7 @@ impl serde::Serialize for ApiBody {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             ApiBody::Status(v) => v.serialize(s),
+            ApiBody::Panic(v) => v.serialize(s),
             ApiBody::Telemetry(v) => v.serialize(s),
             ApiBody::Wifi(v) => v.serialize(s),
             ApiBody::Settings(v) => v.serialize(s),
@@ -563,11 +567,6 @@ fn wifi_state() -> WifiState {
 /// The `CORE` lock is held for the three reads that need it and dropped before
 /// anything is serialised, let alone written to a socket.
 async fn status() -> StatusReply {
-    // Card 243. A dozen volatile reads of RTC memory, no lock and no flash, so
-    // it is read per request rather than cached: the panic record does not
-    // change while the device runs, but reading it here is cheaper than a
-    // second copy of it that could disagree.
-    let crumb = crate::panic::report();
     let (name, idle_mode, state) = {
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core exists");
@@ -602,6 +601,20 @@ async fn status() -> StatusReply {
         fw_state: fw_state(),
         reset_reason: reset_reason(),
         store_errors: store::FAILURES.load(Ordering::Relaxed),
+    }
+}
+
+/// `GET /api/v1/panic`: the breadcrumb in full (card 243).
+///
+/// Its own route, and **not** three more fields on [`StatusReply`]: the bench
+/// measured 44 bytes of `StatusReply` costing 3,488 bytes of core 0's stack,
+/// because one of these is moved through picoserve's response chain many times
+/// in a single inlined async frame. Nothing here takes a lock or touches
+/// flash - it is a dozen volatile reads of RTC memory - and the answer cannot
+/// change while the device runs, because a panic reboots it.
+fn get_panic() -> Reply {
+    let crumb = crate::panic::report();
+    Reply::ok(ApiBody::Panic(PanicReply {
         boot_count: crumb.boots,
         panic_count: crumb.panics,
         last_panic: crumb.last.map(|p| PanicRecord {
@@ -611,7 +624,7 @@ async fn status() -> StatusReply {
             line: p.line,
             consecutive: p.consecutive,
         }),
-    }
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -931,27 +944,32 @@ impl core::fmt::Display for Page {
             format_args!("{} / {}", slot_word(s.fw_slot), state_word(s.fw_state)),
         )?;
         row(f, "reset", format_args!("{}", reset_word(s.reset_reason)))?;
-        // Card 243, one line: the whole breadcrumb. "none" is the answer this
-        // row should almost always give, and the boot count beside it is what
-        // says whether a device has been restarting quietly.
-        match &s.last_panic {
+        // Card 243, one line: the whole breadcrumb, read **here** rather than
+        // carried in the reply. Two things make that safe where it would not
+        // be for `uptime` or `heap`: picoserve formats a body twice (once to
+        // measure it, once to send it) and the two passes must produce the
+        // same bytes, and the breadcrumb is the one thing on this page that
+        // *cannot* change while the device runs - a panic reboots it. Keeping
+        // it out of `StatusReply` is what this card's stack fix is.
+        let crumb = crate::panic::report();
+        match crumb.last {
             None => row(
                 f,
                 "panic",
-                format_args!("none in {} boot(s) since power-on", s.boot_count),
+                format_args!("none in {} boot(s) since power-on", crumb.boots),
             )?,
             Some(p) => row(
                 f,
                 "panic",
                 format_args!(
                     "{}:{} at {} s, boot {} of {} ({} in a row, {} total)",
-                    p.file,
+                    p.file(),
                     p.line,
                     p.uptime_ms / 1000,
                     p.boot,
-                    s.boot_count,
+                    crumb.boots,
                     p.consecutive,
-                    s.panic_count,
+                    crumb.panics,
                 ),
             )?,
         }
@@ -1432,6 +1450,7 @@ async fn route_request<R: picoserve::io::Read>(
     match (row.method, row.path) {
         (route::Method::Get, route::STATUS) => Reply::ok(ApiBody::Status(status().await)),
         (route::Method::Get, route::TELEMETRY) => get_telemetry().await,
+        (route::Method::Get, route::PANIC) => get_panic(),
         (route::Method::Get, route::WIFI) => get_wifi(),
         // Needs the scan card 223 brings.
         (route::Method::Get, route::NETWORKS) => not_yet(),

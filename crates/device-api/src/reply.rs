@@ -55,7 +55,7 @@ pub struct PanicRecord {
     /// Uptime in milliseconds when it panicked.
     pub uptime_ms: u32,
     /// Which boot panicked. `1` is the first boot after power-on, and
-    /// [`StatusReply::boot_count`] is the boot answering now, so
+    /// [`PanicReply::boot_count`] is the boot answering now, so
     /// `boot_count - boot` is how many boots ago it was.
     pub boot: u32,
     /// The base name of the source file, e.g. `"net.rs"`. Never empty: a panic
@@ -86,10 +86,18 @@ impl PanicRecord {
 /// `slot` from 007 is `fw_slot` here, so that all four firmware-health fields
 /// sort together and none of them is just "slot".
 ///
-/// Card 243 adds the last three - `boot_count`, `panic_count` and
-/// `last_panic` - which are the device's RTC breadcrumb. They are additive and
-/// at the end: a reader that does not know about them is unaffected, which is
-/// what §8.6 means by "a new optional field does not bump `api`".
+/// **Card 243's RTC breadcrumb is deliberately not in here**; it is
+/// [`PanicReply`] on `GET /api/v1/panic`. The card's first shape put it in
+/// this struct and the bench measured what that cost: **44 bytes added to this
+/// type cost 3,488 bytes of core 0's stack**, because the firmware moves one of
+/// these through picoserve's response chain many times over, in one inlined
+/// async frame (the card's Log has the numbers and the ablations).
+///
+/// So this struct is **full**, and the rule that follows is worth more than the
+/// fields it is about: *nothing goes in here that is not needed on every poll.*
+/// The Studio reads it every 10 s and the page every 4; a fact that is constant
+/// for the life of a boot - which is exactly what a panic breadcrumb is -
+/// belongs on a route of its own, where it is read once per `boot_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusReply {
     /// The API version, always [`crate::API_VERSION`]. First field, so a
@@ -141,25 +149,6 @@ pub struct StatusReply {
     /// Settings-store errors since boot. Non-zero means the `screeny`
     /// partition is unhappy and the status page should say so.
     pub store_errors: u32,
-    /// Boots since the device last lost power, including this one, from the
-    /// RTC breadcrumb (card 243). `1` on a device that has just been plugged
-    /// in; a number that keeps climbing is a device that keeps restarting.
-    /// `0` means the device does not keep one (the simulator).
-    ///
-    /// **`serde(default)`, like the two below.** §8.6 says a new optional
-    /// field does not bump `api`, and that is only true if a reader tolerates
-    /// its absence: a Studio built from this commit still has to read a panel
-    /// running firmware 0.5.1, which has never heard of these three.
-    #[serde(default)]
-    pub boot_count: u32,
-    /// Panics recorded since the device last lost power. See [`PanicRecord`].
-    #[serde(default)]
-    pub panic_count: u32,
-    /// The last panic, or `null` when there has been none since the device was
-    /// plugged in - which is the normal answer. Absent, on an older firmware,
-    /// means the same thing a `null` does: nothing is known about a panic.
-    #[serde(default)]
-    pub last_panic: Option<PanicRecord>,
 }
 
 impl StatusReply {
@@ -186,6 +175,35 @@ impl StatusReply {
         + field("fw_state", FwState::MAX_JSON_LEN)
         + field("reset_reason", ResetReason::MAX_JSON_LEN)
         + field("store_errors", MAX_U32_LEN)
+
+;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/panic
+// ---------------------------------------------------------------------------
+
+/// `GET /api/v1/panic`: the device's RTC breadcrumb in full.
+///
+/// Its own route rather than three more fields on [`StatusReply`], and the
+/// reason is measured rather than tidy: see [`StatusReply`]'s docs. It is also
+/// the right shape for what this is - the answer **cannot change while the
+/// device is running**, because a panic reboots it, so a reader asks once per
+/// `boot_id` instead of every poll.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PanicReply {
+    /// Boots since the device last lost power, including this one. Same value
+    /// as [`StatusReply::boot_count`].
+    pub boot_count: u32,
+    /// Panics recorded since the device last lost power.
+    pub panic_count: u32,
+    /// The last one, or `null` when there has been none - the normal answer.
+    pub last_panic: Option<PanicRecord>,
+}
+
+impl PanicReply {
+    /// An upper bound on the serialised length.
+    pub const MAX_JSON_LEN: usize = 1
         + field("boot_count", MAX_U32_LEN)
         + field("panic_count", MAX_U32_LEN)
         + field("last_panic", PanicRecord::MAX_JSON_LEN);

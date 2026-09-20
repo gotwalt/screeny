@@ -19,8 +19,5 @@
   "fw_slot": "ota_0",
   "fw_state": "valid",
   "reset_reason": "power_on",
-  "store_errors": 0,
-  "boot_count": 1,
-  "panic_count": 0,
-  "last_panic": null
+  "store_errors": 0
 }

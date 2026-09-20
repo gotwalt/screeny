@@ -83,12 +83,10 @@ function paint(s){
  put("uptime",Math.floor(s.uptime_ms/1000)+" s");put("heap",s.heap_used+" / "+s.heap_size);
  put("wifi",s.wifi_state);put("boot_id",s.boot_id.toString(16).padStart(8,"0"));
  put("firmware",s.fw_slot+" / "+s.fw_state);put("reset",s.reset_reason);
- // Card 243: the RTC breadcrumb. `last_panic` is an object, so the generic
- // loop above skips it (typeof null is "object" too) and this is the only
- // place it is rendered.
- const p=s.last_panic;
- put("panic",p?p.file+":"+p.line+" at "+Math.floor(p.uptime_ms/1000)+" s, boot "+p.boot+" of "+s.boot_count+" ("+p.consecutive+" in a row, "+s.panic_count+" total)"
-            :"none in "+s.boot_count+" boot(s) since power-on");
+ // Card 243: the `panic` row is rendered by the firmware and deliberately
+ // left alone here. It comes from the RTC breadcrumb, which cannot change
+ // while the device is running - a panic reboots it - so there is nothing to
+ // repaint, and `GET /api/v1/panic` is where a program reads it.
  $("#title").textContent=s.name||("screeny-"+s.id);document.title=$("#title").textContent;
  if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode}
 }

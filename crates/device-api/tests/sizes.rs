@@ -12,8 +12,8 @@ use common::*;
 use screeny_device_api::error::ErrorReply;
 use screeny_device_api::form::MAX_FORM_LEN;
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
-    WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply,
+    TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::route::{Body, MAX_REQUEST_LEN, ROUTES};
@@ -43,6 +43,7 @@ fn every_reply_bound_is_exact() {
         NetworksReply::MAX_JSON_LEN,
     );
     exactly("WifiReply", &worst_wifi(), WifiReply::MAX_JSON_LEN);
+    exactly("PanicReply", &worst_panic_reply(), PanicReply::MAX_JSON_LEN);
     exactly(
         "SettingsReply",
         &worst_settings_reply(),
@@ -86,9 +87,11 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     // assume every byte of every name escapes to six characters, which never
     // happens, so nobody should read `MAX_JSON_LEN` as "what a status reply
     // costs on the wire". The real one, with a name and an SSID somebody
-    // would actually type, is 434 bytes against a bound of 1142 (it was 364
-    // against 1018 before card 243's three breadcrumb fields; a status reply
-    // that *carries* a panic record, `status_panicked.json`, is 520).
+    // would actually type, is 364 bytes against a bound of 1018. **Card 243
+    // took its breadcrumb fields back out of this type**: 44 bytes added here
+    // cost 3,488 bytes of the device's stack, because the firmware moves one
+    // of these through picoserve's response chain many times in one inlined
+    // async frame. The breadcrumb is `PanicReply` on its own route.
     let real = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/golden/status.json"
@@ -97,21 +100,8 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     let value: StatusReply = serde_json::from_str(&real).unwrap();
     let on_the_wire = wire(&value).len();
     assert!(
-        on_the_wire < 500,
+        on_the_wire < 400,
         "a real status reply is {on_the_wire} bytes"
-    );
-    // The one that carries a panic record is the longest a real device sends,
-    // and the firmware's self-test buffer is sized from it.
-    let panicked = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/golden/status_panicked.json"
-    ))
-    .unwrap();
-    let panicked: StatusReply = serde_json::from_str(&panicked).unwrap();
-    let panicked = wire(&panicked).len();
-    assert!(
-        panicked < 600,
-        "a status reply carrying a panic record is {panicked} bytes"
     );
     assert!(
         StatusReply::MAX_JSON_LEN > on_the_wire * 2,

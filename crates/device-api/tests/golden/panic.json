@@ -1,0 +1,11 @@
+{
+  "boot_count": 2,
+  "panic_count": 1,
+  "last_panic": {
+    "uptime_ms": 94312,
+    "boot": 1,
+    "file": "net.rs",
+    "line": 321,
+    "consecutive": 1
+  }
+}
