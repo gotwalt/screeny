@@ -244,8 +244,7 @@ pub fn build_ramp(keys: &[(f32, f32, f32)], n: usize, panel: &Panel) -> Vec<[f32
             let lin = oklch_to_lin(l0 + (l1 - l0) * t, c0 + (c1 - c0) * t, lerp_hue(h0, h1, t));
             // Snap through the panel model so the ramp has no steps the panel
             // cannot show and no per-channel rounding casts.
-            let snapped = panel.emit(lin_to_srgb8_3(lin));
-            snapped
+            panel.emit(lin_to_srgb8_3(lin))
         })
         .collect()
 }
@@ -521,15 +520,13 @@ impl Piece for FractalZoom {
     fn render(&mut self, t: Duration, out: &mut Frame) {
         let mut lin = vec![[0f32; 3]; NPIX];
         self.render_lin(t, &mut lin);
-        for i in 0..NPIX {
+        for (i, l) in lin.iter().enumerate() {
             // Snap to codes the panel can actually emit. It costs nothing in
             // quality - the panel would round to these anyway - and it folds
             // hundreds of near-identical averages onto the same code, which
             // is straight profit in the sender's palette budget.
-            let c = self.panel.snap(lin_to_srgb8_3(lin[i]));
-            out.px[i * 3] = c[0];
-            out.px[i * 3 + 1] = c[1];
-            out.px[i * 3 + 2] = c[2];
+            let c = self.panel.snap(lin_to_srgb8_3(*l));
+            out.px[i * 3..i * 3 + 3].copy_from_slice(&c);
         }
     }
 
@@ -674,10 +671,8 @@ pub fn render_target(z: &mut FractalZoom, target: Target, age: f64, out: &mut Fr
     let leg = Leg { target, age };
     let mut lin = vec![[0f32; 3]; NPIX];
     z.render_leg(&leg, age, &mut lin);
-    for i in 0..NPIX {
-        let c = z.panel.snap(lin_to_srgb8_3(lin[i]));
-        out.px[i * 3] = c[0];
-        out.px[i * 3 + 1] = c[1];
-        out.px[i * 3 + 2] = c[2];
+    for (i, l) in lin.iter().enumerate() {
+        let c = z.panel.snap(lin_to_srgb8_3(*l));
+        out.px[i * 3..i * 3 + 3].copy_from_slice(&c);
     }
 }
