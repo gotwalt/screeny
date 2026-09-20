@@ -484,6 +484,7 @@ impl Opts {
 }
 
 /// What the run added up to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
     /// Rules that held.
     pub passed: usize,
@@ -559,14 +560,9 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     let estimate: f32 = rules.iter().filter(|r| will_run(r)).map(|r| r.secs).sum();
 
     println!(
-        "screeny-probe http: {} rules against http://{}{} ({})",
+        "screeny-probe http: {} rules against {} ({})",
         rules.len(),
-        opts.host,
-        if opts.http_addr.port() == 80 {
-            String::new()
-        } else {
-            format!(":{}", opts.http_addr.port())
-        },
+        base_url(opts),
         if opts.http_addr.ip().is_loopback() {
             "loopback"
         } else {
@@ -707,6 +703,16 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         s.passed, s.failed, s.skipped
     );
     Ok(s)
+}
+
+/// The URL the suite is pointed at, as a person would type it: the `Host`
+/// header's value, which already carries a port when it has one.
+fn base_url(opts: &Opts) -> String {
+    if opts.host.contains(':') || opts.http_addr.port() == 80 {
+        format!("http://{}", opts.host)
+    } else {
+        format!("http://{}:{}", opts.host, opts.http_addr.port())
+    }
 }
 
 /// Whether `--only` selects this rule: by number, or by section prefix.

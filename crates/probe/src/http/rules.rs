@@ -1297,11 +1297,43 @@ fn wifi_post_credentials(cx: &mut Ctx) -> Result<Outcome, String> {
 }
 
 fn wifi_after_the_trial(cx: &mut Ctx) -> Result<Outcome, String> {
+    // Two things have to settle, and they are not the same thing: the device
+    // has to be reachable again (on the bench it is away for about a minute
+    // while it tries the dummy pair and falls back), and the attempt has to
+    // have *resolved*. Polling until the state is no longer `connecting` is
+    // the only wait that is right for both a device and a simulator, where
+    // the whole trial is over in 40 ms.
     let t0 = Instant::now();
-    let status = cx.wait_for_device(PATIENCE)?;
+    let mut last = String::from("nothing answered at all");
+    let mut result: Option<WifiReply> = None;
+    while t0.elapsed() < PATIENCE {
+        match cx.get(route::WIFI) {
+            Ok(res) if res.status == 200 => match res.parse::<WifiReply>() {
+                Ok(w) if w.state == WifiState::Connecting => {
+                    last = "still connecting".into();
+                }
+                Ok(w) => {
+                    result = Some(w);
+                    break;
+                }
+                Err(e) => last = e,
+            },
+            Ok(res) => last = format!("HTTP {}: {}", res.status, res.snippet(60)),
+            Err(e) => last = e,
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
     let away = t0.elapsed();
-    let res = cx.get(route::WIFI)?;
-    let w: WifiReply = res.parse()?;
+    let Some(w) = result else {
+        return verdict(
+            false,
+            format!(
+                "the attempt had not resolved after {:.0} s ({last})",
+                away.as_secs_f32()
+            ),
+        );
+    };
+    let status = cx.status()?;
 
     let mut wrong = Vec::new();
     if w.state != WifiState::Failed {

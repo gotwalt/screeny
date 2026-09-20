@@ -148,3 +148,51 @@ tests green, including two guards - every row of `route::ROUTES` is mentioned by
 (the same guard `crates/sim/tests/http_routes.rs` puts on the server), and the rule
 numbers are unique and ascending. Clippy on `crates/probe` adds no warning (the two it
 prints are pre-existing, in `vectors.rs` and `main.rs`).
+
+**Step 3 - the CLI, the in-process run, and a simulator bug.**
+
+`screeny-probe http` shares `--addr`/`--name` with every other command and defaults the
+HTTP address to that host on port 80; `--http HOST[:PORT]` points it elsewhere (a
+simulator on `127.0.0.1:8080`) while the UDP ports stay where they were, because two
+rules compare the two halves of one device against each other. `http --list` is answered
+before any address is resolved, so it works with no device and no DNS - the existing
+`conformance --list` still resolves first, and I did not touch it.
+
+`crates/sim/tests/http_conformance.rs` runs **all 38 rules**, `--allow-reboot`,
+`--allow-wifi-trial` and `--cap-probe` included, against an in-process simulator on
+ephemeral ports. The simulator is shaped so each opt-in rule has something to measure: a
+brightness cap of 100 under a starting brightness of 96, and the scripted radio set to
+`WifiOutcome::Fail` after the boot join so the posted credentials are refused the way
+`Example-Wifi1` is refused on the bench. Four more tests: `--only` by number and by
+section, a target that is not there being one clear error rather than 38 failures, the
+device being as it was found afterwards, and the one below.
+
+**The suite found a bug in the simulator, and I fixed it.** `docs/design/device-web.md`
+(the card 223 paragraph) says `GET /api/v1/status`'s `wifi_state` means **the link** and
+never the sticky result of the last credentials attempt - that result belongs to
+`GET /api/v1/wifi`. `crates/sim/src/api.rs` built it from `wifi.wifi_state()`, which is
+the provisioning machine's sticky byte (correctly, for UDP `GET_WIFI`, spec 8.3). So a
+simulator that ran a trial, failed it and fell back onto its stored network read
+`wifi_state: failed` while online and holding an address - **exactly the firmware 0.4.0
+behaviour card 223 exists to fix**. Rule 8 caught it the moment a test put the simulator
+in that state.
+
+The fix is one derivation in one place: `WifiModel::link_state()` (`pub(crate)`, no
+public API change), used by `wifi_reply()`'s non-trial branch and by `api.rs`'s status
+route, so the two cannot drift apart again. **UDP `GET_WIFI` is untouched** - it still
+answers `wifi.wifi_state()`, sticky `FAILED` and all, and `crates/sim/tests/http_wifi.rs`
+still pins that. `crates/sim`: 131 tests green, the 64-rule UDP conformance test
+unchanged and still green.
+
+Open question I did **not** decide (card 233 below): in `Portal`, `link_state()` still
+reports the machine's byte, so a device sitting in the portal after a failed trial reads
+`wifi_state: failed` rather than `disconnected`. That is what `wifi_reply()` has always
+done and nothing documents which is right; a device in the portal has no link to
+describe, so `disconnected` is arguably the honest answer. Left alone.
+
+One more thing the in-process run taught me: rule 33 originally waited only for the
+device to *answer*, which on a simulator is instantly, and then read a trial that had not
+resolved yet (`connecting`). It now polls `GET /api/v1/wifi` until the state is no longer
+`connecting`, bounded by 150 s. That is the wait that is right for both targets: on the
+bench the device is unreachable for about a minute first, and connection failures during
+that window are not counted as failures.
