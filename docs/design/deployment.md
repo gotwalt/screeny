@@ -115,13 +115,20 @@ and whose `deviceType` is `PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, with
 `driverName = intel_open_source_mesa_driver`. That is ANV, and wgpu will pick it up
 through `WGPU_BACKEND=vulkan`.
 
-The studio's own confirmation is one line on stderr the first time a GPU piece opens:
+The studio's own confirmation is one line on stderr the first time a GPU piece opens.
+Pick `overland`, `lattice` or `knot` in the browser, then:
 
 ```bash
-ssh workbench.local -- sh -c "curl -fsS -X POST http://127.0.0.1:8787/api/v1/set_piece -H 'content-type: application/json' -d '{\"id\":\"overland\"}' >/dev/null; sleep 3; docker logs --tail 50 screeny-studio | grep 'screeny-art: gpu='"
+ssh workbench.local -- docker logs --tail 50 screeny-studio | grep screeny-art:
 ```
 
-**Good:** `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`.
+**Good:** `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`. (On this Mac,
+in a container with no `/dev/dri`, the same line reads
+`gpu=llvmpipe (LLVM 19.1.7, 128 bits) backend=Vulkan` - the code path is identical,
+only the adapter differs.)
+
+Don't try to POST that through `ssh` on one line: `ssh` hands its arguments to a
+remote shell that re-parses them, and the JSON body's quotes do not survive.
 
 **If the only device is `llvmpipe`** (`PHYSICAL_DEVICE_TYPE_CPU`), the container is
 not reaching `/dev/dri`. Almost always the render gid: check it and redeploy with the
@@ -141,8 +148,13 @@ that yet: see card 145. Until it does, the fallback is to stay on the CPU pieces
 with no graphics driver in the tree at all:
 
 ```bash
-ssh workbench.local -- "cd ~/src/screeny && SCREENY_FEATURES=none docker compose -p screeny -f docker-compose.yml build"
+ssh workbench.local -- "cd ~/src/screeny && SCREENY_FEATURES=none SCREENY_PORT=8787 docker compose -p screeny -f docker-compose.yml build && SCREENY_FEATURES=none SCREENY_PORT=8787 docker compose -p screeny -f docker-compose.yml up -d"
 ```
+
+(The `build` alone only makes the image; the `up -d` is what starts using it. Doing
+this reverts on the next `tools/deploy-workbench.sh`, which builds with the default
+features - set `SCREENY_FEATURES=none` in an `.env` beside the compose file on the
+host if it should stick.)
 
 ### (c) Do the clock pieces show local time?
 
