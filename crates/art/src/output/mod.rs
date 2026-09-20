@@ -7,7 +7,8 @@
 //!   that is not this process.
 //! * [`SenderOutput`] is the real one - frames to a panel over UDP through
 //!   `screeny`'s `Link`, indexed frames exactly - and lives behind the
-//!   `sender` feature so the art core still builds with no network stack.
+//!   `sender` feature, which is on by default (card 112);
+//!   `--no-default-features` is the build with no network stack.
 
 use crate::frame::WireFrame;
 use std::io::{self, Write};

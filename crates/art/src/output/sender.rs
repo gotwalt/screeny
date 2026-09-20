@@ -9,8 +9,11 @@
 //! or is simply off is a counter here rather than an `io::Error` a render loop
 //! has to decide what to do about.
 //!
-//! Behind the `sender` feature: without it `screeny-art` has no network stack
-//! at all, which is what the headless runner and the tests want.
+//! Behind the `sender` feature, which is **on by default** (card 112): the
+//! wire acceptance in `tests/sender.rs` is the only check that indexed frames
+//! reach a panel pixel-exact, and it must run in a plain `cargo test`.
+//! `--no-default-features` builds `screeny-art` with no network stack at all,
+//! for a runner that only pipes or snapshots.
 
 use crate::frame::WireFrame;
 use crate::output::Output;

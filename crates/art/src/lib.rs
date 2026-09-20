@@ -6,7 +6,9 @@
 //!
 //! Frame costs and the preview are the real encoder's answers, not estimates
 //! ([`meter`]). Talking to a device is [`output::SenderOutput`], behind the
-//! `sender` feature; with the feature off nothing here opens a socket.
+//! `sender` feature - on by default (card 112), because sending is what this
+//! crate is for. `--no-default-features` turns it off, and then nothing here
+//! opens a socket.
 
 pub mod color;
 pub mod dither;
