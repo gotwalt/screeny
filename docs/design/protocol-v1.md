@@ -49,6 +49,21 @@ the bytes it has are not the bytes that were sent, and a `len` that happens to
 fit the truncation would be a lie. (Card 006: a receiver that simply passes the
 short read to the parser reports `ERR_BAD_LENGTH`-shaped nonsense instead.)
 
+**Neither this rule nor §2.3's 1464-byte `len` ceiling can be observed over
+WiFi.** A UDP payload over 1472 bytes is an IP packet over a 1500-byte MTU, so
+it is fragmented; the device does not reassemble fragments, as the paragraph
+above says, so the stack drops it before the receiver is ever offered it and
+**nothing counts it**. `frames_rejected` stays where it was - which is exactly
+what a violation of the rule looks like from outside. A sender that sets
+`IP_DONTFRAG` as §9.2 advises cannot even transmit such a datagram. Both rules
+are therefore verifiable only over loopback, or across a link whose MTU exceeds
+1500: `screeny-probe conformance` marks them `LOOPBACK_ONLY` and prints
+`SKIP  loopback only: the radio fragments it away` rather than a pass it cannot
+justify, and `crates/sim` keeps the real assertions, where the rejection reason
+is visible in process. This is a property of the rules, not a gap in either
+implementation, and it is written here so that the next device-side test for
+them is not written at all. (Card 132.)
+
 A sender MUST NOT send frame data to a broadcast or multicast address. Unicast
 only. (802.11 sends multicast unacknowledged, at the lowest basic rate, buffered
 to the DTIM beacon - see RFC 9119.) Multicast is used only for mDNS.
@@ -116,7 +131,11 @@ counter useless.
 Number of bytes of payload/body following the 8-byte header. A receiver MUST
 check `8 + len <= datagram_length` and discard the packet otherwise. Bytes
 beyond `8 + len` are padding and MUST be ignored; a sender MAY pad. For a
-`FRAME`, `len` MUST be `<= 1464`.
+`FRAME`, `len` MUST be `<= 1464`. That last one is the rule §1 says cannot be
+observed over WiFi: a `len` of 1465 that the datagram really backs up makes a
+1473-byte datagram, which the radio fragments away. A `len` the datagram does
+*not* back up is the `8 + len <= datagram_length` check above, and that one is
+observable anywhere.
 
 `len` is deliberately redundant with the UDP datagram length. It gives the
 `no_std` decoder a bound to validate before indexing, it allows fixed-size

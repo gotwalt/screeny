@@ -150,3 +150,23 @@ What is in them, all checked against code:
 
 Probe rule numbers cited in the text: 8, 10, 11, 12, 14, 22, 25, 26, 27, 28,
 29, 30, 34, 36, 37, 38 - each beside the sentence it pins.
+
+### Step 3 - card 132's paragraph (orchestrator's addition, same file)
+
+Asked for mid-card and done in its own commit; **card 132 itself is untouched**
+and stays in `backlog/` for the orchestrator to close.
+
+- Section 1 gains a paragraph after the 1472-byte-buffer rule: neither that
+  rule nor §2.3's `len` ceiling is observable over WiFi, because an oversize
+  payload is fragmented and the device does not reassemble, so the stack drops
+  it and nothing counts it - `frames_rejected` unmoved is also what a violation
+  looks like. It names the suite's behaviour (`LOOPBACK_ONLY`, the
+  `SKIP  loopback only: the radio fragments it away` line) and says the
+  simulator keeps the real assertions.
+- Section 2.3 gains the distinction the probe's code actually draws
+  (`crates/probe/src/suite/framing.rs:73-85, 222-235`): a `len` of 1465 that
+  the datagram *backs up* needs a 1473-byte datagram and is loopback-only,
+  while a `len` the datagram does not back up is the `8 + len <=
+  datagram_length` check and is observable anywhere. Card 132's own wording
+  did not separate the two; the two probe rules do, so the spec follows the
+  code.
