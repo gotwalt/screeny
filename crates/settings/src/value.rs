@@ -40,8 +40,20 @@ pub enum SettingError {
 /// **Bytes, not text.** 802.11 SSIDs are an opaque byte string; plenty of real
 /// access points are not UTF-8. Nothing here requires UTF-8, and
 /// [`Ssid::as_str`] is the only place that asks.
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// An SSID is not a secret (spec 8.4 is about the PSK), so `Debug` prints it:
+/// as text when it is UTF-8, as bytes otherwise.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Ssid(Vec<u8, MAX_SSID_LEN>);
+
+impl fmt::Debug for Ssid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.as_str() {
+            Some(s) => write!(f, "Ssid({s:?})"),
+            None => write!(f, "Ssid({:?})", &self.0[..]),
+        }
+    }
+}
 
 impl Ssid {
     /// Validate and copy an SSID.
