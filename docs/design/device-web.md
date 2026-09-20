@@ -3,7 +3,7 @@
 **Status (2026-09-20, late): research done (200-202); on the device: the partition
 table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
 strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
-(221); in flight: 212 (the store in the firmware, hardware) and 226 (`crates/device-api`).** This file is the
+(221); `crates/device-api` (226); in flight: 212 (the store in the firmware, hardware).** This file is the
 source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
 Claude session): decisions, what the research settled, and the build order at the end.
 
@@ -171,6 +171,46 @@ README has the diagram and the action list) - these are now the design:
   credential until `CommitCredentials`.
 - Footprint: no statics; `Provisioner` 168 B, ~400 B of stack at peak in `render`.
 
+### The HTTP API (card 226, `crates/device-api`)
+
+The request and reply shapes are one `no_std` crate, `screeny-device-api`, that the
+firmware (222), the simulator (224) and the Studio all depend on - not a feature of
+`crates/proto`, which is shared surface with the software session. Its README has the
+route table; `crates/device-api/tests/golden/` has a checked-in example of every request
+and reply, verified through `serde_json` and `serde-json-core` on every `cargo test`.
+
+| method | path | request | reply |
+|---|---|---|---|
+| GET | `/api/v1/status` | - | the `GET_INFO` and telemetry numbers plus `api`, `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `store_errors` |
+| GET | `/api/v1/telemetry` | - | the 48 bytes of spec 6.7 as named fields |
+| GET | `/api/v1/networks` | - | at most 16, strongest first; one scan per 10 s |
+| GET | `/api/v1/wifi` | - | `{state, ssid, ip, reason}` - what the portal page's reload reads |
+| POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}`, sent before the radio work |
+| POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | the applied values |
+| POST | `/api/v1/firmware` | raw octet-stream, streamed | `{ok, written, error?}` |
+| POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` |
+| POST | `/api/v1/identify` | `{duration_ms}` | `{"result":"identifying"}` |
+
+Failures are one shape: `{"error":"<code>", "detail"?:"..."}`, the HTTP status being a
+property of the code. Every mutating request carries an optional `pin`/`counter`, parsed
+and ignored today (decision 3); `check_auth` is the single hook for parked card 041.
+
+What card 222 must not rediscover:
+
+- **picoserve does not buffer replies** (it measures into a counting writer, then
+  streams), so reply bounds are documentation; the RAM-relevant bound is the request
+  side, `route::MAX_REQUEST_LEN` = 384 bytes (the WiFi form).
+- **`serde_json_core::from_slice` silently does not unescape strings**: use
+  `from_slice_escaped` / picoserve's `JsonWithUnescapeBufferSize<T, { MIN_UNESCAPE_BUFFER }>`
+  (32 bytes = the longest name; raising `MAX_NAME_LEN` raises it).
+- **picoserve's `Form` extractor cannot be used for `POST /api/v1/wifi`**: it demands a
+  UTF-8 body and an SSID is bytes. Read the raw body, call `form::parse_wifi_form`.
+  Duplicate keys are refused; a missing `psk` means an open network.
+- A non-UTF-8 SSID is reported as `null` and left out of the scan list, never lossily
+  converted.
+- `GET /api/v1/networks` at worst case is 3.7 KB, several TCP segments: that is the route
+  the "HTTP costs no frame" bench proof should hammer, not `/status`.
+
 Orchestrator's defaults for card 201's open questions (the owner can overrule): the
 portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
 **does answer while a sender is streaming**, and a bench card proves it costs no frame;
@@ -188,7 +228,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 203 | bench: GPIO15 confirmed with the probe, owner pressing - **done** | yes (orchestrator + owner) |
 | 212 | (in flight) firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
-| 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio (in flight; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
+| 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi states (delivers 081) | no |
