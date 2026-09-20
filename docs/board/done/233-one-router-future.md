@@ -432,3 +432,14 @@ justification is now historical, and changing a tool is another card's job.
    `main`'s 5,104-byte poll frame plus `store::find_partition`'s 3,200 plus
    esp-storage's ~4,150. One shared buffer is worth ~3 KB off the *only* thing setting
    the mark, which is now the cheapest demand lever left by a distance.
+
+### Orchestrator, after the merge (2026-09-20)
+
+`main` builds to `.stack` 34,352, image 909,665. On the device (fw 0.4.3): HTTP
+conformance 30 passed / 0 failed / 8 skipped (was 26/3/9 on 0.4.2; rule 29 passing with
+`CARD_223_LANDED` untouched); UDP conformance 60/0/4; 764 of 904 requests answered during
+the flash-and-boot window with none failing once up; back-to-back connects 7-25 ms;
+`stack_free` 20,272 and, per the worker's serial log, not one high-water growth line
+under that load. Accepted: `HEAD /` is 405 (picoserve's body-less writer cannot be
+reused from outside the crate); the >= 2 KB RAM target was missed by ~500 bytes and said
+so plainly - card 223 takes the frame-socket tx buffer lever (ex-234) as its first step.
