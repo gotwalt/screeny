@@ -100,3 +100,70 @@ partition and the running slot are untouchable, and a test must prove the writer
 an offset outside its slot.
 
 ## Log
+
+### 1. The design, before building (worker-240, 2026-09-20)
+
+**Where the bytes go.** `POST /api/v1/firmware` is the one route with
+`route::Body::Stream`, so the dispatch never calls `read_all`. The handler takes
+picoserve's `RequestBodyReader`, lengthens *its* deadline
+(`with_different_timeout`, because picoserve's `read_request` is 5 s and a
+750 KB upload over this radio is tens of seconds), and fills **one 4,096-byte
+sector-aligned buffer on the heap** - `Box<Staging>`, allocated when the upload
+starts and freed when it ends. Research 006 section 5 allows exactly that
+("or allocate from the heap for the life of the update"); the alternative, a
+buffer in the handler's future, would be `.bss` twice over (one per HTTP worker)
+and `.bss` is core 0's stack. When the buffer is full, a **synchronous**
+`#[inline(never)]` function erases that one sector and writes it, so the whole
+esp-storage call chain is an ordinary stack frame that is gone before the next
+`await`.
+
+**Who owns the flash.** One `AtomicBool` claim (`FirmwareError::Busy` to the
+loser), and then, per sector, the existing `store::STORE` mutex - the same lock
+the settings store takes. Per sector rather than for the whole upload on
+purpose: a settings commit or a `SET_NAME` waits ~58 ms, not ~15 s, and
+esp-storage's park/unpark granularity is a sector anyway (006 section 4). Only
+core 0 ever touches flash; `multicore_auto_park` is already how the store's
+`FlashStorage` was built, and this path borrows that same handle, so there is
+one `FlashStorage` on the device and one discipline.
+
+**What it can reach.** The target is a `PartitionEntry` for the **inactive** app
+slot, chosen once at boot in `store::read_partitions` by comparing each app
+partition's offset with `booted_partition()`'s. Every write goes through
+`entry.as_flash_region(flash)`, whose `read`/`write`/`erase` are
+partition-relative and bounds-checked by the crate (`partitions.rs` line 793,
+`in_range`), so the writer is *structurally* unable to address the running slot,
+the bootloader, the partition table or `screeny`. On top of that our own
+`screeny_fwimage::plan_write` refuses an offset or length outside the slot, and
+a host test drives it. **`otadata` is not touched by this card at all** - 006's
+staging half never writes it; the flip is `activate_next_partition` in card 241.
+
+**The panel.** Decision 7 lets a firmware update take the panel: while an upload
+is in flight `frames_task` draws a static "updating" screen (a new
+`screeny_provision::Screen::Updating`, so it is one implementation with host
+tests and the simulator can draw it too) and **dither is forced off** for the
+duration and restored after, per 006 section 4. With dither off the display task
+sleeps and the circular DMA loops, so a 50 ms core-1 stall costs literally
+nothing. A sender streaming at 30 fps keeps sending; its frames are still
+drained, decoded and counted (the receiver's `Intent` is untouched, so the
+source lock and the telemetry keep working) but they do **not** reach the panel -
+exactly the `Portal`/`Connected` overlay rule card 223 already built. When the
+upload ends the next decoded frame publishes and the picture is back; the sender
+never sees an error and never has to reconnect.
+
+**Concurrency and aborts.** A second upload while one is in flight gets
+`FirmwareError::Busy` and does not touch flash. A stalled uploader is bounded
+twice: a per-read timeout (`UPLOAD_STALL_MS`) and an overall deadline on the
+body (`UPLOAD_TOTAL_S`); either one ends the upload, releases the claim, frees
+the heap buffer and gives the panel back. Every abort leaves the same thing
+behind: a partly-written inactive slot and **nothing else changed** - `otadata`
+untouched, so the next boot is the running slot, and the next upload re-erases
+as it goes (006 section 5's table, rows 2 and 3).
+
+**Where 006 and this card differ, and 006 wins.** 006 section 9's card D drives
+staging "from a control opcode or the serial console so it can be tested before
+card 201's server exists" - card 201 has shipped, so the driver is the HTTP
+route, which is what this card says. 006 card F puts the "updating" screen in a
+card of its own; this card's step 5 asks for it here, and 006 section 4's
+recommendation is unambiguous about what it should be, so it is built here.
+Nothing in 006's *staging* half is deferred to 241: activate, confirm, revert
+and the health criterion are 241's and are not built.
