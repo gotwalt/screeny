@@ -227,3 +227,13 @@ rather than a read taken after a wait for something else.
 `cargo test --release -p screeny-studio --test moved`, fourteen consecutive
 runs after the fix: 14 x `ok. 2 passed; 0 failed`, 6.4-10.3 s each. (Before
 the fix: 10 ok, 2 failed out of 12.)
+
+### Worker, step 6 (docs)
+
+`crates/studio/README.md`: a bullet under "one panel, one picture" saying what
+the probe is, when it happens, what it will not do (a panel reached by name, an
+id this studio does not know) and that `--no-discover` turns it off; the
+`--no-discover` row and the "nothing grows without bound" sentence now mention
+the probe. `crates/screeny/README.md` got its two API lines in step 2.
+`docs/design/protocol-v1.md` is **not** touched: 5.5 already says exactly this
+and the wire is unchanged - one `GET_INFO`, the same reply, no new opcode.
