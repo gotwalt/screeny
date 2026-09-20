@@ -13,7 +13,7 @@ use sequential_storage::Error as SsError;
 
 pub use sequential_storage::map::MapConfigError;
 
-use crate::value::{Name, Psk, Settings, SettingError, Ssid, Wifi};
+use crate::value::{Name, Psk, SettingError, Settings, Ssid, Wifi};
 
 /// The schema version this build writes and understands.
 ///
@@ -138,9 +138,9 @@ impl<E> From<SsError<E>> for StoreError {
             SsError::Corrupted { .. } => StoreError::Corrupted,
             SsError::FullStorage | SsError::ItemTooBig => StoreError::Full,
             SsError::BufferTooSmall(n) => StoreError::Scratch(n),
-            SsError::BufferTooBig
-            | SsError::SerializationError(_)
-            | SsError::LogicBug { .. } => StoreError::Internal,
+            SsError::BufferTooBig | SsError::SerializationError(_) | SsError::LogicBug { .. } => {
+                StoreError::Internal
+            }
             // `Error` is `#[non_exhaustive]`.
             _ => StoreError::Internal,
         }
@@ -344,13 +344,19 @@ impl<F: NorFlash> Store<F> {
 
         // Wi-Fi. An absent or zero-length SSID means "no credentials"; the PSK
         // is not even consulted in that case.
-        match self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await {
+        match self
+            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
+            .await
+        {
             Err(e) => report.note(Fields::WIFI, Some(e)),
             Ok(None) => report.note(Fields::WIFI, None),
             Ok(Some(raw)) if raw.is_empty() => report.note(Fields::WIFI, None),
             Ok(Some(raw)) => match Ssid::new(&raw) {
                 Err(e) => report.note(Fields::WIFI, Some(StoreError::Invalid(e))),
-                Ok(ssid) => match self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await {
+                Ok(ssid) => match self
+                    .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
+                    .await
+                {
                     Err(e) => report.note(Fields::WIFI, Some(e)),
                     Ok(psk) => {
                         let bytes = psk.as_deref().unwrap_or(&[]);
@@ -405,7 +411,11 @@ impl<F: NorFlash> Store<F> {
     /// # Errors
     /// [`StoreError`]. Nothing is written when the value is refused or the
     /// scratch buffer is too small.
-    pub async fn save_wifi(&mut self, scratch: &mut [u8], wifi: &Wifi) -> Result<Write, StoreError> {
+    pub async fn save_wifi(
+        &mut self,
+        scratch: &mut [u8],
+        wifi: &Wifi,
+    ) -> Result<Write, StoreError> {
         check_scratch(scratch)?;
         let ssid = wifi.ssid.as_bytes();
         let psk = wifi.psk.as_bytes();
@@ -414,8 +424,12 @@ impl<F: NorFlash> Store<F> {
         }
         self.prepare(scratch).await?;
 
-        let cur_ssid = self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await?;
-        let cur_psk = self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await?;
+        let cur_ssid = self
+            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
+            .await?;
+        let cur_psk = self
+            .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
+            .await?;
         if cur_ssid.as_deref() == Some(ssid) && cur_psk.as_deref().unwrap_or(&[]) == psk {
             return Ok(Write::Skipped);
         }
@@ -445,8 +459,12 @@ impl<F: NorFlash> Store<F> {
         check_scratch(scratch)?;
         self.prepare(scratch).await?;
 
-        let cur_ssid = self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await?;
-        let cur_psk = self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await?;
+        let cur_ssid = self
+            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
+            .await?;
+        let cur_psk = self
+            .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
+            .await?;
         let ssid_clear = cur_ssid.as_deref().unwrap_or(&[]).is_empty();
         let psk_clear = cur_psk.as_deref().unwrap_or(&[]).is_empty();
         if ssid_clear && psk_clear {
@@ -466,7 +484,11 @@ impl<F: NorFlash> Store<F> {
     ///
     /// # Errors
     /// [`StoreError`].
-    pub async fn save_name(&mut self, scratch: &mut [u8], name: &Name) -> Result<Write, StoreError> {
+    pub async fn save_name(
+        &mut self,
+        scratch: &mut [u8],
+        name: &Name,
+    ) -> Result<Write, StoreError> {
         check_scratch(scratch)?;
         self.prepare(scratch).await?;
         let want = name.as_bytes();
@@ -586,12 +608,7 @@ impl<F: NorFlash> Store<F> {
         }
     }
 
-    async fn store_bytes(
-        &mut self,
-        scratch: &mut [u8],
-        k: u8,
-        v: &[u8],
-    ) -> Result<(), StoreError> {
+    async fn store_bytes(&mut self, scratch: &mut [u8], k: u8, v: &[u8]) -> Result<(), StoreError> {
         self.map
             .store_item::<&[u8]>(scratch, &k, &v)
             .await

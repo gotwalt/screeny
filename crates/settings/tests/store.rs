@@ -9,8 +9,9 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use screeny_settings::{
-    key, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch, Settings,
-    SettingError, Ssid, Store, StoreError, Wifi, DEFAULT_BRIGHTNESS, SCHEMA_VERSION, SCRATCH_MIN,
+    key, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch,
+    SettingError, Settings, Ssid, Store, StoreError, Wifi, DEFAULT_BRIGHTNESS, SCHEMA_VERSION,
+    SCRATCH_MIN,
 };
 use sequential_storage::cache::Cache;
 use sequential_storage::map::{MapConfig, MapStorage};
@@ -111,7 +112,11 @@ fn a_blank_load_does_not_write_anything() {
     let before = st.flash().stats_snapshot();
     let _ = load(&mut st);
     let d = before.compare_to(st.flash().stats_snapshot());
-    assert_eq!((d.writes, d.erases), (0, 0), "load must never write or erase");
+    assert_eq!(
+        (d.writes, d.erases),
+        (0, 0),
+        "load must never write or erase"
+    );
 }
 
 // -- round trip -----------------------------------------------------------
@@ -254,7 +259,11 @@ fn an_unknown_schema_version_falls_back_to_defaults() {
     let (settings, report) = load(&mut st);
     assert_eq!(report.schema, SchemaState::Unknown(99));
     assert_eq!(report.error, None, "a future version is not a fault");
-    assert_eq!(settings, Settings::default(), "ignore the rest, use defaults");
+    assert_eq!(
+        settings,
+        Settings::default(),
+        "ignore the rest, use defaults"
+    );
 }
 
 #[test]
@@ -305,7 +314,10 @@ fn an_idle_mode_this_build_does_not_know_falls_back_without_an_error() {
     let mut st = store(flash);
     let (settings, report) = load(&mut st);
     assert_eq!(settings.idle_mode, IdleMode::Status);
-    assert_eq!(settings.brightness, 77, "one bad field does not spoil the rest");
+    assert_eq!(
+        settings.brightness, 77,
+        "one bad field does not spoil the rest"
+    );
     assert!(report.fallback.contains(Fields::IDLE_MODE));
     assert_eq!(report.error, None);
 }
@@ -538,7 +550,10 @@ fn thousands_of_brightness_writes_still_round_trip() {
         d.erases >= 1,
         "{N} writes erased nothing - the partition never filled, so page recycling was not exercised"
     );
-    println!("endurance: {N} writes -> {} flash writes, {} erases", d.writes, d.erases);
+    println!(
+        "endurance: {N} writes -> {} flash writes, {} erases",
+        d.writes, d.erases
+    );
 
     let last = ((N - 1) % 251) as u8;
     let (settings, report) = load(&mut st);
@@ -553,7 +568,11 @@ fn thousands_of_brightness_writes_still_round_trip() {
     }
     let (settings, report) = load(&mut st);
     assert_eq!(report.error, None, "{report:?}");
-    assert_eq!(settings.wifi, Some(wifi()), "migrated across page recycling");
+    assert_eq!(
+        settings.wifi,
+        Some(wifi()),
+        "migrated across page recycling"
+    );
 }
 
 // -- power failure ---------------------------------------------------------
@@ -717,11 +736,15 @@ fn a_sixty_second_brightness_sweep_costs_a_handful_of_writes() {
     );
     assert!(
         d.writes <= 20,
-        "{changes} changes became {} flash writes", d.writes
+        "{changes} changes became {} flash writes",
+        d.writes
     );
     assert_eq!(d.erases, 0, "a sweep must not erase a page");
     assert_eq!(load(&mut st).0.brightness, live, "the last value did land");
 
     // Printed so the card's Log can quote a number rather than a bound.
-    println!("sweep: {changes} changes -> {commits} commits -> {} flash writes, {} erases", d.writes, d.erases);
+    println!(
+        "sweep: {changes} changes -> {commits} commits -> {} flash writes, {} erases",
+        d.writes, d.erases
+    );
 }
