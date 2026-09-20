@@ -4,8 +4,8 @@ title: Firmware RAM headroom - framebuffers off core 0's stack, and what APSTA r
 type: build
 hardware: yes
 depends: [201, 210]
-owner:
-branch:
+owner: worker-220
+branch: card/220-ram-headroom-apsta-heap
 ---
 
 ## Goal
