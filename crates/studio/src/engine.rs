@@ -38,6 +38,11 @@ pub struct Engine {
     /// Set when the "send to panel" switch is on. All of the behaviour is in
     /// `screeny_art::output`; this is a field and four lines in `tick`.
     panel: Option<SenderOutput>,
+    /// What the switch was last set to, so the answer survives a restart.
+    /// Card 105 left this out of `StudioState` on purpose and handed it to
+    /// card 106; it now lives in the state file like everything else.
+    panel_on: bool,
+    panel_to: String,
     /// When the meter last took the connected device's budget and codec set.
     limits_at: Instant,
 }
@@ -63,6 +68,8 @@ impl Engine {
             fps: 0.0,
             packet: Arc::new(vec![0; PACKET_BYTES]),
             panel: None,
+            panel_on: false,
+            panel_to: String::new(),
             limits_at: Instant::now(),
         }
     }
@@ -218,6 +225,8 @@ impl Engine {
     /// Turning it off drops the link, which sends `FINAL` and releases the
     /// panel at once.
     pub fn set_panel(&mut self, on: bool, to: &str) -> Option<PanelStatus> {
+        self.panel_on = on;
+        self.panel_to = to.trim().to_string();
         self.panel = on.then(|| SenderOutput::deferred(screeny_art::output::target_for(to)));
         self.limits_at = Instant::now() - Duration::from_secs(10);
         self.panel.as_ref().map(SenderOutput::status)
@@ -231,6 +240,14 @@ impl Engine {
             p.poll();
         }
         self.panel.as_ref().map(SenderOutput::status)
+    }
+
+    /// Whether the preview is being sent to a panel, and to which. This is the
+    /// half of the studio's state that used to live only in the browser's
+    /// `localStorage`.
+    #[must_use]
+    pub fn panel_aim(&self) -> (bool, String) {
+        (self.panel_on, self.panel_to.clone())
     }
 
     /// Send `FINAL` so the panel is released the moment the server stops,

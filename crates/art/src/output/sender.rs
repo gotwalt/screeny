@@ -136,6 +136,18 @@ impl SenderOutput {
         Ok(SenderOutput { link: Link::attach(device, cfg)?, label, last: None })
     }
 
+    /// As [`SenderOutput::attach`], but without waiting for the handshake.
+    ///
+    /// What the studio's device players want (card 106): the registry has
+    /// resolved the device, so the link is pinned to those exact two ports and
+    /// never browses - but a panel that is switched off at boot is not a
+    /// failure, it is Tuesday. Never fails.
+    #[must_use]
+    pub fn attach_deferred(device: Device, cfg: LinkConfig) -> Self {
+        let label = device.label();
+        SenderOutput { link: Link::attach_deferred(device, cfg), label, last: None }
+    }
+
     /// Start without a panel and pick one up whenever it appears.
     ///
     /// What a service wants: a panel that is off at boot is not a different
