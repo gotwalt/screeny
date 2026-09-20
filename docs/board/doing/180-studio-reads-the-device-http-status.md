@@ -153,3 +153,32 @@ with firmware 0.2.0 it looks exactly as it does today.
   nor `state.json` - and that no device fact at all is in `state.json`, since these are
   live data. A `Guard` with a `Drop` kills the child however the test ends; it is stopped
   with SIGTERM, as `docker stop` does, so the state file is written the way it is in life.
+
+- **The page.** A "Device" block at the foot of the panel section, under a rule, in the
+  same facts grid and the same three tones the section already uses: **Slot** (`ota 0 ·
+  valid`), **Up**, **Memory**, **Free stack**, **WiFi** (`<network> · -54 dBm`),
+  **Reboots**, **Last reset**, **Store errors** (only when there are any), **When idle**.
+  Quiet by default; the four things that catch an eye are the four that mean something
+  *happened to* the panel rather than in it - an unexpected reset reason, a store error,
+  a slot that is not `valid`, and memory running out.
+
+  Which is which is decided **once, on the server**, beside the reasoning: the page reads
+  `low_stack`, `low_heap`, `bad_fw_state`, `odd_reset` by name and carries no threshold
+  of its own. A test greps `showDevice` for `2048` and `0.85` to keep it that way.
+
+  No duplication: with facts present, `Up` and `Signal` leave the list above (they are in
+  the Device block now), and the firmware *version* stays above while the block says
+  `Slot`. With no facts, the block is `hidden` and the page is byte-for-byte the page it
+  was. Two quiet notes under the block: "the last WiFi change failed; it is still on the
+  network it had" (the card's rule until firmware 223 - never a fault), and the portal
+  being up.
+
+- **Card 181: kept live, relabelled.** With no panel attached the switch reads *"Drive a
+  panel as soon as one is found"*; with one, *"Show it on the panel"*. Disabling it was
+  the other option and is the wrong one: the switch is not decorative, `state.on` on the
+  unbound player is what makes the first panel found start playing without anybody
+  pressing anything, and greying it out would take that choice away while the page still
+  had to explain the behaviour somewhere. Relabelling makes the control *say* the rule
+  instead. `set_panel`'s two bodies (`{"on":false}`, `{"on":true,"to":"..."}`) and their
+  effect are untouched, and `tests/panel.rs::set_panel_hands_the_panel_over_and_takes_it_back`
+  still passes unchanged.
