@@ -23,7 +23,7 @@ now*. So the sheet was built by a script that read the wall clock, worked out a
 **fractional** offset that puts the simulated clock on the target minute's boundary at
 the start of the warmup, and chose a warmup long enough for the first dance to land but
 short enough that the next one has not set off
-(`docs/research/009-numerals-rest-pose.md`, "How it was rendered"). That works, and it is
+(`docs/research/010-numerals-rest-pose.md`, "How it was rendered"). That works, and it is
 not something the next person should have to rediscover.
 
 It is also why card 160's "snapshot tests for the awkward times" are pose-and-ink

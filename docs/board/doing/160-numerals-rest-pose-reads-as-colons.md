@@ -94,7 +94,7 @@ What I built, in `crates/art/src/pieces/clocks/`:
 
 ### The contact sheet, and what I threw away
 
-`docs/research/009-numerals-rest-pose.md`, with three images under
+`docs/research/010-numerals-rest-pose.md`, with three images under
 `docs/research/img/160-rest-*.png` (240 KB the lot). Rest treatments down, the seven
 awkward times across, rendered through `screeny-art snapshot` with the time pinned by a
 fractional `offset` and `still=60` so the hands are holding, not dancing. `09:05` and
