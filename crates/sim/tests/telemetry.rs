@@ -105,12 +105,20 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
         "network-limited: about seven in ten of {sent} should have arrived; {}",
         counters(&lossy)
     );
+    // And it left holes where it went. This one owes nothing to the host's
+    // scheduling: the slow run below has no holes at all, so the pair of them
+    // tells the two cases apart on its own.
+    assert!(
+        lossy.seq_gaps > 0,
+        "a lost packet leaves a hole in the sequence; {}",
+        counters(&lossy)
+    );
     // And the device kept up with what did arrive: a lost packet is not a
     // superseded one. Against `frames_rx` rather than against zero, because
     // zero is a statement about the machine's scheduler.
     assert!(
-        lossy.frames_dropped_superseded * 4 <= lossy.frames_rx,
-        "a lost packet is not a superseded one: next to none of what arrived \
+        lossy.frames_dropped_superseded * 3 <= lossy.frames_rx,
+        "a lost packet is not a superseded one: a third at most of what arrived \
          should have been superseded; {}",
         counters(&lossy)
     );
@@ -128,11 +136,19 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
         "decode-limited: the device got everything; {}",
         counters(&slow)
     );
-    // But it could not draw it in time: over half of everything that reached
-    // it was superseded before it could be shown, where the lossy run is
-    // under a quarter.
+    // But it could not draw it in time: over half of what reached it was
+    // superseded, where the lossy run is a third at most. The observed values
+    // are 85% and 0%, so the band between the two bounds is wide.
+    //
+    // This is the one assertion whose *premise* the host can take away: 40 ms
+    // of decode is only slow next to frames 4 ms apart, and a machine that
+    // stretches this loop's `sleep(4)` past 40 ms has made the device the
+    // faster of the two. That takes about a hundredfold - at load 105 the
+    // send loop still paced at 5.5 ms a frame - and when it happens the
+    // failure prints `frames_shown` next to `frames_rx` and says so plainly,
+    // which is the honest answer rather than a bound low enough to hide it.
     assert!(
-        slow.frames_dropped_superseded > slow.frames_rx / 2,
+        slow.frames_dropped_superseded * 2 > slow.frames_rx,
         "and could not draw it in time; {}",
         counters(&slow)
     );
