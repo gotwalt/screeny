@@ -308,3 +308,203 @@ one-slot state-file mailbox, capped jittered backoff, and every fault logged onc
 - **167** (`state.repaired` is not shown) - one row in the panel section. Close.
 - **120** (preview bandwidth) - still real, and more so now that the one page always streams.
   Edited rather than closed.
+
+### Step 2 - the engine, and what it cost
+
+`src/engine.rs` -> `src/page.rs`: it keeps `StudioState`, `Bootstrap`, the frame packet
+and the piece list, and holds nothing that runs. `Engine`, `PreviewHealth`, `EngineView`,
+`restore_preview`, `spawn_engine` and `adopt_preview` are gone.
+
+**The player is the only renderer.** Three changes made that possible, and the second is
+the one that mattered:
+
+1. **`Core` produces the whole packet.** `Pipeline::process` already returned `preview`
+   and `stats` beside `wire`; the player was throwing them away. Now the focused player
+   writes `page::pack(...)` into the page's one-slot frame cell, so what the browser
+   draws and what the panel is sent are the same bytes by construction. `Core::tick`
+   also took `paused` and `speed` and matches the old engine's clock exactly (`t += dt`
+   *before* the render, `wall` to the pipeline).
+2. **Changes are drained, not thrown at a new thread.** Every `configure` that touched
+   piece/seed/param/settings used to call `restart_core` - stop a thread, start a
+   thread. Tolerable when only a dropdown reached a player; not tolerable now that the
+   page's **sliders** do, because dragging one is sixty changes a second. A one-slot
+   `Pending { rebuild, params, settings, restart, action }` is drained by the render
+   loop between frames. Measured in the browser afterwards: a twelve-step drag reached
+   the panel with **0** core restarts.
+3. **`Players::rekey` renames in place** instead of building a replacement `Player`, so
+   adopting a panel keeps the thread, the core and the piece - "without the picture
+   restarting", as the card asks. A unit test asserts `Arc::ptr_eq` before and after.
+
+Three things fell out that are worth recording:
+
+- **`health.restarts` became an honest fault counter.** Card 106's soak reported 88
+  restarts for 88 piece changes and had to explain them in its Log. This card's soak
+  reports **0**.
+- **A wedged piece can no longer hold anything.** A player's core is owned by its render
+  thread and is behind no shared lock, so card 106's `try_lock`-and-cache dance around
+  the engine went away and card 143 is closed by construction. `/healthz` lost its
+  fourth 503 condition because nothing is left to be it.
+- **`piece_playing` had to learn to say "not yet".** A change is applied before the
+  *next* frame, so for up to one frame period the configuration says one piece and the
+  core is still running another. Answering with the old piece's `Playing` put the wrong
+  thing on the page - `tests/api.rs::the_api_round_trips` caught it within a minute of
+  the first run. The cached answer is a `(piece, Playing)` pair now and is only used
+  when the piece matches.
+
+**`on: false` stopped meaning "stop".** It releases the link and nothing else; the core
+keeps rendering because the page is still showing the piece. Card 106's idle rule
+survives, restated: full rate while **the link is up or a browser is watching**,
+`IDLE_FPS` otherwise. "A browser is watching" is `Screen::watchers()`, the frame cell's
+`receiver_count()` - so a panel away for a month with nobody looking still costs 5 fps,
+which is what that rule was bought for.
+
+### Step 3 - state v3, and the page
+
+Schema v3 as designed. The migration test uses the live service's v2 shape from card
+165's Log (`LIVE_V2` in `state.rs`): one device `4a00a4`, one player on `overland` seed
+4242, a `preview` block on `clocks-numerals`, a four-entry `pieces` map. Four migration
+tests in all - the real file, a preview on a piece the memory does not know, a file whose
+preview was the *only* thing playing (it becomes the player, on the device `panel_to`
+named), and one with nothing to point at (it becomes an unbound player).
+
+The page: `index.html`, `main.js`, `style.css`; `dashboard.{html,js,css}` deleted;
+`/dashboard` a 307 to `/`. The layout rule is the whole of the ~600 px fix - the
+two-column bench is behind `@media (min-width: 1100px)` and everything narrower is an
+ordinary scrolling column in DOM order. `tests/ui.rs` guards both halves: that the
+breakpoint exists and that nothing above it declares `grid-template-areas`, and that the
+sections are in the order they have to stack in.
+
+### Step 4 - the orchestrator's correction to `set_panel`
+
+Told mid-card that on the live service `POST /api/v1/set_panel {"on":false}` answers 200
+while the panel carries on receiving 30 fps, because card 106's version only switched the
+*preview's* link - and that a firmware conformance suite ran against a panel it believed
+it had borrowed, for 35 false failures. Two changes:
+
+- **the answer says what happened**: `{on, device, label, panel, state}` rather than
+  `null`, because a 200 meaning "I have let it go" and a 200 meaning "I am still
+  streaming to it" must not look the same;
+- **off is off for every player**, not only the one the page shows.
+
+`tests/panel.rs::set_panel_hands_the_panel_over_and_takes_it_back` asserts none of this
+on status codes. It asserts what the **device** sees: after `{"on":false}` the simulator
+leaves `State::Live`, drops its `active_source`, and `frames_rx` does not move for two
+seconds; after `{"on":true,"to":...}` it is `Live` again. Confirmed by hand in the
+browser too - the simulator went `live -> hold` and stopped counting while the page kept
+drawing.
+
+### Step 5 - the flake work
+
+Also told mid-card that `tests/fleet.rs` is flaky under load, with card 093's Log as the
+worked example. The rule applied throughout: **no assertion is about a different moment
+from the one it waited for.** `common/mod.rs` gains `until_json`, which polls a JSON
+route until a predicate holds and hands back *the answer that satisfied it*; its timeout
+message carries the last answer, so a failure on a busy machine says what the server
+thought rather than only that time ran out.
+
+Fixed with it: the telemetry race (it asserted telemetry immediately after streaming
+started, but the poll is periodic and the two are not ordered); the brightness-after-
+reboot race (it read a fresh simulator's brightness in a window the studio was racing to
+close - it now reads the *first* simulator's before any policy exists, and asserts the
+transition rather than an instant); and the two `until`-then-re-read pairs in the restart
+and containment tests.
+
+The one place a hard time bound is still the point - "status answers while a piece is
+wedged" - measures against a baseline taken in the same test
+(`worst < max(baseline * 25, 1 s)`), so a loaded host moves both numbers.
+
+### Step 6 - rendered in a browser, and two bugs only that would have found
+
+The Chrome extension was available. A `screeny-sim` on `127.0.0.1:50881/50882`
+(`--no-mdns --headless`) and a studio on `127.0.0.1:8899` (`--no-discover`, a temporary
+`--state-dir`, `--ui-dir` so edits reload), both under `timeout`. (After the firmware
+session's merge the simulator binary also serves HTTP on a fixed 8080, so add
+`--no-http` to that command from now on, or two simulators will not start side by side.)
+
+Two bugs, both real:
+
+1. **`showPanel` dereferenced the attached device before the first status read had
+   returned**, throwing on every heartbeat (`Cannot read properties of null (reading
+   'label')`). The pill now reads the half-second **heartbeat** rather than the
+   two-second poll - so a panel going away shows up in half a second and the answer does
+   not depend on a read that may not have happened - and every device field is guarded.
+2. **A page opened in a background tab never fetched the panel facts at all.** The "do
+   not poll while hidden" rule came from `dashboard.js` and is right for the repeat, but
+   it also skipped the *first* read. There is now always one read at startup. This is
+   how the extension found it: an extension-driven tab has `document.hidden === true`
+   permanently.
+
+The extension renders its tab at a fixed 1504 px viewport, so `resize_window` cannot
+drive the breakpoints. The four widths were done in a **same-origin iframe harness**,
+which gives each width a real viewport for media queries; each was checked
+programmatically as well as by eye (`innerWidth`, `matchMedia('(min-width: 1100px)')`,
+and `scrollWidth === clientWidth` - **no horizontal page scroll at any of them**).
+
+| width | bench layout | screenshot |
+|---|---|---|
+| 390 | no | [`170-390.png`](../../research/img/170-390.png), panel section [`170-390-panel.png`](../../research/img/170-390-panel.png) |
+| 600 | no | [`170-600.png`](../../research/img/170-600.png) - the picture is inside the stage; this is the overlap the owner saw |
+| 900 | no | [`170-900.png`](../../research/img/170-900.png) |
+| 1400 | yes | [`170-1400.png`](../../research/img/170-1400.png) |
+| 600, panel unplugged | no | [`170-panel-away.png`](../../research/img/170-panel-away.png) |
+
+Every control exercised, by clicking and dragging rather than by calling the API:
+
+| | what happened |
+|---|---|
+| piece | clicking **Plasma** changed what the panel plays within a second; nine sliders rebuilt |
+| a parameter | a twelve-step drag of **Scale** ended at 3.08 on the panel, `running: true`, **restarts 0** |
+| panel output off | device went `live -> hold`, `frames_rx` stopped (12007 -> 12007 over 2 s), page said "The panel is on its own idle screen. The picture above is still playing here.", `/healthz` 200 |
+| panel output on | `live` again, frames flowing, pill back to **On the panel** |
+| panel unplugged | pill **Panel away** in both places, "Desk is away. It will pick this up again by itself when it comes back.", the frame sequence kept advancing (21056 -> 21176 in 1.2 s) |
+| plugged back in | resumed by itself: `plasma`, `scale 3.08`, connected, device `live` |
+| brightness | typing 3 snapped to **6** (card 136); 40 applied; asking for 200 answered "This panel caps brightness at 120." and the slider's maximum snapped to 120 |
+| piece actions | **Compose another** on `clocks-numerals` changed what it is performing, on the player driving the panel, restarts 0 (card 140) |
+| two tabs | tab 2 changed the piece and the seed; tab 1 followed (piece, seed, radio, the new sliders) and so did the panel |
+| `/dashboard` | lands on `/` |
+| server restart | `SIGTERM`, start again on the same state dir: `clocks-numerals` seed 217068 brightness 120 back on the panel in ~10 s, both tabs reconnected by themselves with no notice left on screen |
+
+No console errors after the two fixes. Both tabs closed.
+
+The state file it left behind is the shape the design asked for:
+
+```jsonc
+{ "version": 3,
+  "devices": [ { "id": "d0ca5e", "name": "Desk", "address": "127.0.0.1:50881", ... } ],
+  "players": [ { "device": "d0ca5e", "on": true, "piece": "clocks-numerals",
+                 "seed": 217068, "brightness": 120, "paused": false, "speed": 1.0, ... } ],
+  "focus": "d0ca5e",
+  "pieces": { ... } }
+```
+
+### Step 7 - the evidence
+
+**Root `cargo test --release --no-fail-fast`: 560 passed, 0 failed, 1 ignored.**
+`cargo clippy -p screeny-studio --all-targets`: **no warnings in this crate** (the
+`screeny-demos` ones are card 125's and were not touched).
+
+**The long soak, once, on the final build** - `SCREENY_SOAK_SECS=420`, release, under
+`timeout`:
+
+```
+soak: 420 s, 101 faults in 101 rounds
+soak: rss 11088 -> 12720 KiB (+1632 KiB, +14.7%)
+soak: rendered 10643 frames (10489 since the baseline), 175 sent to the panel, 0 reconnects
+soak: panics 0, stalls 0, restarts 0, state written 203 times, telemetry 0.0 s old
+```
+
+Seven minutes, 101 injected faults, and **restarts 0** where card 106 reported 88 - the
+number that says the pending mailbox does what it was built for. Memory grew 1.6 MB
+across the whole test process (the studio, twenty-odd simulators started and stopped, and
+the test's own client) in seven minutes; the assertion's bound is 40 MB.
+
+**No hardware, no LAN.** No serial, no flash, no camera. Every address in every run and
+every test was an explicit `127.0.0.1`; `--no-discover` on every studio and `--no-mdns`
+on every simulator, so nothing could have reached `screeny-4a00a4` or `workbench.local`
+even by accident.
+
+**Changes outside `crates/studio`**: none at all. Nothing in `crates/art`, nothing in
+`crates/screeny`, nothing in `crates/proto`, nothing in `firmware/`. (The card allowed
+small additive changes to `crates/art` or `crates/screeny`; none turned out to be
+needed, because `Pipeline::process` already returned everything the player had been
+throwing away.)
