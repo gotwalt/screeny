@@ -1007,13 +1007,19 @@ pub fn init(ctx: Ctx) {
 }
 
 /// One connection worker. [`HTTP_TASKS`] of them share the port.
-#[embassy_executor::task(pool_size = HTTP_TASKS)]
-pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
-    // The router is a task local on purpose: naming its type in a `static`
-    // needs `#![feature(impl_trait_in_assoc_type)]` (picoserve's own
-    // `AppBuilder` docs say it "requires the nightly Rust toolchain"), and
-    // this firmware does not gate on nightly for a router.
-    let app = Router::from_service(NotFoundJson)
+/// The route table, in one place.
+///
+/// Returned rather than declared in a `static`: naming this type needs
+/// `#![feature(impl_trait_in_assoc_type)]` (that is what picoserve's
+/// `AppBuilder` is for, and its own docs say it "requires the nightly Rust
+/// toolchain"), and this firmware does not gate on nightly for a router. A
+/// function keeps the table from being written twice - the `http-selftest`
+/// build runs the same one over an in-memory socket.
+///
+/// Every path that exists answers the JSON error shape for the method it does
+/// not take, rather than picoserve's plain-text `MethodNotAllowed`.
+fn router() -> Router<impl picoserve::routing::PathRouter> {
+    Router::from_service(NotFoundJson)
         .route("/", get(get_page))
         .route(route::STATUS, get(get_status).post(wrong_method))
         .route(route::TELEMETRY, get(get_telemetry).post(wrong_method))
@@ -1022,7 +1028,12 @@ pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
         .route(route::SETTINGS, get(wrong_method).post(post_settings))
         .route(route::FIRMWARE, get(wrong_method).post(not_yet))
         .route(route::REBOOT, get(wrong_method).post(post_reboot))
-        .route(route::IDENTIFY, get(wrong_method).post(post_identify));
+        .route(route::IDENTIFY, get(wrong_method).post(post_identify))
+}
+
+#[embassy_executor::task(pool_size = HTTP_TASKS)]
+pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
+    let app = router();
 
     // A stalled client must not be able to pin the one worker, so every phase
     // has a deadline: 3 s to send a request line at all, 5 s to finish a
@@ -1065,6 +1076,225 @@ pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
 // The bench self-test (feature `http-selftest`)
 // ---------------------------------------------------------------------------
 
+/// A picoserve socket that is two byte slices.
+///
+/// The TCP half of the self-test cannot work on this bench - a WiFi station
+/// has no loopback and the access point does not hairpin a frame back to its
+/// sender, which is exactly what the first run measured. But "can the device
+/// reach itself over TCP" is not the question the card is really asking;
+/// "does every route answer the right thing on the real device" is, and that
+/// only needs [`picoserve::Server::serve`], which takes any
+/// [`picoserve::io::Socket`]. So this is one: it hands the server a canned
+/// request and keeps the bytes it writes back.
+///
+/// What it does *not* prove is the TCP path. The accept loop being up, plus
+/// the orchestrator's `curl` run after the merge, cover that.
+#[cfg(feature = "http-selftest")]
+mod mem_socket {
+    // **`picoserve::io::`, not `embedded_io_async::`.** There are two versions
+    // of that crate in this binary - picoserve pins 0.6.1 and embassy-net
+    // 0.7.0 - so the `Read`/`Write` a picoserve socket must implement are the
+    // ones picoserve re-exports, and nothing else will satisfy the bound.
+    // `BaseWrite` is `embedded_io_async::Write`; `picoserve::io::Write` is
+    // picoserve's own trait on top of it, and both are needed.
+    use picoserve::io::{BaseWrite, ErrorType, Read};
+    use picoserve::mem::{BorrowedBuffer, BorrowedCursor};
+
+    /// The request, handed out a few bytes at a time.
+    pub struct Reader<'a> {
+        pub data: &'a [u8],
+    }
+
+    /// The reply, kept. `len` and `overflow` are borrowed from the caller so
+    /// that they are still readable once `serve` has consumed the socket.
+    pub struct Writer<'a> {
+        pub buf: &'a mut [u8],
+        pub len: &'a mut usize,
+        /// Bytes that did not fit. Reported, never silently dropped.
+        pub overflow: &'a mut usize,
+    }
+
+    pub struct MemSocket<'a> {
+        pub r: Reader<'a>,
+        pub w: Writer<'a>,
+    }
+
+    impl ErrorType for Reader<'_> {
+        type Error = core::convert::Infallible;
+    }
+
+    impl Read for Reader<'_> {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            let n = buf.len().min(self.data.len());
+            buf[..n].copy_from_slice(&self.data[..n]);
+            self.data = &self.data[n..];
+            Ok(n)
+        }
+    }
+
+    impl ErrorType for Writer<'_> {
+        type Error = core::convert::Infallible;
+    }
+
+    impl Writer<'_> {
+        fn append(&mut self, bytes: &[u8]) {
+            let at = *self.len;
+            let n = (self.buf.len() - at).min(bytes.len());
+            self.buf[at..at + n].copy_from_slice(&bytes[..n]);
+            *self.len += n;
+            *self.overflow += bytes.len() - n;
+        }
+    }
+
+    impl BaseWrite for Writer<'_> {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.append(buf);
+            Ok(buf.len())
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl picoserve::io::Write for Writer<'_> {
+        // The same shape as picoserve's own test writer: lend a scratch
+        // cursor, then copy whatever the caller filled.
+        async fn write_with<F: FnOnce(BorrowedCursor<'_>) -> R, R>(
+            &mut self,
+            f: F,
+        ) -> Result<R, Self::Error> {
+            let mut scratch = [0u8; 256];
+            let mut buffer = BorrowedBuffer::new(&mut scratch);
+            let out = f(buffer.unfilled());
+            let filled = buffer.filled().len();
+            let mut copy = [0u8; 256];
+            copy[..filled].copy_from_slice(buffer.filled());
+            self.append(&copy[..filled]);
+            Ok(out)
+        }
+    }
+
+    impl<'a, Runtime> picoserve::io::Socket<Runtime> for MemSocket<'a> {
+        type Error = core::convert::Infallible;
+        type ReadHalf<'b>
+            = &'b mut Reader<'a>
+        where
+            Self: 'b;
+        type WriteHalf<'b>
+            = &'b mut Writer<'a>
+        where
+            Self: 'b;
+
+        fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
+            (&mut self.r, &mut self.w)
+        }
+
+        async fn abort<T: picoserve::time::Timer<Runtime>>(
+            self,
+            _timeouts: &picoserve::Timeouts,
+            _timer: &T,
+        ) -> Result<(), picoserve::Error<Self::Error>> {
+            Ok(())
+        }
+
+        async fn shutdown<T: picoserve::time::Timer<Runtime>>(
+            self,
+            _timeouts: &picoserve::Timeouts,
+            _timer: &T,
+        ) -> Result<(), picoserve::Error<Self::Error>> {
+            Ok(())
+        }
+    }
+}
+
+/// A reply body with the station's SSID taken out of it.
+///
+/// `GET /api/v1/status` and `GET /api/v1/wifi` both carry the SSID, which is
+/// right for the reply and wrong for the serial log: the firmware says an SSID
+/// out loud in exactly one place (the WiFi task's "connected" line), and a
+/// bench feature must not become a second. The first run of this self-test did
+/// print it, which is how this exists.
+#[cfg(feature = "http-selftest")]
+struct Redacted<'a>(&'a str);
+
+#[cfg(feature = "http-selftest")]
+impl core::fmt::Display for Redacted<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let secret = crate::current_ssid();
+        if secret.is_empty() {
+            return f.write_str(self.0);
+        }
+        let mut rest = self.0;
+        while let Some(i) = rest.find(secret) {
+            f.write_str(&rest[..i])?;
+            f.write_str("<ssid>")?;
+            rest = &rest[i + secret.len()..];
+        }
+        f.write_str(rest)
+    }
+}
+
+/// Cut a string to at most `max` bytes, on a character boundary.
+#[cfg(feature = "http-selftest")]
+fn clip(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Run one canned request through the real router and report what came back.
+///
+/// Returns `(status, body_len, micros)`.
+#[cfg(feature = "http-selftest")]
+async fn selftest_one(request: &str, out: &mut [u8]) -> (u16, usize, u32) {
+    let app = router();
+    let config = picoserve::Config::new(picoserve::Timeouts {
+        start_read_request: Duration::from_secs(3),
+        persistent_start_read_request: Duration::from_secs(2),
+        read_request: Duration::from_secs(5),
+        write: Duration::from_secs(5),
+    })
+    .close_connection_after_response();
+
+    let mut written = 0usize;
+    let mut overflow = 0usize;
+    let t0 = Instant::now();
+    {
+        // Not `HTTP_BUF`: the canned requests below are ~150 bytes of request
+        // line, headers and body, and this buffer is `.bss` in a build that
+        // already carries a second copy of the whole serve machinery.
+        let mut http_buf = [0u8; 512];
+        let socket = mem_socket::MemSocket {
+            r: mem_socket::Reader {
+                data: request.as_bytes(),
+            },
+            w: mem_socket::Writer {
+                buf: &mut out[..],
+                len: &mut written,
+                overflow: &mut overflow,
+            },
+        };
+        let _ = Server::new(&app, &config, &mut http_buf[..])
+            .serve(socket)
+            .await;
+    }
+    let us = t0.elapsed().as_micros() as u32;
+
+    // "HTTP/1.1 200 OK": the code is characters 9..12 of the status line.
+    let status = core::str::from_utf8(&out[..written.min(16)])
+        .ok()
+        .and_then(|s| s.get(9..12))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    (status, written + overflow, us)
+}
+
 /// Ask the device to make the request a worker cannot make.
 ///
 /// Off by default. See the feature's comment in `Cargo.toml` for why it exists
@@ -1075,11 +1305,18 @@ pub async fn selftest_task(stack: Stack<'static>) {
     use embassy_net::tcp::TcpSocket;
     use embedded_io_async::Write as _;
 
-    const REQUESTS: usize = 40;
+    // Three, not the forty the card suggested: the first run measured that a
+    // station interface has no route to its own address, and repeating a
+    // three-second timeout thirty-nine more times proves nothing. The
+    // in-memory pass below is where the requests actually happen.
+    const REQUESTS: usize = 3;
     const REQ: &[u8] =
         b"GET /api/v1/status HTTP/1.1\r\nHost: selftest\r\nConnection: close\r\n\r\n";
 
-    Timer::after(Duration::from_secs(30)).await;
+    // After the telemetry task's 60 s `stack:` line, not before it: that line
+    // is the baseline this run is compared against, and it should be measured
+    // with the server idle.
+    Timer::after(Duration::from_secs(75)).await;
     let Some(cfg) = stack.config_v4() else {
         warn!("selftest: no address, nothing to connect to");
         return;
@@ -1096,9 +1333,9 @@ pub async fn selftest_task(stack: Stack<'static>) {
     crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
     let t_window = Instant::now();
 
-    let mut rx = [0u8; 512];
-    let mut tx = [0u8; 256];
-    let mut buf = [0u8; 1024];
+    let mut rx = [0u8; 256];
+    let mut tx = [0u8; 192];
+    let mut buf = [0u8; 256];
     let mut ok = 0usize;
     let mut failed = 0usize;
     let mut bytes_total = 0usize;
@@ -1161,14 +1398,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
         }
     }
 
-    let after = {
-        let mut guard = CORE.lock().await;
-        guard.as_mut().expect("core exists").telemetry(now_us())
-    };
-    let secs = t_window.elapsed().as_millis().max(1) as u32 / 1000;
-    let secs = secs.max(1);
     info!(
-        "selftest: {} ok, {} failed of {} | first status line {:?} | {} bytes | {} us mean, {} us max",
+        "selftest: over TCP - {} ok, {} failed of {} | first status line {:?} | {} bytes | {} us mean, {} us max",
         ok,
         failed,
         REQUESTS,
@@ -1177,6 +1408,67 @@ pub async fn selftest_task(stack: Stack<'static>) {
         if ok > 0 { (us_total / ok as u64) as u32 } else { 0 },
         us_max,
     );
+    if ok == 0 {
+        info!(
+            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, stack address {}",
+            HTTP_TASKS, HTTP_PORT, me
+        );
+    }
+
+    // --- the router, exercised without a network ---------------------------
+    //
+    // "Can the device reach itself over TCP" is not the question; "does every
+    // route answer the right thing on the real device" is, and that needs only
+    // a `picoserve::io::Socket`. This one is two byte slices, so every route
+    // below is the real router, the real handlers, the real locks and the real
+    // JSON, running while the Studio streams.
+    // 640 bytes: every JSON reply fits (the largest, `status`, is under 450).
+    // `GET /` does not - the page is ~5.5 KB - and that is fine: the status
+    // line is what is being checked and the overflow is counted and reported
+    // rather than silently dropped.
+    let mut out = [0u8; 640];
+    let mut worst_us = 0u32;
+    let hw_before = crate::stack_probe::high_water().unwrap_or(0);
+    for (label, request, expect) in SELFTEST_ROUTES {
+        let (status, bytes, us) = selftest_one(request, &mut out).await;
+        worst_us = worst_us.max(us);
+        let body = core::str::from_utf8(&out[..bytes.min(out.len())])
+            .ok()
+            .and_then(|s| s.split_once("\r\n\r\n").map(|(_, b)| b))
+            .unwrap_or("<binary>");
+        let ok = status == *expect;
+        info!(
+            "selftest: {:<26} -> {} (want {}) {} {} bytes, {} us | {}",
+            label,
+            status,
+            expect,
+            if ok { "OK  " } else { "WRONG" },
+            bytes,
+            us,
+            Redacted(clip(body, 140)),
+        );
+        // Let the frame task and the display breathe between requests, so the
+        // window below measures a server answering beside a stream rather than
+        // a server monopolising the executor.
+        Timer::after(Duration::from_millis(200)).await;
+    }
+    // **The number this build exists for as much as the status codes.** Until
+    // now nothing had ever run a request through the router on the device, so
+    // the 60 s `stack:` line had never seen the HTTP path's depth. This is the
+    // before/after across the whole route table.
+    info!(
+        "selftest: slowest in-memory request {} us | core 0 stack high-water {} -> {} of {} bytes",
+        worst_us,
+        hw_before,
+        crate::stack_probe::high_water().unwrap_or(0),
+        crate::stack_probe::size(),
+    );
+
+    let after = {
+        let mut guard = CORE.lock().await;
+        guard.as_mut().expect("core exists").telemetry(now_us())
+    };
+    let secs = (t_window.elapsed().as_millis() as u32 / 1000).max(1);
     info!(
         "selftest: over the window - {} fps rx, {} fps shown, decode drops {} (was {}), rejected {} (was {}), render max {} us",
         after.frames_rx.wrapping_sub(before.frames_rx) / secs,
@@ -1187,10 +1479,76 @@ pub async fn selftest_task(stack: Stack<'static>) {
         before.frames_rejected,
         crate::RENDER_US_MAX_WINDOW.load(Ordering::Relaxed),
     );
-    if ok == 0 {
-        info!(
-            "selftest: fallback evidence - {} accept loops listening on tcp/{}, stack address {}",
-            HTTP_TASKS, HTTP_PORT, me
-        );
-    }
 }
+
+/// Every route, with the status code it must answer.
+///
+/// Deliberately includes the three that are refusals - an unknown path, a
+/// method a route does not take, and a route this firmware cannot serve yet -
+/// because those are the ones a hand test forgets. The mutating requests use
+/// values that change nothing observable: the brightness and idle mode that
+/// are already in force cannot be known here, so `identify` asks for 1 ms and
+/// `settings` sets the brightness the device is already at.
+#[cfg(feature = "http-selftest")]
+static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
+    (
+        "GET /",
+        "GET / HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "GET /api/v1/status",
+        "GET /api/v1/status HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "GET /api/v1/telemetry",
+        "GET /api/v1/telemetry HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "GET /api/v1/wifi",
+        "GET /api/v1/wifi HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "GET /api/v1/networks",
+        "GET /api/v1/networks HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        503,
+    ),
+    (
+        "POST /api/v1/identify",
+        "POST /api/v1/identify HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n{\"duration_ms\":1}",
+        200,
+    ),
+    (
+        "POST /api/v1/settings",
+        "POST /api/v1/settings HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 18\r\n\r\n{\"brightness\":96}\n",
+        200,
+    ),
+    (
+        "POST /api/v1/settings bad",
+        "POST /api/v1/settings HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n{nope:}",
+        400,
+    ),
+    (
+        "POST /api/v1/reboot unconf",
+        "POST /api/v1/reboot HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"confirm\":\"NO\"}",
+        400,
+    ),
+    (
+        "POST /api/v1/firmware",
+        "POST /api/v1/firmware HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        503,
+    ),
+    (
+        "GET /api/v1/settings (405)",
+        "GET /api/v1/settings HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "GET /nope (404)",
+        "GET /nope HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        404,
+    ),
+];

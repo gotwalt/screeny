@@ -352,6 +352,21 @@ async fn display_task(
 // Network
 // ---------------------------------------------------------------------------
 
+/// smoltcp socket slots the station's `embassy-net` stack is given.
+///
+/// **Counted on the device, not on paper.** The obvious count is five - the
+/// frame port, the control port, mDNS, DHCP and card 222's `http_task` - and
+/// six was tried first on that basis. It panicked: `SocketSet::add` found the
+/// set full, so something already takes a sixth (`edge-nal-embassy`'s `Udp`
+/// holds more than the one socket its buffer type names). Seven is five plus
+/// the measured extra plus one genuinely spare slot, and the spare is what the
+/// `http-selftest` build's client socket uses.
+///
+/// `StackResources` is `.bss`, and `.bss` is core 0's stack, so this is not a
+/// free number. Card 223's AP gets its own stack and its own resources, so it
+/// does not need room here.
+const NET_SOCKETS: usize = 7;
+
 /// How many times one credential pair is tried before the next is (spec 8.3).
 const JOIN_ATTEMPTS: u8 = 3;
 
@@ -1014,14 +1029,10 @@ async fn main(spawner: Spawner) {
     // a persisted counter would cost a flash write every boot.
     http::BOOT_ID.store(rng.random(), Ordering::Relaxed);
 
-    // Six sockets: the frame port, the control port, mDNS, DHCP and the
-    // `http_task` worker, with one spare. `StackResources` is `.bss`, and
-    // `.bss` is core 0's stack, so this is not a free number - card 223's AP
-    // stack gets its own `StackResources`, so it does not need room here.
     let (stack, runner) = embassy_net::new(
         interface,
         embassy_net::Config::dhcpv4(Default::default()),
-        mk_static!(StackResources<6>, StackResources::<6>::new()),
+        mk_static!(StackResources<NET_SOCKETS>, StackResources::<NET_SOCKETS>::new()),
         seed,
     );
 
