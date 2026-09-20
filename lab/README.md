@@ -25,6 +25,7 @@ Xtensa bench. A few representative sheets are copied into
 | `src/panel.rs` | the LED panel model: gamma LUT, BCM bit depth, optional device-side temporal dithering |
 | `src/metrics.rs` | panel-aware Oklab dE, SSIM, flicker, temporal-average error |
 | `src/sheet.rs`, `src/font.rs` | PNG contact sheets and the 5x7 bitmap font |
+| `src/bin/portal-mock.rs` | card 201: the 64x32 captive-portal screen. Renders the candidate layouts and the WiFi QR with the same `qrcodegen-no-heap` the firmware links, into `docs/research/img/201-portal-*.png`. `cargo run --release --bin portal-mock -- ../docs/research/img` |
 | `nostd-check/` | compiles `src/dec/` as `#![no_std]` with no allocator. If it builds, the decoders are firmware-ready |
 | `xtensa-bench/` | counts Xtensa instructions per decode under `qemu-system-xtensa`. See its `run.sh` |
 

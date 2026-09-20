@@ -231,3 +231,28 @@ claim about a crate's behaviour cites the source line that shows it.
     its channel automatically to be the same as the channel of the station."
     That is *the* trap in the state machine: joining a network on another
     channel moves the AP under the phone that is standing on it.
+- Captive-portal detection researched from primary sources (AOSP NetworkStack on
+  `main`, Microsoft Learn KB 4494446 + the NCSI overview, `NetworkManager.conf(5)`,
+  mozilla-central, Apple's enterprise-hosts article, the WFA captive-behavior
+  reference, RFC 8908/8910, and the source of WLED / Tasmota / ESPHome / tzapu
+  WiFiManager / ESP-IDF's example). Two findings changed the design:
+  - **The iOS captive mini-browser does not re-probe on an AJAX call** - only a
+    full-page navigation does. So the "did my credentials work?" page must be a
+    plain form post plus a `setTimeout(location.href='.')` reload, not a
+    `fetch()` poll. Tasmota's design is the one to copy; WLED's and ESPHome's
+    never tell the user the answer at all.
+  - **Android classifies a 200 with `Content-Length <= 4` as *failed*, not
+    portal**, and ESP-IDF's own example notes "iOS requires content in the
+    response to detect a captive portal, simply redirecting is not sufficient".
+    So the 302 catch-all needs a non-empty body. An empty 302 - which is what
+    WLED and Tasmota send - is the common bug.
+  - Also: no well-known project special-cases the probe hostnames. They all test
+    the *shape* of the `Host:` header (is it an IP literal / our own name).
+- Folded in the orchestrator's three decisions (QR measured and in; open AP; open
+  HTTP auth with a PIN-shaped hole). The QR section now carries the measured
+  naming rule and the one experiment that would relax it.
+- Wrote `docs/research/007-device-web-and-portal.md`. Nine build cards proposed
+  in section 12, six open questions in section 13.
+- Left behind: nothing running. No serial port opened, no flash, no camera, no
+  LAN access, no background processes. The only long commands were firmware
+  builds, each under a `timeout`.
