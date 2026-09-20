@@ -167,3 +167,10 @@ the studio (card 105), so nothing existing moved.
   `screeny-art play --to` and the studio both take a name or an address from a human
   and should keep resolving it, because that is what follows a DHCP lease. The
   natural next caller is card 106's device list, which will hold `Device`s.
+
+### Orchestrator (2026-09-19)
+
+Merged to `main`. `cargo test --release -p screeny --test embed`: 17 passed; `-p screeny-art`
+(default features, so the wire acceptance runs): 40 passed, 0 failed. Full root run deferred
+until the workers sharing the machine finish. `reattach`/`attached()` stay: card 106 is
+the expected caller.

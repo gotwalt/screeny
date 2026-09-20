@@ -141,3 +141,10 @@ build adds `screeny`, ctrlc, wgpu and friends.
 `screeny-art`, `screeny-demos` and `screeny-probe`, all pre-existing and mostly
 `clippy --fix`-able. Out of scope here and a merge conflict with three running
 workers, so it is card 125 in the backlog rather than a diff in this branch.
+
+### Orchestrator (2026-09-19)
+
+Merged to `main`. `cargo test --release -p screeny --test embed`: 17 passed; `-p screeny-art`
+(default features, so the wire acceptance runs): 40 passed, 0 failed. Full root run deferred
+until the workers sharing the machine finish. `reattach`/`attached()` stay: card 106 is
+the expected caller.

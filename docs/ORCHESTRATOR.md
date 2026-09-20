@@ -29,7 +29,7 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
 
 Card 101 is done (2026-09-19): `screeny-art play <piece> --to screeny-4a00a4` streams
 the art system to the real panel through `screeny::Link` (build with `--features
-sender`; a plain `cargo test --release` rebuilds the binary without it - card 112).
+sender` is default-on since card 112, so a plain build has `play`).
 
 In flight since 2026-09-19 evening, four Opus workers in parallel: 105 (server-first
 Studio; follow-up cards 120-124), 111+112 on one branch (`Link` from a `Device`;
