@@ -59,24 +59,40 @@ pub struct RxState {
 }
 
 impl RxState {
-    /// Gaps between successive arrivals.
-    pub fn gaps(&self) -> Vec<Duration> {
+    /// The frames that were part of the paced stream, which is all of them
+    /// except the `FINAL` one.
+    ///
+    /// `FINAL` repeats the last payload the moment the source ends (spec 9.4
+    /// step 5), microseconds behind the frame before it, so it adds a frame
+    /// to any count without adding to the span - a 1.7% error on a 2 s run at
+    /// 30 fps. Worse, whether it is here at all is a race with `shutdown()`:
+    /// card 093 caught it in 9 of 20 identical runs, which made every rate
+    /// measured from these frames bimodal. `Sender`'s own `min_gap` leaves it
+    /// out for the same reason.
+    pub fn paced(&self) -> impl Iterator<Item = &RxFrame> {
         self.frames
-            .windows(2)
-            .map(|w| w[1].at.duration_since(w[0].at))
-            .collect()
+            .iter()
+            .filter(|f| f.flags & screeny::proto::F_FINAL == 0)
     }
 
-    /// Frames per second over the arrival window.
+    /// Gaps between successive arrivals in the paced stream.
+    pub fn gaps(&self) -> Vec<Duration> {
+        let at: Vec<Instant> = self.paced().map(|f| f.at).collect();
+        at.windows(2).map(|w| w[1].duration_since(w[0])).collect()
+    }
+
+    /// Frames per second over the arrival window, measured across the
+    /// intervals between arrivals rather than as a count over elapsed time:
+    /// `n` frames span `n - 1` intervals, and a count divided by a window
+    /// with ragged ends means something different at every run length (card
+    /// 093).
     pub fn fps(&self) -> f64 {
-        if self.frames.len() < 2 {
+        let at: Vec<Instant> = self.paced().map(|f| f.at).collect();
+        if at.len() < 2 {
             return 0.0;
         }
-        let span = self.frames[self.frames.len() - 1]
-            .at
-            .duration_since(self.frames[0].at)
-            .as_secs_f64();
-        (self.frames.len() - 1) as f64 / span
+        let span = at[at.len() - 1].duration_since(at[0]).as_secs_f64();
+        (at.len() - 1) as f64 / span
     }
 }
 

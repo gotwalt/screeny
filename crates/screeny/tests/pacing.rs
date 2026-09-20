@@ -47,7 +47,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::{Receiver, RxConfig, RxState};
-use screeny::proto::F_FINAL;
 use screeny::sender::{period_of, sleep_until};
 use screeny::{Frame, FrameTime, Sender, SenderConfig};
 
@@ -346,25 +345,10 @@ fn pct(v: &[f64], p: f64) -> f64 {
     v[((v.len() - 1) as f64 * p).round() as usize]
 }
 
-/// Arrival intervals at the receiver, in seconds, with the `FINAL` frame left
-/// out: it goes out the moment the source ends, right behind the frame before
-/// it, so it is not part of the paced stream. (It also races `shutdown()` -
-/// in 20 baseline runs it was recorded 9 times - so anything that counts it
-/// is measuring a race.)
+/// When each frame of the paced stream arrived. `RxState::paced` is what
+/// leaves the `FINAL` frame out, and says why.
 fn paced_arrivals(state: &RxState) -> Vec<Instant> {
-    state
-        .frames
-        .iter()
-        .filter(|f| f.flags & F_FINAL == 0)
-        .map(|f| f.at)
-        .collect()
-}
-
-fn arrival_gaps(state: &RxState) -> Vec<f64> {
-    paced_arrivals(state)
-        .windows(2)
-        .map(|w| w[1].duration_since(w[0]).as_secs_f64())
-        .collect()
+    state.paced().map(|f| f.at).collect()
 }
 
 /// The pacer holds the asked-for rate, keeps an absolute schedule, and does
@@ -584,9 +568,10 @@ fn skips_rather_than_bursting_after_a_stall() {
     // threshold is five periods, not one and a half: the stalls are nine
     // periods long and no amount of host jitter reaches a sixth of a second,
     // so this counts stalls and only stalls.
-    let long = arrival_gaps(&state)
+    let long = state
+        .gaps()
         .iter()
-        .filter(|g| **g > period.as_secs_f64() * 5.0)
+        .filter(|g| **g > period.mul_f64(5.0))
         .count();
     assert_eq!(
         long,
