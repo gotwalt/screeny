@@ -551,7 +551,16 @@ async fn devices_refresh(State(st): State<AppState>, _body: axum::body::Bytes) -
         }
         let Some(addr) = crate::devices::parse_addr(&d.stored.address) else { continue };
         let id = d.stored.id.clone();
-        match tokio::task::spawn_blocking(move || crate::devices::identify_at(addr)).await {
+        let asked = tokio::task::spawn_blocking(move || crate::devices::identify_at_counted(addr)).await;
+        // Card 164: counted against the panel whether or not it answered.
+        let asked = match asked {
+            Ok((cost, out)) => {
+                st.devices.metered_control(&id, cost);
+                Ok(out)
+            }
+            Err(e) => Err(e),
+        };
+        match asked {
             Ok(Ok(dev)) => {
                 let (new_id, renamed) = st.devices.resolved(&dev);
                 if let Some(from) = renamed {
@@ -670,14 +679,22 @@ where
     F: FnOnce(&mut screeny::ControlClient) -> Result<T, String> + Send + 'static,
 {
     let addr = control_addr(st, device)?;
-    let done = tokio::task::spawn_blocking(move || crate::devices::control(addr).and_then(|mut c| f(&mut c))).await;
+    let done = tokio::task::spawn_blocking(move || crate::devices::control_call(addr, f)).await;
+    // Card 164: every control conversation with a panel is counted against it,
+    // however it went.
+    let done = match done {
+        Ok((cost, out)) => {
+            st.devices.metered_control(device, cost);
+            out
+        }
+        Err(e) => return Err(ApiError::unreachable(format!("{what}: {e}"))),
+    };
     match done {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => {
+        Ok(v) => Ok(v),
+        Err(e) => {
             st.devices.control_failed(device, format!("{what}: {e}"));
             Err(ApiError::unreachable(format!("{what}: {e}")))
         }
-        Err(e) => Err(ApiError::unreachable(format!("{what}: {e}"))),
     }
 }
 

@@ -16,8 +16,8 @@
 'use strict';
 
 import {
-  $, ago, bindBrightness, busy, connect, duration, facts, IDLE, invoke, kb,
-  makeAttempt, nf, noFrames, notice, panelState, pollStatus, size, wifiLine, words,
+  $, ago, bindBrightness, busy, connect, duration, facts, IDLE, invoke, kb, kbs,
+  makeAttempt, netSize, nf, noFrames, notice, panelState, pollStatus, size, wifiLine, words,
 } from './common.js';
 
 async function start() {
@@ -153,6 +153,7 @@ async function start() {
       }
       if (link.indexed_fallback) rows.push(['Requantised', nf.format(link.indexed_fallback), 'warn']);
     }
+    if (d && d.traffic) rows.push(...networkRows(d.traffic));
     if (player) {
       // Card 171: a player-lifetime count that survives the link being
       // rebuilt, not `sessions - 1` - which was per link object, and the
@@ -189,6 +190,39 @@ async function start() {
     }
     if (!rows.length) rows.push(['Link', attachedId() ? 'nothing yet' : 'no panel attached', 'dim']);
     facts($('#panel-facts'), rows);
+  }
+
+  /** Card 164: what this panel costs the network.
+   *
+   *  Three rows: the rate, the split by path under it in the quiet tone, and
+   *  the totals since the studio started - "2.1 GB out" being the number that
+   *  actually answers "what is this costing my network".
+   *
+   *  **Every figure here was worked out on the server** (`devices.rs`), once
+   *  per supervisor tick, so two browsers cannot show two different rates and
+   *  this file never divides one counter by another. It is a number and not a
+   *  chart on purpose; if a chart is wanted that is a card of its own.
+   *
+   *  What is counted: frames (UDP, the stream and the telemetry that comes
+   *  back along it), control (UDP, the polls and the panel's own controls) and
+   *  http (TCP, the panel's status API every ten seconds). The UDP figures
+   *  carry 28 B a datagram for the IP and UDP headers; the HTTP one is the
+   *  bytes on the socket and nothing more, because TCP's retransmissions and
+   *  ACKs are not visible from up here. mDNS and the broadcast probe are not
+   *  traffic with *a panel* and are left out - see the README. */
+  function networkRows(t) {
+    const r = t.rate || {};
+    const secs = t.window_s || 5;
+    return [
+      ['Network', `${kbs(r.out)} out · ${kbs(r.in)} in`],
+      [
+        'By path',
+        `frames ${kbs(r.frames_out, false)} · control ${kbs(r.control_out, false)} · `
+        + `http ${kbs(r.http_out, false)} KB/s out, averaged over ${secs} s`,
+        'dim',
+      ],
+      ['Sent', `${netSize(t.total.out.bytes)} out · ${netSize(t.total.in.bytes)} in since the studio started`],
+    ];
   }
 
   /** Card 180: the panel's own account of itself, read by the server from

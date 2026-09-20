@@ -43,7 +43,7 @@ use axum::Json;
 use screeny_art::output::PanelStatus;
 use serde::Serialize;
 
-use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, Telem};
+use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, Telem, Traffic};
 
 use crate::player::{PlayerStatus, WATCHDOG};
 use crate::state::{unix_now, StoreHealth};
@@ -144,6 +144,13 @@ pub struct DeviceStatus {
     pub facts_ago: Option<f64>,
     /// How reading it is going. Never a reason for a 503.
     pub http: HttpHealth,
+    /// **Card 164: what this panel has cost the network since the studio
+    /// started, and how fast** - bytes and packets per path (frames, control,
+    /// http) and per direction, the totals with the per-datagram overhead
+    /// added, and the rates, worked out once on the server so that every
+    /// browser reads the same number. Never a problem, and never in
+    /// `/healthz`: it is an account, not a judgement.
+    pub traffic: Traffic,
     pub last_error: Option<String>,
     /// What it plays, and how that is going. `None` when no player is
     /// configured for this device.
@@ -256,6 +263,7 @@ pub fn collect(st: &AppState) -> Status {
                 facts_ago: d.facts.as_ref().map(|f| now.saturating_sub(f.heard_unix) as f64),
                 facts: d.facts.clone(),
                 http: d.http.clone(),
+                traffic: d.traffic.reported(),
                 last_error: d.last_error.clone(),
                 player: st.players.get(&d.stored.id).map(|p| p.status()),
             }

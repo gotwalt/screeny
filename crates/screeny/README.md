@@ -144,14 +144,27 @@ struct Link;
 struct Limits { connected, fps, configured_fps, budget, exact_palette,
                 codecs, codec_limited, panel }
 struct LinkStats { frames_offered, frames_sent, frames_coalesced, frames_dropped,
-                   bytes, indexed_exact, indexed_fallback, sessions, drops,
-                   connect_failures, last_error, connected_since, down_since }
+                   bytes, traffic, indexed_exact, indexed_fallback, sessions,
+                   drops, connect_failures, last_error, connected_since,
+                   down_since }
+struct LinkTraffic { frames: Traffic, control: Traffic }   // card 164
+struct Traffic { out: Wire, inbound: Wire }
+struct Wire { bytes, packets }  add(n)  on_the_wire(overhead)
 
 struct Pace;                                     // spec 9.1, on its own
     Pace::new(fps) tick() -> FrameTime  set_fps(f64)  skipped()  fps()
 ```
 
 `frames_offered == frames_sent + frames_coalesced + frames_dropped`, always.
+
+`LinkStats::bytes` is **pixels**; `LinkStats::traffic` (card 164) is what the
+link cost the *network* - whole datagram payloads on the frame port and on the
+control port, both ways, across every session it has had. Everything counted is
+payload: `UDP_OVERHEAD` (28 B, IPv4 + UDP) is what a caller adds per datagram
+for the figure on the wire, and there is no honest equivalent for a stream
+socket. The totals only grow, because a session ending is banked before its
+socket takes its counters with it. `ControlClient::traffic()` is the same shape
+for a client of the control port, retries and all.
 
 Below `Link` is `Sender`: one socket, one session, every failure handed
 straight back. `Sender::send(Pixels)` and `Sender::send_indexed` are the
@@ -272,11 +285,13 @@ struct Link;                                   // reconnects, paces, FINAL on dr
     close() retarget(Target) reattach(Device) attached() target()
     state() stats() session() limits() fps() pacer() device() config()
 struct LinkConfig { sender, cadence, reconnect, silence, backoff }
-struct LinkStats; struct Limits; struct Pace;
+struct LinkStats; struct LinkTraffic; struct Limits; struct Pace;
+struct Wire { bytes, packets }  struct Traffic { out, inbound }
+const UDP_OVERHEAD: u64 = 28;              // IPv4 + UDP, per datagram
 enum Cadence { Free, Limit }   enum LinkState { Up, Connecting, Waiting, Closed }
 
 struct SendStats { frames_sent, frames_final, frames_encoded, frames_skipped,
-                   bytes, by_codec, encode_total, encode_max, min_gap, max_gap,
+                   bytes, frames: Traffic, control: Traffic, by_codec, encode_total, encode_max, min_gap, max_gap,
                    fps, fps_changes, telemetry, busy, decode_failures,
                    codecs_withdrawn, codec_limited, indexed_exact,
                    indexed_fallback, last_fallback_colours,

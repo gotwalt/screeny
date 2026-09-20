@@ -31,7 +31,7 @@ use crate::device::Device;
 use crate::encode::{EncodeConfig, Encoder, Profile, MIN_BUDGET};
 use crate::error::{Error, Result};
 use crate::frame::{Frame, FrameSource, FrameTime, IndexedSource, Pixels};
-use crate::net;
+use crate::net::{self, Traffic};
 
 /// What became of a frame handed to [`Sender::send`] or [`crate::Link::send`].
 ///
@@ -181,6 +181,22 @@ pub struct SendStats {
     pub frames_skipped: u64,
     /// Pixel payload bytes sent.
     pub bytes: u64,
+    /// **What this session cost the network on the frame port** (card 164):
+    /// whole datagram payloads - the 8-byte header and, when
+    /// [`SenderConfig::timestamps`] is on, its 4-byte extension, on top of
+    /// [`SendStats::bytes`] - and everything the device sent back
+    /// (`TELEMETRY`, `BUSY`, and anything else that arrived).
+    ///
+    /// Payload only: add [`crate::UDP_OVERHEAD`] per datagram for the figure
+    /// on the wire. `frames` is counted the same way whether or not the frame
+    /// was `FINAL`, because `FINAL` is a real datagram - the same rule
+    /// [`SendStats::bytes`] follows (card 153).
+    pub frames: Traffic,
+    /// **What the handshake cost on the control port** (card 164): the
+    /// `GET_INFO` [`Sender::connect`] sends when [`SenderConfig::handshake`]
+    /// is on, and its reply. Zero without a handshake, and never added to
+    /// again - a running session asks for telemetry on the frame port.
+    pub control: Traffic,
     /// How many frames each codec carried.
     pub by_codec: BTreeMap<u8, u64>,
     /// Total time spent in the encoder.
@@ -380,10 +396,15 @@ impl Sender {
     /// handshake gets no reply, [`Error::NoCommonCodec`] if the device and
     /// this sender share no codec, [`Error::Budget`] for an impossible budget.
     pub fn connect(mut device: Device, cfg: SenderConfig) -> Result<Self> {
+        // Card 164: the handshake is real traffic with this panel, on the
+        // control port, and it happens once per session - which is once per
+        // reconnect, so a panel that flaps is not silent about it.
+        let mut control = Traffic::default();
         if cfg.handshake {
             let mut ctl = crate::control::ControlClient::connect(device.control)?;
-            let info = ctl.info()?;
-            device.apply(info);
+            let info = ctl.info();
+            control = ctl.traffic();
+            device.apply(info?);
         }
 
         let my_codecs: Vec<u8> = screeny_proto::dec::SUPPORTED_CODECS.to_vec();
@@ -424,6 +445,7 @@ impl Sender {
 
         let mut stats = SendStats {
             fps: cfg.fps,
+            control,
             ..SendStats::default()
         };
         stats.by_codec.clear();
@@ -680,6 +702,9 @@ impl Sender {
         self.seq = self.seq.wrapping_add(1);
         self.stats.frames_sent += 1;
         self.stats.bytes += payload.len() as u64;
+        // Card 164: `bytes` is the pixels; this is the datagram, header and
+        // all. Two adds in the one place a frame is already being counted.
+        self.stats.frames.out.add(n);
         *self.stats.by_codec.entry(codec).or_insert(0) += 1;
         // The `FINAL` frame goes out the moment the source ends, right behind
         // the frame before it, so it is not part of the paced stream: it does
@@ -729,6 +754,9 @@ impl Sender {
             // even a packet we go on to ignore. This is the reconnect
             // watchdog's only input.
             self.last_rx = Instant::now();
+            // ...and it arrived over the network whether or not it parsed, so
+            // card 164 counts it before deciding what it was.
+            self.stats.frames.inbound.add(n);
             let Ok(pkt) = Packet::parse(&self.rx[..n]) else {
                 continue;
             };

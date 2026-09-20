@@ -12,6 +12,7 @@ use screeny_proto::{ControlPacket, MAX_UDP_PAYLOAD};
 
 use crate::device::DeviceInfo;
 use crate::error::{Error, Result};
+use crate::net::Traffic;
 
 /// Per-attempt reply timeout (spec 6.1).
 pub const REPLY_TIMEOUT: Duration = Duration::from_millis(250);
@@ -27,6 +28,10 @@ pub struct ControlClient {
     timeout: Duration,
     tries: u32,
     buf: Vec<u8>,
+    /// Card 164: what this client has put on the control port and taken off
+    /// it, **retries and packets meant for somebody else included**. Two
+    /// `u64` beside a `send` and a `recv` that were happening anyway.
+    traffic: Traffic,
 }
 
 impl ControlClient {
@@ -48,7 +53,20 @@ impl ControlClient {
             timeout: REPLY_TIMEOUT,
             tries: TRIES,
             buf: vec![0u8; MAX_UDP_PAYLOAD],
+            traffic: Traffic::default(),
         })
+    }
+
+    /// **What this client has cost the network** (card 164): payload bytes and
+    /// datagrams, each way, over its whole life.
+    ///
+    /// Every datagram is counted, not every request: a request that had to be
+    /// retried three times is four datagrams out, and a stray packet that was
+    /// not the reply being waited for is a datagram in. Payload only - add
+    /// [`crate::UDP_OVERHEAD`] per datagram for the figure on the wire.
+    #[must_use]
+    pub fn traffic(&self) -> Traffic {
+        self.traffic
     }
 
     /// Override the per-attempt timeout.
@@ -100,6 +118,7 @@ impl ControlClient {
 
         for _ in 0..self.tries {
             self.sock.send(&out[..n])?;
+            self.traffic.out.add(n);
             let deadline = Instant::now() + self.timeout;
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
@@ -119,6 +138,7 @@ impl ControlClient {
                     }
                     Err(e) => return Err(e.into()),
                 };
+                self.traffic.inbound.add(got);
                 let Ok(pkt) = ControlPacket::parse(&self.buf[..got]) else {
                     continue; // not ours: ignore, keep waiting
                 };

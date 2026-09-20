@@ -51,6 +51,7 @@ use crate::discover::Target;
 use crate::encode::MIN_BUDGET;
 use crate::error::{Error, Result};
 use crate::frame::{FrameTime, Pixels};
+use crate::net::Traffic;
 use crate::sender::{period_of, sleep_until, SendStats, Sender, SenderConfig, Sent};
 
 /// What to do with a frame that arrives sooner than the device can use it.
@@ -169,6 +170,38 @@ impl LinkState {
     }
 }
 
+/// **What a link has cost the network**, over its whole life (card 164).
+///
+/// Two sockets, because they are two different conversations with the panel:
+/// the frame port carries the stream and the telemetry that comes back along
+/// it, and the control port carries the `GET_INFO` handshake at the head of
+/// every session. A caller that wants one number adds them.
+///
+/// Payload bytes and datagrams; add [`crate::UDP_OVERHEAD`] per datagram for
+/// the figure on the wire. Every field only grows - a session that ends is
+/// banked here before its [`SendStats`] go away with the socket.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkTraffic {
+    /// The frame port: frames out, `TELEMETRY` and `BUSY` in.
+    pub frames: Traffic,
+    /// The control port: one `GET_INFO` and its reply per session.
+    pub control: Traffic,
+}
+
+impl LinkTraffic {
+    /// Payload bytes sent on both ports, plus `overhead` per datagram.
+    #[must_use]
+    pub fn out_on_the_wire(&self, overhead: u64) -> u64 {
+        self.frames.out.on_the_wire(overhead) + self.control.out.on_the_wire(overhead)
+    }
+
+    /// Payload bytes received on both ports, plus `overhead` per datagram.
+    #[must_use]
+    pub fn in_on_the_wire(&self, overhead: u64) -> u64 {
+        self.frames.inbound.on_the_wire(overhead) + self.control.inbound.on_the_wire(overhead)
+    }
+}
+
 /// Lifetime totals for a [`Link`], across every session it has had.
 ///
 /// [`Link::session`] has the per-session detail - telemetry, codec mix, encode
@@ -185,6 +218,10 @@ pub struct LinkStats {
     pub frames_dropped: u64,
     /// Pixel payload bytes sent.
     pub bytes: u64,
+    /// **What this link has cost the network**, across every session (card
+    /// 164). Unlike [`LinkStats::bytes`], which is pixels, this is whole
+    /// datagrams on both ports and both ways.
+    pub traffic: LinkTraffic,
     /// Indexed frames that went out exactly.
     pub indexed_exact: u64,
     /// Indexed frames that had to take the lossy fallback
@@ -261,6 +298,10 @@ pub struct Link {
     /// by [`Link::retarget`], which is an explicit instruction to try again.
     given_up: bool,
     stats: LinkStats,
+    /// Card 164: how much of the **current** session's traffic has already
+    /// been folded into `stats.traffic`. A session's counters go away with its
+    /// socket, so they are banked as deltas rather than copied.
+    taken: LinkTraffic,
     /// Absolute schedule for the cadence ceiling.
     next_due: Option<Instant>,
     last_tx: Option<Instant>,
@@ -392,6 +433,7 @@ impl Link {
                 down_since: Some(Instant::now()),
                 ..LinkStats::default()
             },
+            taken: LinkTraffic::default(),
             next_due: None,
             last_tx: None,
             last_limits,
@@ -458,6 +500,7 @@ impl Link {
                 self.stats.bytes += sent.bytes() as u64;
                 self.last_tx = Some(now);
                 self.sender.as_mut().expect("still connected").poll_feedback();
+                self.absorb();
                 Ok(sent)
             }
             // Unreachable: `validate` above rejects both before a frame is
@@ -488,6 +531,7 @@ impl Link {
         if let Some(s) = self.sender.as_mut() {
             s.poll_feedback();
         }
+        self.absorb();
         self.watchdog();
         if self.sender.is_none() {
             self.pump();
@@ -496,6 +540,33 @@ impl Link {
             let fresh = limits_of(s);
             self.last_limits = fresh;
         }
+    }
+
+    /// **Bank what the current session has put on the wire** (card 164).
+    ///
+    /// A [`Sender`]'s counters die with its socket, and a link that runs for
+    /// months rebuilds that socket every time the panel reboots or moves. So
+    /// the lifetime figure is kept here and this folds in the **difference**
+    /// since the last look, which makes it monotonic by construction rather
+    /// than by anyone remembering to read it before a reconnect.
+    ///
+    /// Cheap enough to call per frame: eight `u64` subtractions on values the
+    /// sender has already written, no lock and no allocation.
+    fn absorb(&mut self) {
+        let Some(s) = self.sender.as_ref() else { return };
+        let now = LinkTraffic {
+            frames: s.stats().frames,
+            control: s.stats().control,
+        };
+        let step = |to: &mut crate::net::Wire, now: crate::net::Wire, was: crate::net::Wire| {
+            to.bytes += now.bytes.saturating_sub(was.bytes);
+            to.packets += now.packets.saturating_sub(was.packets);
+        };
+        step(&mut self.stats.traffic.frames.out, now.frames.out, self.taken.frames.out);
+        step(&mut self.stats.traffic.frames.inbound, now.frames.inbound, self.taken.frames.inbound);
+        step(&mut self.stats.traffic.control.out, now.control.out, self.taken.control.out);
+        step(&mut self.stats.traffic.control.inbound, now.control.inbound, self.taken.control.inbound);
+        self.taken = now;
     }
 
     /// Declare the link down if the device has stopped answering while we are
@@ -609,6 +680,9 @@ impl Link {
     }
 
     fn adopt(&mut self, sender: Sender) {
+        // A fresh session counts from zero, and its handshake is already in
+        // its `SendStats` - so nothing has been taken from it yet (card 164).
+        self.taken = LinkTraffic::default();
         self.stats.sessions += 1;
         self.stats.connected_since = Some(Instant::now());
         self.stats.down_since = None;
@@ -623,6 +697,8 @@ impl Link {
     /// nobody to send it to, and if there is, the stream timeout releases the
     /// lock in a second.
     fn lose(&mut self, why: String) {
+        // Bank what this session cost before its counters go with its socket.
+        self.absorb();
         self.sender = None;
         self.next_due = None;
         self.last_tx = None;
@@ -663,10 +739,13 @@ impl Link {
     }
 
     fn reaim(&mut self, aim: Aim) {
-        if let Some(mut s) = self.sender.take() {
+        if let Some(s) = self.sender.as_mut() {
             let _ = s.finish();
             s.poll_feedback();
         }
+        // `FINAL` and whatever came back with it are this session's too.
+        self.absorb();
+        self.sender = None;
         self.pending = None;
         match aim {
             Aim::Find(t) => {
@@ -716,10 +795,13 @@ impl Link {
     pub fn close(&mut self) {
         self.closed = true;
         self.pending = None;
-        if let Some(mut s) = self.sender.take() {
+        if let Some(s) = self.sender.as_mut() {
             let _ = s.finish();
             s.poll_feedback();
         }
+        // The `FINAL` frame is a datagram like any other (card 164).
+        self.absorb();
+        self.sender = None;
         self.last_limits.connected = false;
         self.stats.connected_since = None;
     }

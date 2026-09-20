@@ -365,6 +365,52 @@ points it somewhere other than 80, which is how a simulator is talked to.
 redacts it, and nothing about a device is written to the state file, because these are
 live facts and not state. `tests/ssid.rs` checks both.
 
+### What a panel costs the network (card 164)
+
+The owner's question: *"how much network traffic are we sending, and receiving?"*
+Every device on `/api/v1/status` carries `traffic`, and the Panel screen says it in
+three lines under Link:
+
+```
+Network   36.4 KB/s out · 0.3 KB/s in
+By path   frames 36.1 · control 0.1 · http 0.2 KB/s out, averaged over 5 s
+Sent      2.1 GB out · 4.3 MB in since the studio started
+```
+
+**Three paths, because they are three conversations**, each counted in bytes and
+packets, each way:
+
+| | | |
+|---|---|---|
+| `frames` | UDP, the frame port | the stream out, and the `TELEMETRY` and `BUSY` that come back along it (spec 6.4). Nearly all of it: ~30 datagrams a second of 0.4-1.4 KB. |
+| `control` | UDP, the control port | the telemetry poll, brightness, identify, rename, reboot, `GET_INFO`, and the handshake at the head of **every** link session - so a panel that keeps reconnecting shows up here. Retries are counted: a request to a panel that is off is four datagrams. |
+| `http` | TCP, the panel's port 80 | `GET /api/v1/status` every ten seconds (card 180). Bytes written and bytes read. |
+
+**The overhead rule.** The per-path counters are **payload**: what `send` was handed,
+what `recv` returned, what was written to and read from the socket. The `total` and
+every rate add **28 bytes per datagram** (IPv4 20 + UDP 8) to the two UDP paths, so the
+figure means something on the wire, and add **nothing** to the HTTP path - TCP's
+retransmissions, its ACKs and its handshake are invisible from user space and are not
+guessed at.
+
+**What is not counted**, deliberately: the mDNS browse and the broadcast probe (card
+141). Neither is traffic *with a panel* - a browse is multicast to nobody in particular
+and a probe is one datagram to the subnet that every panel answers - so booking either
+against a device would be inventing a number. Nor are the frames sent to *browsers*:
+those are under `sockets`, where they have been since card 120.
+
+**The rate is worked out in one place**, on the supervisor's own tick, as an
+exponentially weighted average with a five-second time constant. So every browser reads
+the same number, the page does no arithmetic (`tests/ui.rs` holds it to that), the state
+is a handful of `u64` per device, and a panel that goes away decays to zero rather than
+freezing at what it was last doing. **KB is 1000 bytes** here, which is what a network is
+measured in, and is deliberately not what `kb()`/`size()` mean elsewhere on the page.
+
+It costs the frame path nothing measurable: the sender adds two `u64` where it is already
+incrementing `frames_sent`, the link banks the difference (so a rebuilt link adds to the
+total instead of resetting it), and the studio reads the link once a second from the
+supervisor. No lock on the send path, and nothing logged per packet.
+
 ### What counts as trouble, and what only looks like it (card 195)
 
 **The thresholds are the firmware session's**, measured on the real device across
@@ -519,7 +565,10 @@ one slot, the render loop never waits for a reader, and pacing is done by droppi
 frame where it stands rather than by holding one.
 
 `GET /status` says what all this is costing, under `sockets`: `open`, `watching`,
-`frames_sent`, `bytes_sent`.
+`frames_sent`, `bytes_sent`. That is what the *browsers* cost; what the *panels* cost is
+per device under `traffic` (card 164, above), and the two are deliberately not added
+together - one is a LAN and the other is a Wi-Fi link with a 64x32 panel on the end of
+it.
 
 **Brightness** is a policy, not a one-off: it is re-applied whenever the link comes back,
 and whenever the panel's own telemetry disagrees with what it last said it applied - a
@@ -609,6 +658,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
+| `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
 | `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
