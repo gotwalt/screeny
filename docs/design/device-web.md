@@ -6,8 +6,9 @@ portal (open soft-AP, DHCP, DNS catch-all, QR screen, trial join before commit),
 rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5.1** after five fixes
 (card 223's Log: QR stays put, the page says Connected, captive probes get the setup page
 as a `200` and not a `302`, no option 114, the connected screen yields to a stream). **Open:
-0.5.1 went silent once during UDP conformance and it did not reproduce (card 223's Log).** Next: 229 (network scan list), 230/231 (the
-button), 240-243 (OTA), the boot-path stack lever, and 225 (spec sections 8.1/8.3).**
+0.5.1 went silent once during UDP conformance and it did not reproduce (card 223's Log).** Next, in the order the owner chose on 2026-09-20 (decision 10): 234 (the stall), 243 + the
+boot-path stack lever, a one-hour soak, 240/241 (OTA, the full plan), 230 (the button), with
+225 (spec sections 8.1/8.3) and the simulator's captive answer on the side.**
 This file is the source of truth for the device-web track (cards 200-249, coordinated by
 the `firmware` Claude session): decisions, what the research settled, and the build
 order at the end.
@@ -34,6 +35,7 @@ order at the end.
 | 7 | **The frame path is the product.** No HTTP request, flash write or portal activity may cost a frame at 30 fps, except a firmware update, which is allowed to take the panel over with an "updating" screen. | standing |
 | 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the owner pressing (card 203). | owner, 2026-09-20 |
 | 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | owner, 2026-09-20 |
+| 10 | **Scope, after the phone test: "this is not a commercial product, we don't need to overly bomb-proof it. As long as it's not running out of memory and is pretty crash proof I'm happy."** WiFi setup is good enough as it stands. **Dropped**: 229 (network scan list), a faster wrong-password verdict (45 s today), identical-credentials-is-a-no-op, the Android refresh-chain check, mDNS re-announce on an address change (the Studio's card 141 follows a panel that moved), the simulator serving the setup page and the `crates/provision` tidy. **Kept**: 234 (the silent stall), 243 (panic breadcrumb) with the boot-path stack lever, a one-hour soak as the acceptance check, **OTA 240/241 on the full plan of research 006**, and the button as **one card: short press = status for 10 s, hold 5 s (countdown, release cancels) = wipe WiFi -> portal** - no 15 s factory reset, no held-at-boot (this narrows decision 8). Order: stability first, then OTA, then the button; host-only work (spec 225, the simulator's captive `200`) in parallel on Opus workers. | owner, 2026-09-20 |
 
 ## Working agreement with the software session
 
@@ -321,8 +323,9 @@ Studio all depend on - `crates/proto` is not touched.
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
 | 225 | spec: strike 8.1, rewrite 8.3 to end at the portal, add the HTTP API section (shared surface: notice to the software session) | no |
-| 230 | button task: debounce, short press = identify screen | yes |
-| 231 | hold ladder with the on-panel countdown; 5 s wipes WiFi -> portal; held-at-boot | yes |
+| 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
+| 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
+| 229 | network scan list - **dropped** (decision 10) | - |
 | 240 | OTA staging over HTTP into the inactive slot, the five-check validator, per-sector timing (the esp-radio interrupt-window measurement) | yes |
 | 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
