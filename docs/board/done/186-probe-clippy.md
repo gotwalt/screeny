@@ -38,3 +38,11 @@ that sentence comes out with this card.
 `cargo test -p screeny-probe` green.
 
 ## Log
+
+## Log
+
+### Orchestrator (2026-09-20)
+
+Done by the firmware session, which owns `crates/probe`: commit 32ff319 fixed the two
+`manual is_multiple_of` warnings. The exception sentence in `docs/README.md` is removed; the
+workspace has no clippy exception left.

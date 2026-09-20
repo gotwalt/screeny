@@ -52,9 +52,8 @@ The orchestrator reviews, merges to `main`, and moves the card to `done/`.
 
 ## Clippy
 
-`cargo clippy --workspace --all-targets` is expected to say **nothing** for
-every host crate but `screeny-probe`, which card 125 left alone because
-another session held it. There is no CI gate - there is no CI - so it is on
+`cargo clippy --workspace --all-targets` is expected to say **nothing**, for
+every host crate (cards 125 and 186). There is no CI gate - there is no CI - so it is on
 whoever is changing a crate to run it before handing the card over. An
 `#[allow]` that survives carries a one-line reason beside it saying why the
 lint is wrong for that code; a blanket `#![allow]` at the top of a file is not
