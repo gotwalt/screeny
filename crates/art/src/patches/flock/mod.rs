@@ -25,7 +25,7 @@ pub(crate) mod sim;
 use crate::color::{oklch, smoothstep, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
-use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use sim::{v3, Sim, Tuning, V3, STEP};
 use std::f32::consts::TAU;
 
@@ -48,6 +48,7 @@ const PARAMS: &[ParamSpec] = &[
     param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.90),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
+    toggle("backdrop", "Sky and horizon (off = white birds on black)", true),
     choice("scheme", "Tones", SCHEMES, 0.0),
     param("hue", "Hue", 0.0, 360.0, 1.0, 250.0),
     param("spread", "Hue spread, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
@@ -372,18 +373,23 @@ impl Patch for Flock {
         self.advance(ctx, &tune);
 
         let wheel = ctx.get("wheel") * (ctx.t / 60.0) as f32;
-        let (bands, bird) = scheme(
-            ctx.get("scheme") as usize,
-            ctx.get("hue") + wheel,
-            ctx.get("spread"),
-            ctx.get("sky"),
-        );
+        // The owner's option (2026-09-20): no backdrop at all - white birds on
+        // true black, nothing else. The sky, the horizon and the sun all go,
+        // and with them the only thing that shows the camera's own banking;
+        // what is left is the flock, which is the point of asking for it.
+        let backdrop = ctx.get("backdrop") >= 0.5;
+        let which = if backdrop { ctx.get("scheme") as usize } else { 0 };
+        let (mut bands, mut bird) = scheme(which, ctx.get("hue") + wheel, ctx.get("spread"), ctx.get("sky"));
+        if !backdrop {
+            bands = [(0.0, 0.0, 0.0); BANDS];
+            bird = (0.97, 0.0, 0.0);
+        }
         let colours = palette(&bands, bird);
 
         let view = View::of(&self.sim, self.sun);
         let ss = (ctx.get("samples") as usize).clamp(1, 6);
         let mut cover = Coverage::new(ss);
-        let dusk = ctx.get("scheme") as usize == 1;
+        let dusk = which == 1;
         self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { HAZE_DUSK } else { HAZE_LIGHT });
 
         // Sky and ink are quantised separately, each through its own mask,
