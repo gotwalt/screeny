@@ -4,8 +4,8 @@ title: docker-compose.yml and deployment to workbench.local
 type: build
 hardware: no
 depends: [105]
-owner:
-branch:
+owner: worker-107
+branch: card/107-compose-workbench
 ---
 
 ## Goal
