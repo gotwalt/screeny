@@ -298,6 +298,42 @@ mod tests {
         assert!(!p.set(SPECS, "nonesuch", 1.0), "an unknown id is still refused");
     }
 
+    // ---------------- card 162: what time is it ----------------
+
+    /// A pinned time is a time of day on **day zero**, never today. The whole
+    /// point of the flag is a command that draws the same picture tomorrow,
+    /// and the numerals piece seeds each minute's choreography from the
+    /// absolute minute number, so anchoring to today would quietly choose a
+    /// different dance every day.
+    #[test]
+    fn a_pinned_time_is_the_same_number_every_day() {
+        assert_eq!(Clock::parse("21:12"), Ok(Clock::Pinned(21.0 * 3600.0 + 12.0 * 60.0)));
+        assert_eq!(Clock::parse("00:00"), Ok(Clock::Pinned(0.0)));
+        assert_eq!(Clock::parse("23:59:59"), Ok(Clock::Pinned(86399.0)));
+        assert_eq!(Clock::parse("21:11:58.5"), Ok(Clock::Pinned(76318.5)), "seconds may be fractional");
+        // Well under today: nothing here consults the machine.
+        assert!(matches!(Clock::parse("21:12"), Ok(Clock::Pinned(s)) if s < 86400.0));
+    }
+
+    #[test]
+    fn a_pinned_clock_carries_the_moment_forward_by_engine_time() {
+        let c = Clock::parse("21:11:58").expect("a time");
+        assert_eq!(c.now(0.0), 76318.0);
+        assert_eq!(c.now(4.0), 76322.0, "four seconds in, it is 21:12:02");
+        // A live clock ignores `t` and answers the machine, which is what the
+        // unpinned snapshot, `pipe` and `play` have always done.
+        let live = Clock::Live.now(0.0);
+        assert!((live - local_now()).abs() < 5.0);
+        assert_eq!(Clock::default(), Clock::Live);
+    }
+
+    #[test]
+    fn a_thing_that_is_not_a_time_of_day_is_refused() {
+        for s in ["", "21", "21:", "9pm", "21:12:13:14", "24:00", "21:60", "-1:00", "21:12:60", "21:xx"] {
+            assert!(Clock::parse(s).is_err(), "`{s}` is not a time of day");
+        }
+    }
+
     // ---------------- card 163: parameters that are lists ----------------
 
     /// A choice is an ordinary `f32` parameter that happens to have names: the

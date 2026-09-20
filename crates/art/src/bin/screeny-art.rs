@@ -45,9 +45,12 @@ seconds into 21:12:02. With `--time`, `--warmup` defaults to the whole run
 frame; give `--warmup` yourself to shorten it. Pin `--seed` too for a picture
 that is the same byte for byte - by default it comes from the system clock.
 
-  the settled time, 21:12:    snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out x.png
-  mid-dance into 21:12:       snapshot clocks-numerals --time 21:11:40 --at 32 --seed 7 --out x.png
-  dials telling 10:10:        snapshot clocks-dials --time 10:10 --at 12 --out x.png";
+  numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out x.png
+  numerals, dancing into it:   snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out x.png
+  dials, telling 10:10:        snapshot clocks-dials --time 10:09:50 --at 15 --out x.png
+
+The settled one needs no --seed: once the hands have landed, what is on the
+panel is the minute, not the dance that got there. The dancing one does.";
 
 fn main() {
     if let Err(e) = run(std::env::args().skip(1).collect()) {
