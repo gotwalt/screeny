@@ -37,8 +37,12 @@ is when he looked.
 hands on a clock - that is to say, still visible, just in an unobtrusive rest position."
 So: do **not** blank or hide resting dials, and do not dim them into invisibility. They stay
 real clock hands; the job is a rest position (and, if needed, a modest presentation
-difference) that the eye does not read as a colon or as part of a digit. Whether he also
-wants a real hours:minutes separator is still open - ask with snapshots in hand.
+difference) that the eye does not read as a colon or as part of a digit.
+
+**And (same day)**: "clockclock24 shows [digit | 0][digit][digit | 0][digit] with no colons
+or other punctuation." So the format is settled: **four digits, leading zeros kept, no
+separator of any kind** - exactly what `pose` draws today. The whole defect is that the
+resting dials *look like* punctuation. Do not add a colon.
 
 ## Deliverables
 
@@ -54,15 +58,8 @@ wants a real hours:minutes separator is still open - ask with snapshots in hand.
   stay clearly visible). Do not break the dances: rest is a pose the choreography passes
   through, so it must stay a valid pose for the servo model, and a per-dial rest angle
   must not make the dances' formations asymmetric by accident.
-- If the owner wants a real hours:minutes separator, find the room honestly: 4 digits x 2
-  columns fill all 8 columns, so a separator means either narrower digits, a gap column
-  stolen from a `1`, or drawing it between dials in the LED grid (the grid is 64 x 24
-  centred in 64 x 32; there are no spare columns, but there are spare rows). Propose, with
-  snapshots (`screeny-art snapshot clocks-numerals --at ... --set offset=...`), before
-  building.
-- Leading zero / leading blank for hours < 10 in both 12- and 24-hour modes: decide with
-  the owner and make it explicit (today `pose` always draws `hh / 10`, so 09:05 shows a
-  leading 0).
+- Keep the format: four digits, leading zero for hours < 10 (`09:05` is `0905`), no
+  separator. Add a test that pins it, so nobody "fixes" it later.
 - Snapshot tests for the awkward times: `21:12`, `11:11`, `10:15`, `14:47`, `09:05`,
   `00:00`, and 12-hour `1:11`.
 
