@@ -383,3 +383,60 @@ Joined from the store on the **first** attempt, announced, and streamed.
   route table plus the portal pass added *nothing* to it (`13056 -> 13056`
   across the in-memory run). The headroom is 8.3 KB rather than 233's 14.6 KB
   because that is what the AP side cost.
+
+### Flash 3 (`c223-portal`, `start-in-portal` + `http-selftest`): the portal, on the device
+
+One fix went in first: `selftest_task` used to `return` when the stack had no
+address, which is precisely the `start-in-portal` case - the first attempt at
+this run printed nothing at all. The TCP half is skipped now and the in-memory
+pass goes ahead, which is the half that was ever interesting.
+
+```
+WARN - provision: BENCH BUILD - ignoring the stored credentials (they are NOT erased)
+INFO - provision: ap screeny-4a00a4 | stored credentials false | built-in false
+INFO - provision: boot -> portal
+INFO - provision: action RaiseAp
+INFO - provision: soft-AP screeny-4a00a4 up on channel 1, portal at 192.168.4.1
+INFO - dhcp: serving 192.168.4.50-53 on the setup network
+INFO - dns: catch-all up, every name answers 192.168.4.1
+```
+
+**Portal pass, 11 of 11 right, this time with the AP actually up:**
+
+```
+selftest: portal pass, soft-AP is up
+AP  captive.apple.com (302)     -> 302 OK 283 bytes | location "http://192.168.4.1/"
+AP  android generate_204 (302)  -> 302 OK 283 bytes | location "http://192.168.4.1/"
+AP  windows ncsi (302)          -> 302 OK 283 bytes | location "http://192.168.4.1/"
+LAN captive.apple.com (404)     -> 404 OK 109 bytes
+AP  GET / is the setup form     -> 200 OK 1297 bytes
+LAN GET / is the status page    -> 200 OK 6935 bytes
+```
+
+283 bytes of body on the redirect, which is the thing research 007 section 4.3
+insists on (Android calls `Content-Length <= 4` a failure and iOS wants
+something to render). The LAN row is the one that matters most: the same
+request, the same `Host:` header, a plain 404 - so the catch-all is a property
+of **which listener answered** and not of anything a client can claim.
+
+The 20 LAN routes are right too, on a device with no address: `GET
+/api/v1/wifi` reads `{"state":"disconnected","ssid":null,"ip":null,"reason":null}`,
+which is the machine's `Portal` answer with nothing having failed yet.
+
+Numbers with the soft-AP up, DHCP, DNS and the HTTP worker on it, and a
+self-test client running:
+
+* telemetry `state 4` - the `PROVISIONING` overlay, from `overlay_state()`.
+* `stack: core 0 main high-water 13056 of 22600 bytes, 8520 free`; core 1
+  `1648 of 6144`. **The demand is still 13,056**, the boot path's, and the
+  in-memory pass across all 31 routes moved it by zero.
+* `heap 47932/90112` sampled throughout, against 45,416 on the station-only
+  build: **the whole AP side costs ~2.5 KB of heap**, and 42 KB was free at
+  every sample. (esp-alloc's true all-allocations watermark needs
+  `internal-heap-stats`, which only the `apsta-probe` build turns on; card
+  227's APSTA watermark was 54,040 of 90,112.)
+* No panic, no backtrace, no `ERROR`, and the only `WARN` is the bench build
+  announcing itself.
+
+What this run cannot show is the panel and a phone, which is what the phone
+test is for.

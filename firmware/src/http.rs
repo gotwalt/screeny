@@ -1808,12 +1808,13 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // is the baseline this run is compared against, and it should be measured
     // with the server idle.
     Timer::after(Duration::from_secs(75)).await;
-    let Some(cfg) = stack.config_v4() else {
-        warn!("selftest: no address, nothing to connect to");
-        return;
-    };
-    let me = cfg.address.address();
-    let target = IpEndpoint::new(IpAddress::Ipv4(me), HTTP_PORT);
+    // **Not an early return** (card 223). A `start-in-portal` build has no
+    // station address at all - that is the whole point of it - and the TCP
+    // half of this self-test was never the interesting half. Skipping it and
+    // going on to the in-memory pass is what makes the portal build
+    // measurable; returning here is what made the first `start-in-portal`
+    // flash print nothing.
+    let me = stack.config_v4().map(|c| c.address.address());
 
     // The window this is measured over: the frame path either noticed or it
     // did not, and these are the numbers that say which.
@@ -1834,7 +1835,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
     let mut us_total = 0u64;
     let mut first_status: heapless::String<16> = heapless::String::new();
 
-    for i in 0..REQUESTS {
+    for i in (0..REQUESTS).take_while(|_| me.is_some()) {
+        let target = IpEndpoint::new(IpAddress::Ipv4(me.expect("checked")), HTTP_PORT);
         let t0 = Instant::now();
         let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
         sock.set_timeout(Some(Duration::from_secs(3)));
@@ -1882,7 +1884,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
             // hairpin a frame back to its sender, so this is the expected
             // outcome and not a firmware fault. Say so, and fall back.
             warn!(
-                "selftest: embassy-net cannot reach its own address {} - no loopback on a station interface. Falling back to reporting readiness.",
+                "selftest: embassy-net cannot reach its own address {:?} - no loopback on a station interface. Falling back to reporting readiness.",
                 me
             );
             break;
@@ -1901,8 +1903,11 @@ pub async fn selftest_task(stack: Stack<'static>) {
     );
     if ok == 0 {
         info!(
-            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, stack address {}",
-            HTTP_TASKS, HTTP_PORT, me
+            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, station address {:?}, soft-AP {}",
+            HTTP_TASKS,
+            HTTP_PORT,
+            me,
+            if crate::provision::ap_up() { "up" } else { "down" },
         );
     }
 
