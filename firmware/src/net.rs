@@ -48,6 +48,14 @@ const TICK: Duration = Duration::from_millis(20);
 /// How often the idle screen's ambient animation advances.
 const ANIM_MS: u64 = 100;
 
+/// How often the portal screen is recomposed while it is up.
+///
+/// Its content changes every [`screeny_provision::Timing::screen_alternate_ms`]
+/// (four seconds), so anything faster is wasted work - and this one is not
+/// free: it re-encodes a version 2-L QR each time. 250 ms keeps the layout
+/// swap looking instant without putting a QR encode inside every 20 ms tick.
+const PORTAL_MS: u64 = 250;
+
 /// The frame socket's **transmit** buffer, and card 223's RAM lever.
 ///
 /// It was `2 * MAX_DATAGRAM` (2,944 bytes) from card 008 to card 223, by
@@ -150,6 +158,7 @@ pub async fn frames_task(
     let mut had_address = false;
     let mut redraw_seen = 0u32;
     let mut anim_at_ms = 0u64;
+    let mut portal_at_ms = 0u64;
     let mut phase = 0u32;
     let mut link_was_up = true;
 
@@ -220,7 +229,17 @@ pub async fn frames_task(
         let intent = core.intent(now);
         let now_ms = now / 1_000;
         let animating = matches!(intent, Intent::Identify | Intent::Fade { .. });
+        // Card 223: the portal screen and the "connected, I am at x.y.z.w"
+        // screen. **An overlay, like `IDENTIFY`** - frames from a sender on
+        // the LAN are still drained, decoded and counted underneath; what
+        // changes is only what reaches the panel. *Whether* there is one, and
+        // which of the two portal layouts this instant wants, is the machine's
+        // answer (`Provisioner::screen`); this task supplies the clock and the
+        // frame, exactly as it does for every other screen.
+        let portal = crate::provision::screen(now_ms as u32);
+        let portal_due = portal.is_some() && now_ms.wrapping_sub(portal_at_ms) >= PORTAL_MS;
         let due = animating
+            || portal_due
             || core.redraw() != redraw_seen
             || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
 
@@ -230,7 +249,14 @@ pub async fn frames_task(
             phase = phase.wrapping_add(1);
             let hold = crate::PATTERN_HOLD.load(Ordering::Relaxed);
             let mut drew = true;
-            if hold != 0 {
+            if let Some(s) = portal.as_ref() {
+                // Drawn with nothing locked: `provision::screen` copied the
+                // name out of the machine and released it, because a QR encode
+                // inside a critical section would mask core 1's HUB75 DMA
+                // interrupt for the whole of it.
+                portal_at_ms = now_ms;
+                crate::provision::render(s, &mut producer.back().px);
+            } else if hold != 0 {
                 // Bench only: a held test pattern outranks everything, so a
                 // test card stays up while something else is still sending.
                 if let Some(p) = crate::patterns::Pattern::from_u8(hold - 1) {

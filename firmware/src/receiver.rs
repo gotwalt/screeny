@@ -225,6 +225,15 @@ impl rx::Host for Device<'_> {
 /// in an atomic rather than in `Stats`; `RESET_STATS` zeroes it along with
 /// everything else. The RSSI belongs to the Wi-Fi task.
 fn adjust_telemetry(t: &mut Telemetry) {
+    // Spec section 7.3's `PROVISIONING`, as an **overlay**: the stream state
+    // machine's own byte stands the rest of the time, and frame handling
+    // continues underneath either way, so a sender on the LAN that is still
+    // streaming keeps streaming while the panel is in portal mode on the AP
+    // side. Which states get the overlay is `Provisioner::overlay_state`'s
+    // answer, not this function's.
+    if let Some(s) = crate::provision::overlay_state() {
+        t.state = s;
+    }
     t.rssi_dbm = crate::RSSI_DBM.load(Ordering::Relaxed);
     t.render_us_max = crate::RENDER_US_MAX_PROTO
         .load(Ordering::Relaxed)

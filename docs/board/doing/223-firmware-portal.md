@@ -206,3 +206,83 @@ datagrams are in flight.
 `.stack` 34,352 -> **36,784**, +2,432 bytes, exactly the arithmetic. The
 `fw-size.sh` floor (24,576) is untouched. This is the budget card 223's AP side
 is spent out of.
+
+### The portal itself, built (deliverables 2-6), first build
+
+`firmware/src/provision.rs` is the new half: it owns the `Provisioner`, the
+radio and the AP's services, and it implements none of the machine's rules.
+`crates/provision` and `crates/device-api` were **not** touched.
+
+Shape, in brief:
+
+* One `Provisioner` behind a *blocking* critical-section mutex, because
+  `receiver::Host::wifi` is synchronous and must answer `GET_WIFI` without
+  awaiting. Readers hold it for a copy and nothing else - a QR encode inside a
+  critical section would mask core 1's HUB75 DMA interrupt for its duration -
+  so `provision::screen()` copies the machine's answer into an owned
+  `PanelScreen` and `net.rs` draws it with the lock released.
+* `provision_task` owns the `WifiController`. `StartJoin` -> `connect_async`
+  bounded by the machine's own 15 s, then `wait_config_up` for the address (a
+  `Joined` carries one), then `Joined` / `JoinFailed`. `LinkUp` / `LinkDown`
+  are *derived on a 1 s tick* from `is_connected() && config_v4().is_some()`
+  rather than taken from `wait_for_disconnect_async`, so a radio restart -
+  which is what raising or dropping the soft-AP is - produces the same edge as
+  an access point going away, and heals the same way.
+* The one borrow that could not be had: AP client events are
+  `wait_for_access_point_connected_event_async(&self)` and a join is
+  `connect_async(&mut self)`, so while an attempt is in flight the AP's
+  associate/leave events are not observed. Harmless: the only rule that reads
+  `ap_clients()` is the ten-minute portal retry, which fires in `Portal`, where
+  no join is ever in flight. Written down in the module docs.
+* AP side: one `embassy-net` stack at 192.168.4.1/24 built at boot and left
+  idle (`.bss` is paid either way, so building it on demand buys nothing in the
+  pool that breaks first), `StackResources<4>`; `dhcp_task` and `dns_task` bind
+  their sockets only while `ap_up()` and drop them when it goes away.
+* HTTP on both sides with **no third worker**: `Dispatch` carries an `ap` flag,
+  worker 0 stays on the LAN and **worker 1 follows the soft-AP**. A third
+  worker is 7.5 KB of `.bss` - three times the whole lever - and while the AP
+  is up the station is, by the machine's rules, not on a network, so the
+  borrowed worker has nobody to have served.
+* `/setup` (GET and POST) on both interfaces answers **HTML**, because what
+  posts to it is a plain `<form>` in a captive mini-browser; `POST
+  /api/v1/wifi` is unchanged and still answers JSON. Both end at
+  `crate::NEW_WIFI` and the one machine. `GET /` is the form on the AP side and
+  the status page on the LAN side. The catch-all returns a 302 **with a body**
+  to `http://192.168.4.1/` for an unknown path, and only while `ap_up()`.
+
+**A second lever was needed.** The AP side cost 11,144 bytes, not the ~9.7 KB
+the card projected, which put `.stack` at 25,640 - over the 24,576 floor but
+under the card's 26 KB exit. So the card's named fallback was pulled too:
+`MDNS_BUF` 1500 -> **1024** (it is spent four times over: the socket's rx and
+tx and two `VecBufAccess`es), worth 1,904 bytes, and `AP_SOCKETS` 5 -> 4, worth
+another ~408. 1024 is not a guess: what this device sends is under 600 bytes
+(two services' PTR/SRV/TXT/A, TXT bounded by `INFO_MAX` = 224) and 1024 is
+comfortably over the 576-byte message every DNS implementation must accept.
+
+```
+fw 0.4.3 baseline   .data 58380  .bss 103872  .stack 34352  image 910041
++ frame tx lever    .data 58380  .bss 101440  .stack 36784  image 910033
++ the whole portal  .data 58988  .bss 111976  .stack 25640  image 968405
++ mdns + ap sockets .data 58988  .bss 109664  .stack 27952  image 968397
+```
+
+**Exit `.stack` 27,952** against the card's 26,624 (26 KB) and the script's
+24,576 floor. Flash: +58 KB of image, which a 2 MB slot has.
+
+`FW_VERSION` -> **0.5.0**.
+
+**Retired**, as the card instructed: the cargo features `device-web-spike`,
+`spike-ap`, `spike-portal` and `spike-qr`, and with them `firmware/src/web_spike.rs`
+and `firmware/src/web_spike/{ap,portal,qr}.rs`. `edge-nal`, `edge-captive` and
+`edge-dhcp` stop being optional; `qrcodegen-no-heap` stops being a direct
+dependency at all and arrives through `screeny-provision`.
+
+Every other feature still builds, checked one at a time: default,
+`start-in-portal`, `http-selftest`, `store-selftest`, `apsta-probe`,
+`spike-ota`, `display-on-core0`, `fb-on-stack`, `gpio-probe` (both binaries)
+and `bench-wifi`. `bench-wifi` was type-checked with the documented dummies in
+the environment (`build.rs` prefers the environment over either file), so no
+real credential was read, built or written at any point. `apsta-probe` lost its
+call into `station_loop`, which card 223 deleted; it has its own three-line
+"connect, then poll the RSSI" instead, and the heap measurement either side of
+`set_config(AccessPointStation)` is unchanged.

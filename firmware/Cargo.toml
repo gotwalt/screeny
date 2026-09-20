@@ -70,23 +70,25 @@ fb-on-stack = []
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
 gpio-probe = []
 
-# Card 201's compile-only spike. **Evidence, not the implementation.** It
-# exists so the research doc can quote a real image size and a real `.bss`
-# growth for "a soft-AP + a captive portal on this stack", and so that every
-# API claim in the doc is one the compiler agreed with. It is never flashed and
-# the build cards replace it wholesale.
-#
-# **The HTTP third of it was retired by card 222** (`spike-http` and
-# `src/web_spike/http.rs` are gone, along with `web_spike_portal.html`): the
-# real server is `src/http.rs` and it is in the default build, so a second,
-# untested spelling of the same router is two places to get it wrong. The AP,
-# portal and QR parts are card 223's and 231's evidence and still build.
-device-web-spike = ["spike-ap", "spike-portal", "spike-qr"]
-# Split so the research doc can attribute the flash and `.bss` growth to the
-# piece that caused it: each of these builds on its own.
-spike-ap = []
-spike-portal = ["spike-ap", "dep:edge-captive", "dep:edge-dhcp", "dep:edge-nal"]
-spike-qr = ["dep:qrcodegen-no-heap"]
+# Card 201's compile-only spike (`device-web-spike`, `spike-ap`,
+# `spike-portal`, `spike-qr`) was **retired by card 223**, together with
+# `src/web_spike.rs` and `src/web_spike/`. It existed to prove that
+# `esp-radio`'s APSTA mode, a second `embassy-net` stack, `edge-dhcp`,
+# `edge-captive` and the QR encoder link on this chip at these versions. They
+# are all in the default build now and the device runs them, which is better
+# evidence than a build that was never flashed - and a second spelling of each
+# was two places to get them wrong. The HTTP third went the same way in card
+# 222, for the same reason.
+
+# **Card 223's bench build.** Boot as if the settings store held no
+# credentials, **without erasing or overwriting a byte of it**: the machine is
+# told `has_stored: false`, so it goes straight to `Portal`, raises the soft-AP
+# and puts the QR on the panel. The owner's real credentials are still in
+# flash, so typing them into the setup form runs a real trial that really
+# joins and really commits. This is the build the phone test is done with; it
+# does not join a network by itself, so there is no stream while it runs. Off
+# by default, and a plain `cargo build --release` must never pick it up.
+start-in-portal = []
 
 # Card 222's bench self-test. A worker cannot reach the device over the LAN, so
 # this asks the device to make the request itself: 30 s after boot it opens a
@@ -217,15 +219,23 @@ serde-json-core = { version = "=0.6.0", default-features = false }
 # The request and reply shapes, shared with the simulator and the Studio.
 screeny-device-api = { path = "../crates/device-api" }
 
-# --- card 201's spike (feature `device-web-spike` only) -------------------
-# What is left of it after card 222 retired the HTTP third: the soft-AP, the
-# captive portal and the QR encoder, which are cards 223 and 231. All optional,
-# all pinned: edge-captive / edge-dhcp 0.8 want edge-nal 0.7 and domain 0.12,
-# which edge-mdns 0.8 + edge-nal-embassy 0.9 already carry.
-edge-nal = { version = "=0.7.0", optional = true, default-features = false }
-edge-captive = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
-edge-dhcp = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
-qrcodegen-no-heap = { version = "=1.8.1", optional = true }
+# --- the setup portal (card 223) ------------------------------------------
+# The soft-AP's DHCP server and DNS catch-all. Card 201 proved they link at
+# exactly these versions; card 223 ships them. edge-captive / edge-dhcp 0.8
+# want edge-nal 0.7 and domain 0.12, which edge-mdns 0.8 + edge-nal-embassy 0.9
+# already carry, so there is one copy of each in the binary.
+edge-nal = { version = "=0.7.0", default-features = false }
+edge-captive = { version = "=0.8.0", default-features = false, features = ["io"] }
+edge-dhcp = { version = "=0.8.0", default-features = false, features = ["io"] }
+
+# Card 221's crate: the join/portal state machine, the `WIFI:` QR payload and
+# the portal screen. `no_std`, host-tested (60 tests, and the rendered QR is
+# decoded back by an independent decoder), and driven by the simulator too, so
+# the device and the sim cannot answer differently. The firmware implements
+# none of its rules; `src/provision.rs` supplies the radio, the clock and the
+# flash it deliberately does not have. It brings `qrcodegen-no-heap` with it,
+# so the QR encoder is no longer a direct dependency here.
+screeny-provision = { path = "../crates/provision" }
 
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }
