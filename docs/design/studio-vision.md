@@ -68,9 +68,14 @@ Properties that matter:
 - **Device controls** (brightness, identify, name, stats, reboot) are proxied through
   the existing control client. The device's own future captive-portal/HTTP settings
   page is a separate thing, for WiFi setup only.
-- **Editing vs playing.** The design view (sliders, seeds, pause, scrub) drives a
-  *preview* player that can be pointed at a device ("send this to the desk panel") or
-  not. Promoting a tuned piece to "what plays on panel X" is an explicit action.
+- **One panel, one picture** (owner, 2026-09-19, correcting the earlier "editing vs
+  playing" split): a Studio is set up once against a panel and is then almost always
+  connected to it - one panel per Studio, almost always one panel on a network. The web
+  page is a window onto what that panel is doing, for when the panel is not within
+  eyesight: what is on screen is what the device is showing, at the same time. Changing a
+  piece, a slider or a seed in the browser changes the panel. There is no separate preview
+  stream with its own state, and no "promote to the panel" step (card 170 removes the one
+  card 106 built). The data model stays a collection (decision 3 below); the UI assumes one.
 
 ## Built to be forgotten
 
