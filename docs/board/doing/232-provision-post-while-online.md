@@ -99,3 +99,68 @@ apart from the known-flaky `crates/studio/tests/fleet.rs`
 fails, re-run once and report, do not touch it).
 
 ## Log
+
+### 2026-09-20 - `crates/provision`: the transitions
+
+Merged `main` into the worktree first (the branch was based on 597c702, well before
+card 224 landed) so `crates/provision`, `crates/device-api` and the simulator's HTTP
+server were all present.
+
+**The origin lives on `Trial`.** The card left the choice open; `Trial::origin:
+TrialOrigin` won over a private field on `Provisioner` because it is the same lifetime
+as the thing it describes (a trial), it survives into `trial()` for free, and there is
+then exactly one place that knows where a trial came from. `Provisioner::trial_origin()`
+reads it back. `TrialOrigin::{Portal, Online}`; `Portal` is everything that happens
+today.
+
+New transitions:
+
+| from | event | to | actions |
+|---|---|---|---|
+| `Online` | `CredentialsPosted` | `Trial` (origin `Online`) | `StartJoin { Trial, 1 }` |
+| `Joining` | `CredentialsPosted` | `Trial` (origin `Online`) | `StopJoin`, `StartJoin { Trial, 1 }` |
+| `Trial` (origin `Online`) | `Joined` | `Online` | `CommitCredentials { Trial }`, `Announce` |
+| `Trial` (origin `Online`) | `JoinFailed`/timeout, attempts left and not `AuthError` | `Trial` | `StartJoin { Trial, n }` |
+| `Trial` (origin `Online`) | `JoinFailed`/timeout, no attempts left, `has_stored` | `Joining` | `StartJoin { Stored, 1 }` |
+| `Trial` (origin `Online`) | ditto, no store but `has_builtin` | `Joining` | `StartJoin { Builtin, 1 }` |
+| `Trial` (origin `Online`) | ditto, neither | `Portal` | `RaiseAp` |
+| `Trial` (origin `Online`) | `CredentialsPosted` | `Trial` (origin kept) | `StopJoin`, `StartJoin { Trial, 1 }` |
+| `Boot` | `CredentialsPosted` | `Boot` | none (ignored, with a comment and a test) |
+
+No `RaiseAp` anywhere on that path, and no `DropAp` either: `go_online` only arms the
+grace window when the AP is actually up, which on this path it is not.
+
+**Cases the card left open, and what I chose.**
+
+1. *Does an `Online`-origin trial that succeeds put the new address on the panel?*
+   **No.** `connected_since` is set only for a portal trial. The person who posted is
+   reading the address in their own HTTP reply; the panel belongs to the stream. This is
+   the same argument the card makes for not setting the `PROVISIONING` overlay.
+2. *What does `screen()` return during an `Online`-origin trial?* **`None`.** The portal
+   layout points at an AP that was never raised, so drawing it would be a lie.
+3. *What happens to `ip()` when the station leaves the old network for the trial?*
+   **Cleared**, along with `connected_since` and `link_down_since`. We hold no address
+   during the trial, and a stale one in `/api/v1/status` would be wrong.
+4. *A failed `Online`-origin trial with an empty store* (only reachable by posting while
+   `Joining` on a build with compile-time credentials): falls back to `Builtin`, and to
+   the portal if there is nothing at all.
+5. *What clears the sticky `FAILED`?* A new `CredentialsPosted`, `ButtonWipe`, or a
+   reboot. **Not** `go_online`, which is the entire point - the old network coming back
+   must not read as success. `portal_after_failure` is untouched and still behaves as it
+   did.
+6. *A post that arrives while the soft-AP is in its 30 s post-trial grace window*: still
+   an `Online`-origin post. The state decides, not the radio. The grace timer is only read
+   in `Online`, so it pauses for the trial and restarts from the new `Joined`.
+7. *A second post during a trial* keeps the origin of the trial it replaces: it arrived
+   down the same channel.
+8. *Reaching the portal never clears the store* on any of these paths (asserted).
+
+New public items: `TrialOrigin`, `Trial::origin`, `Provisioner::trial_origin()`,
+`Provisioner::trial_is_current()`. `trial_is_current()` exists so the simulator and the
+firmware do not each re-derive "is `trial()` still the answer `GET /api/v1/wifi` should
+give" - it is true while `Trial`/`Portal` and also for a sticky failure.
+
+`cargo test -p screeny-provision`: **47 + 12 + 1 doc = 60**, up from 32 + 12 + 1. Clippy
+clean, `cargo check --target thumbv7em-none-eabi` clean, and
+`the_firmware_knows_exactly_what_this_crate_costs_it` still passes unchanged:
+`Provisioner` is still <= 176 bytes (the `bool` and the origin byte land in padding).

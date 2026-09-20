@@ -84,7 +84,7 @@ pub mod uri;
 
 pub use machine::{
     Action, Actions, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, Trial,
-    TrialOutcome, CONNECTED_SCREEN_MS, MAX_ACTIONS, SSID_MAX,
+    TrialOrigin, TrialOutcome, CONNECTED_SCREEN_MS, MAX_ACTIONS, SSID_MAX,
 };
 pub use qr::{Qr, QrError, QR_MODULES, QR_VERSION};
 pub use screen::{render, Layout, RenderError, Screen, PORTAL_IP, QUIET, TEXT_COLS};
