@@ -1,0 +1,74 @@
+# Screeny Studio anywhere else: a Mac (Docker Desktop, colima, OrbStack), a
+# machine with no GPU, a machine where host networking is not a thing.
+#
+#   docker compose -p screeny107 -f docker-compose.portable.yml up -d --build
+#   open http://localhost:8787/
+#
+# This is a whole file rather than an override of `docker-compose.yml`, on
+# purpose: compose merges `devices:` and `group_add:` by appending, so an
+# override can add a device but can never remove one, and `-f a.yml -f b.yml`
+# would still try to open /dev/dri on a machine that has none.
+#
+# What is different, and what it costs:
+#
+# * **Bridge networking with a published port.** On a Mac the engine runs in a
+#   VM, so a container has no access to the LAN's multicast: **mDNS discovery
+#   does not work here and is not expected to.** Outbound unicast UDP is NATed
+#   and does work, so a manually configured address does: point the studio at
+#   `host.docker.internal:49374` for a `screeny-sim` on the host, or at
+#   `192.168.7.221` for the real panel if the VM can route to it.
+# * **No GPU.** `/dev/dri` is not passed and WGPU_BACKEND is not forced. With
+#   the default (`gpu`) build the GPU pieces fall back to Mesa's lavapipe
+#   software rasteriser if it is present and to black frames if it is not, and
+#   either way they say so on stderr. Build with `SCREENY_FEATURES=none` for a
+#   studio with the CPU pieces only - clocks-numerals, clocks-dials, plasma,
+#   metaballs, testcard - and no graphics driver in the tree at all.
+
+name: screeny-portable
+
+services:
+  studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FEATURES: "${SCREENY_FEATURES:-}"
+    image: screeny-studio:portable
+
+    ports:
+      - "${SCREENY_PORT:-8787}:8787"
+
+    environment:
+      TZ: "${TZ:-America/Los_Angeles}"
+      SCREENY_STATE_DIR: /data
+      SCREENY_LISTEN: "0.0.0.0:8787"
+      SCREENY_PORT: "8787"
+
+    command: ["--listen", "0.0.0.0:8787"]
+
+    # So `host.docker.internal` resolves on Linux too, where it is not built in.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      - state:/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:$${SCREENY_PORT}/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    stop_grace_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  state:

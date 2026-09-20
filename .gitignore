@@ -10,3 +10,7 @@ lab/xtensa-bench/Cargo.lock
 
 # WiFi credentials never go in git (firmware/build.rs reads them at build time)
 wifi.env
+
+# docker compose reads `.env` from the project directory. That file is host
+# state - ports, the render gid, a timezone - and never belongs in the repo.
+.env

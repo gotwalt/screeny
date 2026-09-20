@@ -112,6 +112,8 @@ the UI. The web port must avoid what is already listening there (8000, 8443, 900
 9443, 3002, 5002, 1080, ... ); default **8787**.
 
 Described by a `docker-compose.yml` in the repo, deployable as a Portainer stack.
+**The files and the runbook are in [`deployment.md`](deployment.md)** (card 107);
+what follows here is the reasoning behind them.
 Building the image (Rust + wgpu) is slow; build on workbench over SSH
 (`docker compose build`) or publish an image, rather than building inside Portainer.
 

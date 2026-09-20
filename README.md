@@ -28,7 +28,7 @@ Details: `docs/research/005-end-to-end.md`.
 | `firmware/` | The ESP32 firmware (separate cargo project, `esp` toolchain). |
 | `crates/art` | The generative art system: pieces, panel-aware pipeline, headless `screeny-art` binary. The primary source of frames. |
 | `crates/studio` | Screeny Studio: an HTTP + WebSocket server with the UI built in. Design pieces in a browser and stream them to a panel; see `docs/design/studio-vision.md`. |
-| `docs/design/` | **Source of truth**: `protocol-v1.md`, `architecture.md`, `generative-art-brief.md`. |
+| `docs/design/` | **Source of truth**: `protocol-v1.md`, `architecture.md`, `generative-art-brief.md`; `deployment.md` for running the studio as a service. |
 | `docs/research/` | How we got here: stack choice, codec lab, transport, bring-up, end-to-end results. |
 | `docs/board/` | Kanban: `backlog/`, `doing/`, `review/`, `done/`, `parked/`. See `docs/README.md`. |
 | `lab/` | The codec measurement lab (frozen reference). |
@@ -49,6 +49,19 @@ cargo test --workspace
 
 `tools/sign-macos.sh` builds and Developer-ID-signs the `screeny` binary; use it for
 anything launched outside a terminal, so macOS Local Network permission sticks.
+
+Screeny Studio as a service, in a container, on a machine nobody logs in to:
+
+```bash
+docker compose -p screeny -f docker-compose.portable.yml up -d --build   # here, on a Mac
+tools/deploy-workbench.sh --dry-run                                      # there, over SSH
+```
+
+`Dockerfile`, `docker-compose.yml` (Linux host + Intel iGPU),
+`docker-compose.portable.yml` (everywhere else) and `tools/deploy-workbench.sh`.
+The runbook, what to verify on the host and how to take it all away again are in
+[`docs/design/deployment.md`](docs/design/deployment.md). **The studio has no
+password**: on a LAN that is the point, but do not publish the port.
 
 Firmware (needs `espup`'s Xtensa toolchain and `espflash`):
 

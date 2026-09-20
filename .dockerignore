@@ -1,0 +1,39 @@
+# What the image build is allowed to see.
+#
+# Two reasons to keep this tight: speed (the context is sent to the daemon on
+# every build) and safety (nothing secret or device-specific may ever reach a
+# layer). `firmware/` is excluded whole, which also excludes `firmware/wifi.env`
+# - the image builds host crates only and never needs WiFi credentials - and
+# `backup/` is excluded because it holds the Tidbyt's stock flash image.
+
+# Build outputs: the container builds its own, in its own cache mount.
+target/
+firmware/target/
+lab/target/
+lab/xtensa-bench/target/
+
+# Never in an image, never in a build context.
+backup/
+firmware/
+**/wifi.env
+.env
+*.env
+
+# Not needed to build or run the studio.
+.git/
+.gitignore
+.github/
+.claude/
+captures/
+docs/
+lab/
+README.md
+CLAUDE.md
+tools/
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Editor and OS litter.
+.DS_Store
+*.swp
