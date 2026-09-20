@@ -39,10 +39,11 @@ regression check is `cargo run --release -p screeny-probe -- --addr 192.168.7.22
 conformance --slow` (firmware 0.2.0: 60 pass, 0 fail, 4 skip). Once the Studio runs
 on workbench it holds the source lock around the clock; release it with
 `POST http://workbench.local:8787/api/v1/player/set {"device":"4a00a4","on":false}`
-before bench work and give it back with `"on":true`. (Since the Studio's card 106 the
-older `set_panel` switch answers 200 and does **not** stop the stream: a conformance run
-against a still-streaming Studio reads as ~35 failures, all "LIVE -> LIVE". Check
-`screeny stats` says HOLD or IDLE before starting.) The choice survives a Studio
+before bench work and give it back with `"on":true`. `POST /api/v1/set_panel
+{"on":false}` / `{"on":true,"to":"screeny-4a00a4"}` also works again since the Studio's
+card 170 (between cards 106 and 170 it answered 200 and did nothing, which read as ~35
+conformance failures, all "LIVE -> LIVE"). Either way: **check `screeny stats` says HOLD
+or IDLE before starting a conformance run.** The choice survives a Studio
 restart, so always put it back.
 
 ## How to think about storage and RAM on this device
