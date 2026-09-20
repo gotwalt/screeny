@@ -440,3 +440,52 @@ self-test client running:
 
 What this run cannot show is the panel and a phone, which is what the phone
 test is for.
+
+### The phone test, for after the merge
+
+**Build:**
+
+```
+. ~/export-esp.sh
+cd firmware && cargo build --release --features start-in-portal
+```
+
+(add `,http-selftest` for the route pass on the serial log too). Flash with
+`tools/fw-run.sh <elf> <name> <secs>` as usual. **Nothing about this build
+erases or overwrites the store** - it tells the machine `has_stored: false` and
+never reads the credentials - so the owner's real pair is still there to be
+typed into the form and really joined with.
+
+What the owner should do and see, step by step:
+
+1. The panel shows the setup screen, alternating every 4 s between a QR code on
+   the left with `screeny-4a00a4` beside it, and a text-only screen naming the
+   network and `192.168.4.1`. **There is no stream on this build** - the
+   station deliberately never joins - and that is expected.
+2. Scan the QR with the phone camera, or join the open network `screeny-4a00a4`
+   by hand.
+3. On iOS the captive sheet should open by itself within a few seconds, showing
+   "screeny setup" and two fields, Wi-Fi network name and Password. On Android
+   it is a "Sign in to network" notification. If neither appears, open
+   `http://192.168.4.1/` in a browser.
+4. **Type a wrong password first**, with the right network name, and submit.
+   The page says "Trying that network..." and reloads itself every 4 s - a full
+   page navigation, no JavaScript. Within ~15 s it comes back with "That did
+   not work: wrong password." and the form again. The panel stays on the setup
+   screen. **Nothing is written to flash on this path**, which is the thing
+   being tested.
+5. Then the real network name and the real password. Same "Trying that
+   network..." page. The phone may briefly lose the setup network while the
+   radio changes channel; the page's own reload recovers from that.
+6. On success the page shows "Connected. This panel is now at
+   http://192.168.7.x/" and says the setup network goes away in about half a
+   minute. **The panel shows the same address** for a minute - it is the one
+   channel that survives the radio moving.
+7. About 30 s later the setup network disappears by itself, the device
+   re-associates, and the Studio's stream comes back within a minute or so.
+
+### Flash 4 (`c223-default`): the default build, left running
+
+The owner was not at the keyboard (early morning), so on the orchestrator's
+instruction the portal build came off at once rather than leaving an open AP on
+the air in the house, and the phone test moves to after the merge.
