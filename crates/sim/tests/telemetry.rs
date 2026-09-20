@@ -1,5 +1,13 @@
-//! Spec section 6.4 (telemetry piggybacked on the frame stream), 6.7 (the
-//! 48-byte struct) and 6.9 (what a sender does with it).
+//! Spec section 6.7 (the 48-byte struct) and 6.9 (what a sender does with
+//! it), in process.
+//!
+//! The wire-level half - that a `STATS_REQ` is answered on the frame port
+//! with a 48-byte `REPLY`/`req_id 0` packet, the 100 ms rate limit on it, and
+//! what `RESET_STATS` does and does not zero - is now
+//! `screeny_probe::suite::telemetry` and runs from `tests/conformance.rs`.
+//! What is left needs the simulator: injected faults, and reading the wire
+//! back against `SimHandle`'s own view so that a field filled in at the wrong
+//! offset is caught.
 
 mod common;
 
@@ -12,80 +20,6 @@ use screeny_proto::{ControlPacket, F_KEY, F_STATS_REQ};
 use screeny_sim::{Config, Faults, SimDevice, Timing};
 
 const T: Duration = Duration::from_secs(3);
-
-#[test]
-fn a_stats_request_is_answered_on_the_frame_port() {
-    // Section 6.4: the reply comes "from the frame port to the datagram's
-    // source port ... and a sender MUST accept it there". A sender's control
-    // socket sees nothing.
-    let dev = SimDevice::start(Config::for_test()).unwrap();
-    let sim = dev.handle();
-    let mut tx = Sender::new(dev.frame_addr());
-    let ctrl = Ctrl::new(dev.control_addr());
-
-    let (p, _) = solid([3, 4, 5]);
-    tx.send(codec::SOLID, F_KEY | F_STATS_REQ, &p);
-
-    let d = tx.recv(T).expect("a TELEMETRY on the frame socket");
-    let pkt = ControlPacket::parse(&d).expect("a CONTROL packet on the frame port");
-    assert_eq!(pkt.op, op::TELEMETRY);
-    assert!(pkt.is_reply(), "section 6.2: REPLY set");
-    assert_eq!(pkt.req_id, 0, "section 6.2: req_id 0, nobody asked by id");
-    assert_eq!(pkt.body.len(), 48);
-    assert!(
-        ctrl.recv(Duration::from_millis(100)).is_none(),
-        "the control socket sees nothing"
-    );
-
-    match Reply::decode(pkt.op, pkt.flags, pkt.body).unwrap() {
-        Reply::Telemetry(t) => {
-            assert_eq!(t.frames_rx, 1);
-            assert_eq!(t.frames_shown, 1, "after processing this frame");
-            assert_eq!(t.last_codec, codec::SOLID);
-            assert_eq!(t.state, screeny_proto::control::state::LIVE);
-            assert_eq!(t.brightness, 255);
-            assert_eq!(t.frames_dropped_stale, 0);
-            assert_eq!(t.frames_rejected, 0);
-            assert!(t.uptime_ms < 60_000, "a fresh device");
-            assert_eq!(t.rssi_dbm, -55);
-        }
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(
-        sim.telemetry().frames_shown,
-        1,
-        "and the handle agrees with the wire"
-    );
-}
-
-#[test]
-fn telemetry_is_rate_limited_to_one_per_hundred_milliseconds() {
-    // Section 6.2. A sender that ignores section 6.4's "MUST NOT set it on
-    // more than one frame in 100 ms" gets one reply, not thirty.
-    let dev = SimDevice::start(Config::for_test()).unwrap();
-    let mut tx = Sender::new(dev.frame_addr());
-    let (p, _) = solid([1, 1, 1]);
-
-    for _ in 0..12 {
-        tx.send(codec::SOLID, F_KEY | F_STATS_REQ, &p);
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    std::thread::sleep(Duration::from_millis(50));
-    let replies = tx.drain();
-    assert!(
-        (1..=2).contains(&replies.len()),
-        "expected one reply for ~60 ms of requests, got {}",
-        replies.len()
-    );
-    for d in &replies {
-        assert_eq!(ControlPacket::parse(d).unwrap().op, op::TELEMETRY);
-    }
-
-    // Past the window, another one.
-    std::thread::sleep(Duration::from_millis(120));
-    tx.send(codec::SOLID, F_KEY | F_STATS_REQ, &p);
-    assert!(tx.recv(T).is_some(), "the window reopened");
-}
 
 #[test]
 fn a_sender_can_tell_network_loss_from_a_slow_device() {
@@ -139,38 +73,6 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
     assert!(
         slow.frames_dropped_superseded > 0,
         "and could not draw it in time"
-    );
-}
-
-#[test]
-fn reset_stats_zeroes_the_counters_the_wire_reports() {
-    let dev = SimDevice::start(Config::for_test()).unwrap();
-    let sim = dev.handle();
-    let ctrl = Ctrl::new(dev.control_addr());
-    let mut tx = Sender::new(dev.frame_addr());
-    let (p, _) = solid([6, 7, 8]);
-
-    for _ in 0..5 {
-        tx.send(codec::SOLID, F_KEY, &p);
-        std::thread::sleep(Duration::from_millis(15));
-    }
-    sim.wait_until(T, |s| s.telemetry.frames_rx >= 5).unwrap();
-
-    ctrl.call(&screeny_proto::control::Request::ResetStats, 1)
-        .expect("a reply");
-    let t = sim
-        .wait_until(T, |s| s.telemetry.frames_rx == 0)
-        .unwrap()
-        .telemetry;
-    assert_eq!(t.frames_shown, 0);
-    assert_eq!(t.seq_gaps, 0);
-    assert_eq!(t.decode_us_max, 0);
-    assert_eq!(t.interarrival_max_us, 0);
-    assert_ne!(t.uptime_ms, 0, "uptime is not a counter");
-    assert_eq!(
-        t.last_codec,
-        codec::SOLID,
-        "nor is the codec of the frame still on the panel"
     );
 }
 

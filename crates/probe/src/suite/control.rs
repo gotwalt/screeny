@@ -89,8 +89,8 @@ pub fn rules() -> Vec<Rule> {
         },
         Rule {
             section: "6.5",
-            name: "SET_WIFI's own ERR_BAD_ARG cases",
-            secs: 0.3,
+            name: "SET_WIFI's own ERR_BAD_LENGTH and ERR_BAD_ARG cases",
+            secs: 0.4,
             flags: LOOPBACK_ONLY,
             run: bad_arg_setwifi,
         },
@@ -402,6 +402,15 @@ fn bad_arg(cx: &mut Ctx) -> Result<Outcome, String> {
 }
 
 fn bad_arg_setwifi(cx: &mut Ctx) -> Result<Outcome, String> {
+    // Both halves of section 8.2's body rules, kept together because they are
+    // the only `SET_WIFI` this suite ever sends and both are refused before
+    // the device could act on them. Loopback only all the same: betting the
+    // bench device's association on that reading of the firmware is not a bet
+    // worth making.
+    let short: &[(u8, &[u8], &str)] = &[(op::SET_WIFI, &[1, b'x'], "SET_WIFI cut short")];
+    if let Outcome::Fail(why) = expect_error(cx, ErrorCode::BadLength, short)? {
+        return verdict(false, why);
+    }
     let cases: &[(u8, &[u8], &str)] = &[
         (op::SET_WIFI, &[0, 0, 0], "SET_WIFI with an empty SSID"),
         (op::SET_WIFI, &[1, b'x', 0, 0x02], "SET_WIFI reserved flag"),
