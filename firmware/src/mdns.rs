@@ -44,9 +44,24 @@ const PROTOCOL: &str = "_udp";
 const HTTP_SERVICE: &str = "_http";
 const HTTP_PROTOCOL: &str = "_tcp";
 
-/// An mDNS query or response fits in one datagram many times over; 1500 is
-/// the honest ceiling and costs 3 KB of the two buffers together.
-const MDNS_BUF: usize = 1500;
+/// One mDNS datagram.
+///
+/// **1,024 since card 223**, down from 1,500, and the number is spent four
+/// times over: `UdpBuffers`' receive and transmit halves and the two
+/// `VecBufAccess`es below, so the constant is worth 4 KB of `.bss` - which on
+/// this chip is 4 KB of core 0's stack. It was the second of the two levers
+/// card 223 was told to reach for (`docs/research/010-stack-and-ram-levers.md`
+/// section 5, "MDNS_BUF - 1500 twice over"), and it is worth 1,904 bytes.
+///
+/// Why 1,024 is not a guess: what this device *sends* is a PTR, an SRV, a TXT
+/// and an A record for each of two services, and the TXT is bounded by
+/// [`INFO_MAX`] (224 bytes) - under 600 bytes all told. What it *receives* is
+/// a query, and 1,024 is comfortably over the 576-byte message every DNS
+/// implementation is required to accept. 1,500 was the Ethernet MTU rather
+/// than a measurement of anything. If some other device on the LAN ever sends
+/// a query larger than this, that one query goes unanswered and is re-sent;
+/// nothing this device advertises is affected.
+const MDNS_BUF: usize = 1024;
 
 /// `esp_hal::rng::Rng` in the shape `edge-mdns` wants.
 struct HwRng(esp_hal::rng::Rng);

@@ -55,9 +55,18 @@ button.warn{border-color:#c33;color:#c33}
 </form>
 
 <h2>Wi-Fi</h2>
-<div class="todo">The network form lives here once the setup portal lands (card 223).
-The API route <code>POST /api/v1/wifi</code> already works: it takes an
-urlencoded <code>ssid</code> and <code>psk</code>.</div>
+<!-- Card 223. A plain form post to /setup, the same path and the same bytes the
+     captive portal uses, so there is one credentials path and it works with
+     JavaScript off. Posting here takes the panel off this network while it
+     tries the new one: if it fails it comes back to this one by itself, and
+     the panel is where the result shows up. -->
+<form method="post" action="/setup">
+<label><span>Network name</span><input name="ssid" maxlength="32" required autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+<label><span>Password (empty for an open network)</span><input name="psk" type="password" maxlength="63" autocapitalize="none" autocorrect="off"></label>
+<div class="row"><button type="submit">Join this network</button></div>
+</form>
+<p class="sub">The panel leaves this network while it tries. If the new one does
+not work it comes back here, and <code>GET /api/v1/wifi</code> says why.</p>
 
 <h2>Firmware</h2>
 <div class="todo">Firmware upload lives here once the OTA path lands (card 240).</div>

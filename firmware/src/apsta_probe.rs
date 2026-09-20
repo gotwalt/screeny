@@ -33,11 +33,10 @@
 //! file logs, returns or draws a password, and it never prints the station's
 //! SSID.
 
-use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_futures::select::select;
-use embassy_net::{Runner, Stack, StackResources};
+use embassy_net::Runner;
 use embassy_time::{Duration, Timer, with_timeout};
 use esp_radio::wifi::ap::AccessPointConfig;
 use esp_radio::wifi::{
@@ -47,12 +46,11 @@ use log::{info, warn};
 
 use screeny_settings::Wifi;
 
-use crate::{mk_static, stack_probe, station_config, station_loop};
+use crate::{stack_probe, station_config};
 
-/// The soft-AP's own address. 192.168.4.1/24 is what every ESP soft-AP uses,
-/// so a phone that has met one before already expects the number.
-pub const AP_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
-const AP_PREFIX: u8 = 24;
+/// The soft-AP's own address, for the log line. One definition, in
+/// `crate::provision`.
+use crate::provision::AP_IP;
 
 /// How long the station runs alone before the AP is raised. Long enough for
 /// the association, DHCP, mDNS and the Studio's stream to be in steady state,
@@ -69,26 +67,44 @@ const HEAP_PERIOD_S: u64 = 5;
 /// heap task so every line says which regime it belongs to.
 pub static APSTA_UP: AtomicBool = AtomicBool::new(false);
 
-/// The AP's `embassy-net` stack: static address, no DHCP client, no sockets.
+// The AP's own `embassy-net` stack is `crate::provision::ap_stack` since card
+// 223 - it is in the default build now - and `main` builds it for this probe
+// too, so there is one of them rather than two that have to agree about the
+// address and the socket count.
+
+/// Associate and hold, for the duration of a stage.
 ///
-/// `StackResources<4>` matches what card 201 costed (~3.9 KB of `.bss` with
-/// the interface), so the number this build prints is comparable with that
-/// table even though nothing is listening yet.
-pub fn ap_stack(seed: u64) -> (Stack<'static>, Runner<'static, Interface>) {
-    let interface = Interface::access_point();
-    let mut dns_servers = heapless::Vec::<Ipv4Addr, 3>::new();
-    let _ = dns_servers.push(AP_IP);
-    let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(AP_IP, AP_PREFIX),
-        gateway: None,
-        dns_servers,
-    });
-    embassy_net::new(
-        interface,
-        config,
-        mk_static!(StackResources<4>, StackResources::<4>::new()),
-        seed,
-    )
+/// It used to be [`crate::station_loop`], and the point of that was that the
+/// probe ran *exactly* the shipping firmware's join loop. Card 223 replaced
+/// that loop with the `crates/provision` state machine, which owns the radio
+/// through `crate::provision::provision_task` - and this build owns the radio
+/// itself, because the whole measurement is the mode switch. So the probe has
+/// its own three lines of "connect, then poll the RSSI" instead. What it
+/// measures is the heap either side of `set_config(AccessPointStation)`, and
+/// that is unchanged.
+async fn join_and_hold(controller: &mut WifiController<'static>, w: Option<Wifi>) {
+    let Some(cfg) = w.as_ref().and_then(station_config) else {
+        warn!("apsta-probe: no credentials to join with - measuring the heap only");
+        core::future::pending::<()>().await;
+        return;
+    };
+    if let Err(e) = controller.set_config(&WifiConfig::Station(cfg)) {
+        warn!("apsta-probe: set_config failed {e:?}");
+    }
+    loop {
+        // Only the reason, never the SSID: the probe prints neither.
+        if let Err(e) = controller.connect_async().await {
+            warn!("apsta-probe: join failed {e:?}");
+            Timer::after(Duration::from_secs(2)).await;
+            continue;
+        }
+        while controller.is_connected() {
+            if let Ok(r) = controller.rssi() {
+                crate::RSSI_DBM.store(r.clamp(-128, 0) as i8, Ordering::Relaxed);
+            }
+            Timer::after(Duration::from_secs(2)).await;
+        }
+    }
 }
 
 fn heap_line(tag: &str) {
@@ -146,7 +162,7 @@ pub async fn probe_task(
     // the loop is sitting in its 2 s RSSI poll, which is a safe place to drop.
     let _ = with_timeout(
         Duration::from_secs(STAGE1_S),
-        station_loop(&mut controller, stored.clone()),
+        join_and_hold(&mut controller, stored.clone()),
     )
     .await;
     heap_line("stage 1 done: station-only baseline");
@@ -204,7 +220,7 @@ pub async fn probe_task(
     };
 
     select(
-        select(station_loop(&mut controller, stored), ap_runner.run()),
+        select(join_and_hold(&mut controller, stored), ap_runner.run()),
         stack_line,
     )
     .await;

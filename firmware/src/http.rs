@@ -76,7 +76,7 @@ use screeny_device_api::request::{
     IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
 };
 use screeny_device_api::{
-    form, route, text, ErrorCode, ErrorReply, FailReason, FwSlot, FwState, IdleMode, ResetReason,
+    form, route, text, ErrorCode, ErrorReply, FwSlot, FwState, IdleMode, ResetReason,
     StreamState, WifiState,
 };
 use screeny_proto::control::Request as ControlRequest;
@@ -206,35 +206,11 @@ static FW_SLOT: AtomicU8 = AtomicU8::new(FW_UNKNOWN);
 static FW_STATE: AtomicU8 = AtomicU8::new(FW_UNKNOWN);
 const FW_UNKNOWN: u8 = 0xff;
 
-/// Why the last join attempt failed, as a [`FailReason`] discriminant, or
-/// [`FW_UNKNOWN`] for "no failure to report". Written by the WiFi task.
-pub static WIFI_FAIL_REASON: AtomicU8 = AtomicU8::new(FW_UNKNOWN);
-
-/// Record a join failure for `GET /api/v1/wifi`'s `reason`.
-pub fn note_wifi_failure(reason: FailReason) {
-    WIFI_FAIL_REASON.store(
-        match reason {
-            FailReason::Auth => 0,
-            FailReason::NotFound => 1,
-            FailReason::Other => 2,
-        },
-        Ordering::Relaxed,
-    );
-}
-
-/// Forget any recorded join failure: a join that worked is not a failure.
-pub fn clear_wifi_failure() {
-    WIFI_FAIL_REASON.store(FW_UNKNOWN, Ordering::Relaxed);
-}
-
-fn wifi_failure() -> Option<FailReason> {
-    match WIFI_FAIL_REASON.load(Ordering::Relaxed) {
-        0 => Some(FailReason::Auth),
-        1 => Some(FailReason::NotFound),
-        2 => Some(FailReason::Other),
-        _ => None,
-    }
-}
+// Card 223 removed `WIFI_FAIL_REASON` and its two setters. `GET /api/v1/wifi`
+// reports the *machine's* trial - `Trial::outcome` already carries a
+// `FailReason` and `trial_is_current()` already says when it is the answer - so
+// a second copy of "why did the last join fail", written by the radio and read
+// by a handler, was a second thing to keep in step for no gain.
 
 /// Read `otadata` once, at boot, and remember what it said.
 ///
@@ -432,6 +408,12 @@ impl serde::Serialize for ApiBody {
 enum Reply {
     /// `GET /`, the status page: HTML, streamed.
     Page(Page),
+    /// The setup page (card 223): HTML, streamed, no JavaScript in it.
+    Portal(PortalPage),
+    /// The captive-portal catch-all: a 302 to the portal **with a non-empty
+    /// body** (research 007 section 4.3: Android treats `Content-Length <= 4`
+    /// as a failed probe and iOS wants something to show).
+    Redirect,
     /// Everything else.
     Api(u16, ApiBody),
 }
@@ -468,6 +450,17 @@ impl IntoResponse for Reply {
         // streaming of the body and `Connection: close`.
         match self {
             Reply::Page(p) => Response::ok(p).write_to(connection, response_writer).await,
+            Reply::Portal(p) => Response::ok(p).write_to(connection, response_writer).await,
+            Reply::Redirect => {
+                Response::new(StatusCode::new(302), REDIRECT_BODY)
+                    .with_content_type("text/html; charset=utf-8")
+                    .with_header("Location", PORTAL_URL)
+                    // A captive probe that is cached is a captive sheet that
+                    // never opens again.
+                    .with_header("Cache-Control", "no-store")
+                    .write_to(connection, response_writer)
+                    .await
+            }
             Reply::Api(status, body) => {
                 Json(body)
                     .into_response()
@@ -565,8 +558,15 @@ fn ssid() -> Option<text::SsidText> {
     }
 }
 
+/// `status.wifi_state`: **the link**, from the one `Provisioner`.
+///
+/// Never the sticky result of the last credentials attempt - that belongs to
+/// `GET /api/v1/wifi` alone (`docs/design/device-web.md`, the card 223
+/// paragraph; firmware 0.4.x reported the sticky value in both places and a
+/// device that had fallen back successfully read `failed` while plainly
+/// connected).
 fn wifi_state() -> WifiState {
-    WifiState::from_u8(crate::wifi_report_state()).unwrap_or(WifiState::Disconnected)
+    crate::provision::link_state()
 }
 
 /// Everything `GET /api/v1/status` and the page's status table report.
@@ -602,8 +602,8 @@ async fn status() -> StatusReply {
         ssid: ssid(),
         ip: ip(),
         state,
-        // Card 223 brings the soft-AP; until then the honest answer is "no".
-        portal: false,
+        // The soft-AP is up: somebody could be standing on the setup network.
+        portal: crate::provision::ap_up(),
         fw_slot: fw_slot(),
         fw_state: fw_state(),
         reset_reason: reset_reason(),
@@ -718,16 +718,18 @@ async fn get_telemetry() -> Reply {
     Reply::ok(ApiBody::Telemetry(TelemetryReply::from(&t)))
 }
 
+/// `GET /api/v1/wifi`, built by the machine.
+///
+/// Card 232: a trial in flight or just finished is what the page that posted
+/// reads, and it keeps reading it after the previous network has come back -
+/// [`Provisioner::trial_is_current`] decides that, in `crates/provision`, so
+/// the firmware and the simulator cannot answer it differently. The `reason`
+/// is the radio's, mapped in `crate::provision::fail_reason`, and is no longer
+/// the `null` firmware 0.4.x reported.
+///
+/// [`Provisioner::trial_is_current`]: screeny_provision::Provisioner::trial_is_current
 fn get_wifi() -> Reply {
-    let state = wifi_state();
-    Reply::ok(ApiBody::Wifi(WifiReply {
-        state,
-        ssid: ssid(),
-        ip: ip(),
-        // Spec-shaped: `reason` is meaningful only for `failed`, and the crate
-        // documents it as explicitly `null` otherwise.
-        reason: (state == WifiState::Failed).then(wifi_failure).flatten(),
-    }))
+    Reply::ok(ApiBody::Wifi(crate::provision::wifi_reply()))
 }
 
 /// `POST /api/v1/wifi`: urlencoded, and the reply leaves before the radio work.
@@ -1016,6 +1018,178 @@ const fn reset_word(r: ResetReason) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// The setup page (card 223)
+// ---------------------------------------------------------------------------
+
+/// Where the portal lives, for the catch-all's `Location` and for
+/// `edge-dhcp`'s RFC 8910 option 114. The same number the panel draws
+/// ([`screeny_provision::PORTAL_IP`]) and the DNS catch-all answers.
+const PORTAL_URL: &str = "http://192.168.4.1/";
+
+/// The catch-all's body. Short, but **not empty**: research 007 section 4.3.
+const REDIRECT_BODY: &str = concat!(
+    "<!doctype html><meta charset=utf-8><title>screeny setup</title>",
+    "<p>Continue to <a href=\"http://192.168.4.1/\">screeny setup</a>.</p>"
+);
+
+/// The setup form's own path, on both interfaces.
+///
+/// A path of its own rather than `POST /api/v1/wifi`, for one reason: this one
+/// answers **HTML**, because what posts to it is an ordinary `<form>` in a
+/// captive mini-browser with no JavaScript, and a browser handed
+/// `{"result":"trying"}` shows the person a page of JSON. The JSON route is
+/// unchanged and is still what the Studio and `screeny-probe` use; both end up
+/// in the same place, which is [`crate::NEW_WIFI`] and the one `Provisioner`.
+const SETUP_PATH: &str = "/setup";
+
+/// The head of the setup page. Inline CSS, no script, no external asset: the
+/// iOS and Android captive mini-browsers are the audience.
+const PORTAL_HEAD: &str = concat!(
+    "<!doctype html><html lang=en><head><meta charset=utf-8>",
+    "<meta name=viewport content=\"width=device-width,initial-scale=1\">",
+    "<title>screeny setup</title><style>",
+    ":root{color-scheme:light dark}",
+    "body{margin:0;padding:20px;max-width:26rem;font:16px/1.5 system-ui,sans-serif}",
+    "h1{font-size:1.25rem;margin:0 0 4px}",
+    "p{margin:0 0 12px}",
+    ".s{padding:10px 12px;border-radius:8px;border:1px solid #8884;margin:0 0 16px}",
+    "label{display:block;margin:12px 0}",
+    "label span{display:block;font-size:.85rem;opacity:.7}",
+    "input{font:inherit;width:100%;padding:10px;border-radius:8px;border:1px solid #8886;",
+    "background:transparent;color:inherit}",
+    "button{font:inherit;padding:10px 18px;border-radius:8px;border:1px solid #06c;",
+    "color:#06c;background:transparent;margin-top:8px}",
+    "</style>"
+);
+
+/// The form. `method=post` and nothing else: it works with JavaScript off, and
+/// a full-page navigation is the only thing the iOS mini-browser re-probes on.
+/// No file input - they do not work in a captive browser at all.
+const PORTAL_FORM: &str = concat!(
+    "<form method=post action=\"/setup\">",
+    "<label><span>Wi-Fi network name</span>",
+    "<input name=ssid maxlength=32 required autocapitalize=none autocorrect=off spellcheck=false></label>",
+    "<label><span>Password (leave empty for an open network)</span>",
+    "<input name=psk type=password maxlength=63 autocapitalize=none autocorrect=off></label>",
+    "<button type=submit>Join</button></form>"
+);
+
+/// The setup page, rendered from the one [`Provisioner`]'s answer.
+///
+/// Streamed like [`Page`]: picoserve measures it into a counting writer and
+/// then writes it, so there is no buffer here either.
+///
+/// [`Provisioner`]: screeny_provision::Provisioner
+struct PortalPage {
+    view: Option<crate::provision::TrialView>,
+}
+
+impl core::fmt::Display for PortalPage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use crate::provision::TrialView;
+        f.write_str(PORTAL_HEAD)?;
+        // **A timed full-page reload, not `fetch`.** The iOS captive
+        // mini-browser only re-probes the network on a full navigation, so
+        // polling with script would leave the sheet open forever after the
+        // device had joined (research 007 section 4.4).
+        if matches!(self.view, Some(TrialView::Trying)) {
+            f.write_str("<meta http-equiv=refresh content=\"4;url=/setup\">")?;
+        }
+        f.write_str("</head><body><h1>screeny setup</h1>")?;
+        match self.view {
+            None => {
+                write!(
+                    f,
+                    "<p>Tell this panel which Wi-Fi network to join.</p>{PORTAL_FORM}"
+                )
+            }
+            Some(TrialView::Trying) => f.write_str(concat!(
+                "<div class=s>Trying that network&hellip;</div>",
+                "<p>This page checks again every few seconds. The setup network may ",
+                "drop out for a moment while the panel looks for yours.</p>"
+            )),
+            Some(TrialView::Connected(ip)) => write!(
+                f,
+                "<div class=s>Connected. This panel is now at \
+                 <a href=\"http://{}.{}.{}.{}/\">{}.{}.{}.{}</a>, and the address is \
+                 on the panel too.</div><p>You can close this page. The setup \
+                 network goes away in about half a minute.</p>",
+                ip[0], ip[1], ip[2], ip[3], ip[0], ip[1], ip[2], ip[3]
+            ),
+            Some(TrialView::Failed(why)) => write!(
+                f,
+                "<div class=s>That did not work: {why}.</div>{PORTAL_FORM}"
+            ),
+        }?;
+        f.write_str("</body></html>")
+    }
+}
+
+impl picoserve::response::Content for PortalPage {
+    fn content_type(&self) -> &'static str {
+        "text/html; charset=utf-8"
+    }
+
+    fn content_length(&self) -> usize {
+        let mut c = Counter(0);
+        let _ = write!(c, "{self}");
+        c.0
+    }
+
+    async fn write_content<W: picoserve::io::Write>(self, mut writer: W) -> Result<(), W::Error> {
+        writer.write_fmt(format_args!("{self}")).await
+    }
+}
+
+/// `GET /setup`, and `GET /` on the soft-AP: whatever the machine says about
+/// the last posted credentials, plus the form unless it worked.
+fn get_setup() -> Reply {
+    Reply::Portal(PortalPage {
+        view: crate::provision::trial_view(),
+    })
+}
+
+/// `POST /setup`: the same bytes `POST /api/v1/wifi` takes, answered in HTML.
+///
+/// The credentials are **not** written to flash here, and nothing in this
+/// function touches the store: the pair goes to [`deferred_task`], which hands
+/// it to the provisioning task once the reply is on the air, and the store is
+/// only written when the machine answers `CommitCredentials`.
+fn post_setup(body: &[u8]) -> Reply {
+    match form::parse_wifi_form(body) {
+        Ok(f) => {
+            info!(
+                "http: setup form for a {}-byte SSID, psk_len {}",
+                f.ssid().len(),
+                f.psk_len()
+            );
+            match Wifi::new(f.ssid(), f.psk()) {
+                Ok(wifi) => {
+                    WIFI_PENDING.signal(crate::NewWifi { wifi, persist: true });
+                    // The machine has not seen the post yet - `deferred_task`
+                    // has the 400 ms - so the page it draws now would still be
+                    // the *previous* answer. Say "trying" explicitly.
+                    Reply::Portal(PortalPage {
+                        view: Some(crate::provision::TrialView::Trying),
+                    })
+                }
+                Err(e) => {
+                    warn!("http: setup form refused: {:?}", e);
+                    Reply::Portal(PortalPage {
+                        view: Some(crate::provision::TrialView::Failed(
+                            "that network name or password does not fit",
+                        )),
+                    })
+                }
+            }
+        }
+        Err(_) => Reply::Portal(PortalPage {
+            view: Some(crate::provision::TrialView::Failed("the form was incomplete")),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The dispatch: one future from (method, path) to a reply
 // ---------------------------------------------------------------------------
 
@@ -1042,7 +1216,15 @@ const fn reset_word(r: ResetReason) -> &'static str {
 /// body, measuring each reply with a counting writer, writing
 /// `Content-Type` / `Content-Length` / `Connection: close`, and streaming the
 /// body. Nothing here parses or formats HTTP.
-struct Dispatch;
+struct Dispatch {
+    /// Whether this worker is listening on the **soft-AP**'s stack.
+    ///
+    /// It is a property of the listener, not of the request, and that is the
+    /// point: a browser on the LAN gets the status page and a 404 for an
+    /// unknown path, while a phone on the setup network gets the setup form
+    /// and the captive-portal redirect, with no guessing from headers.
+    ap: bool,
+}
 
 impl PathRouterService for Dispatch {
     async fn call_path_router_service<
@@ -1061,7 +1243,7 @@ impl PathRouterService for Dispatch {
         let method = request.parts.method();
         let path = request.parts.path();
 
-        let reply = route_request(method, path, &mut request.body_connection).await;
+        let reply = route_request(self.ap, method, path, &mut request.body_connection).await;
 
         // The handler future is finished and dropped *before* the reply is
         // written: at no point is a lock, a body borrow or a handler's state
@@ -1111,12 +1293,43 @@ fn known_path(path: Path<'_>) -> Option<&'static str> {
 ///    rather than only at the global `MAX_REQUEST_LEN` (probe rule 29, the
 ///    decision recorded for card 223).
 async fn route_request<R: picoserve::io::Read>(
+    ap: bool,
     method: &str,
     path: Path<'_>,
     body: &mut RequestBodyConnection<'_, R>,
 ) -> Reply {
-    // --- card 223's catch-all hook goes here, before any routing -----------
-    // if portal::is_ap_client() && known_path(path).is_none() { return redirect; }
+    // --- 1: card 223's captive-portal catch-all, before any routing --------
+    //
+    // On the soft-AP, and only while it is actually up, a path this server
+    // does not have is a **302 with a body** rather than a 404. That is what
+    // `captive.apple.com/hotspot-detect.html`, `connectivitycheck.gstatic.com`
+    // and `msftconnecttest.com` are asking, and answering it is what makes the
+    // captive sheet open by itself. `/setup` is exempt for the obvious reason;
+    // so is every route in the table, so a phone can still read the API.
+    let setup = path == SETUP_PATH;
+    if ap && crate::provision::ap_up() && !setup && known_path(path).is_none() {
+        return Reply::Redirect;
+    }
+
+    // --- 2: the setup form, on both interfaces -----------------------------
+    if setup {
+        return match method {
+            "GET" => get_setup(),
+            "POST" => {
+                if body.content_length() > route::MAX_REQUEST_LEN {
+                    return Reply::detail(
+                        ErrorCode::PayloadTooLarge,
+                        "the body is longer than this route accepts",
+                    );
+                }
+                match raw_body(body.body()).await {
+                    Ok(bytes) => post_setup(bytes),
+                    Err(e) => Reply::error(e),
+                }
+            }
+            _ => Reply::err(ErrorCode::MethodNotAllowed),
+        };
+    }
 
     // A request path is URL-encoded, and picoserve's `Route` matched it
     // decoded, so the dispatch does too: `known_path` is the one place that
@@ -1130,6 +1343,10 @@ async fn route_request<R: picoserve::io::Read>(
 
     if path == "/" {
         return match method {
+            // On the setup network `/` **is** the setup form: a phone that was
+            // dragged here by the catch-all, by option 114 or by the QR code
+            // is here to type a network name, not to read a status table.
+            "GET" if ap => get_setup(),
             "GET" => Reply::Page(Page::new(status().await)),
             _ => Reply::err(ErrorCode::MethodNotAllowed),
         };
@@ -1207,13 +1424,52 @@ pub fn init(ctx: Ctx) {
 /// type is now nameable and both values are zero-sized, so this compiles to
 /// nothing. The `http-selftest` build calls the same function, which is what
 /// keeps the self-test honest: it exercises the router the device serves.
-fn router() -> Router<ServicePathRouter<Dispatch>> {
-    Router::from_service(Dispatch)
+fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
+    Router::from_service(Dispatch { ap })
+}
+
+/// Which stack a worker serves.
+///
+/// **Worker 0 is the LAN's and never moves. Worker 1 follows the soft-AP**:
+/// while the AP is up it listens on 192.168.4.1, and the rest of the time it
+/// is a second LAN worker exactly as card 227 made it.
+///
+/// A *third* worker bound to the AP stack was the obvious shape and is what
+/// this card did not do: a worker is 7,504 bytes of `.bss`
+/// ([`HTTP_TASKS`]'s documentation prices it), and `.bss` is core 0's stack, so
+/// a third one would have spent the whole of the card's 2,432-byte lever three
+/// times over. Moving one instead costs nothing measurable - the two arms of
+/// the match below hold the same `listen_and_serve` future type, so the task's
+/// own future is the size of one of them, not two - and the moment it matters
+/// is the moment it is free: while the AP is up the station is, by the
+/// machine's own rules, not on a network, so there is nobody on the LAN for
+/// the borrowed worker to have served.
+async fn serve_on(
+    id: usize,
+    stack: Stack<'static>,
+    ap: bool,
+    app: &Router<ServicePathRouter<Dispatch>>,
+    config: &picoserve::Config,
+    http_buf: &mut [u8],
+    rx: &mut [u8],
+    tx: &mut [u8],
+) {
+    info!(
+        "net: http worker {} listening on tcp/{} ({})",
+        id,
+        HTTP_PORT,
+        if ap { "setup network" } else { "lan" }
+    );
+    Server::new(app, config, http_buf)
+        .listen_and_serve(id, stack, HTTP_PORT, rx, tx)
+        .await
+        .into_never()
 }
 
 #[embassy_executor::task(pool_size = HTTP_TASKS)]
-pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
-    let app = router();
+pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static>) -> ! {
+    let lan = router(false);
+    let portal = router(true);
 
     // A stalled client must not be able to pin the one worker, so every phase
     // has a deadline: 3 s to send a request line at all, 5 s to finish a
@@ -1246,12 +1502,62 @@ pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
     let mut rx = [0u8; TCP_RX];
     let mut tx = [0u8; TCP_TX];
 
-    info!("net: http on tcp/{} (worker {})", HTTP_PORT, id);
-    Server::new(&app, &config, &mut http_buf[..])
-        .listen_and_serve(id, stack, HTTP_PORT, &mut rx[..], &mut tx[..])
-        .await
-        .into_never()
+    // Worker 0 never leaves the LAN, so it never re-enters this loop.
+    if id != HTTP_AP_WORKER {
+        serve_on(
+            id,
+            stack,
+            false,
+            &lan,
+            &config,
+            &mut http_buf[..],
+            &mut rx[..],
+            &mut tx[..],
+        )
+        .await;
+    }
+    loop {
+        // Cancelling `listen_and_serve` drops whatever connection it was
+        // serving, which is right in both directions: the AP going up means
+        // the station is about to lose its network anyway, and the AP going
+        // down means the interface under the socket is being taken away.
+        if crate::provision::ap_up() {
+            let _ = select(
+                serve_on(
+                    id,
+                    ap_stack,
+                    true,
+                    &portal,
+                    &config,
+                    &mut http_buf[..],
+                    &mut rx[..],
+                    &mut tx[..],
+                ),
+                crate::provision::wait_ap_pub(false),
+            )
+            .await;
+        } else {
+            let _ = select(
+                serve_on(
+                    id,
+                    stack,
+                    false,
+                    &lan,
+                    &config,
+                    &mut http_buf[..],
+                    &mut rx[..],
+                    &mut tx[..],
+                ),
+                crate::provision::wait_ap_pub(true),
+            )
+            .await;
+        }
+    }
 }
+
+/// The worker that follows the soft-AP. See [`serve_on`].
+pub const HTTP_AP_WORKER: usize = 1;
+const _: () = assert!(HTTP_AP_WORKER < HTTP_TASKS);
 
 // ---------------------------------------------------------------------------
 // The bench self-test (feature `http-selftest`)
@@ -1433,8 +1739,8 @@ fn clip(s: &str, max: usize) -> &str {
 ///
 /// Returns `(status, body_len, micros)`.
 #[cfg(feature = "http-selftest")]
-async fn selftest_one(request: &str, out: &mut [u8]) -> (u16, usize, u32) {
-    let app = router();
+async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u32) {
+    let app = router(ap);
     let config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Duration::from_secs(3),
         persistent_start_read_request: Duration::from_secs(2),
@@ -1502,12 +1808,13 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // is the baseline this run is compared against, and it should be measured
     // with the server idle.
     Timer::after(Duration::from_secs(75)).await;
-    let Some(cfg) = stack.config_v4() else {
-        warn!("selftest: no address, nothing to connect to");
-        return;
-    };
-    let me = cfg.address.address();
-    let target = IpEndpoint::new(IpAddress::Ipv4(me), HTTP_PORT);
+    // **Not an early return** (card 223). A `start-in-portal` build has no
+    // station address at all - that is the whole point of it - and the TCP
+    // half of this self-test was never the interesting half. Skipping it and
+    // going on to the in-memory pass is what makes the portal build
+    // measurable; returning here is what made the first `start-in-portal`
+    // flash print nothing.
+    let me = stack.config_v4().map(|c| c.address.address());
 
     // The window this is measured over: the frame path either noticed or it
     // did not, and these are the numbers that say which.
@@ -1528,7 +1835,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
     let mut us_total = 0u64;
     let mut first_status: heapless::String<16> = heapless::String::new();
 
-    for i in 0..REQUESTS {
+    for i in (0..REQUESTS).take_while(|_| me.is_some()) {
+        let target = IpEndpoint::new(IpAddress::Ipv4(me.expect("checked")), HTTP_PORT);
         let t0 = Instant::now();
         let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
         sock.set_timeout(Some(Duration::from_secs(3)));
@@ -1576,7 +1884,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
             // hairpin a frame back to its sender, so this is the expected
             // outcome and not a firmware fault. Say so, and fall back.
             warn!(
-                "selftest: embassy-net cannot reach its own address {} - no loopback on a station interface. Falling back to reporting readiness.",
+                "selftest: embassy-net cannot reach its own address {:?} - no loopback on a station interface. Falling back to reporting readiness.",
                 me
             );
             break;
@@ -1595,8 +1903,11 @@ pub async fn selftest_task(stack: Stack<'static>) {
     );
     if ok == 0 {
         info!(
-            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, stack address {}",
-            HTTP_TASKS, HTTP_PORT, me
+            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, station address {:?}, soft-AP {}",
+            HTTP_TASKS,
+            HTTP_PORT,
+            me,
+            if crate::provision::ap_up() { "up" } else { "down" },
         );
     }
 
@@ -1615,7 +1926,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     let mut worst_us = 0u32;
     let hw_before = crate::stack_probe::CORE0.high_water().unwrap_or(0);
     for (label, request, expect) in SELFTEST_ROUTES {
-        let (status, bytes, us) = selftest_one(request, &mut out).await;
+        let (status, bytes, us) = selftest_one(false, request, &mut out).await;
         worst_us = worst_us.max(us);
         let body = core::str::from_utf8(&out[..bytes.min(out.len())])
             .ok()
@@ -1648,6 +1959,46 @@ pub async fn selftest_task(stack: Stack<'static>) {
         crate::stack_probe::CORE0.high_water().unwrap_or(0),
         crate::stack_probe::CORE0.size(),
     );
+
+    // --- card 223: the portal-side routes and the catch-all ----------------
+    //
+    // A worker cannot reach the soft-AP (there is no phone and no route to
+    // 192.168.4.x from this bench), so the same in-memory socket is pointed at
+    // the **AP** dispatch instead. What it proves is exactly what the card
+    // asks: a captive probe gets the 302-with-a-body while `ap_up()` and a 404
+    // when the AP is down, `GET /` is the setup form on that side and the
+    // status page on the other, and the form's GET and POST answer HTML.
+    //
+    // The two arms of every pair are the same request, so the only variable is
+    // whether the soft-AP is up - which is why the AP-down half is run first,
+    // against the device exactly as it is running.
+    let ap_now = crate::provision::ap_up();
+    info!("selftest: portal pass, soft-AP is {}", if ap_now { "up" } else { "down" });
+    for (label, ap, request, expect) in SELFTEST_PORTAL {
+        let (status, bytes, us) = selftest_one(*ap, request, &mut out).await;
+        // The catch-all only fires while the AP is actually up, so the
+        // expected code for those two rows depends on the device's state and
+        // not on the table.
+        let want = match (*expect, *ap, ap_now) {
+            (302, true, false) => 404,
+            (w, _, _) => w,
+        };
+        let head = core::str::from_utf8(&out[..bytes.min(out.len())]).unwrap_or("<binary>");
+        info!(
+            "selftest: {:<30} -> {} (want {}) {} {} bytes, {} us | location {:?}",
+            label,
+            status,
+            want,
+            if status == want { "OK  " } else { "WRONG" },
+            bytes,
+            us,
+            head.split_once("Location: ")
+                .and_then(|(_, r)| r.split_once('\r'))
+                .map(|(l, _)| l)
+                .unwrap_or("-"),
+        );
+        Timer::after(Duration::from_millis(200)).await;
+    }
 
     let after = {
         let mut guard = CORE.lock().await;
@@ -1795,5 +2146,91 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
         "POST wifi 385 > 384 (413)",
         "POST /api/v1/wifi HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 385\r\n\r\nnothing=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         413,
+    ),
+];
+
+/// Card 223's portal pass: `(label, on the AP side, request, expected status)`.
+///
+/// Each row is a question only the AP/LAN split can be asked. The `302` rows
+/// are conditional on the soft-AP actually being up when the self-test runs -
+/// see the loop - because that, and not the table, is what the catch-all is
+/// gated on.
+#[cfg(feature = "http-selftest")]
+static SELFTEST_PORTAL: &[(&str, bool, &str, u16)] = &[
+    // The three captive probes, on the setup network. A non-empty body and a
+    // `Location` are both required: research 007 section 4.3.
+    (
+        "AP  captive.apple.com (302)",
+        true,
+        "GET /hotspot-detect.html HTTP/1.1\r\nHost: captive.apple.com\r\nConnection: close\r\n\r\n",
+        302,
+    ),
+    (
+        "AP  android generate_204 (302)",
+        true,
+        "GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n",
+        302,
+    ),
+    (
+        "AP  windows ncsi (302)",
+        true,
+        "GET /connecttest.txt HTTP/1.1\r\nHost: www.msftconnecttest.com\r\nConnection: close\r\n\r\n",
+        302,
+    ),
+    // The same probe on the LAN is an ordinary unknown path. This row is the
+    // one that says the redirect is a property of the listener and not of the
+    // `Host:` header.
+    (
+        "LAN captive.apple.com (404)",
+        false,
+        "GET /hotspot-detect.html HTTP/1.1\r\nHost: captive.apple.com\r\nConnection: close\r\n\r\n",
+        404,
+    ),
+    // `/` is the form on one side and the status page on the other.
+    (
+        "AP  GET / is the setup form",
+        true,
+        "GET / HTTP/1.1\r\nHost: 192.168.4.1\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "LAN GET / is the status page",
+        false,
+        "GET / HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    // The form itself, on both sides, and its POST. The POST uses an SSID that
+    // cannot exist, so the trial it starts fails at `not_found` rather than
+    // taking the device off its network - and `persist` is irrelevant because
+    // nothing is stored until a join succeeds.
+    (
+        "AP  GET /setup",
+        true,
+        "GET /setup HTTP/1.1\r\nHost: 192.168.4.1\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "LAN GET /setup",
+        false,
+        "GET /setup HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "AP  POST /setup no ssid (200 html)",
+        true,
+        "POST /setup HTTP/1.1\r\nHost: 192.168.4.1\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 6\r\n\r\npsk=xy",
+        200,
+    ),
+    (
+        "AP  POST /setup 385 > 384 (413)",
+        true,
+        "POST /setup HTTP/1.1\r\nHost: 192.168.4.1\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 385\r\n\r\nnothing=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        413,
+    ),
+    (
+        "AP  PUT /setup (405)",
+        true,
+        "PUT /setup HTTP/1.1\r\nHost: 192.168.4.1\r\nConnection: close\r\n\r\n",
+        405,
     ),
 ];
