@@ -222,3 +222,46 @@ line in the script.
 
 `.stack` **26,392** after this step (the `StatusReply` grew, and it is held in a handler
 future).
+
+### Step 5: the stack lever - one partition-table read for the whole boot
+
+The card's premise needed checking before it could be acted on, and it is **nearly** right.
+The two 3 KB buffers are not alive at the same time - `store::find_partition` returned
+before `http::read_fw_health` was called - so "share one buffer" on its own would have
+saved nothing, because the peak is the max of the two chains and not their sum. What is
+real is *where* the second buffer sat: `read_fw_health` declared
+`buf: [u8; PARTITION_TABLE_MAX_LEN]` (3,072 bytes) and then, with the table still
+borrowing it, called `Ota::new` and `current_ota_state` - i.e. **esp-storage's read path
+ran on top of it**, and research 010 already blames esp-storage's ~4 KB frames for the
+deepest chain this firmware has. So the lever the card is really asking for is its own
+parenthesis: *read only what each needs*.
+
+`store::read_partitions` (renamed from `find_partition`) now reads the table **once**, in
+one non-`async` `#[inline(never)]` frame, and keeps three things: the `screeny` entry, the
+`otadata` entry and the booted partition's offset - 68 bytes of `Copy` `store::Parts`.
+`read_fw_health` takes them from beside the flash handle (it already holds the `STORE`
+lock) and does two `otadata` reads with **nothing large underneath**.
+
+**The arithmetic the card asks for, from the code:** the boot path's deepest chain loses
+exactly `PARTITION_TABLE_MAX_LEN` = **3,072 bytes** from under `Ota::new` /
+`current_ota_state` / esp-storage. Card 227 measured the boot path's high-water at
+**13,056** bytes and identified it as the boot path's own; the arithmetic therefore
+predicts **~9,984** on the device. That is a prediction, not a measurement: it assumes the
+`otadata` chain is the deepest of the boot path's three (store load, table read, ota read)
+and the orchestrator's `stack: core 0 main high-water ...` line at the 60 s mark is what
+settles it. If the number does not move, the store's own `load` chain was the peak all
+along and the next lever is there.
+
+`Parts` lives in `store::Flash`, behind the `STORE` mutex, and not as a local in `main`:
+a local would be held across `main`'s first `await` and so be `.bss` anyway - and
+everything that wants a partition has to take that lock regardless. Everything is looked
+up **by label**, never `partition_type()`, which `unwrap!`s its conversion and would panic
+on a subtype this crate's enums do not know (research 006 section 3, the rule the settings
+partition has always followed; `read_fw_health` used to break it by walking the table with
+`find_partition(PartitionType::Data(Ota))`).
+
+`.stack` **26,392 -> 26,240**: the *ceiling* went down by 152 (`Parts` is 68 bytes of
+`.bss` inside the store handle, plus padding and 80 bytes of `.data`) while the *demand*
+goes down by ~3 KB. `fw-size.sh` measures the ceiling; the device measures the demand.
+That is the trade, and it is the right way round on a chip where the ceiling has 1.7 KB of
+margin and the demand has 11.

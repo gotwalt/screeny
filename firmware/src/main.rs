@@ -711,9 +711,11 @@ async fn main(spawner: Spawner) {
     // This is a read, and core 1 is not running yet, so nothing is parked.
     let (settings, _report) = store::init(peripherals.FLASH).await;
     // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
-    // here rather than per request - it needs the `STORE` lock and a 3 KB
-    // partition-table buffer, and nothing can change the answer until card
-    // 241's confirm/revert lands.
+    // here rather than per request - it needs the `STORE` lock, and nothing can
+    // change the answer until card 241's confirm/revert lands. Card 243: it
+    // takes the partition entries `store::init` already read, from beside the
+    // flash handle, instead of reading the 3 KB table a second time underneath
+    // esp-storage's own frames.
     http::read_fw_health().await;
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);

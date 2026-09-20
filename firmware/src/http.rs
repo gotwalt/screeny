@@ -216,44 +216,39 @@ const FW_UNKNOWN: u8 = 0xff;
 ///
 /// Once rather than per request, for three reasons: nothing can change it
 /// before card 241 ships the confirm/revert state machine; it needs the
-/// `STORE` lock and a 3 KB partition-table buffer, neither of which belongs in
-/// an HTTP handler; and a status request should not touch flash.
+/// `STORE` lock, which does not belong in an HTTP handler; and a status request
+/// should not touch flash.
 ///
-/// Call it from `main` after [`crate::store::init`] and before the panel is
-/// lit - it is a read, and at that point core 1 is not running, so nothing is
+/// Call it from `main` after [`crate::store::init`] and before the panel is lit
+/// - it is a read, and at that point core 1 is not running, so nothing is
 /// parked.
+///
+/// **It no longer reads the partition table itself** (card 243). It used to,
+/// and the 3 KB buffer that took stayed alive underneath `Ota::new` and
+/// `current_ota_state` - i.e. underneath esp-storage's read path, the deepest
+/// chain the boot path has. `store::read_partitions` reads the table once for
+/// everybody and keeps the 32-byte entries beside the flash handle; what is
+/// left here is two flash reads of `otadata` with nothing large below them.
 pub async fn read_fw_health() {
     use esp_bootloader_esp_idf::ota::{Ota, OtaImageState};
-    use esp_bootloader_esp_idf::partitions::{
-        self, AppPartitionSubType, DataPartitionSubType, PartitionType, PARTITION_TABLE_MAX_LEN,
-    };
+    use esp_bootloader_esp_idf::partitions::AppPartitionSubType;
 
     let mut guard = store::STORE.lock().await;
     let Some(f) = guard.as_mut() else {
         warn!("http: no flash handle - fw_slot and fw_state report unknown");
         return;
     };
+    let parts = f.parts();
     let flash = f.raw();
-
-    // 3 KB, on `main`'s stack, once, before the framebuffers are lit and long
-    // before any task future exists. It is deliberately not a static.
-    let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let table = match partitions::read_partition_table(flash, &mut buf) {
-        Ok(t) => t,
-        Err(e) => {
-            warn!("http: partition table unreadable ({:?}) - fw health is unknown", e);
-            return;
-        }
-    };
 
     // The *booted* partition, not otadata's selection: after a rollback the
     // bootloader may run one while otadata still names the other.
-    if let Ok(Some(p)) = table.booted_partition() {
+    if let Some(offset) = parts.booted_offset {
         // By offset, from `firmware/partitions.csv`, and not by asking the
         // entry for its subtype: `PartitionEntry::partition_type()` `unwrap!`s
         // the conversion, and a panic in the boot path to put a word in a
         // status reply is a bad trade (research 006 section 3).
-        let slot = match p.offset() {
+        let slot = match offset {
             0x10000 => FwSlot::Ota0 as u8,
             0x210000 => FwSlot::Ota1 as u8,
             _ => FW_UNKNOWN,
@@ -261,8 +256,7 @@ pub async fn read_fw_health() {
         FW_SLOT.store(slot, Ordering::Relaxed);
     }
 
-    let Ok(Some(ota_part)) = table.find_partition(PartitionType::Data(DataPartitionSubType::Ota))
-    else {
+    let Some(ota_part) = parts.otadata else {
         warn!("http: no otadata partition - fw_state reports unknown");
         return;
     };
