@@ -247,6 +247,16 @@ panicking `new`, `lib.rs:634` for `run_with_auto_repair!`, `lib.rs:525-531` for
   `LoadReport` and `Settings` are shaped for it, but nothing consumes them yet;
   worth a card so the HTTP work (201) has a defined source.
 
+**Acceptance, all four**
+
+- `cargo test -p screeny-settings`: 42 passed, 0 failed (16 policy + 26 store).
+- `cargo test` at the root: exit 0, 56 suites, 0 failures, pacing tests included.
+  No re-run was needed - it was green first time, twice.
+- `cargo clippy -p screeny-settings --all-targets -- -D warnings`: clean.
+- `cargo check -p screeny-settings --target thumbv7em-none-eabi`: clean.
+- Also `cargo fmt -p screeny-settings` (the rest of the workspace is not
+  rustfmt-clean, so nothing outside this crate was reformatted).
+
 **Nothing outside scope was touched**: `crates/settings/**`, the card file, and the
 root `Cargo.lock` (8 new locked packages, of which 4 are optional features of
 `sequential-storage` that are never built). No `firmware/`, no `crates/proto`, no
