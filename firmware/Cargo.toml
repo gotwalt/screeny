@@ -37,6 +37,19 @@ spike-ota = [
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
 gpio-probe = []
 
+# Card 201's compile-only spike. **Evidence, not the implementation.** It
+# exists so the research doc can quote a real image size and a real `.bss`
+# growth for "an HTTP server + a soft-AP + a captive portal on this stack",
+# and so that every API claim in the doc is one the compiler agreed with.
+# It is never flashed and the build cards replace it wholesale.
+device-web-spike = ["spike-ap", "spike-http", "spike-portal", "spike-qr"]
+# Split so the research doc can attribute the flash and `.bss` growth to the
+# piece that caused it: each of these builds on its own.
+spike-ap = []
+spike-http = ["spike-ap", "dep:picoserve", "dep:embedded-io-async", "dep:serde"]
+spike-portal = ["spike-ap", "dep:edge-captive", "dep:edge-dhcp", "dep:edge-nal"]
+spike-qr = ["dep:qrcodegen-no-heap"]
+
 # Both binaries are declared explicitly so that neither can be picked up (or
 # dropped) by accident: `screeny-fw` is the firmware, `gpio_probe` is the
 # card 202 bench tool and only exists when its feature is on.
@@ -117,6 +130,23 @@ esp-storage = { version = "=0.10.0", optional = true, default-features = false, 
 sequential-storage = { version = "=8.0.1", optional = true }
 embedded-storage = { version = "=0.3.1", optional = true }
 embassy-embedded-hal = { version = "=0.6.0", optional = true }
+
+# --- card 201's spike (feature `device-web-spike` only) -------------------
+# All optional, all pinned, all chosen because they already agree with the
+# versions above: picoserve 0.20 wants embassy-net =0.9.1 / embassy-time
+# ^0.5.1 / heapless 0.9.3, and edge-captive / edge-dhcp 0.8 want edge-nal 0.7
+# and domain 0.12, which edge-mdns 0.8 + edge-nal-embassy 0.9 already carry.
+picoserve = { version = "=0.20.0", optional = true, default-features = false, features = [
+  "embassy",
+  "json",
+  "log",
+] }
+edge-nal = { version = "=0.7.0", optional = true, default-features = false }
+edge-captive = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
+edge-dhcp = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
+qrcodegen-no-heap = { version = "=1.8.1", optional = true }
+embedded-io-async = { version = "0.7.0", optional = true }
+serde = { version = "1", optional = true, default-features = false, features = ["derive"] }
 
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }

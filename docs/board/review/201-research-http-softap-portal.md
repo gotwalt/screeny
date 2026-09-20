@@ -4,8 +4,8 @@ title: Research - an HTTP server, a soft-AP and a captive portal on the firmware
 type: research
 hardware: no
 depends: [008]
-owner:
-branch:
+owner: worker-201
+branch: card/201-research-http-softap-portal
 ---
 
 ## Goal
@@ -139,3 +139,120 @@ The orchestrator can write the build cards from the research doc alone, and ever
 claim about a crate's behaviour cites the source line that shows it.
 
 ## Log
+
+### 2026-09-19 — worker-201
+
+- Claimed the card, branch `card/201-research-http-softap-portal`.
+- Read `firmware/src/{main.rs,net.rs,mdns.rs,screens.rs}`, `firmware/Cargo.toml`,
+  `docs/README.md`, card 200 (to stay out of its lane), parked card 081.
+- Read `esp-radio 1.0.0-beta.1` wifi sources in `~/.cargo/registry`. First findings:
+  - `Config::AccessPointStation(StationConfig, AccessPointConfig)` exists
+    (`src/wifi/mod.rs:376`), maps to `WIFI_MODE_APSTA` (`mod.rs:3044`), and
+    `set_config` applies AP then STA config (`mod.rs:3064`).
+  - `Interface::access_point()` / `try_access_point()` exist (`mod.rs:1584`), and the
+    STA/AP interfaces are separate singletons guarded by `STA_BIT`/`AP_BIT`
+    (`mod.rs:1523`). So two `embassy_net::new()` stacks, one per interface, is
+    expressible.
+  - `set_config` calls `esp_wifi_stop()` only when the *mode* changes
+    (`mod.rs:3049`), so STA->APSTA is a stop/start of the radio, but APSTA->APSTA
+    with new credentials is not.
+  - Scanning: `scan_async` (`mod.rs:3277`) returns `alloc::vec::Vec` (heap!), and
+    the doc says "Scanning is not supported in AccessPoint-only mode"
+    (`mod.rs:3261`). That is the single strongest argument for APSTA over exclusive
+    AP mode: the settings page wants a network list.
+  - esp-radio's own heap figures (`mod.rs:26-27`): Station 47-57 KB, Open Access
+    Point 53-63 KB. These are the numbers the RAM budget has to start from.
+  - `AccessPointConfig::default()` is SSID `iot-device`, channel 1, open,
+    `max_connections: 255`, `dtim_period: 2`, `beacon_timeout: 300`
+    (`src/wifi/ap.rs:87`). Soft-AP rejects WEP and an empty password (`ap.rs:64`).
+- Crate survey (read the crates.io index directly, then the actual sources, unpacked
+  into the scratchpad):
+  - `picoserve 0.20.0` depends on `embassy-net ^0.9.1`, `embassy-time ^0.5.1`,
+    `heapless 0.9.3`, `embedded-io-async 0.7` - **our exact pins**. MSRV 1.93;
+    the `esp` toolchain here is `rustc 1.97.0-nightly (8ea53bcd7 2026-07-08)`, so
+    that is fine.
+  - `edge-http 0.8.0` / `edge-captive 0.8.0` / `edge-dhcp 0.8.0` all want
+    `edge-nal ^0.7`, which is what `edge-nal-embassy 0.9.0` (already in the tree)
+    provides, and `domain ^0.12.1`, which `edge-mdns 0.8.0` already pulls in.
+  - **`edge-dhcp 0.8.0`'s server needs only a plain UDP socket**, not a raw one
+    (`src/io.rs:30-47` says so in as many words). Older versions needed `edge-raw`.
+    `edge-nal-embassy` has no raw socket, so this is what makes the DHCP server
+    possible at all.
+  - `edge-dhcp` already implements DHCP option 114 (RFC 8910):
+    `ServerOptions::captive_url` (`src/server.rs:29`), `CAPTIVE_URL: u8 = 114`
+    (`src/lib.rs:822`).
+  - **`edge-nal-embassy 0.9.0`'s default feature set is `all`**, which includes
+    `tcp = ["embassy-net/tcp"]` (its `Cargo.toml`). `firmware/Cargo.toml:66` takes
+    it with default features, so smoltcp's TCP is *already compiled into the
+    current image*. The flash cost of "adding TCP" is therefore mostly already paid.
+- Built the compile-only spike (`firmware/src/web_spike*`, features `spike-ap`,
+  `spike-http`, `spike-portal`, `spike-qr`, umbrella `device-web-spike`). It
+  builds clean on the `esp` toolchain, release, LTO fat. **Never flashed.**
+  Measured with `xtensa-esp32-elf-size -A` and `espflash save-image`:
+
+  | config | .text | .rodata | .data | .bss | .stack (what is left) |
+  |---|---|---|---|---|---|
+  | baseline (main) | 531205 | 73064 | 31492 | 127040 | **37536** |
+  | +AP stack | 533117 | 73264 | 31492 | 131008 | 33568 |
+  | +AP +picoserve | 602917 | 82872 | 31892 | 138640 | 25536 |
+  | +AP +dhcp/dns | 549389 | 74952 | 31708 | 136424 | 27928 |
+  | +QR only | 541693 | 75056 | 31556 | 133240 | 31272 |
+  | everything | 629269 | 86408 | 32172 | 150200 | **13688** |
+
+  Flash image: 743,408 -> 855,488 bytes (+112,080, +15%). 20.7% of a 4 MB slot.
+- **The surprise, and the headline risk**: `.stack` is not a constant, it is
+  whatever is left between `_bss_end` and 0x3ffe0000. The full spike takes core
+  0's main stack from 36.7 KB down to **13.4 KB**, and `main` builds two 12 KB
+  `FrameBuffer` temporaries on that stack. This build would very likely die on
+  the stack guard at boot. The budget, not the API, is the hard part of this
+  card - see the doc's RAM table for what has to move to the heap.
+- The 6 KB `Frame` in the QR column is spike-only scaffolding (the real portal
+  screen draws into the existing triple buffer), so the honest steady-state
+  `.bss` cost is ~17 KB, not 23 KB.
+- Portal screen: `lab/src/bin/portal-mock.rs` renders the layouts into
+  `docs/research/img/201-portal-*.png` with the same encoder the spike links.
+  Confirms the owner's bench result exactly: the payload is 32 bytes, version
+  2-L, 25x25. With a 3-pixel quiet zone the block is 31x31 and leaves 32
+  columns = eight `FONT_4X6` characters. The version-2 budget runs out at a
+  17-character SSID; 18 characters and up need version 3 (29x29), which with a
+  1-pixel quiet zone is 31 of 32 rows and leaves no room for text.
+- Two more facts pinned down for the doc:
+  - `embassy-net 0.9.1` always adds a DNS socket to the `SocketSet`
+    (`src/lib.rs:350`) and adds a DHCPv4 socket when configured
+    (`src/lib.rs:707-710`). The STA stack's `StackResources<6>` is therefore
+    already holding DNS + DHCP + frames + control + mDNS = 5 of 6. A TCP
+    listener on the LAN side needs the seventh.
+  - `esp-rtos 0.4.0` has `InterruptExecutor<SWI>` with a priority
+    (`src/embassy/mod.rs:317,392`), and SWI 2 and 3 are free (0 is
+    `esp_rtos::start`, 1 is `start_second_core`). That is the escape hatch if
+    HTTP ever costs a frame.
+  - ESP-IDF, `esp_wifi_set_config` attention: "ESP devices are limited to only
+    one channel, so when in the soft-AP+station mode, the soft-AP will adjust
+    its channel automatically to be the same as the channel of the station."
+    That is *the* trap in the state machine: joining a network on another
+    channel moves the AP under the phone that is standing on it.
+- Captive-portal detection researched from primary sources (AOSP NetworkStack on
+  `main`, Microsoft Learn KB 4494446 + the NCSI overview, `NetworkManager.conf(5)`,
+  mozilla-central, Apple's enterprise-hosts article, the WFA captive-behavior
+  reference, RFC 8908/8910, and the source of WLED / Tasmota / ESPHome / tzapu
+  WiFiManager / ESP-IDF's example). Two findings changed the design:
+  - **The iOS captive mini-browser does not re-probe on an AJAX call** - only a
+    full-page navigation does. So the "did my credentials work?" page must be a
+    plain form post plus a `setTimeout(location.href='.')` reload, not a
+    `fetch()` poll. Tasmota's design is the one to copy; WLED's and ESPHome's
+    never tell the user the answer at all.
+  - **Android classifies a 200 with `Content-Length <= 4` as *failed*, not
+    portal**, and ESP-IDF's own example notes "iOS requires content in the
+    response to detect a captive portal, simply redirecting is not sufficient".
+    So the 302 catch-all needs a non-empty body. An empty 302 - which is what
+    WLED and Tasmota send - is the common bug.
+  - Also: no well-known project special-cases the probe hostnames. They all test
+    the *shape* of the `Host:` header (is it an IP literal / our own name).
+- Folded in the orchestrator's three decisions (QR measured and in; open AP; open
+  HTTP auth with a PIN-shaped hole). The QR section now carries the measured
+  naming rule and the one experiment that would relax it.
+- Wrote `docs/research/007-device-web-and-portal.md`. Nine build cards proposed
+  in section 12, six open questions in section 13.
+- Left behind: nothing running. No serial port opened, no flash, no camera, no
+  LAN access, no background processes. The only long commands were firmware
+  builds, each under a `timeout`.

@@ -46,6 +46,14 @@ mod screens;
 #[cfg(feature = "spike-ota")]
 mod spike_ota;
 mod tidbyt;
+/// Card 201's compile-only spike. Never flashed; see the module docs.
+#[cfg(any(
+    feature = "spike-ap",
+    feature = "spike-http",
+    feature = "spike-portal",
+    feature = "spike-qr"
+))]
+mod web_spike;
 
 use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU8, Ordering};
 
@@ -628,6 +636,36 @@ async fn main(spawner: Spawner) {
     {
         let r = spike_ota::spike_report(peripherals.FLASH).await;
         info!("spike: {:?}", r);
+    }
+
+    // Card 201's spike: the AP stack, the HTTP server, DHCP, DNS and the QR
+    // portal screen, all reachable so the linker keeps them. Compile-only.
+    #[cfg(any(
+        feature = "spike-ap",
+        feature = "spike-http",
+        feature = "spike-portal",
+        feature = "spike-qr"
+    ))]
+    {
+        let ap_ssid = mk_static!(heapless::String<32>, {
+            let mut s = heapless::String::new();
+            let _ = s.push_str(host);
+            s
+        });
+        #[cfg(feature = "spike-ap")]
+        {
+            let _ = web_spike::ap::apsta_config(
+                esp_radio::wifi::sta::StationConfig::default(),
+                ap_ssid.as_str(),
+            );
+            web_spike::spawn_all(spawner, seed ^ 0x5a5a_5a5a);
+        }
+        #[cfg(feature = "spike-qr")]
+        {
+            let f = mk_static!(display::Frame, display::Frame::new());
+            web_spike::portal_frame_demo(f, ap_ssid.as_str());
+        }
+        web_spike::settle().await;
     }
 
     loop {
