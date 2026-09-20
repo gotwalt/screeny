@@ -18,6 +18,10 @@ libc = "0.2.189"
 # sender by card 016. The network stack is `screeny`, below, and is optional.
 screeny-proto = { path = "../proto" }
 screeny-encode = { path = "../encode" }
+# The one panel model (card 016, card 102): what the LEDs emit for an sRGB8
+# code, including the firmware's temporal dither. `panel.rs` is a thin reading
+# of it, not a second copy. No dependencies but `screeny-proto`.
+screeny-panel = { path = "../panel" }
 screeny = { path = "../screeny", optional = true }
 # So `screeny-art play` can send FINAL on ctrl-c and let the panel go at once
 # instead of holding the last frame for the stream timeout. `Drop` does not run

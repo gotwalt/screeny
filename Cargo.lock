@@ -1781,6 +1781,7 @@ dependencies = [
  "pollster",
  "screeny",
  "screeny-encode",
+ "screeny-panel",
  "screeny-proto",
  "screeny-sim",
  "serde",

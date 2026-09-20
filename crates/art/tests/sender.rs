@@ -23,6 +23,7 @@ use screeny::{Cadence, Device, LinkConfig, Sent};
 use screeny_art::frame::WireFrame;
 use screeny_art::output::{Output, SenderOutput};
 use screeny_art::piece::{self, local_now, Ctx, Params};
+use screeny_art::panel::Panel;
 use screeny_art::{Measured, Pipeline, Settings};
 use screeny_sim::{Config, SimDevice};
 
@@ -42,6 +43,20 @@ struct Shown {
     codec: u8,
     bytes: usize,
     decoded: Vec<u8>,
+}
+
+/// What the device *displays* for the frame it received.
+///
+/// The datagram carries sRGB8 codes; the panel shows them at 64 duty levels
+/// spread over sixteen dither phases, which is the identity above code 38 and
+/// a collapse onto a shared level below it (card 102,
+/// `screeny_art::panel::Panel`). The studio's preview is drawn through the
+/// same model, so this is the transform that makes "the preview is what the
+/// panel shows" a statement about the same two pictures.
+fn as_shown(decoded: &[u8]) -> Vec<u8> {
+    let mut px = decoded.to_vec();
+    Panel::DEVICE.show(&mut px);
+    px
 }
 
 /// Start a simulator on loopback with **ephemeral** ports, mDNS off, and
@@ -202,7 +217,7 @@ fn an_indexed_piece_arrives_pixel_exact() {
                 "{id}: frame {i} would show something other than palette[index]"
             );
             // And therefore also: what the studio drew is what the panel shows.
-            assert_eq!(shown[j].decoded, previews[i], "{id}: frame {i}'s preview is not what the panel shows");
+            assert_eq!(as_shown(&shown[j].decoded), previews[i], "{id}: frame {i}'s preview is not what the panel shows");
         }
     }
 }
@@ -221,7 +236,7 @@ fn a_continuous_piece_matches_the_preview() {
     for (i, j) in pairs {
         assert!(wires[i].indexed.is_none(), "{id} is supposed to be a continuous piece");
         assert_eq!(
-            shown[j].decoded, previews[i],
+            as_shown(&shown[j].decoded), previews[i],
             "{id}: frame {i} reached the panel as something other than the preview"
         );
         if !measured[i].exact {

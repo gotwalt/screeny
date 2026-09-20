@@ -4,12 +4,13 @@
 
 use screeny_art::output::{Output, PipeOutput};
 use screeny_art::piece::{self, local_now, Ctx, Params};
+use screeny_art::panel::Panel;
 use screeny_art::{pieces, preview, Pipeline, Settings};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "sender")]
 const PLAY_USAGE: &str = "\
-  screeny-art play <piece> --to NAME|ADDR [--seed N] [--fps 60] [--seconds S] [--levels 64] [--wait] [--set id=value]...
+  screeny-art play <piece> --to NAME|ADDR [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--wait] [--set id=value]...
 ";
 #[cfg(not(feature = "sender"))]
 const PLAY_USAGE: &str = "\
@@ -22,8 +23,8 @@ usage:
   screeny-art list
 ";
 const USAGE_TAIL: &str = "\
-  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--levels 64] [--set id=value]...
-  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--levels 64] [--set id=value]...
+  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--set id=value]...
+  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--set id=value]...
 
 `play` streams to a panel: `--to` takes an mDNS instance name (preferred - the
 link re-resolves it, so it follows the device across a DHCP lease) or an
@@ -119,7 +120,17 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--at" => a.at = num()?,
             "--warmup" => a.warmup = num()?.max(0.0),
             "--scale" => a.scale = (num()? as usize).clamp(1, 64),
-            "--levels" => a.settings.levels = num()? as u32,
+            // Card 102: the old `--levels 64|32|16` is gone. 32 and 16 were
+            // the pre-card-020 "dimmed by scaling" panel, which this device
+            // has never been; 64 is the panel without its temporal dither,
+            // and that is what `--panel bit-planes` is for.
+            "--panel" => {
+                a.settings.panel = match value.as_str() {
+                    "dithered" | "device" => Panel::Dithered,
+                    "bit-planes" | "bitplanes" => Panel::BitPlanes,
+                    _ => return Err(format!("--panel: `{value}` is not `dithered` or `bit-planes`")),
+                }
+            }
             "--out" => a.out = Some(value),
             "--to" => a.to = Some(value),
             "--set" => {
