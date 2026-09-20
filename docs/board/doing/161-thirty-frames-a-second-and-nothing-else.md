@@ -4,8 +4,8 @@ title: Thirty frames a second, and nothing else
 type: build
 hardware: no
 depends: [151]
-owner:
-branch:
+owner: worker (Claude)
+branch: card/161-thirty-fps
 ---
 
 ## Goal
@@ -67,3 +67,22 @@ and nothing coalesced in steady state; no control on the page mentions a frame r
 old state file loads.
 
 ## Log
+
+### Claimed
+
+Branch `card/161-thirty-fps`, cut from `main` at `3b84a2d`. Read the card, `docs/README.md`,
+cards 150/151 (the migration pattern and the `repaired` voice), 172/183 (the slider being
+removed and `drawStops`, which stays), 198 (the two screens) and 164 (the link's stats in
+`player.rs`, which this card must not disturb).
+
+Survey before touching anything - where a rate is named today:
+
+- `crates/art`: `snapshot::FPS = 30.0` (already the one 30 the snapshot tool steps at);
+  `bin/screeny-art.rs` `--fps`, default 60, clamped 1..60, used by both `play` and `pipe`.
+- `crates/studio`: `player::{MIN_FPS 1.0, MAX_FPS 60.0, IDLE_FPS 5.0}`, `StoredPlayer::fps`
+  (default 60), `PlayerChange::fps`, `SetPlayback::fps`, `SetPlayer::fps`, `StudioState::fps`,
+  `PlayerStatus::fps`, `PreviewStatus::fps`, `ws::{DEFAULT_FPS, MAX_FPS}`, the
+  `#fps` slider and `#fps-stops` datalist in `index.html`, `showFps`/`pushPlayback` and the
+  limiter tick's `state.fps` in `picture.js`.
+- `crates/screeny`'s cadence ladder, `crates/proto`, `crates/sim`, `firmware/`,
+  `screeny stream --fps`: **not touched**, by the card's instruction.
