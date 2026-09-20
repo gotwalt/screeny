@@ -311,3 +311,15 @@ failed, 5 skipped, **0 connects refused**. No background process left.
    unchanged.
 5. The `screeny stats` / telemetry numbers should not move: nothing on the frame path
    changed, and core 0 does *less* work per connection than it did.
+
+**Orchestrator, after the merge (2026-09-20): merged as 90e6392; fw 0.5.3 is on the device.**
+Built from `main`: `.stack` 27,232. On the bench, Mac wired, WiFi off:
+`screeny-probe http` three times in a row - **31 passed, 0 failed, 8 skipped, 0 connects
+refused**, each time (0.5.2, same hour, same probe host: 9-17 refused per run).
+`stack_free` 12,224 after them; `/api/v1/panic` clean. UDP conformance once, panel
+released: **60/0/4**. Stream back at 30 fps, zero drops. So the close was the story; the
+split between the peer-dependent `discard_all_data` and the blocking UART lines was not
+measured and does not need to be. The four load-sensitive host tests the worker hit
+(`studio moved`/`soak`, `screeny pacing`/`loopback`) are told to the `software` session;
+not chased here (decision 10). fw 0.5.2 before it: a one-hour passive soak, 714 telemetry
+lines, no WARN/ERROR/reset. The acceptance soak now runs on 0.5.3.

@@ -1,14 +1,13 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status (2026-09-20, evening): the device runs fw 0.5.2 - settings and WiFi
+**Status (2026-09-20, evening): the device runs fw 0.5.3 - settings and WiFi
 credentials in flash, an HTTP status/settings page and JSON API on the LAN, the setup
 portal (open soft-AP, DHCP, DNS catch-all, QR screen, trial join before commit), a
 rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5.1** after five fixes
 (card 223's Log: QR stays put, the page says Connected, captive probes get the setup page
 as a `200` and not a `302`, no option 114, the connected screen yields to a stream). The one silent
 stall of 0.5.1 never reproduced; card 234 fixed an unbounded UDP send and card 243 makes a
-panic reboot and say so (`GET /api/v1/panic`). **Open: card 236, HTTP connects refused under
-back-to-back requests.** Next, in the order the owner chose on 2026-09-20 (decision 10): 234 (the stall), 243 + the
+panic reboot and say so (`GET /api/v1/panic`). Card 236 bounded the HTTP close (refused connects 9-17 per probe run -> 0). Next, in the order the owner chose on 2026-09-20 (decision 10): 234 (the stall), 243 + the
 boot-path stack lever, a one-hour soak, 240/241 (OTA, the full plan), 230 (the button), with
 225 (spec sections 8.1/8.3) and the simulator's captive answer on the side.**
 This file is the source of truth for the device-web track (cards 200-249, coordinated by
@@ -337,7 +336,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | **done, on the device (fw 0.5.2)** - a panic prints its backtrace, leaves a breadcrumb in RTC slow memory and resets (proved with the `panic-test` build: panic -> `SW_RESET` -> rejoined -> `GET /api/v1/panic` reports it); crash-loop guard (5 panics under 60 s -> CRASHED screen, halt); boot-path stack lever; `http-selftest` fits again; `stack_free` 12.4 KB after the HTTP suite | yes |
-| 236 | **doing** - an HTTP worker gets back to `accept` quickly whatever the client does (`screeny-probe http` sees 9-17 refused connects per run, client-timing dependent; no backlog in smoltcp); the probe counts refusals | yes |
+| 236 | **done, on the device (fw 0.5.3)** - picoserve's close waited for the *client's application* to close (up to 5 s) and logged three blocking UART lines per connection; the worker now owns the accept loop and its close waits only for the peer's ACK (500 ms bound). `screeny-probe http`: 9-17 refused connects per run -> 0, three runs; the probe retries and **counts** refusals in its last line | yes |
 
 Firmware cards touch the same files and share one device, so they run one at a time;
 the `no` rows (211, 221, 224, 225) run in parallel with them.
