@@ -4,8 +4,8 @@ title: Studio UI refresh - the picture on one screen, the panel on another
 type: build
 hardware: no
 depends: [170, 180, 102]
-owner:
-branch:
+owner: worker-198
+branch: card/198-studio-two-screens
 ---
 
 ## Goal
@@ -77,3 +77,33 @@ old Panel section is present and works, plus the Studio's health. All existing t
 unedited except where they name moved markup. Judged in a browser by the owner.
 
 ## Log
+
+### Step 0 - claimed, and the reading (worker-198)
+
+Branch `card/198-studio-two-screens`. The worktree's HEAD was `17b6573` (card 141), which
+is **behind** `main` and does not contain this card at all - it was written onto `main` in
+`4d793b0`. `HEAD` is an ancestor of `main`, so the branch is cut from `main` (`c471af0`)
+rather than from the worktree's HEAD: same work, plus the card to do.
+
+Read before designing: `CLAUDE.md`, `docs/README.md`, this card and card 197,
+`crates/studio/README.md`, `ui/index.html`, `ui/main.js` (1245 lines), `ui/style.css`,
+`src/ui.rs`, `src/page.rs`'s routing and `src/lib.rs`'s `fallback(ui::serve)`,
+`tests/ui.rs`, and the Logs of cards 170, 180, 181, 173, 120 and 183.
+
+The behaviours those six cards paid for, which the split must not lose - written down here
+so that each one can be pointed at when the screens are built:
+
+1. **170**: one panel, one picture; the two-column bench is behind `@media (min-width:
+   1100px)` and everything narrower is an ordinary scrolling column in DOM order; no
+   control whose effect on the panel is unclear.
+2. **180**: the Device block is **absent**, not empty, for firmware with no HTTP API; every
+   tone in it comes from a server-decided flag, never from a threshold in the browser.
+3. **181**: the output switch stays live with no panel attached and says what it really
+   does - *"Drive a panel as soon as one is found"* - and `set_panel`'s two bodies are
+   untouched.
+4. **173**: the discovery note tells the three "nothing here yet" apart, in the dim tone,
+   never as a fault.
+5. **120**: a screen that shows no pictures asks for none (`fps: 0`), and still gets the
+   state and the heartbeat.
+6. **183**: a slider's stops are drawn from its own `<datalist>` at the thumb's geometry
+   (`3.5px + frac * (100% - 7px)`), and they do not snap.
