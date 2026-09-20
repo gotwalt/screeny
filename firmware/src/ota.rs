@@ -399,15 +399,27 @@ impl Upload {
             // Nothing is claimed and nothing is erased: this one is free.
             return Err(FirmwareError::TooLarge);
         }
+
+        // **Every `await` in this function happens before the claim is taken.**
+        // That is not tidiness: `crate::http::serve_on` runs inside a `select`
+        // against the soft-AP going up or down, so a handler future *can* be
+        // dropped where it suspends. Once `Ok` is returned the claim, the
+        // buffer and the dither setting all live inside the value, and dropping
+        // the future drops the value and runs `Drop`. Between the
+        // `compare_exchange` and the struct literal there is no suspension
+        // point at all, so there is no window where a cancelled upload could
+        // leave the claim held for ever and every later upload answering
+        // `busy`.
+        let mark = RadioMark::now().await;
+
         if CLAIM
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             return Err(FirmwareError::Busy);
         }
-        // From here on every exit must go through `Drop`, so the claim is
-        // taken *before* anything that can fail and the guard is built as soon
-        // as there is one to build.
+        // The one failure after the claim, and it puts it back by hand because
+        // there is no `Upload` yet to do it.
         let Some(buf) = alloc_sector() else {
             CLAIM.store(false, Ordering::Release);
             warn!("ota: no room on the heap for the staging buffer");
@@ -438,7 +450,7 @@ impl Upload {
             expected: declared,
             scan: Scan::new(slot.len()),
             timing: Timing::new(),
-            mark: RadioMark::now().await,
+            mark,
             front_checked: false,
             dither_was,
         })

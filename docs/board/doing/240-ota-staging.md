@@ -589,3 +589,57 @@ Turn the Mac's WiFi back on. Nothing here leaves a background process; every
 image, confirming it, reverting it, or the health criterion. All four are card
 241. There is no command in this firmware that makes the staged slot the one that
 boots.
+
+### 4. Closing out
+
+**One bug found while re-reading, and fixed.** `Upload::start` used to take the
+claim and turn dither off, and *then* `await` the radio snapshot before the
+`Upload` value existed. `crate::http::serve_on` runs inside a `select` against
+the soft-AP going up or down, so a handler future really can be dropped where it
+suspends - and dropped there, the claim would have been held for ever, every
+later upload would answer `busy`, and dither would have stayed off. Every
+`await` in `start` now happens **before** the `compare_exchange`, so between the
+claim and the struct literal there is no suspension point at all; once the value
+exists, dropping the future runs `Drop` and everything goes back. The comment
+there says so, because it is the kind of ordering a later tidy-up would undo.
+
+**Workspace tests.** `timeout 1200 cargo test` from the repository root: **741
+passed, 1 failed**, and the one failure is
+`screeny-studio`'s `the_status_poll_follows_a_panel_that_moved` timing out under
+a loaded bench. It passes on its own (`cargo test -p screeny-studio --test
+moved`: 2/2), it is a wall-clock/port test in a crate this card does not touch,
+and the card names exactly this case. `cargo clippy --workspace --all-targets`
+says nothing. `screeny-probe http` against the simulator: **43 passed, 0 failed,
+0 skipped**.
+
+**Final `fw-size.sh` for all four builds**, after the fix above (floor 24,576):
+default **26,944**, `panic-test` **26,880**, `http-selftest` **26,528**,
+`start-in-portal` **26,944**.
+
+**Not done here, on purpose.** Activate, confirm, revert and the health
+criterion are card 241 and no code for them exists in this branch. `otadata` is
+read at boot for `fw_slot` / `fw_state`, exactly as it was before this card, and
+written nowhere.
+
+**Open questions for the orchestrator, in the order they matter:**
+
+1. **The one this card was built to ask.** Does esp-radio's WiFi survive 244
+   windows of ~50 ms with core 0's interrupts masked, during a live 30 fps
+   stream? `link downs +0` and `frames` still advancing is the answer; anything
+   else is a finding for 241 and possibly a new card (006 section 4 suggests
+   smaller writes or a pause-and-resume upload). Nothing on the bench Mac can
+   settle it.
+2. **The per-sector numbers are 006's estimates until the bench prints them.**
+   ~50 ms erase and ~8 ms write are a data sheet's typical figures for "a NOR
+   part", not this one's.
+3. **The 180 s outer bound on a body has never been hit.** If a real upload over
+   this radio turns out to take more than a minute, the number is a constant in
+   `firmware/src/http.rs` with its reasoning beside it, not a guess to defend.
+4. **`written` on a refusal is "bytes that reached the sink".** The device and
+   the simulator now agree on it (0 for anything refused on its header), but it
+   is a definition worth checking against what the Studio would want to show.
+5. **A 200 for a failed upload** is what `FirmwareReply` was designed for, what
+   `crates/sim` has always answered and what probe rules 23/24 were written
+   against, and spec 8.6 now says so - but it is the one place this API's status
+   codes and its error codes deliberately part company, and it is the owner's to
+   overrule if he would rather have a 4xx.
