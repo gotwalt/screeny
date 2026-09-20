@@ -319,3 +319,88 @@ mid-twenties, so a 28 KB floor is one the next planned card has to fail - and a
 floor somebody has to edit to get their work through protects nothing. 24 KB is
 the highest round number card 223 can still clear and is 6.6 KB above the worst
 depth ever measured (~17,900).
+
+**Step 6 - the device released, main merged, and the three runs.**
+
+Merged `main` at 1c9021e (the WiFi commit-before-trial fix) - clean, no
+conflicts, the orchestrator's `NewWifi` / `persist_joined` semantics untouched.
+**The fix costs 600 bytes** of the pocket `.stack` comes out of (`.data` +224,
+`.bss` +376), taking the projection from 33,672 to 33,072.
+
+| flash | build | why | outcome |
+|---|---|---|---|
+| 1 | instrumented 0.4.0 | first measurement | wasted: my inverted scan, and the device could not join (the commit-before-trial bug) |
+| A | 0.4.1 + levers, core 1 still 16 KB | measure core 1 against what it has; core 0 under two workers | **core 1 1,872 of 16,384**; core 0 13,328 of 22,832 |
+| B | `apsta-probe`, 24 KB arena, core 1 at 6,144 | validate the heap lever against the APSTA watermark, and soak the resized core 1 | watermark **54,040 of 90,112**; core 1 **1,872 of 6,144**, no guard panic |
+| C | final default, fw 0.4.2 | exit numbers, and force a rejoin | **13,232 of 33,072, 18,816 free**; 30 fps, zero drops |
+
+**Deliverable 1, and it is not what the card assumed.** Core 0's high-water is
+**13,232**, and **13,056 of it is reached at boot** before a single request
+arrives. 2,378 connections in run A moved it by 272 bytes, in steps of 16 to
+112 - the signature of an interrupt taking its 256-byte context at a different
+point in the *same* chain, not a new deeper call. And the WiFi rejoin path,
+the leading suspect, moved it by **exactly zero**: run C forced a
+three-attempt join failure and a re-association and `watch_task` printed
+nothing.
+
+So where did 0.4.0's 17,040-17,904 go? Almost certainly the orchestrator's own
+fix: 0.4.0's `post_wifi` called `store::commit_immediate` **inside the HTTP
+handler**, putting esp-storage's 4,160/4,144-byte flash frames on top of the
+router chain. ~13 KB of request path + ~4.2 KB of flash write is ~17.2 KB.
+0.4.1 moved that write into the WiFi task. **Fixing a credentials bug
+incidentally removed the deepest call chain in the firmware**, and neither
+card noticed. Written up as inference with the experiment that would settle it.
+
+**A correction I had to make to my own earlier work.** The objdump frame table
+in step 1 was summed to 15,744 and used to predict the depth. That was wrong:
+the nested `Either` frames do not coexist - the outer contains the inner by
+value and LLVM inlines the inner poll into it. A frame table is an upper bound
+per function, not a call chain. The device is the only thing that can say how
+deep, which is exactly what `watch_task` was built for.
+
+**Deliverable 2.** Core 1: **1,872 bytes, three times, from two different
+region sizes** (16,384 in run A; 6,144 in runs B and C). A high-water read out
+of a small region agreeing to the byte with one read out of a large region is
+the check that says the number is of the code, not the container.
+`max(2*1872, 6 KB)` = **6,144**; the floor binds, so the margin is 3.2x.
+**10,240 bytes released.**
+
+**Deliverable 4.** Heap at 24 KB: APSTA watermark **54,040 of 90,112, 36,072
+free at the worst instant**, against the "less than 24 KB free, go back to
+32 KB" abort condition. Card 220's watermark on a 32 KB arena was 53,968 -
+**72 bytes lower**. The allocator's demand never depended on the ceiling; the
+8 KB was simply never asked for.
+
+**Deliverable 5, over the wire** (orchestrator, both runs): 4x the throughput
+(13 req/s against 3.3), and the 1 s SYN retransmit is **gone** - back-to-back
+`time_connect` 0.0068-0.0133 s against card 222's 1.007 s. The frame path did
+not notice either run: 30 fps rx / 30 fps shown, zero stale, superseded,
+decode or rejected drops, `render` max 3,195-3,429 us against an idle 3,411.
+
+**Exit numbers.** `stack_free` **18,816** against the card's >= 14 KB: met with
+room. `.stack` **33,072** against the card's >= 34 KB: **missed by 1,744**, and
+section 5 of the research doc is the measured explanation the card allows -
+every remaining item over a kilobyte is the triple buffer, the DMA
+framebuffers, the frame socket's buffers, the mDNS buffers or the heap arena at
+its floor, and all of them are out of scope or change behaviour. What the
+34 KB was protecting is met anyway, because the demand turned out to be 13,232
+rather than the 17,900 the card was written against.
+
+**Card 223, priced by building it rather than estimating it.**
+`--features device-web-spike` costs **15,800 bytes** of `.stack` (33,072 ->
+17,272), not card 201's ~9 KB - low by two thirds. Minus the spike's own 6 KB
+`display::Frame` that the real portal drops, **223 lands at ~23,400**, which is
+~1,200 below the 24,576 floor. The recommendation is **not** to lower the
+floor: cards 234 and 235 are cheap, identified and behaviour-preserving, and
+either clears it alone. A floor that forces one more known lever is working; the
+28,672 I rejected earlier was different only because 223 had no way to clear it.
+
+`device-web-spike` links again now core 1 is resized, and every other feature
+still builds: `spike-ota`, `store-selftest`, `apsta-probe`, `fb-on-stack`,
+`gpio-probe`, `http-selftest`, `display-on-core0`.
+
+**Device is left on this branch's default build**, fw **0.4.2**, joined from
+its store, streaming at 30 fps with zero drops. `wifi_state` reads `failed` as
+the sticky residue of run C's deliberate wrong-credentials POST (spec 8.2 step
+4 - it is meant to be sticky, and it clears on reboot); the device is on the
+real network and `state live` throughout.

@@ -11,47 +11,72 @@ then falsified.
 
 ## Conclusions first
 
-1. **The 18 KB is not a buffer. It is picoserve's router, one frame per
-   route.** `Router::from_service(..).route(..).route(..)` builds a
-   left-nested `Route<path, MethodRouter, Fallback>`, and each layer's
-   `Future::poll` gets a frame big enough to hold the whole remaining chain by
-   value. Two of those frames survive into the disassembly at **5,680 and
-   2,192 bytes**, so 7,872 bytes of stack are spent on *dispatch* before a
-   handler has run, on top of the http task's own 5,968-byte poll frame.
-   Nothing in the request path is a large array, a big by-value reply or a
-   serialisation temporary; there was no cheap win to take (section 3).
+1. **The HTTP request path is not the deepest thing this firmware does. The
+   boot path is.** This is the opposite of what the card assumed and of what
+   the disassembly suggested. Measured on the device under 2,378 HTTP
+   connections in 200 seconds, core 0's high-water was **13,328 bytes**, of
+   which **13,056 was already reached at boot** before a single request
+   arrived. Serving HTTP flat out adds **272 bytes**, in steps of 16 to 112 at
+   a time. The boot path is `main`'s 5,104-byte poll frame plus
+   `store::find_partition`'s 3,200 plus esp-storage's ~4,150 - the two 3 KB
+   partition-table reads - and the request path simply never gets that deep.
 
-2. **Interrupts land on whichever stack was running, and they are not free.**
+2. **The 18 KB that started this card no longer exists, and the most likely
+   reason is that somebody else fixed it.** Firmware 0.4.0 reported
+   `stack_free` 5,176 and later 4,312 of a 23,240-byte stack, i.e. a
+   high-water of 17,040-17,904. On 0.4.2, two independent 200-second runs -
+   one with 2,378 connections, one with 930 connections **and a forced
+   join-failure and rejoin** - both top out at 13,232-13,328. The leading
+   explanation is section 2.3: 0.4.0's `POST /api/v1/wifi` called
+   `store::commit_immediate` **from inside the HTTP handler**, putting
+   esp-storage's ~4,150-byte flash frames on top of the whole router chain,
+   and 0.4.1 moved that write into the WiFi task. It is inference, not a
+   measurement, and section 2.3 says what would settle it.
+
+3. **Interrupts land on whichever stack was running, and they are not free.**
    `xtensa-lx-rt 0.23.0`'s `SAVE_CONTEXT` opens with
    `addmi sp, sp, -XT_STK_FRMSZ`, `XT_STK_FRMSZ = 256`, on the interrupted
    stack; `esp-rtos 0.4.0` has no separate interrupt stack anywhere (its only
    stack bookkeeping is the per-task guard word). So core 0 pays 256 bytes of
    context plus the handler's own frames for every WiFi and timer interrupt,
    and core 1 pays the same for the HUB75 DMA completion at `Priority3`. This
-   is why the high-water keeps creeping for an hour after boot: it is not one
-   deep call, it is the *coincidence* of an interrupt arriving while an
-   already-deep chain is in flight, and the deepest coincidence so far is the
-   only thing a high-water mark can report.
+   is what the creep is: the 16-to-112-byte steps in conclusion 1 are an
+   interrupt landing at a slightly different point in the *same* chain, not a
+   new, deeper call. A high-water mark can only ever report the deepest
+   coincidence so far, which is why it keeps inching up for an hour.
 
-3. **Core 1's 16 KB stack was three-quarters empty.** Measured for the first
-   time here (section 4). See the table for the number and what it was set to.
+4. **Core 1's 16 KB stack was seven-eighths empty: 1,872 bytes.** Measured
+   three times, in two different region sizes, always the same number
+   (section 4). It is now 6 KB, and the 10,240 bytes released are what paid
+   for the second HTTP worker.
 
-4. **The heap was the wrong thing to worry about and still is - but it had
-   8 KB spare.** Card 220 said keep 64 + 32 KB and it was right at the time:
-   there was never a heap *problem*. But the second arena is ordinary `.bss`,
-   which is core 0's stack with extra steps, and the APSTA watermark says
-   24 KB is still clear of the worst instant. That is the lever that pays for
-   the second HTTP worker.
+5. **The heap was the wrong thing to worry about and still is - but it had
+   8 KB spare.** The second arena is ordinary `.bss`, which is core 0's stack
+   with extra steps. At 24 KB the APSTA all-allocations watermark is
+   **54,040 of 90,112, leaving 36,072 free at the worst instant** - and it is
+   only 72 bytes above what card 220 measured with a 32 KB arena, which says
+   the allocator's demand never depended on the ceiling.
 
-5. **The second HTTP connection worker is in** (`HTTP_TASKS = 2`), with
+6. **The second HTTP connection worker is in** (`HTTP_TASKS = 2`), with
    `NET_SOCKETS` raised 7 -> 8 to match: each worker holds its own
    `TcpSocket`, seven would have left no spare slot at all, and the failure
    mode of getting that wrong is `SocketSet::add` panicking on the first poll
-   - a boot loop, not a slow server.
+   - a boot loop, not a slow server. Over the wire it is worth **4x the
+   throughput** (13 requests/s against 3.3) and it removes the 1-second SYN
+   retransmit entirely: back-to-back `time_connect` went from 1.007 s to
+   7-13 ms.
 
-6. **`tools/fw-size.sh`'s floor was below the measured demand and is now
+7. **`tools/fw-size.sh`'s floor was below the measured demand and is now
    above it.** 16,384 against a real high-water of ~17,900 meant a build could
-   pass the check and still die on the guard. The floor is 28,672.
+   pass the check and still die on the guard. The floor is **24,576**, and
+   section 6 explains why it is not the 28,672 the card suggested and why
+   card 223 having to take one more cheap lever to clear it is the floor
+   working rather than failing.
+
+8. **`.stack` is 33,072, not the 34 KB the card asked for**, and the gap is
+   arithmetic rather than effort: section 5 lists every byte. What the card
+   was really protecting is met with room - `stack_free` under load is
+   **18,816** against the 14 KB it asked for.
 
 ---
 
@@ -119,12 +144,19 @@ looks suspiciously flat, that is why.
 | 4 | router `Either<..>::poll`, inner tail: telemetry / status / page / 404 | 2,192 |
 | 5 | `Result<Json<..>, ApiError>::write_to_with_state` | 1,104 |
 | 6 | `get_page` / `ApiError::write_to` / `Json<WifiReply>::into_response` | 608 / 464 / 144 |
-| | **sum of 1-5** | **15,744** |
-| | plus an interrupt landing on top (context + handler) | 256 + handler |
 
-The measured high-water under real TCP traffic is ~17,900, which is this chain
-plus the executor below it plus whatever interrupt was unlucky. The shape
-matches: it is not one fat thing, it is dispatch.
+**Do not add that column up.** The first draft of this section did, got
+15,744, and predicted a high-water the device then refused to produce. Frames
+3 and 4 do not both exist at once: the outer `Either` *contains* the inner one
+by value, so LLVM sizes the outer frame to hold it and inlines the inner poll
+into it, and the 2,192-byte function in the disassembly is the same code
+reached by a different path. The real chain is roughly frames 1 + 2 + 3 plus a
+handler - about 13 KB - and that is what the device measured.
+
+The lesson is worth more than the number: **a frame table read off objdump is
+an upper bound per function, not a call chain.** It is the right tool for
+finding *what* is expensive and the wrong one for saying *how deep*. Only the
+device can say that, which is what section 2.2 is.
 
 ### Everything else on core 0, for comparison
 
@@ -146,6 +178,78 @@ The boot path (`main` + `find_partition` + the flash reads) is the reason card
 is *below* the HTTP path, so shrinking it would not move the high-water mark -
 which is why card 227 did not bother, and why the two 3 KB partition-table
 buffers are still there.
+
+### 2.2 What the device actually did
+
+Two 200-second runs on fw 0.4.2, the Studio streaming 30 fps throughout, the
+orchestrator driving HTTP from the LAN. Every line below is `watch_task`
+reporting a mark that had just grown.
+
+**Run A** - `.stack` 22,832 (core 1 still 16 KB), 2,576 requests in 240 s,
+2,434 answered 200:
+
+| when | high-water | grew by |
+|---|---|---|
+| boot, before any request | 13,056 | - |
+| during an accepted connection | 13,168 | +112 |
+| during an accepted connection | 13,200 | +32 |
+| during an accepted connection | 13,232 | +32 |
+| during an accepted connection | 13,296 | +64 |
+| during an accepted connection | **13,328** | +32 |
+
+**Run C** - `.stack` 33,072, 930 requests, **plus a forced join failure and
+rejoin** (a `POST /api/v1/wifi` with the dummy pair at +120 s: three
+`NoAccessPointFound` attempts, fallback, re-association):
+
+| when | high-water | grew by |
+|---|---|---|
+| boot | 13,056 | - |
+| during connections | 13,072 / 13,184 / 13,200 | +16 / +112 / +16 |
+| during connections | **13,232** | +32 |
+| the whole SET_WIFI failure and rejoin | *no growth at all* | - |
+
+Two things fall out of this:
+
+* **Boot sets the mark.** 13,056 of the 13,232-13,328 ceiling is reached
+  before the first packet. Serving HTTP flat out is worth 272 bytes.
+* **The WiFi rejoin path is not deep.** It was the leading suspect - the
+  orchestrator raised it, and `try_join` does a full `AllChannels` scan - and
+  it moved the mark by exactly zero.
+
+Every post-boot step is 16 to 112 bytes. That is not a new call chain; it is
+an interrupt taking its 256-byte context at a slightly different point in a
+chain the firmware had already been executing. Which is also why the mark
+never settles: it is a record of coincidences, not of code.
+
+### 2.3 The 18 KB that is no longer there
+
+Card 227 exists because 0.4.0 reported `stack_free` **5,176** and later
+**4,312** of a 23,240-byte `.stack` - high-waters of 17,040 and 17,904. On
+0.4.2 the same hardware, under more load, will not go past 13,328.
+
+The difference is almost certainly **not** this card's levers, which change
+how much stack there is and not how deep it goes. The leading explanation is
+the fix that landed on `main` in between, for an unrelated bug:
+
+0.4.0's `POST /api/v1/wifi` called `store::commit_immediate(..).await`
+**inside the HTTP handler**. That reaches `esp_storage`'s flash path, whose
+frames are `FlashStorage::read` 4,160 and `NorFlashRegion::read` 4,144 - on
+top of the http task's poll frame, the router chain and the handler. Roughly
+13 KB of request path plus roughly 4.2 KB of flash write is roughly 17.2 KB,
+which is the number. 0.4.1 moved the write out of the handler and into the
+WiFi task (`persist_joined`, called only after a successful join), where it
+sits on a 784-byte task frame instead.
+
+So **fixing "credentials are committed before they are proved" also removed
+the deepest call chain in the firmware**, and neither card noticed at the
+time. It is consistent with all three of 0.4.0's readings, including the
+5,176 one, because the orchestrator's card 222 verification ran the
+wrong-credentials POST before the hammer.
+
+It is inference. What would settle it: flash 0.4.0 with this card's
+`watch_task` in it and POST a bad credential pair - the growth line would name
+the moment. That is card 239's job, and it is not worth a bench window now
+that the chain is gone.
 
 ### Do interrupts land here?
 
@@ -185,46 +289,208 @@ search, and it found none of those:
 What is actually expensive is structural, and it is not a patch:
 
 **The router should be one future, not nine nested ones.** Each `.route()`
-adds a layer whose `poll` frame has to hold the whole remaining chain. A
-hand-written path match that dispatches to one of N handlers and returns a
-small enum would collapse 7,872 bytes of dispatch into one frame. It is a
-rewrite of `firmware/src/http.rs`'s dispatch half and it changes no behaviour
-on the wire, which makes it a good card and a bad thing to do inside this one.
-See the follow-ups.
+adds a layer whose `poll` frame has to hold the whole remaining chain by
+value, which is why the outermost one is **5,680 bytes** - about 43% of the
+whole 13,232-byte high-water, for deciding which of nine paths was asked for.
+A hand-written path match that dispatches to one of N handlers and returns a
+small enum would collapse it into one frame. It is a rewrite of
+`firmware/src/http.rs`'s dispatch half and it changes no behaviour on the
+wire, which makes it a good card and a bad thing to do inside this one. See
+the follow-ups.
 
 ---
 
 ## 4. Core 1's stack, measured
 
-PENDING-CORE1
+It had been 16 KB since the first flash of this firmware, on the reasoning
+that 16 KB is generous for one display task. It is generous:
+
+| run | region | load | high-water | free |
+|---|---|---|---|---|
+| A | 16,384 | 200 s of 30 fps, dither on, 2,378 HTTP connections on core 0 | **1,872** | 13,488 |
+| B | **6,144** | 200 s `apsta-probe`, station then APSTA | **1,872** | 3,248 |
+| C | 6,144 | 200 s of 30 fps plus 930 connections and a rejoin | **1,872** | 3,248 |
+
+**The same number three times, from two different region sizes.** That is the
+check worth doing: a high-water read out of a 6,144-byte region agreeing to
+the byte with one read out of a 16,384-byte region says the measurement is of
+the code and not of the container.
+
+1,872 bytes is `display::render`'s 192-byte row buffer, the embassy executor
+and esp-rtos task frames under it, the entry closure esp-hal copies onto the
+stack at start-up, and the HUB75 DMA completion interrupt at `Priority3`
+taking its 256-byte context on top - which lands here, not on core 0, because
+`Hub75::new_async` is called from inside core 1's entry point precisely so
+that it would.
+
+Card 227's rule is `max(2 * high_water, 6 KB)` rounded up to a kilobyte:
+`max(3,744, 6,144)` = **6,144**. The 6 KB floor binds, not the measurement, so
+the margin over anything ever observed is 3.2x. **10,240 bytes released**, and
+because core 1's stack is ordinary `.bss` in the same DRAM region as core 0's
+`.stack`, all 10,240 went straight to core 0.
+
+Run B is the one that matters for confidence: 200 seconds on the resized
+stack, through a radio restart into APSTA and back, with esp-rtos checking the
+guard on every context switch. No panic, 3,248 bytes still painted.
 
 ---
 
 ## 5. The levers, before and after
 
-PENDING-LEVERS
+`tools/fw-size.sh`, default build, each step measured:
+
+| build | `.data` | `.bss` | `.stack` | delta |
+|---|---|---|---|---|
+| e3a146c, fw 0.4.0 | 58,164 | 115,192 | **23,240** | - |
+| + card 227's two-core stack probe and `watch_task` | 58,164 | 115,288 | 23,144 | **-96** |
+| + `HTTP_TASKS` 1 -> 2 | 58,164 | 122,784 | 15,648 | **-7,496** |
+| + `NET_SOCKETS` 7 -> 8 *(derived)* | - | - | 15,240 | **-408** |
+| + heap arena 32 KB -> 24 KB | 58,164 | 115,000 | 23,432 | **+8,192** |
+| + merge of `main` 1c9021e (the WiFi commit-before-trial fix) | 58,388 | 115,376 | 22,832 | **-600** |
+| + `APP_CORE_STACK` 16,384 -> 6,144 | 58,388 | 105,136 | **33,072** | **+10,240** |
+
+Net: **+9,832 bytes of `.stack`** while adding a second HTTP worker, an eighth
+socket slot, a permanent two-core stack probe, and absorbing somebody else's
+600-byte bug fix.
+
+### Measured `stack_free`
+
+`stack_free` in `GET /api/v1/status` is `.stack - (high_water + 1024)`, the
+1,024 being the guard reserve the paint leaves alone.
+
+| build | `.stack` | high-water | `stack_free` |
+|---|---|---|---|
+| 0.4.0, after the orchestrator's hammer | 23,240 | 17,040 | 5,176 |
+| 0.4.0, an hour later | 23,240 | 17,904 | 4,312 |
+| **0.4.2 run A** (core 1 not yet resized) | 22,832 | 13,328 | 8,480 |
+| **0.4.2 run C**, hammer + forced rejoin | **33,072** | **13,232** | **18,816** |
+
+The card asked for `stack_free >= 14 KB` under HTTP load. It is **18,816**,
+read back from the device's own JSON at 139 s of uptime after 930 requests and
+a join failure.
+
+### The one exit number that is missed
+
+The card asked for `.stack >= 34 KB` with two HTTP workers. It is **33,072**,
+short by 1,744 bytes (or 744 if "34 KB" means 34,000). The arithmetic is the
+table above and there is no slack in it: the only `.bss`/`.data` items left
+that are bigger than a kilobyte are `SLOTS` (18,440, the triple buffer),
+`FB0`/`FB1` (12,316 each, the DMA framebuffers), the frame socket's receive
+and transmit buffers (5,888 and 2,944), the mDNS buffers (~7.8 KB across the
+task's pool and cell), and the heap arena at its 24 KB floor. Every one of
+them either changes behaviour on the wire or was placed out of scope for this
+card. Cards 234 and 235 are the two that could be taken safely, and together
+they are worth about 3.8 KB - which would clear 34 KB, and which matters more
+for card 223 than for this one (section 6).
+
+What the 34 KB was protecting is met anyway: the demand is 13,232, not the
+17,900 the card was written against, so the margin is 18,816 rather than the
+16,096 that a 34 KB `.stack` at the old demand would have given.
+
+### Heap, at 24 KB
+
+`apsta-probe` with `esp-alloc/internal-heap-stats`, so `max_usage` is a true
+all-allocations watermark rather than a 5-second sample:
+
+| stage | used | free | `max_usage` | free at the worst instant |
+|---|---|---|---|---|
+| station only | 45,540 of 90,112 | 44,572 | 50,132 | 39,980 |
+| APSTA, mode set | 48,152 | 41,960 | 50,132 | 39,980 |
+| APSTA idle | 45,540 | 44,572 | **54,040** | **36,072** |
+
+The abort condition this card was given was "if the watermark leaves less than
+24 KB free at the worst instant, go back to 32 KB". It leaves **36,072**.
+
+The interesting part is the comparison with card 220, which measured the same
+stages on a **32 KB** arena (98,304 total) and got an APSTA watermark of
+53,968. The new watermark is 54,040 - **72 bytes higher**. The allocator's
+demand never depended on the size of the arena; the 8 KB was simply never
+being asked for. That is the clearest possible evidence that this lever was
+free, and it is also a warning: it means the remaining 36 KB of headroom is
+not "spare capacity the radio might grow into", it is genuinely unused, and
+the next person to want `.bss` should look here again before looking at the
+stack.
 
 ---
 
 ## 6. The budget for card 223
 
-PENDING-BUDGET
+Card 201 estimated the portal's cost from a parts list. Card 220 measured one
+part of it. This card can do better than either, because the
+**`device-web-spike` feature builds the whole thing** - the AP interface and
+its second `embassy-net` stack, picoserve's spike server, `edge-dhcp`,
+`edge-captive` and `qrcodegen-no-heap` - and the linker will price it:
+
+| build | `.data` | `.bss` | `.stack` |
+|---|---|---|---|
+| 0.4.2 default | 58,388 | 105,136 | **33,072** |
+| 0.4.2 `--features device-web-spike` | 58,660 | 120,664 | **17,272** |
+| **cost of the spike** | +272 | +15,528 | **-15,800** |
+
+**15,800 bytes, not the ~9 KB card 201's table predicted.** The estimate was
+low by two thirds, which is the whole argument for pricing a feature by
+building it.
+
+Two corrections before that becomes card 223's number:
+
+* The spike allocates its own `display::Frame` for the QR screen
+  (`mk_static!(display::Frame, ..)`, **6,144 bytes**). Research 009 already
+  established the real portal draws into the existing triple buffer instead,
+  so card 223 does not pay this.
+* The spike server is a *second* picoserve instance. Card 223 should serve the
+  portal from the two workers that already exist, which is a design decision
+  it should make deliberately and which this card has not priced.
+
+Taking only the first correction, **card 223 should expect to land at about
+`.stack` 23,400**, and it should expect `stack_free` in the region of
+**8-9 KB** - the current 13,232 demand plus whatever the portal's own handlers
+and the DHCP/DNS tasks add, against a 23,400 ceiling.
+
+### That is below the floor, and the floor should stay
+
+23,400 does not clear `tools/fw-size.sh`'s 24,576. That is deliberate and it
+is not the same mistake as the 28,672 this card rejected.
+
+* **28,672 was wrong** because card 223 could not have cleared it by any means
+  available - the shortfall was ~5 KB and there was no identified lever for
+  it. A floor the next card must fail is one somebody deletes.
+* **24,576 is right** because the shortfall is ~1,200 bytes and there are two
+  identified, cheap, behaviour-preserving levers for it: card 234 (the frame
+  socket's transmit buffer, ~1.9 KB) and card 235 (the mDNS buffers, ~1.9 KB).
+  Either one clears it alone.
+
+A floor that forces one more cheap lever before a feature ships is doing its
+job. Card 223 should take card 234 or 235 as a dependency rather than lower
+the number.
+
+### And card 233 should come first
+
+Card 223's real risk is not `.stack`, it is `stack_free`: ~8-9 KB of margin on
+a device whose high-water is a record of interrupt coincidences and still
+creeping hours after boot. **Card 233 (one router future instead of nine
+nested ones) attacks the demand rather than the supply** - it is worth roughly
+5 KB off the deepest chain, which is margin card 223 cannot buy any other way.
+Scheduling 233 before 223 costs a card's delay and buys back more headroom
+than every lever in section 5 combined.
 
 ---
 
 ## 7. What is left, and cards worth writing
 
-Numbers 233-239 are suggestions, not card files. In rough order of how much
-`.stack` they are worth.
+Numbers 233-239 are suggestions, not card files. **233 is the one that
+matters**, and note that it and 239 buy *demand* while the rest buy *supply* -
+for card 223, demand is the scarcer of the two.
 
-* **233 - One router future, not nine nested ones.** The biggest single item
-  on this page: 7,872 bytes of stack spent on *dispatch*, because every
-  `.route()` adds a layer whose `poll` frame holds the whole remaining chain
-  by value. A hand-written path match that dispatches to one of N handlers and
-  returns a small enum collapses that into one frame, changes nothing on the
-  wire, and is worth more than every lever this card pulled put together. It
-  is a rewrite of `firmware/src/http.rs`'s dispatch half, which is why card
-  227 did not do it inside a card about RAM levers.
+* **233 - One router future, not nine nested ones.** The outermost router
+  `poll` frame is **5,680 bytes**, about 43% of the entire 13,232-byte
+  high-water, spent deciding which of nine paths was asked for - because every
+  `.route()` adds a layer whose frame holds the whole remaining chain by
+  value. A hand-written path match dispatching to one of N handlers and
+  returning a small enum collapses it into one frame, changes nothing on the
+  wire, and is worth roughly 5 KB of *depth*, which is margin no `.bss` lever
+  can buy. It is a rewrite of `firmware/src/http.rs`'s dispatch half, which is
+  why card 227 did not do it inside a card about RAM levers. **Card 223 should
+  depend on it.**
 * **234 - The frame socket's transmit buffer is sized for two full MTUs.**
   `2 * MAX_DATAGRAM` = 2,944 bytes of `.bss` for a socket whose outgoing
   traffic is `Outbox` replies, which are small. Sizing it from the spec's
