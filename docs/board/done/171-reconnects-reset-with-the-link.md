@@ -174,3 +174,12 @@ is a condition and not a fixed sleep: the studio settling on a freshly typed
 address is exactly the overlap above, and a test must not start a round inside
 it. Before that wait, three of five `--release` runs failed; after it, six of
 six passed, at ~13 s each.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly (with cards 176/125/186 already there). Root `cargo test --release
+--no-fail-fast`: 671 passed, 0 failed; `cargo clippy --workspace --all-targets`: silent. Deployed to
+workbench (state backed up first; v3 file untouched, `repaired: []`): the panel was back on `overland`
+seed 4242 at once; `/api/v1/status` reports `gpu: Intel(R) Graphics (RPL-P), Vulkan`; `bootstrap` marks
+`overland`/`lattice`/`knot` as `needs_gpu` and carries the named stops (`rest`: five treatments, `dance`:
+fourteen, `hours24`: switch).
