@@ -4,8 +4,8 @@ title: screeny-art snapshot cannot pin a time of day
 type: build
 hardware: no
 depends: [100]
-owner:
-branch:
+owner: worker (Opus)
+branch: card/162-snapshot-pins-a-time
 ---
 
 ## Goal
