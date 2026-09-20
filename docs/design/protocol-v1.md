@@ -1015,8 +1015,9 @@ there is an address**: an association with no DHCP answer is a failed attempt.
   is one station, so it drops the association it has, and there is nobody on a
   setup network to inform. A failure goes back to the **stored** credentials
   (then the compile-time pair, then the portal only if there is nothing at
-  all) and **never clears the store**. The panel stays the stream's and `ip` is
-  `None` for the length of the trial.
+  all) and **never clears the store**. The panel stays the stream's, the
+  telemetry `state` byte takes **no** `PROVISIONING` overlay - nothing about
+  this device is in setup - and `ip` is `None` for the length of the trial.
 - A failed online-origin trial is **sticky**: `GET_WIFI` reads `FAILED` and
   `GET /api/v1/wifi` carries the reason until the next post, a credentials wipe
   or a reboot - the previous network reconnecting is not an answer to "did the

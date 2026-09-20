@@ -170,3 +170,89 @@ and stays in `backlog/` for the orchestrator to close.
   datagram_length` check and is observable anywhere. Card 132's own wording
   did not separate the two; the two probe rules do, so the spec follows the
   code.
+
+### Step 4 - pointers, and one clause
+
+`README.md` and `docs/README.md` needed **no change**: neither quotes a section
+title from the spec. `README.md:90` is a bare link to the file and
+`docs/README.md` only describes the board. Section 8's title changed anyway,
+and every `§8.x` number a code comment cites still means what it meant -
+8.2, 8.3 and 8.4 kept their numbers deliberately, and 8.4 in particular,
+because `crates/device-api`, `crates/provision` and `firmware/` all cite it as
+the no-PSK invariant.
+
+One clause added to 8.3 while re-reading: an online-origin trial takes **no**
+`PROVISIONING` overlay (`machine.rs:432-440`), where a portal trial does.
+
+### Code/spec disagreements, for the orchestrator
+
+Not fixed here. The first two are "the spec is old" and were fixed; everything
+below is listed rather than decided.
+
+1. **A non-UTF-8 PSK is accepted and then silently fails.** §8.2's body says
+   `psk` is UTF-8, and nothing enforces it: `Psk::new`
+   (`crates/settings/src/value.rs`) takes any bytes, `form::parse_wifi_form`
+   takes any bytes, and the pair is accepted with `{"result":"trying"}` or an
+   empty `SET_WIFI` reply. It is refused three attempts later at the radio -
+   `station_config` (`firmware/src/main.rs:532`,
+   `core::str::from_utf8(w.psk.as_bytes()).ok()?`) - as `FailReason::Other`,
+   logged as "not expressible to the radio"
+   (`firmware/src/provision.rs:883-893`). So the caller is told "could not
+   join" for what is really `out_of_range` / `ERR_BAD_ARG`. Either §8.2 should
+   stop saying UTF-8 and the refusal move to the parser, or the parser should
+   enforce it. I did not pick.
+2. **The SSID is *not* UTF-8, and §8.2 says it is.** The same line of §8.2
+   calls `ssid` UTF-8; every implementation treats it as bytes on purpose
+   (`Ssid` is a byte vector, `form.rs` refuses picoserve's `Form` for exactly
+   this reason, `text::ssid_text` reports a non-UTF-8 one as `null`, a scan
+   result that cannot be named is dropped). Here the code is plainly right and
+   the spec is plainly stale - but it is the same sentence as item 1, where the
+   answer may go the other way, so both are listed together.
+3. **`GET_WIFI` can read `FAILED` while the device is connected.** §6.3 defines
+   `3 FAILED` as "the last join attempt failed", which reads like a property of
+   the link; the machine makes it sticky after an online-origin trial until the
+   next post, a wipe or a reboot, *even once the previous network is back*
+   (`machine.rs:449-465`, `trial_failed_sticky`). §8.3 now states the sticky
+   behaviour, so the spec is self-consistent, but §6.3's one-line gloss and
+   §8.3's rule are two readings of the same byte and the orchestrator may want
+   §6.3 to point at §8.3.
+4. **`GET /api/v1/networks` may never exist on the device.** The route is in
+   the shared table and `crates/sim` serves it for real; firmware 0.5.1 answers
+   `unavailable` (`firmware/src/http.rs:1399`) and device-web decision 10
+   **dropped card 229**, which was the scan. I wrote it into §8.6 as a route
+   with §8.8's `unavailable` escape. If the device is never going to scan, the
+   route should probably be marked as such in the spec and in
+   `crates/device-api`. `firmware/src/http.rs:53-54` still says the scan is
+   "also 223", which is now stale.
+5. **The simulator's captive answer is a different mechanism, not just a
+   different status.** The firmware decides from the **listener** (the AP
+   dispatch, `firmware/src/http.rs:1327-1329`) and answers the setup page,
+   `200`, `no-store`. `crates/sim` decides from the **`Host:` header**
+   (`host_is_ours`, `crates/sim/src/api.rs:153-179`) and answers a `302` with a
+   body (`api.rs:78-87`, used at `api.rs:261`). §8.9 documents the firmware's,
+   which is what the phone test settled. Card 235 is changing the status code;
+   whoever takes it should decide whether the *rule* becomes listener-based
+   too, or the spec has to describe two.
+6. **The setup form cannot carry a 64-byte PSK.** `MAX_PSK_LEN` is 64
+   (`crates/proto/src/control.rs:56`), §8.2 says `0..=64`, and
+   `form::parse_wifi_form` accepts 64 - but the portal page's input is
+   `maxlength=63` (`firmware/src/http.rs:1056`). 63 is a WPA2 passphrase; 64 is
+   the hex form of a PSK. A one-character firmware change if anybody cares;
+   not the spec's problem, but it is a limit the spec states and the page does
+   not honour.
+7. **Code comments cite "spec section 8.3" for the `GET_WIFI` state byte**,
+   which §6.3 defines: `crates/device-api/src/enums.rs:65`,
+   `crates/sim/src/wifi.rs:173` and `:271`, `firmware/src/main.rs:500`,
+   `firmware/src/provision.rs:180`. Harmless, and now half-true - §8.3 carries
+   a state table - but a docs-only card cannot fix a comment.
+8. **`crates/device-api/src/request.rs:135` cites "spec 6.9"** for `REBOOT`'s
+   magic word; 6.9 is "How a sender uses telemetry" and the magic is §6.3.
+   Same category as 7.
+9. **§7.3's "frame handling continues underneath"** is true of an `IDENTIFY`
+   overlay and of the counters under a portal screen, but while the portal
+   screen is up a decoded frame **does not reach the panel**
+   (`firmware/src/net.rs:216-224`): it is counted and kept for the cross-fade
+   and dropped at the swap. §8.1's table now says so in as many words. §7.3
+   itself is unchanged and could be read the other way.
+
+Nothing in this card changes a byte on the wire, and no code was touched.
