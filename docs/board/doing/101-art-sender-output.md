@@ -257,3 +257,53 @@ the next person runs `cargo test --release -p screeny-art --features sender`.
 rows about `budget.rs` and closed with "When the sender library exists, it becomes an
 `Output` impl and replaces `budget.rs`'s estimates with real encoded sizes." It does
 now.
+
+`docs/design/generative-art-brief.md` section 5 had the same two stale references and
+now marks both **[done, card 101]**; `crates/screeny/examples/art_output.rs` gets one
+line saying where the real impl landed, and is otherwise left alone - it is still the
+smallest readable version of the same thing.
+
+### Cards written, not done (reserved range 110-119)
+
+- **110 - Local Network permission for the art binaries.** `hardware: yes`. The finding
+  above: macOS Local Network permission is per binary identity and this card created
+  two new LAN identities (`screeny-art` with the `sender` feature, and the studio,
+  which is a *bundle* - exactly the case `CLAUDE.md` says is not exempt). Needs
+  `tools/sign-macos.sh` extending, and must not leak the macOS answer into the Linux
+  server path that `studio-vision.md` is heading for.
+- **111 - `Link` should be constructible from a `Device`.** API feedback, below.
+- **112 - Decide whether `sender` is on by default.** The "0 tests" wrinkle above,
+  written up with the three options and the tension on both sides, because it is a
+  judgement call and card 105 has a stake in it.
+
+### Feedback on `crates/screeny`'s `Link` API
+
+It was shaped for this and it fitted. `Output::send` really is the sketch from
+`examples/art_output.rs`; `Pixels` taking slices meant no conversion from `Vec`;
+`From<screeny::Error> for io::Error` meant the trait signature did not move; and "the
+network cannot fail a send" removed the one thing that would have forced a policy
+decision into the render loop. `Sent::codec/bytes/exact` and
+`LinkStats::indexed_exact/indexed_fallback` are exactly the studio's stats strip. Four
+things were awkward:
+
+1. **`Link` cannot be built from a `Device`** (card 111). Only from a `Target`, and
+   `Target { addr }` assumes control = frame + 1. `Sender::connect` takes a `Device`;
+   `Link` should too. It made the test fixture here walk a port range looking for a
+   free *consecutive* pair.
+2. **`Link::open_with`-shaped gap.** `open` hard-codes `LinkConfig::default()` in the
+   sketch, and a caller that wants a blocking connect *and* a non-default cadence has
+   to write it out. Minor - `SenderOutput::open_with` now wraps it - but the pair
+   `open`/`open_deferred` invites a `cfg` argument on both, which it has; it was the
+   art-side wrapper that needed widening, not `Link`.
+3. **`limits()` clones.** `Limits` owns a `Vec<u8>` of codecs, so reading it per frame
+   to keep a meter in step allocates. This card reads it once a second instead, which
+   is fine, but a `with_limits(|l| ..)` or a `codecs_len`/`budget` accessor would let a
+   caller do it per frame without thinking about it.
+4. **Two encoders, one question.** The deepest one, and not really a defect: because
+   the meter and the sender each own an `Encoder`, "what will this frame cost?" and
+   "what did this frame cost?" are answered by different objects with different
+   histories. They agree when fed the same frames (test) and can differ on a marginal
+   frame when the cadence ceiling means they are not. A `Link::measure(Pixels) ->
+   Measured` that encoded *once* and let the caller have both the answer and the
+   decoded frame would collapse the two and halve the per-frame cost. Worth
+   considering when card 105 makes the server the only sender.
