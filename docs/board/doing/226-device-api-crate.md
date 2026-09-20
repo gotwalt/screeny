@@ -4,8 +4,8 @@ title: crates/device-api - the device's HTTP JSON shapes, one definition for fir
 type: build
 hardware: no
 depends: [201, 221]
-owner:
-branch:
+owner: worker-226
+branch: card/226-device-api-crate
 ---
 
 ## Goal
