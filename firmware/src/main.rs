@@ -1030,8 +1030,10 @@ async fn main(spawner: Spawner) {
         spawner.spawn(http::http_task(i, stack, ap_stack).unwrap());
     }
     spawner.spawn(http::deferred_task().unwrap());
-    #[cfg(feature = "http-selftest")]
-    spawner.spawn(http::selftest_task(stack).unwrap());
+    // Card 222's `http-selftest` used to be spawned here. Card 243 moved it
+    // into HTTP worker 0, where it borrows that worker's buffers instead of
+    // carrying 5.6 KB of `.bss` of its own - which is what put the build 4 KB
+    // under the `fw-size.sh` floor. `http::selftest` has the arithmetic.
     // Card 243's bench build: one deliberate panic on core 0, once per
     // power-on. See the feature's comment in `Cargo.toml`.
     #[cfg(feature = "panic-test")]

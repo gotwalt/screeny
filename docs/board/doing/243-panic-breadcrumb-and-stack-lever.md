@@ -265,3 +265,28 @@ partition has always followed; `read_fw_health` used to break it by walking the 
 goes down by ~3 KB. `fw-size.sh` measures the ceiling; the device measures the demand.
 That is the trade, and it is the right way round on a chip where the ceiling has 1.7 KB of
 margin and the demand has 11.
+
+### Step 6: `http-selftest` fits the floor again, by not owning anything
+
+Measured first: with steps 1-5 on the branch, `--features http-selftest` had `.stack`
+**20,552** against the 24,576 floor - 4,024 bytes short, and `.bss` 5,640 bytes above the
+default build. That 5,640 is what `selftest_task` cost as a task: its own `rx` (256), `tx`
+(192), reply buffer (256) and picoserve request buffer (768), plus - much the larger half -
+a second copy of picoserve's whole `serve` future, held across an `await` in a task future,
+which is `.bss`, which is core 0's stack.
+
+The card's instruction is "make its buffers the workers'", and it turns out to be worth
+more than the byte arrays suggest. `selftest` is now an ordinary `async fn` called from
+**HTTP worker 0**, which serves the LAN for the 75 s the self-test wants to wait and then
+runs it with `&mut http_buf`, `&mut rx`, `&mut tx` - the worker's own, free because that
+worker is not listening while it runs. The TCP half reads into `http_buf`; the in-memory
+half hands `http_buf` to picoserve and collects the reply in `rx`. The big win is the one
+the byte count does not show: the self-test's `Server::serve` future and the worker's
+`listen_and_serve` future are two states of the *same* generator and never live at once,
+so the compiler overlaps them.
+
+`.stack` **20,552 -> 25,920**, `.bss` for the feature **5,640 -> 272 bytes**. The device
+under test differs from the shipping build in one visible way while the self-test runs:
+worker 0 is busy, so the server is worker 1 alone for a couple of seconds - which is the
+one-worker configuration card 222 shipped and card 227 measured, and the `fallback
+evidence` line now says `HTTP_TASKS - 1` rather than claiming both.

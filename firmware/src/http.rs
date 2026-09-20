@@ -1562,6 +1562,30 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
     let mut rx = [0u8; TCP_RX];
     let mut tx = [0u8; TCP_TX];
 
+    // Card 222's bench self-test, on worker 0, with this worker's buffers
+    // (card 243 - see [`selftest`] for what it used to cost as a task of its
+    // own). It serves the LAN for the 75 s the self-test wants to wait, so the
+    // device is answering normally right up to the moment it runs, and then
+    // falls into the ordinary loop below for the rest of its life.
+    #[cfg(feature = "http-selftest")]
+    if id == 0 {
+        let _ = select(
+            serve_on(
+                id,
+                stack,
+                false,
+                &lan,
+                &config,
+                &mut http_buf[..],
+                &mut rx[..],
+                &mut tx[..],
+            ),
+            Timer::after(Duration::from_secs(75)),
+        )
+        .await;
+        selftest(stack, &mut http_buf[..], &mut rx[..], &mut tx[..]).await;
+    }
+
     loop {
         // Cancelling `listen_and_serve` drops whatever connection it was
         // serving, which is right in both directions: the AP going up means
@@ -1779,9 +1803,19 @@ fn clip(s: &str, max: usize) -> &str {
 
 /// Run one canned request through the real router and report what came back.
 ///
+/// `http_buf` and `out` are **the calling worker's own buffers** (card 243):
+/// this runs on HTTP worker 0 while it is not listening, so its 1,536-byte
+/// request buffer and its 1,024-byte receive buffer are free, and a second set
+/// would be `.bss` - which is core 0's stack.
+///
 /// Returns `(status, body_len, micros)`.
 #[cfg(feature = "http-selftest")]
-async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u32) {
+async fn selftest_one(
+    ap: bool,
+    request: &str,
+    out: &mut [u8],
+    http_buf: &mut [u8],
+) -> (u16, usize, u32) {
     let app = router(ap);
     let config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Duration::from_secs(3),
@@ -1795,14 +1829,6 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
     let mut overflow = 0usize;
     let t0 = Instant::now();
     {
-        // Not `HTTP_BUF`: the canned requests below are request line, headers
-        // and body, and this buffer is `.bss` in a build that already carries
-        // a second copy of the whole serve machinery. 768 rather than card
-        // 222's 512 because card 233 added the two oversize-body cases, and
-        // the longest of them is ~515 bytes on the wire. The `413` is decided
-        // from `Content-Length` before the body is read, so this only has to
-        // hold what picoserve buffers while parsing the head.
-        let mut http_buf = [0u8; 768];
         let socket = mem_socket::MemSocket {
             r: mem_socket::Reader {
                 data: request.as_bytes(),
@@ -1813,9 +1839,7 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
                 overflow: &mut overflow,
             },
         };
-        let _ = Server::new(&app, &config, &mut http_buf[..])
-            .serve(socket)
-            .await;
+        let _ = Server::new(&app, &config, http_buf).serve(socket).await;
     }
     let us = t0.elapsed().as_micros() as u32;
 
@@ -1832,9 +1856,31 @@ async fn selftest_one(ap: bool, request: &str, out: &mut [u8]) -> (u16, usize, u
 ///
 /// Off by default. See the feature's comment in `Cargo.toml` for why it exists
 /// and what its fallback is.
+///
+/// **Not a task of its own since card 243, and this is the whole point of the
+/// change.** As a task it cost **5,640 bytes of `.bss`** - its own `rx`, `tx`,
+/// read and reply buffers, its own picoserve request buffer, and a second copy
+/// of picoserve's whole `serve` future held across an `await` - and `.bss` is
+/// core 0's stack, so the `http-selftest` build had `.stack` at 20,552 against
+/// a floor of 24,576 and could not honestly be flashed. It runs on **HTTP
+/// worker 0**, after that worker has served for 75 s and before it goes back to
+/// listening, and borrows the worker's buffers. Nothing here is a byte the
+/// shipping build does not already own: the only `.bss` the feature still costs
+/// is whatever the worker's own future grows by, and the two halves of a
+/// generator that never run at once share the same bytes.
+///
+/// What is different about the device under test while this runs: worker 0 is
+/// busy for the length of the self-test (a couple of seconds), so the server is
+/// worker 1 alone. That is the same one-worker configuration card 222 shipped
+/// and card 227 measured, and it is the price of not adding 5.6 KB of `.bss`
+/// to a build whose whole purpose is to report how much room is left.
 #[cfg(feature = "http-selftest")]
-#[embassy_executor::task]
-pub async fn selftest_task(stack: Stack<'static>) {
+async fn selftest(
+    stack: Stack<'static>,
+    http_buf: &mut [u8],
+    rx: &mut [u8],
+    tx: &mut [u8],
+) {
     use embassy_net::tcp::TcpSocket;
     use embedded_io_async::Write as _;
 
@@ -1846,10 +1892,11 @@ pub async fn selftest_task(stack: Stack<'static>) {
     const REQ: &[u8] =
         b"GET /api/v1/status HTTP/1.1\r\nHost: selftest\r\nConnection: close\r\n\r\n";
 
-    // After the telemetry task's 60 s `stack:` line, not before it: that line
-    // is the baseline this run is compared against, and it should be measured
-    // with the server idle.
-    Timer::after(Duration::from_secs(75)).await;
+    // The 75 s wait is the caller's (`http_task`), which spends it *serving*
+    // rather than idling, and it is after the telemetry task's 60 s `stack:`
+    // line on purpose: that line is the baseline this run is compared against
+    // and it should be measured with the server quiet.
+    //
     // **Not an early return** (card 223). A `start-in-portal` build has no
     // station address at all - that is the whole point of it - and the TCP
     // half of this self-test was never the interesting half. Skipping it and
@@ -1867,9 +1914,6 @@ pub async fn selftest_task(stack: Stack<'static>) {
     crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
     let t_window = Instant::now();
 
-    let mut rx = [0u8; 256];
-    let mut tx = [0u8; 192];
-    let mut buf = [0u8; 256];
     let mut ok = 0usize;
     let mut failed = 0usize;
     let mut bytes_total = 0usize;
@@ -1880,8 +1924,12 @@ pub async fn selftest_task(stack: Stack<'static>) {
     for i in (0..REQUESTS).take_while(|_| me.is_some()) {
         let target = IpEndpoint::new(IpAddress::Ipv4(me.expect("checked")), HTTP_PORT);
         let t0 = Instant::now();
-        let mut sock = TcpSocket::new(stack, &mut rx, &mut tx);
+        // The worker's own smoltcp buffers, and its request buffer to read the
+        // reply into: this worker is not listening while this runs, so all
+        // three are free. See this function's docs.
+        let mut sock = TcpSocket::new(stack, &mut rx[..], &mut tx[..]);
         sock.set_timeout(Some(Duration::from_secs(3)));
+        let buf = &mut http_buf[..];
         let r = async {
             embassy_time::with_timeout(Duration::from_secs(3), sock.connect(target))
                 .await
@@ -1914,7 +1962,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
                 bytes_total += n;
                 ok += 1;
                 if first_status.is_empty() {
-                    let line = core::str::from_utf8(&buf[..n.min(16)]).unwrap_or("");
+                    let line = core::str::from_utf8(&http_buf[..n.min(16)]).unwrap_or("");
                     let _ = first_status.push_str(line.trim_end());
                 }
             }
@@ -1945,8 +1993,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
     );
     if ok == 0 {
         info!(
-            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{}, station address {:?}, soft-AP {}",
-            HTTP_TASKS,
+            "selftest: fallback evidence - {} accept loop(s) listening on tcp/{} while this runs, station address {:?}, soft-AP {}",
+            HTTP_TASKS - 1,
             HTTP_PORT,
             me,
             if crate::provision::ap_up() { "up" } else { "down" },
@@ -1960,15 +2008,17 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // a `picoserve::io::Socket`. This one is two byte slices, so every route
     // below is the real router, the real handlers, the real locks and the real
     // JSON, running while the Studio streams.
-    // 640 bytes: every JSON reply fits (the largest, `status`, is under 450).
-    // `GET /` does not - the page is ~5.5 KB - and that is fine: the status
-    // line is what is being checked and the overflow is counted and reported
-    // rather than silently dropped.
-    let mut out = [0u8; 640];
+    // The reply lands in the worker's 1,024-byte receive buffer (card 243:
+    // nothing here has a buffer of its own). Every JSON reply fits - the
+    // largest, `status`, is 520 bytes once it carries a panic record. `GET /`
+    // does not, the page being ~5.5 KB, and that is fine: the status line is
+    // what is being checked and the overflow is counted and reported rather
+    // than silently dropped.
+    let out = &mut rx[..];
     let mut worst_us = 0u32;
     let hw_before = crate::stack_probe::CORE0.high_water().unwrap_or(0);
     for (label, request, expect) in SELFTEST_ROUTES {
-        let (status, bytes, us) = selftest_one(false, request, &mut out).await;
+        let (status, bytes, us) = selftest_one(false, request, out, http_buf).await;
         worst_us = worst_us.max(us);
         let body = core::str::from_utf8(&out[..bytes.min(out.len())])
             .ok()
@@ -2017,7 +2067,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     let ap_now = crate::provision::ap_up();
     info!("selftest: portal pass, soft-AP is {}", if ap_now { "up" } else { "down" });
     for (label, ap, request, expect) in SELFTEST_PORTAL {
-        let (status, bytes, us) = selftest_one(*ap, request, &mut out).await;
+        let (status, bytes, us) = selftest_one(*ap, request, out, http_buf).await;
         // The catch-all only fires while the AP is actually up, so the
         // expected code for those two rows depends on the device's state and
         // not on the table.
