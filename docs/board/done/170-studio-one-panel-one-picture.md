@@ -654,3 +654,23 @@ parameter stops (163), the art pieces themselves.
   three different things from the person reading them. `/api/v1/status` already knows.
 
 174 and 175 are unused.
+
+### Orchestrator: merged, deployed, verified on the live service and the real panel (2026-09-20 ~00:00 PDT)
+
+Merged cleanly onto `main` (which by then also had cards 146/147/153 and the firmware
+session's simulator HTTP work). Root `cargo test --release --no-fail-fast`: 612 passed, 0
+failed, 1 ignored - the two flaky fleet tests did not recur. Looked at the 390 px and 1400 px
+screenshots: stacked and two-column layouts as designed, nothing overlapping.
+
+Live service: backed up the v2 file (`~/screeny-backups/state-v2-*.json` on workbench), pushed,
+deployed. Log: `the state file was schema v2; migrated to v3` once; `repaired: []`; no
+`state.bad.json`. On disk afterwards: `version: 3`, `focus: 4a00a4`, no `preview`, the player
+still `overland` seed 4242 `on`, and `pieces` byte-for-byte what the v2 backup had. The panel
+link was up immediately after the deploy returned; `/api/v1/status` reports the page's player
+as device `4a00a4` (`attached: true`). `/dashboard` -> 307 to `/`.
+
+`set_panel` against the real device (the call that had silently stopped working after card
+106): `{"on":false}` -> reply `{on:false, device:"4a00a4"}` and `screeny stats` shows the device
+go `LIVE -> HOLD`; `{"on":true,"to":"screeny-4a00a4"}` -> `LIVE` again. Firmware session told.
+
+The owner's four open questions from the worker's report are passed on in the morning summary.
