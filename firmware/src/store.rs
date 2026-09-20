@@ -587,15 +587,20 @@ async fn commit(field: Field) {
 /// evidence that a flash write works, and what it does to the panel while it is
 /// happening, would be the orchestrator's over-the-wire pass after a merge.
 ///
-/// One run, at boot + [`SELFTEST_AT_S`] seconds:
+/// One run, at boot + 25 seconds:
 ///
-/// 1. save a name, a brightness and an idle mode through the same [`Flash`]
-///    methods the control handlers use, timing each and counting its erases;
-/// 2. print `render` max over the window, so the cost to the panel is in the
-///    same log line as the cost to flash;
-/// 3. reboot **once** - guarded by the marker value written into the name, so a
-///    boot that already sees it reports what it loaded and stops. There is no
-///    way for this to become a reboot loop.
+/// 1. save a brightness, an idle mode and a name through the same [`Flash`]
+///    methods the control handlers use, timing each and counting its sector
+///    erases, then save the brightness again to show the skip path;
+/// 2. print `render` max over the burst, so what the panel paid is in the same
+///    log as what flash cost;
+/// 3. reboot **once** and print what was loaded. The guard is the stored
+///    *brightness*: pass 1 writes a value no default build would have, and any
+///    boot that loads it takes the reporting branch instead. Pass 2 restores
+///    the name and the idle mode (the name is the mDNS instance name, and a
+///    device left on `Dim` shows nothing when the stream stops) and
+///    deliberately leaves the brightness, so the next flash's boot log shows a
+///    setting surviving a reflash as well as a reboot.
 #[cfg(feature = "store-selftest")]
 pub mod selftest {
     use embassy_time::Timer;
@@ -605,78 +610,96 @@ pub mod selftest {
     /// When the run starts. After the association, DHCP, mDNS and the Studio's
     /// reconnect (~15-20 s), so the writes land in the middle of a live 30 fps
     /// stream rather than in the quiet before one.
-    const SELFTEST_AT_S: u64 = 20;
+    const AT_S: u64 = 25;
 
-    /// The name written by pass 1 and looked for by pass 2. Also the guard: a
-    /// boot that loads this name knows it is the second pass and does not
-    /// reboot again.
-    const MARKER: &str = "selftest-212";
-    /// A brightness that is not [`screeny_settings::DEFAULT_BRIGHTNESS`] and is
-    /// under the firmware cap.
+    /// The name written by pass 1. It exercises the `SET_NAME` storage path,
+    /// which is also the one that drives the mDNS instance name - and that is
+    /// exactly why pass 2 puts it back.
+    const MARKER_NAME: &str = "selftest-212";
+    /// The brightness written by pass 1, and **the guard**: a boot that loads
+    /// it knows the run has already happened and must not reboot again. 111 is
+    /// not the default (96) and is well under the firmware cap (160).
     const MARKER_BRIGHTNESS: u8 = 111;
-    /// A mode that is not the default `Status`.
+    /// The idle mode written by pass 1; restored in pass 2.
     const MARKER_IDLE: IdleMode = IdleMode::Dim;
 
-    fn render_window_max() -> u32 {
-        crate::RENDER_US_MAX_WINDOW.load(Ordering::Relaxed)
-    }
-
-    /// Log one timing line in the shape the card asks for.
+    /// Log one write in the shape the card asks for.
     fn say(what: &str, r: &Result<Timing, StoreError>) {
         match r {
             Ok(t) => info!(
-                "selftest: {} -> {:?} in {} us, {} sector erases | render max {} us in the window",
-                what,
-                t.write,
-                t.us,
-                t.erases,
-                render_window_max(),
+                "selftest: {} -> {:?} in {} us, {} sector erase(s)",
+                what, t.write, t.us, t.erases
             ),
             Err(e) => warn!("selftest: {} FAILED {:?}", what, e),
         }
     }
 
+    fn counters(when: &str) {
+        info!(
+            "selftest: counters {} | commits {} skips {} failures {} sector erases {} page writes {}",
+            when,
+            COMMITS.load(Ordering::Relaxed),
+            SKIPS.load(Ordering::Relaxed),
+            FAILURES.load(Ordering::Relaxed),
+            ERASES.load(Ordering::Relaxed),
+            PAGE_WRITES.load(Ordering::Relaxed),
+        );
+    }
+
     /// The whole run. Spawned only by the `store-selftest` build.
     #[embassy_executor::task]
     pub async fn selftest_task(loaded: Settings) {
-        Timer::after(Duration::from_secs(SELFTEST_AT_S)).await;
+        Timer::after(Duration::from_secs(AT_S)).await;
 
-        if loaded.name.as_str() == MARKER {
+        // --- pass 2, or any later boot -------------------------------------
+        if loaded.brightness == MARKER_BRIGHTNESS {
+            if loaded.name.as_str() != MARKER_NAME {
+                info!("selftest: already run on an earlier boot; nothing to do");
+                return;
+            }
             info!(
-                "selftest: PASS 2 (after the reboot) - loaded name {:?} brightness {} idle {}; expected {:?} {} {}",
+                "selftest: PASS 2, after the reboot - loaded name {:?} brightness {} idle {}; pass 1 wrote {:?} {} {}",
                 loaded.name.as_str(),
                 loaded.brightness,
                 loaded.idle_mode.as_u8(),
-                MARKER,
+                MARKER_NAME,
                 MARKER_BRIGHTNESS,
                 MARKER_IDLE.as_u8(),
             );
-            let ok = loaded.brightness == MARKER_BRIGHTNESS
-                && loaded.idle_mode.as_u8() == MARKER_IDLE.as_u8();
             info!(
-                "selftest: settings survived the reboot: {}",
-                if ok { "YES" } else { "NO" }
+                "selftest: all three settings survived the reboot: {}",
+                if loaded.idle_mode.as_u8() == MARKER_IDLE.as_u8() {
+                    "YES"
+                } else {
+                    "NO"
+                }
             );
+            counters("after the reboot");
+
+            // Put back the two that would outstay their welcome, and leave the
+            // brightness as the guard and as the next flash's evidence.
+            let Ok(name) = Name::new("") else { return };
+            let mut guard = STORE.lock().await;
+            let Some(f) = guard.as_mut() else { return };
+            let r = f.save_name(&name).await;
+            say("restore the name to empty (screeny-<id>)", &r);
+            let r = f.save_idle_mode(IdleMode::Status).await;
+            say("restore the idle mode to Status", &r);
             info!(
-                "selftest: counters | commits {} skips {} failures {} erases {} page writes {}",
-                COMMITS.load(Ordering::Relaxed),
-                SKIPS.load(Ordering::Relaxed),
-                FAILURES.load(Ordering::Relaxed),
-                ERASES.load(Ordering::Relaxed),
-                PAGE_WRITES.load(Ordering::Relaxed),
+                "selftest: done. Brightness {} is left in flash on purpose; the next boot, of any build, should load it.",
+                MARKER_BRIGHTNESS
             );
-            info!("selftest: done, no further reboot");
             return;
         }
 
+        // --- pass 1 --------------------------------------------------------
         info!(
             "selftest: PASS 1 - writing name {:?}, brightness {}, idle {}",
-            MARKER,
+            MARKER_NAME,
             MARKER_BRIGHTNESS,
             MARKER_IDLE.as_u8()
         );
-
-        let name = match Name::new(MARKER) {
+        let name = match Name::new(MARKER_NAME) {
             Ok(n) => n,
             Err(e) => {
                 warn!("selftest: bad marker name {:?}", e);
@@ -684,44 +707,41 @@ pub mod selftest {
             }
         };
 
+        // `render` is measured on core 1, which is *parked* for the duration of
+        // each ROM flash call, so it cannot report anything while a write is in
+        // flight. What this window catches is the first render after the
+        // unpark - the frame that ran late - which is the number that says what
+        // the panel actually paid.
+        crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
         {
             let mut guard = STORE.lock().await;
             let Some(f) = guard.as_mut() else {
                 warn!("selftest: no store - nothing to test");
                 return;
             };
-            crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
             let r = f.save_brightness(MARKER_BRIGHTNESS).await;
             say("save_brightness", &r);
-
-            crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
             let r = f.save_idle_mode(MARKER_IDLE).await;
             say("save_idle_mode", &r);
-
-            crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
             let r = f.save_name(&name).await;
             say("save_name", &r);
-
-            // A second save of the same value: this is the path a debounced
-            // slider that landed where it started takes, and it must cost no
-            // erase and no write.
-            crate::RENDER_US_MAX_WINDOW.store(0, Ordering::Relaxed);
+            // The same value again: this is the path a debounced slider that
+            // landed back where it started takes, and it must cost no erase and
+            // no write at all.
             let r = f.save_brightness(MARKER_BRIGHTNESS).await;
-            say("save_brightness (again, must skip)", &r);
+            say("save_brightness again (must Skip)", &r);
         }
-
+        // Let core 1 run again, then report what the burst cost the panel.
+        Timer::after(Duration::from_millis(500)).await;
         info!(
-            "selftest: counters before the reboot | commits {} skips {} failures {} erases {} page writes {}",
-            COMMITS.load(Ordering::Relaxed),
-            SKIPS.load(Ordering::Relaxed),
-            FAILURES.load(Ordering::Relaxed),
-            ERASES.load(Ordering::Relaxed),
-            PAGE_WRITES.load(Ordering::Relaxed),
+            "selftest: render max over the whole write burst: {} us",
+            crate::RENDER_US_MAX_WINDOW.load(Ordering::Relaxed)
         );
+        counters("before the reboot");
 
-        // Let the stream settle and the telemetry line print once more, so the
-        // log shows the fps either side of the writes, then reboot exactly once.
-        Timer::after(Duration::from_secs(10)).await;
+        // Two telemetry periods, so the log shows the stream either side of the
+        // writes, then reboot exactly once.
+        Timer::after(Duration::from_secs(11)).await;
         info!("selftest: rebooting once to prove the values survive");
         Timer::after(Duration::from_millis(100)).await;
         esp_hal::system::software_reset();
