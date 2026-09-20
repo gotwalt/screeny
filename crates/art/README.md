@@ -8,7 +8,7 @@ Two crates in the repo's single workspace (`crates/`; host toolchain, not the `e
 | | |
 |---|---|
 | `crates/art` (`screeny-art`) | Library + headless binary. Patches, panel model, dither, limiter, statistics, outputs. No GUI dependencies; this is what will run on a server. |
-| `crates/studio` (`screeny-studio`) | Tauri v2 desktop app for designing patches. A window onto the same pipeline, drawn as LEDs. |
+| `crates/studio` (`screeny-studio`) | The Studio: an axum server with a browser page, attached to one panel. The page is a window onto what that panel is playing, drawn as LEDs, and where patches are designed. |
 
 Nothing here opens the serial port or implements the wire protocol - that is
 `crates/proto` and `crates/screeny`, and this crate calls them. Frames leave

@@ -418,3 +418,18 @@ Two things found on the way that are **not** this card's and were not done:
   implements it.
 - **`crates/art/README.md` line 11 still calls `crates/studio` "a Tauri v2 desktop app
   for designing patches".** Wrong since card 105.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed the scope (72 files, all in `crates/art`, `crates/studio`, docs and the root
+README) and the migration guard. **Tested the migration on the real thing before merging**:
+a read-only copy of workbench's live `/data/state.json` (v3; the owner's `clocks-dials`
+with four tuned parameters, speed 0.55, four per-patch memories), defanged so it could not
+reach for the panel (`on:false`, a loopback address), loaded by this branch's build on
+loopback: "migrated to v4; the v3 file is kept as state.v3.json", the player came up as
+`clocks-dials` seed 4242 with all four parameters and speed 0.55, the backup was
+byte-identical to the input, and the rewritten file holds none of `"piece"`, `"pieces"`,
+`"settings"`. Copies deleted afterwards. Merged `--no-ff`; root suite 765 passed, 1 failed -
+`pacing.rs::holds_thirty_fps_within_one_percent`, one of card 156's load-sensitive four;
+alone: 4 of 4. Clippy silent. Follow-ups carded as 157 (the two `Output`s) by the
+orchestrator; the README's stale "Tauri" sentence fixed in the same commit as this note.

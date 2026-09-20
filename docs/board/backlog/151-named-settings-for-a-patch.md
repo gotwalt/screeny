@@ -49,6 +49,22 @@ which setting each patch was on; unsaved tweaks survive a restart as they do tod
   at 390 px; keyboard reachable. The existing "Reset" becomes "load Default". No
   `prompt()`/`confirm()` dialogs (the browser tooling cannot drive them, and they are ugly):
   inline name field, inline confirm for delete.
+- **The seed is not a control for humans** (the owner, the same afternoon: "i don't think
+  the 'seed' value is really interesting to humans as it's super opaque as to what it
+  affects"). It stays what it is underneath - part of what makes a picture reproducible,
+  stored in a setting and in the working copy, accepted by the API and the CLI - but the
+  page stops presenting a number: the Seed readout in the title block and the numeric
+  `#seed` input go. What a person wants from it is "show me another one like this": keep
+  that as one quiet button beside the settings control ("Another" - the `N` key still
+  works), which picks a new seed and therefore marks the setting modified like any other
+  change. Show that button only for a patch whose picture actually depends on its seed:
+  add a `seeded: bool` (or similar) to the patch definition, set honestly per patch by
+  reading the code - the clocks seed only a dance order, plasma may use none - and hide the
+  button where it would do nothing a person could see. A patch that has better words for
+  its own randomness can already offer an action (`patch_act`, as the clocks' "again" /
+  "another" do); prefer those where they exist. The number remains visible in
+  `/api/v1/status` and in the `title` tooltip of the button, for the day somebody needs to
+  reproduce a frame.
 - The CLI: `screeny-art play|snapshot <patch> --setting NAME` would need the Studio's
   state file; out of scope here - write it as a follow-up card if it looks worthwhile.
 - Promotion of a good setting into the repo as a factory setting was offered to the owner
@@ -60,7 +76,9 @@ which setting each patch was on; unsaved tweaks survive a restart as they do tod
   setting from an older patch version, v4 file loads).
 - `api.rs`/`player.rs`: the four routes, the state fields, tests including "two browsers
   see each other's save and load".
-- `picture.js` / `index.html` / `style.css`: the control; `tests/ui.rs` id checks.
+- `picture.js` / `index.html` / `style.css`: the control, and the seed's number gone from
+  the page; `tests/ui.rs` id checks. `crates/art`: the `seeded` flag on each patch definition
+  (tell the orchestrator: card 155's worker is adding a patch in the same crate).
 - `crates/studio/README.md`: the model in a short section - patch, working copy, settings,
   Default, modified - and the routes.
 
