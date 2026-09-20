@@ -92,6 +92,70 @@ pub fn connected_socket(target: SocketAddr, dontfrag: bool, qos: bool) -> io::Re
     Ok(sock)
 }
 
+// ------------------------------------------------ card 164: what it cost ----
+
+/// What a datagram costs on the wire beyond its payload: an IPv4 header (20 B)
+/// and a UDP header (8 B).
+///
+/// Everything this crate counts is **payload**, because that is the only thing
+/// user space can see honestly. A caller that wants the figure a router would
+/// bill adds this per datagram; [`Wire::on_the_wire`] is that sum. There is no
+/// equivalent for TCP - retransmissions, ACKs and the handshake are invisible
+/// from up here - so an HTTP byte count is the bytes written and read and
+/// nothing more.
+pub const UDP_OVERHEAD: u64 = 28;
+
+/// Bytes and datagrams one way on one socket (card 164).
+///
+/// Two `u64` added where a counter is already being incremented: no lock, no
+/// allocation, nothing logged, and nothing that a frame path can feel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wire {
+    /// Payload bytes: what was handed to `send`, or what `recv` returned.
+    /// **Headers are not in here** - see [`UDP_OVERHEAD`].
+    pub bytes: u64,
+    /// Datagrams.
+    pub packets: u64,
+}
+
+impl Wire {
+    /// Count one datagram of `bytes` payload.
+    pub fn add(&mut self, bytes: usize) {
+        self.bytes += bytes as u64;
+        self.packets += 1;
+    }
+
+    /// Fold another counter into this one.
+    pub fn fold(&mut self, other: Wire) {
+        self.bytes += other.bytes;
+        self.packets += other.packets;
+    }
+
+    /// Payload plus `overhead` bytes per datagram: what the link actually
+    /// carried. Pass [`UDP_OVERHEAD`] for UDP and `0` for a stream.
+    #[must_use]
+    pub fn on_the_wire(&self, overhead: u64) -> u64 {
+        self.bytes + self.packets * overhead
+    }
+}
+
+/// One socket's traffic, both ways (card 164).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traffic {
+    /// What this host sent.
+    pub out: Wire,
+    /// What it received.
+    pub inbound: Wire,
+}
+
+impl Traffic {
+    /// Fold another counter into this one.
+    pub fn fold(&mut self, other: Traffic) {
+        self.out.fold(other.out);
+        self.inbound.fold(other.inbound);
+    }
+}
+
 /// True if `a` is in one of the ranges a home LAN uses. Used only to decide
 /// whether a failure is worth attaching the Local Network hint to.
 #[must_use]
