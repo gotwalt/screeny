@@ -929,6 +929,256 @@ mod tests {
         assert!(store.health().last_error.is_none());
     }
 
+    // ------------------------- the per-piece memory (card 165) -------------------------
+
+    fn plasma() -> &'static PieceDef {
+        screeny_art::piece::find("plasma").expect("plasma is in every build")
+    }
+
+    fn spec(def: &PieceDef, id: &str) -> ParamSpec {
+        *def.params.iter().find(|s| s.id == id).expect("a parameter of this piece")
+    }
+
+    /// The decision the card is built on: only what a human actually moved is
+    /// written down, so a later release's better default reaches everybody who
+    /// never touched that slider.
+    #[test]
+    fn only_what_differs_from_the_defaults_is_remembered() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let mut live: BTreeMap<String, f32> = def.params.iter().map(|s| (s.id.to_string(), s.default)).collect();
+        remember(&mut memory, def, &live, 7);
+        assert_eq!(memory["plasma"].params, BTreeMap::new(), "untouched defaults are not worth a byte");
+        assert_eq!(memory["plasma"].seed, Some(7));
+
+        live.insert("scale".into(), 2.5);
+        remember(&mut memory, def, &live, 7);
+        assert_eq!(memory["plasma"].params.len(), 1);
+        assert_eq!(memory["plasma"].params["scale"], 2.5);
+
+        // And putting it back where it started forgets it again.
+        live.insert("scale".into(), spec(def, "scale").default);
+        remember(&mut memory, def, &live, 7);
+        assert!(memory["plasma"].params.is_empty());
+    }
+
+    /// Reset means "back to the defaults and *stay* there", so the parameters
+    /// are forgotten. The seed is not: the seed is not what Reset is about, and
+    /// throwing it away would make a switch back rebuild the piece on whatever
+    /// seed the *other* piece happened to be on.
+    #[test]
+    fn reset_forgets_the_parameters_and_keeps_the_seed() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        remember(&mut memory, def, &BTreeMap::from([("scale".to_string(), 2.5)]), 99);
+        forget_params(&mut memory, "plasma");
+        assert_eq!(memory["plasma"].seed, Some(99));
+        assert!(memory["plasma"].params.is_empty());
+
+        // An entry with nothing left in it at all goes away entirely.
+        memory.insert("ghost".into(), PieceMemory { seed: None, params: BTreeMap::from([("x".into(), 1.0)]) });
+        forget_params(&mut memory, "ghost");
+        assert!(!memory.contains_key("ghost"));
+    }
+
+    /// Every error case the card lists, one value at a time, and the rule that
+    /// matters: one bad value never costs the others.
+    #[test]
+    fn a_value_this_build_cannot_use_becomes_the_default_and_the_rest_survive() {
+        let def = plasma();
+        let scale = spec(def, "scale");
+        let remembered = BTreeMap::from([
+            ("scale".to_string(), 2.5),            // good, and must survive all of this
+            ("gone".to_string(), 1.0),             // a parameter this build does not have
+            ("drift".to_string(), 99.0),           // above the range
+            ("cycle".to_string(), -99.0),          // below the range
+            ("bands".to_string(), f32::NAN),       // not a number
+            ("black".to_string(), f32::INFINITY),  // not a number either
+            ("hue".to_string(), spec(def, "hue").default), // already the default
+        ]);
+        let (usable, repaired) = usable_params(&remembered, def.params);
+
+        assert_eq!(usable["scale"], 2.5, "the good value survived every bad one");
+        assert!(!usable.contains_key("gone"), "an unknown parameter is ignored");
+        assert_eq!(usable["drift"], spec(def, "drift").max, "out of range is clamped, as the slider would");
+        assert_eq!(usable["cycle"], spec(def, "cycle").min);
+        assert!(!usable.contains_key("bands"), "a NaN falls back to the default");
+        assert!(!usable.contains_key("black"), "an infinity falls back to the default");
+        assert!(!usable.contains_key("hue"), "a value that is already the default is not stored");
+        assert_eq!(repaired.len(), 5, "one sentence per correction: {repaired:?}");
+        assert_eq!(scale.sanitise(2.5), 2.5);
+    }
+
+    /// The correction is written back, so it happens once rather than on every
+    /// switch - which is what makes "logged once" true without keeping a set of
+    /// things already said.
+    #[test]
+    fn a_correction_is_made_once_and_written_back() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        memory.insert(
+            "plasma".into(),
+            PieceMemory { seed: Some(5), params: BTreeMap::from([("scale".into(), 99.0), ("gone".into(), 1.0)]) },
+        );
+        let (first, seed) = recall(&mut memory, def, "a test");
+        assert_eq!(seed, Some(5));
+        assert_eq!(first["scale"], spec(def, "scale").max);
+        assert_eq!(memory["plasma"].params, first, "the file's copy was corrected too");
+        // Second time round there is nothing left to correct, so nothing to say.
+        let (again, _) = recall(&mut memory, def, "a test");
+        assert_eq!(again, first);
+    }
+
+    /// The whole point: switch away, switch back, and it is as you left it.
+    #[test]
+    fn a_memory_round_trips_through_the_file() {
+        let dir = Temp::new("memory-roundtrip");
+        let (store, _) = Store::open(Some(&dir.0));
+        let mut want = Persisted::default();
+        want.preview.memory.insert("plasma".into(), PieceMemory { seed: Some(3), params: BTreeMap::from([("scale".into(), 2.5)]) });
+        want.players.push(StoredPlayer {
+            device: "abc".into(),
+            memory: Memory::from([("metaballs".to_string(), PieceMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]) })]),
+            ..StoredPlayer::default()
+        });
+        store.save(want.clone());
+        store.flush();
+        store.stop();
+
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        assert!(text.contains("\"memory\""), "the memory is in the state file, not somewhere else:\n{text}");
+        let (_s2, back) = Store::open(Some(&dir.0));
+        assert_eq!(back, want);
+        assert_eq!(back.version, SCHEMA_VERSION);
+    }
+
+    /// A v1 file as the deployed service has one today (the shape is card 106's
+    /// Log). What each context was playing becomes that piece's first memory:
+    /// nobody loses the tuning they have.
+    #[test]
+    fn a_real_v1_file_migrates_without_losing_anything() {
+        let dir = Temp::new("v1");
+        let v1 = r#"{
+  "version": 1,
+  "devices": [
+    { "id": "4a00a4", "name": "desk", "instance": "screeny-4a00a4", "address": "", "manual": false }
+  ],
+  "players": [
+    {
+      "device": "4a00a4",
+      "on": true,
+      "piece": "plasma",
+      "seed": 4242,
+      "params": {
+        "scale": 2.5, "drift": 0.35, "cycle": 0.12, "bands": 1.5, "colours": 32.0,
+        "black": 0.45, "hue": 300.0, "spread": 140.0, "dither": 1.0
+      },
+      "fps": 30.0,
+      "settings": {
+        "levels": 64, "dither": "bayer4",
+        "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
+        "panel_model": true, "codec_preview": true
+      },
+      "brightness": 96
+    }
+  ],
+  "preview": {
+    "piece": "metaballs",
+    "seed": 7,
+    "params": { "count": 7.0, "speed": 0.5, "size": 1.0, "hue": 20.0, "spread": 200.0, "samples": 4.0 },
+    "settings": {
+      "levels": 64, "dither": "bayer4",
+      "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
+      "panel_model": true, "codec_preview": true
+    },
+    "paused": false, "speed": 1.0, "fps": 60.0,
+    "panel_on": true, "panel_to": "screeny-4a00a4"
+  }
+}"#;
+        std::fs::write(dir.0.join(FILE), v1).expect("write the v1 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        // Nothing v1 knew about is lost.
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.devices.len(), 1);
+        assert_eq!(loaded.devices[0].id, "4a00a4");
+        assert_eq!(loaded.players[0].piece, "plasma");
+        assert_eq!(loaded.players[0].seed, 4242);
+        assert_eq!(loaded.players[0].brightness, Some(96));
+        assert_eq!(loaded.preview.piece, "metaballs");
+        assert_eq!(loaded.preview.panel_to, "screeny-4a00a4");
+        assert!(loaded.preview.panel_on);
+
+        // And what each context was playing is now its first memory - only the
+        // values that were actually moved, not the whole v1 parameter dump.
+        let player = &loaded.players[0].memory;
+        assert_eq!(player["plasma"].seed, Some(4242));
+        assert_eq!(player["plasma"].params, BTreeMap::from([("scale".to_string(), 2.5)]), "only `scale` was off its default");
+        let preview = &loaded.preview.memory;
+        assert_eq!(preview["metaballs"].seed, Some(7));
+        assert_eq!(preview["metaballs"].params, BTreeMap::from([("count".to_string(), 7.0)]));
+
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v1")), "the migration says so once");
+        assert!(store.health().repaired.is_empty(), "a good v1 file needs no repairs");
+        assert!(!dir.0.join(BAD_FILE).exists(), "a v1 file is migrated, not condemned");
+    }
+
+    /// A hand-edited file full of rubbish in the memory. Every one of these is
+    /// a *value* problem, and card 106's rule is that a value problem must not
+    /// cost the file: nothing here may reach `state.bad.json`.
+    #[test]
+    fn rubbish_in_the_memory_costs_exactly_the_rubbish() {
+        let dir = Temp::new("rubbish");
+        let file = format!(
+            r#"{{
+  "version": {SCHEMA_VERSION},
+  "preview": {{
+    "piece": "plasma",
+    "memory": {{
+      "plasma":   {{ "seed": 11, "params": {{ "scale": 2.5, "drift": null, "cycle": "fast", "bands": {{}}, "colours": [] }} }},
+      "metaballs": {{ "seed": "not a seed", "params": {{ "count": 8.0 }} }},
+      "no-such-piece": {{ "seed": 4, "params": {{ "whatever": 1.0 }} }},
+      "testcard": "not an object at all",
+      "clocks-dials": {{ "params": "not an object either" }}
+    }}
+  }}
+}}"#
+        );
+        std::fs::write(dir.0.join(FILE), &file).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        assert!(!dir.0.join(BAD_FILE).exists(), "a bad value must never condemn the file");
+        let m = &loaded.preview.memory;
+        assert_eq!(m["plasma"].seed, Some(11));
+        assert_eq!(m["plasma"].params, BTreeMap::from([("scale".to_string(), 2.5)]), "one good value, four bad ones dropped");
+        assert_eq!(m["metaballs"].seed, None, "a seed that is not a seed is forgotten");
+        assert_eq!(m["metaballs"].params["count"], 8.0, "and the rest of that piece's memory survives it");
+        assert!(m.contains_key("no-such-piece"), "an unknown piece keeps its entry, so a piece that comes back gets it");
+        assert!(!m.contains_key("testcard"), "an entry that is not an object is forgotten");
+        assert!(!m.contains_key("clocks-dials"), "so is one with nothing usable left in it");
+        assert!(!store.health().repaired.is_empty(), "and the server says what it had to correct");
+        assert!(store.health().last_error.is_none());
+    }
+
+    /// The bound. The studio only ever writes a memory for a piece it can play,
+    /// so this is the other direction: a hand-edited file cannot make the state
+    /// file grow for ever.
+    #[test]
+    fn unknown_pieces_are_capped() {
+        let dir = Temp::new("cap");
+        let entries: Vec<String> =
+            (0..MAX_UNKNOWN_PIECES + 20).map(|i| format!(r#""ghost-{i:03}": {{"seed": {i}}}"#)).collect();
+        let file = format!(
+            r#"{{"version":{SCHEMA_VERSION},"preview":{{"piece":"plasma","memory":{{{},"plasma":{{"seed":1}}}}}}}}"#,
+            entries.join(",")
+        );
+        std::fs::write(dir.0.join(FILE), &file).expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        let m = &loaded.preview.memory;
+        assert_eq!(m.len(), MAX_UNKNOWN_PIECES + 1, "the known piece plus the cap: {}", m.len());
+        assert!(m.contains_key("plasma"), "a known piece is never dropped to make room");
+    }
+
     /// The temp file must never be left behind, and the real file must never be
     /// half-written.
     #[test]

@@ -1033,6 +1033,136 @@ mod tests {
         assert_eq!(p.stored().fps, MIN_FPS);
     }
 
+    // ------------------------- the per-piece memory (card 165) -------------------------
+
+    /// A player that is configured but not running: no thread, no socket, and
+    /// every change is pure arithmetic on what it would play.
+    fn idle_player() -> Arc<Player> {
+        Player::new(StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() }, true)
+    }
+
+    fn change(c: PlayerChange) -> PlayerChange {
+        c
+    }
+
+    /// The card, for a panel: tune one piece, go and tune another, come back.
+    #[test]
+    fn a_panel_comes_back_to_a_piece_as_it_left_it() {
+        let p = idle_player();
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { seed: Some(11), ..PlayerChange::default() })).expect("a seed");
+        p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
+
+        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
+        p.configure(&change(PlayerChange { seed: Some(22), ..PlayerChange::default() })).expect("a seed");
+        p.configure(&change(PlayerChange { param: Some(("count".into(), 8.0)), ..PlayerChange::default() })).expect("count");
+        assert_eq!(p.stored().params.get("scale"), None, "the other piece's parameters do not follow it over");
+
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        let s = p.stored();
+        assert_eq!(s.piece, "plasma");
+        assert_eq!(s.seed, 11, "and on the seed it was left on");
+        assert_eq!(s.params["scale"], 2.5);
+
+        // And the other one is still where it was left, too.
+        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("and back");
+        let s = p.stored();
+        assert_eq!(s.seed, 22);
+        assert_eq!(s.params["count"], 8.0);
+    }
+
+    /// Reset means "back to the defaults and stay there".
+    #[test]
+    fn reset_makes_a_panel_forget_that_piece() {
+        let p = idle_player();
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
+        p.configure(&change(PlayerChange { reset_params: true, ..PlayerChange::default() }));
+        assert!(p.stored().params.is_empty());
+
+        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        assert!(p.stored().params.is_empty(), "Reset means the old value does not come back on the next switch");
+    }
+
+    /// Each panel has its own memory: what panel X plays and what somebody is
+    /// fiddling with in the design view are different things (card 106).
+    #[test]
+    fn two_panels_do_not_share_a_memory() {
+        let a = Player::new(StoredPlayer { device: "a".into(), on: false, ..StoredPlayer::default() }, false);
+        let b = Player::new(StoredPlayer { device: "b".into(), on: false, ..StoredPlayer::default() }, false);
+        for (p, v) in [(&a, 2.5f32), (&b, 0.5)] {
+            p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+            p.configure(&change(PlayerChange { param: Some(("scale".into(), v)), ..PlayerChange::default() })).expect("scale");
+            p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+            p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        }
+        assert_eq!(a.stored().params["scale"], 2.5);
+        assert_eq!(b.stored().params["scale"], 0.5);
+    }
+
+    /// "Play my preview on panel X" copies the preview's values into *that
+    /// panel's* memory for that piece, so the panel comes back to them later.
+    #[test]
+    fn promoting_the_preview_writes_into_that_panels_memory() {
+        let p = idle_player();
+        p.configure(&change(PlayerChange {
+            replace: Some(Adopt {
+                piece: "plasma".into(),
+                seed: 77,
+                params: BTreeMap::from([("scale".to_string(), 3.0)]),
+                settings: Settings::default(),
+                fps: 30.0,
+            }),
+            ..PlayerChange::default()
+        }))
+        .expect("adopted");
+        assert_eq!(p.stored().params["scale"], 3.0);
+
+        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        let s = p.stored();
+        assert_eq!(s.params["scale"], 3.0, "what was promoted is what the panel comes back to");
+        assert_eq!(s.seed, 77);
+    }
+
+    /// A value a later build cannot use is corrected rather than obeyed, and it
+    /// never costs the rest of the entry. Card 160 adding a `rest` parameter to
+    /// `clocks-numerals` is the live version of the middle row.
+    #[test]
+    fn a_remembered_value_this_build_cannot_use_is_corrected() {
+        let mut cfg = StoredPlayer { device: "abc".into(), on: false, piece: "metaballs".into(), ..StoredPlayer::default() };
+        cfg.memory.insert(
+            "plasma".into(),
+            crate::state::PieceMemory {
+                seed: Some(5),
+                params: BTreeMap::from([
+                    ("scale".to_string(), 2.5),   // fine
+                    ("gone".to_string(), 1.0),    // a parameter this build does not have
+                    ("drift".to_string(), 999.0), // out of the range this build allows
+                ]),
+            },
+        );
+        let p = Player::new(cfg, false);
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        let s = p.stored();
+        assert_eq!(s.seed, 5);
+        assert_eq!(s.params["scale"], 2.5, "the good value survived the bad ones");
+        assert!(!s.params.contains_key("gone"));
+        assert_eq!(s.params["drift"], 2.0, "clamped to this build's range, as the slider would");
+    }
+
+    /// An entry for a piece this build has never heard of is kept, not thrown
+    /// away: a piece that comes back in a later release gets its settings back.
+    #[test]
+    fn a_memory_for_a_piece_that_is_not_here_is_kept() {
+        let mut cfg = StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() };
+        cfg.memory.insert("from-the-future".into(), crate::state::PieceMemory { seed: Some(3), params: BTreeMap::new() });
+        let p = Player::new(cfg, false);
+        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        assert!(p.stored().memory.contains_key("from-the-future"));
+    }
+
     #[test]
     fn a_fleet_is_a_collection_and_a_rekey_carries_the_player_over() {
         let players = Players::new();
