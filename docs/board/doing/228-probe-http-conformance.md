@@ -4,8 +4,8 @@ title: screeny-probe http - a conformance run over the device's HTTP API, the sa
 type: test
 hardware: no
 depends: [224, 226, 232]
-owner:
-branch:
+owner: worker-228
+branch: card/228-probe-http-conformance
 ---
 
 ## Goal
