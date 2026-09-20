@@ -300,3 +300,13 @@ flakes recurred, though another worktree was running its soak in a loop at the t
 **Not done, on purpose:** the picture itself was not judged by eye (see step 3); no new
 card was needed. Two backlog cards (113, 121) name `ui/main.js` in their Context and will
 want re-reading against the three files that replaced it.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed the scope (UI files, `ui.rs`, two doc comments, one test line, README; no route,
+schema or message change) and merged `--no-ff`. Root `cargo test --release --no-fail-fast`:
+752 passed, 1 failed - the studio soak at `soak.rs:138`, "the panel comes back on the same
+address": the re-bind of a fixed port while another worktree was running the same suite
+(card 117, whose worker is on it now; the same line failed the same way for card 162's
+worker). Alone: passes in 61 s. Clippy silent. Deployed to workbench with card 162; the
+first look in a visible browser tab is the owner's.
