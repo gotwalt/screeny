@@ -265,3 +265,64 @@ is unchanged and green in 36 s**; `tests/control.rs` and every other pre-existin
 are unchanged in meaning and in text apart from the one 503 test the card told me to
 replace. Clippy clean (`crates/probe`'s one pre-existing `is_multiple_of` warning is not
 mine and not in scope).
+
+### 2026-09-20 - Acceptance
+
+- `cargo test -p screeny-provision -p screeny-device-api -p screeny-sim`: green.
+  - `screeny-provision` **47 transitions + 12 render + 1 doc** (was 32 + 12 + 1)
+  - `screeny-device-api` **71 + 3 doc** (was 64 + 1); no golden file changed
+  - `screeny-sim` **120 + 1 doc** (was 112 + 1), `tests/conformance.rs`'s 64-rule wire
+    suite unchanged and green in 36 s
+- Clippy clean on all three. The only workspace warning is `crates/probe`'s pre-existing
+  `manual_is_multiple_of`, which is card 125's.
+- `cargo check --target thumbv7em-none-eabi` green for both `no_std` crates.
+- Root `cargo test`: **green, every crate, nothing skipped**. `crates/studio`'s
+  `fleet.rs` passed all 12 including
+  `a_typed_address_becomes_a_device_and_starts_playing`, and the `crates/screeny`
+  pacing tests passed; no re-run needed.
+- No background process left: `pgrep -fl screeny-sim` is empty and nothing of this
+  worktree's is running.
+
+### What card 223 (the firmware's portal) needs from this
+
+1. Feed **every** `POST /api/v1/wifi` and `SET_WIFI` into the one `Provisioner` with
+   `Event::CredentialsPosted { ssid }`, whatever state it is in. Answer the request
+   *first* (spec 8.2), then `step`.
+2. The LAN settings page's post is a `TrialOrigin::Online` trial. The machine raises no
+   AP for it - so **do not raise one yourself** - and it clears the address it was
+   reporting, so anything reading `p.ip()` must cope with `None` for the length of the
+   trial.
+3. `Action::StartJoin { which: Trial, .. }` on this path means *drop the association you
+   have*. There is one station. `StopJoin` arrives first only when a join was already in
+   flight.
+4. Read `p.overlay_state()` for the telemetry byte and `p.screen(now)` for the panel, as
+   before: both correctly say nothing for an online-origin trial, so the stream keeps the
+   panel through the rejoin.
+5. `GET /api/v1/wifi` must use `p.trial_is_current()` to decide between `p.trial()` and
+   the station's own state, and `GET_WIFI` must use `p.wifi_state()`. Both keep reading
+   `FAILED` after a failed LAN-side trial until the next post or a reboot - that is
+   deliberate, and re-deriving it in the firmware would lose it.
+6. A failed online-origin trial answers `StartJoin { Stored, 1 }`. Nothing was committed
+   and nothing was cleared, so the credentials in the store are still the ones to use.
+7. `route::find` / `route::path_is_known` for the 405-vs-404 split, `route::RateLimit`
+   with `route::SCAN_MIN_INTERVAL_MS` for the scan, and `Route::max_request_len` per
+   route as card 224 advised.
+8. If the firmware's HTTP server is ever written against a non-blocking listener on a
+   host (the simulator was), read the O_NONBLOCK note above first.
+
+### Proposed follow-up cards
+
+- **238 - UDP `SET_WIFI` drives the machine in the simulator too.** Today `POST
+  /api/v1/wifi` starts an online-origin trial and `SET_WIFI` does not, because changing
+  what the simulator answers on the wire is out of card 232's scope. The device does not
+  have that asymmetry. One-line change in `crates/sim/src/core.rs`, plus updating
+  `tests/control.rs`'s "accepted, logged, and not acted on" and whatever other sessions'
+  tests assert it. Needs the orchestrator to say when.
+- **239 - `screeny_provision` should be able to say "the trial is over, stop showing
+  it".** The sticky `FAILED` clears on the next post or a reboot and nothing else. A
+  device left alone for a week after one mistyped password keeps answering `failed` to
+  `GET_WIFI` while sitting happily on its old network. An explicit
+  `Provisioner::acknowledge_trial()` - called when the page that posted has read the
+  result - would let the firmware and the Studio clear it without a reboot. Design
+  question first: what counts as "read it".
+- **235 (card 224's, still open) - the simulator restarts for real.** Unchanged.
