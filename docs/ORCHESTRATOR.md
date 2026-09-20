@@ -138,8 +138,18 @@ backoff, and a reboot seen in telemetry clears it: ~130 s -> 10-20 s) and 117 (t
 `embed.rs` and `tests/fleet.rs` wait on what they assert, retry fixed-port re-binds, and
 print numbers). New backlog: 119 (the Studio cannot be shown a pinned time), 143 (a
 `crates/sim` telemetry test asserts an exact count under load - the firmware session's
-crate), 144 (`frames_sent` restarts when the link is rebuilt; needs a decision). Nothing of
-this session's is in flight. The owner said the edit-to-panel loop is low
+crate), 144 (`frames_sent` restarts when the link is rebuilt; needs a decision). **The owner's
+vocabulary since 2026-09-20 afternoon: a piece is a *patch* (metaballs is a patch), and each
+patch has multiple named, persisted *settings*, like an audio plugin.** His answers: rename
+everywhere (page, docs, CLI, Rust, API, state file; old API names and the old state file
+still accepted); a setting holds params + seed + speed; every patch has a read-only
+"Default", he can Save / Save as / Rename / Delete his own, and a modified mark shows until
+saved or reverted. What the code called `Settings` (panel kind, dither, limiter) becomes
+`Output`. **In flight:** 150 (`card/150-pieces-become-patches`, the rename + state v4; one
+worker, nobody else in `crates/art` or `crates/studio` while it runs). **Next, after 150
+merges:** 151 (named settings, state v5). Do not redeploy before ~16:00 without telling the
+firmware session (its one-hour soak of fw 0.5.2 runs under the Studio's stream). The owner
+said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
 permission for `screeny-studio`/`screeny-art`, is the one to check the first time he does).
 Pruned to `parked/` the same day, each with its reason: 065, 067, 082, 113, 133, 135, 142,
