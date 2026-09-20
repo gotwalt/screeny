@@ -695,3 +695,70 @@ earlier failures were this Mac's two-interfaces-on-one-subnet path, not the firm
 Lesson for the bench: with en0 and en5 both up on 192.168.7.0/24 this Mac's path stalls
 for seconds at a time; turn WiFi off before conformance or flashing sessions.
 **Still open: the phone test.**
+
+### The phone test, 2026-09-20 (owner's iPhone, iOS 18.7): six passes, five fixes, fw 0.5.1
+
+Passed on the sixth build. Every finding below is something no bench check had seen,
+because **no real client had ever used the soft-AP**: the portal pass of the self-test
+is an in-memory dispatch, and the bench Mac - which tolerates everything iOS does not -
+walks the whole flow cleanly on every build, including the broken ones. *The Mac is not
+evidence for the portal.* Serial logs: `captures/phone-test-*.log` (not in git).
+
+1. **The QR did not scan**: the QR and text layouts alternated every 4 s. The QR layout
+   now stays put (it already names the network); the text layout is only the fallback
+   for a name no QR can carry. `Timing::screen_alternate_ms` is gone. (2dae13a)
+2. **The page showed the empty form again after a good join**, so the owner posted
+   twice: `trial_is_current()` was false in `Online`, which is where a trial that works
+   goes at once. It is now true in `Online` for as long as the AP is held up. (2dae13a)
+3. **"Hotspot login cannot open the page because it could not connect to the server"**,
+   two runs in three. What the per-request log showed: the probe
+   (`CaptiveNetworkSupport`) gets its answer; the sheet then opens **two** connections,
+   fetches `hotspot-detect.html` on one and never uses the other, which pins a worker for
+   `start_read_request` (3 s); our `302` made it open a third to 192.168.4.1 within
+   milliseconds, while the worker that had just answered was between `close` and
+   `accept`. smoltcp has no backlog, the SYN is refused, and **iOS does not retry a
+   refused connection** (macOS does, after 1 s). Fixes: both HTTP workers follow the AP
+   (22717a8; the LAN has no HTTP while the AP is up), and the catch-all answers with
+   **the setup page itself, `200`, `no-store`** instead of a redirect, so the sheet
+   needs no further connection (86fd2f5). `Reply::Redirect` is gone.
+4. **DHCP option 114 is no longer sent.** It was not proven to be a cause (pass 4, without
+   it, still failed on the 302), but it can only be wrong here: 8910/8908 want an HTTPS
+   API endpoint on a hostname. (86fd2f5)
+5. **The address flashed through the art for a minute after the join**: the `connected`
+   screen and the Studio's frames were both published. The `connected` screen now yields
+   to a stream; the setup screen is a true overlay. Owner: "no flicker". (86fd2f5)
+
+Also new: one log line per request **on the setup network only** (method, path, host,
+user-agent). It is what found 3.
+
+**Follow-ups, not done:**
+- A wrong password took **45 s** and would have read "could not join": in APSTA with the
+  AP up the radio reports no disconnect reason, the attempt times out at 15 s as
+  `FailReason::Other`, and the machine retries `Other` three times. (The owner saw the
+  form come back and carried on; the log shows attempts 1-3.)
+- `crates/sim` still models the captive answer as a Host-based `302`
+  (`sim/src/api.rs`, `tests/http_routes.rs`). Align it when the sim learns to serve the
+  setup page (the host-only card); the `software` session has been told.
+- A post during the grace window is still an online-origin trial that bounces the
+  stream. With fix 2 nobody has a reason to post twice, but identical credentials while
+  already online could be a no-op.
+- A page reload that lands while the radio is changing channel is lost
+  (`WriteTimeout` in pass 5) and the no-JavaScript refresh chain ends with it. iOS
+  re-probes and recovers; worth a look on Android.
+
+**After the final flash (default build, 0.5.1):** joined from the store on the first
+attempt, Studio streaming at 30 fps; `screeny-probe http` 30/0/8; `.stack` 27,520.
+
+**OPEN - the device went silent once.** First UDP conformance run on 0.5.1: rules 1-19
+passed, 20-64 `no reply`. The Mac's WiFi had come back on during that run (which by
+itself explains a Mac-side failure), **but the Studio on workbench also lost the panel**:
+its last contact was at device uptime ~85 s, about 20 s *before* the Mac's UDP rules
+started failing, and a passive read of the serial port (`stty`/`cat`, no reset - checked
+afterwards against a live device: 774 bytes in 8 s) returned **zero bytes in 10 s**, where
+a live device prints telemetry. So: HTTP went first, UDP ~20 s later, then the log - a
+progressive stall, not a reboot (a reboot would have rejoined in 15 s). Caveat: a failed
+`espflash monitor --before no-reset-no-sync` attach ran just before the passive read and
+may have held the chip in reset, so the serial silence alone is weak; the Studio's
+silence is not. After a reset, with the monitor attached, the same suite ran
+**60/0/4** and the device stayed up. Not reproduced, not explained. A passive serial
+watch (1 h, 5 MB cap) is on the device; the next card is to find it.
