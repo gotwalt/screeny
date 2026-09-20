@@ -3,8 +3,9 @@
 //! what the panel should look like.
 
 use screeny_art::output::{Output, PipeOutput};
-use screeny_art::piece::{self, local_now, Ctx, Params};
+use screeny_art::piece::{self, Clock, Ctx, Params};
 use screeny_art::panel::Panel;
+use screeny_art::snapshot::{self, Shot};
 use screeny_art::{pieces, preview, Pipeline, Settings};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,8 +24,8 @@ usage:
   screeny-art list
 ";
 const USAGE_TAIL: &str = "\
-  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--set id=value]...
-  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--set id=value]...
+  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
 
 `play` streams to a panel: `--to` takes an mDNS instance name (preferred - the
 link re-resolves it, so it follows the device across a DHCP lease) or an
@@ -33,7 +34,20 @@ panel is keeping up with. `--wait` starts without a panel and picks one up when
 it appears instead of failing.
 
 `pipe` writes 6144-byte sRGB frames (64x32, row-major R,G,B) to stdout, paced by
-the wall clock. The seed is logged to stderr so a good run can be reproduced.";
+the wall clock. The seed is logged to stderr so a good run can be reproduced.
+
+`--time` tells the pieces that tell the time what time it is when the run
+starts, instead of the machine's clock, so the same command draws the same
+picture today and tomorrow. It is a time of day on a fixed day, and the run
+goes forward from it: `snapshot --time 21:11:58 --at 4` renders the four
+seconds into 21:12:02. With `--time`, `--warmup` defaults to the whole run
+(from engine time zero), because a clock has to be watched from its first
+frame; give `--warmup` yourself to shorten it. Pin `--seed` too for a picture
+that is the same byte for byte - by default it comes from the system clock.
+
+  the settled time, 21:12:    snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out x.png
+  mid-dance into 21:12:       snapshot clocks-numerals --time 21:11:40 --at 32 --seed 7 --out x.png
+  dials telling 10:10:        snapshot clocks-dials --time 10:10 --at 12 --out x.png";
 
 fn main() {
     if let Err(e) = run(std::env::args().skip(1).collect()) {
@@ -50,6 +64,10 @@ struct Args {
     seconds: Option<f64>,
     at: f64,
     warmup: f64,
+    /// True once `--warmup` has been given, so `--time` may change the default
+    /// without overriding a choice.
+    warmup_given: bool,
+    clock: Clock,
     scale: usize,
     out: Option<String>,
     to: Option<String>,
@@ -99,6 +117,8 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         seconds: None,
         at: 5.0,
         warmup: 2.0,
+        warmup_given: false,
+        clock: Clock::Live,
         scale: 12,
         out: None,
         to: None,
@@ -118,7 +138,12 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--fps" => a.fps = num()?.clamp(1.0, 60.0),
             "--seconds" => a.seconds = Some(num()?),
             "--at" => a.at = num()?,
-            "--warmup" => a.warmup = num()?.max(0.0),
+            "--warmup" => {
+                a.warmup = num()?.max(0.0);
+                a.warmup_given = true;
+            }
+            // Card 162: what time it is, for the pieces that tell the time.
+            "--time" => a.clock = Clock::parse(&value).map_err(|e| format!("--time: {e}"))?,
             "--scale" => a.scale = (num()? as usize).clamp(1, 64),
             // Card 102: the old `--levels 64|32|16` is gone. 32 and 16 were
             // the pre-card-020 "dimmed by scaling" panel, which this device
@@ -143,6 +168,13 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             _ => return Err(format!("unknown flag `{flag}`")),
         }
     }
+    // A pinned clock is watched from its first frame: a piece that dances onto
+    // the minute has to be alive before the minute turns, and two seconds of
+    // warmup would only show it being born. So `--time` makes the default
+    // warmup the whole run; an explicit `--warmup` still wins.
+    if matches!(a.clock, Clock::Pinned(_)) && !a.warmup_given {
+        a.warmup = a.at.max(0.0);
+    }
     Ok(a)
 }
 
@@ -161,7 +193,7 @@ fn pipe(a: Args) -> Result<(), String> {
         if a.seconds.is_some_and(|s| t >= s) {
             return Ok(());
         }
-        let frame = piece.render(&Ctx { t, dt: t - last_t, now: local_now(), params: &a.params });
+        let frame = piece.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
         let result = pipeline.process(frame, t - last_t);
         last_t = t;
         match out.send(&result.wire) {
@@ -234,7 +266,7 @@ fn play(a: Args) -> Result<(), String> {
             }
         }
 
-        let frame = piece.render(&Ctx { t, dt: t - last_t, now: local_now(), params: &a.params });
+        let frame = piece.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
         let result = pipeline.process(frame, t - last_t);
         last_t = t;
         out.send(&result.wire).map_err(|e| format!("sending frame: {e}"))?;
@@ -289,24 +321,11 @@ fn play(a: Args) -> Result<(), String> {
 
 fn snapshot(a: Args) -> Result<(), String> {
     let path = a.out.ok_or("snapshot needs --out FILE.png")?;
-    let mut piece = (a.piece.make)(a.seed);
-    let mut pipeline = Pipeline::new(a.settings);
-    // Run up to the requested moment at 30 fps so stateful pieces and the
-    // limiter are where they would be in a live run. Pieces with long-lived
-    // state want a longer --warmup.
-    let dt = 1.0 / 30.0;
-    let first = (a.at - a.warmup).max(0.0);
-    let steps = ((a.at - first) / dt).round() as usize;
-    // The time of day is simulated too, starting from the real one, so pieces
-    // that tell the time see a consistent clock however fast this runs.
-    let began = local_now();
-    let mut result = None;
-    for i in 0..=steps {
-        let t = first + i as f64 * dt;
-        let frame = piece.render(&Ctx { t, dt, now: began + (t - first), params: &a.params });
-        result = Some(pipeline.process(frame, dt));
-    }
-    let result = result.expect("at least one frame");
+    // The run itself is `snapshot::take`, which is what the tests render
+    // through too, so a pinned picture is checked by the same code the command
+    // runs (card 162).
+    let shot = Shot { seed: a.seed, at: a.at, warmup: a.warmup, clock: a.clock, settings: a.settings };
+    let result = snapshot::take(a.piece, &a.params, &shot);
     let (w, h, rgba) = preview::render_dots(&result.preview, a.scale);
 
     let file = std::fs::File::create(&path).map_err(|e| format!("{path}: {e}"))?;
@@ -318,6 +337,20 @@ fn snapshot(a: Args) -> Result<(), String> {
         .map_err(|e| format!("{path}: {e}"))?;
 
     let s = result.stats;
+    // With a pinned clock, say what the panel's own clock reads at this frame:
+    // the answer to "which minute did I actually get?" without opening the PNG.
+    if let Clock::Pinned(_) = a.clock {
+        let now = a.clock.now(a.at);
+        let day = now.rem_euclid(86400.0);
+        eprintln!(
+            "screeny-art: clock pinned, reading {:02}:{:02}:{:05.2} at t={:.2} (run from t={:.2})",
+            (day / 3600.0).floor(),
+            (day / 60.0).floor() % 60.0,
+            day % 60.0,
+            a.at,
+            (a.at - a.warmup).max(0.0),
+        );
+    }
     eprintln!(
         "screeny-art: piece={} seed={} t={:.2}  colours={} bytes={}/{} ({}, {})  apl={:.0}% (piece {:.0}%)  limiter x{:.2}",
         a.piece.id,

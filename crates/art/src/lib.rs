@@ -25,6 +25,7 @@ pub mod pieces;
 pub mod pipeline;
 pub mod preview;
 pub mod rng;
+pub mod snapshot;
 pub mod variety;
 
 /// Whether this process can render the GPU pieces, and why not when it cannot
@@ -81,5 +82,6 @@ pub fn gpu_status() -> GpuStatus {
 pub use color::Rgb;
 pub use frame::{Frame, WireFrame, H, N, W};
 pub use meter::{Measured, Meter};
-pub use piece::{Ctx, Params, Piece, PieceDef};
+pub use piece::{Clock, Ctx, Params, Piece, PieceDef};
+pub use snapshot::Shot;
 pub use pipeline::{Pipeline, Settings, Stats};
