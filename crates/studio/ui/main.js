@@ -338,14 +338,53 @@ async function start() {
 
   const pieceById = Object.fromEntries(boot.pieces.map((p) => [p.id, p]));
 
+  // Card 145: a GPU piece with no adapter renders black, and used to say so
+  // only on the process's stderr - which in a container is `docker logs`,
+  // which nobody is reading. The outcome is decided once by the server and
+  // comes down in `bootstrap`.
+  const gpu = boot.gpu || { available: true };
+  const unplayable = (p) => Boolean(p && p.needs_gpu && !gpu.available);
+  const blocked = boot.pieces.filter(unplayable);
+
   $('#pieces').replaceChildren(...boot.pieces.map((p) => {
     const label = document.createElement('label');
     const input = Object.assign(document.createElement('input'), { type: 'radio', name: 'piece', value: p.id });
     const span = Object.assign(document.createElement('span'), { textContent: p.name });
+    if (unplayable(p)) {
+      // Not offered, rather than offered and then black.
+      input.disabled = true;
+      label.dataset.unavailable = 'yes';
+      label.title = 'Needs a graphics adapter, and there is none here.';
+      span.append(Object.assign(document.createElement('em'), { textContent: 'no GPU' }));
+    }
     input.addEventListener('change', async () => adopt(await call('set_piece', { id: p.id })));
     label.append(input, span);
     return label;
   }));
+
+  $('#gpu-note').hidden = blocked.length === 0;
+  if (blocked.length) {
+    const names = blocked.map((p) => p.name).join(', ');
+    $('#gpu-note').textContent = `${names} cannot be drawn here — ${gpu.error || 'no graphics adapter'}.`;
+  }
+
+  /** A black picture never passes silently: if the piece that is *already*
+   *  loaded needs an adapter there is none for - which is how a state file
+   *  from a machine with a GPU arrives in a container without one - the stage
+   *  says so until another piece is picked. */
+  let gpuNoticeUp = false;
+  function sayIfBlack() {
+    const piece = pieceById[state.piece];
+    if (unplayable(piece)) {
+      notice(`${piece.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another piece.`);
+      $('#gpu-note').dataset.tone = 'bad';
+      gpuNoticeUp = true;
+    } else if (gpuNoticeUp) {
+      notice('');
+      delete $('#gpu-note').dataset.tone;
+      gpuNoticeUp = false;
+    }
+  }
 
   function adopt(next) {
     if (!next) return;
@@ -375,6 +414,7 @@ async function start() {
       return root;
     }));
     $('#reset-params').hidden = !piece || piece.params.length === 0;
+    sayIfBlack();
     // Empty until the controls below are bound, which is the first call.
     for (const control of refreshers) control.refresh();
   }

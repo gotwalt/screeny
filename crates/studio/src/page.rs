@@ -124,6 +124,10 @@ pub struct PieceInfo {
     pub name: &'static str,
     pub blurb: &'static str,
     pub params: Vec<ParamInfo>,
+    /// Card 145: this piece cannot draw without a graphics adapter. With
+    /// [`Bootstrap::gpu`] saying there is none, the page marks it unavailable
+    /// rather than letting it be picked and render black.
+    pub needs_gpu: bool,
 }
 
 /// What the page is showing, which is what the panel is showing.
@@ -158,6 +162,9 @@ pub struct Bootstrap {
     pub pieces: Vec<PieceInfo>,
     pub payload_bytes: u32,
     pub state: StudioState,
+    /// Card 145: whether this process has a graphics adapter, so the page can
+    /// say why the GPU pieces are not available instead of showing black.
+    pub gpu: screeny_art::GpuStatus,
 }
 
 /// Every piece this build offers, with its parameters.
@@ -171,6 +178,7 @@ pub fn pieces(faults: bool) -> Vec<PieceInfo> {
             id: d.id,
             name: d.name,
             blurb: d.blurb,
+            needs_gpu: pieces::needs_gpu(d.id),
             params: d
                 .params
                 .iter()

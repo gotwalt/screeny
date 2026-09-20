@@ -142,6 +142,7 @@ async fn bootstrap(State(st): State<AppState>) -> Json<Bootstrap> {
         pieces: page::pieces(st.cfg.fault_pieces),
         payload_bytes: screeny_art::meter::PAYLOAD_BYTES,
         state: st.page_state(),
+        gpu: screeny_art::gpu_status(),
     })
 }
 

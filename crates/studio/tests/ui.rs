@@ -172,6 +172,53 @@ fn the_page_can_say_whether_it_is_looking_for_panels() {
     assert!(!body.contains("'bad'"), "a browse that finds nothing is not a fault");
 }
 
+/// Card 145: the GPU outcome is part of the studio's state rather than a line
+/// on stderr. `bootstrap` says which pieces need an adapter and whether there
+/// is one; `/api/v1/status` says the same thing; and a missing adapter is
+/// never a 503.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let gpu = &boot["gpu"];
+    assert!(gpu["available"].is_boolean(), "bootstrap should carry the adapter outcome: {boot}");
+    let pieces = boot["pieces"].as_array().expect("a list of pieces");
+    assert!(pieces.iter().all(|p| p["needs_gpu"].is_boolean()), "every piece says whether it needs an adapter");
+    // Built with the `gpu` feature, so there are some; without it there are
+    // none, and that is the truth for that build.
+    let marked: Vec<&str> = pieces
+        .iter()
+        .filter(|p| p["needs_gpu"] == true)
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert_eq!(marked, screeny_art::pieces::NEEDS_GPU.to_vec(), "the marked pieces are exactly the GPU ones");
+
+    let status = get(at, "/api/v1/status").await.json();
+    assert_eq!(status["gpu"], *gpu, "the two routes must not be able to disagree");
+    assert_eq!(status["ok"], true, "a missing adapter is not a server fault");
+    assert_eq!(get(at, "/healthz").await.status, 200);
+
+    // Whichever way this machine answered, one of the two halves is filled in.
+    if gpu["available"] == true {
+        assert!(!gpu["adapter"].as_str().unwrap_or("").is_empty(), "an available adapter has a name: {gpu}");
+        assert_eq!(gpu["error"], serde_json::Value::Null);
+    } else {
+        assert!(!gpu["error"].as_str().unwrap_or("").is_empty(), "an unavailable adapter has a reason: {gpu}");
+    }
+}
+
+/// And the page draws it: the GPU pieces are marked unavailable rather than
+/// offered and then black, and the reason is on the page.
+#[test]
+fn the_page_says_why_a_gpu_piece_is_not_available() {
+    assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the piece list needs a line for the adapter");
+    assert!(MAIN_JS.contains("input.disabled = true"), "a piece that cannot draw must not be offered");
+    assert!(MAIN_JS.contains("needs_gpu"), "the page reads the per-piece flag from bootstrap");
+    assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable piece has to look unavailable");
+}
+
 /// The same fact over the API, which is what the line is drawn from: with
 /// discovery off, `/api/v1/status` says so rather than looking like a browse
 /// that has found nothing yet.

@@ -21,6 +21,12 @@
 //! 3. **A player is not running**, and has not been for longer than
 //!    [`crate::START_GRACE`] - a render thread that died and was not replaced.
 //!
+//! A **missing graphics adapter is not one of them** (card 145). A studio with
+//! no GPU plays every CPU piece perfectly well, no restart conjures an adapter,
+//! and the answer a person needs is a sentence on the page rather than a 503 at
+//! three in the morning. It is reported on `/api/v1/status` as `gpu` and
+//! nowhere else.
+//!
 //! Card 106 had a fourth - "the preview engine is wedged or dead" - and card
 //! 170 deleted the thing it was about. There is one engine now, the player for
 //! the attached panel, and a player that wedges is *recovered* by its own
@@ -54,6 +60,11 @@ pub struct Status {
     pub version: &'static str,
     pub state: StoreHealth,
     pub discovery: DiscoveryHealth,
+    /// Card 145: the graphics adapter, or why there is none. **Never a
+    /// problem**: a studio with no GPU plays the CPU pieces perfectly well,
+    /// and a restart does not conjure an adapter. It is here so that a black
+    /// `overland` has a reason a person can read.
+    pub gpu: screeny_art::GpuStatus,
     /// What the page is showing - which, since card 170, is what the attached
     /// panel is showing. The key is still `preview` so that scripts written
     /// against card 106's shape keep working.
@@ -239,6 +250,7 @@ pub fn collect(st: &AppState) -> Status {
         version: env!("CARGO_PKG_VERSION"),
         state: st.store.health(),
         discovery: st.devices.discovery_health(),
+        gpu: screeny_art::gpu_status(),
         preview,
         devices,
     }

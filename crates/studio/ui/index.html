@@ -37,6 +37,9 @@
       <div class="playing__actions" id="playing-actions"></div>
       <ul class="playing__notes" id="playing-notes"></ul>
       <div class="pieces" id="pieces" role="radiogroup" aria-label="Piece"></div>
+      <!-- Card 145: why the GPU pieces are greyed out, said once, here rather
+           than only on stderr. -->
+      <p class="hint" id="gpu-note" hidden></p>
       <div class="row row--seed">
         <label for="seed">Seed</label>
         <input id="seed" type="number" min="0" max="4294967295" step="1" inputmode="numeric">

@@ -121,14 +121,25 @@ and whose `deviceType` is `PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, with
 `driverName = intel_open_source_mesa_driver`. That is ANV, and wgpu will pick it up
 through `WGPU_BACKEND=vulkan`.
 
-The studio's own confirmation is one line on stderr the first time a GPU piece opens.
-Pick `overland`, `lattice` or `knot` in the browser, then:
+The studio's own confirmation, since card 145, is **one line on stdout at startup**,
+whichever way it went, and nobody has to select a piece first:
 
 ```bash
-ssh workbench.local -- docker logs --tail 50 screeny-studio | grep screeny-art:
+ssh workbench.local -- docker logs --tail 50 screeny-studio | grep 'studio: '
 ```
 
-**Good:** `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`. (On this Mac,
+**Good:** `studio: gpu Intel(R) Graphics (RPL-P) (Vulkan)`. With no adapter it reads
+`studio: no GPU adapter: ... - overland, lattice, knot cannot be played here`, and the
+same fact is on `GET /api/v1/status` as `gpu` and on the page, where those three pieces
+are struck through with the reason under them. **A missing adapter is never a 503**:
+the CPU pieces are unaffected and no restart conjures a GPU.
+
+```bash
+ssh workbench.local -- curl -s localhost:8787/api/v1/status | jq .gpu
+```
+
+The older per-piece line on stderr is still there the first time a GPU piece opens:
+`screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`. (On this Mac,
 in a container with no `/dev/dri`, the same line reads
 `gpu=llvmpipe (LLVM 19.1.7, 128 bits) backend=Vulkan` - the code path is identical,
 only the adapter differs.)
@@ -148,9 +159,11 @@ tools/deploy-workbench.sh --render-gid <gid>
 lavapipe still renders - it is Mesa's software rasteriser and 64x32 is small - so the
 GPU pieces will work, slowly, rather than fail. **If there is no adapter at all**, the
 GPU pieces render black and say so once on stderr per piece
-(`screeny-art: <piece>: no GPU adapter: ...; rendering black`). The UI does not show
-that yet: see card 145. Until it does, the fallback is to stay on the CPU pieces -
-`clocks-numerals`, `clocks-dials`, `plasma`, `metaballs`, `testcard` - or to rebuild
+(`screeny-art: <piece>: no GPU adapter: ...; rendering black`) - and, since card 145,
+the page says it too: `overland`, `lattice` and `knot` are struck through with "no GPU"
+and the reason is the line under the list, so the fallback (stay on the CPU pieces -
+`clocks-numerals`, `clocks-dials`, `plasma`, `metaballs`, `testcard`) is the obvious
+thing to do rather than something to be told. The heavier alternative is to rebuild
 with no graphics driver in the tree at all:
 
 ```bash

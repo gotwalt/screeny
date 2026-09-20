@@ -233,7 +233,7 @@ it changes the panel, which is the point of card 170.
 
 | route | body | answer |
 |---|---|---|
-| `GET /bootstrap` | | every piece and its parameters, the payload budget, the current state |
+| `GET /bootstrap` | | every piece and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which pieces need a GPU (`needs_gpu`), the payload budget, the current state, and the adapter outcome (`gpu`) |
 | `GET /frame` | | one frame packet: 52-byte header + 64x32 sRGB = 6196 bytes |
 | `GET /piece_playing` | | what a composing piece is performing, or `null` |
 | `GET /panel_status` | | the preview's panel link, or `null` |
@@ -275,7 +275,7 @@ once whether or not the panel is there. Every change is persisted.
 
 | route | body | answer |
 |---|---|---|
-| `GET /status` | | everything: health, the state file, discovery, what the page is showing (still keyed `preview`, for scripts written against card 106), every device |
+| `GET /status` | | everything: health, the state file, discovery, the graphics adapter or why there is none (`gpu`, card 145 - never a reason for a 503), what the page is showing (still keyed `preview`, for scripts written against card 106), every device |
 | `GET /devices` | | the device half of `/status` on its own |
 | `POST /devices/add` | `{to, name?, play?}` | `{id}` - a new panel, by name or address |
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |

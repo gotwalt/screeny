@@ -211,6 +211,23 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 .pieces input:checked + span { border-left-color: var(--amber); background: var(--bench); color: var(--paper); }
 .pieces input:focus-visible + span { outline: 2px solid var(--amber); outline-offset: -2px; }
 
+/* Card 145: a piece this build cannot draw. Struck through rather than hidden,
+   so the list is the same list everywhere and the reason is the line below. */
+.pieces label[data-unavailable] { cursor: not-allowed; }
+.pieces label[data-unavailable] span { color: var(--rule); text-decoration: line-through; }
+.pieces label[data-unavailable]:hover span { color: var(--rule); }
+.pieces label[data-unavailable] em {
+  float: right;
+  font: 400 11px/1.45 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-decoration: none;
+  font-style: normal;
+  color: var(--dim);
+}
+
+.hint[data-tone="bad"] { color: var(--over); }
+
 /* Now playing: what a composing piece is performing. */
 .playing__title { font: 400 19px/1.15 var(--label); letter-spacing: 0.05em; text-transform: uppercase; }
 .playing__detail { margin-top: 5px; color: var(--dim); font-size: 12px; }
