@@ -365,7 +365,14 @@ async fn display_task(
 /// `StackResources` is `.bss`, and `.bss` is core 0's stack, so this is not a
 /// free number. Card 223's AP gets its own stack and its own resources, so it
 /// does not need room here.
-const NET_SOCKETS: usize = 7;
+///
+/// **Eight since card 227**, because [`http::HTTP_TASKS`] is two and each
+/// worker holds its own `TcpSocket` for as long as it is listening or
+/// serving. Seven would have been exactly enough and left no spare at all,
+/// and the failure mode of getting this wrong is not a degraded server: it is
+/// `SocketSet::add` panicking on the first poll of a task, which is a boot
+/// loop. 408 bytes is the right price for the slot that is not needed.
+const NET_SOCKETS: usize = 8;
 
 /// How many times one credential pair is tried before the next is (spec 8.3).
 const JOIN_ATTEMPTS: u8 = 3;
@@ -838,8 +845,20 @@ async fn main(spawner: Spawner) {
     // 60 s mark. Read that line before moving either number here. The heap
     // side of the same question — what the radio wants with a soft-AP up —
     // is the `apsta-probe` build.
+    // Card 227 takes the second arena from 32 KB to 24 KB. It is the card's
+    // last-resort lever and it was measured before it was pulled, against the
+    // **APSTA** peak rather than the station one, because the station number
+    // would have flattered it: `esp-alloc`'s own all-allocations watermark
+    // (the `apsta-probe` build turns on `internal-heap-stats`) is the only
+    // thing that sees the radio's transients, and it read 53,968 of 98,304
+    // with a soft-AP up. Eight kilobytes off the ceiling still leaves the
+    // worst instant of an APSTA run comfortably clear - see
+    // `docs/research/010-stack-and-ram-levers.md` for the run. **24 KB is the
+    // floor**: card 227 was told not to go below it and the margin above is
+    // now small enough that the next person should measure again rather than
+    // shave.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 32 * 1024);
+    esp_alloc::heap_allocator!(size: 24 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);

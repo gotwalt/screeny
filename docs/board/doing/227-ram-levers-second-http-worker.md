@@ -209,3 +209,84 @@ observation that `stack_free` keeps falling with uptime: a single 60 s reading
 cannot say what went deep.
 
 Cost of the instrumentation: **96 bytes** of `.bss` (`.stack` 23240 -> 23144).
+
+**Step 3 - flash 1, and two bugs (one mine, one on main).**
+
+`timeout 400 /Users/aaron/src/screeny/tools/fw-run.sh <elf> card227-measure 200`.
+The build was fw 0.4.0 plus the instrumentation only, so that core 1's
+high-water would be measured against its existing 16 KB. **Two things went
+wrong, and neither number came out of it.**
+
+*Mine.* Both cores reported **exactly `size - GUARD_RESERVE`** - core 0
+"22,120 of 23,144, 0 free", core 1 "15,360 of 16,384, 0 free" - which is
+impossible twice over: neither had tripped the guard, and core 1 cannot have
+used 15 KB to run one display task. The cause was the scan I had just written.
+Painted memory is at the *bottom* of the region and used memory at the *top*,
+so the scan must stop at the first word that is **not** the paint; I had
+inverted it, so it stopped at the first word it looked at. Worse, the reason I
+had touched it at all was an "optimisation": remember the cursor so a 4 Hz
+sample costs one read. That cannot work in either direction - the mark moves
+*down* as the stack deepens, so it cannot be resumed upward, and a downward
+resume walks newly-written memory where a word coincidentally holding the
+paint value stops it early and silently under-reports. Scanning up from the
+bottom every time only ever crosses memory that really is still painted. It
+costs one read per four bytes of *unused* stack, tens of microseconds, which
+at 4 Hz is not measurable. **The optimisation was never needed and it cost a
+flash and a bench window.** Fixed; the scan is now card 220's logic exactly,
+parameterised over a region.
+
+*Not mine.* The device never joined: `NoAccessPointFound` on every attempt for
+the whole 200 s, with `store: ... wifi stored`. Firmware 0.4.0's
+`POST /api/v1/wifi` commits the posted credentials to flash with
+`persist: true` **before** trying them (`http.rs`, the `commit_immediate` call
+above `WIFI_PENDING.signal`), so the orchestrator's wrong-credentials
+acceptance test an hour earlier had overwritten the real pair; the device
+stayed online only through `station_loop`'s in-RAM `active` fallback until the
+next reboot, which was this flash. The orchestrator reached the same
+conclusion independently, has taken the device to recover it, and is fixing
+commit-before-trial on `main`. Flash 1 is therefore charged to this card but
+produced no measurement, and HTTP-load request #1 was not spent (2 of 14,770
+curl attempts reached the device).
+
+**Step 4 - the levers, on the host.**
+
+Host-side while the device is out. Sizes from `tools/fw-size.sh`, default
+build each time:
+
+| build | `.data` | `.bss` | `.stack` | delta |
+|---|---|---|---|---|
+| e3a146c, fw 0.4.0 | 58164 | 115192 | **23240** | - |
+| + card 227 instrumentation | 58164 | 115288 | 23144 | -96 |
+| + `HTTP_TASKS` 1 -> 2 | 58164 | 122784 | 15648 | **-7496** |
+| + `NET_SOCKETS` 7 -> 8 | 58164 | 123192 | 15240 | -408 |
+| + heap arena 32 KB -> 24 KB | 58164 | 115000 | **23432** | +8192 |
+| + core 1's stack (pending its measurement) | | | | |
+
+`NET_SOCKETS` had to go up, and that is a trap worth naming: each HTTP worker
+holds its own `TcpSocket`, so two workers need a seventh slot and seven would
+have left no spare. Getting it wrong is not a degraded server, it is
+`SocketSet::add` panicking on the first poll - a boot loop. 408 bytes for the
+slot that is not needed.
+
+**Every feature still builds** - `spike-ota`, `store-selftest`, `apsta-probe`,
+`fb-on-stack`, `gpio-probe`, `http-selftest`, `display-on-core0` - **except
+`device-web-spike`**, which now fails at the *linker*:
+
+```
+ld: Main stack is smaller than 8192 bytes.
+```
+
+A fact nobody had written down: **there is a hard 8,192-byte floor on `.stack`
+below `tools/fw-size.sh`'s, and it lives in the linker script.** The spike adds
+~17 KB of `.bss` to a build that is at 23,432 while core 1 still holds 16 KB.
+It should link again once the core 1 lever lands (+10,240); re-checked on the
+final build, not assumed.
+
+`tools/fw-size.sh`: floor 16384 -> **28672**, with the reasoning in the header.
+16,384 was *below* the measured demand of ~17,900, so a build could pass the
+check and still die on the guard; 28,672 is that demand plus the ~9 KB card 223
+needs next.
+
+`docs/research/010-stack-and-ram-levers.md` started: the method and the bug in
+it, the objdump frame tables, the interrupt answer, and deliverable 3's
+finding. The measured sections are still to come.

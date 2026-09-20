@@ -36,11 +36,11 @@
 //! when a mark has **grown**, with the delta. The log volume is bounded by
 //! the growth itself - a high-water mark is monotonic, so a line is only ever
 //! printed when something genuinely went deeper than anything before it - and
-//! the cost of a sample that finds no growth is one word read, because the
-//! scan cursor is remembered between calls (see [`Region::high_water`]).
-//! Lined up against the timestamps of the serial log's other lines (picoserve
-//! logs every accepted connection, the WiFi task logs every join and
-//! disconnect) that is what turns "18 KB" into "18 KB, and here is where".
+//! a sample costs a few thousand word reads (see [`Region::high_water`]),
+//! which at 4 Hz is not measurable. Lined up against the timestamps of the
+//! serial log's other lines (picoserve logs every accepted connection, the
+//! WiFi task logs every join and disconnect) that is what turns "18 KB" into
+//! "18 KB, and here is where".
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -109,12 +109,6 @@ unsafe extern "C" {
 pub struct Region {
     bottom: AtomicUsize,
     top: AtomicUsize,
-    /// The lowest address still holding [`PAINT`] as of the last scan, or 0
-    /// before the region is armed. Monotonically non-decreasing: a word that
-    /// has been written by a frame is never painted again, so a scan can
-    /// resume where the last one stopped instead of starting at the bottom.
-    /// That is what makes a 4 Hz sample cost one read.
-    cursor: AtomicUsize,
     /// The last high-water [`Region::grown`] reported, so it can report only
     /// changes.
     reported: AtomicUsize,
@@ -125,7 +119,6 @@ impl Region {
         Self {
             bottom: AtomicUsize::new(0),
             top: AtomicUsize::new(0),
-            cursor: AtomicUsize::new(0),
             reported: AtomicUsize::new(0),
         }
     }
@@ -163,7 +156,6 @@ impl Region {
             p += 4;
         }
         self.bottom.store(bottom, Ordering::Relaxed);
-        self.cursor.store(lo, Ordering::Relaxed);
         // Last, and with a release: it is what [`armed`] tests.
         self.top.store(top, Ordering::Release);
     }
@@ -171,19 +163,28 @@ impl Region {
     /// Deepest this stack has been since it was painted, in bytes below the
     /// top. `None` if it was never painted.
     ///
-    /// Advances the remembered cursor, so the common "nothing moved" case is
-    /// a single word read.
+    /// **Scan up from the bottom, and stop at the first word that is no longer
+    /// [`PAINT`].** Not down from the last answer, which is the optimisation
+    /// this code had for one build and which is wrong twice over: the mark
+    /// moves *down* as the stack deepens, so a cursor cannot be resumed
+    /// upward at all, and a downward resume walks newly-written memory, where
+    /// a word that coincidentally holds the paint value would stop it early
+    /// and under-report. Scanning up from the bottom only ever crosses memory
+    /// that really is still painted, so it lands on the true mark.
+    ///
+    /// The cost is one word read per byte-quad of *unused* stack - a few
+    /// thousand reads, tens of microseconds - which is why [`watch_task`] can
+    /// afford it four times a second and still be invisible.
     pub fn high_water(&self) -> Option<usize> {
-        let (_, top) = self.armed()?;
-        let mut p = self.cursor.load(Ordering::Relaxed);
+        let (bottom, top) = self.armed()?;
+        let mut p = bottom + GUARD_RESERVE;
         while p < top {
             // SAFETY: reading inside a stack region we painted, word aligned.
-            if unsafe { (p as *const u32).read_volatile() } == PAINT {
+            if unsafe { (p as *const u32).read_volatile() } != PAINT {
                 break;
             }
             p += 4;
         }
-        self.cursor.store(p, Ordering::Relaxed);
         Some(top - p)
     }
 
@@ -252,6 +253,7 @@ pub fn paint_core0() {
 /// core starts, so the whole region is paintable; esp-hal then copies the
 /// entry closure near the top of it and esp-rtos writes its guard word near
 /// the bottom, and both of those are honestly counted as "used".
+#[cfg_attr(feature = "display-on-core0", allow(dead_code))]
 pub unsafe fn paint_core1(bottom: usize, top: usize) {
     // SAFETY: the caller's contract - core 1 has not started, so no frame is
     // live anywhere in the region.
