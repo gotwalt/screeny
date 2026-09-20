@@ -19,8 +19,8 @@ use screeny_device_api::{
 };
 
 use super::{
-    idle_name, verdict, Ctx, Outcome, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE, KNOWN_223,
-    NEEDS_UDP,
+    idle_name, verdict, Ctx, Outcome, Res, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE,
+    KNOWN_223, NEEDS_UDP,
 };
 
 /// The SSID and PSK every test on this bench uses. Never a real pair: CLAUDE.md
@@ -503,6 +503,35 @@ pub fn all() -> Vec<Rule> {
             secs: 1.0,
             flags: 0,
             run: firmware_truncated,
+        },
+        // --- card 241's query flag ---------------------------------------
+        //
+        // Both of these are **safe on a device somebody is using**: neither
+        // sends an image that could be staged, let alone activated. What they
+        // pin is the half of activation a probe can check without rebooting
+        // anything - that the flag is parsed, and that a spelling the device
+        // does not understand is refused rather than guessed at. The half that
+        // does reboot is `screeny-probe fw-upload --activate`, which is a
+        // command somebody types.
+        Rule {
+            n: 44,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "an activate flag this API does not define is out_of_range",
+            cite: "route::parse_activate; spec 8.6",
+            secs: 0.4,
+            flags: 0,
+            run: firmware_bad_activate,
+        },
+        Rule {
+            n: 45,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "activate=0 is accepted and never activates anything",
+            cite: "reply::FirmwareReply::activating; card 241",
+            secs: 0.4,
+            flags: 0,
+            run: firmware_stage_only,
         },
     ]
 }
@@ -1119,6 +1148,26 @@ fn identify_out_of_range(cx: &mut Ctx) -> Result<Outcome, String> {
 // POST /api/v1/firmware
 // ---------------------------------------------------------------------------
 
+/// Is the device refusing because it is in the middle of an OTA trial?
+///
+/// Card 241: while an image is on trial the inactive slot holds the image the
+/// device may have to roll back to, so an upload is refused `busy` rather than
+/// allowed to overwrite the escape hatch. That is correct behaviour and not a
+/// failure of any rule here - it just means this suite cannot ask its question
+/// for the next couple of minutes, which is what a skip is for.
+fn busy_with_a_trial(res: &Res) -> Option<Outcome> {
+    if res.status != 200 {
+        return None;
+    }
+    let f: FirmwareReply = res.parse().ok()?;
+    (f.error == Some(FirmwareError::Busy)).then(|| {
+        Outcome::Skip(
+            "the device is busy with an upload or an OTA trial; try again in three minutes"
+                .to_owned(),
+        )
+    })
+}
+
 /// The one shape of firmware upload this suite will ever send: a body that
 /// **cannot** pass the first of research 006's checks, so nothing can be
 /// installed by running the suite.
@@ -1129,6 +1178,9 @@ fn firmware_refuses(cx: &mut Ctx, body: &[u8], what: &str) -> Result<Outcome, St
             "this build does not take uploads: {}",
             unavailable_detail(&res)
         )));
+    }
+    if let Some(s) = busy_with_a_trial(&res) {
+        return Ok(s);
     }
     if res.status != 200 {
         // Any other refusal is fine too, as long as it is the error shape.
@@ -1175,6 +1227,9 @@ fn firmware_refuses_with(
             "this build does not take uploads: {}",
             unavailable_detail(&res)
         )));
+    }
+    if let Some(s) = busy_with_a_trial(&res) {
+        return Ok(s);
     }
     if res.status != 200 {
         return match res.error() {
@@ -1277,6 +1332,56 @@ fn firmware_truncated(cx: &mut Ctx) -> Result<Outcome, String> {
         &image[..cut],
         FirmwareError::BadSha256,
         "a good image with 200 bytes missing",
+    )
+}
+
+/// Card 241: `?activate=` is parsed, and a value this API does not define is
+/// refused rather than guessed at.
+///
+/// The body is 64 bytes of zeroes - an image that cannot pass check 1 - so a
+/// device that ignored the query entirely would answer `bad_magic` and fail
+/// this rule for the right reason. **Nothing here can be staged**, and the
+/// refusal happens on the query before the body is read at all.
+fn firmware_bad_activate(cx: &mut Ctx) -> Result<Outcome, String> {
+    let path = format!("{}?activate=maybe", route::FIRMWARE);
+    let res = cx.post_bytes(&path, &[0u8; 64])?;
+    if is_unavailable(&res) {
+        return Ok(Outcome::Skip(format!(
+            "this build does not take uploads: {}",
+            unavailable_detail(&res)
+        )));
+    }
+    refusal(&res, ErrorCode::OutOfRange)
+}
+
+/// Card 241: `?activate=0` is the staging-only upload card 240 shipped, and an
+/// accepted or refused one says `activating: false`.
+///
+/// Sent with the same unstageable body as every other rule in this section, so
+/// what is being checked is that the flag parses and that the reply carries the
+/// field - not that anything was installed, which this suite must never do.
+fn firmware_stage_only(cx: &mut Ctx) -> Result<Outcome, String> {
+    let path = format!("{}?activate=0", route::FIRMWARE);
+    let res = cx.post_bytes(&path, &[0u8; 64])?;
+    if is_unavailable(&res) {
+        return Ok(Outcome::Skip(format!(
+            "this build does not take uploads: {}",
+            unavailable_detail(&res)
+        )));
+    }
+    if let Some(s) = busy_with_a_trial(&res) {
+        return Ok(s);
+    }
+    if res.status != 200 {
+        return verdict(false, format!("HTTP {} - expected 200", res.status));
+    }
+    let f: FirmwareReply = res.parse()?;
+    verdict(
+        !f.ok && !f.activating && f.error == Some(FirmwareError::BadMagic),
+        format!(
+            "ok {} activating {} error {:?}",
+            f.ok, f.activating, f.error
+        ),
     )
 }
 

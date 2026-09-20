@@ -314,6 +314,28 @@ the device advertises **`_http._tcp`** in mDNS; JSON shapes for the HTTP API liv
 their own crate, `crates/device-api` (card 226), which the firmware, the sim and the
 Studio all depend on - `crates/proto` is not touched.
 
+## How to update the panel over WiFi
+
+Five lines, and the fifth is the one that matters.
+
+1. Build it: `. ~/export-esp.sh && cd firmware && cargo build --release`, then
+   `espflash save-image --chip esp32 --flash-size 8mb --partition-table
+   firmware/partitions.csv firmware/target/xtensa-esp32-none-elf/release/screeny-fw
+   new.bin` from the repository root.
+2. Send it: `cargo run --release -p screeny-probe -- --addr 192.168.7.221
+   fw-upload new.bin --activate`. It scans the file first, so a bad one is
+   refused in a millisecond instead of after half a minute of flash writes.
+3. The panel says "updating" with a progress bar for ~25 s, then "installing",
+   then the device restarts. The upload command waits and prints what it finds.
+4. The new image is **on trial** for up to three minutes: it confirms itself
+   once it has an address, has drawn a frame and has served a request (or after
+   two minutes), and never sooner than 60 s. `fw-upload` prints `CONFIRMED`.
+5. **If anything goes wrong - it crashes, it never joins, it wedges - the old
+   image comes back by itself within about three and a half minutes**, and
+   `curl -s http://192.168.7.221/api/v1/panic | jq .update` says which version
+   was rejected and why. No cable is needed. A cable (`tools/fw-run.sh`) is
+   still the thing that always wins, because it erases `otadata`.
+
 ## Build order
 
 | card | what | hardware |
@@ -338,7 +360,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
 | 240 | **done, on the device (fw 0.6.0)** - `POST /api/v1/firmware` streams an image sector by sector into the inactive slot (`crates/fwimage`: 006's checks as a scanner; wrong chip/project refused before the first erase; SHA checked on arrival and read back from flash); `otadata` untouched, so nothing it does can change what boots. Bench: 998 KB in 25 s under a live stream, erases ~40 ms (55 worst), **link downs 0**, ~21% of stream frames lost during the upload, the updating screen on the panel | yes |
-| 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
+| 241 | **built, on the branch (fw 0.7.0)** - OTA activate / confirm / revert: `POST /api/v1/firmware` activates by default (`?activate=0` stages only), the image boots on trial, confirms itself on 006's health criterion (address + a swap + a request or 120 s, never before 60 s) and reverts at 180 s; a reset during the trial is rolled back by the bootloader on *any* reset reason, and a hang by an RTC watchdog armed from the RTC breadcrumb. `GET /api/v1/panic` gains `update` - outcome, reason, slot and the rejected version. `crates/otastate` host-tests every interruption point against a paper v6.1 bootloader | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | **done, on the device (fw 0.5.2)** - a panic prints its backtrace, leaves a breadcrumb in RTC slow memory and resets (proved with the `panic-test` build: panic -> `SW_RESET` -> rejoined -> `GET /api/v1/panic` reports it); crash-loop guard (5 panics under 60 s -> CRASHED screen, halt); boot-path stack lever; `http-selftest` fits again; `stack_free` 12.4 KB after the HTTP suite | yes |
 | 236 | **done, on the device (fw 0.5.3)** - picoserve's close waited for the *client's application* to close (up to 5 s) and logged three blocking UART lines per connection; the worker now owns the accept loop and its close waits only for the peer's ACK (500 ms bound). `screeny-probe http`: 9-17 refused connects per run -> 0, three runs; the probe retries and **counts** refusals in its last line | yes |

@@ -76,12 +76,19 @@
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
-use embassy_time::Instant;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Instant, Timer};
 use embedded_storage::nor_flash::NorFlash as _;
-use esp_bootloader_esp_idf::partitions::PartitionEntry;
+use esp_bootloader_esp_idf::ota::{Ota, OtaImageState};
+use esp_bootloader_esp_idf::partitions::{AppPartitionSubType, FlashStorage, PartitionEntry};
+use esp_hal::rtc_cntl::{Rtc, RwdtStage};
 use log::{info, warn};
-use screeny_device_api::FirmwareError;
-use screeny_fwimage::{plan_write, Rehash, Scan, SECTOR};
+use screeny_device_api::reply::UpdateRecord;
+use screeny_device_api::{FirmwareError, FwSlot, FwState, RevertReason, UpdateOutcome};
+use screeny_fwimage::{plan_write, Rehash, Scan, HEAD_LEN, SECTOR};
+use screeny_otastate::{classify, decide, Boot, Health, TrialAction};
 
 use crate::store::{self, InactiveSlot};
 
@@ -108,6 +115,32 @@ pub static ACCEPTED: AtomicU32 = AtomicU32::new(0);
 #[must_use]
 pub fn updating() -> bool {
     CLAIM.load(Ordering::Relaxed)
+}
+
+/// What the panel should be showing on account of an update, if anything.
+///
+/// One question for the frame task instead of three atomics, because the two
+/// screens are mutually exclusive and the order between them matters: an
+/// upload that has been accepted and is waiting to be activated is
+/// [`Panel::Installing`] even though the claim is already back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    /// An upload is streaming into the inactive slot.
+    Uploading(Option<u8>),
+    /// The image is in and the device is about to restart into it.
+    Installing,
+}
+
+/// The screen an update wants, if it wants one.
+#[must_use]
+pub fn panel() -> Option<Panel> {
+    if ACTIVATING.load(Ordering::Relaxed) {
+        Some(Panel::Installing)
+    } else if updating() {
+        Some(Panel::Uploading(percent()))
+    } else {
+        None
+    }
 }
 
 /// How far through the upload is, for the panel.
@@ -399,6 +432,16 @@ impl Upload {
             // Nothing is claimed and nothing is erased: this one is free.
             return Err(FirmwareError::TooLarge);
         }
+        // **Card 241, and this is a safety rule rather than a courtesy.**
+        // While the running image is on trial, the inactive slot holds the
+        // known-good image the device may have to roll back to; staging over
+        // it would throw the escape hatch away and leave a device with one
+        // unproven image and nowhere to go (research 006 section 6,
+        // mitigation 3). The same goes for the window between an accepted
+        // upload and the reset that boots it: the slot is spoken for.
+        if boot_class().on_trial() || activating() {
+            return Err(FirmwareError::Busy);
+        }
 
         // **Every `await` in this function happens before the claim is taken.**
         // That is not tidiness: `crate::http::serve_on` runs inside a `select`
@@ -672,6 +715,684 @@ impl Drop for Upload {
         // The panel is the stream's again from the frame task's next tick,
         // which is at most 20 ms away.
         CLAIM.store(false, Ordering::Release);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Card 241: activate, confirm, revert
+// ---------------------------------------------------------------------------
+//
+// Everything below this line is about `otadata`, which is 64 bytes in two
+// sectors at 0xE000 and is the only thing the bootloader reads to decide which
+// app slot to run. The three writes this firmware makes to it are
+// [`write_selection`] (activate) and two calls of [`write_state`] (confirm and
+// revert); there are no others, and each is a synchronous `#[inline(never)]`
+// call under the settings store's lock, for the reason the staging path has
+// one: `FlashRegion::write` on a 32-byte entry does a read-modify-erase-write
+// of the whole 4 KB sector with a `[u8; 4096]` on the caller's stack, and card
+// 227's lesson is that such a frame must never appear inside an HTTP handler.
+//
+// The bootloader's half - `NEW -> PENDING_VERIFY` before it hands over, and
+// `PENDING_VERIFY -> ABORTED` on **any** reset before it chooses - is ESP-IDF
+// v6.1 with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` (card 242,
+// `firmware/bootloader/README.md`). The card's Log quotes the lines.
+
+/// How long the RTC watchdog gives a trial boot that has stopped answering.
+///
+/// It exists for one failure and one only: an image that **hangs** - before
+/// `main`, or with interrupts off - and therefore never resets, so the
+/// bootloader's abort loop is never reached and the app-side deadline never
+/// runs. `esp_hal::init` disables every watchdog this chip has
+/// (`esp-hal-1.2.2/src/lib.rs` lines 768-778), so without this there is nothing
+/// armed on the device at all.
+///
+/// Above [`screeny_otastate::REVERT_AT_MS`] on purpose, and by a minute: a
+/// healthy trial disables it at its confirm and an unhealthy one resets itself
+/// at 180 s, so the watchdog should never be what fires. When it does, it is
+/// the last resort and the reset it causes is the one the bootloader turns into
+/// a rollback. It is armed only on a trial boot and is **never fed**, so a
+/// confirmed device carries no watchdog it has to keep alive.
+const TRIAL_WDT_S: u64 = 240;
+
+/// How long after the reply the activation waits before touching `otadata`.
+///
+/// The reply is in smoltcp's send buffer when the handler returns; card 236's
+/// `BoundedSocket` then closes and waits up to `CLOSE_ACK_MS` = 1500 ms for the
+/// peer to acknowledge it. Two seconds is past that bound, so by the time the
+/// first sector is erased the caller has its `{"ok":true,...,"activating":true}`
+/// and the connection is shut. The panel says `installing` for the whole of it,
+/// which is what the two seconds are really for: an update that appeared to
+/// hang for two seconds and then vanished would be indistinguishable from one
+/// that crashed.
+const ACTIVATE_DELAY_MS: u64 = 2_000;
+
+/// How often the trial asks itself whether it has proved anything.
+const TRIAL_TICK: Duration = Duration::from_secs(1);
+
+/// How often a trial that is still waiting says so on the log. Six lines for a
+/// whole trial, not one a second.
+const TRIAL_SAY_MS: u32 = 30_000;
+
+/// What kind of boot this is, as a [`Boot`] discriminant. [`BOOT_UNKNOWN`]
+/// until `read_fw_health` has classified it.
+static BOOT: AtomicU8 = AtomicU8::new(BOOT_UNKNOWN);
+const BOOT_UNKNOWN: u8 = 0;
+const BOOT_SETTLED: u8 = 1;
+const BOOT_TRIAL: u8 = 2;
+const BOOT_REVERTED_DEADLINE: u8 = 3;
+const BOOT_REVERTED_ABORTED: u8 = 4;
+const BOOT_REVERTED_REJECTED: u8 = 5;
+
+/// The image on trial has confirmed itself. One-way, and the only thing that
+/// stops [`trial_task`] writing `VALID` twice.
+static CONFIRMED: AtomicBool = AtomicBool::new(false);
+
+/// An accepted upload is waiting to be activated, or is being activated now.
+///
+/// It is **not** the same flag as [`CLAIM`] and it outlives it: the claim ends
+/// when the handler's `Upload` is dropped, and this covers the window from
+/// there to the reset. A second upload in that window would stage over an image
+/// the device is about to boot, so it is refused.
+static ACTIVATING: AtomicBool = AtomicBool::new(false);
+
+/// The activation the handler asked for, delivered to [`activate_task`].
+static ACTIVATE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// The slot the last update was installed into, as an [`FwSlot`] discriminant.
+static UPDATE_SLOT: AtomicU8 = AtomicU8::new(SLOT_NONE);
+const SLOT_NONE: u8 = 0xff;
+
+/// `esp_app_desc.version` of the image the last update installed, read once at
+/// boot.
+///
+/// A `OnceLock` rather than a mutex because it is written exactly once, in the
+/// boot path, before any task exists, and read by an HTTP handler thereafter -
+/// which is the same shape (and the same type) as `http::CTX`.
+static UPDATE_VERSION: embassy_sync::once_lock::OnceLock<screeny_device_api::text::FwText> =
+    embassy_sync::once_lock::OnceLock::new();
+
+/// The RTC watchdog, once it has been armed.
+///
+/// `esp_hal`'s `Rwdt` is a zero-sized handle to a global register block that
+/// only `Rtc` can hand out, so the `Rtc` is kept here rather than reconstructed
+/// where it is turned off. `None` on every boot that is not a trial, and on
+/// those the peripheral is never even taken.
+static WDT: Mutex<CriticalSectionRawMutex, Option<Rtc<'static>>> = Mutex::new(None);
+
+/// What kind of boot this is.
+#[must_use]
+pub fn boot_class() -> Boot {
+    match BOOT.load(Ordering::Relaxed) {
+        BOOT_SETTLED => Boot::Settled,
+        // `Unproven` is promoted to `PendingVerify` in the boot path, so by the
+        // time anybody asks there is only one kind of trial.
+        BOOT_TRIAL => Boot::Trial,
+        BOOT_REVERTED_DEADLINE => Boot::Reverted(RevertReason::Deadline),
+        BOOT_REVERTED_ABORTED => Boot::Reverted(RevertReason::Aborted),
+        BOOT_REVERTED_REJECTED => Boot::Reverted(RevertReason::Rejected),
+        _ => Boot::Unknown,
+    }
+}
+
+/// Can this device activate a staged image at all?
+///
+/// `false` when the boot classification says the device cannot read `otadata` -
+/// one half-written entry makes both of `esp-bootloader-esp-idf`'s reads fail -
+/// in which case an upload is still *staged* correctly but there is no way to
+/// select it, and the honest answer to a caller asking for activation is
+/// `unavailable` before the megabyte rather than a promise afterwards.
+#[must_use]
+pub fn can_activate() -> bool {
+    boot_class() != Boot::Unknown
+}
+
+/// What became of the last update, for `GET /api/v1/panic` (card 241).
+///
+/// Nothing here touches flash: every value was read once at boot and put in an
+/// atomic. The answer changes exactly once while the device runs - when a trial
+/// confirms - which is why it belongs on this route and not on the polled one.
+#[must_use]
+pub fn update_record() -> Option<UpdateRecord> {
+    let slot = match UPDATE_SLOT.load(Ordering::Relaxed) {
+        x if x == FwSlot::Ota0 as u8 => FwSlot::Ota0,
+        x if x == FwSlot::Ota1 as u8 => FwSlot::Ota1,
+        _ => return None,
+    };
+    let (outcome, reason) = match boot_class() {
+        Boot::Trial if CONFIRMED.load(Ordering::Relaxed) => (UpdateOutcome::Confirmed, None),
+        Boot::Trial => (UpdateOutcome::Trial, None),
+        Boot::Reverted(r) => (UpdateOutcome::Reverted, Some(r)),
+        // A settled boot has nothing to report: the update it came from, if
+        // there was one, confirmed on an earlier boot and `otadata` has kept
+        // no memory of it beyond "this slot is valid", which `fw_slot` and
+        // `fw_state` already say.
+        Boot::Settled | Boot::Unproven | Boot::Unknown => return None,
+    };
+    Some(UpdateRecord {
+        outcome,
+        reason,
+        slot,
+        version: UPDATE_VERSION.try_get().cloned(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The three writes
+// ---------------------------------------------------------------------------
+
+/// Write a state onto the entry `otadata` currently selects.
+///
+/// **The entry it writes is the one with the highest sequence number**, which
+/// on a trial boot is the running image's own. That is only true on a trial
+/// boot - after a rollback the highest sequence belongs to the image that was
+/// rolled back - so every caller of this is on a path that has already checked
+/// the boot is a trial. See the card's Log, "the trap in
+/// `esp-bootloader-esp-idf`'s own bookkeeping".
+#[inline(never)]
+fn write_state(
+    entry: PartitionEntry,
+    flash: &mut FlashStorage<'static>,
+    state: OtaImageState,
+) -> Result<(), ()> {
+    let mut ota = Ota::new(entry.as_flash_region(flash), 2).map_err(|e| {
+        warn!("ota: otadata is not usable: {:?}", e);
+    })?;
+    ota.set_current_ota_state(state).map_err(|e| {
+        warn!("ota: could not write otadata state {:?}: {:?}", state, e);
+    })
+}
+
+/// Point `otadata` at `app` and mark it `NEW`: the activation, both writes.
+///
+/// The order is 006 section 6's - select, then mark - and the window between
+/// the two is interruption 5b in the card's Log: losing power there leaves the
+/// staged slot selected with a state of `Undefined`, which the next boot
+/// promotes to `PENDING_VERIFY` rather than letting it run unproven. The
+/// sequence write lands on the entry the device is **not** booting from
+/// (`Ota::set_current_app_partition` writes `current_slot().next()`), so at no
+/// point is the entry that is keeping this device alive in flight.
+#[inline(never)]
+fn write_selection(
+    entry: PartitionEntry,
+    flash: &mut FlashStorage<'static>,
+    app: AppPartitionSubType,
+) -> Result<(), ()> {
+    let mut ota = Ota::new(entry.as_flash_region(flash), 2).map_err(|e| {
+        warn!("ota: otadata is not usable: {:?}", e);
+    })?;
+    ota.set_current_app_partition(app).map_err(|e| {
+        warn!("ota: could not select {:?}: {:?}", app, e);
+    })?;
+    ota.set_current_ota_state(OtaImageState::New).map_err(|e| {
+        warn!("ota: selected {:?} but could not mark it NEW: {:?}", app, e);
+    })
+}
+
+/// Read the front of a slot and say what version is in it.
+///
+/// [`HEAD_LEN`] is 112 bytes, which is the image header, the first segment
+/// header and `esp_app_desc` up to the end of `version`. The buffer is
+/// word-aligned so that `read_nor` reads straight into it and esp-storage's
+/// 4 KB sector buffer never appears (the same reasoning as [`read_back`]).
+#[inline(never)]
+fn read_version(
+    entry: PartitionEntry,
+    flash: &mut FlashStorage<'static>,
+) -> Option<screeny_fwimage::Version> {
+    use embedded_storage::nor_flash::ReadNorFlash as _;
+    #[repr(C, align(4))]
+    struct Head([u8; HEAD_LEN]);
+    let mut head = Head([0; HEAD_LEN]);
+    let mut region = entry.as_flash_region(flash);
+    let mut nor = region.as_nor_flash().ok()?;
+    nor.read(0, &mut head.0).ok()?;
+    screeny_fwimage::version_of(&head.0)
+}
+
+// ---------------------------------------------------------------------------
+// The boot classification
+// ---------------------------------------------------------------------------
+
+/// Work out what kind of boot this is, say so, and arm whatever it needs.
+///
+/// Called once, from [`crate::http::read_fw_health`], with the `STORE` lock
+/// held and the flash handle borrowed - so everything here that touches flash
+/// does it in one pass, under one lock, before any task exists.
+///
+/// Returns the state to report as `fw_state`, which may differ from what was
+/// read: an `Undefined` entry that selects the running slot is promoted to
+/// `PENDING_VERIFY` here, and from then on the device really is on trial.
+pub fn note_boot(
+    booted: FwSlot,
+    selected: FwSlot,
+    state: FwState,
+    parts: &store::Parts,
+    flash: &mut FlashStorage<'static>,
+) -> FwState {
+    let mut class = classify(booted, selected, state);
+    let mut state = state;
+
+    // Interruption 5b. One `otadata` write, on a boot that nothing normal
+    // produces, and the alternative is letting an image nobody vouched for
+    // become permanent because the power went out between two sector writes.
+    if class == Boot::Unproven {
+        warn!(
+            "ota: {:?} is selected but was never marked - an activation was interrupted. Putting it on trial.",
+            booted
+        );
+        if parts
+            .otadata
+            .is_some_and(|e| write_state(e, flash, OtaImageState::PendingVerify).is_ok())
+        {
+            state = FwState::PendingVerify;
+            class = Boot::Trial;
+        }
+    }
+
+    // The slot the last update was installed into, and the version in it: the
+    // running one for a trial, the *other* one for a revert - which is the
+    // image that was rejected and the thing anybody asks about first.
+    let (slot, entry) = match class {
+        Boot::Trial => (booted, None),
+        Boot::Reverted(_) => (
+            match booted {
+                FwSlot::Ota0 => FwSlot::Ota1,
+                FwSlot::Ota1 => FwSlot::Ota0,
+                FwSlot::Unknown => FwSlot::Unknown,
+            },
+            parts.inactive.map(|s| s.entry()),
+        ),
+        _ => (FwSlot::Unknown, None),
+    };
+    UPDATE_SLOT.store(slot as u8, Ordering::Relaxed);
+    let version = match (class, entry) {
+        // A trial is running the image in question, so its version is this
+        // build's own string and needs no flash read at all.
+        (Boot::Trial, _) => screeny_device_api::text::text(crate::FW_VERSION),
+        (Boot::Reverted(_), Some(e)) => read_version(e, flash)
+            .and_then(|v| v.as_str().and_then(screeny_device_api::text::text)),
+        _ => None,
+    };
+    if let Some(v) = version {
+        let _ = UPDATE_VERSION.init(v);
+    }
+
+    BOOT.store(
+        match class {
+            Boot::Settled => BOOT_SETTLED,
+            Boot::Trial | Boot::Unproven => BOOT_TRIAL,
+            Boot::Reverted(RevertReason::Deadline) => BOOT_REVERTED_DEADLINE,
+            Boot::Reverted(RevertReason::Aborted) => BOOT_REVERTED_ABORTED,
+            Boot::Reverted(RevertReason::Rejected) => BOOT_REVERTED_REJECTED,
+            Boot::Unknown => BOOT_UNKNOWN,
+        },
+        Ordering::Relaxed,
+    );
+
+    // **The one line at boot that says an update was rolled back.** It is a
+    // `warn!` because it is the one thing in this log somebody looking for
+    // "why is it still on the old version" needs to find.
+    match class {
+        Boot::Settled => {}
+        Boot::Trial | Boot::Unproven => info!(
+            "ota: ON TRIAL - this boot is a firmware update's first run from {:?}. It confirms itself once it is healthy (never before {} s) or reverts at {} s.",
+            booted,
+            screeny_otastate::CONFIRM_NOT_BEFORE_MS / 1000,
+            screeny_otastate::REVERT_AT_MS / 1000,
+        ),
+        Boot::Reverted(reason) => warn!(
+            "ota: REVERTED - the last firmware update did not stick. {} was rolled back ({}), and this device is running {:?} again, fw {}.",
+            match slot {
+                FwSlot::Ota0 => "ota_0",
+                FwSlot::Ota1 => "ota_1",
+                FwSlot::Unknown => "the other slot",
+            },
+            match reason {
+                RevertReason::Deadline =>
+                    "it booted but never became healthy, so it marked itself invalid",
+                RevertReason::Aborted =>
+                    "it reset before it could confirm itself - a panic, a watchdog or a power cut; GET /api/v1/panic says which",
+                RevertReason::Rejected => "the bootloader would not run it at all",
+            },
+            booted,
+            crate::FW_VERSION,
+        ),
+        Boot::Unknown => warn!(
+            "ota: this device cannot say which slot otadata selects, so it will not write to it. A serial flash (tools/fw-run.sh erases otadata) is what clears this."
+        ),
+    }
+
+    // RTC memory's copy of "a trial is expected" has done its job - the
+    // watchdog is either armed or not by now - and it must not survive into a
+    // boot that is not one. `otadata` is the record from here on.
+    crate::panic::set_ota_trial(class.on_trial());
+    state
+}
+
+// ---------------------------------------------------------------------------
+// The watchdog
+// ---------------------------------------------------------------------------
+
+/// Take the RTC peripheral, without arming anything.
+///
+/// Called from `main` on every boot, because the handle has to be somewhere
+/// [`arm_watchdog`] can reach and `esp_hal`'s `Rwdt` is a zero-sized token only
+/// `Rtc` can hand out. It costs a `Peripherals` field and nothing else: the
+/// watchdog `esp_hal::init` disabled stays disabled until somebody asks.
+pub async fn hold_watchdog(rtc: Rtc<'static>) {
+    *WDT.lock().await = Some(rtc);
+}
+
+/// Arm the RTC watchdog for [`TRIAL_WDT_S`].
+///
+/// Called **twice**, and both times matter:
+///
+/// 1. From `main` immediately after `esp_hal::init`, when RTC memory says the
+///    boot that is starting is a trial. That is early enough to cover
+///    `esp_hal::init`'s own work, the heap, the store and the panel - i.e.
+///    everything a newly written image could wedge in before it could read
+///    `otadata` and find out what it was.
+/// 2. From `main` again once `otadata` has been read, if that says this is a
+///    trial after all. RTC memory is zeroed by a power cycle, so a device
+///    unplugged between the activation and the trial boot arrives here with the
+///    bit clear and the trial still very much on; this is the second chance,
+///    and it covers everything after the store comes up.
+///
+/// Arming twice is harmless - it is two register writes - and the log line
+/// only appears the first time, because the second is the uninteresting one.
+pub async fn arm_watchdog() {
+    let mut guard = WDT.lock().await;
+    let Some(rtc) = guard.as_mut() else {
+        warn!("ota: no RTC handle - this trial has no watchdog");
+        return;
+    };
+    let first = !ARMED.swap(true, Ordering::Relaxed);
+    rtc.rwdt.set_timeout(
+        RwdtStage::Stage0,
+        esp_hal::time::Duration::from_secs(TRIAL_WDT_S),
+    );
+    rtc.rwdt.enable();
+    if first {
+        warn!(
+            "ota: trial boot - RTC watchdog armed for {} s (it is never fed; confirming turns it off)",
+            TRIAL_WDT_S
+        );
+    }
+}
+
+/// Turn it off again: this boot is not a trial, or the trial has confirmed.
+pub async fn disarm_watchdog() {
+    if !ARMED.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    if let Some(rtc) = WDT.lock().await.as_mut() {
+        rtc.rwdt.disable();
+        info!("ota: RTC watchdog disabled");
+    }
+}
+
+/// Whether [`arm_watchdog`] has run since boot, so that arming twice says so
+/// once and disarming an unarmed watchdog says nothing at all.
+static ARMED: AtomicBool = AtomicBool::new(false);
+
+// ---------------------------------------------------------------------------
+// Confirm and revert: the image on trial decides its own fate
+// ---------------------------------------------------------------------------
+
+/// Everything the health criterion asks about this device, right now.
+fn health() -> Health {
+    // The `ota-test-unhealthy` bench build (card 241): an image that boots,
+    // joins, serves and draws perfectly well and simply never says so. It is
+    // the one shape of failure the bootloader cannot see - nothing resets -
+    // so the app-side deadline is the only thing that can end its trial, which
+    // is precisely what the bench is being asked to demonstrate.
+    #[cfg(feature = "ota-test-unhealthy")]
+    return Health {
+        uptime_ms: crate::now_ms(),
+        has_ip: false,
+        http_requests: 0,
+        swaps: 0,
+    };
+    #[cfg(not(feature = "ota-test-unhealthy"))]
+    Health {
+        uptime_ms: crate::now_ms(),
+        // WiFi associated *and* DHCP bound: the frame task publishes the
+        // station's address here on every 20 ms tick, and it is `None` - so
+        // zero - for the whole of a trial join as well as when there is no
+        // link at all.
+        has_ip: crate::http::IPV4.load(Ordering::Relaxed) != 0,
+        http_requests: crate::http::REQUESTS.load(Ordering::Relaxed),
+        swaps: crate::SWAPS.load(Ordering::Relaxed),
+    }
+}
+
+/// The image on trial, proving itself or giving up.
+///
+/// Spawned by `main` **only** when the boot classification is a trial, which is
+/// what makes "it is impossible to confirm from a state that is not a trial"
+/// true by construction rather than by a check inside the loop: on every other
+/// boot this task does not exist and `otadata` is not written at all.
+#[embassy_executor::task]
+pub async fn trial_task() {
+    let mut said_at: u32 = 0;
+    loop {
+        Timer::after(TRIAL_TICK).await;
+        let h = health();
+        match decide(h) {
+            TrialAction::Wait => {
+                if h.uptime_ms.wrapping_sub(said_at) >= TRIAL_SAY_MS {
+                    said_at = h.uptime_ms;
+                    info!(
+                        "ota: trial at {} s - ip {}, http {}, swaps {} (healthy {})",
+                        h.uptime_ms / 1000,
+                        h.has_ip,
+                        h.http_requests,
+                        h.swaps,
+                        h.is_healthy(),
+                    );
+                }
+            }
+            TrialAction::Confirm => {
+                if confirm(&h).await {
+                    return;
+                }
+                // The write failed. Keep trying: the deadline is still ahead,
+                // and if it arrives first the revert path takes over - which
+                // is the right way round, because an image that cannot write
+                // `otadata` has not proved it is healthy.
+            }
+            TrialAction::Revert => revert(&h).await,
+        }
+    }
+}
+
+/// Mark the running slot `VALID`. Returns whether it stuck.
+async fn confirm(h: &Health) -> bool {
+    if CONFIRMED.load(Ordering::Relaxed) {
+        return true;
+    }
+    let ok = {
+        let mut guard = store::STORE.lock().await;
+        match guard.as_mut() {
+            Some(f) => {
+                let entry = f.parts().otadata;
+                let flash = f.raw();
+                match entry {
+                    Some(e) => write_state(e, flash, OtaImageState::Valid).is_ok(),
+                    None => false,
+                }
+            }
+            None => false,
+        }
+    };
+    if !ok {
+        warn!("ota: could not confirm this image - will try again on the next tick");
+        return false;
+    }
+    CONFIRMED.store(true, Ordering::Relaxed);
+    crate::http::set_fw_state(FwState::Valid);
+    crate::panic::set_ota_trial(false);
+    disarm_watchdog().await;
+    info!(
+        "ota: CONFIRMED at {} s - fw {} is now this device's firmware (otadata says valid). ip {}, http requests {}, swaps {}.",
+        h.uptime_ms / 1000,
+        crate::FW_VERSION,
+        h.has_ip,
+        h.http_requests,
+        h.swaps,
+    );
+    true
+}
+
+/// Mark the running slot `INVALID` and restart, so the bootloader picks the
+/// other one.
+async fn revert(h: &Health) -> ! {
+    warn!(
+        "ota: REVERTING at {} s - fw {} never became healthy (ip {}, http requests {}, swaps {}). Marking this slot invalid and restarting into the previous image.",
+        h.uptime_ms / 1000,
+        crate::FW_VERSION,
+        h.has_ip,
+        h.http_requests,
+        h.swaps,
+    );
+    {
+        let mut guard = store::STORE.lock().await;
+        if let Some(f) = guard.as_mut() {
+            let entry = f.parts().otadata;
+            let flash = f.raw();
+            if let Some(e) = entry {
+                // A failure here is survivable and is *not* a reason to stay:
+                // the entry is still `PENDING_VERIFY`, and the bootloader
+                // aborts one of those on the reset that is two lines away.
+                let _ = write_state(e, flash, OtaImageState::Invalid);
+            }
+        }
+    }
+    crate::panic::set_ota_trial(false);
+    // Long enough for the two lines above to leave the blocking UART, and for
+    // any sector erase to finish - the same reasoning as the panic path's
+    // settle, at a point where there is no hurry at all.
+    Timer::after(Duration::from_millis(200)).await;
+    esp_hal::system::software_reset()
+}
+
+// ---------------------------------------------------------------------------
+// Activation: the deferred half of POST /api/v1/firmware
+// ---------------------------------------------------------------------------
+
+/// Ask for the staged image to be activated, once the reply is on the wire.
+///
+/// Called by the HTTP handler **after** it has built its reply and before it
+/// returns, so the flash write and the reset happen where card 227's lesson
+/// says they must: not in the handler.
+pub fn request_activation() {
+    ACTIVATING.store(true, Ordering::Relaxed);
+    ACTIVATE.signal(());
+}
+
+/// The counterpart of [`request_activation`] for a device that has just
+/// accepted an image: is one already on its way to being booted?
+#[must_use]
+pub fn activating() -> bool {
+    ACTIVATING.load(Ordering::Relaxed)
+}
+
+/// Write `otadata` and restart, once the reply has had time to leave.
+///
+/// A task and not part of the handler, for two reasons that both matter: the
+/// 4 KB sector-buffer frame must not sit under picoserve's response chain, and
+/// the reply must be acknowledged before the connection is destroyed by a
+/// reboot. See [`ACTIVATE_DELAY_MS`].
+#[embassy_executor::task]
+pub async fn activate_task() {
+    ACTIVATE.wait().await;
+    Timer::after(Duration::from_millis(ACTIVATE_DELAY_MS)).await;
+
+    let target = {
+        let guard = store::STORE.lock().await;
+        guard.as_ref().and_then(|f| f.parts().inactive)
+    };
+    let Some(slot) = target else {
+        warn!("ota: asked to activate with no inactive slot - nothing done");
+        ACTIVATING.store(false, Ordering::Relaxed);
+        return;
+    };
+    let Some(app) = app_subtype(&slot) else {
+        warn!("ota: the staged slot has a label this build does not know - nothing done");
+        ACTIVATING.store(false, Ordering::Relaxed);
+        return;
+    };
+
+    let ok = {
+        let mut guard = store::STORE.lock().await;
+        match guard.as_mut() {
+            Some(f) => {
+                let entry = f.parts().otadata;
+                let flash = f.raw();
+                match entry {
+                    Some(e) => write_selection(e, flash, app).is_ok(),
+                    None => false,
+                }
+            }
+            None => false,
+        }
+    };
+    if !ok {
+        warn!(
+            "ota: the staged image is still in {:#x} but otadata could not be written - this device is unchanged and is still running fw {}",
+            slot.offset(),
+            crate::FW_VERSION
+        );
+        ACTIVATING.store(false, Ordering::Relaxed);
+        return;
+    }
+
+    // RTC memory, so that the next boot can arm the watchdog before it is able
+    // to read a single byte of flash.
+    crate::panic::set_ota_trial(true);
+    info!(
+        "ota: ACTIVATED {:#x} - restarting into it on trial. If it does not prove itself within {} s, or resets before it does, the bootloader brings fw {} back.",
+        slot.offset(),
+        screeny_otastate::REVERT_AT_MS / 1000,
+        crate::FW_VERSION
+    );
+    Timer::after(Duration::from_millis(200)).await;
+    esp_hal::system::software_reset()
+}
+
+/// The `ota-test-panic` bench build: panic twenty seconds into **every** boot.
+///
+/// Card 243's `panic-test` fires once per power-on, because its job is to prove
+/// the breadcrumb survives a reset. This one has the opposite job - it is an
+/// *update* that is broken, and the thing being proved is that the bootloader
+/// takes the panel back to the previous image - so it must not quietly become
+/// healthy on the second boot. In practice it panics exactly once, because the
+/// second boot is the old image; if it ever panics twice, the rollback did not
+/// happen and that is the finding.
+#[cfg(feature = "ota-test-panic")]
+#[embassy_executor::task]
+pub async fn panic_test_task() {
+    const AFTER_S: u64 = 20;
+    warn!(
+        "ota-test: BENCH BUILD - panicking on core 0 in {} s, on every boot (card 241)",
+        AFTER_S
+    );
+    Timer::after(Duration::from_secs(AFTER_S)).await;
+    panic!("ota-test: deliberate panic during an OTA trial (card 241)");
+}
+
+/// The partition subtype for a slot, from its **label**.
+///
+/// By label and not by `PartitionEntry::partition_type()`, which `unwrap!`s its
+/// conversion and would panic on a subtype this crate's enums do not know
+/// (research 006 section 3), and not by hard-coded offset, which a
+/// re-partitioned device would make a lie. `firmware/partitions.csv` is the
+/// source of truth for both the names and the places.
+fn app_subtype(slot: &InactiveSlot) -> Option<AppPartitionSubType> {
+    match slot.entry().label_as_str() {
+        "ota_0" => Some(AppPartitionSubType::Ota0),
+        "ota_1" => Some(AppPartitionSubType::Ota1),
+        _ => None,
     }
 }
 

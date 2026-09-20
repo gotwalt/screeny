@@ -116,6 +116,18 @@ pub enum Screen<'a> {
         /// than inventing a figure.
         percent: Option<u8>,
     },
+    /// The image is in, the boot slot is about to be switched, and the device
+    /// is going to restart (card 241).
+    ///
+    /// [`Screen::Updating`]'s successor, and the two are separate screens
+    /// rather than one with a flag because they ask different things of
+    /// whoever is watching. "Updating" has a bar that moves and means *wait*;
+    /// this one has no bar at all - there is nothing left to measure - and
+    /// means *it is about to go away and come back*. A progress bar frozen at
+    /// 100% for the two seconds before a reboot is the picture of a device
+    /// that has hung, which is exactly the wrong thing to show while one is
+    /// deliberately restarting.
+    Installing,
 }
 
 /// Why a screen could not be drawn.
@@ -190,6 +202,15 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             text(&mut t, "updating", 1, 2, title);
             text(&mut t, "do not unplug", 1, 12, label);
             progress_bar(&mut t, percent);
+        }
+        Screen::Installing => {
+            let title = MonoTextStyle::new(&FONT_5X7, TITLE);
+            let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+            // Two lines and nothing where the bar was: the empty half of the
+            // panel is itself the difference from `Updating`, and it is what
+            // the test below pins.
+            text(&mut t, "installing", 1, 5, title);
+            text(&mut t, "restarting", 1, 16, label);
         }
     }
     Ok(())
@@ -413,6 +434,7 @@ mod tests {
             Screen::Connected { ip: [192, 168, 7, 221] },
             Screen::Updating { percent: Some(100) },
             Screen::Updating { percent: None },
+            Screen::Installing,
         ] {
             let mut f = [0u8; NBYTES];
             render(&s, &mut f).unwrap();
@@ -446,6 +468,37 @@ mod tests {
         assert!(all >= 58, "a finished upload fills the bar ({all})");
         // Out of range is clamped, not wrapped.
         assert_eq!(filled(Some(200)), all);
+    }
+
+    /// Card 241. The screen that stands between the last flash write and the
+    /// reboot has to be *different* from the one before it - a panel that does
+    /// not change for two seconds is what a hung device looks like - and it
+    /// has to have no bar, because there is nothing left to measure.
+    #[test]
+    fn the_installing_screen_is_not_the_updating_one_and_has_no_bar() {
+        let mut installing = [0u8; NBYTES];
+        render(&Screen::Installing, &mut installing).unwrap();
+        let mut updating = [0u8; NBYTES];
+        render(&Screen::Updating { percent: Some(100) }, &mut updating).unwrap();
+        assert_ne!(
+            installing, updating,
+            "the two screens must be told apart from across a room"
+        );
+        // Rows 22 and 28 are the bar's two edges, drawn right across the panel
+        // on `Updating` and nothing at all here.
+        for y in [22, 28] {
+            let n = (0..W).filter(|x| lit(&installing, *x, y)).count();
+            assert_eq!(n, 0, "row {y} is not empty: the bar is still there");
+            assert!(
+                (0..W).filter(|x| lit(&updating, *x, y)).count() > 50,
+                "row {y} of the updating screen should be the bar's edge"
+            );
+        }
+        let n = (0..W)
+            .flat_map(|x| (0..H).map(move |y| (x, y)))
+            .filter(|&(x, y)| lit(&installing, x, y))
+            .count();
+        assert!(n > 100, "the installing screen drew nothing ({n} pixels)");
     }
 
     /// The outline is there even when there is nothing to fill it with, so

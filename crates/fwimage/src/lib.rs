@@ -102,7 +102,7 @@ pub const HASH_LEN: usize = 32;
 /// How much of the front of an image this crate keeps a copy of: the header,
 /// the first segment header, and the app descriptor's magic, version and
 /// project name.
-const HEAD_LEN: usize = APP_DESC_OFFSET + DESC_PROJECT + DESC_FIELD;
+pub const HEAD_LEN: usize = APP_DESC_OFFSET + DESC_PROJECT + DESC_FIELD;
 
 const _: () = assert!(HEAD_LEN == 112);
 const _: () = assert!(HEAD_LEN < SECTOR, "the head must fit the first chunk");
@@ -182,6 +182,39 @@ impl core::fmt::Debug for Version {
             None => write!(f, "<{} non-ascii bytes>", DESC_FIELD),
         }
     }
+}
+
+/// `esp_app_desc.version` out of the front of an image, with no scan at all.
+///
+/// [`Scan`] is how an image *arriving* is identified, and it is the only thing
+/// that may decide whether one is acceptable. This is the other question, which
+/// card 241 asks about an image that is already sitting in flash: after a
+/// rolled-back update the device wants to say **which version it just rejected**,
+/// and the answer is 112 bytes at the front of the slot it is not running from.
+/// Reading them is one aligned flash read; a full [`Scan`] of a megabyte would
+/// be a SHA-256 pass to put a string in a JSON reply.
+///
+/// `front` is the image from byte 0; anything past [`HEAD_LEN`] is ignored.
+/// `None` when it is not an ESP image, when the app descriptor's magic word is
+/// not there, or when there are not enough bytes - which is what an erased or
+/// half-staged slot looks like, and is the honest answer for it.
+///
+/// It deliberately does **not** check `project_name`: this is for reporting,
+/// not for admitting, and an image that got as far as being staged has already
+/// passed check 4. Refusing to name a version because the check that would have
+/// refused the image never ran would be the wrong way round.
+#[must_use]
+pub fn version_of(front: &[u8]) -> Option<Version> {
+    if front.len() < HEAD_LEN || front[0] != IMAGE_MAGIC {
+        return None;
+    }
+    let d = &front[APP_DESC_OFFSET..];
+    if u32::from_le_bytes([d[0], d[1], d[2], d[3]]) != APP_DESC_MAGIC {
+        return None;
+    }
+    let mut v = [0u8; DESC_FIELD];
+    v.copy_from_slice(&d[DESC_VERSION..DESC_VERSION + DESC_FIELD]);
+    Some(Version(v))
 }
 
 // ---------------------------------------------------------------------------

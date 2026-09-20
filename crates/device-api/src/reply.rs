@@ -14,8 +14,8 @@ use screeny_provision::machine::{Trial, TrialOutcome};
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, StreamState,
-    WifiState,
+    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    StreamState, UpdateOutcome, WifiState,
 };
 use crate::text::{
     ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, SsidText, MAX_FW_LEN,
@@ -199,6 +199,19 @@ pub struct PanicReply {
     pub panic_count: u32,
     /// The last one, or `null` when there has been none - the normal answer.
     pub last_panic: Option<PanicRecord>,
+    /// What became of the last firmware update (card 241), or `null` when this
+    /// device has not activated one since it was last flashed over serial.
+    ///
+    /// It shares this route rather than [`StatusReply`] for the same two
+    /// reasons the breadcrumb does: `status` is polled every few seconds and is
+    /// full, and this is a fact that **cannot change while the device runs**
+    /// except once, when an image on trial confirms itself. A reader asks once
+    /// per `boot_id`, and again if it saw `"trial"`.
+    ///
+    /// `#[serde(default)]`, so a Studio built from this commit can still read
+    /// firmware 0.6.x, which does not send it.
+    #[serde(default)]
+    pub update: Option<UpdateRecord>,
 }
 
 impl PanicReply {
@@ -206,7 +219,39 @@ impl PanicReply {
     pub const MAX_JSON_LEN: usize = 1
         + field("boot_count", MAX_U32_LEN)
         + field("panic_count", MAX_U32_LEN)
-        + field("last_panic", PanicRecord::MAX_JSON_LEN);
+        + field("last_panic", PanicRecord::MAX_JSON_LEN)
+        + field("update", UpdateRecord::MAX_JSON_LEN);
+}
+
+/// What became of the last firmware update this device activated (card 241).
+///
+/// Every field is read back out of flash - `otadata` for the first two, the
+/// slot's own `esp_app_desc` for the last - so the answer survives a power
+/// cycle and is still true days later. There is nothing here that a device
+/// which was reverted and then unplugged would have forgotten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRecord {
+    /// Trial, confirmed, or rolled back.
+    pub outcome: UpdateOutcome,
+    /// Why it was rolled back; `null` unless `outcome` is `reverted`.
+    pub reason: Option<RevertReason>,
+    /// The slot the update was installed into - the one now running for a
+    /// `trial` or a `confirmed` one, and the one **not** running for a
+    /// `reverted` one.
+    pub slot: FwSlot,
+    /// `esp_app_desc.version` of the image in that slot: the version this
+    /// update was trying to install. `null` when the slot holds nothing
+    /// readable, which is what an update reverted before its image finished
+    /// staging looks like.
+    pub version: Option<FwText>,
+}
+
+impl UpdateRecord {
+    pub(crate) const MAX_JSON_LEN: usize = 1
+        + field("outcome", UpdateOutcome::MAX_JSON_LEN)
+        + field("reason", RevertReason::MAX_JSON_LEN)
+        + field("slot", FwSlot::MAX_JSON_LEN)
+        + field("version", 2 + MAX_FW_LEN * ESCAPE_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +602,25 @@ pub struct FirmwareReply {
     /// Why it failed. Absent when `ok`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<FirmwareError>,
+    /// The device has accepted the image **and will reboot into it** (card
+    /// 241): expect the connection to go away within a couple of seconds and
+    /// the device to be back in about twenty.
+    ///
+    /// False for a refused upload, and false for an accepted one that was sent
+    /// with `?activate=0`, which stages the image and changes nothing about
+    /// what boots.
+    ///
+    /// It is `true` when the device has *decided* to activate, not when it
+    /// has: the `otadata` write happens after this reply is on the wire, on
+    /// purpose (a flash write inside an HTTP handler is what card 227 found
+    /// costing 4 KB of core 0's stack). A device that loses power in between
+    /// comes back running what it was running before, and the upload is simply
+    /// repeated.
+    ///
+    /// `#[serde(default)]`, so a reader built from this commit can still parse
+    /// firmware 0.6.x's reply, which never activates anything.
+    #[serde(default)]
+    pub activating: bool,
 }
 
 impl FirmwareReply {
@@ -564,15 +628,29 @@ impl FirmwareReply {
     pub const MAX_JSON_LEN: usize = 1
         + field("ok", "false".len())
         + field("written", MAX_U32_LEN)
-        + field("error", FirmwareError::MAX_JSON_LEN);
+        + field("error", FirmwareError::MAX_JSON_LEN)
+        + field("activating", "false".len());
 
-    /// A successful upload of `written` bytes.
+    /// A successful upload of `written` bytes that **changed nothing about
+    /// what boots**: the image is staged in the inactive slot and that is all.
     #[must_use]
     pub const fn ok(written: u32) -> Self {
         Self {
             ok: true,
             written,
             error: None,
+            activating: false,
+        }
+    }
+
+    /// A successful upload the device is about to reboot into.
+    #[must_use]
+    pub const fn activating(written: u32) -> Self {
+        Self {
+            ok: true,
+            written,
+            error: None,
+            activating: true,
         }
     }
 
@@ -583,6 +661,7 @@ impl FirmwareReply {
             ok: false,
             written,
             error: Some(error),
+            activating: false,
         }
     }
 }

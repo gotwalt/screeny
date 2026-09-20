@@ -339,8 +339,12 @@ pub fn screen(now_ms: u32) -> Option<PanelScreen> {
 /// not learn. What it shares with the portal screens is the *renderer*, so
 /// that the two things the panel can be taken over by are drawn by one crate
 /// with host tests rather than by two.
-pub fn render_updating(percent: Option<u8>, frame: &mut Rgb888Frame) {
-    if let Err(e) = screeny_provision::render(&Screen::Updating { percent }, frame) {
+pub fn render_updating(what: crate::ota::Panel, frame: &mut Rgb888Frame) {
+    let screen = match what {
+        crate::ota::Panel::Uploading(percent) => Screen::Updating { percent },
+        crate::ota::Panel::Installing => Screen::Installing,
+    };
+    if let Err(e) = screeny_provision::render(&screen, frame) {
         warn!("ota: the updating screen could not be drawn: {:?}", e);
     }
 }

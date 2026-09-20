@@ -221,6 +221,22 @@ static FW_SLOT: AtomicU8 = AtomicU8::new(FW_UNKNOWN);
 static FW_STATE: AtomicU8 = AtomicU8::new(FW_UNKNOWN);
 const FW_UNKNOWN: u8 = 0xff;
 
+/// Requests this server has served since boot.
+///
+/// Four bytes, and they exist for card 241's health criterion: research 006
+/// section 6 confirms an image on trial only once "the HTTP server has accepted
+/// one request **or** 120 s of uptime has passed", and "one request" has to be
+/// counted somewhere. Counted in [`Dispatch`], so it covers the page, the API
+/// and the setup form alike - anything that proves somebody reached this device
+/// and got an answer.
+pub static REQUESTS: AtomicU32 = AtomicU32::new(0);
+
+/// Publish a new `fw_state`, for the one thing that can change it while the
+/// device runs: an image on trial confirming itself (card 241).
+pub fn set_fw_state(state: FwState) {
+    FW_STATE.store(state as u8, Ordering::Relaxed);
+}
+
 // Card 223 removed `WIFI_FAIL_REASON` and its two setters. `GET /api/v1/wifi`
 // reports the *machine's* trial - `Trial::outcome` already carries a
 // `FailReason` and `trial_is_current()` already says when it is the answer - so
@@ -305,11 +321,27 @@ pub async fn read_fw_health() {
             Ordering::Relaxed,
         );
     }
-    info!(
-        "http: fw slot {:?} state {:?}",
-        fw_slot(),
-        fw_state()
-    );
+    // Which slot `otadata` *selected*, which is not always the one that
+    // booted: `Ota::current_app_partition` works from the sequence numbers
+    // alone and ignores the image states, so after a rollback it names the
+    // slot that was rolled back from. Card 241 makes that disagreement the
+    // detection, so it is read here whether or not the MMU answered.
+    let selected = match ota.current_app_partition() {
+        Ok(AppPartitionSubType::Ota0) => FwSlot::Ota0,
+        Ok(AppPartitionSubType::Ota1) => FwSlot::Ota1,
+        _ => FwSlot::Unknown,
+    };
+    // `Ota` borrows the flash handle and `note_boot` needs it back. It has no
+    // `Drop`, so this is a borrow ending and not a destructor running.
+    let _ = ota;
+    info!("http: fw slot {:?} state {:?}", fw_slot(), fw_state());
+
+    // Card 241: what kind of boot this is, the one line that says an update
+    // was rolled back, and - on a trial - the promotion that makes an
+    // interrupted activation safe. It is the last thing done under this lock
+    // because it is the only one that may write.
+    let state = crate::ota::note_boot(fw_slot(), selected, fw_state(), &parts, flash);
+    set_fw_state(state);
 }
 
 fn fw_slot() -> FwSlot {
@@ -648,6 +680,11 @@ fn get_panic() -> Reply {
             line: p.line,
             consecutive: p.consecutive,
         }),
+        // Card 241, and on this route for the same two reasons the breadcrumb
+        // is: `StatusReply` is polled every few seconds and is full, and this
+        // changes exactly once in the life of a boot - when an image on trial
+        // confirms itself.
+        update: crate::ota::update_record(),
     }))
 }
 
@@ -970,6 +1007,7 @@ fn firmware_failed(written: u32, e: FirmwareError) -> Reply {
 /// SHA-256 - is in `#[inline(never)]` synchronous functions and adds at most
 /// ~600 bytes on top, only while an upload is running.
 async fn post_firmware<R: picoserve::io::Read>(
+    activate: bool,
     body: &mut RequestBodyConnection<'_, R>,
 ) -> Reply {
     let declared = u32::try_from(body.content_length()).ok();
@@ -982,6 +1020,17 @@ async fn post_firmware<R: picoserve::io::Read>(
             "this device has no inactive app slot",
         );
     };
+    // Card 241. Refused **before** the megabyte rather than after it: a device
+    // whose `otadata` could not be read can still stage an image perfectly
+    // well and can never select it, so promising to activate one and then
+    // spending twenty-five seconds discovering otherwise is the wrong way
+    // round. Staging (`?activate=0`) is still offered, because it still works.
+    if activate && !crate::ota::can_activate() {
+        return Reply::detail(
+            ErrorCode::Unavailable,
+            "this device cannot select a boot slot",
+        );
+    }
     let mut up = match crate::ota::Upload::start(slot, declared).await {
         Ok(u) => u,
         // No claim was taken and no sector was erased for any of these.
@@ -1031,7 +1080,22 @@ async fn post_firmware<R: picoserve::io::Read>(
                 "ota: staged image accepted - {} bytes, {} segments, version {:?}",
                 a.image_len, a.segments, a.version
             );
-            Reply::ok(ApiBody::Firmware(FirmwareReply::ok(a.written)))
+            if activate {
+                // **The reply is built here and the flash write happens
+                // elsewhere**, and the order is the whole of card 227's lesson
+                // and card 236's: `request_activation` only raises a signal,
+                // so nothing in this handler's chain touches flash; the
+                // `Upload` is dropped on the next line, giving the panel back;
+                // `Dispatch` writes this reply; the worker's `BoundedSocket`
+                // closes and waits for the peer's acknowledgement; and
+                // `ota::activate_task`, two seconds later, is what writes
+                // `otadata` and resets the chip.
+                crate::ota::request_activation();
+                Reply::ok(ApiBody::Firmware(FirmwareReply::activating(a.written)))
+            } else {
+                info!("ota: staged only (activate=0) - nothing about what boots has changed");
+                Reply::ok(ApiBody::Firmware(FirmwareReply::ok(a.written)))
+            }
         }
         Err(e) => firmware_failed(written, e),
     }
@@ -1458,6 +1522,15 @@ impl PathRouterService for Dispatch {
         // the `Request`, so the body connection can still be borrowed mutably.
         let method = request.parts.method();
         let path = request.parts.path();
+        // Card 241's health criterion counts requests *served*, so it is
+        // counted here, on the way in, for every route and both pages alike.
+        // A `Relaxed` add of a `u32` is two instructions and the number only
+        // ever has to answer "more than none".
+        REQUESTS.fetch_add(1, Ordering::Relaxed);
+        // The one query parameter this API has. picoserve keeps it apart from
+        // the path, so `/api/v1/firmware?activate=0` still matches the route
+        // table exactly.
+        let query = request.parts.query();
 
         // One line per request **on the setup network only**: it exists for
         // minutes, a phone's captive probing is what goes wrong on it, and the
@@ -1480,7 +1553,8 @@ impl PathRouterService for Dispatch {
             );
         }
 
-        let reply = route_request(self.ap, method, path, &mut request.body_connection).await;
+        let reply =
+            route_request(self.ap, method, path, query, &mut request.body_connection).await;
 
         // The handler future is finished and dropped *before* the reply is
         // written: at no point is a lock, a body borrow or a handler's state
@@ -1533,6 +1607,7 @@ async fn route_request<R: picoserve::io::Read>(
     ap: bool,
     method: &str,
     path: Path<'_>,
+    query: Option<picoserve::url_encoded::UrlEncodedString<'_>>,
     body: &mut RequestBodyConnection<'_, R>,
 ) -> Reply {
     // --- 1: card 223's captive-portal catch-all, before any routing --------
@@ -1649,8 +1724,29 @@ async fn route_request<R: picoserve::io::Read>(
         },
         // Card 240. The one route whose body is never buffered: `Body::Stream`
         // above means no `max_request_len` check and no `read_all`, and the
-        // handler reads the socket itself.
-        (route::Method::Post, route::FIRMWARE) => post_firmware(body).await,
+        // handler reads the socket itself. Card 241 gives it the one query
+        // parameter this API has, decoded here because it is the only route
+        // that looks at a query at all: a 32-byte buffer holds
+        // `activate=false` three times over, and a query longer than that on
+        // this route is refused rather than half-read.
+        (route::Method::Post, route::FIRMWARE) => {
+            let decoded = match query {
+                None => None,
+                Some(q) => match q.try_into_string::<32>() {
+                    Ok(s) => Some(s),
+                    Err(_) => {
+                        return Reply::detail(
+                            ErrorCode::OutOfRange,
+                            "the query string is not one this route takes",
+                        );
+                    }
+                },
+            };
+            match route::parse_activate(decoded.as_deref()) {
+                Ok(activate) => post_firmware(activate, body).await,
+                Err(_) => Reply::detail(ErrorCode::OutOfRange, "activate must be 0 or 1"),
+            }
+        }
         // Unreachable while this match covers `ROUTES`; a new row that nobody
         // wired up answers 404 rather than failing to compile, because a
         // firmware that panics on an unhandled path is worse than one that

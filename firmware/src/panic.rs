@@ -125,6 +125,18 @@ const F_HALT: u32 = 1 << 1;
 /// reflash between them.
 #[cfg_attr(not(feature = "panic-test"), allow(dead_code))]
 const F_TEST_FIRED: u32 = 1 << 2;
+/// **A firmware update was activated and the next boot is its trial** (card
+/// 241).
+///
+/// One bit rather than the new words the card's first sketch wanted, because
+/// everything else about a trial lives in `otadata`, where it survives a power
+/// cut. What this bit is for is the one question that has to be answered
+/// *before* flash is up: whether to arm the RTC watchdog as the first thing
+/// after `esp_hal::init`, so that an image that hangs before it can read
+/// `otadata` is still replaced. Losing it on a power cycle is harmless and is
+/// the reason it can live here at all: a power cycle is itself a reset, and
+/// the bootloader has already aborted the trial by the time `main` runs.
+const F_OTA_TRIAL: u32 = 1 << 3;
 
 const W_MAGIC: usize = 0;
 /// Boots since the last power-on, including this one.
@@ -339,6 +351,45 @@ pub fn boot() -> bool {
     // cost 128 bytes of ceiling for a value that cannot change. The check reads
     // it again with [`report`], which is a dozen volatile loads.
     r.halt
+}
+
+// ---------------------------------------------------------------------------
+// The one bit card 241 keeps here
+// ---------------------------------------------------------------------------
+
+/// Remember that the next boot is a firmware update's trial, or forget it.
+///
+/// Called by [`crate::ota`] from either side of a trial: set before the reboot
+/// that activates an image, cleared the moment the boot classification says
+/// this boot is not one. It is a plain flag with no counter beside it: "how
+/// many times has this been tried" is a question `otadata` answers, and answers
+/// across a power cut, which this region does not.
+pub fn set_ota_trial(armed: bool) {
+    if !intact() {
+        wipe();
+    }
+    let flags = get(W_FLAGS);
+    let next = if armed {
+        flags | F_OTA_TRIAL
+    } else {
+        flags & !F_OTA_TRIAL
+    };
+    if next != flags {
+        put(W_FLAGS, next);
+        seal();
+    }
+}
+
+/// Is the boot that is starting now a firmware update's trial, as far as RTC
+/// memory knows?
+///
+/// **Read before `esp_hal::init` has done anything but come up**, and therefore
+/// before the partition table, `otadata` or the store. `false` here does not
+/// mean "not a trial" - a power cycle clears the region - it means "no reason to
+/// arm the watchdog", which is the only decision this answer feeds.
+#[must_use]
+pub fn ota_trial_armed() -> bool {
+    intact() && get(W_FLAGS) & F_OTA_TRIAL != 0
 }
 
 /// The `panic-test` build's one-shot latch: `true` the first time it is called
