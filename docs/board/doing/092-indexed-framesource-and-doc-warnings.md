@@ -207,3 +207,58 @@ real binary - `screeny clock --at 11:42:50 --addr 127.0.0.1:PORT --fps 30
 --duration 1` - against the loopback receiver and checks every arriving frame
 is `PAL4_LZ` with 11 colours or fewer, that stdout says `pal4-lz 100%` and
 `N indexed frames exact on the wire`, and that it never says `requantised`.
+
+### Surprise: the fractal is palette-authored too, and gains more than the clock
+
+The card says "the fractal is a continuous-colour renderer and should stay
+RGB". That was true when the card was written; it is not true of today's
+`crates/demos`. `FractalZoom` implements `Piece::render_indexed` (fractal.rs
+line 540): it renders in linear light, picks the two nearest entries of a
+32-ish-entry ramp and dithers along the line between them, and
+`demos/tests/fractal.rs::the_indexed_path_is_always_exact` already pins that.
+So the one adapter hands *both* pieces to `send_indexed`, and I did not
+special-case the fractal back onto the RGB path: doing so would mean writing
+code to refuse a door the piece already implements.
+
+Measured, release, against `screeny-sim` on 127.0.0.1 (this laptop was
+building firmware and a docker image for two other workers at the time, so the
+millisecond figures are pessimistic):
+
+| | bytes/frame | encode mean | codec | exact | README claimed before |
+|---|---|---|---|---|---|
+| `screeny clock`, 10 s | 271 | 0.07 ms | `PAL4_LZ` 100% | 301/301 | ~280 B, 0.05 ms |
+| `screeny fractal`, 4 s | 753 | 0.16 ms | `PAL8_LZ` 100% | 122/122 | ~1300 B, 0.9 ms |
+
+Both a steady 30 fps, device counters `drop 0/0/0` throughout. The pixels are
+unchanged in both cases - the old path was lossless too, the ladder having
+rediscovered the piece's own palette from the expanded frame - so this is the
+same picture at 58% of the bytes and a fifth of the encode time for the
+fractal. If the orchestrator would rather the fractal stayed on the RGB path,
+it is a two-line change in `PieceSource`; I think the measurement argues
+against it.
+
+### Evidence
+
+```
+$ ./target/release/screeny-sim --headless --no-mdns \
+      --frame-port 49574 --control-port 49575 --exit-after 25 &
+$ ./target/release/screeny --addr 127.0.0.1:49574 clock \
+      --at 11:42:50 --fps 30 --duration 10
+streaming clock to screeny sim at 127.0.0.1:49574 at 30.0 fps, budget 1464 B
+     31 frames   31.0 fps     253 B  enc  0.08/ 0.50 ms  [pal4-lz 100%]  dev: shown 1 drop 0/0/0
+    ...
+    301 frames   30.0 fps     271 B  enc  0.07/ 0.50 ms  [pal4-lz 100%]  dev: shown 277 drop 0/0/0
+sent 302 frames in 10.0 s (30.19 fps), 0 skipped, 271 B mean, encode mean 0.07 ms / p95 0.50 ms / max 0.17 ms
+301 indexed frames exact on the wire
+```
+
+The simulator's own log agrees: `PAL4_LZ`, `rx 302 shown 301`, `stale 0 super 0
+dec 0 rej 0`. (One oddity, unrelated: after my stream ended and the sim had
+gone back to `IDLE`, its counters picked up another 131 `PAL8_LZ` frames from
+something else on this machine - four workers share it. Nothing of mine was
+running by then, and it is after the measurement.)
+
+`cargo test -p screeny -p screeny-demos`: 105 tests, all pass (`pacing` 18.4 s,
+first try, no flake). `cargo doc -p screeny-encode -p screeny --no-deps`:
+silent. `cargo clippy -p screeny -p screeny-encode --all-targets`: clean (the
+five warnings it does print are `screeny-demos`' pre-existing ones, card 125).
