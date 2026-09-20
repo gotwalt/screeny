@@ -209,3 +209,25 @@ claim about a crate's behaviour cites the source line that shows it.
 - The 6 KB `Frame` in the QR column is spike-only scaffolding (the real portal
   screen draws into the existing triple buffer), so the honest steady-state
   `.bss` cost is ~17 KB, not 23 KB.
+- Portal screen: `lab/src/bin/portal-mock.rs` renders the layouts into
+  `docs/research/img/201-portal-*.png` with the same encoder the spike links.
+  Confirms the owner's bench result exactly: the payload is 32 bytes, version
+  2-L, 25x25. With a 3-pixel quiet zone the block is 31x31 and leaves 32
+  columns = eight `FONT_4X6` characters. The version-2 budget runs out at a
+  17-character SSID; 18 characters and up need version 3 (29x29), which with a
+  1-pixel quiet zone is 31 of 32 rows and leaves no room for text.
+- Two more facts pinned down for the doc:
+  - `embassy-net 0.9.1` always adds a DNS socket to the `SocketSet`
+    (`src/lib.rs:350`) and adds a DHCPv4 socket when configured
+    (`src/lib.rs:707-710`). The STA stack's `StackResources<6>` is therefore
+    already holding DNS + DHCP + frames + control + mDNS = 5 of 6. A TCP
+    listener on the LAN side needs the seventh.
+  - `esp-rtos 0.4.0` has `InterruptExecutor<SWI>` with a priority
+    (`src/embassy/mod.rs:317,392`), and SWI 2 and 3 are free (0 is
+    `esp_rtos::start`, 1 is `start_second_core`). That is the escape hatch if
+    HTTP ever costs a frame.
+  - ESP-IDF, `esp_wifi_set_config` attention: "ESP devices are limited to only
+    one channel, so when in the soft-AP+station mode, the soft-AP will adjust
+    its channel automatically to be the same as the channel of the station."
+    That is *the* trap in the state machine: joining a network on another
+    channel moves the AP under the phone that is standing on it.
