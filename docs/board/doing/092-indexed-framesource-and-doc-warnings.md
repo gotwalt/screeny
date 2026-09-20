@@ -4,8 +4,8 @@ title: An indexed FrameSource for the built-in demos, and four cargo doc warning
 type: build
 hardware: no
 depends: [011, 016]
-owner:
-branch:
+owner: worker-092
+branch: card/092-indexed-framesource
 ---
 
 ## Goal
@@ -55,3 +55,26 @@ both constants are private (lines 23, 29, 154, 155).
 `indexed_exact` rising and `indexed_fallback` at zero.
 
 ## Log
+
+### Claimed (worker-092)
+
+Branch `card/092-indexed-framesource` off `main` at c326521.
+
+Where the card's Context has drifted since it was written (cards 016, 011,
+101, 111):
+
+- `quant.rs` is **`crates/encode/src/quant.rs`** now, not
+  `crates/screeny/src/encode/quant.rs` - card 016 moved the encoders into
+  `screeny-encode`. So `cargo doc -p screeny --no-deps` is *already* silent
+  (`--no-deps` skips the dependency that owns the file); the four warnings are
+  on `cargo doc -p screeny-encode --no-deps`, at quant.rs:23, 29, 154, 155,
+  exactly as described. Both spellings will be checked.
+- `Link` needs no new door: `Link::send(Pixels)` has taken
+  `Pixels::Indexed` since card 011, and `Link` is push-only (no pull loop to
+  add a source to). The missing half is the **pull** model, `Sender::run`,
+  which is what the CLI's `screeny clock` uses.
+- `crates/demos` already renders the clock as palette + indices:
+  `Piece::render_indexed(&mut Indexed) -> bool`, `WordClock` overrides it,
+  `FractalZoom` does not. Nothing consumes it. The expansion the card is about
+  is in `main.rs`'s `PieceSource`, which calls `Piece::render` (which does
+  `Indexed::to_frame()`) and then copies 6144 bytes into the sender's frame.
