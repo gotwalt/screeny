@@ -4,7 +4,7 @@
 
 use crate::color::{oklch, Rgb};
 use crate::dither::Dither;
-use crate::frame::{Frame, H, MAX_PALETTE, N, W};
+use crate::frame::{Frame, GUARANTEED_PALETTE, H, N, W};
 use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
 use crate::rng::Rng;
 use std::f32::consts::{PI, TAU};
@@ -64,7 +64,7 @@ impl Piece for Plasma {
         let t = ctx.t as f32;
         let scale = ctx.get("scale");
         let drift = ctx.get("drift") * t;
-        let n = (ctx.get("colours") as usize).clamp(2, MAX_PALETTE);
+        let n = (ctx.get("colours") as usize).clamp(2, GUARANTEED_PALETTE);
 
         let phase = (ctx.get("cycle") * t).rem_euclid(1.0);
         let palette = (0..n)

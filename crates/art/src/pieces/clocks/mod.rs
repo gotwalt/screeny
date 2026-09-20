@@ -524,7 +524,7 @@ fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled:
 mod tests {
     use super::*;
     use crate::color::Rgb;
-    use crate::frame::{MAX_PALETTE, W};
+    use crate::frame::{GUARANTEED_PALETTE, W};
 
     /// The times the owner found this piece failing at (card 160), and what
     /// each must draw. Every one of them contains a digit that leaves dials
@@ -660,7 +660,7 @@ mod tests {
                     let frame = picture(&pose(hh, mm, *rest), &resting(hh, mm), *rest, settled, look());
                     let Frame::Indexed { palette, indices } = &frame else { panic!("rest {v}: not an indexed frame") };
                     assert_eq!(palette.len(), 31, "rest {v}: palette grew");
-                    assert!(palette.len() <= MAX_PALETTE);
+                    assert!(palette.len() <= GUARANTEED_PALETTE, "and exact whatever the indices do");
                     assert!(indices.iter().all(|i| (*i as usize) < palette.len()));
                 }
             }

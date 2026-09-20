@@ -5,8 +5,23 @@ use crate::color::Rgb;
 pub const W: usize = 64;
 pub const H: usize = 32;
 pub const N: usize = W * H;
-/// Largest palette that is still an exact, lossless frame (brief section 2.3).
-pub const MAX_PALETTE: usize = 32;
+/// Largest palette a frame can have at all: an index is one byte, and 256 is
+/// also the biggest palette the exact path can carry (`PAL8_LZ`, brief section
+/// 2.3). Whether it *does* depends on the picture, not on the colour count -
+/// see [`GUARANTEED_PALETTE`] and ask [`crate::Meter`] for the answer.
+pub const MAX_PALETTE: usize = 256;
+
+/// Palette size that is exact **whatever the index plane looks like**: the
+/// fixed-rate `PAL5` rung is 1376 bytes for any 32 colours and any 2048
+/// indices, including pure noise, so it cannot overflow the budget.
+///
+/// Above this, exactness is a compression question. Up to [`MAX_PALETTE`]
+/// colours go out losslessly when the index image compresses - which for
+/// flat-shaded, terraced and palette-cycled work it usually does - and
+/// `Measured::exact` says whether it did for this frame, measured rather than
+/// assumed (card 101). Spatial coherence is the real cost: a 200-colour smooth
+/// gradient fits where a 40-colour field of confetti does not.
+pub const GUARANTEED_PALETTE: usize = 32;
 
 /// A frame as a piece makes it: linear light, not yet quantised.
 ///
@@ -16,7 +31,7 @@ pub const MAX_PALETTE: usize = 32;
 pub enum Frame {
     /// Row-major, top-left origin, `N` pixels.
     Linear(Vec<Rgb>),
-    /// At most `MAX_PALETTE` colours plus `N` indices into them.
+    /// At most [`MAX_PALETTE`] colours plus `N` indices into them.
     Indexed { palette: Vec<Rgb>, indices: Vec<u8> },
 }
 
