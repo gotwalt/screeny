@@ -341,3 +341,78 @@ Four tests, all in `patches/flock/tests.rs`:
 - `the_same_seed_at_the_same_moment_is_the_same_frame`.
 
 Follow-up written as card 169.
+
+### 2026-09-20 - the numbers as shipped
+
+Three seeds x ten simulated minutes at the defaults (55 birds), from
+`ten_minutes_of_flight`:
+
+```
+seed  in frame (min/med/p05)  nearest (min/med)  biggest  seat (med/p95)  spread
+ 11        34 / 48 / 42          4.0 / 6.7 m     6.0 LED   11.9 / 14.3 m   4.8 m
+ 29        35 / 47 / 39          4.3 / 6.6 m     6.1 LED   12.0 / 14.2 m   4.8 m
+404        17 / 48 / 40          2.3 / 6.7 m     6.0 LED   12.0 / 21.9 m   4.8 m
+
+view      yaw p95 15.5 / 18.8 / 18.5 deg/s, max 25.8 (the hard ceiling)
+          roll p95 1.75 / 2.58 / 2.46 deg/s, max 5.73 (the roll-rate ceiling)
+limits    speed always inside its band; turn rate at worst x1.009 of the limit
+clearance flock 10.5 / 14.6 / 4.9 m; camera 19.4 / 20.7 / 11.0 m
+loop      strongest self-similarity 0.53 / 0.39 / 0.40, at 264 / 296 / 30 s
+```
+
+Non-periodicity, stated plainly: over ten minutes, the closest the flock's drift or
+its turn rate ever comes to repeating itself at any lag from 30 s to 5 minutes is a
+correlation of **0.53**, and the lag where that happens is different on every seed -
+which is what "not a loop" looks like as a number rather than as an adjective.
+
+The wire, 1800 frames of each scheme through the real encoder and decoder:
+
+```
+light on dark    worst 1163 of 1464 bytes, up to 46 colours, peak APL 9%,  0 lossy
+dusk silhouettes worst 1194 of 1464 bytes, up to 46 colours, peak APL 24%, 0 lossy
+```
+
+Both on `pal8-lz`, limiter idle once flying. The two schemes cost the same because they
+are the same index image; only the 84 colours in front of it change.
+
+Rate independence: a minute flown at 30 fps and at 60 fps differ in **0 of 2048 pixels**.
+
+Performance, patch and full pipeline together, one core, release:
+
+```
+samples=1  0.20 ms/frame (55 birds)   0.30 ms (150)
+samples=3  0.39 ms/frame (default)    0.57 ms (150)
+samples=6  0.98 ms/frame              1.14 ms (150)
+```
+
+### Open with the owner
+
+Everything below is taste, or a trade I made and could unmake.
+
+1. **Which scheme.** Light-on-dark is the default and, at 64x32, the stronger read: a
+   white bird two LEDs across on a near-black sky has contrast that size cannot give
+   it, and it runs at 7-9% APL. The dusk silhouettes are the more atmospheric picture
+   and the horizon band is lovely, but a dark shape on a lit sky is weaker at this size
+   and it runs at 24%. Dusk also wants `hue 35, spread 95` (a warm horizon) - the
+   defaults are tuned for the blue sky.
+2. **How close the camera rides.** The default `near` 6.0 gives a foreground bird of
+   about 6 LEDs. At 2.5 it is 8-10 and much more clearly *a bird* - but the camera then
+   scatters the flock (card 169). Worth deciding whether the close look is wanted
+   enough to be worth fixing properly.
+3. **Wingbeat against pace.** `beat` is in Hz and rides on simulation time, so at
+   `pace` 0.3 the default beat is dreamy slow motion. `pace 0.3, beat 5.0` gives slow
+   drift with wings working at a believable rate. Two different pictures; both are in
+   the strips.
+4. **How far the view leans** (`bank`, default 0.8, ceiling 17 degrees of roll and
+   5.7 deg/s). The horizon tilt is what makes this feel like flying, and it is
+   currently subtle.
+5. **The sun.** Always on, low, placed by the seed, and not a parameter. It is the one
+   thing in the picture that says which way the flock has turned. Say if it should be
+   switchable or if a moon variant is wanted.
+6. **How many birds.** 55 by default; 80+ was fog at this size but the range goes to
+   150 for anyone who wants a murmuration.
+7. **The sky's dither.** Bayer 4x4, chosen on bytes rather than looks because I could
+   not tell the four masks apart. Undithered is 150 bytes cheaper; if the headroom is
+   ever wanted, that is where it is.
+8. **How dark the deep sky goes.** The top of the frame reaches true black, which is
+   this panel's strength but also means the top third is nearly empty. `sky` scales it.
