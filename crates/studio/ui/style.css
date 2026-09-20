@@ -3,10 +3,16 @@
    read as the darkest thing in the window, and nothing here may tint how the
    art's colour is judged. The one loud object is the device itself.
 
-   One page since card 170. The layout is a **scrolling column by default** -
-   picture, now playing, parameters, panel - and becomes the two-column bench
+   **Two screens since card 198**, in one visual language: the Picture (`/`)
+   and the Panel (`/panel`). Everything above "the panel screen" is shared;
+   what follows it is the second screen's own layout.
+
+   The Picture screen is a **scrolling column by default** - picture, now
+   playing, parameters, brightness, time... - and becomes the two-column bench
    only above 1100 px, where there is room for both. Doing it the other way
-   round is what put the walnut frame on top of the inspector at ~600 px. */
+   round is what put the walnut frame on top of the inspector at ~600 px. The
+   Panel screen is a column of the same sections and splits into two above the
+   same breakpoint, for the same reason. */
 
 :root {
   --bench: #1b1a18;
@@ -106,6 +112,27 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 .pill[data-state="away"] { border-color: var(--dim); color: var(--dim); }
 .pill[data-state="bad"] { border-color: var(--over); color: var(--over); }
 
+/* Card 198: the Picture screen's chip is the way to the Panel screen. A pill
+   that is a link says so with a chevron rather than with an underline, which
+   would fight the small-caps label type; `::after` rather than markup, because
+   the text is rewritten on every heartbeat. */
+a.pill { text-decoration: none; }
+a.pill::after { content: " ›"; }
+a.pill:hover { border-color: var(--paper); color: var(--paper); }
+
+/* ...and the way back is a plain one, above the panel's name. */
+.backlink {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: var(--dim);
+  font: 400 12px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.backlink::before { content: "‹ "; }
+.backlink:hover { color: var(--paper); }
+
 /* ---------- the stage ---------- */
 
 .stage {
@@ -148,15 +175,19 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 
 #panel { display: block; }
 
-.stage__notice {
-  position: absolute;
-  inset: auto var(--gutter) 10px;
+/* The one line either screen says things on. */
+.notice {
   padding: 10px 14px;
   border-left: 3px solid var(--over);
   background: var(--bench-raised);
   user-select: text;
 }
-.stage__notice[data-tone="say"] { border-left-color: var(--amber); }
+.notice[data-tone="say"] { border-left-color: var(--amber); }
+/* On the Picture screen it lies over the foot of the stage... */
+.stage__notice { position: absolute; inset: auto var(--gutter) 10px; }
+/* ...and on the Panel screen, where there is no stage, it takes its own line
+   under the title block rather than covering the first control. */
+.sheet__notice { margin: 0 var(--gutter) 4px; }
 
 /* ---------- meters ---------- */
 
@@ -188,17 +219,21 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 .meter[data-state="over"] output, .meter[data-state="over"] .meter__note { color: var(--over); }
 .meter[data-state="over"] .fill { background: var(--over); }
 
-/* ---------- inspector ---------- */
+/* ---------- inspector, and the panel screen's sheet ----------
 
-.inspector {
+   The Picture screen's right-hand column and the Panel screen's body are the
+   same kind of surface - a raised panel of ruled sections - so they are one
+   set of rules and a control looks the same wherever it is. */
+
+.inspector, .sheet {
   min-height: 0;
   background: var(--bench-raised);
   border-top: 1px solid var(--rule);
 }
 
-.inspector section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
-.inspector section > h2, .section-head { margin-bottom: 14px; }
-.inspector h2 { color: var(--paper); font-size: 15px; }
+.inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
+.inspector section > h2, .sheet section > h2, .section-head { margin-bottom: 14px; }
+.inspector h2, .sheet h2 { color: var(--paper); font-size: 15px; }
 
 .section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 
@@ -246,7 +281,9 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 .row + .seg, .row + .slider, .slider + .slider, .seg + .seg, .seg + .switch, .switch + .switch,
 .switch + .slider, .seg + .row, .row + .hint, .hint + .slider, .switch + .row, .facts + .row,
 .hint + .facts, .hint + .row, .switch + .hint, .slider + .hint, .facts + .details, .row + .setup,
-.hint + .setup, .playing__notes + .pieces { margin-top: 14px; }
+.hint + .setup, .hint + .switch, .facts + .hint, .playing__notes + .pieces { margin-top: 14px; }
+/* Two hints in a row are one thought in two sentences, not two blocks. */
+.hint + .hint { margin-top: 6px; }
 .row label { flex: none; }
 .row--seed input { flex: 1; min-width: 0; }
 .row--density input { width: 74px; margin-left: auto; }
@@ -438,9 +475,13 @@ select:hover { border-color: var(--dim); }
 @media (min-width: 1100px) {
   :root { --gutter: 24px; }
 
-  html, body { height: 100%; overflow: hidden; }
+  /* The bench itself does not scroll: the inspector column does. Scoped to the
+     Picture screen, because the Panel screen scrolls like any other page. */
+  html:has(> body.picture-page) { height: 100%; overflow: hidden; }
 
-  body {
+  body.picture-page {
+    height: 100vh;
+    overflow: hidden;
     display: grid;
     grid-template-columns: minmax(0, 1fr) 340px;
     grid-template-rows: auto minmax(0, 1fr) auto;
@@ -459,6 +500,27 @@ select:hover { border-color: var(--dim); }
     border-top: 0;
     border-left: 1px solid var(--rule);
   }
+
+  /* The Panel screen splits in two at the same width, for the same reason: the
+     panel's own controls on the left, what it and the studio have to say about
+     themselves on the right. The columns are held to a readable measure rather
+     than stretched across a bench - a `dd` two feet wide is not a fact anybody
+     reads. */
+  .sheet {
+    display: grid;
+    grid-template-columns: minmax(0, 420px) minmax(0, 620px);
+    grid-template-areas:
+      "panel link"
+      "panel studio";
+    align-items: start;
+    justify-content: start;
+  }
+  #sec-panel { grid-area: panel; border-right: 1px solid var(--rule); }
+  #sec-link { grid-area: link; }
+  #sec-studio { grid-area: studio; }
+  /* ...and the title block is held to the same 1040 px, so the readouts sit
+     over the columns rather than adrift at the edge of a wide window. */
+  body.panel-page .titleblock { max-width: 1040px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

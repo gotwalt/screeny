@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Screeny Studio</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="picture-page">
   <header class="titleblock">
     <div class="titleblock__piece">
       <h1 id="piece-name">&nbsp;</h1>
@@ -16,7 +16,11 @@
       <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
       <div><dt>Time</dt><dd id="ro-time">–</dd></div>
       <div><dt>Rate</dt><dd id="ro-fps">–</dd></div>
-      <div class="readouts__panel"><dt>Panel</dt><dd><span class="pill" id="ro-panel">–</span></dd></div>
+      <!-- Card 198: the one thing on this screen that is about the panel
+           rather than the picture. It says what the panel is doing, wears a
+           fault tone when the panel needs attention - so that trouble is never
+           hidden behind a tab - and is the way to the Panel screen. -->
+      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="/panel">–</a></dd></div>
     </dl>
   </header>
 
@@ -26,7 +30,7 @@
         <canvas id="panel" width="768" height="384" aria-label="64 by 32 LED panel"></canvas>
       </div>
     </div>
-    <p class="stage__notice" id="notice" role="status" hidden></p>
+    <p class="notice stage__notice" id="notice" role="status" hidden></p>
   </section>
 
   <aside class="inspector" aria-label="Controls">
@@ -55,65 +59,18 @@
       <div id="params"></div>
     </section>
 
-    <section id="sec-panel">
-      <div class="section-head">
-        <h2>Panel</h2>
-        <span class="pill" id="panel-pill">–</span>
-      </div>
-      <p class="panel__name" id="panel-name">Looking for a panel…</p>
-      <p class="hint" id="panel-help"></p>
-      <!-- Card 173: is the studio even looking? Never a fault tone - a browse
-           that finds nothing is normal - but never silent either. -->
-      <p class="hint" id="discovery-note" hidden></p>
-
-      <!-- Card 181: the label is written by the script. With a panel attached
-           it is "Show it on the panel"; with none it says what the switch
-           really does, which is decide whether the first panel found starts
-           playing. `set_panel` is untouched either way. -->
-      <label class="switch"><input type="checkbox" id="panel-out"><span id="panel-out-label">Show it on the panel</span></label>
-
+    <!-- Card 198: brightness is the one panel control that stays on this
+         screen, because it changes how the piece looks on the LEDs and is part
+         of judging it. It is the same control as the Panel screen's, bound
+         once in `common.js`; everything else about the panel is over there. -->
+    <section id="sec-bright">
+      <h2>Brightness</h2>
       <div class="slider" id="bright-slider">
-        <label for="bright">Brightness</label><output></output>
+        <label for="bright">Level</label><output></output>
         <input id="bright" type="range" min="0" max="255" step="1" value="0">
       </div>
+      <p class="hint">The panel's own brightness, which is why the picture above does not change with it.</p>
       <p class="hint" id="bright-note"></p>
-
-      <dl class="facts" id="panel-facts"></dl>
-
-      <!-- Card 180: what only the device knows - heap, free stack, firmware
-           slot, WiFi, why it last restarted. It comes from the panel's own
-           GET /api/v1/status, which firmware older than 0.4.0 does not serve;
-           then this block is not here at all and the page above is exactly
-           the page it was. -->
-      <div class="device-block" id="device-block" hidden>
-        <h3>Device</h3>
-        <dl class="facts" id="device-facts"></dl>
-        <p class="hint" id="device-note" hidden></p>
-      </div>
-
-      <p class="hint" id="panel-repairs" hidden></p>
-
-      <div class="row row--actions">
-        <button type="button" id="identify">Identify</button>
-        <button type="button" id="rename">Rename</button>
-        <button type="button" id="reboot" class="danger">Reboot</button>
-      </div>
-
-      <details class="setup" id="setup">
-        <summary>Change which panel</summary>
-        <div class="setup__body">
-          <div class="found" id="found"></div>
-          <div class="row row--seed">
-            <label for="add-to">Panel</label>
-            <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-4a00a4, panel.local or 192.168.7.221">
-          </div>
-          <div class="row row--actions">
-            <button type="button" id="add">Use this panel</button>
-            <button type="button" id="look" class="quiet">Look again</button>
-          </div>
-          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not.</p>
-        </div>
-      </details>
     </section>
 
     <section id="sec-time">
@@ -129,7 +86,7 @@
 
            The datalist names the rates worth reaching for. Chrome only paints
            tick marks on the *default* track and style.css replaces it, so card
-           183 draws them from this list instead (`drawStops` in main.js), on
+           183 draws them from this list instead (`drawStops` in common.js), on
            the thumb's own geometry. This is still the one list of stops: it is
            what the accessibility tree reads and what is drawn. They do not
            snap - the readout is the exact rate and the arrow keys step by
@@ -146,9 +103,20 @@
           <option value="60" label="60 fps"></option>
         </datalist>
       </div>
+      <!-- Card 197: Speed runs 0.1 to 4.0 in steps of 0.05, and 1.00x - "play
+           it as the piece intended" - was one of 79 positions with no mark and
+           no way back except the keyboard. Three stops, drawn by the same
+           mechanism as the rate slider's, and a double-click on the thumb
+           returns it to 1.00x. They do not snap. -->
       <div class="slider" id="speed-slider">
         <label for="speed">Speed</label><output></output>
-        <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1">
+        <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1" list="speed-stops"
+               title="Double-click for 1.00×">
+        <datalist id="speed-stops">
+          <option value="0.5" label="half speed"></option>
+          <option value="1" label="as the piece intended"></option>
+          <option value="2" label="twice as fast"></option>
+        </datalist>
       </div>
     </section>
 
@@ -261,6 +229,6 @@
     </div>
   </section>
 
-  <script src="main.js"></script>
+  <script type="module" src="/picture.js"></script>
 </body>
 </html>

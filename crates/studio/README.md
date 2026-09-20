@@ -21,9 +21,22 @@ doing - for when the panel is not within eyesight. The frames the browser draws 
 the same decoded datagrams the panel is being sent, and every control on the page
 changes the panel: a piece, a slider, a seed, the seconds a clock holds a time.
 
-So there is **one page**, at `/`: the picture, what is playing, its parameters, and
-the panel itself - connection, brightness, identify, rename, reboot. `/dashboard`,
-which was a second app until card 170, is folded into it and redirects.
+There are **two screens** onto that one studio (card 198), because the work is two
+kinds of work:
+
+| | |
+|---|---|
+| **Picture**, `/` | the canvas, what is playing, its parameters, time, how the panel is modelled, the limiter, the view, the meters - and **brightness**, which is how a piece looks on the LEDs. Everything that changes or judges what the picture looks like. |
+| **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, the same brightness control, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
+
+They are the same state and the same stream, so a change on one shows on the other -
+and in another browser - at once. The Picture screen carries one **status chip** in
+its title block: the panel's name, what it is doing and the rate it is being sent. It
+is the link to the Panel screen, and it takes the fault tone and says why when the
+panel needs attention, so that trouble is never hidden behind a tab. The Panel screen
+has no canvas and therefore asks the socket for no frames at all.
+
+`/dashboard`, which was a second app until card 170, is folded into `/` and redirects.
 
 | flag | | env |
 |---|---|---|
@@ -290,7 +303,7 @@ reports panics, `panic` becomes a reason of its own and this gets simpler.
 
 ## The API
 
-Everything the two pages do is one of these, under `/api/v1`. Reads are `GET`, changes
+Everything the two screens do is one of these, under `/api/v1`. Reads are `GET`, changes
 are `POST` with a JSON body. A failed change is a 400 with `{"error": "..."}`; an unknown
 device is a 404; a device that is known but cannot be reached right now is a **409**,
 which is a fact about the panel and not a fault in the server.
@@ -422,16 +435,34 @@ stop is 6, because values 1..=5 light nothing on this firmware (card 136).
 
 ## Editing the UI
 
-`ui/` is three static files and no build step: `index.html`, `main.js` and `style.css`.
+`ui/` is six static files and no build step:
+
+```
+index.html  picture.js  ┐
+                        ├─ common.js   style.css
+panel.html  panel.js    ┘
+```
+
+Two documents, one per screen, and the scripts are plain ES modules: each screen loads
+its own, which `import`s the shared one. `common.js` is the socket, the status poll,
+the notice line, the formatting, the small control bindings, the brightness control and
+the one judgement of what the panel is doing - and it **reaches for no element by id
+except `#notice`**, which both screens have; everything else is handed the element it
+works on. Two documents rather than one document with two views because "nothing about
+devices is on the Picture screen" is then a fact about the file, and because reload, the
+back button and a bookmark are the browser's job rather than a `popstate` handler's.
+
 They are `include_bytes!`d into the binary, so `cargo run` always serves what is in the
 tree; **`--ui-dir` serves them off disk** for a reload-to-see-it loop, which is what to
-use while editing. A new file has to be listed in `src/ui.rs`.
+use while editing. A new file has to be listed in `src/ui.rs`, and so does a new screen's
+tidy URL.
 
-The layout is a **scrolling column by default** - picture, now playing, parameters,
-panel - and becomes the two-column bench only above 1100 px, where there is room for
-both. Doing it the other way round is what used to put the walnut frame on top of the
-controls at around 600 px. Checked at 390, 600, 900 and 1400 px in a browser; the
-screenshots are in card 170's Log and, for the controls below, in cards 145/163/171-173's.
+Each screen is a **scrolling column by default** - the Picture screen is picture, now
+playing, parameters, brightness, time... - and splits into two columns only above
+1100 px, where there is room. Doing it the other way round is what used to put the
+walnut frame on top of the controls at around 600 px. Checked at 390 and 1400 px in a
+browser for both screens (card 198's Log), and at 390, 600, 900 and 1400 in card 170's;
+the screenshots are in those Logs and, for the controls below, in cards 145/163/171-173's.
 
 **A control's shape comes from what it controls** (card 163). The page builds each
 parameter from its `ParamSpec`: an ordinary number is a slider, a spec with `choices` is
@@ -440,17 +471,19 @@ a segmented control (three stops or fewer, which fit across the inspector at 390
 value changes - it is an `f32` set with `set_param` either way - so a piece asks for the
 control it wants by how it declares the parameter, and never by putting a key in a label.
 
-**Nothing on the page may say something that is not so.** The rate control spans the
-player's whole range rather than offering two stops it might not be on (172), and the
+**Nothing on either screen may say something that is not so.** The rate control spans
+the player's whole range rather than offering two stops it might not be on (172), and the
 stops it declares are drawn where the thumb lands rather than declared and left invisible
-(183); the panel
-section says whether the studio is even looking for panels (173); "Reconnects" is a
-player-lifetime count that survives the link being rebuilt (171); and a piece that needs
+(183, and 197 for Speed, whose home position is marked and a double-click away); the
+output switch says what it really does when there is no panel (181); the Panel screen
+says whether the studio is even looking for panels (173); "Reconnects" is a
+player-lifetime count that survives the link being rebuilt (171); a piece that needs
 a graphics adapter there is none for is struck through with the reason rather than
-offered and then black (145).
+offered and then black (145); and the brightness slider says out loud that it is the
+panel's own brightness, which is why the picture on screen does not change with it.
 
 No framework, no bundler, no CDN: the box this runs on has no promise of internet, and a
-test asserts that neither page reaches outside it.
+test asserts that no file of either screen reaches outside it.
 
 ## Tests
 
@@ -469,6 +502,6 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
-| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that its declared stops are **drawn** on the thumb's own geometry and the stylesheet's thumb width still matches the arithmetic (183), and that a parameter with named stops carries them (163) |
+| `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

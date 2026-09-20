@@ -44,3 +44,18 @@ The Speed slider shows where 1.00x is, at 390 and 1400 px, aligned with the
 thumb; a speed a script set is still shown exactly.
 
 ## Log
+
+- **2026-09-20, worker-198.** Done inside **card 198**, which the orchestrator folded this
+  one into because both edit the same files. The open question - a mark, or a way back? -
+  was put to the owner, who did not answer, so card 198 took the default it named: stops
+  at **0.5x, 1.00x and 2x** on a `<datalist>` that card 183's `drawStops` draws, **no
+  snapping**, and a **double-click on the slider returns it to 1.00x**.
+
+  The `ui.rs` test is the general one this card's Deliverables asked for rather than a
+  second special case: `every_slider_that_declares_stops_declares_reachable_ones` walks
+  every `list=` on either screen and checks its stops against that input's own `min`/`max`.
+
+  Acceptance, measured in Chrome at 1400 px (the marks' positions read back): the three
+  stops land on `3.5px + frac * (100% - 7px)` to within 0.1 px, 1.00x among them; a speed
+  set through the API is still shown exactly, because nothing snaps. See card 198's Log,
+  step 2.
