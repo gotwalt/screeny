@@ -635,3 +635,50 @@ re-decided here. Five things were awkward, all small, all news:
   build back.
 * **The store's credentials were never read, erased or overwritten**, and no
   SSID, BSSID or credential appears anywhere in this branch.
+
+### Orchestrator, after the merge (2026-09-20)
+
+`main` builds to the worker's numbers (`.stack` 27,928, floor 24,576, image 968,409).
+fw 0.5.0 is on the device.
+
+**Verified over the wire**
+- `screeny-probe http --allow-wifi-trial --allow-reboot` with `CARD_223_LANDED` now
+  **true** (rules 8, 14, 29, 33 enforced): 32 passed, 1 failed, 5 skipped - and the one
+  failure (rule 33) was the *probe's*: it polled inside the ~100 ms between the `trying`
+  reply and the start of the radio work, read the old `connected` and gave its verdict at
+  "0 s". Fixed in the probe (a 5 s "not started yet" grace); re-run of the section: 2/2.
+  Rule 35 (confirmed reboot, device returns with a new `boot_id`) passed.
+- By hand, a wrong-credentials POST while online: `trying`, then within 7 s
+  `GET /api/v1/wifi` = `failed` / `reason: not_found` and sticky, while
+  `status.wifi_state` stayed `connected` - **and the device never left the network**: it
+  answered every poll through the whole trial. Then the bench rule: reboot -> rejoined
+  from the store, `wifi_state connected`, the sticky result gone.
+- A captive probe on the LAN listener is a 404. 1,043 of 1,136 requests answered during
+  the flash-and-boot window, none failing once up; connects ~10 ms; `stack_free`
+  12.5-13.8 KB.
+- The Studio on workbench streams to it at 30-31 fps with zero drops and reads its
+  status API every 10 s.
+
+**NOT yet verified: the 64-rule UDP conformance suite on 0.5.0.** Five attempts gave
+11-37 passes with failures of the form `no reply to op ...` and
+`Can't assign requested address (os error 49)`, starting at a different rule each time.
+That pattern is this Mac's network, not the firmware: a baseline `ping` from this Mac to
+the router and to workbench **with nothing else running** showed 24 timeouts in 80 s and
+round trips of up to 51 s, the same sections passed 11/11 on 0.5.0 in a quiet window, an
+A/B against 0.4.3 passed 11/11 twice in another quiet window, and through all of it the
+Studio (on workbench, a different host) streamed to the device without a dropped frame.
+Serial flashing was flaky in the same period (`Bad data checksum` on about half the
+attempts at 230400 baud). Both point at this Mac's Thunderbolt/USB path. **Re-run
+`screeny-probe --addr 192.168.7.221 conformance --slow` when `ping 192.168.7.1` from this
+Mac is clean, and record the result here.**
+
+**Still to do with the owner: the phone test** (steps and the build command are in this
+card's Log under "The phone test, for after the merge").
+
+Follow-ups accepted from the worker's list: share the boot path's two 3 KB
+partition-table buffers (the only thing setting the 13 KB stack demand); `http-selftest`
+is 5.3 KB of `.bss` and its bench build now fails the `fw-size.sh` floor (share the
+workers' buffers); `link_state()` and an owned screen description belong in
+`crates/provision` (the firmware and the simulator each carry a copy today); the
+simulator should serve the setup page so its HTML has a test; re-announce mDNS when the
+station's address changes; `Timing` should model the DHCP phase (this mesh takes 10-12 s).
