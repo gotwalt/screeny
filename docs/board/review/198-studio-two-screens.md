@@ -278,3 +278,25 @@ gains 181, 197 and the brightness line; and the `tests/ui.rs` row says what it n
 Root `cargo test --release --no-fail-fast`: **742 passed, 0 failed, 1 ignored**.
 `cargo clippy --workspace --all-targets`: **silent**. Neither of card 117's two known
 flakes recurred, though another worktree was running its soak in a loop at the time.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| Picture: title block, canvas, now playing, parameters, time, panel model, limiter, view, the meters | `ui/index.html`, in that order; `each_screen_is_in_the_order_it_should_stack_in` |
+| brightness stays reachable there, as a compact control | `#sec-bright`: one slider, two lines of hint, the same binding the Panel screen uses |
+| one quiet status chip in the title block: name, state, fps; the link to the Panel screen; a fault tone when the panel needs attention | `#ro-panel` as an `a.pill`; `panelState` + `attention` in `common.js`; seen red as `DESK · LIVE · 30 FPS · STORE ERRORS` |
+| Panel: which panel, discovery, output switch, brightness, link facts, the Device block and its notes, state repairs, identify/rename/reboot, change which panel, and the studio's own health | `ui/panel.html` + `panel.js`; `the_two_screens_hold_what_the_split_says_they_do` names every id that moved |
+| no canvas needed; a small static indication of what is playing | the title block's *Showing* / *Seed*; no `<canvas>`, no frame pump, `fps: 0` |
+| each screen its own URL that survives a reload; the back button works | two documents at `/` and `/panel`; reload and back exercised in Chrome |
+| a change on one screen shows on the other in another browser at once | two tabs: the switch on `/panel` changed `/`'s chip and its stage at once |
+| the existing visual language, at 390 and 1400 px | `style.css`'s tokens unchanged; the table in step 3 |
+| `ui.rs` serving and tests extended to both screens; the id cross-check covers both | `PAGES` has two entries; `every_element_each_screen_reaches_for_exists` checks three scripts against two screens |
+| `crates/studio/README.md` updated | step 4 |
+| card 197 to `done/` with a Log line pointing here | done, with its acceptance in step 2 |
+| no API route, state schema or WebSocket message change | none: the only Rust outside `ui.rs` is two doc comments in `page.rs` and one line of `tests/api.rs` |
+| nothing about devices, discovery, WiFi, heap or reboots on the Picture screen | asserted by id **and** by word in `the_two_screens_hold_what_the_split_says_they_do` |
+
+**Not done, on purpose:** the picture itself was not judged by eye (see step 3); no new
+card was needed. Two backlog cards (113, 121) name `ui/main.js` in their Context and will
+want re-reading against the three files that replaced it.
