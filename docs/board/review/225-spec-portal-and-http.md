@@ -224,15 +224,21 @@ below is listed rather than decided.
    route should probably be marked as such in the spec and in
    `crates/device-api`. `firmware/src/http.rs:53-54` still says the scan is
    "also 223", which is now stale.
-5. **The simulator's captive answer is a different mechanism, not just a
-   different status.** The firmware decides from the **listener** (the AP
-   dispatch, `firmware/src/http.rs:1327-1329`) and answers the setup page,
-   `200`, `no-store`. `crates/sim` decides from the **`Host:` header**
-   (`host_is_ours`, `crates/sim/src/api.rs:153-179`) and answers a `302` with a
-   body (`api.rs:78-87`, used at `api.rs:261`). §8.9 documents the firmware's,
-   which is what the phone test settled. Card 235 is changing the status code;
-   whoever takes it should decide whether the *rule* becomes listener-based
-   too, or the spec has to describe two.
+5. **The simulator's captive answer is still a different mechanism, now that
+   card 235 has merged.** Checked against `main` at 03c7595, not against the
+   base this branch was cut from. The *status* now agrees - the sim answers the
+   setup page as a `200` and says so in as many words - but the two decide
+   **when** to answer it differently, and §8.9 documents the firmware's:
+   - the firmware decides from the **listener** (the AP dispatch,
+     `firmware/src/http.rs:1327-1329`) and gates on `ap_up()`;
+   - the sim decides from the **`Host:` header** (`host_is_ours`,
+     `crates/sim/src/api.rs:157`, used at `:269`) and gates on the machine
+     being in `Portal | Trial`.
+   Two consequences, both real: during §8.3's 30 s AP grace the device is
+   `Online` with the AP up and still answers the catch-all, where the sim would
+   `404`; and a probe's `Host` reaching the device over the **LAN** is a 404 on
+   the firmware and the setup page on the sim. The sim also has no `/setup`
+   path at all, so §8.6's `/setup` rows are firmware-only today.
 6. **The setup form cannot carry a 64-byte PSK.** `MAX_PSK_LEN` is 64
    (`crates/proto/src/control.rs:56`), §8.2 says `0..=64`, and
    `form::parse_wifi_form` accepts 64 - but the portal page's input is
