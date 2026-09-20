@@ -4,6 +4,8 @@ title: A browse for a named instance waits out the whole window after it has fou
 type: build
 hardware: no
 depends: [146]
+owner: worker-176
+branch: card/176-125-browse-and-clippy
 ---
 
 ## Goal

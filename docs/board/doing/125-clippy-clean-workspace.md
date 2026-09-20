@@ -4,8 +4,8 @@ title: Make `cargo clippy --workspace --all-targets` clean, and keep it clean
 type: build
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker-176
+branch: card/176-125-browse-and-clippy
 ---
 
 ## Goal
