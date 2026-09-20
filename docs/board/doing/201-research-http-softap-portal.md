@@ -139,3 +139,29 @@ The orchestrator can write the build cards from the research doc alone, and ever
 claim about a crate's behaviour cites the source line that shows it.
 
 ## Log
+
+### 2026-09-19 — worker-201
+
+- Claimed the card, branch `card/201-research-http-softap-portal`.
+- Read `firmware/src/{main.rs,net.rs,mdns.rs,screens.rs}`, `firmware/Cargo.toml`,
+  `docs/README.md`, card 200 (to stay out of its lane), parked card 081.
+- Read `esp-radio 1.0.0-beta.1` wifi sources in `~/.cargo/registry`. First findings:
+  - `Config::AccessPointStation(StationConfig, AccessPointConfig)` exists
+    (`src/wifi/mod.rs:376`), maps to `WIFI_MODE_APSTA` (`mod.rs:3044`), and
+    `set_config` applies AP then STA config (`mod.rs:3064`).
+  - `Interface::access_point()` / `try_access_point()` exist (`mod.rs:1584`), and the
+    STA/AP interfaces are separate singletons guarded by `STA_BIT`/`AP_BIT`
+    (`mod.rs:1523`). So two `embassy_net::new()` stacks, one per interface, is
+    expressible.
+  - `set_config` calls `esp_wifi_stop()` only when the *mode* changes
+    (`mod.rs:3049`), so STA->APSTA is a stop/start of the radio, but APSTA->APSTA
+    with new credentials is not.
+  - Scanning: `scan_async` (`mod.rs:3277`) returns `alloc::vec::Vec` (heap!), and
+    the doc says "Scanning is not supported in AccessPoint-only mode"
+    (`mod.rs:3261`). That is the single strongest argument for APSTA over exclusive
+    AP mode: the settings page wants a network list.
+  - esp-radio's own heap figures (`mod.rs:26-27`): Station 47-57 KB, Open Access
+    Point 53-63 KB. These are the numbers the RAM budget has to start from.
+  - `AccessPointConfig::default()` is SSID `iot-device`, channel 1, open,
+    `max_connections: 255`, `dtim_period: 2`, `beacon_timeout: 300`
+    (`src/wifi/ap.rs:87`). Soft-AP rejects WEP and an empty password (`ap.rs:64`).
