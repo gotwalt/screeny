@@ -1179,6 +1179,11 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         // Full rate while the panel is connected or a browser is watching.
         // Otherwise there is nothing to be fast for: a panel unplugged for a
         // month, with nobody looking, must not cost a core for a month.
+        //
+        // Card 120: *watching*, not *connected*. A tab that has been switched
+        // away from asks for no frames and gives up its claim, so a studio with
+        // no panel and only hidden tabs open idles here too - and picks up
+        // again within one idle frame when somebody looks.
         let watched = player.is_focused() && player.screen.watchers() > 0;
         let rate = if connected || watched { fps } else { IDLE_FPS };
         next += Duration::from_secs_f64(1.0 / rate.clamp(MIN_FPS, MAX_FPS));

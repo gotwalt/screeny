@@ -133,11 +133,16 @@ async fn a_player_renders_with_nobody_watching() {
 /// ...and it speeds up the moment somebody is. The rate a player renders at is
 /// what card 105 called the engine's rate; nothing about a browser may hold it
 /// back, but with nobody there it need not be 60 fps.
+///
+/// The socket asks for `fps=60` because since card 120 a socket that asks for
+/// nothing is paced to `ws::DEFAULT_FPS`. That is the browser's side of the
+/// bargain and not the player's: what is being measured here is that the
+/// *player* is rendering fast, so this one asks for everything it makes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_watching_browser_gets_the_full_rate() {
     let studio = studio().await;
     let at = studio.addr;
-    let mut ws = Ws::connect(at, None).await;
+    let mut ws = Ws::connect_asking(at, "fps=60").await;
     ws.frame().await;
     let n = ws.count_frames(Duration::from_secs(1)).await;
     assert!(n > 30, "only {n} frames in a second with a browser watching");
@@ -194,10 +199,12 @@ async fn healthz_answers() {
 }
 
 /// The socket delivers frames, and they are the frames the engine is making.
+/// `fps=60` for the same reason as above: this is about what the engine makes,
+/// not about what a browser chooses to be sent (card 120).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_socket_delivers_frames() {
     let studio = studio().await;
-    let mut ws = Ws::connect(studio.addr, Some("watcher")).await;
+    let mut ws = Ws::connect_asking(studio.addr, "client=watcher&fps=60").await;
 
     // The first thing a browser gets is the state, so it need not ask.
     let hello = ws.event("state").await;

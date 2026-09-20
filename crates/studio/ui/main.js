@@ -8,6 +8,10 @@
 // WebSocket; the panel's own facts - link, telemetry, the device list - come
 // from GET /api/v1/status every couple of seconds while the tab is visible.
 // Everything else is a POST to /api/v1/<command>.
+//
+// The page asks for only as many frames as it can use (`previewFps`), and for
+// none at all while the tab is hidden. It never asks for a *different* picture:
+// what arrives is the panel's own frames, paced.
 
 'use strict';
 
@@ -296,29 +300,65 @@ async function invoke(cmd, args) {
   return response.arrayBuffer();
 }
 
+// Card 120: how many frames a second to ask the server for.
+//
+// One frame packet is 6196 bytes, so every one of these is 6.2 KB/s. A hidden
+// tab asks for none: `requestAnimationFrame` has stopped, so every frame sent
+// to it would be received and thrown away. A tab on a connection that says it
+// is slow, or whose owner has asked for less data, takes the lower rate - the
+// picture is 64x32 and stays perfectly legible at ten frames a second.
+const PREVIEW_FPS = 30;
+const PREVIEW_FPS_SLOW = 10;
+
+function previewFps() {
+  if (document.hidden) return 0;
+  const link = navigator.connection;
+  if (link && (link.saveData || /^([23]g|slow-2g)$/.test(link.effectiveType || ''))) return PREVIEW_FPS_SLOW;
+  return PREVIEW_FPS;
+}
+
 // One socket: binary messages are frames, text messages say what they are.
 // It reconnects by itself, because the server is allowed to be restarted.
+//
+// The only thing this page ever sends on it is its pace (above). `repeat:false`
+// says not to send a picture identical to the last one this socket got - a
+// clock holding the time is the same 6196 bytes for fifteen seconds - which the
+// server honours without letting the meters freeze.
 function connect(handlers) {
   const url = new URL('api/v1/ws', document.baseURI);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('client', CLIENT);
+  url.searchParams.set('repeat', 'false');
   let wait = 250;
+  let live = null;
+  const ask = () => {
+    // The rate goes in the query string too, so a page loaded in a background
+    // tab never costs a frame - not even the one between opening and asking.
+    url.searchParams.set('fps', String(previewFps()));
+    if (live && live.readyState === WebSocket.OPEN) {
+      live.send(JSON.stringify({ type: 'preview', fps: previewFps(), repeat: false }));
+    }
+  };
   const open = () => {
+    ask();
     const socket = new WebSocket(url);
     socket.binaryType = 'arraybuffer';
-    socket.addEventListener('open', () => { wait = 250; notice(''); });
+    socket.addEventListener('open', () => { wait = 250; live = socket; notice(''); });
     socket.addEventListener('message', (e) => {
       if (e.data instanceof ArrayBuffer) { handlers.frame(e.data); return; }
       const message = JSON.parse(e.data);
       handlers[message.type]?.(message);
     });
     socket.addEventListener('close', () => {
+      if (live === socket) live = null;
       notice('Lost contact with the studio. Reconnecting…');
       setTimeout(open, wait);
       wait = Math.min(wait * 2, 5000);
     });
     socket.addEventListener('error', () => socket.close());
   };
+  document.addEventListener('visibilitychange', ask);
+  navigator.connection?.addEventListener('change', ask);
   open();
 }
 
