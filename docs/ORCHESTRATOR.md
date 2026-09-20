@@ -31,6 +31,16 @@ Card 101 is done (2026-09-19): `screeny-art play <piece> --to screeny-4a00a4` st
 the art system to the real panel through `screeny::Link` (build with `--features
 sender`; a plain `cargo test --release` rebuilds the binary without it - card 112).
 
+In flight since 2026-09-19 evening, four Opus workers in parallel: 105 (server-first
+Studio; follow-up cards 120-124), 111+112 on one branch (`Link` from a `Device`;
+`sender` default-on - the orchestrator's decision; 125-129), 080 (conformance suite
+grown from `screeny-probe`; 130-134), 066 (sim brightness model; 135-139). File
+ownership was split in the prompts; expect small `Cargo.lock`/`Cargo.toml` conflicts.
+After each merges: 105 gets a real-panel run from a browser, 080 gets run against the
+device. Held back: 093 (timing test; wants a quiet machine), 092 (touches
+`crates/screeny`, after 111), hardware cards 062/065/068/110 (one at a time, and the
+owner is using the panel).
+
 **Next up, in order:** 105 (server-first Studio, Tauri
 removed) -> 106 (players, devices, state; built to be forgotten) -> 107
 (docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
