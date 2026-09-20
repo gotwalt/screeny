@@ -4,8 +4,8 @@ title: Studio reads the device's own HTTP status, when the firmware serves it
 type: build
 hardware: no
 depends: [170, 222]
-owner:
-branch:
+owner: worker-180
+branch: card/180-device-http-status
 ---
 
 ## Goal
@@ -76,3 +76,17 @@ With firmware that serves the API, the page shows the device's heap, WiFi and fi
 with firmware 0.2.0 it looks exactly as it does today.
 
 ## Log
+
+- **2026-09-20, worker-180.** Claimed, with card 181 folded in (same section of the
+  page). Branch `card/180-device-http-status`, worktree of its own, no hardware and no
+  LAN: everything below is against `screeny-sim` on loopback.
+
+  Read first: the card's Context notes, `docs/design/device-web.md` ("The HTTP API"),
+  `crates/device-api` (`StatusReply` and `tests/golden/status.json`), the 38 rules
+  `screeny-probe --addr 127.0.0.1 http --list` prints, and the seam card 106 left in
+  `crates/studio/src/fleet.rs`.
+
+  What the rules changed in the plan: rule #31 says a lone request comes back in
+  25-37 ms and inside 1 s when the one worker is busy, so a 2 s total deadline is
+  generous rather than tight; rule #3 says `boot_id` is stable across two reads, which
+  is what makes "count reboots from `boot_id`" honest.

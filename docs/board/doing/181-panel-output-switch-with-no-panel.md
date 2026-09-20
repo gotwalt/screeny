@@ -4,8 +4,8 @@ title: "Show it on the panel" is switched on when there is no panel
 type: build
 hardware: no
 depends: [170, 173]
-owner:
-branch:
+owner: worker-180
+branch: card/180-device-http-status
 ---
 
 ## Goal
