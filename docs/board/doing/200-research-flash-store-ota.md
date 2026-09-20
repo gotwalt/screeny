@@ -243,3 +243,35 @@ MD5 entry included, which `esp-bootloader-esp-idf`'s default `validation` featur
 requires) and the `undefined` data subtype (0x06) is accepted by both esp-idf-part and
 `DataPartitionSubType` (`partitions.rs` line 565), so `partition_type()` will not panic
 on it.
+
+### 2026-09-19 — research doc written
+
+`docs/research/006-flash-store-ota.md`: conclusions first, then evidence with file+line
+citations, the proposed `firmware/partitions.csv` fenced in section 3, the exact
+`tools/fw-run.sh` diff, and seven proposed build cards (A-G) in section 9.
+
+Things that surprised me and are worth the orchestrator's attention:
+
+1. **A serial flash does not beat a stale OTA slot.** espflash writes bootloader, table
+   and app and nothing else; with no `factory` partition it writes `ota_0` while otadata
+   may still select `ota_1`. `--erase-data-parts ota` must be permanent in `fw-run.sh`.
+2. **The default multi-core strategy makes flash writes impossible on this device.**
+   `MultiCoreStrategy::Error` + a display that owns core 1 forever = every write returns
+   `OtherCoreRunning`. `multicore_auto_park()` is not an optimisation, it is the only
+   way this works at all.
+3. **The atomicity of the otadata flip is real and provable**: `set_current_app_partition`
+   always writes the *inactive* entry, and a half-written entry fails CRC, so a power cut
+   during the flip lands on the previous slot.
+4. **Rollback is one Kconfig option away**, but the option is off in espflash's bundled
+   bootloader and ESP-IDF is not installed on this bench. The app-side revert I propose
+   covers everything except an image that dies before its own confirm timer arms.
+5. `sequential-storage 8` is async-only; `MapConfig::new` panics on a bad range (use
+   `try_new`); a custom data partition must use subtype `undefined` or
+   `PartitionEntry::partition_type()` panics on the device.
+6. **No coredump partition**, and the reasoning is not just "we don't need it": writing
+   flash from a panic handler is the one context where the core-park discipline cannot be
+   honoured. Proposed card G offers an RTC-slow-memory breadcrumb instead.
+
+Open questions for the owner are listed in the report; the one that blocks a build card is
+whether to install ESP-IDF v6.1 and commit a 26 KB bootloader blob to a repo that is meant
+to go public.
