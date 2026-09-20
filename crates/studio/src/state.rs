@@ -19,6 +19,7 @@
 //! save never blocks the caller, and a burst of slider changes costs one write
 //! rather than a queue. Nothing here can grow without bound.
 
+use screeny_art::piece::{ParamSpec, PieceDef};
 use screeny_art::Settings;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,12 +29,28 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The schema this build writes and is willing to read.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// v2 (card 165) adds the per-piece settings memory to the preview and to
+/// every player. v1 files are migrated: what a context was playing at the time
+/// becomes that piece's first memory, so nobody loses what they have today.
+pub const SCHEMA_VERSION: u32 = 2;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
 /// runs for months must not accumulate rubble.
 pub const BAD_FILE: &str = "state.bad.json";
+
+/// How many memories for pieces this build has never heard of are kept.
+///
+/// The studio itself only ever writes a memory for a piece it can play, so it
+/// is already bounded by the number of pieces in the binary. This is the bound
+/// on the other direction: a file edited by hand, or written by a build with
+/// pieces this one does not have, cannot grow without limit.
+pub const MAX_UNKNOWN_PIECES: usize = 64;
+
+/// How many "this is what I had to correct" sentences are kept for the status
+/// route. The log has them all; the dashboard does not need a novel.
+const MAX_REPAIRS: usize = 16;
 
 /// Everything that survives a restart.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -105,6 +122,9 @@ pub struct StoredPlayer {
     /// or `None` to leave whatever the device has. Never raised above the cap
     /// the device reports back.
     pub brightness: Option<u8>,
+    /// This panel's own per-piece settings memory (card 165). Schema v2.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub memory: Memory,
 }
 
 impl Default for StoredPlayer {
@@ -118,6 +138,7 @@ impl Default for StoredPlayer {
             fps: 60.0,
             settings: Settings::default(),
             brightness: None,
+            memory: Memory::new(),
         }
     }
 }
@@ -140,6 +161,9 @@ pub struct StoredPreview {
     pub panel_on: bool,
     /// A device id, a name or an address. Empty means "the first panel found".
     pub panel_to: String,
+    /// The design view's own per-piece settings memory (card 165). Schema v2.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub memory: Memory,
 }
 
 impl Default for StoredPreview {
@@ -154,8 +178,200 @@ impl Default for StoredPreview {
             fps: 60.0,
             panel_on: false,
             panel_to: String::new(),
+            memory: Memory::new(),
         }
     }
+}
+
+// ----------------------------------------------- the per-piece memory (165) ---
+
+/// What one context remembers about one piece.
+///
+/// Only what *differs* from the piece's defaults is kept, so a piece whose
+/// defaults improve in a later release improves for everybody who never
+/// touched that parameter - and the file stays small.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PieceMemory {
+    /// The seed this piece was last left on. `None` means "never chosen", in
+    /// which case switching to it keeps whatever seed the context is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    /// Parameter values that differ from the defaults, by param id.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+}
+
+impl PieceMemory {
+    /// Nothing worth writing down.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.seed.is_none() && self.params.is_empty()
+    }
+}
+
+/// One context's memory: piece id -> what it was left set to.
+///
+/// There is one of these for the design view and one for each device player,
+/// because "what panel X plays" and "what I am fiddling with" are different
+/// things (card 106 made that split explicit).
+pub type Memory = BTreeMap<String, PieceMemory>;
+
+/// Write down what `def` is set to now.
+///
+/// A value equal to the piece's default is *removed* rather than stored: that
+/// is the whole reason a later release's better default still reaches the
+/// people who never touched that slider.
+pub fn remember(memory: &mut Memory, def: &PieceDef, params: &BTreeMap<String, f32>, seed: u32) {
+    let entry = memory.entry(def.id.to_string()).or_default();
+    entry.seed = Some(seed);
+    entry.params.clear();
+    for spec in def.params {
+        if let Some(v) = params.get(spec.id) {
+            let v = spec.sanitise(*v);
+            // `!=` on f32 is exactly right here: the question is whether this
+            // is still literally the default, not whether it is close to it.
+            if v != spec.default {
+                entry.params.insert(spec.id.to_string(), v);
+            }
+        }
+    }
+}
+
+/// Forget the parameters remembered for `piece`, keeping its seed.
+///
+/// This is what "Reset" means: back to the defaults, and *stay* there, rather
+/// than being handed the old values again on the next switch back.
+pub fn forget_params(memory: &mut Memory, piece: &str) {
+    if let Some(entry) = memory.get_mut(piece) {
+        entry.params.clear();
+        if entry.is_empty() {
+            memory.remove(piece);
+        }
+    }
+}
+
+/// What `def` should be set to, according to this memory.
+///
+/// Everything the card asks for about a value this build cannot use happens
+/// here, per value, and never costs the rest of the entry:
+///
+/// | in the file | what happens |
+/// |---|---|
+/// | a parameter this build's piece does not have | ignored |
+/// | a value outside the spec's range | clamped to the range |
+/// | a value that is not a finite number | the piece's default |
+///
+/// Corrections are **written back** into the memory, so a file that needed
+/// fixing is fixed once rather than complained about on every switch - which
+/// is also what makes "logged once" true without a set of things already said.
+/// `who` names the context for that one log line.
+#[must_use]
+pub fn recall(memory: &mut Memory, def: &PieceDef, who: &str) -> (BTreeMap<String, f32>, Option<u32>) {
+    let Some(entry) = memory.get_mut(def.id) else {
+        return (BTreeMap::new(), None);
+    };
+    let (usable, repaired) = usable_params(&entry.params, def.params);
+    if !repaired.is_empty() {
+        eprintln!("studio: {who}: the remembered settings for `{}`: {}", def.id, repaired.join("; "));
+        entry.params = usable.clone();
+        if entry.is_empty() {
+            memory.remove(def.id);
+        }
+    }
+    (usable, entry_seed(memory, def.id))
+}
+
+fn entry_seed(memory: &Memory, piece: &str) -> Option<u32> {
+    memory.get(piece).and_then(|e| e.seed)
+}
+
+/// The remembered values this build can actually use, and one sentence per
+/// value it had to correct.
+#[must_use]
+pub fn usable_params(remembered: &BTreeMap<String, f32>, specs: &[ParamSpec]) -> (BTreeMap<String, f32>, Vec<String>) {
+    let mut usable = BTreeMap::new();
+    let mut repaired = Vec::new();
+    for (id, value) in remembered {
+        let Some(spec) = specs.iter().find(|s| s.id == id) else {
+            repaired.push(format!("`{id}` is not one of its parameters any more"));
+            continue;
+        };
+        if !value.is_finite() {
+            repaired.push(format!("`{id}` was not a number; back to {}", spec.default));
+            continue;
+        }
+        let fixed = spec.sanitise(*value);
+        if fixed != *value {
+            repaired.push(format!("`{id}` was {value}, outside {}..{}; held at {fixed}", spec.min, spec.max));
+        }
+        // A value that is now exactly the default is not worth remembering.
+        if fixed != spec.default {
+            usable.insert(spec.id.to_string(), fixed);
+        }
+    }
+    (usable, repaired)
+}
+
+/// Read a `memory` object out of a file as forgivingly as the card asks.
+///
+/// This runs on `serde_json::Value` rather than through serde's `f32`
+/// deliberately: `BTreeMap<String, f32>` refuses a `null`, a string or an
+/// object, and a refusal here would condemn the **whole file** to
+/// `state.bad.json` under card 106's rules. One bad value must cost exactly
+/// that one value.
+fn clean_memory(raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> Memory {
+    let Some(serde_json::Value::Object(entries)) = raw else {
+        if raw.is_some_and(|v| !v.is_null()) {
+            repaired.push("the remembered settings were not an object; forgotten".into());
+        }
+        return Memory::new();
+    };
+    let mut memory = Memory::new();
+    let mut unknown = 0usize;
+    for (piece, value) in entries {
+        // An unknown piece id keeps its entry - a piece that comes back in a
+        // later release gets its settings back - but only so many of them.
+        if screeny_art::piece::find(piece).is_none() {
+            unknown += 1;
+            if unknown > MAX_UNKNOWN_PIECES {
+                repaired.push(format!("`{piece}` is not a piece here and there were already {MAX_UNKNOWN_PIECES} such entries; dropped"));
+                continue;
+            }
+        }
+        let serde_json::Value::Object(entry) = value else {
+            repaired.push(format!("what was remembered for `{piece}` was not an object; forgotten"));
+            continue;
+        };
+        let seed = match entry.get("seed") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
+                Some(n) => Some(n),
+                None => {
+                    repaired.push(format!("the seed remembered for `{piece}` was not a seed; forgotten"));
+                    None
+                }
+            },
+        };
+        let mut params = BTreeMap::new();
+        if let Some(serde_json::Value::Object(ps)) = entry.get("params") {
+            for (id, v) in ps {
+                match v.as_f64().map(|f| f as f32).filter(|f| f.is_finite()) {
+                    Some(f) => {
+                        params.insert(id.clone(), f);
+                    }
+                    None => repaired.push(format!("`{piece}`'s remembered `{id}` was not a number; back to its default")),
+                }
+            }
+        } else if entry.get("params").is_some_and(|v| !v.is_null()) {
+            repaired.push(format!("the parameters remembered for `{piece}` were not an object; forgotten"));
+        }
+        let m = PieceMemory { seed, params };
+        if !m.is_empty() {
+            memory.insert(piece.clone(), m);
+        }
+    }
+    memory
 }
 
 /// A file that did not name a schema version at all.
@@ -187,59 +403,142 @@ pub struct StoreHealth {
     /// did. `None` covers both "the file was read" and "there was no file",
     /// which are both normal; [`StoreHealth::recovered`] tells them apart.
     pub recovered: Option<String>,
+    /// Remembered settings this build could not use as written and silently
+    /// corrected (card 165). Not a fault, never a 503: a value being out of
+    /// range after a piece was re-ranged is exactly what the memory is meant
+    /// to survive. Capped at [`MAX_REPAIRS`].
+    pub repaired: Vec<String>,
 }
 
 // ---------------------------------------------------------------- loading ---
+
+/// What reading the file produced.
+struct Loaded {
+    state: Persisted,
+    /// Why the studio started from a default rather than from the file.
+    recovered: Option<String>,
+    /// Remembered values that had to be corrected. Not a recovery: the file
+    /// was used, one value in it was not.
+    repaired: Vec<String>,
+}
+
+impl Loaded {
+    fn fresh(why: Option<String>) -> Loaded {
+        Loaded { state: Persisted::default(), recovered: why, repaired: Vec::new() }
+    }
+}
 
 /// Read the state file, whatever is in it.
 ///
 /// Returns the state to start from and, when the file could not be used, one
 /// sentence saying why - already logged, and worth putting on the dashboard.
 /// This function has no failure mode: that is the point of it.
-fn load(path: &Path) -> (Persisted, Option<String>) {
+fn load(path: &Path) -> Loaded {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         // No file is the normal first run, not a problem to report.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Persisted::default(), None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::fresh(None),
         Err(e) => {
-            return (Persisted::default(), Some(format!("{} could not be read ({e}); starting from defaults", path.display())));
+            return Loaded::fresh(Some(format!("{} could not be read ({e}); starting from defaults", path.display())));
         }
     };
 
-    // Peek at the version before trusting the rest of the shape: a file from a
-    // newer build may have fields this one would reject.
-    let version = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|v| v.get("version").and_then(serde_json::Value::as_u64));
-    if let Some(v) = version {
+    let keep_the_file = |why: String| {
+        let bad = path.with_file_name(BAD_FILE);
+        let moved = std::fs::rename(path, &bad).is_ok();
+        let where_ = if moved { format!("; kept as {}", bad.display()) } else { String::new() };
+        Loaded::fresh(Some(format!("{why}{where_}; starting from defaults")))
+    };
+
+    // One parse into a `Value` first. The version has to be read before the
+    // shape is trusted - a file from a newer build may have fields this one
+    // would reject - and the per-piece memory has to be lifted out and cleaned
+    // before serde sees it, because a single bad value in there must cost that
+    // value and not the whole file.
+    let mut raw: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(e) => return keep_the_file(format!("the state file could not be parsed ({e})")),
+    };
+
+    if let Some(v) = raw.get("version").and_then(serde_json::Value::as_u64) {
         if v > u64::from(SCHEMA_VERSION) {
             let keep = path.with_file_name(format!("state.v{v}.json"));
             let moved = std::fs::rename(path, &keep).is_ok();
             let where_ = if moved { format!("; kept as {}", keep.display()) } else { String::new() };
-            return (
-                Persisted::default(),
-                Some(format!("the state file is schema v{v} and this build understands v{SCHEMA_VERSION}{where_}")),
-            );
+            return Loaded::fresh(Some(format!(
+                "the state file is schema v{v} and this build understands v{SCHEMA_VERSION}{where_}"
+            )));
         }
     }
 
-    match serde_json::from_slice::<Persisted>(&bytes) {
-        // A file with no version, or a version older than this build's, is a
-        // migration. There is only one schema so far, so adopting it is the
-        // whole migration; the next one adds a match here.
-        Ok(mut p) => {
-            let was = p.version;
-            p.version = SCHEMA_VERSION;
-            let note = (was != SCHEMA_VERSION)
-                .then(|| format!("the state file was schema v{was}; migrated to v{SCHEMA_VERSION}"));
-            (p, note)
+    let mut repaired = Vec::new();
+    let memories = lift_memories(&mut raw, &mut repaired);
+
+    let mut state: Persisted = match serde_json::from_value(raw) {
+        Ok(p) => p,
+        Err(e) => return keep_the_file(format!("the state file could not be parsed ({e})")),
+    };
+    let was = state.version;
+    state.version = SCHEMA_VERSION;
+    put_memories_back(&mut state, memories);
+    if was < 2 {
+        migrate_v1_to_v2(&mut state);
+    }
+    repaired.truncate(MAX_REPAIRS);
+    let recovered =
+        (was != SCHEMA_VERSION).then(|| format!("the state file was schema v{was}; migrated to v{SCHEMA_VERSION}"));
+    Loaded { state, recovered, repaired }
+}
+
+/// Take every `memory` object out of the raw JSON and clean it.
+///
+/// `None` for the preview, then one per player in the order they appear, which
+/// is the order [`put_memories_back`] hands them out again.
+fn lift_memories(raw: &mut serde_json::Value, repaired: &mut Vec<String>) -> (Memory, Vec<Memory>) {
+    let preview = raw.get_mut("preview").map(|p| {
+        let m = clean_memory(p.get("memory"), repaired);
+        if let Some(o) = p.as_object_mut() {
+            o.remove("memory");
         }
-        Err(e) => {
-            let bad = path.with_file_name(BAD_FILE);
-            let moved = std::fs::rename(path, &bad).is_ok();
-            let where_ = if moved { format!("; kept as {}", bad.display()) } else { String::new() };
-            (Persisted::default(), Some(format!("the state file could not be parsed ({e}){where_}; starting from defaults")))
+        m
+    });
+    let players = raw.get_mut("players").and_then(serde_json::Value::as_array_mut).map(|list| {
+        list.iter_mut()
+            .map(|p| {
+                let m = clean_memory(p.get("memory"), repaired);
+                if let Some(o) = p.as_object_mut() {
+                    o.remove("memory");
+                }
+                m
+            })
+            .collect()
+    });
+    (preview.unwrap_or_default(), players.unwrap_or_default())
+}
+
+fn put_memories_back(state: &mut Persisted, (preview, players): (Memory, Vec<Memory>)) {
+    state.preview.memory = preview;
+    for (player, memory) in state.players.iter_mut().zip(players) {
+        player.memory = memory;
+    }
+}
+
+/// v1 -> v2: what each context was playing becomes that piece's first memory.
+///
+/// v1 kept one `params` map per context, for the *current* piece only. That is
+/// exactly one entry's worth of memory, so nobody loses the tuning they have
+/// today - and because [`remember`] drops anything equal to the piece's
+/// default, a v1 file's full parameter dump comes out of the migration as just
+/// the values that were actually moved.
+fn migrate_v1_to_v2(state: &mut Persisted) {
+    for player in &mut state.players {
+        if let Some(def) = screeny_art::piece::find(&player.piece) {
+            remember(&mut player.memory, def, &player.params, player.seed);
         }
+    }
+    let preview = &mut state.preview;
+    if let Some(def) = screeny_art::piece::find(&preview.piece) {
+        remember(&mut preview.memory, def, &preview.params, preview.seed);
     }
 }
 
@@ -298,12 +597,17 @@ impl Store {
                     // server is still useful; `/healthz` says it is not well.
                     (Some(path), Persisted::default())
                 } else {
-                    let (p, why) = load(&path);
-                    if let Some(why) = &why {
+                    let loaded = load(&path);
+                    if let Some(why) = &loaded.recovered {
                         eprintln!("studio: state: {why}");
                     }
-                    health.recovered = why;
-                    (Some(path), p)
+                    // Said once, here, on the way in - not once per switch.
+                    for what in &loaded.repaired {
+                        eprintln!("studio: state: {what}");
+                    }
+                    health.recovered = loaded.recovered;
+                    health.repaired = loaded.repaired;
+                    (Some(path), loaded.state)
                 }
             }
         };

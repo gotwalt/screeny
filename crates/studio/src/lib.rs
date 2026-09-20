@@ -229,6 +229,10 @@ impl AppState {
                 fps: snap.fps,
                 panel_on,
                 panel_to,
+                // Card 165. It lives here and nowhere else: the state file in
+                // `SCREENY_STATE_DIR` is the volume the container keeps across
+                // a rebuild, so this is what makes the memory survive a deploy.
+                memory: e.memory().clone(),
             }
         };
         self.store.save(state::Persisted {
@@ -419,12 +423,27 @@ fn router(state: AppState) -> Router {
 /// than fatal. A state file from an older build must never stop the server.
 fn restore_preview(engine: &Shared, saved: &state::StoredPreview, faults: bool) {
     let mut e = lock(engine);
-    if player::find_piece(&saved.piece, faults).is_some() && e.set_piece(&saved.piece).is_err() {
-        eprintln!("studio: the saved piece `{}` could not be loaded; starting on the default", saved.piece);
-    }
-    e.set_seed(Some(saved.seed));
-    for (id, v) in &saved.params {
-        let _ = e.set_param(id, *v);
+    // The memory first, so putting the saved piece back is an ordinary switch
+    // and every other piece's settings are there the moment somebody asks for
+    // one - which is the point of card 165 surviving a restart at all.
+    e.load_memory(saved.memory.clone());
+    let restored = player::find_piece(&saved.piece, faults).is_some() && e.set_piece(&saved.piece).is_ok();
+    if restored {
+        // The live values win over the memory for the piece that was actually
+        // on screen: they are the same thing unless the file was hand-edited,
+        // and if it was, the top-level ones are what a human wrote last.
+        e.set_seed(Some(saved.seed));
+        for (id, v) in &saved.params {
+            let _ = e.set_param(id, *v);
+        }
+    } else if !saved.piece.is_empty() {
+        // Its memory is kept, so a piece that comes back in a later build
+        // comes back set up the way it was left.
+        eprintln!(
+            "studio: the saved piece `{}` is not in this build; starting on `{}` and keeping its settings",
+            saved.piece,
+            e.snapshot().piece
+        );
     }
     e.set_settings(saved.settings);
     e.set_playback(saved.paused, saved.speed, saved.fps);

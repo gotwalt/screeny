@@ -35,6 +35,27 @@ use std::time::{Duration, Instant};
 use crate::devices::Reach;
 use crate::state::{unix_now, StoredPlayer};
 
+/// Write down what this player's current piece is set to, if it is a piece
+/// this build has. An unknown piece has no specs to compare against, so its
+/// entry is left exactly as the file had it (card 165: "unknown piece id ->
+/// entry ignored, kept in the file").
+fn remember_current(cfg: &mut StoredPlayer, faults: bool) {
+    if let Some(def) = find_piece(&cfg.piece, faults) {
+        let (params, seed) = (cfg.params.clone(), cfg.seed);
+        crate::state::remember(&mut cfg.memory, def, &params, seed);
+    }
+}
+
+/// Put `cfg` on `def`, restoring whatever this player last left it set to.
+fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, device: &str) {
+    cfg.piece = def.id.to_string();
+    let (params, seed) = crate::state::recall(&mut cfg.memory, def, &format!("panel {device}"));
+    cfg.params = params;
+    if let Some(seed) = seed {
+        cfg.seed = seed;
+    }
+}
+
 /// How long one frame may take before the player is treated as wedged.
 /// Generous: a cold GPU piece's first frame is not a fault.
 pub const WATCHDOG: Duration = Duration::from_secs(5);
@@ -321,8 +342,10 @@ impl Player {
             if let Some(id) = &change.piece {
                 let def = find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
                 if cfg.piece != def.id {
-                    cfg.piece = def.id.to_string();
-                    cfg.params.clear();
+                    // Leave the old piece where it was left, and arrive at the
+                    // new one where *it* was left (card 165).
+                    remember_current(&mut cfg, self.faults);
+                    recall_into(&mut cfg, def, &self.device);
                     restart = true;
                 }
                 // Asking for a piece again clears its refusal: a human saying
@@ -335,15 +358,25 @@ impl Player {
             }
             if let Some(seed) = change.seed {
                 cfg.seed = seed;
+                remember_current(&mut cfg, self.faults);
                 restart = true;
             }
             if let Some((id, value)) = &change.param {
                 let def = find_piece(&cfg.piece, self.faults);
-                let known = def.is_some_and(|d| d.params.iter().any(|p| p.id == id));
-                if !known {
+                let Some(spec) = def.and_then(|d| d.params.iter().find(|p| p.id == id)) else {
                     return Err(format!("{} has no parameter `{id}`", cfg.piece));
-                }
-                cfg.params.insert(id.clone(), *value);
+                };
+                cfg.params.insert(id.clone(), spec.sanitise(*value));
+                remember_current(&mut cfg, self.faults);
+                restart = true;
+            }
+            // "Back to the defaults, and stay there": the remembered
+            // parameters go with them, or the next switch back would hand the
+            // old values straight over again.
+            if change.reset_params {
+                cfg.params.clear();
+                let piece = cfg.piece.clone();
+                crate::state::forget_params(&mut cfg.memory, &piece);
                 restart = true;
             }
             if let Some(fps) = change.fps {
@@ -367,11 +400,18 @@ impl Player {
             if change.replace.is_some() {
                 let r = change.replace.clone().expect("checked");
                 let def = find_piece(&r.piece, self.faults).ok_or_else(|| format!("no piece called `{}`", r.piece))?;
+                // Leaving the piece it was on: write that one down too, so
+                // "play my preview" does not cost this panel what it had.
+                remember_current(&mut cfg, self.faults);
                 cfg.piece = def.id.to_string();
                 cfg.seed = r.seed;
                 cfg.params = r.params;
                 cfg.settings = r.settings;
                 cfg.fps = r.fps.clamp(MIN_FPS, MAX_FPS);
+                // The card: promoting the preview copies its values into this
+                // player's memory *for that piece*, so they are what the panel
+                // comes back to next time it is asked for this piece.
+                remember_current(&mut cfg, self.faults);
                 restart = true;
                 let mut h = self.health_mut();
                 h.refused.clear();
@@ -620,8 +660,10 @@ impl Player {
             h.refused.push(piece.to_string());
         }
         h.fell_back_from = Some(piece.to_string());
-        cfg.piece = fallback.id.to_string();
-        cfg.params.clear();
+        // The fallback arrives set up the way it was last left here, like any
+        // other piece change. The failing piece's own memory is untouched: it
+        // is already current, and a fault is not a reason to forget it.
+        recall_into(&mut cfg, fallback, &self.device);
     }
 
     fn start_core(self: &Arc<Self>) {
@@ -703,6 +745,9 @@ pub struct PlayerChange {
     pub piece: Option<String>,
     pub seed: Option<u32>,
     pub param: Option<(String, f32)>,
+    /// The player's "Reset": back to the piece's defaults, and forget what was
+    /// remembered for it here (card 165).
+    pub reset_params: bool,
     pub fps: Option<f64>,
     pub settings: Option<Settings>,
     /// `Some(None)` clears the brightness policy; `Some(Some(n))` sets it.

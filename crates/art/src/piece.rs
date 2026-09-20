@@ -90,6 +90,23 @@ pub const fn param(id: &'static str, label: &'static str, min: f32, max: f32, st
     ParamSpec { id, label, min, max, step, default }
 }
 
+impl ParamSpec {
+    /// A value fit to hand to a piece.
+    ///
+    /// Out of range is clamped, which is what the sliders do anyway. A value
+    /// that is not a number at all becomes the default: `f32::clamp` returns a
+    /// NaN unchanged, so without this a remembered or hand-edited NaN would
+    /// reach a piece's arithmetic and paint a black frame for ever.
+    #[must_use]
+    pub fn sanitise(&self, value: f32) -> f32 {
+        if value.is_finite() {
+            value.clamp(self.min, self.max)
+        } else {
+            self.default
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Params(BTreeMap<&'static str, f32>);
 
@@ -103,10 +120,13 @@ impl Params {
     }
 
     /// Returns false if the piece has no such parameter.
+    ///
+    /// A value the spec does not allow is corrected rather than refused - see
+    /// [`ParamSpec::sanitise`] - so the answer is only ever about the *id*.
     pub fn set(&mut self, specs: &[ParamSpec], id: &str, value: f32) -> bool {
         match specs.iter().find(|s| s.id == id) {
             Some(s) => {
-                self.0.insert(s.id, value.clamp(s.min, s.max));
+                self.0.insert(s.id, s.sanitise(value));
                 true
             }
             None => false,
@@ -129,4 +149,35 @@ pub struct PieceDef {
 
 pub fn find(id: &str) -> Option<&'static PieceDef> {
     crate::pieces::ALL.iter().find(|d| d.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPECS: &[ParamSpec] = &[param("scale", "Scale", 0.5, 4.0, 0.1, 1.0)];
+
+    /// Card 165: a remembered or hand-edited value reaches a piece through
+    /// here, so "no piece ever sees a value its own spec forbids" has to be
+    /// true of every path into `Params`, not just of the sliders.
+    #[test]
+    fn a_spec_corrects_a_value_it_cannot_allow() {
+        let s = SPECS[0];
+        assert_eq!(s.sanitise(2.0), 2.0);
+        assert_eq!(s.sanitise(9.0), 4.0, "above the range is clamped");
+        assert_eq!(s.sanitise(-9.0), 0.5, "below the range is clamped");
+        assert_eq!(s.sanitise(f32::NAN), 1.0, "not a number at all is the default");
+        assert_eq!(s.sanitise(f32::INFINITY), 1.0);
+        assert_eq!(s.sanitise(f32::NEG_INFINITY), 1.0);
+    }
+
+    #[test]
+    fn setting_a_parameter_never_leaves_a_piece_with_a_nan() {
+        let mut p = Params::defaults(SPECS);
+        assert!(p.set(SPECS, "scale", f32::NAN), "a NaN is a value problem, not an unknown id");
+        assert_eq!(p.get("scale"), 1.0);
+        assert!(p.set(SPECS, "scale", 100.0));
+        assert_eq!(p.get("scale"), 4.0);
+        assert!(!p.set(SPECS, "nonesuch", 1.0), "an unknown id is still refused");
+    }
 }
