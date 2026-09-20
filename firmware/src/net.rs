@@ -327,18 +327,21 @@ pub async fn control_task(stack: Stack<'static>) {
         // failures are counted in `store::FAILURES` instead.
         let mut wifi_to_try = None;
         if let Some(what) = immediate {
-            match store::commit_immediate(&what).await {
-                Ok(()) => {
-                    if let store::Immediate::Wifi { wifi, .. } = what {
-                        wifi_to_try = Some(wifi);
-                    }
+            match what {
+                // Credentials are **not** written here. They are handed to the
+                // WiFi task, which stores them only once they have joined
+                // (`crate::NewWifi`): writing first let one bad `SET_WIFI`
+                // replace a working pair in flash. So `SET_WIFI` can no longer
+                // answer `ERR_STORAGE`; a failed write after a good join is
+                // counted in `store::FAILURES` instead.
+                store::Immediate::Wifi { wifi, persist } => {
+                    wifi_to_try = Some(crate::NewWifi { wifi, persist });
                 }
-                Err(e) => {
-                    warn!("control: storing the setting failed: {:?} -> ERR_STORAGE", e);
-                    // Nothing is attempted with credentials we could not keep:
-                    // dropping a working association for a pair that will be
-                    // gone at the next boot is the worst of both.
-                    len = err_storage(&buf[..n], &mut reply[..]).or(len);
+                other => {
+                    if let Err(e) = store::commit_immediate(&other).await {
+                        warn!("control: storing the setting failed: {:?} -> ERR_STORAGE", e);
+                        len = err_storage(&buf[..n], &mut reply[..]).or(len);
+                    }
                 }
             }
         }

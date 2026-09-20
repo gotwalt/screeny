@@ -615,7 +615,7 @@ async fn apply_control(reqs: &[ControlRequest<'_>]) -> Result<(), ApiError> {
 // ---------------------------------------------------------------------------
 
 /// Credentials accepted by `POST /api/v1/wifi`, waiting for the reply to leave.
-static WIFI_PENDING: Signal<CriticalSectionRawMutex, Wifi> = Signal::new();
+static WIFI_PENDING: Signal<CriticalSectionRawMutex, crate::NewWifi> = Signal::new();
 /// A `POST /api/v1/reboot` that has been answered.
 static REBOOT_PENDING: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
@@ -697,21 +697,10 @@ async fn post_wifi(RawForm(body): RawForm) -> Api<AcceptedReply> {
         ApiError::detail(ErrorCode::OutOfRange, "those credentials do not fit")
     })?;
 
-    // Written to flash *before* the reply, exactly as `SET_WIFI` is: a store
-    // failure is then an honest `storage`, and nothing is attempted with
-    // credentials that would be gone at the next boot. The write does not drop
-    // the connection; the join does, which is why the join is deferred.
-    store::commit_immediate(&store::Immediate::Wifi {
-        wifi: wifi.clone(),
-        persist: true,
-    })
-    .await
-    .map_err(|e| {
-        warn!("http: storing the credentials failed: {:?}", e);
-        ApiError::detail(ErrorCode::Storage, "the write to flash failed")
-    })?;
-
-    WIFI_PENDING.signal(wifi);
+    // Nothing is written here. The WiFi task stores the pair only after it has
+    // joined (`crate::NewWifi`); firmware 0.4.0 wrote first, and one mistyped
+    // password replaced the working credentials in flash.
+    WIFI_PENDING.signal(crate::NewWifi { wifi, persist: true });
     Ok(picoserve::response::Json(AcceptedReply::TRYING))
 }
 

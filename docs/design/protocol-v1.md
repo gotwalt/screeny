@@ -910,11 +910,15 @@ a browser-based installer.
 The device MUST send the reply **before** disconnecting, because after
 disconnecting it cannot. Then:
 
-1. Store the credentials if `persist`.
-2. Disconnect and attempt to join the new network, up to 3 attempts.
-3. On success, re-announce over mDNS from the new address.
-4. On failure, fall back per §8.3 and set the join state so `GET_WIFI` reports
-   `ERR_WIFI`.
+1. Disconnect and attempt to join the new network, up to 3 attempts.
+2. On success, **then** store the credentials if `persist`, and re-announce over
+   mDNS from the new address. Credentials MUST NOT be stored before they have
+   joined: firmware 0.4.0 stored first, and one wrong `SET_WIFI` replaced a working
+   pair in flash - the device ran on until its next reboot and then could join
+   nothing. A store failure at this point cannot be reported in the reply (it has
+   already been sent); the device counts it and carries on with the join it has.
+3. On failure, fall back per §8.3 to the credentials it had, leave the store
+   untouched, and set the join state so `GET_WIFI` reports `ERR_WIFI`.
 
 ### 8.3 Fallback rule
 
