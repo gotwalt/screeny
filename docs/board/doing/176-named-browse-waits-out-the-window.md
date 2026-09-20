@@ -58,3 +58,77 @@ in well under the browse window, and against one that is not still waits the
 window out and lists what did answer.
 
 ## Log
+
+### Done, 2026-09-20 (worker-176)
+
+**The rule, decided and written down.** The three ways a device can answer to a
+name are not equally knowable, so they do not get the same treatment:
+
+| `--name` matched | unique? | when it can be decided |
+|---|---|---|
+| the DNS-SD **instance name**, in full | yes - RFC 6762 §9 conflict resolution makes it unique on a link | the moment that instance resolves |
+| the friendly **`name=`** in the TXT record | no - two panels can be given one name | only when the window closes |
+| a **prefix** of an instance name | only if nothing else starts with it | only when the window closes |
+
+So a browse for a full instance name stops the moment that instance resolves,
+and nothing else stops early. That is the whole of the fix, and it is the case
+the studio is in: it reconnects to `screeny-4a00a4` by instance name.
+
+This also settles the "first match vs unique prefix" contradiction the card
+warned about. The old code's predicate was one `find` over an OR of the three,
+so the *alphabetically first* device matching any of them won, and an ambiguous
+prefix silently picked one. Now `pick` takes the strongest kind of match
+present (instance, then friendly, then prefix) and, if two devices tie on that
+kind, returns the new `Error::AmbiguousName` - "`screeny-4a00` matches more
+than one device (screeny-4a00a4, screeny-4a00b7); name one of them in full" -
+rather than guessing. An exact instance name can never reach that error, so
+naming a panel in full always works. `Error` is `#[non_exhaustive]`, so the new
+variant is not a breaking change.
+
+**Before and after.** Measured on `collect_until`, the browse loop itself,
+driven by a scripted stream of resolves - no daemon, no multicast, nothing that
+could see or be seen by the panel on this bench (the card allowed a real
+`SimDevice` only if the real panel could be kept out of it; this keeps it out by
+construction). Three devices answer at 20/60/100 ms into the default 3 s window
+and the one wanted is the second:
+
+| browse | returns after |
+|---|---|
+| named, before (`want: None`, collect the window) | **3.006 s** |
+| named, after (stop at that instance) | **0.070 s** |
+| unnamed / collect-everything, unchanged | 3.008 s, all three devices |
+
+A ~43x cut on every reconnect, and the studio re-resolves on every one of them.
+
+**Still paid, deliberately.** A name nothing answers to waits the window out, so
+`Error::NoSuchDevice` can still list every instance that did answer - tested.
+
+**Code.** `crates/screeny/src/discover.rs`:
+
+- `collect_until(timeout, next, stop)` is the loop, over any source of a new
+  private `Step` (`Resolved` / `Other` / `Done`). Split out precisely so the
+  stop condition is testable without a network.
+- `browse_until` is `collect_until` driven by a real `ServiceDaemon`.
+- `pub fn browse_for_name(timeout, want)` is the new entry point: stop when
+  `want` is a key in what has resolved. `pub fn browse(timeout, want:
+  Option<usize>)` is unchanged in signature and behaviour.
+- `match_kind` / `Match` / `pick` are the matching rule, pure and unit-tested.
+- `Target::browse_for` now picks `browse_for_name` for a named target and
+  `browse(_, Some(1))` for an unnamed one.
+
+**Tests** (`discover::tests`, all hermetic):
+`a_named_browse_returns_when_that_instance_answers` (the table above, and that
+an unnamed browse still returns every device),
+`a_name_nothing_answers_to_still_costs_the_window` (window paid, names listed),
+`a_prefix_must_be_unique_but_a_full_instance_name_never_is_ambiguous` (the
+precedence and the new error).
+
+**Docs.** `crates/screeny/README.md`: the API summary, the `--name`/`--timeout`
+rows, and a new bullet in the notes stating the rule. `Target::name`'s doc
+comment and `browse_for_name`'s carry it in the code.
+
+One `#[allow(clippy::large_enum_variant)]` with a reason on `Step`: it is a
+return value that is matched and dropped immediately, so boxing the `Device`
+would buy an allocation per resolve and save nothing.
+
+`cargo test -p screeny`: green (31 tests across lib, integration and doc tests).
