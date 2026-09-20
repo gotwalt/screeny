@@ -237,3 +237,72 @@ id this studio does not know) and that `--no-discover` turns it off; the
 the probe. `crates/screeny/README.md` got its two API lines in step 2.
 `docs/design/protocol-v1.md` is **not** touched: 5.5 already says exactly this
 and the wire is unchanged - one `GET_INFO`, the same reply, no new opcode.
+
+### Worker, step 7 (verification, and what the orchestrator should run)
+
+**Everything as actually run, on this branch, with no hardware and no LAN
+access:**
+
+- `cargo test --release --no-fail-fast` at the root: **724 passed, 0 failed, 1
+  ignored** across 80 test binaries and doc-test targets, exit 0.
+- `cargo clippy --workspace --all-targets`: **silent**, no warnings, and no
+  `#[allow]` added anywhere in this card.
+- `cargo test --release -p screeny-studio --test moved`, **14 consecutive runs
+  after the de-flake: 14 x ok, 2 passed, 0 failed** (6.4-10.3 s each).
+- Nothing left running: `pgrep` for cargo/rustc/screeny is empty, and `lsof`
+  shows nothing listening on 49374/49375 or on the 50900-51100 test band.
+
+**One flake seen that is not mine**, written down so the next person does not
+chase it: `screeny-sim`'s `a_sender_can_tell_network_loss_from_a_slow_device`
+(`crates/sim/tests/telemetry.rs`) failed once under a full parallel `--release`
+suite with `frames_dropped_superseded 1, expected 0`, and passed 10/10 on its
+own and in three later full runs. It paces a sender at 4 ms on loopback and
+asserts the simulator superseded nothing, which a loaded machine can break.
+Nothing in this card touches the frame path, the simulator or `proto`.
+
+**Two things I did not do, and why.** The probe still waits its whole 1 s
+window even once every missing panel has answered: it is one second on a
+blocking thread, so stopping early would buy nothing worth the machinery. And
+`Config::probe_to` has no CLI flag - that is new card **142**, because a
+container whose broadcast does not reach the panel needs one and this card did
+not ask for it.
+
+### The real-panel check, for the orchestrator
+
+No hardware was touched here. This is the bench half of the acceptance.
+
+1. Build from this branch and run the studio the normal way - discovery on, so
+   the probe is on: `cargo run --release -p screeny-studio`.
+2. Add the panel **by address**, not by name: a name already follows a lease,
+   so testing with one would not be testing this card. `POST
+   /api/v1/devices/add` with `{"to":"192.168.7.221","name":"desk","play":true}`.
+   Wait until `/api/v1/status` shows it `"resolved": true` and streaming, then
+   set something recognisable with `POST /api/v1/player/set`:
+   `{"device":"4a00a4","piece":"metaballs","seed":4242}`.
+3. Make it move: give it a different DHCP lease (a reservation change and a
+   power cycle is the easy way on this bench), and **leave the studio alone**.
+4. What to expect, within `stale_after` (120 s) plus a browse tick (30 s) and
+   possibly a few backoff passes - so a couple of minutes, not seconds:
+   - exactly **one** new line on stderr, of the form
+     "studio: `4a00a4` answered a probe at 192.168.7.NN:49374 (it was at
+     192.168.7.221:49374); following it";
+   - in `/api/v1/status`: `devices[0].address` is the new address,
+     `"resolved": true`, `control_addr` is the new IP on 49375, and the player
+     is still on `metaballs` seed 4242 with `panel.connected: true` and
+     `frames_sent` climbing. `discovery.moved` is 1 and
+     `discovery.last_probe_error` is null;
+   - `/healthz` 200 throughout, and the panel showing the same piece it was
+     showing. The point of the card is that it does not restart.
+5. **Which mechanism caught it.** On a bench where mDNS works, the browse may
+   win the race and re-resolve the panel first. That is fine and is not a
+   failure of this card: `discovery.moved` and the log line above are what say
+   the probe did it, and if the browse got there first, `moved` stays 0 and
+   there is no line. To watch the probe do the work alone, the panel has to be
+   known by address (step 2) and out of mDNS's reach - which is the container,
+   where it already is.
+6. **If it does not catch up**, the two honest failures are: `discovery.probes`
+   climbing while `moved` stays 0 (the panel is not answering the broadcast, or
+   the broadcast does not reach it - `discovery.last_probe_error` says if the
+   socket itself refused), and `probes` staying 0 (nothing counted as unheard -
+   compare `devices[0].last_seen_ago` with 120 s). Nothing needs restarting to
+   retry; the next tick tries again.
