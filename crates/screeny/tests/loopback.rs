@@ -110,6 +110,68 @@ fn low_colour_frames_arrive_pixel_exact() {
     }
 }
 
+/// Card 153: the rate the sender reports must mean "the rate the stream ran
+/// at" at any stream length.
+///
+/// **Two lengths, both about two seconds, at different rates** - 20 slots at
+/// 10 fps and 60 slots at 30 fps - rather than a 2 s run and a 10 s one. The
+/// old bug was `2 / slots`, so it shows up in the *slot count*: +10.5% at 20
+/// slots, +3.4% at 60. The measurement noise is one late wake-up over the
+/// span, so it shows up in the *wall clock*: this host's `thread::sleep`
+/// overshoot is about 4 ms (card 154), 0.2% of two seconds. Two short runs at
+/// different rates therefore catch the bug harder than a 2 s and a 10 s run at
+/// the same rate, and cost 4 s of suite time instead of 12.
+///
+/// The receiver's own estimator is the cross-check: it is interval-based over
+/// the arrivals (card 093's `RxState::paced`), computed from different clocks
+/// on the other side of the socket, and the two must agree.
+#[test]
+fn the_reported_rate_is_the_same_at_any_stream_length() {
+    for (fps, slots) in [(10.0, 20u64), (30.0, 60u64)] {
+        let rx = Receiver::start(RxConfig::default());
+        let mut sender = Sender::connect(rx.device(), cfg(fps)).expect("connect");
+        let stop = AtomicBool::new(false);
+        let mut n = 0u64;
+        let mut src =
+            screeny::FnSource::new("bars", move |t: FrameTime, out: &mut screeny::Frame| {
+                Pattern::Bars.render_at(t.index, out);
+                n += 1;
+                n <= slots
+            });
+        sender.run(&mut src, &stop).expect("run");
+
+        let s = sender.stats().clone();
+        let reported = s.actual_fps();
+        drop(sender);
+        let state = rx.shutdown();
+        let arrived = state.fps();
+
+        assert_eq!(s.frames_paced(), slots, "{fps} fps: paced frame count");
+        assert_eq!(s.frames_sent, slots + 1, "one FINAL frame on top");
+        assert_eq!(s.frames_encoded, slots, "FINAL encodes nothing");
+        assert_eq!(s.frames_skipped, 0, "{fps} fps: nothing should be skipped");
+        // 1% against the nominal rate, not 0.5%, and for a reason worth
+        // writing down: what is left of the error is one wake-up's overshoot
+        // over the span, not arithmetic. The frame at slot 0 goes out without
+        // sleeping first and every later frame goes out about 4 ms after its
+        // slot (card 154), so the span is one overshoot too long and the rate
+        // reads that much low - 0.2-0.4% over two seconds, under 0.1% over
+        // ten. The bug this guards against is +10.5% at 20 slots and +3.4% at
+        // 60, so the margin is still 10x and 3x.
+        assert!(
+            (reported - fps).abs() <= fps * 0.01,
+            "{fps} fps over {slots} slots: reported {reported:.3}, outside +-1%"
+        );
+        // The sharp half: the receiver measures the same sends with its own
+        // clock and the same estimator (card 093's `RxState::paced`). Host
+        // jitter moves both together, so they have to agree closely.
+        assert!(
+            (reported - arrived).abs() <= fps * 0.003,
+            "{fps} fps: sender says {reported:.3}, receiver says {arrived:.3}"
+        );
+    }
+}
+
 #[test]
 fn stats_requests_are_piggybacked_and_answered() {
     let rx = Receiver::start(RxConfig::default());

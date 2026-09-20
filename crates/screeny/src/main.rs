@@ -731,14 +731,27 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
     }
 
     let verbose = cli.verbose;
+    // The live line is a rate over the tick interval, and card 153's lesson
+    // applies to it too: count paced frames over the time that actually
+    // passed, not frames over an interval assumed to be a second. The last
+    // tick arrives immediately after `FINAL`, a sliver of time with nothing
+    // paced in it; the summary line below says everything it could, so skip it
+    // rather than print a rate over a few milliseconds.
     let mut last = 0u64;
+    let mut last_at = Instant::now();
     let mut tick = move |s: &SendStats| {
-        let sent = s.frames_sent - last;
-        last = s.frames_sent;
+        let now = Instant::now();
+        let dt = now.duration_since(last_at).as_secs_f64();
+        let sent = s.frames_paced() - last;
+        if dt < 0.25 {
+            return;
+        }
+        last = s.frames_paced();
+        last_at = now;
         let mut line = format!(
             "{:>7} frames  {:>5.1} fps  {:>6.0} B  enc {:>5.2}/{:>5.2} ms (mean/p95)",
             s.frames_sent,
-            sent as f64,
+            sent as f64 / dt,
             s.mean_bytes(),
             s.mean_encode().as_secs_f64() * 1000.0,
             s.encode_pct(0.95).as_secs_f64() * 1000.0
@@ -781,12 +794,15 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
         Src::Indexed(s) => sender.run_indexed_with(*s, &stop, &mut tick),
     };
     let s = sender.stats();
+    // The rate is over the paced window and says so: the frame count includes
+    // the `FINAL` frame, which is a datagram but not a slot (card 153).
     println!(
-        "sent {} frames in {:.1} s ({:.2} fps), {} skipped, {:.0} B mean, \
+        "sent {} frames in {:.1} s ({:.2} fps over {} paced), {} skipped, {:.0} B mean, \
          encode mean {:.2} ms / p95 {:.2} ms / max {:.2} ms",
         s.frames_sent,
         s.started.map_or(0.0, |t| t.elapsed().as_secs_f64()),
         s.actual_fps(),
+        s.frames_paced(),
         s.frames_skipped,
         s.mean_bytes(),
         s.mean_encode().as_secs_f64() * 1000.0,

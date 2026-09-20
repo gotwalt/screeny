@@ -272,11 +272,16 @@ struct LinkConfig { sender, cadence, reconnect, silence, backoff }
 struct LinkStats; struct Limits; struct Pace;
 enum Cadence { Free, Limit }   enum LinkState { Up, Connecting, Waiting, Closed }
 
-struct SendStats { frames_sent, frames_skipped, bytes, by_codec, encode_total,
-                   encode_max, min_gap, max_gap, fps, fps_changes, telemetry,
-                   busy, decode_failures, codecs_withdrawn, codec_limited,
-                   indexed_exact, indexed_fallback, last_fallback_colours }
-    actual_fps() mean_bytes() mean_encode() encode_pct(p)
+struct SendStats { frames_sent, frames_final, frames_encoded, frames_skipped,
+                   bytes, by_codec, encode_total, encode_max, min_gap, max_gap,
+                   fps, fps_changes, telemetry, busy, decode_failures,
+                   codecs_withdrawn, codec_limited, indexed_exact,
+                   indexed_fallback, last_fallback_colours,
+                   started, first_paced, last_paced }
+    frames_paced()        // frames_sent without the FINAL frame
+    actual_fps()          // first paced send to last: the paced window only
+    mean_bytes()          // every datagram, FINAL included
+    mean_encode() encode_pct(p)        // the frames that were encoded
 
 fn sender::period_of(fps) -> Duration
 fn sender::sleep_until(Instant)             // sleep, then spin the last ms
