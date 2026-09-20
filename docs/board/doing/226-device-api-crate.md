@@ -100,3 +100,45 @@ root `cargo test` still green (the pacing tests in `crates/screeny` are timing-s
 under load: re-run once before believing a failure there).
 
 ## Log
+
+### Reading the dependencies before writing a line (source, not memory)
+
+Read from `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`:
+
+- **`picoserve 0.20.0` depends on `serde-json-core 0.6.0`** (`[dependencies.serde-json-core]
+  version = "0.6.0"`, behind its `json` feature), on `heapless 0.9.3` **with the `serde`
+  feature already on**, on `heapless 0.8.0` as well (aliased `heapless-0-8`), and on
+  `serde 1.0.229` with `default-features = false, features = ["derive"]`. So this crate
+  pins `serde-json-core = "0.6"` and `heapless = "0.9"` and the firmware links one copy
+  of each.
+- `heapless 0.9.3`'s serde impls are written against **`serde_core`**, not `serde`.
+  That is fine: `serde 1.0.229/src/lib.rs:252` is `pub use serde_core::{de, ser,
+  Deserialize, Deserializer, Serialize, Serializer}` - the traits are literally the same
+  items, so `#[derive(Serialize)]` on a struct holding `heapless::String<N>` works.
+- `serde-json-core 0.6.0`'s `src/lib.rs` doc comment still says *"Serialization of
+  strings doesn't escape stuff"*. **That comment is stale**: `src/ser/mod.rs:99
+  push_char` escapes `\`, `"`, `\b`, `\t`, `\n`, `\f`, `\r` and `\u00xx`. Checked the
+  code, not the docs.
+- `serde-json-core 0.6.0`'s `default = ["heapless"]` feature pulls **heapless 0.8**
+  (its optional dep is `heapless = "0.8"`). This crate takes it with
+  `default-features = false` so it does not add a second heapless on its own account;
+  the firmware gets 0.8 anyway through picoserve, but that is picoserve's business.
+- **picoserve's reply serialiser is its own** (`src/response/json.rs`), not
+  serde-json-core's, and it needs **no output buffer**: `Content::content_length`
+  (line 737) serialises into a counting writer `MeasureFormatSize` and `write_content`
+  streams. So a reply's `MAX_JSON_LEN` is *not* what sizes picoserve's buffer.
+- **One divergence between the three serialisers**: picoserve escapes `/` as `\/`
+  (`src/response/json.rs:80`); `serde_json` and `serde-json-core` do not. Everything
+  else agrees (same field order, same `is_first` comma logic so `skip_serializing_if`
+  is safe on all three, `None` -> `null`, integers printed identically, no floats
+  anywhere in this API). Decision: no golden file contains a `/` inside a string, and a
+  test enforces it, so every golden is byte-exact under picoserve too.
+- picoserve's `extract::Json` uses `serde_json_core::from_slice_escaped` with a **32-byte**
+  unescape buffer by default (`src/extract.rs:478`, `JsonWithUnescapeBufferSize<T, 32>`);
+  `JsonWithUnescapeBufferSize<T, N>` is how card 222 raises it.
+- picoserve's `extract::Form` deserialises through its own urlencoded deserialiser and
+  requires the whole body to be UTF-8 (`FormRejection::BodyIsNotUtf8`). An 802.11 SSID
+  is bytes, so card 222 cannot use `Form` for `POST /api/v1/wifi`; that is exactly why
+  this card asks for our own parser over the raw body.
+- Installed no_std target for the check: `thumbv7em-none-eabi` (`rustup target list
+  --installed`). Nothing installed.
