@@ -1830,7 +1830,10 @@ name = "screeny-probe"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
+ "screeny-device-api",
  "screeny-proto",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

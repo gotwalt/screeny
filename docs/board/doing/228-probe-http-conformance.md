@@ -105,3 +105,46 @@ cannot reach the device or the LAN; do not try. The orchestrator runs it against
 device after the merge and appends the result to this card.
 
 ## Log
+
+### worker-228
+
+**Step 1 - read, then design (2026-09-20).**
+
+Read `CLAUDE.md`, `docs/README.md`, `docs/design/device-web.md`, `crates/device-api`
+(`route.rs`, `error.rs`, `reply.rs`, `request.rs`, `enums.rs`), `crates/probe/src/suite/`,
+`crates/sim/src/{api,http,wifi}.rs`, `crates/sim/tests/{conformance,http_routes,http_wifi}.rs`
+and the done logs of cards 222 and 232. Merged `main` into the worktree first: the base
+was two commits behind and did not have the card.
+
+Shape settled before writing anything:
+
+- `crates/probe/src/http/` - `mod.rs` (rule type, `Ctx`, restore, the runner),
+  `client.rs` (the HTTP client), `rules.rs` (the catalogue). The UDP suite's `suite/` is
+  the precedent for every bit of it: rules are data, one line of output each, `--list`,
+  `--only`, a `RestoreGuard` plus a ctrl-c handler.
+- **How the suite tells a simulator from a device: it does not have to.** Every route a
+  build cannot serve answers `503 unavailable` in the crate's own error shape, and the
+  rules that could hit one read that and `SKIP` with the reply's `detail`. That covers
+  `GET /api/v1/networks` and `POST /api/v1/firmware` on firmware 0.4.0, and it will keep
+  covering them when 223 and 240 land without a line changing.
+- **One constant for the known firmware differences.** `http::CARD_223_LANDED` (false).
+  While it is false, a rule tagged `KNOWN_223` that *fails* is reported as `SKIP` with
+  the card number instead; a **pass is still a pass**, so the simulator is held to those
+  rules today and the device is not. Flipping the one constant enforces them everywhere.
+  Four rules carry it: 8 (`status.wifi_state` is the link), 14 (`wifi.reason` set exactly
+  when failed), 29 (per-route `max_request_len`), 33 (after the trial).
+- **HTTP client: written here, no crate.** ~300 lines over `std::net::TcpStream`, one
+  request per connection, `Connection: close`, `Content-Length` bodies, an 8 s connect
+  timeout (card 222: a second connection to the one-worker firmware waits out a 1 s SYN
+  retransmit - that is the device behaving, not failing) and a 10 s IO timeout. It reads
+  exactly `Content-Length` bytes when there is one and to EOF when there is not, so a
+  server that forgets to close costs a parse error and not a ten-second stall.
+- New dependencies, both already compiled by anything that compiles `crates/sim`:
+  `screeny-device-api` (the reply types - the suite defines no shapes of its own) and
+  `serde_json` + `serde`. No async runtime, no TLS, no HTTP crate.
+
+**Step 2 - the client, the runner and 38 rules.** `cargo test -p screeny-probe`: 14
+tests green, including two guards - every row of `route::ROUTES` is mentioned by a rule
+(the same guard `crates/sim/tests/http_routes.rs` puts on the server), and the rule
+numbers are unique and ascending. Clippy on `crates/probe` adds no warning (the two it
+prints are pre-existing, in `vectors.rs` and `main.rs`).

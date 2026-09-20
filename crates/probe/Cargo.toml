@@ -8,7 +8,7 @@ description = "Bench tool for card 008: drives a screeny receiver (device or sim
 # A library as well as a binary since card 080: `suite` is the wire-level
 # conformance suite, and `link`/`enc`/`vectors` are the one sender and the one
 # set of section-4 encoders that both this tool and `crates/sim`'s integration
-# tests drive. The library depends on `screeny-proto` and nothing else.
+# tests drive. Card 228 adds `http`, the same thing for the device's HTTP API.
 [lib]
 name = "screeny_probe"
 path = "src/lib.rs"
@@ -19,6 +19,15 @@ path = "src/main.rs"
 
 [dependencies]
 screeny-proto = { path = "../proto" }
+# Card 228: the HTTP suite parses every reply with the API's own types and
+# defines no shapes of its own. Both of these are already compiled by anything
+# that compiles `crates/sim`, and neither brings an async runtime or a TLS
+# stack - the HTTP client is 300 lines over `TcpStream` in `src/http/client.rs`
+# for exactly that reason. `serde` is here only for the `DeserializeOwned`
+# bound on `Res::parse`.
+screeny-device-api = { path = "../device-api", features = ["std"] }
+serde = { version = "1", default-features = false }
+serde_json = "1"
 # So that ctrl-c during a conformance run still restores the device's
 # brightness and idle mode. `Drop` covers every other exit path.
 ctrlc = "3.5.2"
