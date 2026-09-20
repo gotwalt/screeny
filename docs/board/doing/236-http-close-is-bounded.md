@@ -144,3 +144,157 @@ rule because picoserve writes them.
 
 **Baseline build (unchanged tree, for the before/after):** `.stack` **27,088**,
 `.bss` 110,272, `.data` 59,236, image 974,181.
+
+### Step 2 - the options, and the one chosen
+
+`picoserve::Config` offers nothing for this: `Timeouts` is exactly four durations
+(`start_read_request`, `persistent_start_read_request`, `read_request`, `write`) and
+`KeepAlive`, and the shutdown is hard-coded in `impl Socket for TcpSocket`. So every
+option below is a change to how the socket is closed or to who owns the accept loop.
+
+| option | what it costs | why not / why |
+|---|---|---|
+| Shorten `timeouts.read_request` | one constant | **No.** The same number bounds *reading a request*, where 5 s is wanted. Shortening it to bound the close would shorten the wrong thing, and would still leave the close depending on the peer, just less. |
+| `keep_connection_alive()` | one line | **No.** Off the card, and it makes the shortage worse: two workers, two browsers, no server. [`HTTP_TASKS`] already argues this. |
+| A third worker | 7,504 bytes of `.bss` | Excluded by the card, and `.bss` is core 0's stack. It would also not fix anything: three workers all waiting on three clients is the same failure one connection later. |
+| `flush()` then `abort()` (RST once everything is ACKed) | small | **Nearly.** The delivery argument is sound (see below), but the RST is gratuitous: once `flush` has returned we can simply *drop*, and then the peer is only reset if it sends something - which, if it has finished reading, it does not. A RST we do not need is a RST that can turn a clean EOF into `ECONNRESET` on some client. |
+| Wait for the peer's FIN with a short timer, then drop | small | **Nearly.** It keeps the textbook four-way close for a prompt client, at 1 RTT. But the bound would have to be ~20 ms to help, which is of the same order as a whole request cycle on this LAN - so in the bad case it still eats the budget it is meant to protect, and it is still the peer deciding. |
+| **`close()`, wait for the acknowledgement, drop** | -112 bytes of `.bss` | **Chosen.** |
+
+**The chosen close, and why it cannot truncate a response.** `TcpSocket::close()` queues
+the FIN behind the last body byte; `TcpSocket::flush()` is pending while any sent byte is
+unacknowledged or the state is still `FinWait1 | Closing | LastAck`, so when it returns,
+**the peer's TCP has acknowledged every byte and the FIN**. The FIN occupies the sequence
+number after the last body byte, so an ACK of the FIN *is* an ACK of the whole body -
+there is no ordering in which the acknowledgement arrives and the body did not. On top of
+that every reply this server sends carries `Content-Length` (picoserve measures each body
+with a counting writer before it writes a header, the streamed status page included), so
+no client here needs to see the close to know where the body ended: `screeny-probe`'s own
+client stops on `Content-Length` and never reads to EOF at all
+(`crates/probe/src/http/client.rs:269-275`).
+
+What is given up is the second half of the four-way close. The socket is dropped in
+`FIN-WAIT-2`; `Drop` removes it from smoltcp's set, so the client's FIN, whenever it
+comes, matches no socket and smoltcp answers with a RST. Three cases:
+- the client has read everything and closed - which is every client here, because
+  `Content-Length` told it when to stop. Its own socket is closed by then; the RST
+  changes nothing it can observe.
+- the client is still reading out of its own receive buffer. It sends nothing, so it
+  draws no RST, and it has every byte.
+- the client has the bytes, has not read them, and emits a window update. It gets a RST
+  with data in its socket buffer - and both Darwin's `soreceive` and Linux's
+  `tcp_recvmsg` deliver buffered bytes to the application before they report the error,
+  so the worst outcome is `ECONNRESET` where `EOF` would have been, after the last byte.
+  That is decision 10's trade: good enough and crash proof, not bomb-proof.
+
+**iOS / the setup network (card 223 finding 3) gets strictly better, not worse.** That
+finding is this same shortage seen from the other side: the captive sheet opened a third
+connection "while the worker that had just answered was between `close` and `accept`",
+and iOS does not retry a refused connection. The window this card closes is exactly that
+window. Nothing about the sheet's behaviour is relied on: the reply is complete and
+acknowledged before the socket goes, and the page it fetches is the one that carries the
+form, `200` with `no-store`, with a `Content-Length`.
+
+**A stalled or malicious client still cannot pin a worker.** The per-phase deadlines are
+untouched (3 s to start a request, 5 s to finish one, 5 s to take the reply) and the
+close now adds `CLOSE_ACK_MS` = **500 ms** instead of up to 10 s. `set_timeout(45 s)` and
+`set_keep_alive(30 s)`, which picoserve set on every accepted socket, are set here too -
+they are the backstop for a half-open connection none of the picoserve phases can see.
+Worst case after the change: ~8.5 s of stalling before the reply, 0.5 s after it. Before
+the change the *ordinary* case could cost seconds after it.
+
+**Second win on the same path, free.** Owning the accept loop also drops picoserve's three
+`info!` lines per connection, two of which (`"N requests handled from .."`,
+`"Listening on TCP:80..."`) sit between the close and the next `accept`: ~150 bytes
+through `esp-println`'s **blocking** UART at 230,400 baud is ~6.5 ms of core 0 per
+connection, on the exact path this card shortens, on the LAN, forever. This module's rule
+was already that per-request logging belongs on the setup network only; picoserve's lines
+were outside it only because picoserve wrote them. `Dispatch`'s setup-network line, which
+is what found card 223's finding 3, is unchanged.
+
+### Step 3 - the probe says when it was refused
+
+`crates/probe/src/http/client.rs`: `Client::connect` retries a connect **only** on
+`ErrorKind::ConnectionRefused` - `CONNECT_TRIES` = 3, `CONNECT_RETRY_DELAY` = 100 ms - and
+increments a counter on every refusal, recovered or not. A timeout, a reset or an
+unreachable host still fails on the first try, because those say something is wrong where
+a refusal says "busy". The counter is an `Arc<AtomicU32>` so that the clone the restore
+guard holds (`http/mod.rs:621`) counts into the same total.
+
+`Summary` grows `refused: usize` and the last line now reads:
+
+```text
+http conformance: 34 passed, 0 failed, 5 skipped, 0 connects refused
+```
+
+and, when it is not zero:
+
+```text
+http conformance: 34 passed, 0 failed, 5 skipped, 11 connects refused (retried up to 3 times each; the device had no worker in accept)
+```
+
+So a run that passes *because of* the retries no longer prints the same line as one that
+never needed them. A rule whose three tries are all refused fails as before, and all three
+refusals are counted.
+
+New test `a_refused_connect_is_retried_and_every_refusal_is_counted`: bind a loopback
+port, drop the listener, and connect - the host's own stack then answers the SYN with a
+RST, which is `ECONNREFUSED` on demand. It asserts three tries, three counted, the spacing,
+and that a clone reports the same total.
+
+### Step 4 - `crates/sim` is not taught to refuse
+
+Not built, as the card says. `crates/sim/src/http.rs:176` is a `std::net::TcpListener`
+with a thread per connection: it has the kernel's listen backlog, so it *cannot* refuse
+the way smoltcp does without being rewritten to model a worker pool. The simulator's job
+is the API's shapes, not the device's socket economics, and decision 10 says good enough.
+The sim's conformance test now asserts `refused: 0`, which is what a server with a real
+backlog owes.
+
+### Numbers
+
+`tools/fw-size.sh`, all four builds, before (at `main`) and after:
+
+| build | `.stack` before | `.stack` after | `.bss` before | `.bss` after | image before | image after |
+|---|---|---|---|---|---|---|
+| default | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,181 | 971,961 |
+| `panic-test` | 27,024 | **27,152** (+128) | 110,336 | 110,224 (-112) | 975,137 | 972,853 |
+| `http-selftest` | 26,784 | **26,800** (+16) | 110,544 | 110,544 (0) | 1,008,689 | 1,006,249 |
+| `start-in-portal` | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,125 | 971,913 |
+
+All four are above the 24,576 floor and none fell; the card's "must not drop by more than
+~200 bytes" is comfortably met in the other direction. The `.bss` that goes is
+`ReadExt::discard_all_data`'s 128-byte buffer, which picoserve held across an await - i.e.
+the fix pays for itself in the pool that breaks first. `http-selftest` gains least because
+its second, in-memory `Server::serve` chain (`selftest_one`) never went near
+`listen_and_serve`.
+
+`cargo clippy --workspace --all-targets`: silent. `cargo clippy --release` in `firmware/`:
+9 warnings, all pre-existing (`doc_lazy_continuation` in `store.rs`, a collapsible `if`,
+and `serve_on`'s 8 arguments, which it already had).
+
+`timeout 1200 cargo test` from the repo root: **759 passed, 0 failed, 1 ignored**, 49 test
+binaries. (Card 117's port re-bind flake, which the card-198 merge saw, did not appear.)
+
+End-to-end smoke against the simulator (`screeny-sim --headless --no-mdns --http-port
+8099`, `screeny-probe --addr 127.0.0.1:49475 http --http 127.0.0.1:8099`): 34 passed, 0
+failed, 5 skipped, **0 connects refused**. No background process left.
+
+### For the bench (the orchestrator)
+
+1. Flash the default ELF in the scratchpad as `screeny-fw-0.5.3-default.elf` with
+   `tools/fw-run.sh`. `GET /api/v1/status` should report `fw` **0.5.3**.
+2. Mac WiFi **off**, wired, as `device-web.md` says for conformance.
+3. `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http`, and read the
+   **last line**. Before this card, on 0.5.2, the same run was 9-17 `Connection refused
+   (os error 61)` failures out of ~35 requests (and with this probe those would have shown
+   as a large `connects refused` count rather than as failures). The number to expect now
+   is **0, or a low single digit**; anything in double figures means the close is not the
+   whole story and the next thing to look at is the gap between the last
+   `Listening on tcp/80` line and the request that was refused.
+4. Worth noticing on the serial log: it is **much quieter** during an HTTP run - the three
+   picoserve lines per connection are gone. `net: http worker N listening on tcp/80` is
+   still printed once per worker per AP flip, and the setup-network per-request line is
+   unchanged.
+5. The `screeny stats` / telemetry numbers should not move: nothing on the frame path
+   changed, and core 0 does *less* work per connection than it did.
