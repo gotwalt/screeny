@@ -39,6 +39,10 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "Larger dials in continuous, flowing motion; each minute they gather to read the time as analog clocks, then let go. For a moving field that knows the time.",
     params: PARAMS,
     make,
+    // The seed picks the opening mood and the ambient field's numbers, but the
+    // field wanders on by itself and "Move on" is the patch's own word for
+    // going somewhere new - without restarting the whole grid.
+    seeded: false,
 };
 
 const PARAMS: &[ParamSpec] = &[

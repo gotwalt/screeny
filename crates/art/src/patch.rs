@@ -262,6 +262,26 @@ pub struct PatchDef {
     pub blurb: &'static str,
     pub params: &'static [ParamSpec],
     pub make: fn(seed: u64) -> Box<dyn Patch>,
+    /// **Is "another one like this" a thing a person can ask this patch for?**
+    /// (card 151.)
+    ///
+    /// Every patch is handed a seed and may ignore it. This says whether
+    /// changing it gives the person a *different picture of the same kind* -
+    /// which is the only thing the seed is good for to a human, the number
+    /// itself being opaque. The studio shows one quiet "Another" button for a
+    /// patch that says yes, and nothing at all for one that says no, rather
+    /// than a control that does nothing anybody could see.
+    ///
+    /// Two kinds of patch say **no**, and the second is the one worth stating:
+    ///
+    /// - a patch that does not read its seed (`testcard`);
+    /// - a patch that **composes as it goes and offers its own action**
+    ///   ([`Patch::playing`]). The clocks are both of these: their seed only
+    ///   shifts which choreography or mood comes up next, the picture itself
+    ///   being the time; and "Compose another" / "Move on" are better words for
+    ///   what a person wants, act at once, and do not restart the patch. Where
+    ///   a patch has those words, they are the ones to offer.
+    pub seeded: bool,
 }
 
 pub fn find(id: &str) -> Option<&'static PatchDef> {

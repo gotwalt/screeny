@@ -21,6 +21,10 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "GPU. A procedural world painted by palette index: 32 colours, exact on the wire, and the day cycle is palette animation.",
     params: PARAMS,
     make,
+    // `u.seed` chooses the biome - green, savanna, red rock, alien, ice - and
+    // offsets every terrain noise field and the path through it: a new seed is
+    // a different country.
+    seeded: true,
 };
 
 // The shader reads the first six as P(0)..P(5); the rest are used here.

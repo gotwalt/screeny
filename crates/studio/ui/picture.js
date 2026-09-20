@@ -337,13 +337,10 @@ async function start() {
     const patch = patchById[state.patch];
     $('#patch-name').textContent = patch ? patch.name : state.patch;
     $('#patch-blurb').textContent = patch ? patch.blurb : '';
-    $('#ro-seed').textContent = state.seed;
-    if (!busy($('#seed'))) $('#seed').value = state.seed;
     document.querySelectorAll('#patches input').forEach((i) => { i.checked = i.value === state.patch; });
 
     paramControls = [];
     $('#params').replaceChildren(...(patch ? patch.params : []).map((spec) => paramControl(spec)));
-    $('#reset-params').hidden = !patch || patch.params.length === 0;
     sayIfBlack();
     // Empty until the controls below are bound, which is the first call.
     for (const control of refreshers) control.refresh();
@@ -356,18 +353,156 @@ async function start() {
     if (!next) return;
     if (next.patch !== state.patch) { adopt(next); return; }
     state = next;
-    $('#ro-seed').textContent = state.seed;
-    if (!busy($('#seed'))) $('#seed').value = state.seed;
     for (const control of [...refreshers, ...paramControls]) control.refresh();
   }
 
-  const newSeed = async () => adopt(await call('set_seed', { seed: null }));
-  $('#new-seed').addEventListener('click', newSeed);
-  $('#seed').addEventListener('change', async (e) => {
-    const seed = Math.max(0, Math.min(4294967295, Math.floor(Number(e.target.value) || 0)));
-    adopt(await call('set_seed', { seed }));
+  // ---- settings (card 151) ----
+  //
+  // A patch has a **working copy** - what is playing - and named **settings**.
+  // The working copy remembers which one it came from; whether it has been
+  // moved since is the server's `modified`, computed rather than remembered, so
+  // this page never has to keep a flag of its own in step with anything.
+  //
+  // Everything here is one POST that answers with the whole state, which is
+  // also broadcast: a second browser sees a save, a load, a rename or a delete
+  // at once, with no extra read.
+
+  /** The one setting that is not stored: the patch's own defaults, speed 1.00x
+   *  and a fixed seed. It is the server's `state::DEFAULT_SETTING` - one
+   *  spelling, checked by `tests/ui.rs` - and it heads the list, which is what
+   *  the old "Reset" button became. */
+  const DEFAULT_SETTING = 'Default';
+
+  const settingList = $('#setting-list');
+  const settingMark = $('#setting-mark');
+  const settingError = $('#setting-error');
+  const nameForm = $('#setting-name');
+  const nameInput = $('#setting-name-input');
+  const nameLabel = $('#setting-name-label');
+  const confirmDelete = $('#setting-confirm');
+  const confirmWhat = $('#setting-confirm-what');
+  const anotherButton = $('#another');
+
+  /** Which inline form is open: `'save-as'`, `'rename'` or nothing. */
+  let naming = null;
+
+  /** The one line the settings control says things on - inline, beside the
+   *  control, rather than on the shared notice line at the far end of the
+   *  page. A refusal here is about the name somebody has just typed. */
+  const saySetting = (message) => {
+    settingError.hidden = !message;
+    settingError.textContent = message || '';
+  };
+
+  /** One settings change: the server's answer is the whole state, so there is
+   *  nothing to re-read, and a refusal is a sentence to show rather than a
+   *  reason to make the page wrong. */
+  async function settingCall(cmd, args) {
+    saySetting('');
+    try {
+      sync(await invoke(cmd, args));
+      return true;
+    } catch (e) {
+      saySetting(e.message || String(e));
+      return false;
+    }
+  }
+
+  function closeName() { naming = null; nameForm.hidden = true; }
+  function closeConfirm() { confirmDelete.hidden = true; }
+
+  function openName(kind) {
+    naming = kind;
+    closeConfirm();
+    saySetting('');
+    nameLabel.textContent = kind === 'rename' ? 'Rename to' : 'Save as';
+    nameInput.value = state.setting === DEFAULT_SETTING ? '' : state.setting;
+    nameForm.hidden = false;
+    nameInput.focus();
+    nameInput.select();
+  }
+
+  function openConfirm() {
+    closeName();
+    saySetting('');
+    confirmWhat.textContent = `Delete “${state.setting}”?`;
+    confirmDelete.hidden = false;
+    $('#setting-confirm-yes').focus();
+  }
+
+  /** The list is rebuilt only when the names change, so a save does not shut an
+   *  open dropdown under somebody's hand. */
+  let listKey = '';
+  function showSetting() {
+    const names = [DEFAULT_SETTING, ...(state.settings || [])];
+    const key = names.join('\u0000');
+    if (key !== listKey) {
+      listKey = key;
+      settingList.replaceChildren(...names.map((n) =>
+        Object.assign(document.createElement('option'), { value: n, textContent: n })));
+    }
+    if (!busy(settingList)) settingList.value = state.setting;
+    settingMark.hidden = !state.modified;
+
+    const onDefault = state.setting === DEFAULT_SETTING;
+    // Default is the patch's own: it can be loaded and saved *from*, never
+    // written over, renamed or deleted. Saying so by shape rather than by
+    // refusing after the fact.
+    $('#setting-save').textContent = onDefault ? 'Save as…' : 'Save';
+    $('#setting-saveas').hidden = onDefault;
+    $('#setting-rename').disabled = onDefault;
+    $('#setting-delete').disabled = onDefault;
+    $('#setting-revert').disabled = !state.modified;
+
+    const patch = patchById[state.patch];
+    anotherButton.hidden = !(patch && patch.seeded);
+    // The number nobody needs, kept where somebody reproducing a frame can
+    // find it (card 151).
+    anotherButton.title = `Another one like this (N). Seed ${state.seed}.`;
+  }
+  showSetting();
+  bind({ refresh: showSetting });
+
+  settingList.addEventListener('change', () => {
+    closeName();
+    closeConfirm();
+    settingCall('settings/load', { name: settingList.value });
   });
-  $('#reset-params').addEventListener('click', async () => adopt(await call('reset_params')));
+  $('#setting-save').addEventListener('click', () => {
+    // On Default, Save *is* Save as...: there is nothing to write over.
+    if (state.setting === DEFAULT_SETTING) { openName('save-as'); return; }
+    settingCall('settings/save', {});
+  });
+  $('#setting-saveas').addEventListener('click', () => openName('save-as'));
+  $('#setting-rename').addEventListener('click', () => openName('rename'));
+  $('#setting-delete').addEventListener('click', openConfirm);
+  $('#setting-revert').addEventListener('click', () => {
+    closeName();
+    closeConfirm();
+    settingCall('settings/load', { name: state.setting });
+  });
+
+  nameForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = nameInput.value;
+    const done = naming === 'rename'
+      ? await settingCall('settings/rename', { to: name })
+      : await settingCall('settings/save', { name });
+    if (done) closeName();
+  });
+  $('#setting-name-cancel').addEventListener('click', () => { closeName(); saySetting(''); });
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeName(); saySetting(''); }
+  });
+  $('#setting-confirm-yes').addEventListener('click', async () => {
+    if (await settingCall('settings/delete', {})) closeConfirm();
+  });
+  $('#setting-confirm-no').addEventListener('click', closeConfirm);
+
+  /** A new seed, which is "another one like this" (card 151). It marks the
+   *  setting modified like any other change, because it is one. */
+  const another = async () => sync(await call('set_seed', { seed: null }));
+  anotherButton.addEventListener('click', another);
 
   // ---- time ----
 
@@ -554,7 +689,10 @@ async function start() {
     const mode = { 1: 'dots', 2: 'squint', 3: 'raw' }[e.key];
     if (mode) { view.mode = mode; storeView(); modeRadios.refresh(); renderer.draw(); }
     else if (e.key === ' ') { e.preventDefault(); togglePause(); }
-    else if (e.key === 'n') newSeed();
+    // `n` is the Another button's shortcut and goes where it goes: on a patch
+    // whose picture does not depend on its seed there is no button, and the
+    // key would rebuild the patch for nothing anybody could see.
+    else if (e.key === 'n') { if (!anotherButton.hidden) another(); }
     else if (e.key === 'r') restart();
   });
 

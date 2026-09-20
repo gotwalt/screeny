@@ -44,10 +44,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   `settings` block is its `output`. Every old key is still read - see the
 ///   `#[serde(alias)]`s below and [`migrate`] - so a v3 file, or a script
 ///   writing one, loses nothing.
+/// - **v5** (card 151) gives a patch **named settings**. Its entry in
+///   `patches` keeps what it always did - the working copy - and gains three
+///   things: `speed` (which is part of a setting, so it has to be part of the
+///   working copy or a switch away and back would lose it), `setting` (the name
+///   the working copy was loaded from, empty for Default) and `settings`: name
+///   -> `{seed, params, speed}`. **"Modified" is not in the file**: it is the
+///   working copy compared with the setting it names, which cannot go stale.
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -74,6 +81,118 @@ pub const MAX_UNKNOWN_PATCHES: usize = 64;
 /// How many "this is what I had to correct" sentences are kept for the status
 /// route. The log has them all; the dashboard does not need a novel.
 const MAX_REPAIRS: usize = 16;
+
+// ------------------------------------ named settings (card 151) ------------
+
+/// The setting every patch has and nobody can change: its `ParamSpec`
+/// defaults, speed 1.0 and [`DEFAULT_SEED`].
+///
+/// **Not stored.** It is synthesised from the patch, so a release that
+/// improves a default improves Default for everybody. Reserved as a name in
+/// any case: "default", "DEFAULT" and "Default" are all it.
+pub const DEFAULT_SETTING: &str = "Default";
+
+/// The seed Default is on.
+///
+/// A *fixed* number rather than a fresh one, because Default has to be **one
+/// picture**: two people on Default, or the same person before and after a
+/// restart, must be looking at the same thing. No patch declares a seed of its
+/// own today, so this is the studio's own starting seed
+/// ([`StoredPlayer::default`]); a patch that later has an opinion can carry one
+/// in its `PatchDef` and this stays the answer for the rest.
+pub const DEFAULT_SEED: u32 = 1;
+
+/// Named settings a patch may have. The file is written whole, so this is what
+/// keeps it small enough for that to stay true.
+pub const MAX_SETTINGS: usize = 64;
+
+/// Characters a name may have, after trimming.
+pub const MAX_NAME_CHARS: usize = 40;
+
+/// One named setting: everything about a patch that a person tuned.
+///
+/// The seed is in here because it is half of what makes a picture reproducible
+/// even though the page does not show the number any more (card 151), and
+/// `speed` because the owner asked for it. The pipeline `output` is **not**:
+/// the panel model, the dither and the limiter are about the panel, not about
+/// the patch.
+///
+/// `params` holds only what differs from the patch's defaults, exactly as
+/// [`PatchMemory`] does - which is also what makes "a parameter the patch has
+/// gained since this was saved takes its default" true by construction.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Setting {
+    pub seed: u32,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+    pub speed: f64,
+}
+
+impl Default for Setting {
+    fn default() -> Self {
+        Setting { seed: DEFAULT_SEED, params: BTreeMap::new(), speed: 1.0 }
+    }
+}
+
+/// What one patch is set to right now: the **working copy**.
+///
+/// The same three things a [`Setting`] holds, which is what lets "modified" be
+/// a comparison rather than a flag somebody has to remember to clear.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Working {
+    /// Only what differs from the patch's defaults; see [`sparse`].
+    pub params: BTreeMap<String, f32>,
+    pub seed: u32,
+    pub speed: f64,
+}
+
+impl Working {
+    /// This working copy as a setting to store.
+    #[must_use]
+    pub fn to_setting(&self) -> Setting {
+        Setting { seed: self.seed, params: self.params.clone(), speed: self.speed }
+    }
+}
+
+impl From<Setting> for Working {
+    fn from(s: Setting) -> Working {
+        Working { params: s.params, seed: s.seed, speed: s.speed }
+    }
+}
+
+/// Is this name the read-only one?
+#[must_use]
+pub fn is_default_name(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case(DEFAULT_SETTING)
+}
+
+/// A name a person typed, as it will be stored - or the sentence to show them.
+///
+/// Trimmed, 1..=[`MAX_NAME_CHARS`] characters, not [`DEFAULT_SETTING`] in any
+/// case, and nothing that is not printable: a name with a newline in it would
+/// be a name nobody could see the whole of.
+///
+/// # Errors
+///
+/// If it is empty, too long, reserved, or has a control character in it.
+pub fn check_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A setting needs a name.".into());
+    }
+    let chars = name.chars().count();
+    if chars > MAX_NAME_CHARS {
+        return Err(format!("A setting's name can be at most {MAX_NAME_CHARS} characters; that one is {chars}."));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("A setting's name cannot have line breaks or control characters in it.".into());
+    }
+    if is_default_name(name) {
+        return Err(format!("`{DEFAULT_SETTING}` is the patch's own setting, so it cannot be the name of one of yours."));
+    }
+    Ok(name.to_string())
+}
 
 /// Everything that survives a restart.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -243,7 +362,8 @@ impl Default for LegacyPreview {
 
 // ----------------------------------------------- the per-patch memory (165) ---
 
-/// What the studio remembers about one patch.
+/// What the studio remembers about one patch: its **working copy**, the name
+/// that came from, and its **named settings** (card 151).
 ///
 /// Only what *differs* from the patch's defaults is kept, so a patch whose
 /// defaults improve in a later release improves for everybody who never
@@ -251,20 +371,42 @@ impl Default for LegacyPreview {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PatchMemory {
-    /// The seed this patch was last left on. `None` means "never chosen", in
-    /// which case switching to it keeps whatever seed the context is on.
+    /// The seed this patch was last left on. `None` means "never chosen", and
+    /// switching to it then puts it on [`DEFAULT_SEED`] - which is to say, on
+    /// Default, where a patch nobody has touched belongs (card 151; before it,
+    /// the patch kept whatever seed the previous one happened to be on).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u32>,
     /// Parameter values that differ from the defaults, by param id.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, f32>,
+    /// How fast this patch was last played (card 151, v5). `None` means "never
+    /// said", and switching to it leaves the player's speed alone.
+    ///
+    /// Speed is here rather than only on the player because a **setting**
+    /// carries it: without this, loading a setting that plays at 0.4x and
+    /// switching patch and back would quietly lose the 0.4x, and the setting
+    /// would then read as modified for ever.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+    /// The named setting the working copy was loaded from. Empty means
+    /// [`DEFAULT_SETTING`], which is where everything starts.
+    ///
+    /// **Whether it has been changed since is not stored**: that is the working
+    /// copy above compared with this setting ([`modified`]), so it cannot be
+    /// left behind by a change that forgot to clear a flag.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub setting: String,
+    /// This patch's named settings, by name as it was typed.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, Setting>,
 }
 
 impl PatchMemory {
     /// Nothing worth writing down.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.seed.is_none() && self.params.is_empty()
+        self.seed.is_none() && self.params.is_empty() && self.speed.is_none() && self.setting.is_empty() && self.settings.is_empty()
     }
 }
 
@@ -305,13 +447,13 @@ impl SharedMemory {
     }
 
     /// See [`remember`].
-    pub fn remember(&self, def: &PatchDef, params: &BTreeMap<String, f32>, seed: u32) {
-        remember(&mut self.lock(), def, params, seed);
+    pub fn remember(&self, def: &PatchDef, params: &BTreeMap<String, f32>, seed: u32, speed: f64) {
+        remember(&mut self.lock(), def, params, seed, speed);
     }
 
     /// See [`recall`].
     #[must_use]
-    pub fn recall(&self, def: &PatchDef, who: &str) -> (BTreeMap<String, f32>, Option<u32>) {
+    pub fn recall(&self, def: &PatchDef, who: &str) -> Recalled {
         recall(&mut self.lock(), def, who)
     }
 
@@ -325,6 +467,81 @@ impl SharedMemory {
     pub fn knows(&self, patch: &str) -> bool {
         self.lock().contains_key(patch)
     }
+
+    // ---- named settings (card 151) ----
+
+    /// The names of this patch's settings, alphabetically. Never includes
+    /// [`DEFAULT_SETTING`], which is not stored.
+    #[must_use]
+    pub fn setting_names(&self, patch: &str) -> Vec<String> {
+        self.lock().get(patch).map(|e| e.settings.keys().cloned().collect()).unwrap_or_default()
+    }
+
+    /// The name the working copy was loaded from; [`DEFAULT_SETTING`] when it
+    /// has not been loaded from anything.
+    #[must_use]
+    pub fn current_setting(&self, patch: &str) -> String {
+        current_setting(&self.lock(), patch)
+    }
+
+    /// See [`usable_setting`].
+    ///
+    /// # Errors
+    ///
+    /// If this patch has no setting by that name.
+    pub fn usable_setting(&self, def: &PatchDef, name: &str) -> Result<(Working, Vec<String>), String> {
+        usable_setting(&self.lock(), def, name)
+    }
+
+    /// Put the working copy on a setting: what to play, and whatever had to be
+    /// repaired on the way (said once by the caller, in `repaired` style).
+    ///
+    /// # Errors
+    ///
+    /// If this patch has no setting by that name.
+    pub fn load_setting(&self, def: &PatchDef, name: &str) -> Result<(Working, Vec<String>), String> {
+        let mut memory = self.lock();
+        let (work, repaired) = usable_setting(&memory, def, name)?;
+        remember(&mut memory, def, &work.params, work.seed, work.speed);
+        let entry = memory.entry(def.id.to_string()).or_default();
+        entry.setting = if is_default_name(name) { String::new() } else { name.to_string() };
+        Ok((work, repaired))
+    }
+
+    /// See [`save_setting`].
+    ///
+    /// # Errors
+    ///
+    /// If the name is not one a setting may have, is already taken by another
+    /// setting, or there are already [`MAX_SETTINGS`] of them.
+    pub fn save_setting(&self, def: &PatchDef, name: Option<&str>, work: &Working) -> Result<String, String> {
+        save_setting(&mut self.lock(), def, name, work)
+    }
+
+    /// See [`rename_setting`].
+    ///
+    /// # Errors
+    ///
+    /// If there is no such setting, it is Default, or the new name is not one
+    /// a setting may have.
+    pub fn rename_setting(&self, def: &PatchDef, from: Option<&str>, to: &str) -> Result<String, String> {
+        rename_setting(&mut self.lock(), def, from, to)
+    }
+
+    /// See [`delete_setting`].
+    ///
+    /// # Errors
+    ///
+    /// If there is no such setting, or it is Default.
+    pub fn delete_setting(&self, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
+        delete_setting(&mut self.lock(), def, name)
+    }
+
+    /// See [`modified`].
+    #[must_use]
+    pub fn modified(&self, def: &PatchDef, work: &Working) -> bool {
+        modified(&self.lock(), def, work)
+    }
 }
 
 impl std::fmt::Debug for SharedMemory {
@@ -333,24 +550,38 @@ impl std::fmt::Debug for SharedMemory {
     }
 }
 
-/// Write down what `def` is set to now.
+/// The values worth writing down: what differs from the patch's defaults.
 ///
-/// A value equal to the patch's default is *removed* rather than stored: that
+/// A value equal to the patch's default is *dropped* rather than stored: that
 /// is the whole reason a later release's better default still reaches the
-/// people who never touched that slider.
-pub fn remember(memory: &mut Memory, def: &PatchDef, params: &BTreeMap<String, f32>, seed: u32) {
-    let entry = memory.entry(def.id.to_string()).or_default();
-    entry.seed = Some(seed);
-    entry.params.clear();
+/// people who never touched that slider. It is also what makes comparing a
+/// working copy with a setting an honest comparison - both sides have been
+/// through here - and what makes "a parameter the patch has gained since this
+/// was saved takes its default" true without any code for it.
+#[must_use]
+pub fn sparse(def: &PatchDef, params: &BTreeMap<String, f32>) -> BTreeMap<String, f32> {
+    let mut out = BTreeMap::new();
     for spec in def.params {
         if let Some(v) = params.get(spec.id) {
             let v = spec.sanitise(*v);
             // `!=` on f32 is exactly right here: the question is whether this
             // is still literally the default, not whether it is close to it.
             if v != spec.default {
-                entry.params.insert(spec.id.to_string(), v);
+                out.insert(spec.id.to_string(), v);
             }
         }
+    }
+    out
+}
+
+/// Write down what `def` is set to now: the working copy.
+pub fn remember(memory: &mut Memory, def: &PatchDef, params: &BTreeMap<String, f32>, seed: u32, speed: f64) {
+    let params = sparse(def, params);
+    let entry = memory.entry(def.id.to_string()).or_default();
+    entry.seed = Some(seed);
+    entry.params = params;
+    if speed.is_finite() {
+        entry.speed = Some(speed);
     }
 }
 
@@ -383,9 +614,9 @@ pub fn forget_params(memory: &mut Memory, patch: &str) {
 /// is also what makes "logged once" true without a set of things already said.
 /// `who` names the context for that one log line.
 #[must_use]
-pub fn recall(memory: &mut Memory, def: &PatchDef, who: &str) -> (BTreeMap<String, f32>, Option<u32>) {
+pub fn recall(memory: &mut Memory, def: &PatchDef, who: &str) -> Recalled {
     let Some(entry) = memory.get_mut(def.id) else {
-        return (BTreeMap::new(), None);
+        return Recalled::default();
     };
     let (usable, repaired) = usable_params(&entry.params, def.params);
     if !repaired.is_empty() {
@@ -393,13 +624,20 @@ pub fn recall(memory: &mut Memory, def: &PatchDef, who: &str) -> (BTreeMap<Strin
         entry.params = usable.clone();
         if entry.is_empty() {
             memory.remove(def.id);
+            return Recalled { params: usable, seed: None, speed: None };
         }
     }
-    (usable, entry_seed(memory, def.id))
+    let entry = memory.get(def.id);
+    Recalled { params: usable, seed: entry.and_then(|e| e.seed), speed: entry.and_then(|e| e.speed) }
 }
 
-fn entry_seed(memory: &Memory, patch: &str) -> Option<u32> {
-    memory.get(patch).and_then(|e| e.seed)
+/// What the memory had to say about a patch. `None` is "never said", and the
+/// caller then leaves that of its own alone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recalled {
+    pub params: BTreeMap<String, f32>,
+    pub seed: Option<u32>,
+    pub speed: Option<f64>,
 }
 
 /// The remembered values this build can actually use, and one sentence per
@@ -427,6 +665,184 @@ pub fn usable_params(remembered: &BTreeMap<String, f32>, specs: &[ParamSpec]) ->
         }
     }
     (usable, repaired)
+}
+
+// ------------------------------------ named settings (card 151) ------------
+
+/// The name the working copy of `patch` was loaded from, or
+/// [`DEFAULT_SETTING`].
+#[must_use]
+pub fn current_setting(memory: &Memory, patch: &str) -> String {
+    match memory.get(patch).map(|e| e.setting.as_str()) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => DEFAULT_SETTING.to_string(),
+    }
+}
+
+/// The setting `name` **as this build can use it**, and one sentence per value
+/// it could not use as written.
+///
+/// This is where a patch that has changed since a setting was saved is dealt
+/// with, and it is deliberately the *only* place: a parameter the patch has
+/// lost is dropped, one outside its range is clamped, one that is not a number
+/// goes back to the default, and one the patch has gained is simply absent and
+/// therefore already its default.
+///
+/// It is also what `modified` compares against, rather than the raw stored
+/// setting - otherwise a setting that needed repairing would read as modified
+/// from the moment it was loaded, for ever.
+///
+/// # Errors
+///
+/// If this patch has no setting by that name.
+pub fn usable_setting(memory: &Memory, def: &PatchDef, name: &str) -> Result<(Working, Vec<String>), String> {
+    if is_default_name(name) {
+        return Ok((Working { params: BTreeMap::new(), seed: DEFAULT_SEED, speed: 1.0 }, Vec::new()));
+    }
+    let stored = memory
+        .get(def.id)
+        .and_then(|e| e.settings.get(name.trim()))
+        .ok_or_else(|| format!("`{}` has no setting called `{}`.", def.name, name.trim()))?;
+    let (params, mut repaired) = usable_params(&stored.params, def.params);
+    let speed = if stored.speed.is_finite() && stored.speed > 0.0 {
+        stored.speed
+    } else {
+        repaired.push(format!("the speed saved in `{}` was not a speed; back to 1.00x", name.trim()));
+        1.0
+    };
+    // Say which setting each sentence is about: `repaired` is read on a
+    // dashboard beside sentences about the working copy.
+    let what = name.trim();
+    for line in &mut repaired {
+        if !line.contains(what) {
+            *line = format!("in `{what}`: {line}");
+        }
+    }
+    Ok((Working { params, seed: stored.seed, speed }, repaired))
+}
+
+/// **Is the working copy still the setting it says it is?**
+///
+/// Computed, never stored (the card's word). Both sides go through the same
+/// two funnels - [`sparse`] for the values and [`usable_setting`] for the
+/// stored one - so this is an honest comparison and not a flag anybody has to
+/// remember to clear. A setting that has gone missing under the working copy's
+/// feet counts as modified: there is nothing left to be equal to.
+#[must_use]
+pub fn modified(memory: &Memory, def: &PatchDef, work: &Working) -> bool {
+    let name = current_setting(memory, def.id);
+    match usable_setting(memory, def, &name) {
+        Ok((was, _)) => was != *work,
+        Err(_) => true,
+    }
+}
+
+/// Save the working copy as a setting.
+///
+/// `name` of `None` is **Save**: overwrite the one the working copy was loaded
+/// from. A name is **Save as...**, and a name that is already a setting's,
+/// exactly, overwrites it. Either way the working copy ends up loaded from the
+/// setting just written, so it is not modified the moment it is saved.
+///
+/// Returns the name it was saved under.
+///
+/// # Errors
+///
+/// If the name is not one a setting may have ([`check_name`]), if another
+/// setting has it but spelled differently, if there is nothing to overwrite
+/// (Default, which is read-only), or if there are already [`MAX_SETTINGS`].
+pub fn save_setting(memory: &mut Memory, def: &PatchDef, name: Option<&str>, work: &Working) -> Result<String, String> {
+    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(asked) => check_name(asked)?,
+        // Save with no name: the one it is on.
+        None => {
+            let current = current_setting(memory, def.id);
+            if is_default_name(&current) {
+                return Err(format!(
+                    "`{DEFAULT_SETTING}` is the patch's own setting and cannot be written over; save this under a name of your own."
+                ));
+            }
+            current
+        }
+    };
+    let entry = memory.entry(def.id.to_string()).or_default();
+    // A name that differs only in case from one already here is a second
+    // setting nobody could tell from the first.
+    if let Some(clash) = entry.settings.keys().find(|k| k.eq_ignore_ascii_case(&name) && **k != name) {
+        return Err(format!("There is already a setting called `{clash}`."));
+    }
+    if !entry.settings.contains_key(&name) && entry.settings.len() >= MAX_SETTINGS {
+        return Err(format!("`{}` already has {MAX_SETTINGS} settings, which is as many as it may have.", def.name));
+    }
+    entry.settings.insert(name.clone(), work.to_setting());
+    entry.setting.clone_from(&name);
+    Ok(name)
+}
+
+/// Rename a setting. `from` of `None` is the one the working copy is on.
+///
+/// Returns the new name.
+///
+/// # Errors
+///
+/// If there is no such setting, if it is Default (which is not yours to
+/// rename), or if the new name is not one a setting may have.
+pub fn rename_setting(memory: &mut Memory, def: &PatchDef, from: Option<&str>, to: &str) -> Result<String, String> {
+    let from = named_setting(memory, def, from)?;
+    let to = check_name(to)?;
+    let entry = memory.entry(def.id.to_string()).or_default();
+    if to != from {
+        if let Some(clash) = entry.settings.keys().find(|k| k.eq_ignore_ascii_case(&to) && **k != from) {
+            return Err(format!("There is already a setting called `{clash}`."));
+        }
+    }
+    let Some(setting) = entry.settings.remove(&from) else {
+        return Err(format!("`{}` has no setting called `{from}`.", def.name));
+    };
+    entry.settings.insert(to.clone(), setting);
+    if entry.setting == from {
+        entry.setting.clone_from(&to);
+    }
+    Ok(to)
+}
+
+/// Delete a setting. `name` of `None` is the one the working copy is on.
+///
+/// **What is playing does not change.** The values stay exactly where they
+/// are; what goes is the name they came from, so the working copy is then on
+/// Default and reads as modified - which is the truth.
+///
+/// Returns the name deleted.
+///
+/// # Errors
+///
+/// If there is no such setting, or it is Default.
+pub fn delete_setting(memory: &mut Memory, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
+    let name = named_setting(memory, def, name)?;
+    let entry = memory.entry(def.id.to_string()).or_default();
+    if entry.settings.remove(&name).is_none() {
+        return Err(format!("`{}` has no setting called `{name}`.", def.name));
+    }
+    if entry.setting == name {
+        entry.setting.clear();
+    }
+    if entry.is_empty() {
+        memory.remove(def.id);
+    }
+    Ok(name)
+}
+
+/// Which setting a rename or a delete is about: the one named, or the one the
+/// working copy is on - and never Default, which is nobody's to change.
+fn named_setting(memory: &Memory, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
+    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => current_setting(memory, def.id),
+    };
+    if is_default_name(&name) {
+        return Err(format!("`{DEFAULT_SETTING}` is the patch's own setting: it cannot be renamed or deleted."));
+    }
+    Ok(name)
 }
 
 /// Read the `patches` object out of a file as forgivingly as the card asks.
@@ -469,25 +885,118 @@ fn clean_memory(raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> 
                 }
             },
         };
-        let mut params = BTreeMap::new();
-        if let Some(serde_json::Value::Object(ps)) = entry.get("params") {
-            for (id, v) in ps {
-                match v.as_f64().map(|f| f as f32).filter(|f| f.is_finite()) {
-                    Some(f) => {
-                        params.insert(id.clone(), f);
-                    }
-                    None => repaired.push(format!("`{patch}`'s remembered `{id}` was not a number; back to its default")),
-                }
+        let params = clean_params(entry.get("params"), &format!("`{patch}`'s remembered"), repaired);
+        let speed = clean_speed(entry.get("speed"), &format!("the speed remembered for `{patch}`"), repaired);
+        // Card 151. The name the working copy was loaded from, and the named
+        // settings themselves - read one at a time for the same reason as
+        // everything above: one unreadable setting costs that setting.
+        let setting = match entry.get("setting") {
+            None | Some(serde_json::Value::Null) => String::new(),
+            Some(serde_json::Value::String(s)) => s.trim().to_string(),
+            Some(_) => {
+                repaired.push(format!("the setting `{patch}` was on was not a name; it is on {DEFAULT_SETTING}"));
+                String::new()
             }
-        } else if entry.get("params").is_some_and(|v| !v.is_null()) {
-            repaired.push(format!("the parameters remembered for `{patch}` were not an object; forgotten"));
-        }
-        let m = PatchMemory { seed, params };
+        };
+        let settings = clean_settings(patch, entry.get("settings"), repaired);
+        // A name that is not there any more is not a name it is on.
+        let setting = if setting.is_empty() || settings.contains_key(&setting) {
+            setting
+        } else {
+            repaired.push(format!("`{patch}` was on a setting called `{setting}`, which is not in the file; it is on {DEFAULT_SETTING}"));
+            String::new()
+        };
+        let m = PatchMemory { seed, params, speed, setting, settings };
         if !m.is_empty() {
             memory.insert(patch.clone(), m);
         }
     }
     memory
+}
+
+/// A `params` object out of the file, one value at a time.
+fn clean_params(raw: Option<&serde_json::Value>, whose: &str, repaired: &mut Vec<String>) -> BTreeMap<String, f32> {
+    let mut params = BTreeMap::new();
+    if let Some(serde_json::Value::Object(ps)) = raw {
+        for (id, v) in ps {
+            match v.as_f64().map(|f| f as f32).filter(|f| f.is_finite()) {
+                Some(f) => {
+                    params.insert(id.clone(), f);
+                }
+                None => repaired.push(format!("{whose} `{id}` was not a number; back to its default")),
+            }
+        }
+    } else if raw.is_some_and(|v| !v.is_null()) {
+        repaired.push(format!("{whose} parameters were not an object; forgotten"));
+    }
+    params
+}
+
+/// A `speed` out of the file. Absent is "never said"; anything that is not a
+/// speed is said once and forgotten.
+fn clean_speed(raw: Option<&serde_json::Value>, whose: &str, repaired: &mut Vec<String>) -> Option<f64> {
+    match raw {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match v.as_f64().filter(|f| f.is_finite() && *f > 0.0) {
+            Some(f) => Some(f),
+            None => {
+                repaired.push(format!("{whose} was not a speed; forgotten"));
+                None
+            }
+        },
+    }
+}
+
+/// The `settings` object of one patch (card 151).
+///
+/// Bounded ([`MAX_SETTINGS`]) and checked by the same name rules a person's
+/// typing goes through, because this file can be hand-edited and a name nobody
+/// can see the whole of is no use to anybody.
+fn clean_settings(patch: &str, raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> BTreeMap<String, Setting> {
+    let mut out = BTreeMap::new();
+    let Some(serde_json::Value::Object(entries)) = raw else {
+        if raw.is_some_and(|v| !v.is_null()) {
+            repaired.push(format!("the settings saved for `{patch}` were not an object; forgotten"));
+        }
+        return out;
+    };
+    for (name, value) in entries {
+        let name = match check_name(name) {
+            Ok(n) => n,
+            Err(why) => {
+                repaired.push(format!("a setting of `{patch}` was dropped: {why}"));
+                continue;
+            }
+        };
+        if out.len() >= MAX_SETTINGS {
+            repaired.push(format!("`{patch}` had more than {MAX_SETTINGS} settings; `{name}` and any after it were dropped"));
+            break;
+        }
+        // A second name that differs only in case is one nobody could tell
+        // from the first.
+        if let Some(first) = out.keys().find(|k: &&String| k.eq_ignore_ascii_case(&name)) {
+            repaired.push(format!("`{patch}` had two settings called `{first}`; the second was dropped"));
+            continue;
+        }
+        let serde_json::Value::Object(setting) = value else {
+            repaired.push(format!("the setting `{name}` of `{patch}` was not an object; dropped"));
+            continue;
+        };
+        let seed = match setting.get("seed") {
+            None | Some(serde_json::Value::Null) => DEFAULT_SEED,
+            Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
+                Some(n) => n,
+                None => {
+                    repaired.push(format!("the seed saved in `{name}` (`{patch}`) was not a seed; {DEFAULT_SEED} instead"));
+                    DEFAULT_SEED
+                }
+            },
+        };
+        let params = clean_params(setting.get("params"), &format!("`{name}`'s saved"), repaired);
+        let speed = clean_speed(setting.get("speed"), &format!("the speed saved in `{name}` (`{patch}`)"), repaired).unwrap_or(1.0);
+        out.insert(name, Setting { seed, params, speed });
+    }
+    out
 }
 
 /// Card 102: a file's `settings.levels` is not a setting any more.
@@ -700,9 +1209,53 @@ fn back_up(path: &Path, was: u32) -> Option<String> {
 ///   the next save writes `patches`, `patch` and `output`. The file is copied
 ///   to `state.v3.json` first ([`back_up`]) so the older build could still be
 ///   put back.
+/// - **v4 -> v5** is [`migrate_to_v5`]: the named settings are new and empty,
+///   and the one thing that has to *move* is speed.
+///
+/// Each step is behind its own `was <` guard, so a file that is already past a
+/// step never runs it again - which is the property card 150 wrote the guard
+/// for, and the reason a v1 file can pass through every step in one start.
 fn migrate(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
     if was < 3 {
         migrate_to_v3(state, preview, was);
+    }
+    if was < 5 {
+        migrate_to_v5(state);
+    }
+}
+
+/// v4 -> v5 (card 151): a patch's **speed** becomes part of what is remembered
+/// about the patch, because a setting carries it.
+///
+/// Before this card speed was only a player's. So the patch each player was on
+/// takes that player's speed as its working copy's, and a studio that was
+/// playing at 0.4x comes back at 0.4x rather than snapping to 1.00x the first
+/// time somebody switches patch and back.
+///
+/// **Fill, never overwrite**: a v1/v2 file has already been through
+/// [`migrate_to_v3`], whose `remember` calls set a speed from the same places,
+/// and running this over the top would undo that. With one panel - the expected
+/// case - there is nothing to choose anyway.
+///
+/// **And only a speed somebody actually set.** A player at 1.00x has nothing
+/// to say - that is where a working copy starts - and writing it down would
+/// invent a memory entry for a patch nobody has ever tuned, which is the thing
+/// `migrating_a_v3_file_invents_no_memory` exists to stop.
+///
+/// Nothing else moves. `settings` starts empty and `setting` starts as Default,
+/// which is what "this patch has never been saved under a name" is.
+fn migrate_to_v5(state: &mut Persisted) {
+    for player in &state.players {
+        if screeny_art::patch::find(&player.patch).is_none() {
+            continue;
+        }
+        if !player.speed.is_finite() || player.speed <= 0.0 || player.speed == 1.0 {
+            continue;
+        }
+        let entry = state.patches.entry(player.patch.clone()).or_default();
+        if entry.speed.is_none() {
+            entry.speed = Some(player.speed);
+        }
     }
 }
 
@@ -732,18 +1285,18 @@ fn migrate(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
 fn migrate_to_v3(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
     if was < 2 {
         if let Some(def) = screeny_art::patch::find(&preview.patch) {
-            remember(&mut state.patches, def, &preview.params, preview.seed);
+            remember(&mut state.patches, def, &preview.params, preview.seed, preview.speed);
         }
         // Second, so a panel overwrites the design view on a shared patch.
         for player in &state.players {
             if let Some(def) = screeny_art::patch::find(&player.patch) {
-                remember(&mut state.patches, def, &player.params, player.seed);
+                remember(&mut state.patches, def, &player.params, player.seed, player.speed);
             }
         }
     } else if let Some(def) = screeny_art::patch::find(&preview.patch) {
         // v2: the map is the answer; fill a gap, never overwrite one.
         if !state.patches.contains_key(def.id) {
-            remember(&mut state.patches, def, &preview.params, preview.seed);
+            remember(&mut state.patches, def, &preview.params, preview.seed, preview.speed);
         }
     }
 
@@ -1200,19 +1753,24 @@ mod tests {
         let def = plasma();
         let mut memory = Memory::new();
         let mut live: BTreeMap<String, f32> = def.params.iter().map(|s| (s.id.to_string(), s.default)).collect();
-        remember(&mut memory, def, &live, 7);
+        remember(&mut memory, def, &live, 7, 1.0);
         assert_eq!(memory["plasma"].params, BTreeMap::new(), "untouched defaults are not worth a byte");
         assert_eq!(memory["plasma"].seed, Some(7));
 
         live.insert("scale".into(), 2.5);
-        remember(&mut memory, def, &live, 7);
+        remember(&mut memory, def, &live, 7, 1.0);
         assert_eq!(memory["plasma"].params.len(), 1);
         assert_eq!(memory["plasma"].params["scale"], 2.5);
 
         // And putting it back where it started forgets it again.
         live.insert("scale".into(), spec(def, "scale").default);
-        remember(&mut memory, def, &live, 7);
+        remember(&mut memory, def, &live, 7, 1.0);
         assert!(memory["plasma"].params.is_empty());
+
+        // Card 151: speed is part of the working copy now, for the same reason
+        // it is part of a setting.
+        remember(&mut memory, def, &live, 7, 0.4);
+        assert_eq!(memory["plasma"].speed, Some(0.4));
     }
 
     /// Reset means "back to the defaults and *stay* there", so the parameters
@@ -1223,13 +1781,16 @@ mod tests {
     fn reset_forgets_the_parameters_and_keeps_the_seed() {
         let def = plasma();
         let mut memory = Memory::new();
-        remember(&mut memory, def, &BTreeMap::from([("scale".to_string(), 2.5)]), 99);
+        remember(&mut memory, def, &BTreeMap::from([("scale".to_string(), 2.5)]), 99, 1.0);
         forget_params(&mut memory, "plasma");
         assert_eq!(memory["plasma"].seed, Some(99));
         assert!(memory["plasma"].params.is_empty());
 
         // An entry with nothing left in it at all goes away entirely.
-        memory.insert("ghost".into(), PatchMemory { seed: None, params: BTreeMap::from([("x".into(), 1.0)]) });
+        memory.insert(
+            "ghost".into(),
+            PatchMemory { params: BTreeMap::from([("x".into(), 1.0)]), ..PatchMemory::default() },
+        );
         forget_params(&mut memory, "ghost");
         assert!(!memory.contains_key("ghost"));
     }
@@ -1271,14 +1832,18 @@ mod tests {
         let mut memory = Memory::new();
         memory.insert(
             "plasma".into(),
-            PatchMemory { seed: Some(5), params: BTreeMap::from([("scale".into(), 99.0), ("gone".into(), 1.0)]) },
+            PatchMemory {
+                seed: Some(5),
+                params: BTreeMap::from([("scale".into(), 99.0), ("gone".into(), 1.0)]),
+                ..PatchMemory::default()
+            },
         );
-        let (first, seed) = recall(&mut memory, def, "a test");
-        assert_eq!(seed, Some(5));
-        assert_eq!(first["scale"], spec(def, "scale").max);
-        assert_eq!(memory["plasma"].params, first, "the file's copy was corrected too");
+        let first = recall(&mut memory, def, "a test");
+        assert_eq!(first.seed, Some(5));
+        assert_eq!(first.params["scale"], spec(def, "scale").max);
+        assert_eq!(memory["plasma"].params, first.params, "the file's copy was corrected too");
         // Second time round there is nothing left to correct, so nothing to say.
-        let (again, _) = recall(&mut memory, def, "a test");
+        let again = recall(&mut memory, def, "a test");
         assert_eq!(again, first);
     }
 
@@ -1288,8 +1853,23 @@ mod tests {
         let dir = Temp::new("memory-roundtrip");
         let (store, _) = Store::open(Some(&dir.0));
         let mut want = Persisted::default();
-        want.patches.insert("plasma".into(), PatchMemory { seed: Some(3), params: BTreeMap::from([("scale".into(), 2.5)]) });
-        want.patches.insert("metaballs".into(), PatchMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]) });
+        want.patches.insert(
+            "plasma".into(),
+            PatchMemory {
+                seed: Some(3),
+                params: BTreeMap::from([("scale".into(), 2.5)]),
+                speed: Some(0.4),
+                setting: "Lava".into(),
+                settings: BTreeMap::from([(
+                    "Lava".to_string(),
+                    Setting { seed: 3, params: BTreeMap::from([("scale".into(), 2.5)]), speed: 0.4 },
+                )]),
+            },
+        );
+        want.patches.insert(
+            "metaballs".into(),
+            PatchMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]), ..PatchMemory::default() },
+        );
         want.players.push(StoredPlayer { device: "abc".into(), ..StoredPlayer::default() });
         store.save(want.clone());
         store.flush();
@@ -1786,9 +2366,14 @@ mod tests {
         store.stop();
 
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
-        for want in ["\"patches\"", "\"patch\"", "\"output\"", "\"version\": 4"] {
+        // Card 151: the same claim, one schema on - a v3 file passes through
+        // v4's renaming and v5's settings in one start and is written as v5.
+        for want in ["\"patches\"", "\"patch\"", "\"output\"", &format!("\"version\": {SCHEMA_VERSION}")] {
             assert!(text.contains(want), "the new file should say {want}:\n{text}");
         }
+        // `settings` is card 151's word now - a patch's named settings - but
+        // this file has none, so its absence still means what card 150 meant
+        // by it: no player writes its output block under the old name.
         for gone in ["\"piece\"", "\"pieces\"", "\"settings\""] {
             assert!(!text.contains(gone), "the new file should not say {gone}:\n{text}");
         }
@@ -1838,5 +2423,384 @@ mod tests {
         let (_store, loaded) = Store::open(Some(&dir.0));
         assert!(loaded.patches.is_empty(), "nothing was remembered, so nothing is: {:?}", loaded.patches);
         assert_eq!(loaded.players.len(), 1, "and no second player was invented either");
+    }
+
+    // ------------------------- named settings (card 151) -------------------------
+
+    /// The working copy of `plasma`, tuned however this test wants it.
+    fn work(seed: u32, scale: f32, speed: f64) -> Working {
+        Working { params: BTreeMap::from([("scale".to_string(), scale)]), seed, speed }
+    }
+
+    /// Save, load, and the mark that says it has been moved since.
+    #[test]
+    fn a_setting_is_saved_loaded_and_says_when_it_has_been_moved() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let lava = work(111, 2.5, 0.4);
+        remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
+
+        assert_eq!(current_setting(&memory, "plasma"), DEFAULT_SETTING, "everything starts on Default");
+        assert!(modified(&memory, def, &lava), "and a tuned patch is not Default any more");
+
+        assert_eq!(save_setting(&mut memory, def, Some("Lava"), &lava).expect("saved"), "Lava");
+        assert_eq!(current_setting(&memory, "plasma"), "Lava", "saving puts the working copy on what was saved");
+        assert!(!modified(&memory, def, &lava), "which is not modified the moment it is written");
+
+        // Move something: the mark comes back, and the setting is untouched.
+        let moved = work(111, 3.5, 0.4);
+        assert!(modified(&memory, def, &moved));
+        let (stored, repaired) = usable_setting(&memory, def, "Lava").expect("still there");
+        assert_eq!(stored, lava, "the saved setting did not move with the working copy");
+        assert!(repaired.is_empty());
+
+        // A second setting, and loading the first one back.
+        let ink = work(222, 1.5, 0.2);
+        save_setting(&mut memory, def, Some("Slow ink"), &ink).expect("saved");
+        assert_eq!(memory["plasma"].settings.len(), 2);
+        let (back, _) = usable_setting(&memory, def, "Lava").expect("still there");
+        assert_eq!(back, lava);
+
+        // Save with no name is "overwrite the one it is on".
+        save_setting(&mut memory, def, None, &moved).expect("overwritten");
+        assert_eq!(current_setting(&memory, "plasma"), "Slow ink");
+        assert_eq!(usable_setting(&memory, def, "Slow ink").expect("there").0, moved);
+    }
+
+    /// Default is the patch's own: synthesised, never stored, and nobody's to
+    /// write over, rename or delete.
+    #[test]
+    fn default_is_the_patchs_own_setting_and_is_read_only() {
+        let def = plasma();
+        let mut memory = Memory::new();
+
+        let (default, _) = usable_setting(&memory, def, DEFAULT_SETTING).expect("every patch has one");
+        assert!(default.params.is_empty(), "the patch's own defaults, not a copy of them");
+        assert_eq!(default.seed, DEFAULT_SEED, "a fixed seed, so Default is one picture");
+        assert_eq!(default.speed, 1.0);
+        // In any case, and never in the file.
+        for spelling in ["default", "DEFAULT", " Default "] {
+            assert!(usable_setting(&memory, def, spelling).is_ok(), "{spelling}");
+        }
+        assert!(memory.is_empty(), "and asking for it wrote nothing down");
+
+        assert!(save_setting(&mut memory, def, None, &default).is_err(), "Save on Default is Save as...");
+        assert!(save_setting(&mut memory, def, Some("Default"), &default).is_err());
+        assert!(rename_setting(&mut memory, def, None, "Mine").is_err());
+        assert!(delete_setting(&mut memory, def, None).is_err());
+        assert!(delete_setting(&mut memory, def, Some("default")).is_err(), "in any case");
+    }
+
+    /// The name rules, in one place, as a person would meet them.
+    #[test]
+    fn a_name_is_trimmed_bounded_and_unique_however_it_is_spelled() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let w = work(1, 2.5, 1.0);
+
+        assert_eq!(check_name("  Lava  ").expect("trimmed"), "Lava");
+        assert_eq!(check_name(&"x".repeat(MAX_NAME_CHARS)).expect("the longest allowed").len(), MAX_NAME_CHARS);
+        for bad in ["", "   ", "Default", "DEFAULT", "two\nlines"] {
+            assert!(check_name(bad).is_err(), "`{bad}` is not a name a setting may have");
+        }
+        let too_long = "x".repeat(MAX_NAME_CHARS + 1);
+        let why = check_name(&too_long).expect_err("too long");
+        assert!(why.contains(&format!("{MAX_NAME_CHARS}")) && why.contains(&format!("{}", MAX_NAME_CHARS + 1)), "{why}");
+
+        // Saving trims, and a name that differs only in case is refused rather
+        // than made into a second setting nobody could tell from the first.
+        save_setting(&mut memory, def, Some("  Lava  "), &w).expect("saved");
+        assert!(memory["plasma"].settings.contains_key("Lava"));
+        let why = save_setting(&mut memory, def, Some("lava"), &w).expect_err("a near-duplicate");
+        assert!(why.contains("already a setting called `Lava`"), "{why}");
+        // ...but the same name, exactly, is an overwrite, which is the point.
+        save_setting(&mut memory, def, Some("Lava"), &work(9, 3.0, 2.0)).expect("overwritten");
+        assert_eq!(memory["plasma"].settings.len(), 1);
+        assert_eq!(memory["plasma"].settings["Lava"].seed, 9);
+    }
+
+    /// Bounded: a patch may have [`MAX_SETTINGS`] and the refusal is a sentence
+    /// rather than a silently dropped save.
+    #[test]
+    fn a_patch_may_have_only_so_many_settings() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let w = work(1, 2.5, 1.0);
+        for i in 0..MAX_SETTINGS {
+            save_setting(&mut memory, def, Some(&format!("one {i}")), &w).unwrap_or_else(|e| panic!("{i}: {e}"));
+        }
+        let why = save_setting(&mut memory, def, Some("one more"), &w).expect_err("that is enough");
+        assert!(why.contains(&format!("{MAX_SETTINGS}")), "{why}");
+        // Overwriting one of the ones already there is still fine: it is not a
+        // new setting.
+        save_setting(&mut memory, def, Some("one 0"), &w).expect("an overwrite is not a new one");
+        assert_eq!(memory["plasma"].settings.len(), MAX_SETTINGS);
+    }
+
+    /// Rename and delete, including what happens to the name the working copy
+    /// is on.
+    #[test]
+    fn renaming_follows_the_working_copy_and_deleting_leaves_it_playing() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let lava = work(111, 2.5, 0.4);
+        save_setting(&mut memory, def, Some("Lava"), &lava).expect("saved");
+        remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
+
+        assert_eq!(rename_setting(&mut memory, def, None, "Lava lamp").expect("renamed"), "Lava lamp");
+        assert_eq!(current_setting(&memory, "plasma"), "Lava lamp", "the working copy followed its name");
+        assert!(!modified(&memory, def, &lava), "and is still not modified");
+        assert!(rename_setting(&mut memory, def, Some("Lava"), "Anything").is_err(), "the old name is gone");
+        // A re-spelling of its own name is not a clash with itself.
+        assert_eq!(rename_setting(&mut memory, def, None, "Lava Lamp").expect("re-spelled"), "Lava Lamp");
+
+        // A second setting. Saving it moves the working copy onto it, so what
+        // follows is about deleting one it is *not* on and then one it is.
+        save_setting(&mut memory, def, Some("Other"), &work(2, 1.0, 1.0)).expect("saved");
+        let why = rename_setting(&mut memory, def, Some("Other"), "lava lamp").expect_err("taken");
+        assert!(why.contains("already a setting called `Lava Lamp`"), "{why}");
+
+        let before = memory["plasma"].params.clone();
+        assert_eq!(delete_setting(&mut memory, def, Some("Lava Lamp")).expect("deleted"), "Lava Lamp");
+        assert_eq!(current_setting(&memory, "plasma"), "Other", "deleting another one does not move the name");
+        assert_eq!(memory["plasma"].params, before, "nor what is playing");
+        assert!(delete_setting(&mut memory, def, Some("Lava Lamp")).is_err(), "and it is really gone");
+
+        // Deleting the one it *is* on leaves the values playing and the name on
+        // Default - which is then honestly "modified".
+        assert_eq!(delete_setting(&mut memory, def, None).expect("deleted"), "Other");
+        assert_eq!(memory["plasma"].params, before, "what is playing did not change");
+        assert_eq!(current_setting(&memory, "plasma"), DEFAULT_SETTING);
+        assert!(modified(&memory, def, &lava), "values nothing is holding any more");
+    }
+
+    /// The case the card is built for: a patch's parameters change between
+    /// releases, and a setting saved by the older build still loads.
+    ///
+    /// One it has **lost** is dropped and said once; one it has **gained**
+    /// takes its default by being absent; one out of range is clamped. And the
+    /// setting does not read as modified the moment it is loaded, which it
+    /// would if `modified` compared against the raw stored values.
+    #[test]
+    fn a_setting_older_than_the_patch_loads_and_says_what_it_dropped() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        memory.insert(
+            "plasma".into(),
+            PatchMemory {
+                settings: BTreeMap::from([(
+                    "From before".to_string(),
+                    Setting {
+                        seed: 7,
+                        params: BTreeMap::from([
+                            ("scale".to_string(), 2.5),   // still a parameter
+                            ("gone".to_string(), 1.0),    // one this build has not got
+                            ("drift".to_string(), 999.0), // out of this build's range
+                        ]),
+                        speed: 0.5,
+                    },
+                )]),
+                ..PatchMemory::default()
+            },
+        );
+
+        let (usable, repaired) = usable_setting(&memory, def, "From before").expect("it still loads");
+        assert_eq!(usable.params["scale"], 2.5, "the good value survived");
+        assert!(!usable.params.contains_key("gone"), "a parameter the patch has lost is dropped");
+        assert_eq!(usable.params["drift"], spec(def, "drift").max, "out of range is clamped");
+        assert!(!usable.params.contains_key("cycle"), "one the patch has gained is simply its default");
+        assert_eq!(usable.seed, 7);
+        assert_eq!(usable.speed, 0.5);
+        assert_eq!(repaired.len(), 2, "one sentence each, and never an error: {repaired:?}");
+        assert!(repaired.iter().all(|r| r.contains("From before")), "each says which setting: {repaired:?}");
+
+        // Load it, and it is not modified - although the file still holds the
+        // values this build cannot use.
+        memory.get_mut("plasma").expect("there").setting = "From before".into();
+        remember(&mut memory, def, &usable.params, usable.seed, usable.speed);
+        assert!(!modified(&memory, def, &usable), "a repaired setting must not read as modified for ever");
+        assert!(memory["plasma"].settings["From before"].params.contains_key("gone"), "and the file is left as it was");
+    }
+
+    /// A setting a patch has not got, and a name that has gone from under the
+    /// working copy's feet.
+    #[test]
+    fn asking_for_a_setting_that_is_not_there_says_so() {
+        let def = plasma();
+        let mut memory = Memory::new();
+        let why = usable_setting(&memory, def, "Nope").expect_err("no such setting");
+        assert!(why.contains("no setting called `Nope`"), "{why}");
+        // A working copy pointed at a name nothing answers to is modified: there
+        // is nothing left for it to be equal to.
+        memory.insert("plasma".into(), PatchMemory { setting: "Ghost".into(), ..PatchMemory::default() });
+        assert!(modified(&memory, def, &work(1, 2.5, 1.0)));
+    }
+
+    /// v4 -> v5: a realistic v4 file - the shape the live service writes today,
+    /// with dummy device names - loads, keeps everything, and comes back as v5.
+    ///
+    /// The one thing that **moves** is speed: a player at 0.4x hands that to
+    /// the patch it is on, so the working copy is where the panel actually was.
+    #[test]
+    fn a_real_v4_file_migrates_to_v5() {
+        let dir = Temp::new("v4");
+        let v4 = r#"{
+  "version": 4,
+  "devices": [
+    { "id": "aa11bb", "name": "the shelf", "instance": "screeny-aa11bb", "address": "", "manual": false }
+  ],
+  "players": [
+    {
+      "device": "aa11bb",
+      "on": true,
+      "patch": "plasma",
+      "seed": 4242,
+      "params": { "scale": 2.97 },
+      "fps": 30.0,
+      "output": {
+        "dither": "bayer4",
+        "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
+        "panel_model": true, "codec_preview": true
+      },
+      "brightness": 96,
+      "paused": false,
+      "speed": 0.4
+    }
+  ],
+  "focus": "aa11bb",
+  "patches": {
+    "clocks-numerals": { "seed": 0 },
+    "metaballs": { "seed": 222, "params": { "count": 8.0 } },
+    "plasma": { "seed": 4242, "params": { "scale": 2.97 } }
+  }
+}"#;
+        std::fs::write(dir.0.join(FILE), v4).expect("write the v4 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.devices.len(), 1);
+        assert_eq!(loaded.players.len(), 1);
+        assert_eq!(loaded.players[0].patch, "plasma");
+        assert_eq!(loaded.players[0].speed, 0.4);
+        assert_eq!(loaded.focus, "aa11bb");
+
+        // The memory is v4's, entry for entry, and nothing was invented.
+        assert_eq!(loaded.patches.len(), 3);
+        assert_eq!(loaded.patches["metaballs"].params["count"], 8.0);
+        assert_eq!(loaded.patches["metaballs"].seed, Some(222));
+        assert!(loaded.patches.values().all(|e| e.settings.is_empty()), "a v4 file has no settings to carry");
+        assert!(loaded.patches.values().all(|e| e.setting.is_empty()), "so every patch is on Default");
+        // The one thing that moves, and only for the patch that was playing.
+        assert_eq!(loaded.patches["plasma"].speed, Some(0.4), "the panel was at 0.4x and comes back at 0.4x");
+        assert_eq!(loaded.patches["metaballs"].speed, None, "a patch nothing was playing is left alone");
+
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v4")), "it says so once");
+        assert!(store.health().repaired.is_empty(), "a good v4 file needs no repair: {:?}", store.health().repaired);
+        assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(4))).expect("the backup"), v4, "kept byte for byte");
+        assert!(!dir.0.join(BAD_FILE).exists(), "a v4 file is migrated, not condemned");
+    }
+
+    /// And the migration is **run once**: the guard means a file that has
+    /// already been through a step does not run it again. A v5 file whose
+    /// player is at 1.0x but whose patch remembers 0.4x keeps the 0.4x, which
+    /// is exactly what a second run of v4 -> v5 would overwrite.
+    #[test]
+    fn a_v5_file_does_not_run_the_migration_again() {
+        let dir = Temp::new("v5-once");
+        let v5 = format!(
+            r#"{{"version":{SCHEMA_VERSION},"focus":"abc",
+                 "players":[{{"device":"abc","patch":"plasma","seed":8,"speed":1.0}}],
+                 "patches":{{"plasma":{{"seed":8,"speed":0.4,"setting":"Lava",
+                              "settings":{{"Lava":{{"seed":8,"params":{{"scale":2.5}},"speed":0.4}}}}}}}}}}"#
+        );
+        std::fs::write(dir.0.join(FILE), &v5).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert!(store.health().recovered.is_none(), "same version, so nothing was migrated");
+        assert!(!dir.0.join(backup_name(5)).exists(), "and nothing was copied aside");
+        assert_eq!(loaded.patches["plasma"].speed, Some(0.4), "the working copy's own speed, not the player's");
+        assert_eq!(loaded.patches["plasma"].setting, "Lava");
+        assert_eq!(loaded.patches["plasma"].settings["Lava"].params["scale"], 2.5);
+        assert_eq!(loaded.patches["plasma"].settings["Lava"].speed, 0.4);
+    }
+
+    /// A v1 file goes all the way in one start: v1 -> v3 -> v5.
+    #[test]
+    fn a_v1_file_comes_all_the_way_up_in_one_start() {
+        let dir = Temp::new("v1-to-v5");
+        std::fs::write(
+            dir.0.join(FILE),
+            r#"{
+              "version": 1,
+              "players": [ { "device": "abc", "piece": "plasma", "seed": 2, "params": { "scale": 3.0 }, "speed": 0.5 } ],
+              "preview":   { "piece": "metaballs", "seed": 1, "params": { "count": 8.0 }, "speed": 2.0 }
+            }"#,
+        )
+        .expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.patches["plasma"].params["scale"], 3.0, "v1's merge still happened");
+        assert_eq!(loaded.patches["plasma"].speed, Some(0.5), "and each context's speed came with it");
+        assert_eq!(loaded.patches["metaballs"].speed, Some(2.0));
+        assert!(loaded.patches.values().all(|e| e.settings.is_empty()));
+        let why = store.health().recovered.expect("it says so");
+        assert!(why.contains("v1") && why.contains(&format!("v{SCHEMA_VERSION}")), "{why}");
+    }
+
+    /// The file can be hand-edited, so every way a `settings` block can be
+    /// wrong costs that block and nothing else - never the file.
+    #[test]
+    fn a_hand_edited_settings_block_costs_only_what_is_wrong() {
+        let dir = Temp::new("v5-garbage");
+        let file = format!(
+            r#"{{"version":{SCHEMA_VERSION},
+                 "patches":{{"plasma":{{"seed":1,"speed":"fast","setting":"Ghost","settings":{{
+                   "Good":     {{"seed":5,"params":{{"scale":2.5}},"speed":0.5}},
+                   "Bad seed": {{"seed":"eleven","params":{{"scale":2.0}}}},
+                   "Bad speed":{{"seed":5,"speed":-3}},
+                   "Bad param":{{"seed":5,"params":{{"scale":"wide"}}}},
+                   "Not an object": 7,
+                   "":         {{"seed":5}},
+                   "Default":  {{"seed":5}},
+                   "good":     {{"seed":6}}
+                 }}}}}}}}"#
+        );
+        std::fs::write(dir.0.join(FILE), &file).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        let entry = &loaded.patches["plasma"];
+
+        assert!(!dir.0.join(BAD_FILE).exists(), "one bad value never condemns the file");
+        assert_eq!(entry.seed, Some(1), "and never costs the rest of the entry");
+        assert_eq!(entry.speed, None, "a speed that is not a speed is forgotten");
+        assert!(entry.setting.is_empty(), "a name nothing answers to is not a name it is on");
+
+        assert_eq!(entry.settings["Good"].params["scale"], 2.5);
+        assert_eq!(entry.settings["Good"].speed, 0.5);
+        assert_eq!(entry.settings["Bad seed"].seed, DEFAULT_SEED, "a seed that is not a seed takes Default's");
+        assert_eq!(entry.settings["Bad speed"].speed, 1.0, "a speed that is not a speed is 1.00x");
+        assert!(entry.settings["Bad param"].params.is_empty(), "a value that is not a number is its default");
+        for gone in ["Not an object", "", "Default", "good"] {
+            assert!(!entry.settings.contains_key(gone), "`{gone}` is not a setting this build will keep");
+        }
+        assert_eq!(entry.settings.len(), 4);
+
+        let said = store.health().repaired;
+        assert!(said.len() >= 7, "one sentence per thing corrected: {said:?}");
+        assert!(said.iter().any(|s| s.contains("Ghost")), "including the name it thought it was on: {said:?}");
+    }
+
+    /// A file with more settings than a patch may have is cut to the bound, not
+    /// refused: a hand-edited file cannot make the studio grow without limit.
+    #[test]
+    fn a_file_with_too_many_settings_is_cut_to_the_bound() {
+        let dir = Temp::new("v5-too-many");
+        let settings: Vec<String> = (0..MAX_SETTINGS + 5).map(|i| format!(r#""one {i:03}":{{"seed":{i}}}"#)).collect();
+        let file = format!(
+            r#"{{"version":{SCHEMA_VERSION},"patches":{{"plasma":{{"seed":1,"settings":{{{}}}}}}}}}"#,
+            settings.join(",")
+        );
+        std::fs::write(dir.0.join(FILE), &file).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.patches["plasma"].settings.len(), MAX_SETTINGS);
+        assert!(store.health().repaired.iter().any(|s| s.contains(&format!("{MAX_SETTINGS}"))), "{:?}", store.health().repaired);
     }
 }

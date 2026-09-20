@@ -102,6 +102,11 @@ pub fn routes() -> Router<AppState> {
         .route("/patch_act", post(patch_act))
         .route("/restart", post(restart))
         .route("/set_panel", post(set_panel))
+        // ---- card 151: a patch's named settings ----
+        .route("/settings/load", post(settings_load))
+        .route("/settings/save", post(settings_save))
+        .route("/settings/rename", post(settings_rename))
+        .route("/settings/delete", post(settings_delete))
         // ---- card 150: the names a piece went by, still answering ----
         .route("/piece_playing", get(patch_playing))
         .route("/set_piece", post(set_patch))
@@ -275,6 +280,100 @@ async fn patch_act(State(st): State<AppState>, Json(req): Json<PatchAct>) -> Api
     // returned is what it was performing *before* the action is drained - the
     // page redraws from the next heartbeat.
     Ok(Json(player.playing()))
+}
+
+// ---------------- card 151: a patch's named settings ----------------
+//
+// Four changes in the same shape as every other one on this page: act, tell the
+// other browsers, write it down. The **list**, the current name and `modified`
+// travel in `StudioState`, which every one of these answers with, so a browser
+// needs no extra `GET` and a second browser sees a save the moment it happens.
+//
+// Note for anyone reading both APIs: the **panel's own** firmware serves a
+// `POST /api/v1/settings` (`docs/design/device-web.md`) for its WiFi and name.
+// That one is on the device, on port 80; these are the studio's, and they are
+// about a patch. Nothing is shared but the word.
+
+#[derive(Deserialize)]
+struct LoadSetting {
+    /// The setting's name, or `Default`. Empty means the one it is already on,
+    /// which is what "Revert" sends.
+    #[serde(default)]
+    name: String,
+}
+
+/// Put the working copy back on a setting.
+///
+/// **One change**: the parameters, the seed and the speed move together, so
+/// there is one broadcast and one write, and the panel follows in one step
+/// rather than through a burst of half-loaded pictures (card 196's pacing is
+/// about a burst; a load must not be one).
+async fn settings_load(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<StudioState>> {
+    let name = if req.name.trim().is_empty() {
+        st.page().state().setting
+    } else {
+        req.name
+    };
+    on_page(&st, &headers, &PlayerChange { load_setting: Some(name), ..PlayerChange::default() })
+}
+
+#[derive(Deserialize)]
+struct SaveSetting {
+    /// A name saves under it ("Save as..."); no name overwrites the one the
+    /// working copy is on ("Save"), which `Default` never is.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn settings_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<StudioState>> {
+    let player = st.page();
+    let (def, work) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
+    st.memory
+        .save_setting(def, req.name.as_deref(), &work)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(publish(&st, &headers, &player)))
+}
+
+#[derive(Deserialize)]
+struct RenameSetting {
+    /// Which one; absent or empty is the one the working copy is on.
+    #[serde(default, alias = "name")]
+    from: String,
+    to: String,
+}
+
+async fn settings_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<StudioState>> {
+    let player = st.page();
+    let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
+    st.memory
+        .rename_setting(def, Some(req.from.as_str()).filter(|f| !f.trim().is_empty()), &req.to)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(publish(&st, &headers, &player)))
+}
+
+#[derive(Deserialize)]
+struct DeleteSetting {
+    #[serde(default)]
+    name: String,
+}
+
+/// Delete a setting. **What is playing does not change**: the values stay, and
+/// what goes is the name they came from - so the answer says `Default`, and
+/// `modified`, which is the truth about values nothing is holding any more.
+async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<StudioState>> {
+    let player = st.page();
+    let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
+    st.memory
+        .delete_setting(def, Some(req.name.as_str()).filter(|n| !n.trim().is_empty()))
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(publish(&st, &headers, &player)))
+}
+
+/// The one refusal these four share: a state file naming a patch this build
+/// has not got. There is no spec to measure values against, so there is
+/// nothing honest to save them as.
+fn unknown_patch(player: &Arc<Player>) -> String {
+    format!("`{}` is not a patch this build has, so it has no settings.", player.stored().patch)
 }
 
 /// Takes no arguments; reads the body for the reason `reset_params` does.
@@ -499,6 +598,11 @@ struct SetPlayer {
     /// Start the patch again from its seed.
     #[serde(default)]
     restart: bool,
+    /// Card 151: put this panel's patch on one of its named settings, or on
+    /// `Default`. The page uses `POST /settings/load`, which is the same change
+    /// on the panel the page is a window onto.
+    #[serde(default)]
+    setting: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -534,6 +638,7 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
             brightness: req.brightness,
             restart: req.restart,
             act: None,
+            load_setting: req.setting,
         })
         .map_err(ApiError::bad_request)?;
     crate::fleet::aim_at_device(&st, &player);
