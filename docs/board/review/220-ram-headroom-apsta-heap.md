@@ -314,3 +314,46 @@ take card 201's lever 3, and do not grow the heap either - it comes out of the
 same region `.bss` and `.stack` share**) and the ~17.1 KB `.bss` budget for
 picoserve / DHCP / DNS / the AP stack, which leaves `.stack` at ~20.4 KB against
 a measured demand of 6,304. Cards 221-226 proposed there, no card files written.
+
+### Flash 6 - reflash after a clippy fix, so the device matches HEAD
+
+`cargo clippy` flagged one `collapsible_if` that this card's own code
+introduced (the telemetry stack tick). Fixing it changed the source after flash
+5, so the device would no longer have been running the branch's default build
+as committed. Reflashed rather than report something not literally true. The
+other three `collapsible_if`s, the `u16 -> u16` cast and the overindented doc
+list are pre-existing and belong to card 125; `cargo fmt --check` is clean for
+every file this card touches (the one diff it reports is in card 202's
+`src/bin/gpio_probe.rs`, untouched here).
+
+```
+INFO - display: core 1, 6 planes, 154 Hz refresh (driver), 12312 bytes/buffer, OE slots 0..=55 (cap 25), OE start 8
+INFO - device: mac [b4, 8a, 0a, 4a, 00, a4] id 4a00a4
+INFO - stack: core 0 main high-water 6000 of 37512 bytes, 30488 free (painted at boot)
+INFO - telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops stale 0 superseded 0 decode 0 rejected 0 gaps 1 | ia 33090 us jit 3537 us | decode 533 us (max 2423) | render 3085 us (max 3192 window, 3380 boot) | state 1 codec 0x10 rssi -71 bright 96 | heap 45540/98304
+```
+
+Zero PANIC/WARN/ERROR lines. **The device is on this branch's default build.**
+
+Note the high-water read 6,304 on one boot of this build and 6,000 on another.
+Boot-to-boot variance of a few hundred bytes is expected - the deepest path
+depends on which DHCP/mDNS/association branch runs - so the number should be
+quoted as "about 6 KB", not to the byte. It does not change any conclusion: the
+headroom is 30 KB either way.
+
+### Verification before handing back
+
+- All six feature configurations build: default, `fb-on-stack`, `apsta-probe`,
+  `device-web-spike`, `spike-ota`, `gpio-probe`. The card 201 spike modules and
+  card 202's `gpio_probe` are untouched and still build.
+- `cargo fmt --check` clean for every file this card touches.
+- The real SSID appears in **zero** tracked files on this branch and **zero**
+  lines of the branch diff; no password literal anywhere. `captures/` is
+  git-ignored. The firmware still gets credentials only from `build.rs` via
+  `env!`, and `station_config()` is the one place that reads them.
+- `pgrep -fl espflash` is empty. No monitors, servers or emulators were started
+  beyond the ones `fw-run.sh` starts and stops itself; every call was wrapped in
+  `timeout 400` with `secs <= 195`.
+- Scope: `firmware/` plus this card and `docs/research/009-ram-headroom.md`.
+  Nothing under `crates/`, `tools/`, `docs/design/` or any other card was
+  touched. `tidbyt.rs` (card 202's `BUTTON_GPIO`) left alone as instructed.
