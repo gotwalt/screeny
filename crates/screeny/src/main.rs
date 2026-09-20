@@ -606,13 +606,13 @@ fn cmd_pattern(cli: &Cli, name: &str, list: bool, stream: &StreamArgs) -> Result
 /// pure functions of elapsed time, so a skipped frame is a skip, never a
 /// slowdown.
 ///
-/// `IndexedSource` rather than `FrameSource` for both kinds of piece, because
-/// it is the seam that can carry either (card 092). A palette-authored piece -
-/// the word clock, eleven colours it chose itself - lends its palette and
-/// index plane straight to `Sender::send_indexed` and reaches the panel
-/// exactly. A continuous-colour piece - the fractal - answers `false` to
-/// `Piece::render_indexed` and its RGB frame is lent to the ordinary chooser
-/// instead. Either way nothing is copied and nothing is expanded on the way.
+/// `IndexedSource` rather than `FrameSource`, because it is the seam that can
+/// carry either kind of piece (card 092). A palette-authored one - the clock's
+/// eleven colours, the fractal's dithered ramp - lends its palette and index
+/// plane straight to `Sender::send_indexed` and reaches the panel exactly. One
+/// that answers `false` to `Piece::render_indexed` lends its RGB frame to the
+/// ordinary chooser instead. Both demos take the first branch today; either
+/// way nothing is copied and nothing is expanded on the way.
 struct PieceSource<P: screeny_demos::Piece> {
     piece: P,
     idx: screeny_demos::Indexed,
