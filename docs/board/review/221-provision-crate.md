@@ -241,3 +241,59 @@ frame. Flash should be close to the spike's ~10.5 KB for `qrcodegen-no-heap` plu
 thumbv7em-none-eabi` builds clean - a stock no_std target that was already installed
 (`rustup target list --installed`), so no toolchain was added and the esp toolchain was
 not needed.
+
+**`crates/provision/README.md`** (deliverable 5): the ASCII state diagram, the seven
+actions and what the caller does about each, the firmware's expected loop, the five QR
+numbers that are measured and not adjustable, and the RAM cost.
+
+**Acceptance, all four:**
+
+| check | result |
+|---|---|
+| `cargo test -p screeny-provision` | 60 green (20 unit, 8 render, 31 transitions, 1 doctest) |
+| `cargo test` at the root | green, no failures, pacing included (18.5 s, passed first time) |
+| `cargo clippy -p screeny-provision --all-targets` | **zero warnings** |
+| no_std target | `cargo build -p screeny-provision --target thumbv7em-none-eabi` clean |
+| the PNGs look like 007's mock-ups | layout A is pixel-for-pixel the mock; looked at all three |
+
+The no_std check used the **stock `thumbv7em-none-eabi`** target, which
+`rustup target list --installed` already had. No toolchain was installed and the esp
+toolchain was not needed.
+
+**Scope.** Touched only `crates/provision/`, this card file, the three
+`docs/research/img/221-*.png`, and the root `Cargo.lock`. Nothing in `firmware/`,
+`lab/`, `crates/proto`, `crates/receiver`, `crates/sim`, `docs/design/` or any other
+crate. `main` moved on while I worked (card 211's `crates/settings` landed); my branch is
+based on `ffdd514` and my diff against that base is disjoint from it except for
+`Cargo.lock`, which is the orchestrator's to resolve as expected.
+
+**Proposed follow-up cards** (not written as card files, as instructed):
+
+- **226. Retire `lab/src/bin/portal-mock.rs`.** Research 007 section 8 wanted the QR
+  layout to stop existing twice, and it now does not need to: `cargo run -p
+  screeny-provision --example portal-png` renders the same frames the firmware will put
+  on the panel. The mock's remaining unique value is its QR-version-vs-SSID-length table,
+  which is worth keeping as a comment or a test. `lab/` only; I did not touch it.
+- **227. Bench: scan the short open form.** `UriForm::ShortOpen`
+  (`WIFI:S:screeny-4a00a4;;`, 23 bytes) is implemented, tested and decodes correctly with
+  `rqrr`; it has never been scanned off the real panel. Show it and read it with an iPhone
+  and an Android phone. If both read it, flip the default and the AP-SSID limit goes from
+  14 characters to 23, which answers 007's open question 1. One line of change either way.
+- **228. Fold this card's nine readings of 007 into the design doc.** The ambiguities
+  listed above are settled in code comments and in this log; `docs/design/device-web.md`
+  (or card 225's spec surgery) should carry the ones that are behaviour the rest of the
+  system depends on - especially the `wifi_state` mapping for a wiped store, the
+  `AuthError` fast-fail, and the uniform 30 s AP grace.
+- **229. When the HTTP JSON shapes land in `crates/proto`** (007 section 8, cards 222 and
+  224), derive `GET /api/v1/wifi` from `screeny-provision`'s `Trial` / `TrialOutcome` /
+  `FailReason` rather than restating them. `FailReason::as_str` already emits 007's exact
+  words (`auth`, `not_found`, `other`).
+
+**Nothing proposed for `crates/proto`, `crates/receiver` or the spec.** The
+`state::PROVISIONING` and `wifi_state::*` constants were read and are sufficient; I added
+nothing to them.
+
+**No processes left running**, no device touched, no serial port opened, nothing sent to
+192.168.7.221, no camera.
+
+Card to `review/`.
