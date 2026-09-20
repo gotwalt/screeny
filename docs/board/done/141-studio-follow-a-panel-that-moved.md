@@ -306,3 +306,14 @@ No hardware was touched here. This is the bench half of the acceptance.
    socket itself refused), and `probes` staying 0 (nothing counted as unheard -
    compare `devices[0].last_seen_ago` with 120 s). Nothing needs restarting to
    retry; the next tick tries again.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed `fleet.rs` (the probe rides the browse's tick, after it, only while something is
+unheard) and `discover.rs` (frame port = `ctrl - 1`, the same convention a bare `Target`
+already uses). Merged `--no-ff`; root `cargo test --release --no-fail-fast`: 741 passed, 0
+failed; clippy silent. The acceptance line - move the bench panel to a new DHCP lease - needs
+a change at the router and a power cycle, which is the owner's to do when he cares to; step 7
+above says what to look for. Until then the evidence is the two-simulator test. Note the
+deployed Studio reaches the panel by *name*, which already follows a lease: this matters for
+panels added by address and for the container, where mDNS is the thing most likely missing.
