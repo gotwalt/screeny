@@ -140,6 +140,67 @@ fn a_link_opens_sends_and_reports_what_it_did() {
     drop(dev);
 }
 
+/// Card 146: a **host name** is a third kind of target, resolved by the
+/// system resolver on the connect thread. `localhost` is the one name every
+/// machine this builds on agrees about, and the ephemeral port makes it a
+/// `name:port`, which is the shape `host.docker.internal:49374` has.
+///
+/// The reconnection half matters as much as the first connect: the name is
+/// re-resolved on every attempt, so a link whose DNS answer changes follows
+/// it. Here the answer is the same and the device restarts under it.
+#[test]
+fn a_link_finds_a_panel_by_host_name() {
+    let (dev, sim, port) = sim_anywhere();
+    let mut target = Target::parse(&format!("localhost:{port}"));
+    target.timeout = Some(Duration::from_millis(200));
+    assert_eq!(target.host.as_deref(), Some("localhost"), "a name, not an address");
+    assert_eq!(target.label(), format!("localhost:{port}"));
+
+    let mut link = Link::open(target, brisk()).expect("localhost resolves and the sim answers");
+    assert_eq!(link.state(), LinkState::Up);
+    assert_eq!(link.device().map(|d| d.frame), Some(dev.frame_addr()));
+
+    let sent = push(&mut link, 0);
+    assert!(sent.is_sent() && sent.exact(), "{sent:?}");
+    let shot = sim.wait_for_frames(1, PATIENCE).expect("displayed");
+    assert_eq!(&shot.decoded[..], simfix::expand(&PAL, &indices(0)).as_slice());
+
+    // The panel reboots: the name is looked up again on the connect thread.
+    drop(sim);
+    drop(dev);
+    assert!(
+        push_until(&mut link, PATIENCE, |l| l.state() != LinkState::Up),
+        "the link should notice the device is gone"
+    );
+    let (dev, sim) = sim_pair(port);
+    assert!(
+        push_until(&mut link, PATIENCE, |l| l.state() == LinkState::Up),
+        "the name should resolve again and reconnect"
+    );
+    assert!(sim.wait_for_frames(1, PATIENCE).is_some(), "frames flow again");
+    assert!(link.stats().sessions >= 2);
+    drop(link);
+    drop(dev);
+}
+
+/// A name that resolves to nothing is *not* "no panel on the network", and it
+/// must not cost a browse: `Link::open` fails with the name in the message.
+#[test]
+fn a_host_name_that_means_nothing_names_itself() {
+    // RFC 2606 reserves `.invalid`; it can never resolve.
+    let mut target = Target::parse("nothing-here.invalid:49374");
+    target.timeout = Some(Duration::from_millis(200));
+    let started = Instant::now();
+    let err = Link::open(target, brisk()).expect_err("cannot resolve");
+    assert!(
+        matches!(err, screeny::Error::Unresolved { .. }),
+        "{err:?} should not be a missing-panel error"
+    );
+    let msg = err.to_string();
+    assert!(msg.contains("nothing-here.invalid:49374"), "{msg}");
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+}
+
 /// What the device allows has to be visible, because a producer that cannot
 /// see the budget cannot choose a palette against it.
 #[test]

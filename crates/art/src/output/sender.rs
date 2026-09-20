@@ -23,23 +23,17 @@ use std::io;
 
 /// Turn `--to <name-or-addr>` into a [`Target`].
 ///
-/// `10.0.0.5`, `10.0.0.5:49374` and `[::1]:49374` skip discovery entirely;
-/// anything else is a DNS-SD instance name (or a unique prefix of one), which
-/// is the better answer for a device on DHCP because the link re-resolves it
-/// on every reconnect and so follows the device across a lease.
+/// One line, because the grammar is [`Target::parse`]'s and lives in
+/// `screeny` so that the CLI, this crate and the studio cannot disagree about
+/// it (card 146). In short: `10.0.0.5`, `10.0.0.5:49374` and `[::1]:49374`
+/// skip discovery entirely; a name with a dot or a port in it -
+/// `host.docker.internal:49374` - is looked up with the system resolver; a
+/// bare name is a DNS-SD instance name, which is the better answer for a
+/// device on DHCP because the link re-resolves it on every reconnect and so
+/// follows the device across a lease.
 #[must_use]
 pub fn target_for(to: &str) -> Target {
-    let to = to.trim();
-    if let Ok(addr) = to.parse() {
-        return Target { addr: Some(addr), ..Target::default() };
-    }
-    if let Ok(ip) = to.parse() {
-        return Target {
-            addr: Some(std::net::SocketAddr::new(ip, screeny_proto::DEFAULT_FRAME_PORT)),
-            ..Target::default()
-        };
-    }
-    Target { name: Some(to.to_string()), ..Target::default() }
+    Target::parse(to)
 }
 
 /// What became of the last frame, and of every frame so far.
@@ -270,11 +264,7 @@ impl Output for SenderOutput {
 }
 
 fn label_of(t: &Target) -> String {
-    match (&t.addr, &t.name) {
-        (Some(a), _) => a.to_string(),
-        (None, Some(n)) => n.clone(),
-        (None, None) => "the first panel found".into(),
-    }
+    t.label()
 }
 
 fn state_name(s: LinkState) -> &'static str {
@@ -291,7 +281,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_target_is_an_address_or_a_name() {
+    fn a_target_is_an_address_a_host_name_or_an_instance_name() {
         let a = target_for("127.0.0.1:49374");
         assert_eq!(a.addr.map(|a| a.to_string()).as_deref(), Some("127.0.0.1:49374"));
         assert!(a.name.is_none());
@@ -300,8 +290,41 @@ mod tests {
         assert_eq!(b.addr.map(|a| a.port()), Some(screeny_proto::DEFAULT_FRAME_PORT));
 
         let c = target_for(" screeny-4a00a4 ");
-        assert!(c.addr.is_none());
+        assert!(c.addr.is_none() && c.host.is_none());
         assert_eq!(c.name.as_deref(), Some("screeny-4a00a4"));
+
+        // Card 146: the third shape. `{"to":"host.docker.internal:49374"}`
+        // used to be browsed for as an instance name and reported as a
+        // missing panel; it is a name for the system resolver.
+        let d = target_for("host.docker.internal:49374");
+        assert_eq!(d.host.as_deref(), Some("host.docker.internal"));
+        assert_eq!(d.port, Some(49374));
+        assert!(d.addr.is_none() && d.name.is_none());
+        assert_eq!(label_of(&d), "host.docker.internal:49374");
+    }
+
+    /// A name that resolves to nothing is a counter and a `last_error` that
+    /// names the name, not an error out of the render loop, and not "no
+    /// screeny device found".
+    #[test]
+    fn a_hostname_that_resolves_to_nothing_is_reported_as_itself() {
+        // RFC 2606 reserves `.invalid`, so this can never reach anything.
+        let mut out = SenderOutput::deferred(target_for("nothing-here.invalid:49374"));
+        let frame = WireFrame { rgb: vec![0; crate::frame::N * 3], indexed: None };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            out.send(&frame).expect("the network cannot fail a send");
+            if out.status().last_error.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let st = out.status();
+        assert_eq!(st.target, "nothing-here.invalid:49374");
+        assert_eq!(st.frames_sent, 0);
+        let err = st.last_error.expect("the lookup failed and said so");
+        assert!(err.contains("nothing-here.invalid:49374"), "{err}");
+        assert!(!err.contains("no screeny device found"), "{err}");
     }
 
     /// A deferred link with nowhere to go is a run of counters, never an

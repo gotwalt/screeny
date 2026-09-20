@@ -237,7 +237,11 @@ What is different there:
 
 - **No discovery.** On a Mac the engine runs inside a VM with no access to the LAN's
   multicast. Outbound unicast UDP is NATed and does work, so a configured address
-  does: `host.docker.internal:49374` reaches a `screeny-sim` on the host.
+  does: `host.docker.internal:49374` reaches a `screeny-sim` on the host. Since card
+  146 that name is resolved rather than browsed for - anything with a dot or a port
+  in it goes to the system resolver, a bare name is still an mDNS instance name - so
+  it can be given to `set_panel` as it stands, and a name that means nothing says so
+  instead of reporting a missing panel.
 - **No GPU.** The GPU pieces fall back to lavapipe, Mesa's software rasteriser, which
   the image carries. Build with `SCREENY_FEATURES=none` for a studio with the CPU
   pieces only and no graphics driver compiled in at all.

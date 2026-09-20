@@ -47,6 +47,20 @@ pub enum Error {
         secs: f64,
     },
 
+    /// A name that needs a lookup resolved to nothing, by DNS or by mDNS.
+    ///
+    /// Deliberately **not** [`Error::NotFound`]: "the panel is not
+    /// advertising" and "that name means nothing on this machine" send a
+    /// person to different places, and conflating them cost card 146 an
+    /// afternoon of looking at a panel that was fine.
+    #[error("{name:?} is not an address, and did not resolve: {tried}")]
+    Unresolved {
+        /// The name as it was given.
+        name: String,
+        /// Every lookup that was made and what each one said, in order.
+        tried: String,
+    },
+
     /// The named instance was not among the ones that answered.
     #[error("no device named {wanted:?} (found: {found})")]
     NoSuchDevice {
@@ -221,6 +235,13 @@ impl Error {
                 ),
                 Platform::Other => ESCAPE.to_string(),
             }),
+            Error::Unresolved { .. } => Some(
+                "A name with a dot or a port in it is looked up with the system resolver; a bare \
+                 name is browsed for as a DNS-SD instance. Check the spelling, or skip the \
+                 lookup entirely by giving the address: `--addr IP[:port]`, or `to` as \
+                 `IP:49374`."
+                    .to_string(),
+            ),
             Error::Io(e)
                 if matches!(
                     e.raw_os_error(),

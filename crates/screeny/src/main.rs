@@ -5,7 +5,6 @@
 //! here.
 
 use std::io::{IsTerminal, Read, Write};
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -42,8 +41,9 @@ struct Cli {
 /// How to find the device. `--addr` always works and skips discovery.
 #[derive(Args, Debug, Clone)]
 struct TargetArgs {
-    /// Device address as `IP` or `IP:port`, skipping discovery entirely.
-    #[arg(long, global = true, value_name = "IP[:PORT]")]
+    /// Device address as `IP`, `IP:port`, or a host name the system resolver
+    /// knows. Either way discovery is skipped.
+    #[arg(long, global = true, value_name = "IP|HOST[:PORT]")]
     addr: Option<String>,
 
     /// Pick a discovered device by instance or friendly name.
@@ -60,34 +60,19 @@ struct TargetArgs {
 }
 
 impl TargetArgs {
-    fn parse_addr(&self) -> Result<Option<SocketAddr>> {
-        let Some(s) = &self.addr else { return Ok(None) };
-        if let Ok(a) = s.parse::<SocketAddr>() {
-            return Ok(Some(a));
-        }
-        if let Ok(ip) = s.parse::<std::net::IpAddr>() {
-            return Ok(Some(SocketAddr::new(ip, screeny::proto::DEFAULT_FRAME_PORT)));
-        }
-        // A host name: let the resolver have it, defaulting the port.
-        let with_port = if s.contains(':') {
-            s.clone()
-        } else {
-            format!("{s}:{}", screeny::proto::DEFAULT_FRAME_PORT)
-        };
-        let mut it = std::net::ToSocketAddrs::to_socket_addrs(&with_port)
-            .with_context(|| format!("resolving {s:?}"))?;
-        it.next()
-            .map(Some)
-            .ok_or_else(|| anyhow::anyhow!("{s:?} resolved to no addresses"))
-    }
-
+    /// `--addr` is classified by [`screeny::Target::direct`] - an address, or
+    /// a host name for the system resolver, never a browse - and the lookup
+    /// itself happens inside `Target::resolve`, so there is one grammar and
+    /// one resolver for the CLI, the library and the art system (card 146).
     fn to_target(&self) -> Result<screeny::Target> {
-        Ok(screeny::Target {
-            addr: self.parse_addr()?,
-            name: self.name.clone(),
-            timeout: Some(Duration::from_secs_f64(self.timeout)),
-            broadcast: self.broadcast,
-        })
+        let mut t = match &self.addr {
+            Some(s) => screeny::Target::direct(s),
+            None => screeny::Target::default(),
+        };
+        t.name = self.name.clone();
+        t.timeout = Some(Duration::from_secs_f64(self.timeout));
+        t.broadcast = self.broadcast;
+        Ok(t)
     }
 
     fn resolve(&self) -> Result<Device> {

@@ -223,9 +223,12 @@ struct Panel { bits: u32, subframes: u32 }
 const NOMINAL, TEMPORAL, DIMMED, DEEP;      // selection scores against TEMPORAL
 
 // --- discovery (spec 5) ------------------------------------------------
-struct Target { addr: Option<SocketAddr>, name: Option<String>,
-                timeout: Option<Duration>, broadcast: bool }
-    fn resolve(&self) -> Result<Device>
+struct Target { addr: Option<SocketAddr>, host: Option<String>, port: Option<u16>,
+                name: Option<String>, timeout: Option<Duration>, broadcast: bool }
+    Target::parse(&str)      // an address, a host name, or an instance name
+    Target::direct(&str)     // an address or a host name; never a browse
+    fn resolve(&self) -> Result<Device>      // blocking; call it off your loop
+    fn label(&self) -> String                // what was asked for, as asked
 fn discover::browse(Duration, want: Option<usize>) -> Result<Vec<Device>>
 fn discover::broadcast_probe(Duration, port) -> Result<Vec<Device>>   // spec 5.5
 
@@ -334,7 +337,7 @@ discovery does not:
 
 | option | |
 |---|---|
-| `--addr IP[:PORT]` | talk to this address, skipping discovery entirely |
+| `--addr IP\|HOST[:PORT]` | talk to this address, or to a host name the system resolver knows, skipping discovery entirely |
 | `--name NAME` | pick a discovered device by instance or friendly name |
 | `--timeout SECS` | how long to browse for (default 3) |
 | `--broadcast` | use the broadcast `GET_INFO` probe instead of mDNS (spec 5.5) |
