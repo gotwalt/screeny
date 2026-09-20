@@ -4,8 +4,8 @@ title: The simulator can only play a healthy device
 type: build
 hardware: no
 depends: [224, 180]
-owner:
-branch:
+owner: worker-192 (firmware session)
+branch: card/192-sim-unhealthy-device
 ---
 
 ## Goal
