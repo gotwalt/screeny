@@ -332,8 +332,30 @@ pub fn angle_at(from: f32, moves: &[Move], motor: Motor, tau: f32) -> f32 {
 
 pub const DANCES: usize = 12;
 
+/// What each dance is called, in the order [`dance`] builds them.
+///
+/// Card 182: **the one list**. `dance` reads the name from here rather than
+/// returning a literal, and `clocks::DANCE_CHOICES` - the `dance` parameter's
+/// named stops - is built from it, so a new dance is one name in one place.
+pub const NAMES: [&str; DANCES] = [
+    "formation",
+    "bloom",
+    "line wave",
+    "ripple",
+    "magnet",
+    "cascade",
+    "fan",
+    "checker",
+    "scissors",
+    "swell",
+    "scatter",
+    "vortex",
+];
+
 /// The repertoire. `which` is 0..DANCES; `rng` varies direction, focus and
 /// angles, so the same dance is rarely performed the same way twice.
+///
+/// The `match` carries only what varies: the name is [`NAMES`]`[which]`.
 pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
     use Formation::*;
     let flip = rng.u64() & 1 == 0;
@@ -353,101 +375,73 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
         bow: rng.range(-25.0, 25.0),
     };
 
-    match which % DANCES {
+    let which = which % DANCES;
+    let phases = match which {
         // Every corner spins as a rigid shape, column after column.
-        0 => ("formation", vec![step(Digits, sweep, way, 1, 0.0)]),
+        0 => vec![step(Digits, sweep, way, 1, 0.0)],
         // Hands part in opposite directions, symmetric about the middle.
-        1 => (
-            "bloom",
-            vec![step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, Turn::CounterMirror, 1, 0.0)],
-        ),
+        1 => vec![step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, Turn::CounterMirror, 1, 0.0)],
         // Gather into parallel lines, hold, roll a full-turn wave across, resolve.
-        2 => (
-            "line wave",
-            vec![
-                step(Lines(45.0), Timing::Together, Turn::Shortest, 0, 0.8),
-                step(Lines(45.0), sweep, way, 1, 0.4),
-                step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        2 => vec![
+            step(Lines(45.0), Timing::Together, Turn::Shortest, 0, 0.8),
+            step(Lines(45.0), sweep, way, 1, 0.4),
+            step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
+        ],
         // Rings round a focus; a ripple turns them to spokes and back out to digits.
-        3 => (
-            "ripple",
-            vec![
-                step(Rings { focus, spokes: false }, Timing::Ripple { focus, gap: 0.25, inward: false }, Turn::Shortest, 0, -1.0),
-                step(Rings { focus, spokes: true }, Timing::Ripple { focus, gap: 0.3, inward: false }, way, 1, -1.0),
-                step(Digits, Timing::Ripple { focus, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        3 => vec![
+            step(Rings { focus, spokes: false }, Timing::Ripple { focus, gap: 0.25, inward: false }, Turn::Shortest, 0, -1.0),
+            step(Rings { focus, spokes: true }, Timing::Ripple { focus, gap: 0.3, inward: false }, way, 1, -1.0),
+            step(Digits, Timing::Ripple { focus, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
+        ],
         // Every needle follows a magnet carried across the panel.
-        4 => (
-            "magnet",
-            vec![
-                step(Compass { focus: side }, sweep, Turn::Shortest, 0, -0.5),
-                step(Compass { focus: (middle.0, -2.0) }, sweep, Turn::Shortest, 0, -1.5),
-                step(Compass { focus: far_side }, sweep, Turn::Shortest, 0, -0.5),
-                step(Digits, sweep, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        4 => vec![
+            step(Compass { focus: side }, sweep, Turn::Shortest, 0, -0.5),
+            step(Compass { focus: (middle.0, -2.0) }, sweep, Turn::Shortest, 0, -1.5),
+            step(Compass { focus: far_side }, sweep, Turn::Shortest, 0, -0.5),
+            step(Digits, sweep, Turn::Shortest, 0, 0.0),
+        ],
         // All hands drop, row by row, then climb into the digits from the bottom up.
-        5 => (
-            "cascade",
-            vec![
-                step(Needles(180.0), Timing::Rows { gap: 0.5, reverse: false }, Turn::Mirror, 0, 0.3),
-                step(Digits, Timing::Rows { gap: 0.6, reverse: true }, Turn::Mirror, 1, 0.0),
-            ],
-        ),
+        5 => vec![
+            step(Needles(180.0), Timing::Rows { gap: 0.5, reverse: false }, Turn::Mirror, 0, 0.3),
+            step(Digits, Timing::Rows { gap: 0.6, reverse: true }, Turn::Mirror, 1, 0.0),
+        ],
         // A frozen wave of fanned lines that travels through itself.
-        6 => (
-            "fan",
-            vec![
-                step(Fan { base: 0.0, per_col: 22.5 }, Timing::Together, Turn::Shortest, 0, -0.5),
-                step(Fan { base: 180.0, per_col: 22.5 }, sweep, way, 0, -1.0),
-                step(Fan { base: 0.0, per_col: -22.5 }, sweep, way, 0, 0.2),
-                step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        6 => vec![
+            step(Fan { base: 0.0, per_col: 22.5 }, Timing::Together, Turn::Shortest, 0, -0.5),
+            step(Fan { base: 180.0, per_col: 22.5 }, sweep, way, 0, -1.0),
+            step(Fan { base: 0.0, per_col: -22.5 }, sweep, way, 0, 0.2),
+            step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
+        ],
         // Neighbours turn against each other along the diagonal.
-        7 => ("checker", vec![step(Digits, Timing::Diagonal { gap: 0.3 }, Turn::Checker, 1, 0.0)]),
+        7 => vec![step(Digits, Timing::Diagonal { gap: 0.3 }, Turn::Checker, 1, 0.0)],
         // Close to a bud, open like scissors to a line, carry on round to the digits.
-        8 => (
-            "scissors",
-            vec![
-                step(Needles(0.0), Timing::Together, Turn::Shortest, 0, 0.3),
-                step(Lines(90.0), Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, -0.8),
-                step(Chevron { axis: 180.0, spread: 90.0 }, Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, 0.2),
-                step(Digits, Timing::Ripple { focus: middle, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        8 => vec![
+            step(Needles(0.0), Timing::Together, Turn::Shortest, 0, 0.3),
+            step(Lines(90.0), Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, -0.8),
+            step(Chevron { axis: 180.0, spread: 90.0 }, Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, 0.2),
+            step(Digits, Timing::Ripple { focus: middle, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
+        ],
         // Folded needles settle into a shallow wave, which deepens and rolls
         // on before the digits surface out of it.
-        9 => (
-            "swell",
-            vec![
-                step(Flow { wave, open: 6.0 }, sweep, Turn::Shortest, 0, -1.0),
-                step(Flow { wave: Wave { amp: wave.amp * 3.0, phase: wave.phase + 2.0, ..wave }, open: 6.0 }, sweep, way, 0, -1.0),
-                step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        9 => vec![
+            step(Flow { wave, open: 6.0 }, sweep, Turn::Shortest, 0, -1.0),
+            step(Flow { wave: Wave { amp: wave.amp * 3.0, phase: wave.phase + 2.0, ..wave }, open: 6.0 }, sweep, way, 0, -1.0),
+            step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
+        ],
         // The new time appears at once but scattered, each clock's corner
         // turned by a wave, then the wave drains away.
-        10 => (
-            "scatter",
-            vec![
-                step(Turned { wave: Wave { base: 0.0, amp: rng.range(90.0, 150.0), ..wave } }, Timing::Ripple { focus, gap: 0.2, inward: false }, way, 0, 0.3),
-                step(Digits, Timing::Ripple { focus, gap: 0.3, inward: true }, Turn::Shortest, 0, 0.0),
-            ],
-        ),
+        10 => vec![
+            step(Turned { wave: Wave { base: 0.0, amp: rng.range(90.0, 150.0), ..wave } }, Timing::Ripple { focus, gap: 0.2, inward: false }, way, 0, 0.3),
+            step(Digits, Timing::Ripple { focus, gap: 0.3, inward: true }, Turn::Shortest, 0, 0.0),
+        ],
         // A vortex: rings about the middle, spun a full turn from the rim inwards.
-        _ => (
-            "vortex",
-            vec![
-                step(Rings { focus: middle, spokes: false }, Timing::Together, Turn::Shortest, 0, 0.2),
-                step(Rings { focus: middle, spokes: false }, Timing::Ripple { focus: middle, gap: 0.35, inward: true }, way, 1, -1.5),
-                step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, way, 0, 0.0),
-            ],
-        ),
-    }
+        _ => vec![
+            step(Rings { focus: middle, spokes: false }, Timing::Together, Turn::Shortest, 0, 0.2),
+            step(Rings { focus: middle, spokes: false }, Timing::Ripple { focus: middle, gap: 0.35, inward: true }, way, 1, -1.5),
+            step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, way, 0, 0.0),
+        ],
+    };
+    (NAMES[which], phases)
 }
 
 // ---------------------------------------------------------------------------

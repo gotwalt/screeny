@@ -61,3 +61,39 @@ studio pick it up with no other edit. No piece's behaviour changes and the
 `dance` parameter's range moves only if `DANCES` does.
 
 ## Log
+
+### One list each, and the pixels proved unchanged (worker-120)
+
+`dance::NAMES: [&str; DANCES]` and `ambient::MOOD_NAMES: [&str; MOODS]` are now
+the only place either set of names is written.
+
+- `dance::dance` takes `which % DANCES` once, the `match` yields only
+  `Vec<Phase>`, and the function returns `(NAMES[which], phases)`. The arms lost
+  a tuple wrapper each and read better for it.
+- `Mood::new` does the same. To get the name out of eight struct literals I
+  added `Mood::STILL` (everything at rest) and `Ripple::ZERO` so the arms use
+  `..Mood::STILL` and say only what they change - `rings: none` and
+  `open_wave: none` disappear from five of them - and the closing expression
+  puts `name: MOOD_NAMES[which]` on. **Field order was preserved for every arm
+  that calls `rng`** (`ripples` then `open_wave`), because a struct literal
+  evaluates its fields in written order and these draw from the rng.
+- `DANCE_CHOICES` and `MOOD_CHOICES` are built by `const fn`s from those arrays:
+  `"vary"` + `NAMES` + `"composed"`, and `"wander"` + `MOOD_NAMES`. The lengths
+  come out of `DANCES`/`MOODS`, so adding a dance moves the parameter's range
+  with it and nothing else has to be touched.
+- `piece::tests::the_named_stops_are_the_pieces_own_names` keeps both halves,
+  now as a guard on the **offsets** (vary/composed at the ends, wander first)
+  and on the ranges the pieces shipped, which is the part that is still written
+  by hand. Its comment says so.
+
+**Pixel and rng proof.** A throwaway `crates/art/examples/framehash.rs` (card
+125's method: FNV-1a over the raw f32 bits of all 2048 pixels) hashed **600
+frames** per case at a fixed wall clock, for **95 cases**: `clocks-numerals` at
+seeds 1/7/12345/99 x all 14 `dance` values, `clocks-dials` at the same seeds x
+all 9 `mood` values, and the composing path at seeds 3/31/314. The 95 hashes
+were stable across two runs before the change and are **byte-identical after
+it** - so neither the pixels nor the rng sequence moved. The harness was deleted
+and never committed.
+
+`cargo test -p screeny-art` (43 tests) green, `cargo clippy -p screeny-art
+--all-targets` silent.
