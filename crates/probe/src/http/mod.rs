@@ -92,7 +92,7 @@ pub use client::{Client, Res};
 /// **This is the one constant to flip when 223 lands**: the [`KNOWN_223`]
 /// rules stop being downgraded to `SKIP` and are enforced against every
 /// target.
-pub const CARD_223_LANDED: bool = false;
+pub const CARD_223_LANDED: bool = true;
 
 // ---------------------------------------------------------------------------
 // Flags

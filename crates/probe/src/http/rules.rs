@@ -1296,6 +1296,10 @@ fn wifi_post_credentials(cx: &mut Ctx) -> Result<Outcome, String> {
     )
 }
 
+/// How long after the post a `connected` answer is read as "the trial has not
+/// started yet" rather than as its result.
+const NOT_STARTED_GRACE: Duration = Duration::from_secs(5);
+
 fn wifi_after_the_trial(cx: &mut Ctx) -> Result<Outcome, String> {
     // Two things have to settle, and they are not the same thing: the device
     // has to be reachable again (on the bench it is away for about a minute
@@ -1311,6 +1315,16 @@ fn wifi_after_the_trial(cx: &mut Ctx) -> Result<Outcome, String> {
             Ok(res) if res.status == 200 => match res.parse::<WifiReply>() {
                 Ok(w) if w.state == WifiState::Connecting => {
                     last = "still connecting".into();
+                }
+                // The device answers `trying` *first* and starts the radio work
+                // a moment later (spec 8.2; firmware 0.5.0 waits 100 ms so the
+                // reply really leaves). A poll inside that window still reads
+                // the old `connected`, which is "not started yet", not a
+                // verdict: the first device run of this rule failed on exactly
+                // that, at "0 s", while the device went on to report
+                // failed/not_found seven seconds later.
+                Ok(w) if w.state == WifiState::Connected && t0.elapsed() < NOT_STARTED_GRACE => {
+                    last = "still reads the old connection".into();
                 }
                 Ok(w) => {
                     result = Some(w);
