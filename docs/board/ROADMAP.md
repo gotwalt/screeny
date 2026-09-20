@@ -56,7 +56,8 @@ measurement are deferred.
 - [x] 100 art system merged (42253d2): pipeline, Tauri studio, pieces. Verified: root 209
   tests, art 31 tests, and `screeny-art pipe clocks-numerals | screeny pipe --fps 60`
   into the simulator at 60 fps, 304 B/frame, `PAL4_LZ` exact, 0 drops
-- 101 art sends through `crates/screeny` (after 011) - art session
+- 101 art sends through `crates/screeny` (after 011) - in progress on `card/101-art-sender-output`.
+  Owner's acceptance (2026-09-19): it is done when it actually runs on the real panel, not only the sim.
 - 102 reconcile art's panel model and colour rules with the measured device - art session
 - 104 piece runner / scheduler (design with the owner) - art session
 
