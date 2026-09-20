@@ -494,26 +494,18 @@ fn instance_candidate(host: &str) -> Option<&str> {
     }
 }
 
-/// Ask for `GET_INFO` on the subnet broadcast address and collect the unicast
-/// replies (spec 5.5).
+/// The control addresses a broadcast probe asks: the subnet broadcast address
+/// of every usable IPv4 interface, on `port`.
 ///
-/// This is the "mDNS is broken on this machine today" escape hatch. Frame data
-/// is never broadcast; this is one small control packet.
+/// Separate from [`probe`] so that a caller which *cannot* broadcast can say
+/// where to ask instead. That is not a test-only concern: a container with no
+/// broadcast reachability to the panel's subnet, which is the Docker case the
+/// studio is built for, has the same problem and the same answer.
 ///
-/// # Errors
-///
-/// [`Error::Io`] if the socket cannot be set up.
-pub fn broadcast_probe(timeout: Duration, port: u16) -> Result<Vec<Device>> {
-    let sock = UdpSocket::bind("0.0.0.0:0")?;
-    sock.set_broadcast(true)?;
-
-    let req = Request::GetInfo;
-    let mut out = vec![0u8; req.encoded_len()];
-    let req_id = 0x5350u16; // arbitrary and non-zero: zero means "no reply"
-    let n = req
-        .write(req_id, &mut out)
-        .map_err(|e| Error::Metadata(format!("{e:?} building GET_INFO")))?;
-
+/// [`Ipv4Addr::BROADCAST`] is the fallback when this machine has no usable
+/// interface to compute a directed broadcast from.
+#[must_use]
+pub fn broadcast_targets(port: u16) -> Vec<SocketAddr> {
     let mut targets: Vec<Ipv4Addr> = net::local_ipv4()
         .into_iter()
         .filter(|i| !i.addr.is_loopback() && u32::from(i.mask) != 0)
@@ -524,9 +516,56 @@ pub fn broadcast_probe(timeout: Duration, port: u16) -> Result<Vec<Device>> {
     if targets.is_empty() {
         targets.push(Ipv4Addr::BROADCAST);
     }
-    for t in &targets {
+    targets
+        .into_iter()
+        .map(|t| SocketAddr::new(IpAddr::V4(t), port))
+        .collect()
+}
+
+/// Ask for `GET_INFO` on the subnet broadcast address and collect the unicast
+/// replies (spec 5.5).
+///
+/// This is the "mDNS is broken on this machine today" escape hatch. Frame data
+/// is never broadcast; this is one small control packet.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the socket cannot be set up.
+pub fn broadcast_probe(timeout: Duration, port: u16) -> Result<Vec<Device>> {
+    probe(timeout, &broadcast_targets(port))
+}
+
+/// Send one `GET_INFO` to each of `to` and collect the unicast replies, for
+/// `timeout` in total.
+///
+/// [`broadcast_probe`] is this with [`broadcast_targets`]; anything else is a
+/// caller that knows where to ask - a list of panel control addresses in a
+/// container, or two simulators on loopback in a test. The reply is what
+/// identifies the device, not the address it was asked at: every answer
+/// carries the panel's own `id=`, which is what makes a panel found at a new
+/// address the *same* panel.
+///
+/// One socket, one datagram per destination, one window: nothing here scales
+/// with how long it is left running.
+///
+/// # Errors
+///
+/// [`Error::Io`] if the socket cannot be set up.
+pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>> {
+    let sock = UdpSocket::bind("0.0.0.0:0")?;
+    // Harmless for a unicast destination, and required for a broadcast one.
+    sock.set_broadcast(true)?;
+
+    let req = Request::GetInfo;
+    let mut out = vec![0u8; req.encoded_len()];
+    let req_id = 0x5350u16; // arbitrary and non-zero: zero means "no reply"
+    let n = req
+        .write(req_id, &mut out)
+        .map_err(|e| Error::Metadata(format!("{e:?} building GET_INFO")))?;
+
+    for t in to {
         // A refused broadcast on one interface should not stop the others.
-        let _ = sock.send_to(&out[..n], SocketAddr::new(IpAddr::V4(*t), port));
+        let _ = sock.send_to(&out[..n], t);
     }
 
     let deadline = Instant::now() + timeout;
@@ -563,8 +602,17 @@ pub fn broadcast_probe(timeout: Duration, port: u16) -> Result<Vec<Device>> {
             continue;
         }
         // The reply came from the control port; the frame port is in the SRV
-        // record, which we do not have here, so fall back to the default.
-        let frame = SocketAddr::new(from.ip(), screeny_proto::DEFAULT_FRAME_PORT);
+        // record, which a probe does not have. The guess is the same `+1`
+        // convention [`Device::from_addr`] and `--addr` have always used, and
+        // for a device on the spec's ports it *is*
+        // [`screeny_proto::DEFAULT_FRAME_PORT`] - 49375 - 1 = 49374 - so this
+        // changes nothing for a real panel and makes the probe usable against
+        // a simulator on a port pair of its own. A device that answers with
+        // `ctrl=0` has said nothing usable and is ignored.
+        let Some(frame_port) = info.ctrl.checked_sub(1) else {
+            continue;
+        };
+        let frame = SocketAddr::new(from.ip(), frame_port);
         let control = SocketAddr::new(from.ip(), info.ctrl);
         let instance = if info.id.is_empty() {
             from.ip().to_string()
@@ -822,6 +870,81 @@ mod tests {
         let msg = e.to_string();
         assert!(matches!(e, Error::NoSuchDevice { .. }), "{e:?}");
         assert!(msg.contains("screeny-aaaa") && msg.contains("screeny-bbbb"), "{msg}");
+    }
+
+    // ---- Card 141: a probe that can be told where to ask -----------------
+
+    /// A device that answers `GET_INFO` on loopback, once, and then stops.
+    ///
+    /// Hand-rolled rather than `screeny-sim`, so this crate keeps no
+    /// dev-dependency on a crate that depends on it. Blocking socket, one read
+    /// timeout, one answer, joined by the test: nothing here can outlive the
+    /// test that started it.
+    fn fake_device(id: &'static str) -> (u16, std::thread::JoinHandle<()>) {
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("a loopback port");
+        let port = sock.local_addr().expect("bound").port();
+        sock.set_read_timeout(Some(Duration::from_secs(5))).expect("a read timeout");
+        let handle = std::thread::spawn(move || {
+            let mut buf = [0u8; MAX_UDP_PAYLOAD];
+            let Ok((n, from)) = sock.recv_from(&mut buf) else { return };
+            let Ok(pkt) = ControlPacket::parse(&buf[..n]) else { return };
+            let info = screeny_proto::txt::DeviceInfo {
+                proto: "1",
+                codecs: "16",
+                // What the panel says its control port is - here, the port
+                // this responder is actually listening on.
+                ctrl: port,
+                id,
+                name: "fake",
+                ..screeny_proto::txt::DeviceInfo::DEFAULT
+            };
+            let mut txt = [0u8; 256];
+            let len = info.write(&mut txt).expect("a TXT record");
+            let mut out = [0u8; MAX_UDP_PAYLOAD];
+            let reply = screeny_proto::control::Reply::Info(&txt[..len]);
+            let n = reply.write(op::GET_INFO, pkt.req_id, &mut out).expect("a reply");
+            let _ = sock.send_to(&out[..n], from);
+        });
+        (port, handle)
+    }
+
+    /// The card 141 half of spec 5.5: a probe can be told exactly where to
+    /// ask, every answer names its own device, and a destination nobody is
+    /// listening at costs only the window.
+    #[test]
+    fn a_probe_can_be_pointed_at_named_addresses() {
+        let (port, responder) = fake_device("abc123");
+        let at = SocketAddr::from(([127, 0, 0, 1], port));
+        // A second destination with nothing behind it: the probe must not
+        // care, which is what a broadcast that reaches switched-off panels is.
+        let nobody = SocketAddr::from(([127, 0, 0, 1], 1));
+
+        let started = Instant::now();
+        let found = probe(Duration::from_secs(2), &[nobody, at]).expect("the socket");
+        let took = started.elapsed();
+        responder.join().expect("the responder finished");
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        let d = &found[0];
+        assert_eq!(d.instance, "screeny-abc123", "the reply names the device, not the address");
+        assert_eq!(d.info.as_ref().expect("info").id, "abc123");
+        assert_eq!(d.control, at, "the control port is where it answered from");
+        assert_eq!(d.frame.port(), port - 1, "the frame port is the `+1` convention run backwards");
+        println!("card 141: a two-address probe answered in {took:?}");
+    }
+
+    /// The default destinations are still the subnet broadcast addresses, on
+    /// the port asked for, and never loopback - so `--broadcast` is what it
+    /// always was.
+    #[test]
+    fn the_default_probe_targets_are_the_subnet_broadcasts() {
+        let targets = broadcast_targets(DEFAULT_CONTROL_PORT);
+        assert!(!targets.is_empty(), "there is always a fallback");
+        for t in &targets {
+            assert_eq!(t.port(), DEFAULT_CONTROL_PORT, "{t}");
+            assert!(t.is_ipv4(), "spec 5.5 is IPv4 broadcast: {t}");
+            assert!(!t.ip().is_loopback(), "a broadcast probe is not for loopback: {t}");
+        }
     }
 
     /// The prefix rule, stated: an exact instance name wins over a longer

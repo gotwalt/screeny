@@ -66,3 +66,37 @@ card 176's log (the named browse must stay at ~0.07 s - nothing here touches
 - A match calls the existing `Registry::set_address`, which keeps the id, the
   player, the piece and the seed, and makes the next telemetry poll confirm the
   new address with `GET_INFO`.
+
+### Worker, step 2 (`screeny::discover`: a probe you can point somewhere)
+
+`crates/screeny/src/discover.rs`, and nothing else in that crate:
+
+- **`pub fn broadcast_targets(port) -> Vec<SocketAddr>`** - the subnet
+  broadcast address of every usable IPv4 interface, lifted out of
+  `broadcast_probe` unchanged (same filter, same sort/dedup, same
+  `255.255.255.255` fallback).
+- **`pub fn probe(timeout, &[SocketAddr])`** - the old body, with the
+  destinations passed in. One socket, one datagram per destination, one
+  window.
+- **`broadcast_probe(timeout, port)`** is now exactly `probe(timeout,
+  &broadcast_targets(port))`, so `screeny --broadcast` is bit-for-bit what it
+  was.
+- One behaviour change, deliberate and stated: the frame port in a probe
+  result was `DEFAULT_FRAME_PORT`; it is now `info.ctrl - 1`, the same `+1`
+  convention `Device::from_addr` and `--addr` have always used. **For a device
+  on the spec's ports these are the same number** (49375 - 1 = 49374), so no
+  real panel sees a difference; it is what lets a probe reach a simulator on a
+  port pair of its own. A reply with `ctrl=0` is ignored rather than
+  underflowing.
+
+Tests (hermetic, no multicast, no LAN): `a_probe_can_be_pointed_at_named_addresses`
+stands up a hand-rolled loopback responder (no dev-dependency on `screeny-sim`,
+which depends on this crate), probes two addresses of which one is dead, and
+checks the answer names the device by its `id=` and that frame = ctrl - 1;
+`the_default_probe_targets_are_the_subnet_broadcasts` pins that the default
+destinations are IPv4, on the port asked for, and never loopback.
+
+`cargo test -p screeny --lib discover`: 10 passed, 0 failed. Card 176's
+`a_named_browse_returns_when_that_instance_answers` still passes untouched -
+nothing here goes near `collect_until`, `browse` or `browse_for_name`.
+`crates/screeny/README.md`: two lines in the API summary.

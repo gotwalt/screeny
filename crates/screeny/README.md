@@ -232,6 +232,8 @@ struct Target { addr: Option<SocketAddr>, host: Option<String>, port: Option<u16
 fn discover::browse(Duration, want: Option<usize>) -> Result<Vec<Device>>
 fn discover::browse_for_name(Duration, &str) -> Result<Vec<Device>>   // stops at that instance
 fn discover::broadcast_probe(Duration, port) -> Result<Vec<Device>>   // spec 5.5
+fn discover::broadcast_targets(port) -> Vec<SocketAddr>               // where that asks
+fn discover::probe(Duration, &[SocketAddr]) -> Result<Vec<Device>>    // ...or ask here instead
 
 struct Device { instance, host, frame: SocketAddr, control: SocketAddr,
                 addresses: Vec<IpAddr>, info: Option<DeviceInfo> }
