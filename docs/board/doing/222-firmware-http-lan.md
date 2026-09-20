@@ -4,8 +4,8 @@ title: Firmware - an HTTP server on the LAN: status page, JSON API, settings, id
 type: build
 hardware: yes
 depends: [212, 220, 226]
-owner:
-branch:
+owner: worker-222
+branch: card/222-firmware-http-lan
 ---
 
 ## Goal
