@@ -4,8 +4,8 @@ title: screeny-sim - the device's HTTP API and the WiFi join/portal states, so n
 type: build
 hardware: no
 depends: [221, 226]
-owner:
-branch:
+owner: worker-224
+branch: card/224-sim-http-and-wifi-states
 ---
 
 ## Goal
