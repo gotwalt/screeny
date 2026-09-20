@@ -422,3 +422,15 @@ Bounded, once, ~5 minutes of device time. **No hardware was touched by this card
 * **Card 243's RTC breadcrumb should be pulled forward** - see the instrument above.
 * `crates/studio/tests/fleet.rs:185` is timing-sensitive under a loaded `cargo test` (the
   `software` session's).
+
+**Orchestrator, after the merge (2026-09-20):** merged to `main` as 1678e0a. Accepted as
+written, including the correction to the card's premise: "HTTP first, UDP 20 s later" is
+within the error of the estimates, so one event at ~93-95 s fits. The bounded send is a
+real bug fixed whatever else happened. The instrument (custom-halt + RTC breadcrumb +
+reset) is card 243, pulled forward and next; the bench procedure above runs **once, on
+243's build** (fw 0.5.2), so the same run has both the bounded send and the breadcrumb.
+Meanwhile fw 0.5.1 ran 56 min under the Studio at 30 fps with no drops and nothing but
+INFO lines on a passive serial watch - the stall is rare, which is why the instrument
+matters more than another attempt to provoke it. Backlog items: the `MACHINE`-section
+logging fix rides with 243; the sim/firmware BUSY-count divergence and the Studio
+`fleet.rs` flake are told to the `software` session and otherwise left (decision 10).
