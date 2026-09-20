@@ -32,6 +32,22 @@ spike-ota = [
   "dep:embassy-embedded-hal",
   "esp-bootloader-esp-idf/embedded-storage",
 ]
+# Card 202's bench tool. It gates `[[bin]] gpio_probe` through
+# `required-features`, so a plain `cargo build --release` never builds it and
+# the shipping firmware is unaffected. See `docs/research/008-button.md`.
+gpio-probe = []
+
+# Both binaries are declared explicitly so that neither can be picked up (or
+# dropped) by accident: `screeny-fw` is the firmware, `gpio_probe` is the
+# card 202 bench tool and only exists when its feature is on.
+[[bin]]
+name = "screeny-fw"
+path = "src/main.rs"
+
+[[bin]]
+name = "gpio_probe"
+path = "src/bin/gpio_probe.rs"
+required-features = ["gpio-probe"]
 
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------

@@ -61,15 +61,30 @@ pub mod pins {
     pub const PSRAM_CLK: u8 = 17;
 
     /// GPIO13 and GPIO15 are analogue board-identification straps: the stock
-    /// firmware ADC-reads both to decide generation and revision.
+    /// firmware ADC-reads both to decide generation and revision (ADC unit 2,
+    /// channels 4 and 3, 12-bit, 12 dB atten, four samples averaged).
+    ///
+    /// GPIO15 is *also* the reset button — see [`super::BUTTON_GPIO`]. Anything
+    /// that reads the strap has to do it once, before the button is configured.
     pub const BOARD_ID_ADC_A: u8 = 13;
     pub const BOARD_ID_ADC_B: u8 = 15;
 }
 
-/// The reset button exists — the stock firmware has a `tidbyt/button` log tag
-/// and a hold-to-reset flow — but no source states its GPIO, and the tronbyt
-/// firmware leaves `BUTTON_PIN` at `-1` for every board. Unknown; do not
-/// guess it, measure it.
+/// The reset button. Card 202 read the pin out of Tidbyt's own flash image:
+/// the stock firmware's `gpio_config_t` is `pin_bit_mask = 1 << 15`, input,
+/// internal pull-up, any-edge interrupt, and its press test is
+/// `gpio_get_level(15) == 0` — so **GPIO15, active low**. A stock boot log on
+/// Tidbyt's forum says the same thing independently. `docs/research/008-button.md`
+/// has the evidence, the gesture design and the build cards.
+///
+/// Still `None`, deliberately: nothing here has been confirmed on this unit yet.
+/// `firmware/src/bin/gpio_probe.rs` settles it in one minute with the owner
+/// pressing the button; the card that runs it sets this to `Some(15)`. Do not
+/// set it from the reading alone.
+///
+/// Note that GPIO15 is also [`pins::BOARD_ID_ADC_B`]: the newer stock build
+/// ADC-reads it (ADC2 channel 3) for the hardware revision *and* uses it as the
+/// button. Both facts are true; see the research doc before using either.
 pub const BUTTON_GPIO: Option<u8> = None;
 
 /// Stock firmware brightness, as an 8-bit value handed to the HUB75 library's
