@@ -96,6 +96,40 @@ fn holds_thirty_fps_within_one_percent() {
     let state = rx.shutdown();
     let arrived = state.fps();
 
+    // TEMPORARY (card 093 baseline): print what the run measured, before any
+    // assert can abort it. Removed once the new assertions land.
+    {
+        let mut g: Vec<f64> = state.gaps().iter().map(Duration::as_secs_f64).collect();
+        let finals = state
+            .frames
+            .iter()
+            .filter(|f| f.flags & screeny::proto::F_FINAL != 0)
+            .count();
+        g.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let n = g.len();
+        let med = g[n / 2];
+        let lo = g[n / 100];
+        let hi = g[n - 1 - n / 100];
+        let small = g.iter().filter(|x| **x < 0.4 / 30.0).count();
+        let off = g.iter().filter(|x| (*x - 1.0 / 30.0).abs() > 0.008).count();
+        let span = state.frames[state.frames.len() - 1]
+            .at
+            .duration_since(state.frames[0].at)
+            .as_secs_f64();
+        let drift = span - (state.frames.len() - 1) as f64 / 30.0;
+        eprintln!(
+            "BASELINE secs={secs} sent={sent} rxn={rxn} finals={finals} achieved={achieved:.4} arrived={arrived:.4} \
+             skipped={skipped} min_gap_ms={:.3} med_ms={:.4} p1_ms={:.3} p99_ms={:.3} \
+             gaps_lt_0.4p={small} gaps_off_8ms={off} drift_ms={:.2}",
+            min_gap.as_secs_f64() * 1000.0,
+            med * 1000.0,
+            lo * 1000.0,
+            hi * 1000.0,
+            drift * 1000.0,
+            rxn = state.frames.len(),
+        );
+    }
+
     assert!(
         (29.7..=30.3).contains(&achieved),
         "sender managed {achieved:.3} fps over {secs} s ({sent} frames), outside 30.0 +-1%"
