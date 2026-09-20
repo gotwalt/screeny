@@ -120,3 +120,120 @@ Measured, `cargo test --release -p screeny --test traffic`, 4 passed in 0.52 s:
 - a link pointed at `127.0.0.1:1` counts exactly zero.
 
 `cargo clippy -p screeny --all-targets`: silent.
+
+### The studio: per device, and one rate (commit `b473011`)
+
+`devices.rs` gains `Flow { bytes, packets }`, `PathFlow { out, in }`, `Rates`, `Traffic`
+(the three paths, the rolled-up `total`, the rates and `window_s`) and a `TrafficMeter`
+that is **not** on the wire. `DeviceRecord.traffic` holds it; it is live only and never
+persisted, because a total read back out of a file would be a lie about this process's
+uptime.
+
+`health.rs` puts `Traffic` under each device on `/api/v1/status` as `traffic`. Additive:
+no route renamed, nothing removed.
+
+**Where the bytes are picked up**, which is the thing worth writing down:
+
+| path | counted in | read into the registry by |
+|---|---|---|
+| frames out | `Sender::transmit`, beside `stats.frames_sent += 1` - the `n` that `pkt.write` returned, so header included | `fleet::supervise` -> `Player::link_traffic()` -> `Registry::metered_link` |
+| frames in | `Sender::poll_feedback`, on the `recv` that already exists, **before** the packet is parsed | same |
+| control (handshake) | `Sender::connect`, from the `ControlClient` it already builds | same - it rides in `LinkStats.traffic.control` |
+| control (everything else) | `ControlClient::request`, on the `send` and the `recv` | `devices::control_call` / `identify_at_counted` -> `Registry::metered_control`, from `fleet::apply_brightness`, `fleet::poll_once` (both branches), `api::on_device`, `api::devices_refresh` |
+| http | `devhttp::read_status` (`cost.out += head.len()`) and `read_reply` (`cost.inbound += n`) | `fleet::status_once` -> `Registry::metered_http` |
+
+`Link::absorb` is the piece to understand: a `Sender`'s counters die with its socket and
+the studio rebuilds the link whenever it re-aims it, so the link banks the **difference**
+each time it looks (after each send, in `poll`, and before the sender is dropped in
+`lose`/`close`/`reaim`). The registry does the same thing one level up, with one
+"is this a new link" decision for the **whole** link rather than one per counter.
+
+The rate is `Registry::sample_traffic`, called from `fleet::supervise` **after** everything
+that tick added, and from nowhere else. EWMA, `alpha = 1 - e^(-dt/5s)`, so the figure
+means the same thing whatever the tick period is - which is what lets the tests drive it
+on a synthetic clock through `sample_traffic_at`.
+
+Two bugs the unit tests caught: a per-counter "new link" test missed a second handshake
+whose figure was byte-identical to the first, and the rate needed a clock a test could
+step. 19 `devices::` unit tests pass.
+
+### The page (commit `7bb0e16`)
+
+Three rows in the Panel screen's Link block, from `networkRows()` in `ui/panel.js`:
+
+```
+Network   36.4 KB/s out · 0.3 KB/s in
+By path   frames 36.1 · control 0.1 · http 0.2 KB/s out, averaged over 5 s
+Sent      2.1 GB out · 4.3 MB in since the studio started
+```
+
+Every figure is read; the page does no arithmetic, and `tests/ui.rs` asserts there is no
+`/` in the block. `common.js` gains `kbs()` and `netSize()` and nothing else - **KB is
+1000 bytes** there, which `kb()`/`size()` are not, and the comment says why they are two
+functions rather than one with a flag. No new ids, so the existing wiring check covers it.
+21 ui tests pass.
+
+### The acceptance, against `screeny-sim` (commit `e61bd1f`)
+
+`crates/studio/tests/traffic.rs`, four tests, a simulator each on explicit loopback ports,
+discovery off, no state file. Measured:
+
+```
+frames out: 150 datagrams x 1304 B + 28 B in 5.00 s = 39.9 KB/s;
+            the page says 39.4 KB/s (1.4% out)
+```
+
+against the card's 10%. The stream is the test card with its line stopped, so "mean frame
+bytes" is a fact rather than an average over scenes - the first version of this test
+divided by the mean over the whole run and read **51% out** on `clocks-numerals`, which is
+a fair warning about what this number means on a patch that changes scene.
+
+Also shown: http counters move both ways on every poll and the reply is the bigger half;
+Identify and a brightness change each move the control counters both ways; the totals only
+grow across twelve reads **and across the panel being taken away and given back** (which
+rebuilds the link and resets its own counters); two reads inside one tick are identical,
+which is what "one rate, every browser" means; and a panel that is away reads 0 KB/s and
+zero frame packets.
+
+A third bug caught here: `total` was rolled up on the supervisor tick and so lagged the
+rows above it by up to a second. It is computed at read time now (`TrafficMeter::reported`).
+
+`cargo clippy --workspace --all-targets`: silent.
+
+### READMEs (commit `6428716`)
+
+`crates/studio/README.md`: "What a panel costs the network" - the three paths, the
+overhead rule, **what is deliberately not counted** (mDNS and the broadcast probe are not
+traffic with *a panel*; browser frames stay under `sockets`), and that the rate is worked
+out once. `crates/screeny/README.md`: the new shapes in the API map, and the sentence that
+`bytes` is pixels while `traffic` is what the link cost the network.
+
+### Paused
+
+**Paused by the orchestrator** (two workers at a time; the design cards take priority).
+Nothing is half-written: the branch compiles, `cargo clippy --workspace --all-targets` is
+silent, and every test named above passes. The card is **left in `doing/`**.
+
+Where I had got to: I had just started a hand-run loopback pair - `screeny-sim` on
+127.0.0.1:50900/50901 with `--no-mdns --http-port 50902`, and a studio on 127.0.0.1:58787
+with `--no-discover --device-http-port 50902` and a scratch `--state-dir` - attached it,
+set it to `testcard`, and was about to let it stream and `curl /api/v1/status` for a real
+example payload to paste into this Log and the report. Both processes are stopped and
+nothing is left behind.
+
+**What is left to do**, in order:
+
+1. Re-run that loopback pair under `timeout` and capture one real `traffic` block from
+   `/api/v1/status` for the Log and the report. (Only ever my own loopback output: a real
+   device's status payload carries the SSID.)
+2. Look at `/panel` at 390 px and 1400 px, to check the three new rows wrap rather than
+   overflow at phone width. `ui/style.css` is **untouched** so far, and the hope is that it
+   stays that way - the rows are ordinary `facts()` rows. If the "By path" line is too long
+   at 390 px, shorten the wording rather than adding CSS.
+3. Full `cargo test --release --no-fail-fast` at the root, and the final clippy.
+4. `git mv` the card to `review/`.
+
+Nothing learned that is not written above. The one thing to carry in your head if somebody
+else picks this up: **the counters are payload, the overhead is added when the figure is
+reported**, and the two places that add it are `TrafficMeter::wire` (for the rate) and
+`TrafficMeter::reported` (for `total`). Adding it anywhere else double-counts.
