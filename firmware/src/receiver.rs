@@ -14,12 +14,14 @@
 use core::sync::atomic::Ordering;
 
 use embassy_net::{IpAddress, IpEndpoint};
-use log::info;
-use screeny_proto::control::{ErrorCode, IdleMode, Reply, Telemetry};
+use log::{info, warn};
+use screeny_proto::control::{ErrorCode, IdleMode, Reply, SetWifi, Telemetry};
 use screeny_proto::Rgb888Frame;
 use screeny_receiver as rx;
+use screeny_settings::{Name, Settings, Wifi};
 
 use crate::display::{self, Frame};
+use crate::store::{self, Immediate};
 
 pub use screeny_receiver::{Intent, Offer, INFO_MAX, OUT_MAX};
 
@@ -60,17 +62,36 @@ pub type Outbox = heapless::Vec<Out, 4>;
 /// is one that can produce a datagram at all.
 struct Device<'a> {
     out: Option<&'a mut Outbox>,
+    /// Where a handler that needs a flash write *before* its reply leaves it.
+    /// See [`crate::store::Immediate`]: `SET_NAME` and `SET_WIFI` are the only
+    /// two opcodes that can honestly answer `ERR_STORAGE` (spec section 6.5),
+    /// and they can only do it because the control task performs the write
+    /// while the reply is still in its buffer.
+    imm: Option<&'a mut Option<Immediate>>,
 }
 
 impl Device<'_> {
     fn new(out: &mut Outbox) -> Device<'_> {
-        Device { out: Some(out) }
+        Device {
+            out: Some(out),
+            imm: None,
+        }
     }
 
-    /// For `tick` and the control port, neither of which sends anything from
-    /// the frame socket.
+    /// For `tick`, which sends nothing and stores nothing.
     fn quiet() -> Device<'static> {
-        Device { out: None }
+        Device {
+            out: None,
+            imm: None,
+        }
+    }
+
+    /// For the control port: no frame-socket datagrams, but writes to collect.
+    fn control(imm: &mut Option<Immediate>) -> Device<'_> {
+        Device {
+            out: None,
+            imm: Some(imm),
+        }
     }
 }
 
@@ -101,14 +122,41 @@ impl rx::Host for Device<'_> {
         let _ = out.push(item);
     }
 
+    /// Spec section 6.3: the SSID actually in use, never the one the build was
+    /// compiled with - a default build has no such thing - and never a PSK
+    /// (section 8.4). The state has [`crate::WIFI_SET_FAILED`] folded in.
     fn wifi(&self) -> (&'static str, u8) {
-        (crate::SSID, crate::WIFI_STATE.load(Ordering::Relaxed))
+        (crate::current_ssid(), crate::wifi_report_state())
     }
 
-    // `set_wifi` keeps the trait's default, `ERR_NOT_PERMITTED`. Card 014 owns
-    // credential storage and the rejoin sequence. Until then that is section
-    // 6.5's "op disabled in this build" - the spec has no ERR_UNSUPPORTED, and
-    // inventing one would put a byte on the wire no sender could interpret.
+    /// Spec section 8.2. The reply must leave before the device disconnects,
+    /// so nothing is disconnected here: the pair is validated, parked in
+    /// [`Device::imm`] for the control task to write to flash (which is what
+    /// makes `ERR_STORAGE` honest), and only then signalled to the Wi-Fi task.
+    ///
+    /// The PSK is copied into a [`Wifi`] and never formatted.
+    fn set_wifi(&mut self, w: &SetWifi<'_>) -> Result<(), u8> {
+        let Some(slot) = self.imm.as_deref_mut() else {
+            // `set_wifi` can only arrive on the control port, which always
+            // builds a `Device::control`. Refusing rather than silently
+            // succeeding keeps that true.
+            return Err(ErrorCode::NotPermitted.as_u8());
+        };
+        let wifi = Wifi::new(w.ssid.as_bytes(), w.psk.as_bytes()).map_err(|e| {
+            warn!("control: SET_WIFI refused: {:?}", e);
+            ErrorCode::BadArg.as_u8()
+        })?;
+        info!(
+            "control: SET_WIFI for a {}-byte SSID, persist {}",
+            wifi.ssid.len(),
+            w.persist
+        );
+        *slot = Some(Immediate::Wifi {
+            wifi,
+            persist: w.persist,
+        });
+        Ok(())
+    }
 
     fn adjust_telemetry(&self, t: &mut Telemetry) {
         adjust_telemetry(t);
@@ -136,10 +184,31 @@ impl rx::Host for Device<'_> {
                         applied,
                         display::slots_for(applied)
                     );
+                    // Debounced: a slider sends ~60 of these a second, and the
+                    // reply has already been decided, so it cannot report
+                    // `ERR_STORAGE`. Noting the change here rather than on
+                    // every `SET_BRIGHTNESS` means a sender that keeps setting
+                    // the value it already has costs nothing at all.
+                    store::note_dirty(store::DIRTY_BRIGHTNESS);
                 }
             }
-            rx::Event::IdleMode { mode } => info!("control: idle mode {}", mode),
-            rx::Event::Renamed { name } => info!("control: name is now {:?}", name),
+            rx::Event::IdleMode { mode } => {
+                info!("control: idle mode {}", mode);
+                store::note_dirty(store::DIRTY_IDLE);
+            }
+            rx::Event::Renamed { name } => {
+                info!("control: name is now {:?}", name);
+                // Immediate, not debounced: `SET_NAME` is the one naming
+                // opcode a person watches the reply of, so it gets to answer
+                // `ERR_STORAGE`. A name longer than the store can hold cannot
+                // arrive - the receiver has already truncated it to
+                // `MAX_NAME_LEN`, which is the store's limit too.
+                match (Name::new(name), self.imm.as_deref_mut()) {
+                    (Ok(n), Some(slot)) => *slot = Some(Immediate::Name(n)),
+                    (Ok(_), None) => {}
+                    (Err(e), _) => warn!("control: name not storable: {:?}", e),
+                }
+            }
             rx::Event::StatsReset => crate::RENDER_US_MAX_PROTO.store(0, Ordering::Relaxed),
             _ => {}
         }
@@ -168,22 +237,34 @@ pub struct Core {
 }
 
 impl Core {
-    /// Build a receiver. `id` is the lowercase MAC suffix of section 5.1.
-    pub fn new(id: &str) -> Self {
-        // Section 5.1: the default instance name is `screeny-<id>`.
+    /// Build a receiver. `id` is the lowercase MAC suffix of section 5.1, and
+    /// `settings` is what card 212's store read out of flash at boot.
+    ///
+    /// Everything persisted that the state machine owns is seeded here rather
+    /// than applied afterwards, so there is no window in which the device is
+    /// running under a default it is about to change: mDNS announces the stored
+    /// name from its first announcement, and `GET_INFO` never reports the
+    /// default one.
+    pub fn new(id: &str, settings: &Settings) -> Self {
+        // Section 5.1: the default instance name is `screeny-<id>`, and an
+        // empty stored name means exactly that.
         let mut name: heapless::String<{ rx::NAME_MAX }> = heapless::String::new();
-        let _ = name.push_str("screeny-");
-        let _ = name.push_str(id);
+        if settings.name.is_empty() {
+            let _ = name.push_str("screeny-");
+            let _ = name.push_str(id);
+        } else {
+            let _ = name.push_str(settings.name.as_str());
+        }
         Core {
             rx: rx::Receiver::new(&rx::Params {
                 id,
                 fw: crate::FW_VERSION,
                 name: &name,
                 control_port: crate::CONTROL_PORT,
-                brightness: display::DEFAULT_BRIGHTNESS,
+                brightness: settings.brightness.min(crate::BRIGHTNESS_CAP),
                 brightness_cap: crate::BRIGHTNESS_CAP,
                 rssi_dbm: 0,
-                idle_mode: IdleMode::Status,
+                idle_mode: settings.idle_mode,
                 timing: rx::Timing::SPEC,
             }),
         }
@@ -194,6 +275,12 @@ impl Core {
     /// The friendly name.
     pub fn name(&self) -> &str {
         self.rx.name()
+    }
+
+    /// The idle behaviour in force. The store task reads it here rather than
+    /// keeping a copy, so flash can never disagree with the panel.
+    pub fn idle_mode(&self) -> IdleMode {
+        self.rx.idle_mode()
     }
 
     /// The `GET_INFO` / TXT bytes (section 6.6).
@@ -280,13 +367,16 @@ impl Core {
     /// Handle one datagram from the control socket.
     ///
     /// Returns the length of a reply written into `out`, or `None` when the
-    /// spec says to answer nothing.
+    /// spec says to answer nothing. `imm` comes back `Some` when the opcode
+    /// wants a flash write **before** the reply goes out; the caller performs
+    /// it and downgrades the reply to `ERR_STORAGE` if it fails.
     pub fn control(
         &mut self,
         now_us: u64,
         from: IpEndpoint,
         data: &[u8],
         out: &mut [u8],
+        imm: &mut Option<Immediate>,
     ) -> Option<usize> {
         // The bench opcode is this device's alone, so it never reaches the
         // shared core. Peeking for it before parsing would be wrong; peeking
@@ -297,7 +387,7 @@ impl Core {
             }
         }
         self.rx
-            .control(&mut Device::quiet(), now_us, from, data, out)
+            .control(&mut Device::control(imm), now_us, from, data, out)
     }
 
     /// The private bench opcode, `0x80`.

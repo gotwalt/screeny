@@ -1970,6 +1970,7 @@ dependencies = [
  "rand_core 0.10.1",
  "screeny-proto",
  "screeny-receiver",
+ "screeny-settings",
  "sequential-storage",
  "serde",
  "static_cell",
@@ -1985,6 +1986,16 @@ version = "0.1.0"
 dependencies = [
  "heapless 0.9.3",
  "screeny-proto",
+]
+
+[[package]]
+name = "screeny-settings"
+version = "0.1.0"
+dependencies = [
+ "embedded-storage-async",
+ "heapless 0.9.3",
+ "screeny-proto",
+ "sequential-storage",
 ]
 
 [[package]]

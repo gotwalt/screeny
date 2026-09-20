@@ -49,6 +49,7 @@ mod screens;
 #[cfg(feature = "spike-ota")]
 mod spike_ota;
 mod stack_probe;
+mod store;
 mod tidbyt;
 /// Card 201's compile-only spike. Never flashed; see the module docs.
 #[cfg(any(
@@ -59,11 +60,15 @@ mod tidbyt;
 ))]
 mod web_spike;
 
-use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU8, Ordering};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_net::{Runner, StackResources};
-use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
+use embassy_time::{with_timeout, Duration, Instant as EmbassyInstant, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
@@ -77,11 +82,12 @@ use esp_hub75::framebuffer::compute_rows;
 use esp_hub75::{Hub75, Hub75Config, Hub75Pins16};
 use esp_radio::wifi::sta::{ScanMethod, StationConfig};
 use esp_radio::wifi::{
-    AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, PowerSaveMode,
-    WifiController,
+    AuthenticationMethodConfig, Config as WifiConfig, ConnectionError, ControllerConfig, Interface,
+    PowerSaveMode, WifiController,
 };
 use log::{info, warn};
-use screeny_proto::control::wifi_state;
+use screeny_proto::control::{wifi_state, MAX_SSID_LEN};
+use screeny_settings::Wifi;
 
 use display::Mode;
 
@@ -91,15 +97,23 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Compile-time credentials, supplied by `build.rs` from outside git (environment,
-/// `firmware/wifi.env`, or `~/.config/screeny/wifi.env`). Never write them here.
-/// Runtime provisioning (a captive portal) is planned; until then this is the only
-/// network we join.
+/// The **bench override** credentials, supplied by `build.rs` from outside git.
+///
+/// These exist only in a `--features bench-wifi` build (owner's decision,
+/// 2026-09-20). In a default build the constants are not declared at all, so
+/// there is no name by which a credential could reach the binary, and anything
+/// that tried would fail to compile. The device joins from its settings store;
+/// the compiled-in pair is a bench convenience that seeds an empty store and
+/// acts as spec section 8.3's step-2 fallback, and nothing else.
+#[cfg(feature = "bench-wifi")]
 pub const SSID: &str = env!("SCREENY_WIFI_SSID");
+#[cfg(feature = "bench-wifi")]
 const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 
 /// The `fw=` TXT key and `GET_INFO` field.
-pub const FW_VERSION: &str = "0.2.0";
+///
+/// 0.3.0 is card 212: settings live in flash.
+pub const FW_VERSION: &str = "0.3.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -340,72 +354,318 @@ async fn display_task(
 // Network
 // ---------------------------------------------------------------------------
 
-/// The station's credentials, in one place: `main` uses it for the initial
-/// `ControllerConfig`, and the `apsta-probe` build hands the same value back
-/// to `set_config` when it switches the radio into APSTA. Nothing here logs,
-/// returns or otherwise leaks the PSK (spec section 8.4).
-fn station_config() -> StationConfig {
-    StationConfig::default()
-        .with_ssid(SSID.try_into().unwrap())
-        // The default fast scan joins the first access point that answers. On
-        // a mesh that is a lottery: five boots in a row picked five different
-        // nodes, from -54 to -78 dBm (card 220). Scanning every channel lets
-        // the driver's by-signal sort choose the strongest, for ~2 s at join.
-        .with_scan_method(ScanMethod::AllChannels)
-        .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
-            PASSWORD.try_into().unwrap(),
-        ))
+/// How many times one credential pair is tried before the next is (spec 8.3).
+const JOIN_ATTEMPTS: u8 = 3;
+
+/// How long the station waits before trying the stored credentials again once
+/// every pair it has has failed. Long enough not to hold the radio (and, with
+/// `ScanMethod::AllChannels`, ~2 s of scan) against the rest of the device;
+/// short enough that an access point that came back is found without a reboot.
+const RETRY_AFTER: Duration = Duration::from_secs(30);
+
+/// A credential pair `SET_WIFI` wants the station to switch to.
+///
+/// A [`Signal`] and not a channel: only the newest request matters, which is
+/// exactly what a `Signal` keeps. It carries a [`Wifi`], whose `Debug` is safe
+/// because `Psk`'s prints a byte count and nothing else (spec section 8.4) -
+/// and nothing formats it anyway.
+pub static NEW_WIFI: Signal<CriticalSectionRawMutex, Wifi> = Signal::new();
+
+/// Set when a `SET_WIFI` could not join and the station fell back to what it
+/// had (spec section 8.2 step 4).
+///
+/// **Sticky**, on purpose. The question the sender asked was "does the network
+/// I just gave you work?", and the answer is no; letting `GET_WIFI` go back to
+/// `CONNECTED` a few seconds later - because the *old* network came back - would
+/// read as a yes. It is cleared by a `SET_WIFI` that does join, and by a reboot.
+static WIFI_SET_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The SSID the station is currently configured for, for `GET_WIFI`.
+///
+/// [`screeny_receiver::Host::wifi`] must return a `&'static str`, so this is a
+/// fixed static buffer the Wi-Fi task fills at join time rather than anything
+/// borrowed from the store.
+///
+/// **One writer, one reader, neither of which suspends.** [`set_current_ssid`]
+/// is called only from the Wi-Fi task and [`current_ssid`] only from the
+/// receiver's synchronous control handler; both are on core 0's single
+/// executor, neither contains an `await`, so they cannot interleave, and core 1
+/// never touches this.
+///
+/// An 802.11 SSID is opaque bytes while `GET_WIFI` is typed as text, so a
+/// non-UTF-8 SSID is stored **lossily** - anything that is not printable ASCII
+/// becomes `?`. That keeps the buffer valid UTF-8 at every instant, which is
+/// what lets the reader hand out a `&'static str` at all.
+struct CurrentSsid {
+    buf: UnsafeCell<[u8; MAX_SSID_LEN]>,
+    len: AtomicUsize,
 }
 
-/// Associate, hold the association, report RSSI, reconnect forever.
+// SAFETY: see the type's documentation - single writer, single reader, no
+// suspension point between the write and the read, and one core.
+unsafe impl Sync for CurrentSsid {}
+
+static CURRENT_SSID: CurrentSsid = CurrentSsid {
+    buf: UnsafeCell::new([0; MAX_SSID_LEN]),
+    len: AtomicUsize::new(0),
+};
+
+fn set_current_ssid(bytes: &[u8]) {
+    let n = bytes.len().min(MAX_SSID_LEN);
+    let utf8 = core::str::from_utf8(&bytes[..n]).is_ok();
+    // SAFETY: see [`CurrentSsid`].
+    let dst = unsafe { &mut *CURRENT_SSID.buf.get() };
+    for (i, b) in bytes[..n].iter().enumerate() {
+        dst[i] = if utf8 || b.is_ascii_graphic() || *b == b' ' {
+            *b
+        } else {
+            b'?'
+        };
+    }
+    CURRENT_SSID.len.store(n, Ordering::Release);
+}
+
+/// The SSID `GET_WIFI` reports: the one actually in use, not the one the build
+/// was compiled with. Empty before the first join attempt.
+pub fn current_ssid() -> &'static str {
+    let n = CURRENT_SSID.len.load(Ordering::Acquire);
+    // SAFETY: see [`CurrentSsid`].
+    let buf = unsafe { &*CURRENT_SSID.buf.get() };
+    core::str::from_utf8(&buf[..n]).unwrap_or("")
+}
+
+/// The join state `GET_WIFI` reports, with [`WIFI_SET_FAILED`] applied.
+pub fn wifi_report_state() -> u8 {
+    if WIFI_SET_FAILED.load(Ordering::Relaxed) {
+        wifi_state::FAILED
+    } else {
+        WIFI_STATE.load(Ordering::Relaxed)
+    }
+}
+
+/// The pair this build was compiled with, or `None` - which is every default
+/// build (owner's decision, 2026-09-20). `crates/provision` models the same
+/// thing as `has_builtin: false`.
+pub fn builtin_wifi() -> Option<Wifi> {
+    #[cfg(feature = "bench-wifi")]
+    {
+        // `build.rs` has already checked both lengths against 802.11's limits,
+        // so this cannot fail; `ok()` rather than `expect` keeps a panic out of
+        // the boot path regardless.
+        Wifi::new(SSID.as_bytes(), PASSWORD.as_bytes()).ok()
+    }
+    #[cfg(not(feature = "bench-wifi"))]
+    {
+        None
+    }
+}
+
+/// Turn a stored credential pair into a radio configuration.
 ///
-/// Extracted from [`wifi_task`] so the `apsta-probe` build can run exactly
-/// this loop before and after it flips the radio into APSTA, instead of
-/// keeping a second, slightly different copy of it. Never returns.
-async fn station_loop(controller: &mut WifiController<'static>) {
-    loop {
+/// `None` when the radio cannot express it: an SSID longer than 32 bytes, or a
+/// PSK that is not UTF-8 (`esp-radio`'s `Password` is built from text, and
+/// every PSK that can reach the store came in over `SET_WIFI`, which spec
+/// section 8.2 types as UTF-8). Nothing here logs, returns or otherwise leaks
+/// the PSK (spec section 8.4).
+fn station_config(w: &Wifi) -> Option<StationConfig> {
+    let ssid = esp_radio::wifi::Ssid::try_from(w.ssid.as_bytes()).ok()?;
+    let psk = core::str::from_utf8(w.psk.as_bytes()).ok()?;
+    let authentication = if psk.is_empty() {
+        AuthenticationMethodConfig::Open
+    } else {
+        AuthenticationMethodConfig::Wpa2Personal(psk.try_into().ok()?)
+    };
+    Some(
+        StationConfig::default()
+            .with_ssid(ssid)
+            // The default fast scan joins the first access point that answers.
+            // On a mesh that is a lottery: five boots in a row picked five
+            // different nodes, from -54 to -78 dBm (card 220). Scanning every
+            // channel lets the driver's by-signal sort choose the strongest,
+            // for ~2 s at join. **Keep this** in anything that builds a
+            // `StationConfig`.
+            .with_scan_method(ScanMethod::AllChannels)
+            .with_authentication(authentication),
+    )
+}
+
+/// Apply `w` and try to associate, at most `attempts` times.
+///
+/// The SSID goes into [`CURRENT_SSID`] before the first attempt, so `GET_WIFI`
+/// describes what the device is *trying*, which is the useful answer while a
+/// `SET_WIFI` is in flight.
+async fn try_join(controller: &mut WifiController<'static>, w: &Wifi, attempts: u8) -> bool {
+    let Some(cfg) = station_config(w) else {
+        warn!("wifi: those credentials are not expressible to the radio (SSID too long, or a non-UTF-8 PSK)");
+        return false;
+    };
+    set_current_ssid(w.ssid.as_bytes());
+    if let Err(e) = controller.set_config(&WifiConfig::Station(cfg)) {
+        warn!("wifi: set_config failed {:?}", e);
+        WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
+        return false;
+    }
+
+    for attempt in 1..=attempts {
         WIFI_STATE.store(wifi_state::CONNECTING, Ordering::Relaxed);
         match controller.connect_async().await {
             Ok(info) => {
+                // The one line in this firmware that says an SSID out loud.
                 info!(
                     "wifi: connected ssid {:?} ch {} bssid {:02x?}",
                     info.ssid, info.channel, info.bssid
                 );
                 WIFI_STATE.store(wifi_state::CONNECTED, Ordering::Relaxed);
-                // Poll the beacon RSSI for telemetry byte 44 and the status
-                // screen's bars, and notice a disconnect either way.
-                loop {
-                    if let Ok(r) = controller.rssi() {
-                        RSSI_DBM.store(r.clamp(-128, 0) as i8, Ordering::Relaxed);
-                    }
-                    match embassy_time::with_timeout(
-                        Duration::from_secs(2),
-                        controller.wait_for_disconnect_async(),
-                    )
-                    .await
-                    {
-                        Ok(reason) => {
-                            warn!("wifi: disconnected {:?}", reason);
-                            break;
-                        }
-                        Err(_) => continue,
-                    }
-                }
-                WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
-                RSSI_DBM.store(0, Ordering::Relaxed);
+                return true;
             }
-            Err(e) => {
-                warn!("wifi: connect failed {:?}", e);
-                WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
-            }
+            // Only the reason, not the whole `DisconnectedInfo`: the reason is
+            // the diagnostic, and it keeps one more copy of the SSID out of the
+            // bench log.
+            Err(ConnectionError::Failed(info)) => warn!(
+                "wifi: join attempt {} of {} failed: {:?}",
+                attempt, attempts, info.reason
+            ),
+            Err(e) => warn!(
+                "wifi: join attempt {} of {} failed: {:?}",
+                attempt, attempts, e
+            ),
         }
         Timer::after(Duration::from_millis(2000)).await;
+    }
+    WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
+    false
+}
+
+/// How an association ended.
+enum Held {
+    /// The access point went away.
+    Disconnected,
+    /// `SET_WIFI` asked for a different network.
+    NewCredentials(Wifi),
+}
+
+/// Hold the association: poll the beacon RSSI for telemetry byte 44 and the
+/// status screen's bars, notice a disconnect, and notice a `SET_WIFI`.
+async fn hold(controller: &mut WifiController<'static>) -> Held {
+    loop {
+        if let Ok(r) = controller.rssi() {
+            RSSI_DBM.store(r.clamp(-128, 0) as i8, Ordering::Relaxed);
+        }
+        let watch = with_timeout(
+            Duration::from_secs(2),
+            controller.wait_for_disconnect_async(),
+        );
+        match select(watch, NEW_WIFI.wait()).await {
+            Either::First(Ok(reason)) => {
+                warn!("wifi: disconnected {:?}", reason);
+                return Held::Disconnected;
+            }
+            // The 2 s poll expired: go round, re-read the RSSI.
+            Either::First(Err(_)) => continue,
+            Either::Second(w) => return Held::NewCredentials(w),
+        }
+    }
+}
+
+/// Associate, hold the association, reconnect forever, and honour `SET_WIFI`.
+///
+/// Spec section 8.3's fallback, as amended by the owner on 2026-09-20:
+///
+/// 1. the **stored** credentials, [`JOIN_ATTEMPTS`] times;
+/// 2. in a `bench-wifi` build only, the compiled-in pair, [`JOIN_ATTEMPTS`]
+///    times. A default build has no step 2 and nothing to have one with;
+/// 3. otherwise the existing "wifi failed" idle screen (`WIFI_STATE` is
+///    `FAILED`, which is what `screens::status` draws from) and a retry of the
+///    whole list every [`RETRY_AFTER`]. With no credentials at all there is
+///    nothing to retry, so the task simply waits for a `SET_WIFI`; the portal
+///    that makes that reachable is card 223.
+///
+/// A `SET_WIFI` that fails falls back to the pair that was working and sets
+/// [`WIFI_SET_FAILED`], per section 8.2 step 4.
+///
+/// Extracted from [`wifi_task`] so the `apsta-probe` build runs exactly this
+/// loop before and after it flips the radio into APSTA. Never returns.
+pub async fn station_loop(controller: &mut WifiController<'static>, stored: Option<Wifi>) {
+    let builtin = builtin_wifi();
+    // What the station is using now. `SET_WIFI` replaces it, and a `SET_WIFI`
+    // that cannot join puts the previous value back.
+    let mut active = stored.or_else(|| builtin.clone());
+
+    loop {
+        let Some(w) = active.clone() else {
+            WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
+            warn!("wifi: no credentials stored and none compiled in - waiting for SET_WIFI (the setup portal is card 223)");
+            active = Some(NEW_WIFI.wait().await);
+            continue;
+        };
+
+        if try_join(controller, &w, JOIN_ATTEMPTS).await {
+            match hold(controller).await {
+                Held::Disconnected => {
+                    WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
+                    RSSI_DBM.store(0, Ordering::Relaxed);
+                    Timer::after(Duration::from_millis(2000)).await;
+                }
+                Held::NewCredentials(next) => {
+                    info!("wifi: SET_WIFI - trying the new network, {} attempts", JOIN_ATTEMPTS);
+                    // Section 8.2: the reply has already gone out; now drop the
+                    // association we have. `NotConnected` here just means the
+                    // link had already gone.
+                    let _ = controller.disconnect_async().await;
+                    RSSI_DBM.store(0, Ordering::Relaxed);
+                    if try_join(controller, &next, JOIN_ATTEMPTS).await {
+                        WIFI_SET_FAILED.store(false, Ordering::Relaxed);
+                        active = Some(next);
+                        // The TXT record does not carry the SSID, but the
+                        // address may well have changed; re-announce.
+                        net::INFO_CHANGED.signal(());
+                    } else {
+                        warn!("wifi: SET_WIFI failed after {} attempts - falling back to the previous network; GET_WIFI reports FAILED", JOIN_ATTEMPTS);
+                        WIFI_SET_FAILED.store(true, Ordering::Relaxed);
+                        // `active` is unchanged, so the top of the loop retries
+                        // the pair that was working.
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Step 1 failed. Step 2 exists only in a `bench-wifi` build.
+        if let Some(b) = builtin.clone() {
+            if Some(&b) != active.as_ref() {
+                info!("wifi: stored credentials failed - falling back to the build's (bench-wifi)");
+                if try_join(controller, &b, JOIN_ATTEMPTS).await {
+                    // Deliberately *not* stored: a failing stored pair is the
+                    // owner's to replace, and silently overwriting it with the
+                    // bench network would hide the problem.
+                    match hold(controller).await {
+                        Held::Disconnected => {
+                            WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
+                            RSSI_DBM.store(0, Ordering::Relaxed);
+                        }
+                        Held::NewCredentials(next) => active = Some(next),
+                    }
+                    continue;
+                }
+            }
+        }
+
+        warn!(
+            "wifi: nothing joined; the panel shows the failure screen, retrying in {} s",
+            RETRY_AFTER.as_secs()
+        );
+        // Either wait out the retry interval or jump straight to a SET_WIFI.
+        if let Either::Second(next) =
+            select(Timer::after(RETRY_AFTER), NEW_WIFI.wait()).await
+        {
+            active = Some(next);
+        }
     }
 }
 
 #[embassy_executor::task]
-async fn wifi_task(mut controller: WifiController<'static>) {
-    station_loop(&mut controller).await
+async fn wifi_task(mut controller: WifiController<'static>, stored: Option<Wifi>) {
+    station_loop(&mut controller, stored).await
 }
 
 #[embassy_executor::task]
@@ -525,6 +785,20 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
+    // --- settings (card 212) ----------------------------------------------
+    //
+    // First, before the panel and before the receiver. Before the panel because
+    // the two framebuffers are formatted for an output-enable window that has
+    // to be the *stored* brightness, not the default one, or the first refresh
+    // is visibly wrong. Before the receiver because `Params` seeds the name and
+    // the idle mode, and mDNS should announce the stored name from its very
+    // first announcement rather than rename itself a second later.
+    //
+    // This is a read, and core 1 is not running yet, so nothing is parked.
+    let (settings, _report) = store::init(peripherals.FLASH).await;
+    let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
+    BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
+
     // --- panel ------------------------------------------------------------
     assert_pin(&peripherals.GPIO21, tidbyt::pins::R1);
     assert_pin(&peripherals.GPIO2, tidbyt::pins::G1);
@@ -605,11 +879,11 @@ async fn main(spawner: Spawner) {
             mk_static!(FrameBuffer, FrameBuffer::new()),
         )
     };
-    // Come up already dimmed. `FrameBuffer::new()` formats for the widest
-    // output-enable window the build can produce, which is well over the
-    // power cap; letting a single refresh out at that duty would be a bug
-    // with a current spike attached to it.
-    let slots = display::slots_for(display::DEFAULT_BRIGHTNESS);
+    // Come up already dimmed, and at the *stored* brightness. `FrameBuffer::new()`
+    // formats for the widest output-enable window the build can produce, which
+    // is well over the power cap; letting a single refresh out at that duty
+    // would be a bug with a current spike attached to it.
+    let slots = display::slots_for(boot_brightness);
     fb0.set_oe_slots(slots);
     fb1.set_oe_slots(slots);
     BRIGHTNESS_DIRTY.store(0, Ordering::Relaxed);
@@ -658,10 +932,15 @@ async fn main(spawner: Spawner) {
     }
 
     // --- wifi -------------------------------------------------------------
+    //
+    // The controller is built with whatever `StationConfig::default()` is; the
+    // real one is applied by `try_join`, which is the only place that turns a
+    // credential pair into a radio configuration. That keeps `ScanMethod::AllChannels`
+    // and the authentication method in one function instead of two.
     let mut controller = WifiController::new(
         peripherals.WIFI,
         ControllerConfig::default()
-            .with_initial_config(WifiConfig::Station(station_config()))
+            .with_initial_config(WifiConfig::Station(StationConfig::default()))
             .with_rx_queue_size(3)
             .with_country_info(*b"US"),
     )
@@ -700,7 +979,7 @@ async fn main(spawner: Spawner) {
 
     {
         let mut guard = net::CORE.lock().await;
-        *guard = Some(receiver::Core::new(&id));
+        *guard = Some(receiver::Core::new(&id, &settings));
     }
 
     let host: &'static str = {
@@ -710,30 +989,56 @@ async fn main(spawner: Spawner) {
         s.as_str()
     };
 
+    // A `bench-wifi` build seeds an **empty** store from its compiled-in pair,
+    // through the ordinary save path, so that from the first boot onwards the
+    // device is running on stored credentials and the path that matters is the
+    // one being exercised. A store that already holds credentials is never
+    // overwritten: a `SET_WIFI` outranks the build. This is the one flash write
+    // in the boot path, and by here core 1 is running, so it parks it.
+    #[cfg(feature = "bench-wifi")]
+    if settings.wifi.is_none()
+        && let Some(w) = builtin_wifi()
+    {
+        store::seed_wifi(&w).await;
+    }
+
     // Card 220's measurement build owns the controller instead, because the
     // switch into APSTA, the re-association and the AP's own stack all have
     // to happen in order and in one place. The default build is unaffected.
     #[cfg(not(feature = "apsta-probe"))]
-    spawner.spawn(wifi_task(controller).unwrap());
+    spawner.spawn(wifi_task(controller, settings.wifi.clone()).unwrap());
     #[cfg(feature = "apsta-probe")]
     {
         let (ap_stack, ap_runner) = apsta_probe::ap_stack(seed ^ 0x5a5a_5a5a);
         let _ = ap_stack;
-        spawner.spawn(apsta_probe::probe_task(controller, host, ap_runner).unwrap());
+        spawner.spawn(
+            apsta_probe::probe_task(controller, host, ap_runner, settings.wifi.clone()).unwrap(),
+        );
         spawner.spawn(apsta_probe::heap_task().unwrap());
     }
     spawner.spawn(net_task(runner).unwrap());
+    // On core 0, like everything else that touches flash (research 006 §4).
+    spawner.spawn(store::store_task().unwrap());
+    #[cfg(feature = "store-selftest")]
+    spawner.spawn(store::selftest::selftest_task(settings.clone()).unwrap());
     spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host).unwrap());
     spawner.spawn(telemetry_task().unwrap());
 
     // Card 200 spike: reachable from `main` so the linker keeps it and
-    // `xtensa-esp32-elf-size` measures something real. Off by default.
+    // `xtensa-esp32-elf-size` measures something real. Off by default. Its
+    // settings half was retired by card 212 - `src/store.rs` is the real thing
+    // now - so what is left is the OTA evidence, and it borrows the flash
+    // handle the store already owns rather than trying to build a second
+    // `FlashStorage` (which panics).
     #[cfg(feature = "spike-ota")]
     {
-        let r = spike_ota::spike_report(peripherals.FLASH).await;
-        info!("spike: {:?}", r);
+        let mut guard = store::STORE.lock().await;
+        if let Some(f) = guard.as_mut() {
+            let r = spike_ota::spike_report(f.raw());
+            info!("spike: {:?}", r);
+        }
     }
 
     // Card 201's spike: the AP stack, the HTTP server, DHCP, DNS and the QR

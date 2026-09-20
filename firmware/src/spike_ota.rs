@@ -10,9 +10,12 @@
 //! 2. An OTA image can be validated *before* otadata is touched, using only
 //!    what these crates give us (ESP image header, `esp_app_desc`, the
 //!    appended SHA-256 via `PartitionEntry::sha256`).
-//! 3. `sequential-storage 8.0.1` (async-only) runs over an
-//!    `esp-bootloader-esp-idf` `NorFlashRegion` through
-//!    `embassy_embedded_hal::adapter::BlockingAsync`.
+//! Its third claim - that `sequential-storage 8.0.1` runs over an
+//! `esp-bootloader-esp-idf` `NorFlashRegion` through
+//! `embassy_embedded_hal::adapter::BlockingAsync` - has been **retired by card
+//! 212**, which built the real settings store in `src/store.rs`. A spike and an
+//! implementation of the same thing are two places to get it wrong, and the
+//! implementation is the one that is tested. What is left here is the OTA half.
 //!
 //! None of this is wired to the network, and nothing here should survive into
 //! the build cards unchanged. See `docs/research/006-flash-store-ota.md`.
@@ -21,7 +24,6 @@
 //! under the feature, so the linker cannot strip it, but the feature is off by
 //! default and card 200 is `hardware: no`.
 
-use embassy_embedded_hal::adapter::BlockingAsync;
 use esp_bootloader_esp_idf::ota::{Ota, OtaImageState};
 use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
 use esp_bootloader_esp_idf::partitions::{
@@ -29,8 +31,6 @@ use esp_bootloader_esp_idf::partitions::{
     PartitionType, PARTITION_TABLE_MAX_LEN,
 };
 use log::info;
-use sequential_storage::cache::Cache;
-use sequential_storage::map::{MapConfig, MapStorage};
 
 /// Label of the settings partition in `firmware/partitions.csv`.
 const CONFIG_LABEL: &str = "screeny";
@@ -44,20 +44,6 @@ const PROJECT_NAME: &str = "screeny-fw";
 /// for one sector-erase (~50 ms) at a time rather than one 64 KB block
 /// (~400 ms) or one whole slot.
 const CHUNK: usize = 4096;
-
-/// Key set for the settings map. `u8` keys keep the record small;
-/// `sequential-storage` needs `Key`, which is implemented for `u8`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-#[allow(dead_code)]
-pub enum SettingKey {
-    SchemaVersion = 0,
-    WifiSsid = 1,
-    WifiPsk = 2,
-    Name = 3,
-    Brightness = 4,
-    IdleMode = 5,
-}
 
 /// Everything the spike wants to say about the device's flash.
 #[derive(Debug, Default)]
@@ -74,17 +60,19 @@ pub struct Report {
 ///
 /// Every call here is one the real implementation will need, which is the
 /// point: if this links, the design in research 006 is buildable.
-pub async fn spike_report(flash: esp_hal::peripherals::FLASH<'static>) -> Result<Report, PartError> {
+pub fn spike_report(flash: &mut FlashStorage<'static>) -> Result<Report, PartError> {
     let mut report = Report::default();
 
-    // The display owns core 1 forever, so the default `MultiCoreStrategy::Error`
-    // would make every erase/write return `OtherCoreRunning`. Auto-park stalls
-    // core 1 (RTC_CNTL SW_STALL) for the duration of each ROM flash call.
-    let mut flash = FlashStorage::new(flash).multicore_auto_park();
+    // The flash handle belongs to the settings store now (`src/store.rs`), which
+    // already built it with `multicore_auto_park()`: the display owns core 1
+    // forever, so the default `MultiCoreStrategy::Error` would make every
+    // erase/write return `OtherCoreRunning`. `FlashStorage::new` panics if it is
+    // called twice, so borrowing is not a tidiness choice.
+    let flash = &mut *flash;
 
     // --- the table ---------------------------------------------------------
     let mut buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let table = partitions::read_partition_table(&mut flash, &mut buf)?;
+    let table = partitions::read_partition_table(flash, &mut buf)?;
     report.table_entries = table.len();
     report.booted_offset = table.booted_partition()?.map(|p| p.offset());
 
@@ -100,17 +88,17 @@ pub async fn spike_report(flash: esp_hal::peripherals::FLASH<'static>) -> Result
         .find_partition(PartitionType::Data(DataPartitionSubType::Ota))?
         .ok_or(PartError::Invalid)?;
     {
-        let mut ota = Ota::new(ota_part.as_flash_region(&mut flash), 2)?;
+        let mut ota = Ota::new(ota_part.as_flash_region(flash), 2)?;
         report.selected = Some(ota.current_app_partition()? as u8);
         report.state = ota.current_ota_state().ok().map(|s| s as u32);
     }
 
     // --- the health confirmation the real firmware owes the bootloader -----
-    confirm_if_pending(&mut flash)?;
+    confirm_if_pending(flash)?;
 
     // --- validate the *other* slot before anything switches to it ----------
     let mut updater_buf = [0u8; PARTITION_TABLE_MAX_LEN];
-    let mut updater = OtaUpdater::new(&mut flash, &mut updater_buf)?;
+    let mut updater = OtaUpdater::new(flash, &mut updater_buf)?;
     let (_region, next) = updater.next_partition()?;
     info!("spike: next OTA slot would be {:?}", next);
 
@@ -118,15 +106,12 @@ pub async fn spike_report(flash: esp_hal::peripherals::FLASH<'static>) -> Result
     // research 006 include it: write one sector, then validate the slot, then
     // (and only then) would the real code call `activate_next_partition`.
     let chunk = [0xffu8; CHUNK];
-    let _ = stage_chunk(&mut flash, next, 0, &chunk);
+    let _ = stage_chunk(flash, next, 0, &chunk);
     let mut version = [0u8; 32];
-    match validate_staged(&mut flash, next, &mut version) {
+    match validate_staged(flash, next, &mut version) {
         Ok(()) => info!("spike: staged image would be accepted"),
         Err(e) => info!("spike: staged image rejected: {:?}", e),
     }
-
-    // --- the settings map --------------------------------------------------
-    let _ = settings_roundtrip(&mut flash, &table).await;
 
     Ok(report)
 }
@@ -222,38 +207,4 @@ pub fn stage_chunk(
     let mut nor = region.as_nor_flash()?;
     use embedded_storage::nor_flash::NorFlash;
     nor.write(offset, chunk).map_err(|_| PartError::StorageError)
-}
-
-/// `sequential-storage` over the `screeny` partition, through `BlockingAsync`
-/// because `sequential-storage 8` is async-only.
-async fn settings_roundtrip(
-    flash: &mut FlashStorage<'static>,
-    table: &partitions::PartitionTable<'_>,
-) -> Result<(), PartError> {
-    let entry = table
-        .iter()
-        .find(|e| e.label_as_str() == CONFIG_LABEL)
-        .ok_or(PartError::Invalid)?;
-    let len = entry.len();
-    let mut region = entry.as_flash_region(flash);
-    let nor = region.as_nor_flash()?;
-    let mut storage = BlockingAsync::new(nor);
-
-    // Offsets are relative to the partition, so the range starts at 0.
-    let config = MapConfig::new(0..len);
-    let mut map: MapStorage<u8, _, _> =
-        MapStorage::new(&mut storage, config, Cache::new_uncached());
-
-    let mut data = [0u8; 128];
-    let brightness: Option<u8> = map
-        .fetch_item(&mut data, &(SettingKey::Brightness as u8))
-        .await
-        .map_err(|_| PartError::StorageError)?;
-    info!("spike: stored brightness = {:?}", brightness);
-
-    map.store_item(&mut data, &(SettingKey::SchemaVersion as u8), &1u8)
-        .await
-        .map_err(|_| PartError::StorageError)?;
-
-    Ok(())
 }

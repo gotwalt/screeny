@@ -31,6 +31,7 @@ use crate::display::Frame;
 use crate::fb::Producer;
 use crate::receiver::{Core, Intent, Offer, Outbox};
 use crate::screens::{self, Net};
+use crate::store;
 use crate::{mk_static, CONTROL_PORT, FRAME_PORT, MAX_DATAGRAM};
 
 /// The receive state machine, shared by the two tasks on core 0.
@@ -259,6 +260,25 @@ pub async fn frames_task(
 // Control
 // ---------------------------------------------------------------------------
 
+/// Rewrite a reply as `ERR_STORAGE` (spec section 6.5).
+///
+/// The opcode and `req_id` are re-read from the request rather than threaded
+/// out of the handler: they are bytes 2 and 4-5 of a datagram that has already
+/// parsed once, so this cannot answer the wrong request, and it keeps the
+/// error path out of the shared `screeny-receiver` crate. `None` when the
+/// request had no `req_id` and therefore wanted no reply at all (section 6.1).
+fn err_storage(request: &[u8], out: &mut [u8]) -> Option<usize> {
+    let pkt = screeny_proto::ControlPacket::parse(request).ok()?;
+    if pkt.req_id == 0 {
+        return None;
+    }
+    screeny_proto::control::Reply::Err {
+        code: screeny_proto::control::ErrorCode::Storage.as_u8(),
+    }
+    .write(pkt.op, pkt.req_id, out)
+    .ok()
+}
+
 /// UDP 49375: every opcode in spec section 6.3.
 #[embassy_executor::task]
 pub async fn control_task(stack: Stack<'static>) {
@@ -283,12 +303,42 @@ pub async fn control_task(stack: Stack<'static>) {
             // sender reads to diagnose its *video* stream would ruin it.
             Err(_) => continue,
         };
+        let mut immediate: Option<store::Immediate> = None;
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core built before tasks spawn");
-        let len = core.control(now_us(), meta.endpoint, &buf[..n], &mut reply[..]);
+        let mut len = core.control(
+            now_us(),
+            meta.endpoint,
+            &buf[..n],
+            &mut reply[..],
+            &mut immediate,
+        );
         let reboot = core.reboot_pending();
         let info_changed = core.take_info_changed();
         drop(guard);
+
+        // Spec section 6.5: `ERR_STORAGE` is only an honest answer for a write
+        // that has already happened, so `SET_NAME` and `SET_WIFI` are written
+        // here, with the reply still in the buffer and the CORE lock already
+        // released. The debounced settings cannot do this and do not try; their
+        // failures are counted in `store::FAILURES` instead.
+        let mut wifi_to_try = None;
+        if let Some(what) = immediate {
+            match store::commit_immediate(&what).await {
+                Ok(()) => {
+                    if let store::Immediate::Wifi { wifi, .. } = what {
+                        wifi_to_try = Some(wifi);
+                    }
+                }
+                Err(e) => {
+                    warn!("control: storing the setting failed: {:?} -> ERR_STORAGE", e);
+                    // Nothing is attempted with credentials we could not keep:
+                    // dropping a working association for a pair that will be
+                    // gone at the next boot is the worst of both.
+                    len = err_storage(&buf[..n], &mut reply[..]).or(len);
+                }
+            }
+        }
 
         if info_changed {
             INFO_CHANGED.signal(());
@@ -297,6 +347,11 @@ pub async fn control_task(stack: Stack<'static>) {
             if socket.send_to(&reply[..len], meta.endpoint).await.is_err() {
                 warn!("net: control reply to {} failed", meta.endpoint);
             }
+        }
+        // Section 8.2: **after** the reply is on the air, because after the
+        // disconnect it could not be sent.
+        if let Some(w) = wifi_to_try {
+            crate::NEW_WIFI.signal(w);
         }
         if reboot {
             // Section 6.3: the reply goes out before the reboot. Give the
