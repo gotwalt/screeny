@@ -147,7 +147,7 @@ still accepted); a setting holds params + seed + speed; every patch has a read-o
 saved or reverted. What the code called `Settings` (panel kind, dither, limiter) becomes
 `Output`. **In flight:** 150 (`card/150-pieces-become-patches`, the rename + state v4; one
 worker, nobody else in `crates/art` or `crates/studio` while it runs). **Next, after 150
-merges:** 151 (named settings, state v5). Do not redeploy before ~16:00 without telling the
+merges:** 151 (named settings, state v5). Do not redeploy before ~14:45 on 2026-09-20 without telling the
 firmware session (its one-hour soak of fw 0.5.2 runs under the Studio's stream). The owner
 said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
