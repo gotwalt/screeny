@@ -83,6 +83,13 @@ Port **8080**, never 80: binding 80 needs root and nothing on this bench runs
 as root. `--http-port 0` binds an ephemeral one and the banner prints it;
 that is what `Config::for_test()` does, so tests never collide.
 
+**A second simulator still starts.** When 8080 was not asked for by name and is
+already taken, the port falls back to an ephemeral one, a line on stderr says so
+and the banner prints the address it really got - running two or three
+simulators at once must not fail over an HTTP port nobody chose. Pass
+`--http-port N` and a busy `N` *is* an error: that one is going to be connected
+to.
+
 `GET /` is a one-line placeholder that says the real page is card 222's and
 links the routes. The HTML page will be shared with the firmware rather than
 written twice.

@@ -272,6 +272,15 @@ fn serve_one(
     handler: &Arc<Handler>,
     wants_stream: &Arc<WantsStream>,
 ) -> io::Result<()> {
+    // **The listener is non-blocking, and on the BSDs - macOS included - the
+    // accepted socket inherits that flag**, where on Linux it does not. Left
+    // alone, a connection whose first bytes have not arrived by the time this
+    // thread reads gives `WouldBlock`, `read_head` reads it as "a connection
+    // that said nothing", and the client gets a closed socket and no response
+    // at all. That is a load-dependent flake in every HTTP test, and it was
+    // one: card 232 chased it down. Blocking mode plus `IO_TIMEOUT` is what
+    // the rest of this function already assumes.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let mut writer = stream.try_clone()?;

@@ -197,3 +197,71 @@ and needed the new `origin` field. That is a test, not the reply shape.
 
 `cargo test -p screeny-device-api`: **71 + 3 doc**, up from 64 + 1. Clippy clean,
 `thumbv7em-none-eabi` clean.
+
+### 2026-09-20 - `crates/sim`: the 503 goes away, and the crate's own lookup replaces the local one
+
+- **`POST /api/v1/wifi` while `Online` answers `200 {"result":"trying"}`** and runs a
+  real online-origin trial. `Posted::Ignored` is kept but is now only reachable from
+  `Boot`, which the simulator never serves from (it boots the machine inside
+  `WifiModel::new`); the arm and its 503 stay because card 224's rule - never answer
+  `trying` when no trial started - is right whatever state is left.
+- `WifiModel::wifi_reply` now asks `Provisioner::trial_is_current()` instead of matching
+  on the state itself, so the sticky `FAILED` reaches `GET /api/v1/wifi` without the
+  simulator re-deriving the rule.
+- `api::SCAN_MIN_INTERVAL_MS` is now `route::SCAN_MIN_INTERVAL_MS`, kept under the same
+  name and type so nothing that used it breaks. `ApiState` holds a `route::RateLimit`
+  instead of an `AtomicU64` + `last != 0` sentinel, and the 429's `detail` now says how
+  long to wait.
+- `dispatch` and `within_bound` use `route::find` / `route::path_is_known`; the
+  hand-written `ROUTES.iter().any(..)` walks are gone.
+
+**UDP is deliberately unchanged.** `core.rs::set_wifi` only feeds the machine when the
+phase is `Portal` or `Trial` - exactly the cases that reached it before. Letting UDP use
+the new transition would make a `GET_WIFI` after a `SET_WIFI` read `CONNECTING` where it
+has always read `CONNECTED`, and my instructions are that the simulator's UDP behaviour
+stays as it is because other sessions' tests are written against it.
+`tests/control.rs`'s "SET_WIFI is accepted, logged, and not acted on" still holds, and
+`udp_set_wifi_while_online_is_still_accepted_and_not_acted_on` pins the asymmetry so it
+cannot be lost by accident. **Proposed card 238** closes it on purpose.
+
+### Orchestrator addition, 2026-09-20 - a second simulator must still start
+
+`Config` gains `http_port_explicit: bool` (default `false`); `http_port: u16` is
+untouched, so `..Config::default()` keeps working. `SimDevice::start` now treats the
+default port as a *preference*: `AddrInUse` on a port that was not named, and is not 0,
+falls back to an ephemeral one with a line on stderr, and the banner's second line
+prints the address it really got. `--http-port N` sets the flag, so a busy named port is
+still an error. `Config::for_test()` is unchanged (port 0). CLI help and the README say
+so. Two tests: `two_simulators_with_default_http_settings_both_start` and
+`a_named_http_port_that_is_busy_is_an_error`.
+
+### The flake I found on the way, and fixed: macOS inherits O_NONBLOCK across accept()
+
+Running `cargo test -p screeny-sim -p screeny-provision -p screeny-device-api` failed
+about one run in three with `common/http.rs:169: no header terminator in ""` - an empty
+HTTP response - on a *different* test each time, including tests card 224 wrote and I
+had not touched. `http_wifi` alone was green 8/8, and the workspace run with my four new
+tests skipped was green 5/5, so the extra devices were making something pre-existing
+fire, not breaking something new.
+
+The cause is in `crates/sim/src/http.rs`. `Server::start` puts the listener in
+non-blocking mode so the accept loop can poll the stop flag. **On the BSDs, macOS
+included, the socket returned by `accept()` inherits `O_NONBLOCK`; on Linux it does
+not.** So a connection whose first bytes had not yet arrived gave `WouldBlock`,
+`read_head` read that as "a connection that said nothing", and `serve_one` closed it
+with no response at all. One line fixes it: `stream.set_nonblocking(false)?` before the
+timeouts `serve_one` already sets. Six workspace runs after the fix: **6/6 green**.
+
+Worth knowing for card 222: picoserve on embassy does not have this problem, but any
+host-side acceptor written the same way does, and it fails *only* under load and *only*
+on macOS.
+
+### Results
+
+`cargo test -p screeny-sim`: **120 + 1 doc**, up from 112 + 1 - 8 added (4 in
+`tests/http_wifi.rs`, 2 in `tests/http_routes.rs`, and the 503 test replaced rather than
+deleted, plus 2 more from the port work). `tests/conformance.rs`'s **64-rule wire suite
+is unchanged and green in 36 s**; `tests/control.rs` and every other pre-existing suite
+are unchanged in meaning and in text apart from the one 503 test the card told me to
+replace. Clippy clean (`crates/probe`'s one pre-existing `is_multiple_of` warning is not
+mine and not in scope).

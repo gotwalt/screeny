@@ -107,6 +107,17 @@ pub struct Config {
     /// actually got. The binary defaults to [`DEFAULT_HTTP_PORT`], never 80:
     /// nothing on this bench runs as root.
     pub http_port: u16,
+    /// Whether [`http_port`](Self::http_port) was asked for **by name**.
+    ///
+    /// `false` - the default - makes it a preference: if it is taken, an
+    /// ephemeral port is bound instead and the binary says so on stderr. That
+    /// is what lets two or three simulators run side by side on one machine
+    /// without anybody having thought about HTTP at all, which is how several
+    /// sessions actually use them.
+    ///
+    /// `true` means somebody named the port (`--http-port N`) and is going to
+    /// connect to it, so a busy one is an error rather than a surprise.
+    pub http_port_explicit: bool,
     /// The SSID the simulator claims its store holds, and so what `GET_WIFI`
     /// and `/api/v1/status` report. Never a PSK; the simulator keeps none.
     pub wifi_ssid: String,
@@ -155,6 +166,7 @@ impl Default for Config {
             fault_seed: 0x5EED_5CEE,
             http: true,
             http_port: DEFAULT_HTTP_PORT,
+            http_port_explicit: false,
             wifi_ssid: crate::core::SIM_SSID.into(),
             ap_ssid: "screeny-515151".into(),
             wifi_outcome: WifiOutcome::Ok,

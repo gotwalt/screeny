@@ -87,10 +87,14 @@ impl WifiOutcome {
 
 /// What happened to a posted credential.
 ///
-/// The `Ignored` arm is not a simulator limitation: `screeny_provision`'s
-/// machine honours [`ProvEvent::CredentialsPosted`] only in `Portal` and
-/// `Trial`, so a post that arrives while the device is already `Online` has
-/// nowhere to go. See the card's log.
+/// Card 224 saw `Ignored` for every post that arrived while the device was
+/// `Online`, which is exactly the case card 223's LAN settings page is. Card
+/// 232 gave the machine that transition, so a post now starts a trial from
+/// `Portal`, `Trial`, `Joining` **and** `Online`, and `Ignored` is left for
+/// the one state that cannot receive one: `Boot`, before `Event::Boot` has
+/// been processed. The simulator never observes that state - it boots the
+/// machine inside [`WifiModel::new`] - so the arm is kept for honesty rather
+/// than because it happens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Posted {
     /// A trial join started.
@@ -253,13 +257,18 @@ impl WifiModel {
 
     /// `GET /api/v1/wifi`'s body, built from the machine and nothing else.
     ///
-    /// A trial in flight or just finished is what the portal page reads, so it
-    /// wins; otherwise the station's own state is reported.
+    /// A trial in flight or just finished is what the page that posted reads,
+    /// so it wins; otherwise the station's own state is reported. **The
+    /// machine decides which**, through
+    /// [`Provisioner::trial_is_current`](screeny_provision::Provisioner::trial_is_current) -
+    /// card 232, so that a LAN-side trial that failed keeps saying so after
+    /// the previous network has come back, and so that the firmware and the
+    /// simulator cannot answer this differently.
     #[must_use]
     pub fn wifi_reply(&self) -> WifiReply {
         use screeny_device_api::WifiState;
-        if let Some(t) = self.p.trial() {
-            if matches!(self.p.state(), State::Trial | State::Portal) {
+        if self.p.trial_is_current() {
+            if let Some(t) = self.p.trial() {
                 return WifiReply::from(t);
             }
         }

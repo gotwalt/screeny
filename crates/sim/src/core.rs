@@ -170,8 +170,24 @@ impl rx::Host for Sim<'_> {
         // `POST /api/v1/wifi` feeds. `w.psk` is not passed on and is not kept:
         // the scripted radio decides the outcome, so the simulator has no use
         // for a password and therefore never holds one.
-        self.wifi
-            .post_credentials(w.ssid, self.now_us, &mut self.out.events);
+        //
+        // **Only from the portal side.** Card 232 gave the machine a
+        // transition for a post that arrives while the device is `Online` or
+        // `Joining`, which is what spec 8.2 says `SET_WIFI` does on a real
+        // device. Letting UDP use it here would change what the simulator does
+        // on the wire - a `GET_WIFI` after a `SET_WIFI` would read `CONNECTING`
+        // where it has always read `CONNECTED` - and card 232 may not do that:
+        // other sessions' tests are written against today's answers. So HTTP
+        // and `SimHandle::post_wifi` drive the new transition and UDP does not,
+        // and the asymmetry is written down here rather than discovered.
+        // Proposed card 238 closes it deliberately, with those tests in hand.
+        if matches!(
+            self.wifi.phase(),
+            screeny_provision::State::Portal | screeny_provision::State::Trial
+        ) {
+            self.wifi
+                .post_credentials(w.ssid, self.now_us, &mut self.out.events);
+        }
         // Spec section 8.2 is "reply before disconnecting", and the reply is
         // built by the caller the moment this returns, before any scripted
         // join can be delivered by a tick. `Ok` whatever the machine did with

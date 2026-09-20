@@ -399,7 +399,10 @@ mod tests {
         let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
         assert_eq!(limit.interval_ms(), 10_000);
         assert_eq!(limit.retry_after_ms(0), 0, "nothing has happened yet");
-        assert!(limit.allow(0), "a clock that really is at zero is not special");
+        assert!(
+            limit.allow(0),
+            "a clock that really is at zero is not special"
+        );
         assert!(!limit.allow(0));
         assert!(!limit.allow(9_999));
         assert_eq!(limit.retry_after_ms(9_999), 1);
@@ -427,7 +430,10 @@ mod tests {
         assert!(limit.allow(last));
         // 5 s before the wrap and 4 999 ms after it: both inside the window.
         assert!(!limit.allow(u32::MAX));
-        assert!(!limit.allow(4_998), "wrapped, but only 9 999 ms have passed");
+        assert!(
+            !limit.allow(4_998),
+            "wrapped, but only 9 999 ms have passed"
+        );
         assert_eq!(limit.retry_after_ms(4_998), 1);
         // One more millisecond and the window is open again.
         assert!(limit.allow(4_999));
