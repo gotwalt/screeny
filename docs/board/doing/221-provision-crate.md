@@ -4,8 +4,8 @@ title: crates/provision - the join/portal state machine, the WIFI URI, and the p
 type: build
 hardware: no
 depends: [201]
-owner:
-branch:
+owner: worker-221
+branch: card/221-provision-crate
 ---
 
 ## Goal
