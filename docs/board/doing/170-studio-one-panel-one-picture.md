@@ -4,8 +4,8 @@ title: Studio - one panel, one picture; the page is a window onto the device
 type: build
 hardware: no
 depends: [106, 165]
-owner:
-branch:
+owner: worker-170
+branch: card/170-one-panel-one-picture
 ---
 
 ## Goal
