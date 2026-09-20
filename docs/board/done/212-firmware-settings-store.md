@@ -423,3 +423,29 @@ servers or emulators were started beyond `fw-run.sh`'s own, each wrapped in
 `ERR_STORAGE` path have **never been exercised over the wire** - only the store
 calls underneath them have. The acceptance list at the top of this card is
 unchanged and is all still to do.
+
+### Orchestrator, over the wire after the merge (2026-09-20)
+
+- Default build from `main`: **0 occurrences** of the real SSID and of the real password
+  in the ELF (counted with `grep -c`, values never printed).
+- `SET_NAME bench-212`, `SET_IDLE 1`, `SET_BRIGHTNESS 77`, `REBOOT`: `GET_INFO` came
+  back with `name=bench-212`, telemetry with brightness 77, and the boot log with
+  `loaded ... name "bench-212" brightness 77 idle 1 | wifi stored`. `fw=0.3.0`.
+- Brightness sweep: **4,098 `SET_BRIGHTNESS` in 60 s -> 1 flash commit** (2.3 ms, 0
+  erases), stream at 30 fps with 0 drops throughout. Card 063's acceptance, met.
+- `SET_WIFI` with the dummy pair, not persisted: 3 attempts (`NoAccessPointFound`),
+  fallback to the stored network, `GET_WIFI` state 3 (`FAILED`) and sticky, stream back.
+  The PSK appears 0 times in the serial log. **Found and fixed:** the reply never
+  reached the sender ("no reply to op 0x0b") because `send_to` only queues the datagram
+  and the rejoin started at once; the control task now waits 100 ms first, as `REBOOT`
+  already did. Re-tested: `ok (Empty)`.
+- `screeny-probe` gained `set-wifi SSID PSK [--persist]` for this (bench only, not part
+  of `conformance`).
+- Conformance: 60 passed, 0 failed, 4 skipped. (A first run read 25/35/4 because the
+  Studio was still streaming: its `set_panel` switch no longer stops the stream, the
+  per-device `player/set` does. Recorded in `docs/design/device-web.md`.)
+- Name, idle mode and brightness restored to `screeny-4a00a4`, 0, 96.
+- Follow-ups accepted from the worker's list: mDNS rebind after an address change, the
+  failure screen naming the SSID (folds into card 223), store counters on the status
+  page (card 222), a factory-reset path (the button's 15 s hold, card 231; an opcode
+  needs a spec change and waits).

@@ -349,8 +349,11 @@ pub async fn control_task(stack: Stack<'static>) {
             }
         }
         // Section 8.2: **after** the reply is on the air, because after the
-        // disconnect it could not be sent.
+        // disconnect it could not be sent. `send_to` returning only means the
+        // datagram is queued, so give the stack the same tick `REBOOT` gets
+        // below; without it the bench saw "no reply to op 0x0b" every time.
         if let Some(w) = wifi_to_try {
+            Timer::after(Duration::from_millis(100)).await;
             crate::NEW_WIFI.signal(w);
         }
         if reboot {

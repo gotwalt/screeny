@@ -71,8 +71,11 @@ cd firmware && cargo build --release
 tools/fw-run.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw boot 20   # flash, log, snapshot
 ```
 
-WiFi credentials are compiled in for now (`firmware/src/`); a captive-portal setup
-with an HTTP settings page is planned. The original Tidbyt firmware is backed up in
+WiFi credentials live in the device's settings partition, not in the firmware. Until
+the captive portal lands (`docs/design/device-web.md`), seed a fresh device once with
+`cargo build --release --features bench-wifi` (it embeds the pair from
+`firmware/wifi.env` or `~/.config/screeny/wifi.env` and stores it on first boot); every
+later default build joins from the store. The original Tidbyt firmware is backed up in
 `backup/` with restore instructions.
 
 ## The protocol in one paragraph
