@@ -60,7 +60,8 @@ use esp_bootloader_esp_idf::partitions::{
 };
 use log::{info, warn};
 use screeny_settings::{
-    Debounce, Field, IdleMode, LoadReport, Name, Scratch, Settings, Store, StoreError, Wifi, Write,
+    Debounce, Field, IdleMode, LoadReport, Name, SchemaState, Scratch, Settings, Store, StoreError,
+    Wifi, Write,
 };
 
 /// The label of the settings partition in `firmware/partitions.csv`.
@@ -318,6 +319,29 @@ impl Flash {
     pub async fn save_wifi(&mut self, wifi: &Wifi) -> Result<Timing, StoreError> {
         timed!(with_store!(self, s, buf, s.save_wifi(buf, wifi).await))
     }
+
+    /// Erase the whole partition: a factory reset, and the **only** thing that
+    /// ever erases settings.
+    ///
+    /// `screeny-settings` deliberately refuses to do this on its own - a load
+    /// that goes wrong falls back to defaults and keeps whatever is in flash -
+    /// so the decision is the firmware's, and [`init`] takes it in exactly one
+    /// situation. See [`repair`].
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn erase_all(&mut self) -> Result<(), StoreError> {
+        let Flash { flash, entry, .. } = self;
+        let len = entry.len();
+        let mut region = entry.as_flash_region(flash);
+        let Ok(nor) = region.as_nor_flash() else {
+            return Err(StoreError::Flash);
+        };
+        let Ok(mut store) = Store::new(BlockingAsync::new(Counted(nor)), 0..len) else {
+            return Err(StoreError::Internal);
+        };
+        store.erase_all().await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,7 +404,11 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
         entry,
         scratch: Scratch::new(),
     };
-    let (settings, report) = f.load().await;
+    let (mut settings, mut report) = f.load().await;
+    if let Some((s, r)) = repair(&mut f, &report).await {
+        settings = s;
+        report = r;
+    }
     *STORE.lock().await = Some(f);
 
     // Deliberately not a `Debug` of `Settings`: `Ssid`'s `Debug` prints the
@@ -401,6 +429,58 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
         },
     );
     (settings, report)
+}
+
+/// Erase a partition that does not hold a settings map at all, once, at boot.
+///
+/// **This is the one place the firmware erases settings**, and it is narrower
+/// than it looks. It fires only on `Unreadable` + [`StoreError::Corrupted`],
+/// which is the load telling us it could not even read the schema-version item:
+/// `sequential-storage` has already re-run the operation through its own repair
+/// pass (`run_with_auto_repair!`) and still says the region is not a map. A
+/// *partly* damaged map does not come back like this - it comes back with some
+/// keys at their defaults and a `fallback` bitset - and is left alone.
+///
+/// The case that actually produces it is a device whose `screeny` partition has
+/// never been written: 0x410000 is inside the region the stock Tidbyt image
+/// used, so the bytes there are not `0xFF` and are not ours. Card 212 hit it on
+/// the first flash. The card's instruction is exactly this: a wrong settings
+/// partition is fixed in code with `erase_all`, never with `espflash erase-*`.
+///
+/// Once per boot, and nothing here reboots, so it cannot become a loop. The
+/// erase is one 64 KB region and it happens before the panel is up, so the
+/// several hundred milliseconds core 1 spends parked are invisible.
+///
+/// Returns the re-read settings when it erased, `None` when it did not.
+async fn repair(f: &mut Flash, report: &LoadReport) -> Option<(Settings, LoadReport)> {
+    if !matches!(report.schema, SchemaState::Unreadable)
+        || report.error != Some(StoreError::Corrupted)
+    {
+        return None;
+    }
+    warn!(
+        "store: the '{}' partition does not hold a settings map (a partition that has never been written still holds whatever the stock image left there). Erasing it once, now.",
+        LABEL
+    );
+    let t0 = Instant::now();
+    let e0 = ERASES.load(Ordering::Relaxed);
+    match f.erase_all().await {
+        Ok(()) => {
+            info!(
+                "store: erase_all took {} us, {} sectors",
+                t0.elapsed().as_micros() as u32,
+                ERASES.load(Ordering::Relaxed).wrapping_sub(e0),
+            );
+            Some(f.load().await)
+        }
+        Err(e) => {
+            warn!(
+                "store: erase_all failed ({:?}) - running on defaults, nothing will be saved",
+                e
+            );
+            None
+        }
+    }
 }
 
 /// Write a credential pair into an empty store.
