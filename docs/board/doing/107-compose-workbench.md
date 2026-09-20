@@ -120,9 +120,22 @@ only and needs no credential of any kind.
 | cold build, empty caches | **54 s** wall (`docker compose build`), of which cargo 40 s (164 crates, `Finished release in 39.5 s`), apt+base 7 s, export 6 s |
 | rebuild, nothing changed | **1.2 s** (pure layer cache hit) |
 | rebuild, `FEATURES=none`, warm caches | **11.9 s** (cargo re-links against a warm registry and `target/`) |
-| image, default (gpu) | **486 MB** unpacked / 113 MB compressed |
+| image, default (gpu) | **491 MB** unpacked |
 | image, `FEATURES=none` | **479 MB** - barely smaller, because the runtime stage installs Mesa either way |
-| layer breakdown | debian base 110 MB, the apt layer 253 MB, `screeny-studio` 8.1 MB, `screeny` 2.1 MB |
+| layer breakdown | debian base 110 MB, the apt layer 253 MB, `screeny-studio` 11.8 MB, `screeny` 2.9 MB |
+
+**Stripping, measured rather than guessed.** The workspace builds release with
+`debug = 1`, and the three options are not close:
+
+| | `screeny-studio` | `screeny` |
+|---|---|---|
+| untouched | 77.7 MB | 23.1 MB |
+| `strip --strip-debug` | **11.8 MB** | **2.9 MB** |
+| `strip` (everything) | 8.1 MB | 2.1 MB |
+
+So keeping the DWARF costs ~90 MB and keeping only `.symtab` costs 3.7 MB. The image
+does `--strip-debug`: a panic backtrace from a service nobody is watching still names
+its functions, for 3.7 MB, and only the line numbers are gone.
 
 The apt layer is the whole story on size: Debian ships `mesa-vulkan-drivers` as one
 package with every driver in it (ANV, RADV, nouveau, panvk, lavapipe, ...) and there
@@ -233,7 +246,67 @@ Dry runs of both routes print a complete, correct plan and run nothing; the
 `git remote add` on the workbench route is printed but not executed under
 `--dry-run`.
 
-### Step 5 - the doc
+### Step 6 - amd64: the half that could be proved here, and the half that could not
+
+The target that matters is x86_64 Linux and this is an arm64 Mac, so a
+`docker build --platform linux/amd64` went in under QEMU with a 45-minute cap.
+**It failed at 584 s**, and the failure is the emulator's, not the Dockerfile's:
+
+```
+error: linking with `cc` failed: signal: 11 (SIGSEGV) (core dumped)
+  ... -o /src/target/release/deps/libdocument_features-*.so ... -fuse-ld=lld
+error: could not compile `document-features` (lib)
+```
+
+`lld` segfaulting while linking a proc-macro `.so` under `qemu-x86_64` is a known
+emulation limit. Working around it would mean changing the linker for everyone to
+please an emulator this project does not target, so it was not done. **x86_64 remains
+to be verified on workbench itself**, which is the first thing the deployment does.
+
+What the attempt *did* prove before it died, which is most of the arch risk:
+
+- `rust:1-trixie` and `debian:trixie-slim` both resolve and pull for `linux/amd64`
+  (the same digests are multi-arch manifests).
+- The `rustup toolchain install stable` layer works on amd64 (19.7 s).
+- **The whole runtime stage completed on amd64 in 68.8 s**:
+  `libvulkan1:amd64 1.4.309.0-1`, `vulkan-tools 1.4.304.0+dfsg1-1`,
+  `mesa-vulkan-drivers:amd64 25.0.7-2+deb13u1`. Mesa 25.0.7 is comfortably new enough
+  for Raptor Lake ANV, which is the thing workbench actually needs.
+- 160+ crates compiled for amd64, wgpu 30 and naga among them, before the linker
+  crashed on a *host* proc-macro.
+
+Nothing in the Dockerfile is architecture-specific; there is no `--platform`, no
+pinned digest, no arch in any path.
+
+### Step 7 - the things the dry runs and the local container caught
+
+Beyond the `cd`-builtin bug in step 4:
+
+- **The push the script advises has to be possible.** On the workbench route the
+  refusal says `git push workbench main`, but the bare repo it pushes to is created
+  by the script - and that creation used to happen *after* the refusal, so the advice
+  was unfollowable on a first run. The reachability check and the bare-repo creation
+  now come first. It is three runs of the script on that route, and the doc says so.
+- **`restart: unless-stopped` was checked, not assumed.** `docker kill` does not test
+  it (Docker treats any manual stop as "stopped"); a throwaway container given a bad
+  flag exits 1 and was restarted **7 times in 8 s**. Which also means a typo'd
+  argument presents as a crash loop, so the doc says to reach for `--logs` first.
+- **The `$${SCREENY_PORT}` healthcheck escaping is the tested one.** The portable
+  file was changed to use the same form as the workbench file rather than a literal
+  port, and the container goes healthy with it - so the escaping the untestable file
+  depends on is escaping that has actually run.
+- **`screeny discover` inside the container prints macOS advice.**
+  `crates/screeny/src/error.rs` `Error::hint()` has no `cfg`, so a Linux container is
+  told to open System Settings and run `dns-sd`. That is verification (a)'s own
+  command, so the first empty browse on workbench would send the operator to a
+  settings panel that does not exist. Written up as **card 147**;
+  `crates/screeny/**` belongs to card 092, so nothing there was touched. The doc
+  warns about it and gives `avahi-browse -rt _screeny._udp` on the host as the real
+  equivalent.
+- `cargo test --release --no-fail-fast` at the root: **300 passed, 0 failed**, 52
+  test binaries. No Rust was changed by this card.
+
+### Step 8 - the doc
 
 `docs/design/deployment.md` is the operational half of `studio-vision.md`: the file
 table, "there is no password" first, the ordered first-deployment runbook for the
@@ -243,3 +316,34 @@ output looks like *and* what to do when the answer is no, day-to-day
 profile and why it is a whole file, the knobs table, and the two things the container
 cannot fix (no state file and `SCREENY_LISTEN` ignored until card 106). The root
 `README.md` points at it from the layout table and from a deployment line.
+
+### Step 9 - what is proven, and what the orchestrator still has to do
+
+| deliverable | here | on workbench |
+|---|---|---|
+| `Dockerfile` builds | **yes**, arm64, cold 54 s / warm 1.2 s | x86_64 build: only the runtime stage was provable under QEMU (see step 6). First `docker compose build` over SSH is the test. |
+| non-root, `/data` writable | **yes**, uid 10001, marker survived a restart | volume ownership is the same mechanism; nothing host-specific |
+| `/healthz` and compose healthcheck | **yes**, `Up (healthy)`, same `$${SCREENY_PORT}` form as the workbench file | same |
+| UI served from the binary | **yes**, `/`, `/main.js`, `/style.css`, bootstrap, frame | same |
+| streams to a panel | **yes**, to `screeny-sim` on the host: 29.7-30.5 fps, PAL8_LZ, exact-indexed, 0 gaps/rejects | to the real panel at 192.168.7.221 |
+| SIGTERM releases the panel | **yes**, 0.49 s, exit 0, sim logged `Final` | same |
+| capped logs, `unless-stopped` | **yes**, inspected; crash-restart proved with a throwaway | plus the reboot, which is the card's acceptance and only testable there |
+| `network_mode: host`, `/dev/dri`, `group_add` | **no** - macOS has none of them. File renders correctly (`docker compose config`). | (a) and (b) below |
+| mDNS beside avahi | **no** - no multicast in a Mac VM | (a) below |
+| GPU adapter | **partly**: Vulkan works in the image and the studio logged `gpu=llvmpipe ... backend=Vulkan`; only the adapter differs on workbench | (b) below |
+| local time | **yes**, `PDT` inside the container | (c) below - workbench's own zone is `Etc/UTC`, so this is the one that would silently be wrong |
+| deploy script | **dry runs of both routes**, every refusal path exercised against a throwaway repo, shellcheck clean | the real run |
+
+The three one-liners, and what a "no" means, are in `docs/design/deployment.md`,
+"After the deployment: three questions, three one-liners".
+
+### Step 10 - bench hygiene
+
+Everything this card started on the local Docker was inside the project
+`screeny107` or named `screeny-107-*`, and all of it is removed: the compose stack,
+its network and its `screeny107_state` volume, the `screeny-107-cpuonly` image and
+the throwaway restart-policy container. The `koalaman/shellcheck:stable` image pulled
+to lint the script is removed too. Left behind on purpose: `screeny-studio:portable`
+(491 MB) and the BuildKit cache mounts, which are what make the next build 1.2 s
+instead of 54 s. The `screeny-sim` used for the streaming test was bounded with
+`--exit-after 60` and exited on its own.

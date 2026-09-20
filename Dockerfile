@@ -60,12 +60,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     mkdir -p /out; \
     cp target/release/screeny-studio /out/; \
     cp target/release/screeny /out/; \
+    strip --strip-debug /out/screeny-studio /out/screeny; \
     ls -l /out/
-# Deliberately not stripped. The workspace builds release with `debug = 1` -
-# line tables, no full debug info - and that is exactly what turns a panic
-# backtrace from a column of hex into function names and line numbers. This is
-# a service meant to run unwatched for months; the tens of megabytes are worth
-# less than being able to read the one crash that matters.
+# `--strip-debug`, not a full strip. The workspace builds release with
+# `debug = 1`, and keeping all of it costs ~90 MB in the image; throwing all of
+# it away costs the names in a panic backtrace, which is a bad trade for a
+# service meant to run unwatched for months. `--strip-debug` drops the DWARF and
+# keeps `.symtab`, so a backtrace still names the functions - no line numbers,
+# but never a column of hex.
 
 # ---------------------------------------------------------------- runtime ---
 FROM ${RUNTIME_IMAGE} AS runtime
