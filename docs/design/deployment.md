@@ -62,13 +62,19 @@ than not deploying.
 For a host that cannot reach GitHub, or for a repo that is not allowed off the bench:
 
 ```bash
-tools/deploy-workbench.sh --route workbench --dry-run
-git push workbench main        # the script adds the `workbench` remote for you
-tools/deploy-workbench.sh --route workbench
+tools/deploy-workbench.sh --route workbench --dry-run   # read the plan
+tools/deploy-workbench.sh --route workbench             # adds the remote, makes the
+                                                        # bare repo, then refuses:
+                                                        # "git push workbench main"
+git push workbench main
+tools/deploy-workbench.sh --route workbench             # and now it deploys
 ```
 
-The remote is `workbench.local:srv/screeny.git`, a bare repo the script creates on
-the host on first use. The script never creates or changes `origin`.
+Three runs, not two, and that is the design rather than an accident: the script adds
+the local `workbench` remote (`workbench.local:srv/screeny.git`) and creates the bare
+repo behind it *before* it checks whether the branch is there, so that the push it
+tells you to run is a push that will work. It will never repoint an existing
+`workbench` remote, and it never creates or changes `origin`.
 
 ## After the deployment: three questions, three one-liners
 

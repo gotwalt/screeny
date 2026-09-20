@@ -273,6 +273,24 @@ else
   say "  remote      origin -> $(git remote get-url origin)"
 fi
 
+# --------------------------------------------------------------- reachable?
+#
+# Before the ahead/behind check, not after, because on the workbench route the
+# refusal below says "git push workbench main" - and that push only works once
+# the bare repo on the host exists. Making it exist is the next step.
+
+step "can we reach $HOST?"
+run_remote "echo connected as \$(id -un)@\$(hostname) && docker --version && docker compose version --short" \
+  || die "cannot ssh to $HOST, or it has no usable docker.
+    ssh $HOST -- true                 # is the host there and is your key on it?
+    ssh $HOST -- docker ps            # are you in the docker group there?
+  --host NAME points this somewhere else."
+
+if [ "$ROUTE" = workbench ]; then
+  step "the bare repo on $HOST"
+  run_remote "mkdir -p \$(dirname $BARE) && { test -d $BARE || git init --bare -b $BRANCH $BARE; } && echo bare repo: $BARE"
+fi
+
 # --------------------------------------------------- is the remote current?
 
 step "does $REMOTE_NAME have $BRANCH?"
@@ -309,20 +327,10 @@ else
   fi
 fi
 
-# --------------------------------------------------------------- reachable?
-
-step "can we reach $HOST?"
-run_remote "echo connected as \$(id -un)@\$(hostname) && docker --version && docker compose version --short" \
-  || die "cannot ssh to $HOST, or it has no usable docker.
-    ssh $HOST -- true                 # is the host there and is your key on it?
-    ssh $HOST -- docker ps            # are you in the docker group there?
-  --host NAME points this somewhere else."
-
 # ----------------------------------------------------------------- get code
 
 step "the checkout on $HOST"
 if [ "$ROUTE" = workbench ]; then
-  run_remote "mkdir -p \$(dirname $BARE) && { test -d $BARE || git init --bare -b $BRANCH $BARE; } && echo bare repo: $BARE"
   run_remote "test -d $DIR/.git || git clone $BARE $DIR"
   run_remote "cd $DIR && git remote set-url origin $BARE && git fetch --prune origin && git checkout -B $BRANCH origin/$BRANCH && git --no-pager log --oneline -1"
 else
