@@ -30,7 +30,7 @@ which was a second app until card 170, is folded into it and redirects.
 | `--listen ADDR` | where to serve. A bare number is a port on loopback. | `SCREENY_LISTEN` |
 | `--state-dir DIR` | where what-plays-where is kept. Default `./.screeny-studio`. | `SCREENY_STATE_DIR` |
 | `--ui-dir DIR` | serve the UI off disk instead of from the binary. | |
-| `--no-discover` | do not browse for panels; use configured addresses only. | |
+| `--no-discover` | do not browse or probe for panels; use configured addresses only. | |
 | | offer two pieces that misbehave on purpose. | `SCREENY_STUDIO_FAULTS=1` |
 
 A flag beats the environment; the environment beats the default.
@@ -85,6 +85,15 @@ construction rather than by agreement.
 - **Reaching a panel**: by instance name when a human typed a name, which re-resolves on
   every reconnect and so follows a DHCP lease; by `Link::attach` to its exact two ports
   when the registry has resolved it.
+- **A panel that moves is followed** (card 141). A device known by *address* cannot
+  re-resolve anything, so when it has been unheard for longer than `stale_after` the
+  studio sends one `GET_INFO` to the subnet broadcast address (spec 5.5) on the browse's
+  own tick. Every panel answers with its own `id=`, the registry is keyed by that id, and
+  a known id at a new address is that panel: its address is updated and its player, piece
+  and seed carry on. One probe in flight, capped jittered backoff, one line in the log
+  per panel followed and none per attempt, and off under `--no-discover`. A panel reached
+  by name is left alone - it already follows itself - and an id this studio does not know
+  is not adopted.
 
 ## Built to be forgotten
 
@@ -94,10 +103,10 @@ page, so:
 **Nothing grows without bound.** Preview frames live in a one-slot `watch` cell, state
 changes in a fixed-depth broadcast, and a socket that cannot take a message in three
 seconds is closed. There is one render thread per player, one link, one control request
-in flight, one browse at a time, a one-slot mailbox in front of the state file, and
-every fault is logged *once* rather than once a frame. A device that does not answer is
-polled on capped, jittered backoff. While a panel is away its player renders at 5 fps
-instead of 60: a panel unplugged for a month must not cost a core for a month.
+in flight, one browse and one probe at a time, a one-slot mailbox in front of the state
+file, and every fault is logged *once* rather than once a frame. A device that does not
+answer is polled on capped, jittered backoff. While a panel is away its player renders at
+5 fps instead of 60: a panel unplugged for a month must not cost a core for a month.
 
 **A bad piece cannot take the process down.** A piece that panics is caught
 (`catch_unwind`), logged once and replaced by a safe fallback in milliseconds. A piece

@@ -21,7 +21,7 @@ screeny-studio - play generative pieces on the panels, and design them in a brow
                      atomically; the studio resumes from it after a restart
     --ui-dir DIR     serve the UI from this directory instead of from the
                      binary, so an edit needs a reload rather than a rebuild
-    --no-discover    do not browse for panels; use configured addresses only
+    --no-discover    do not browse or probe for panels; use configured addresses only
     --device-http-port PORT
                      the port a panel serves its own status API on (default 80,
                      env SCREENY_DEVICE_HTTP_PORT). Only for pointing a studio
@@ -74,7 +74,7 @@ fn main() -> ExitCode {
             println!("studio: state in {}", dir.display());
         }
         if !cfg.discover {
-            println!("studio: not browsing for panels; configured addresses only");
+            println!("studio: not browsing or probing for panels; configured addresses only");
         }
         if !cfg.device_http {
             println!("studio: not reading any panel's own status API (--no-device-http)");

@@ -187,13 +187,18 @@ async fn apply_brightness(st: &AppState, job: &BrightnessJob) {
     }
 }
 
-/// Browse `_screeny._udp`, if discovery is on at all.
+/// Browse `_screeny._udp`, and probe for a panel that has moved, if discovery
+/// is on at all.
 ///
 /// Finding nothing is normal, not an error; so is mDNS failing outright, which
 /// is a Tuesday inside Docker on macOS. Everything still works from configured
 /// addresses, which is why this task is allowed to be a convenience.
+///
+/// The two live on **one** tick, in this order, and the probe is the second
+/// one: a browse is never delayed by a probe, and there is one of each in
+/// flight at a time by construction, because this loop awaits them.
 pub fn spawn_discovery(st: AppState) {
-    if !st.cfg.discover {
+    if !st.cfg.discover && !probing(&st) {
         return;
     }
     let mut stop = st.stop.clone();
@@ -201,25 +206,29 @@ pub fn spawn_discovery(st: AppState) {
         let timeout = Duration::from_secs(3).min(st.cfg.discover_every);
         let mut ticker = tokio::time::interval(st.cfg.discover_every);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut backoff: BTreeMap<String, (u32, u32)> = BTreeMap::new();
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let found = tokio::task::spawn_blocking(move || devices::browse(timeout)).await;
-                    let (list, err) = match found {
-                        Ok(Ok(list)) => (list, None),
-                        Ok(Err(e)) => (Vec::new(), Some(e)),
-                        Err(e) => (Vec::new(), Some(e.to_string())),
-                    };
-                    let changes = st.devices.browsed(&list, err);
-                    for (from, to) in &changes.renamed {
-                        st.players.rekey(from, to);
-                    }
-                    if !changes.renamed.is_empty() || !changes.added.is_empty() {
-                        for id in &changes.added {
-                            eprintln!("studio: found `{id}`");
+                    if st.cfg.discover {
+                        let found = tokio::task::spawn_blocking(move || devices::browse(timeout)).await;
+                        let (list, err) = match found {
+                            Ok(Ok(list)) => (list, None),
+                            Ok(Err(e)) => (Vec::new(), Some(e)),
+                            Err(e) => (Vec::new(), Some(e.to_string())),
+                        };
+                        let changes = st.devices.browsed(&list, err);
+                        for (from, to) in &changes.renamed {
+                            st.players.rekey(from, to);
                         }
-                        st.persist();
+                        if !changes.renamed.is_empty() || !changes.added.is_empty() {
+                            for id in &changes.added {
+                                eprintln!("studio: found `{id}`");
+                            }
+                            st.persist();
+                        }
                     }
+                    probe_once(&st, &mut backoff).await;
                 }
                 // The borrow `wait_for` hands back is not `Send` and this
                 // future has to be: discard it inside the block.
@@ -227,6 +236,107 @@ pub fn spawn_discovery(st: AppState) {
             }
         }
     });
+}
+
+// ----------------------------------------- card 141: a panel that moved ----
+
+/// How long a probe listens for answers.
+///
+/// Short: a panel that is there answers a `GET_INFO` in milliseconds, and this
+/// runs on the browse's tick, where anything longer is time the next browse
+/// waits for. It is clamped to the tick so a fast test cannot overlap itself.
+const PROBE_WINDOW: Duration = Duration::from_secs(1);
+
+/// The one key the probe's backoff is kept under: the probe is one thing for
+/// the whole fleet, not one per device.
+const PROBE: &str = "probe";
+
+/// Is the probe on? Card 141: on wherever the browse is, and also wherever
+/// somebody has named the addresses to ask - which is a container with no
+/// broadcast route, and the tests.
+fn probing(st: &AppState) -> bool {
+    st.cfg.discover || !st.cfg.probe_to.is_empty()
+}
+
+/// Where it asks: what was configured, or the subnet broadcast address of
+/// every interface on the machine (spec 5.5).
+fn probe_targets(st: &AppState) -> Vec<std::net::SocketAddr> {
+    if st.cfg.probe_to.is_empty() {
+        screeny::discover::broadcast_targets(screeny::proto::DEFAULT_CONTROL_PORT)
+    } else {
+        st.cfg.probe_to.clone()
+    }
+}
+
+/// **Find a panel that has taken a new DHCP lease, without being told.**
+///
+/// One `GET_INFO` to the broadcast address; every panel answers with its own
+/// `id=`; a known id at a new address is that panel, moved
+/// ([`devices::Registry::probed`]). The studio's registry is keyed by that id,
+/// so following it costs the panel nothing: same player, same piece, same
+/// seed, new address.
+///
+/// Bounded, and each bound is deliberate:
+///
+/// * **only when something is missing** - no device unheard past
+///   `Config::stale_after`, no probe. A house that is working sends nothing.
+/// * **one in flight** - this is awaited on the discovery task, which does one
+///   thing at a time, and it runs *after* the browse rather than beside it.
+/// * **capped, jittered backoff** - [`fail`], the same one the two polls use:
+///   a panel that has been off for a month is probed for every twelfth pass,
+///   not every pass.
+/// * **never on a render thread** - `spawn_blocking`.
+/// * **logged per event, not per attempt** - a line when a panel is followed,
+///   and a line when the probe itself starts failing for a new reason. A probe
+///   that finds nothing says nothing, for ever.
+async fn probe_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
+    if !probing(st) {
+        return;
+    }
+    if let Some((_, left)) = backoff.get_mut(PROBE) {
+        if *left > 0 {
+            *left -= 1;
+            return;
+        }
+    }
+    let missing = st.devices.unheard(st.cfg.stale_after);
+    if missing.is_empty() {
+        // Nothing to look for. Not a failure, and the next panel to go quiet
+        // should be looked for at once rather than after a backoff it did not
+        // earn.
+        backoff.remove(PROBE);
+        return;
+    }
+    let to = probe_targets(st);
+    if to.is_empty() {
+        return;
+    }
+    let window = PROBE_WINDOW.min(st.cfg.discover_every);
+    let found = tokio::task::spawn_blocking(move || devices::probe(window, &to)).await;
+    let (list, err) = match found {
+        Ok(Ok(list)) => (list, None),
+        Ok(Err(e)) => (Vec::new(), Some(e)),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    };
+    let said = st.devices.discovery_health().last_probe_error;
+    if let Some(e) = &err {
+        if said.as_deref() != Some(e.as_str()) {
+            eprintln!("studio: probing for a panel that has moved: {e}");
+        }
+    }
+    let moves = st.devices.probed(&list, &missing, err);
+    if moves.is_empty() {
+        fail(backoff, PROBE);
+        return;
+    }
+    for m in &moves {
+        let from = if m.from.is_empty() { "nowhere we knew of".to_string() } else { m.from.clone() };
+        eprintln!("studio: `{}` answered a probe at {} (it was at {from}); following it", m.id, m.to);
+    }
+    // The player is already keyed by the id, so nothing here touches it: the
+    // supervisor re-aims its link at the new address on its next tick.
+    backoff.remove(PROBE);
+    st.persist();
 }
 
 /// Ask each device how it is - and, for a manually typed address, who it is.

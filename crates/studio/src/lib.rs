@@ -91,8 +91,18 @@ pub struct Config {
     pub state_dir: Option<PathBuf>,
     /// Browse `_screeny._udp` for panels. Off here on purpose; see above.
     pub discover: bool,
-    /// How often to browse.
+    /// How often to browse - and, card 141, how often a panel that has been
+    /// unheard past [`Config::stale_after`] is probed for.
     pub discover_every: Duration,
+    /// Where the "has it moved?" probe asks (card 141, spec 5.5). **Empty -
+    /// the default - means the subnet broadcast address of every interface**,
+    /// and the probe then follows `discover`: it is a LAN packet, so it is off
+    /// wherever the browse is, including under `--no-discover`. A non-empty
+    /// list is control addresses to ask instead, which is what a container
+    /// with no broadcast route needs and what the loopback tests use; naming
+    /// them turns the probe on by itself, because nothing it sends can then
+    /// leave the addresses it was pointed at.
+    pub probe_to: Vec<SocketAddr>,
     /// How often to ask each known device for its telemetry.
     pub telemetry_every: Duration,
     /// Read each device's own HTTP status API at all (card 180). On by
@@ -127,6 +137,7 @@ impl Default for Config {
             state_dir: None,
             discover: false,
             discover_every: Duration::from_secs(30),
+            probe_to: Vec::new(),
             telemetry_every: Duration::from_secs(5),
             device_http: true,
             device_http_every: MIN_DEVICE_HTTP_EVERY,
