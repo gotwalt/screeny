@@ -128,6 +128,15 @@ async fn the_ui_is_served_from_the_binary() {
     assert_eq!(get(at, "/sub/dir.js").await.status, 404, "the UI is one directory, flat");
 }
 
+/// A container healthcheck has something cheap to ask.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn healthz_answers() {
+    let studio = studio().await;
+    let health = get(studio.addr, "/healthz").await;
+    assert_eq!(health.status, 200);
+    assert_eq!(health.body, b"ok\n");
+}
+
 /// The socket delivers frames, and they are the frames the engine is making.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_socket_delivers_frames() {

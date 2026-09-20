@@ -202,6 +202,9 @@ fn router(state: AppState) -> Router {
     Router::new()
         .nest("/api/v1", api::routes())
         .route("/api/v1/ws", any(ws::upgrade))
+        // Liveness only, for a container healthcheck (card 107): the process is up and
+        // answering. Card 106 makes it mean "the players are healthy" (200/503).
+        .route("/healthz", axum::routing::get(|| async { "ok\n" }))
         .fallback(ui::serve)
         .with_state(state)
 }
