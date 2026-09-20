@@ -212,6 +212,54 @@ PENDING-BUDGET
 
 ---
 
+## 7. What is left, and cards worth writing
+
+Numbers 233-239 are suggestions, not card files. In rough order of how much
+`.stack` they are worth.
+
+* **233 - One router future, not nine nested ones.** The biggest single item
+  on this page: 7,872 bytes of stack spent on *dispatch*, because every
+  `.route()` adds a layer whose `poll` frame holds the whole remaining chain
+  by value. A hand-written path match that dispatches to one of N handlers and
+  returns a small enum collapses that into one frame, changes nothing on the
+  wire, and is worth more than every lever this card pulled put together. It
+  is a rewrite of `firmware/src/http.rs`'s dispatch half, which is why card
+  227 did not do it inside a card about RAM levers.
+* **234 - The frame socket's transmit buffer is sized for two full MTUs.**
+  `2 * MAX_DATAGRAM` = 2,944 bytes of `.bss` for a socket whose outgoing
+  traffic is `Outbox` replies, which are small. Sizing it from the spec's
+  largest frame-port reply instead of from the MTU looks like ~1.9 KB, but it
+  needs the spec read first, and getting it wrong drops replies under load, so
+  it is a card and not a guess.
+* **235 - `MDNS_BUF` is 1500 twice over.** `UdpBuffers<1, 1500, 1500, 2>` plus
+  edge-mdns's two `VecBufAccess<_, 1500>` is ~7.8 KB across the task's pool
+  and cell. Real mDNS traffic on this LAN is a few hundred bytes. Worth ~1.9 KB
+  at 1024, and the risk is a truncated incoming query breaking discovery, so
+  it wants a measurement of what actually arrives before it is cut.
+* **236 - A `const` assert on `.stack`, inside the build.** `tools/fw-size.sh`
+  is a check somebody has to run. The linker already enforces a hard 8,192-byte
+  minimum ("Main stack is smaller than 8192 bytes", which is how the
+  `device-web-spike` feature fails to link when `.stack` gets thin) - the same
+  idea at the project's own floor would turn a bad build into a build error.
+* **237 - The boot path's two 3 KB partition-table buffers.**
+  `store::find_partition` and `http::read_fw_health` each put
+  `[0u8; PARTITION_TABLE_MAX_LEN]` on `main`'s stack. They do not set the
+  high-water today, because the HTTP path is deeper - but card 223's portal
+  runs on the same stack and the margin is thinner afterwards, so one shared
+  buffer is cheap insurance.
+* **238 - Does keep-alive pay for itself now there are two workers?**
+  picoserve's docs say to enable it only with several sockets serving, which
+  is now true. Against it: the status page polls every four seconds, so one
+  open tab would hold one of the two workers indefinitely. It is a one-line
+  change and a measurement.
+* **239 - Reproduce the high-water creep deliberately.** The mark rises for an
+  hour after boot because the deepest *coincidence* of an interrupt on an
+  already-deep chain has not happened yet. A bench run that drives HTTP and
+  forces disconnect/rejoin repeatedly would find the real ceiling in minutes
+  instead of hours, and that is the number a floor should be set from.
+
+---
+
 ## Appendix: reproducing this
 
 ```
