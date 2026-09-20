@@ -162,3 +162,11 @@ assertions - "dimmer than at full" and "brightness 0 is black" - hold under the
 new model unchanged, and `tests/control.rs` passes untouched. Nothing in
 `crates/studio`, `crates/screeny`, `crates/art` or `crates/probe` was touched;
 neither `art` nor `studio` even depends on `screeny-panel`.
+
+### Orchestrator (2026-09-19)
+
+Merged to `main`. `cargo test --release -p screeny-panel -p screeny-sim`: 99 passed, 0 failed
+(full root run deferred until the three workers sharing the machine finish). Keeping
+`Lut::value_scaled` for now: it is the measurement of the difference and costs nothing;
+delete it with card 102 if nothing uses it by then. The 25-step quantisation in the preview
+stays: the device steps, so a smooth preview would be lying. Card 136 needs the owner.
