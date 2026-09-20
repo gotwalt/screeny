@@ -317,3 +317,16 @@ names and would otherwise not carry `DEVICE`. Nothing in `crates/studio/src/ws.r
 `docs/design/protocol-v1.md`. No hardware, no serial port, no camera, no LAN: the only
 thing started was `screeny-sim` on loopback with ephemeral ports, inside
 `tests/sender.rs`, which bounds all its own waits. No processes left running.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed before merging. Checked for myself that the `FIRMWARE_SRGB_TO_Q` fixture in
+`crates/panel/src/model.rs` is `firmware/src/gamma.rs`'s table entry for entry (script, all
+256 equal), and that `display.rs` does spend the remainder over `FRAC = 16` phases. Because
+this changes the bytes the panel is sent, measured the encoder's answer on main and on the
+branch with `screeny-art play ... --seconds 6` into a loopback simulator, seed 4242:
+metaballs `pal8-lz` lossy ~1210 B on both; plasma `pal8-lz` exact ~1400 B, 180 of 180
+exact on both; 30 fps, 0 dropped on both. So the finer grid costs the link nothing.
+Merged `--no-ff`; root `cargo test --release --no-fail-fast`: 732 passed, 0 failed; clippy
+silent. Not judged on the real panel by anyone yet: that is the owner's eye on the test
+card's fifth strip after the next deploy, with the four "Open with the owner" items above.
