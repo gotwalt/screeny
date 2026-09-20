@@ -263,7 +263,7 @@ pub fn collect(st: &AppState) -> Status {
                 facts_ago: d.facts.as_ref().map(|f| now.saturating_sub(f.heard_unix) as f64),
                 facts: d.facts.clone(),
                 http: d.http.clone(),
-                traffic: d.traffic.totals,
+                traffic: d.traffic.reported(),
                 last_error: d.last_error.clone(),
                 player: st.players.get(&d.stored.id).map(|p| p.status()),
             }

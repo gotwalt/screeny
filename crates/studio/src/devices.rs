@@ -355,10 +355,16 @@ impl TrafficMeter {
         ]
     }
 
-    /// Roll the totals up and advance the rate. `now` is passed in so that one
-    /// pass over the fleet uses one instant.
-    fn sample(&mut self, now: Instant) {
-        let t = &mut self.totals;
+    /// The counters as `/api/v1/status` reports them: the three paths as they
+    /// stand **now**, with `total` rolled up from them.
+    ///
+    /// Rolled up here rather than on the tick, because the paths are added to
+    /// whenever a request finishes and the tick is once a second: a `total`
+    /// computed on the tick would be a second behind the rows above it, and a
+    /// page that showed both would be visibly inconsistent with itself.
+    #[must_use]
+    pub fn reported(&self) -> Traffic {
+        let mut t = self.totals;
         t.total.out = Flow {
             bytes: t.frames.out.on_the_wire(UDP) + t.control.out.on_the_wire(UDP) + t.http.out.bytes,
             packets: t.frames.out.packets + t.control.out.packets + t.http.out.packets,
@@ -368,7 +374,12 @@ impl TrafficMeter {
             packets: t.frames.inbound.packets + t.control.inbound.packets + t.http.inbound.packets,
         };
         t.window_s = TRAFFIC_WINDOW.as_secs_f64();
+        t
+    }
 
+    /// Advance the rate. `now` is passed in so that one pass over the fleet
+    /// uses one instant.
+    fn sample(&mut self, now: Instant) {
         let wire = self.wire();
         let Some(then) = self.at.replace(now) else {
             // The first pass has no interval to divide by, so it sets the
@@ -1039,7 +1050,7 @@ impl Registry {
     /// What one device has cost, for `/api/v1/status`.
     #[must_use]
     pub fn traffic(&self, id: &str) -> Traffic {
-        self.lock().get(id).map(|d| d.traffic.totals).unwrap_or_default()
+        self.lock().get(id).map(|d| d.traffic.reported()).unwrap_or_default()
     }
 
     /// Record that a control request failed. Logged by the caller, once.
