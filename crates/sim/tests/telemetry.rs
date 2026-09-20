@@ -100,11 +100,25 @@ fn the_telemetry_struct_round_trips_through_its_own_offsets() {
 
     tx.send(codec::SOLID, F_KEY | F_STATS_REQ, &p);
 
-    let d = tx
-        .drain()
-        .into_iter()
-        .find(|d| ControlPacket::parse(d).map(|p| p.op) == Ok(op::TELEMETRY))
-        .expect("a TELEMETRY");
+    // **Poll for the reply rather than looking once.** `drain()` settles for
+    // five milliseconds, and the device sends its `TELEMETRY` after it has let
+    // go of the core lock - so on a busy machine one look can be too early.
+    // That was the flake card 234 uncovered by adding two multi-second tests
+    // to this crate; the deadline is the same `T` the rest of the test uses.
+    let deadline = std::time::Instant::now() + T;
+    let d = loop {
+        if let Some(d) = tx
+            .drain()
+            .into_iter()
+            .find(|d| ControlPacket::parse(d).map(|p| p.op) == Ok(op::TELEMETRY))
+        {
+            break d;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no TELEMETRY came back within {T:?}"
+        );
+    };
     let pkt = ControlPacket::parse(&d).unwrap();
     let Ok(Reply::Telemetry(wire)) = Reply::decode(pkt.op, pkt.flags, pkt.body) else {
         panic!()
