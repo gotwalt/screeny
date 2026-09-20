@@ -177,3 +177,9 @@ it": the thresholds and whose numbers they are, `low_stack`'s new meaning, the a
 window and why it is that length, and the new test file in the table.
 
 **No new cards.** Nothing was found that belongs outside this one; 187-189 are unused.
+
+**Green.** Root `cargo test --release --no-fail-fast`: **711 passed, 0 failed** across every
+crate (was 685 at card 180's merge). `cargo clippy --workspace --all-targets`: silent, no
+new `#[allow]` anywhere. `crates/studio` on its own after the last commit: 128 passed, 0
+failed. `tests/ssid.rs` unchanged but for the one call that gained a parameter, and
+passing. `ps` shows nothing of mine running.
