@@ -368,7 +368,7 @@ impl Ambient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pieces::clocks::pose;
+    use crate::pieces::clocks::{pose, Rest, DEFAULT_REST};
 
     /// From the digits, through every mood and a change of mood, and back to
     /// rest: speed stays bounded, acceleration never exceeds the motor's, and
@@ -379,7 +379,7 @@ mod tests {
         for which in 0..MOODS {
             let mut rng = Rng::new(which as u64 * 7 + 1);
             let mut ambient = Ambient::new(&mut rng, which, 8, 3, 8.0);
-            let mut angles = pose(9, 25).to_vec();
+            let mut angles = pose(9, 25, Rest::of(DEFAULT_REST as f32)).to_vec();
             let dt = 1.0 / 30.0;
             let mut prev = angles.clone();
             let mut prev_v = vec![[0.0_f32; 2]; angles.len()];

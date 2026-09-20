@@ -247,6 +247,6 @@ impl Piece for Flow {
             Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.01), light: mix(ctx.get("light"), 0.97) },
         ];
         let mark = grip * ctx.get("mark");
-        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, ring: 0.0, mark }.draw()
+        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, rest: &[], ring: 0.0, mark }.draw()
     }
 }

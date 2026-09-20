@@ -188,6 +188,22 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   of fixed per-clock error) under the same motor limits, with a braking curve so
   it never overshoots. Four moods: drift, sway, breathe, corners. A test checks
   speed and acceleration stay bounded and that everything comes to rest.
+- **A dial that is not part of a digit is still a clock** ("Resting dials", `rest`).
+  `1`, `4` and `7` leave dials out of their glyph, and until card 160 those rested
+  with both hands at 7:30, at full brightness: three identical strokes stacked beside
+  a `1` are a colon, so `21:12` read as `2:1:12` and `14:47` as `1,4,4,7`. They must
+  stay visible clock hands (the owner), so the fix is a pose and a presentation, not
+  blanking. The default is **"hatched, quiet"**: hour hand at 7:30, minute hand at
+  1:30 - one diagonal corner to corner, a dial reading about 1:37 - at a fifth of the
+  ink. A diagonal is the one direction the digits never use, and it survives being
+  looked at from across the room, where three blurred dots are a colon and three
+  blurred slashes are a texture. Dimming costs no palette entry: a hand's ink scaled
+  in linear light is what its own anti-aliasing ramp already is, so it lands on a step
+  of that ramp and the frame stays 31 colours. The other treatments (including `0`,
+  exactly what the piece did before) are switchable live so the panel can settle it;
+  the evidence is `docs/research/010-numerals-rest-pose.md`. Resting dials only recede
+  while the time is being held: a dance is always drawn at full strength, and the
+  picture settles over 0.6 s as the hands land.
 - Formations include non-uniform ones taken from footage of the original:
   `Flow` (hands about a bowed sine wave, folded into needles or open) and
   `Turned` (the digits with each clock's corner rigidly rotated by a wave).
