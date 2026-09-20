@@ -445,16 +445,29 @@ struct LinkSlot {
 impl LinkSlot {
     /// Drop the current link and bank what it reached (card 171).
     ///
-    /// `studio_will_reopen` says the *studio* is why the stream will come up
-    /// again. It only discounts a link that had actually come up: replacing a
-    /// link that never connected costs no extra session, so discounting one
-    /// there would hide a real reconnect - which is exactly what it did in the
-    /// first cut of this, on a panel whose typed address was resolved before
-    /// the first link had finished connecting.
-    fn close_link(&mut self, studio_will_reopen: bool) {
-        let reached = u64::from(self.sessions);
-        self.closed_ups += reached;
-        if studio_will_reopen && reached > 0 {
+    /// `studio_took_a_live_stream` says the studio is replacing a link that is
+    /// **up right now** - so the connect that follows is this studio getting
+    /// back what it just let go of, not the panel coming back, and it does not
+    /// count as a reconnect.
+    ///
+    /// "Up right now" is the whole condition, and both halves of it were paid
+    /// for:
+    ///
+    /// - a link that never connected costs no extra session when it is
+    ///   replaced, so discounting one hid the very first reconnect on a panel
+    ///   whose typed address resolved before the link had finished connecting;
+    /// - a link that is **down** is down because the panel is away, so the
+    ///   connect that follows replacing it is the panel returning. Discounting
+    ///   that swallowed a real reconnect whenever a re-aim happened to land in
+    ///   the window while the panel was unplugged.
+    ///
+    /// `reached` is the closing link's **own** session count, read from it
+    /// here rather than from `self.sessions`: that field is the supervisor's
+    /// once-a-second copy, and a link built and torn down between two ticks
+    /// would bank a zero it had not earned.
+    fn close_link(&mut self, reached: u32, studio_took_a_live_stream: bool) {
+        self.closed_ups += u64::from(reached);
+        if studio_took_a_live_stream {
             self.studio_ups += 1;
         }
         self.out = None;
@@ -686,14 +699,16 @@ impl Player {
         let mut slot = self.slot();
         if !on || matches!(reach, Reach::Unknown) {
             if let Some(out) = slot.out.as_mut() {
+                // Switching output off takes away a stream that was running,
+                // so the connect that follows switching it back on is not the
+                // panel coming back. Losing the device's address
+                // (`Reach::Unknown`) is the opposite: the panel really is away.
+                let took_a_live_stream = !on && out.link().state().is_up();
+                let reached = out.link().stats().sessions;
                 // FINAL: the panel is released now rather than after its
                 // stream timeout, and goes back to its own idle screen.
                 out.close();
-                // Output switched off is the *studio* letting the panel go, so
-                // the connect that follows switching it back on is not the
-                // panel coming back. Losing the device's address
-                // (`Reach::Unknown`) is the opposite: the panel really is away.
-                slot.close_link(!on);
+                slot.close_link(reached, took_a_live_stream);
             }
             slot.key = String::new();
             slot.from_resolved = false;
@@ -703,15 +718,20 @@ impl Player {
             return;
         }
         let resolved = matches!(reach, Reach::Resolved(_));
-        if slot.out.is_some() {
+        if let Some(out) = slot.out.as_ref() {
             // The studio finding out where the device really is. A panel
             // typed in as an address is re-aimed at the resolved device
             // within seconds of being added, and the panel has not moved an
             // inch; without this every freshly attached panel would read
             // "Reconnects 1" before anyone had touched it. One resolved
             // device to *another* is not this: that panel was away.
-            let learned_where_it_is = resolved && !slot.from_resolved;
-            slot.close_link(learned_where_it_is);
+            //
+            // And only while the stream it is replacing is **up**: a link
+            // that is down is down because the panel is away, so the connect
+            // that follows is the panel returning and must be counted.
+            let took_a_live_stream = resolved && !slot.from_resolved && out.link().state().is_up();
+            let reached = out.link().stats().sessions;
+            slot.close_link(reached, took_a_live_stream);
         }
         slot.out = Some(open_link(reach));
         slot.key = key;

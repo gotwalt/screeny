@@ -80,7 +80,12 @@ that a rate it used to silently drop now lands.
   the wrong file); it points at `MIN_FPS`/`MAX_FPS` now.
 - `api.rs`: `set_playback` passes the rate through; the player clamps.
 - `index.html`: a `.slider` from 1 to 60, step 1, with a `<datalist>` of stops
-  at 1, 10, 15, 24, 30 and 60.
+  at 1, 10, 15, 24, 30 and 60. **The stops are declared but not drawn**: Chrome
+  paints a range input's tick marks only on the default track and `style.css`
+  replaces it. They are real to the accessibility tree; the readout is the
+  exact rate and the arrow keys step by one, so 30 and 60 are reachable, but
+  the card's "detents" are not visible. Drawing them, aligned to where the
+  thumb actually lands, is **card 183**.
 - `main.js`: the fps control is bound by hand rather than with `bindSlider`,
   because `bindSlider`'s output reads the *input*, and a range input with
   whole stops rounds a rate that has not got one. The readout says the rate

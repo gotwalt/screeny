@@ -91,8 +91,9 @@ link flapping".
 ### What I did
 
 - `player.rs`: `LinkSlot` gains `closed_ups` (banked from closed links),
-  `studio_ups` and `reapply_brightness`; `aim()` banks before it closes;
-  `supervise()` computes `link_ups = closed_ups + sessions` and
+  `studio_ups`, `from_resolved` and `reapply_brightness`;
+  `LinkSlot::close_link` banks and discounts in one place; `supervise()`
+  computes `link_ups = closed_ups + sessions` and
   `reconnects = link_ups - 1 - studio_ups`.
 - `PlayerHealth` gains `link_ups` and `reconnects` (additive; `sessions` kept).
 - The page: `Reconnects  2 since the studio started`. The label says the window
@@ -104,12 +105,13 @@ link flapping".
 
 `tests/panel.rs::a_panel_that_comes_back_twice_says_two` (12 s): a simulator on
 a known port pair is dropped and a fresh one started in its place, twice; the
-page says 2, and `link_ups` is one higher per round. Then
+page says 2, and `link_ups` is at least one higher per round. Then
 `set_panel {"on":false}` / `{"on":true}` - which **rebuilds the link**, the
 exact thing that used to wipe the count to 0 - and it still says 2, while
-`link_ups` goes up again so nothing is hidden. The baseline is taken once the
-device is **resolved**, every wait is `until_json` with a 30 s deadline, and
-every assertion is made on the one read that satisfied its wait.
+`link_ups` goes up again so nothing is hidden. Every wait is condition-based
+with a 30 s deadline and every assertion is made on the read that satisfied
+its wait; only `reconnects` is asserted exactly, because it is the number the
+card is about and the only one the studio's own re-aiming cannot move.
 
 ### What the browser caught that the test did not
 
@@ -129,11 +131,10 @@ rebuild is only right when the link being replaced had **actually come up**.
 Replacing a link that never connected costs no extra session, so discounting
 there hid a real reconnect - which is exactly what happened when the address
 resolved before the first link had finished connecting. `LinkSlot::close_link`
-now banks and discounts in one place, and only discounts `if reached > 0`.
+now banks and discounts in one place.
 
-The integration test was rewritten to take its baseline once the device is
-**resolved** and to count in deltas from there, so it does not depend on how
-many link-ups the attach itself took.
+The integration test was rewritten to count in deltas from a baseline, so it
+does not depend on how many link-ups the attach itself took.
 
 ### Rendered
 
@@ -142,3 +143,34 @@ many link-ups the attach itself took.
   studio started"**, beside `Link up · 30 fps` and `Heard 2 s ago`.
 - Before that, freshly attached and resolved, `/api/v1/status` read
   `reconnects: 0, link_ups: 2` and the page said `0 since the studio started`.
+
+### And a third, from running it six times
+
+The card's own footnote - "worth telling apart, **if it is cheap**" - turned
+out to be the load-bearing word. Telling a studio-caused link rebuild from a
+panel-caused one is cheap only if the two cannot overlap, and they can. Three
+passes, each found by running rather than by reading:
+
+1. **A freshly attached panel read 1.** Fixed by booking "the studio learned
+   where the device is" to `studio_ups` (found in the browser).
+2. **A real reconnect read 0.** Discounting a rebuild is only right when the
+   link replaced was up; replacing a link that never connected consumes no
+   session. Fixed by the `is_up()` condition.
+3. **`slot.sessions` is the supervisor's once-a-second copy.** A link built and
+   torn down between two ticks banked a zero it had not earned, so the
+   discount ran without the credit. `close_link` now reads the closing link's
+   own `stats().sessions`.
+
+**What is left, deliberately.** If the studio re-aims while the stream is up
+*and* the panel goes away before the replacement connects, the panel's return
+is the same connect as the re-aim landing, and it is not counted. Under-
+counting in a rare overlap is the right side to err on - the alternative is
+telling somebody their panel dropped when it did not - and `link_ups` still
+counts it, so nothing is hidden. Chasing it further would mean modelling
+*why* a link is down, which is not cheap, and the card said not to.
+
+The test now waits for the count to **stop moving** before its baseline, which
+is a condition and not a fixed sleep: the studio settling on a freshly typed
+address is exactly the overlap above, and a test must not start a round inside
+it. Before that wait, three of five `--release` runs failed; after it, six of
+six passed, at ~13 s each.

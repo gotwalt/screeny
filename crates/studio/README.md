@@ -203,6 +203,10 @@ does fix:
 3. **a player is not running**, and has not been for longer than the fifteen-second
    start grace - a render thread that died and was not replaced.
 
+A **missing graphics adapter is not one of them** (card 145). A studio with no GPU plays
+every CPU piece perfectly well and no restart conjures one, so it is reported as `gpu` on
+`/api/v1/status` and said on the page, never as a 503.
+
 Card 106 had a fourth, "the preview engine is wedged", and card 170 deleted the thing
 it was about. A piece that stops returning is now caught by the same five-second
 watchdog every panel has, abandoned, and replaced by the fallback - so it is recovered
@@ -323,7 +327,21 @@ The layout is a **scrolling column by default** - picture, now playing, paramete
 panel - and becomes the two-column bench only above 1100 px, where there is room for
 both. Doing it the other way round is what used to put the walnut frame on top of the
 controls at around 600 px. Checked at 390, 600, 900 and 1400 px in a browser; the
-screenshots are in card 170's Log.
+screenshots are in card 170's Log and, for the controls below, in cards 145/163/171-173's.
+
+**A control's shape comes from what it controls** (card 163). The page builds each
+parameter from its `ParamSpec`: an ordinary number is a slider, a spec with `choices` is
+a segmented control (three stops or fewer, which fit across the inspector at 390 px) or a
+`<select>` (more than three), and a spec with `switch` is a switch. Nothing about the
+value changes - it is an `f32` set with `set_param` either way - so a piece asks for the
+control it wants by how it declares the parameter, and never by putting a key in a label.
+
+**Nothing on the page may say something that is not so.** The rate control spans the
+player's whole range rather than offering two stops it might not be on (172); the panel
+section says whether the studio is even looking for panels (173); "Reconnects" is a
+player-lifetime count that survives the link being rebuilt (171); and a piece that needs
+a graphics adapter there is none for is struck through with the reason rather than
+offered and then black (145).
 
 No framework, no bundler, no CDN: the box this runs on has no promise of internet, and a
 test asserts that neither page reaches outside it.
@@ -337,9 +355,9 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | file | what it pins |
 |---|---|
 | `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
-| `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees |
+| `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
-| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, and the narrow layout stays the default |
+| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

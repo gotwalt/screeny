@@ -108,8 +108,13 @@
       </div>
       <!-- Card 172: a player may be at any rate from 1 to 60 and a script may
            set one, so the control is a slider over the whole range rather than
-           two buttons that could both be unlit. The stops are the rates worth
-           reaching for; the min and max are `player::MIN_FPS`/`MAX_FPS`. -->
+           two buttons that could both be unlit. The min and max are
+           `player::MIN_FPS`/`MAX_FPS`, checked by a test.
+
+           The datalist names the rates worth reaching for. Chrome only paints
+           tick marks on the *default* track and style.css replaces it, so they
+           are not drawn: card 183. The readout is the exact rate either way,
+           and the arrow keys step by one. -->
       <div class="slider" id="fps-slider">
         <label for="fps">Frames per second</label><output></output>
         <input id="fps" type="range" min="1" max="60" step="1" value="60" list="fps-stops">
