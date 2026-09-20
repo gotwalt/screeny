@@ -247,3 +247,44 @@ Left exactly as they are; none of them changed a pixel in this card.
 A fourth, smaller one: the **panel-model A/B** now offers "Dithered" and "Bit planes".
 If the owner would rather see a dim room modelled, that is a brightness control on the
 preview (`screeny_panel::oe_light`), not a panel - say so and it is a small card.
+
+### Step 5 - the test card's dark ramp, which is this card's acceptance
+
+The acceptance line asked for a camera capture beside the studio's preview. The
+camera is disconnected (owner, 2026-09-19), so the evidence is the test card's own
+dark ramp, measured. Row 4 is the darkest quarter of sRGB stretched across all 64
+columns - one column per sRGB code, near enough - and
+`pieces/testcard.rs`'s new tests read it straight out of `Output::preview`, with the
+codec preview off (a test card is deliberately the worst case for the encoder, and
+this row is a question about the panel).
+
+```
+device   0  0  3  3  3  7  7  7  7 10 10 10 13 13 13 15 15 18 18 20 20 22 ... 63 64
+planes   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0 ... 62 62
+```
+
+- **On the device: 43 distinct greys out of 64 columns, rising the whole way, lit
+  from the third column.** That is a ramp. Its steps are uneven - pairs and triples
+  at the bottom where up to four sRGB codes share a duty level - but it never goes
+  backwards and it never sits on black.
+- **On the bit planes alone: four values** (0, 34, 50, 62), with the first 21 columns
+  black. That is what the preview drew before this card, and what the panel really
+  did before card 030.
+
+Second test, the dither change in one number: on this dark row a full-amplitude
+blue-noise dither swings a pixel by at least 3 sRGB codes; on the bright half of the
+grey ramp (sRGB 129..255) by **at most 1**, and then only where a value sits on a code
+boundary. Before, it was a screen-door texture at every brightness, none of which the
+panel could show above sRGB 38 - and all of which the LZ coder had to pay for.
+
+What the owner should look for on the real panel: row 4 (the fifth strip from the
+top) should read as a continuous dark ramp from black at the left, not as three or
+four steps with a long black run. Large dark areas may sparkle faintly; that is the
+firmware's phase cycle and is expected (brief 2.1).
+
+### New card
+
+- **113** `docs/board/backlog/113-studio-cadence-history.md` - show the sender's
+  cadence ladder moving. Written out of the frame-rate note above: the rate is on the
+  page but its *history* is not, so a step down under loss looks exactly like somebody
+  moving the frame-rate slider. Nothing about the sender was changed by this card.
