@@ -478,6 +478,8 @@ async function start() {
 
   const attachedId = () => (picture ? picture.preview.device : state.device) || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
+  /** The panel link, from the half-second heartbeat. Null when output is off. */
+  let link = null;
 
   const needPanel = () => {
     const id = attachedId();
@@ -513,14 +515,17 @@ async function start() {
   });
   $('#look').addEventListener('click', () => attempt('Asked every panel who it is', () => invoke('devices/refresh', {})));
 
-  /** The one line that answers "is it on the panel?". */
+  /** The one line that answers "is it on the panel?".
+   *
+   *  It reads the half-second heartbeat rather than the two-second poll, so
+   *  a panel going away shows up in half a second and the answer does not
+   *  depend on a read that may not have happened yet. */
   function panelPill() {
-    const p = attachedDevice();
-    const player = p && p.player;
+    const player = (attachedDevice() || {}).player;
     if (!attachedId()) return ['No panel', 'away'];
     if (player && player.health.gave_up) return ['Stopped', 'bad'];
     if (!state.on) return ['Output off', 'away'];
-    if (player && player.panel && player.panel.connected) return ['On the panel', 'on'];
+    if (link && link.connected) return ['On the panel', 'on'];
     return ['Panel away', 'away'];
   }
 
@@ -532,18 +537,21 @@ async function start() {
     }
     $('#stage').dataset.panel = tone === 'on' ? 'on' : 'away';
 
+    // The device list is polled, so it can legitimately be a moment behind
+    // the state and the heartbeat. Nothing below may assume it is here.
     const d = attachedDevice();
     const player = d && d.player;
-    const link = player && player.panel;
+    const where = d ? (d.frame_addr || d.address || d.instance || d.id) : '';
+    const name = d ? d.label : attachedId() || '';
 
-    $('#panel-name').textContent = d ? d.label : 'No panel yet';
+    $('#panel-name').textContent = name || 'No panel yet';
     $('#panel-help').textContent = !attachedId()
       ? 'Nothing is being sent. The picture above is what the panel will show when one is found.'
       : !state.on
         ? 'The panel is on its own idle screen. The picture above is still playing here.'
         : link && link.connected
-          ? `Sending to ${d.frame_addr || d.address || d.instance || d.id}.`
-          : `${d.label} is away. It will pick this up again by itself when it comes back.`;
+          ? `Sending to ${where || name}.`
+          : `${name} is away. It will pick this up again by itself when it comes back.`;
 
     // Brightness. The maximum is the device's own ceiling once it has told us
     // what that is, so the slider cannot ask for something it will not give.
@@ -560,7 +568,7 @@ async function start() {
       : 'Not managed: whatever the panel has.';
 
     const rows = [];
-    if (link) {
+    if (link && state.on) {
       rows.push(['Link', link.state + (link.connected ? ` · ${link.fps.toFixed(0)} fps` : ''), link.connected ? null : 'dim']);
       rows.push(['Frames', `${nf.format(link.frames_sent)} sent, ${nf.format(link.frames_coalesced)} folded, ${nf.format(link.frames_dropped)} lost`]);
       if (link.codec_name) {
@@ -807,6 +815,10 @@ async function start() {
     statusTimer = setInterval(refreshPicture, STATUS_MS);
   }
   document.addEventListener('visibilitychange', tick);
+  // One read whatever the tab is doing, so a page opened in a background tab
+  // is already right the moment somebody looks at it. It is the *repeat* that
+  // a hidden tab is spared: a phone in a pocket should not poll all night.
+  refreshPicture();
   tick();
 
   // ---- the frame pump ----
@@ -854,7 +866,7 @@ async function start() {
   connect({
     frame: (buf) => { newest = buf; },
     state: (message) => sync(message.state),
-    status: (message) => { showPlaying(message.playing); showPanel(); },
+    status: (message) => { link = message.panel; showPlaying(message.playing); showPanel(); },
   });
 }
 
