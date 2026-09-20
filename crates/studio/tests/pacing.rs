@@ -102,7 +102,7 @@ async fn drag(at: SocketAddr, who: &'static str, how_long: Duration) -> (usize, 
 async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
 
     // Two tabs, neither of them asking for pictures: this weighs state only.
     let mut dragger = Ws::connect_asking(at, "client=dragger&fps=0").await;
@@ -168,7 +168,7 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
     studio.stop().await;
 }
 
-/// A deliberate change - a piece picked, a switch flipped - is not a burst, and
+/// A deliberate change - a patch picked, a switch flipped - is not a burst, and
 /// must still feel instant on the other browser. The pacer's leading edge is
 /// what makes that true: after a quiet moment there is nothing held, so the
 /// change goes out where it stands.
@@ -176,13 +176,13 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
 async fn a_single_change_still_arrives_at_once() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
     let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
     watcher.event("state").await; // the hello
 
     // Ten changes, each after a moment of quiet, which is what a person
     // clicking things produces. The first one is thrown away: the studio is
-    // still starting the piece, and what is being measured is the steady case.
+    // still starting the patch, and what is being measured is the steady case.
     let mut worst = Duration::ZERO;
     let mut total = Duration::ZERO;
     for i in 0..10u32 {
@@ -218,7 +218,7 @@ async fn a_single_change_still_arrives_at_once() {
 async fn the_value_a_drag_ended_on_always_arrives() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
     let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
     watcher.event("state").await; // the hello
 

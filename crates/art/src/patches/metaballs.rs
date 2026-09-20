@@ -4,11 +4,11 @@
 
 use crate::color::{oklch, smoothstep, Rgb};
 use crate::frame::{Frame, H, W};
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
 use std::f32::consts::TAU;
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "metaballs",
     name: "Metaballs",
     blurb: "Continuous colour, supersampled in linear light. More than 32 colours, so it shows codec damage.",
@@ -38,7 +38,7 @@ struct Metaballs {
     bodies: Vec<Body>,
 }
 
-fn make(seed: u64) -> Box<dyn Piece> {
+fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = Rng::new(seed);
     let bodies = (0..MAX_BODIES)
         .map(|_| Body {
@@ -52,7 +52,7 @@ fn make(seed: u64) -> Box<dyn Piece> {
     Box::new(Metaballs { bodies })
 }
 
-impl Piece for Metaballs {
+impl Patch for Metaballs {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let t = ctx.t as f32 * ctx.get("speed");
         let count = (ctx.get("count") as usize).clamp(1, MAX_BODIES);

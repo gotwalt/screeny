@@ -37,6 +37,12 @@ Body: **Goal**, **Context** (links into research/ and design/), **Deliverables**
 (exact file paths), **Acceptance** (how we know it is done), and a **Log** section
 the worker appends to.
 
+**Cards before 150 say "piece" for what is now a patch**, and "settings" for what is
+now a patch's `output` block. Card 150 renamed both everywhere in the code, the API,
+the page and `docs/design/`; `done/`, `parked/` and `docs/research/` are history and
+were left as they were written. `docs/board/ROADMAP.md` and `docs/ORCHESTRATOR.md`
+are the orchestrator's own running records and were left alone for the same reason.
+
 ## Worker protocol
 
 1. You are given a card number. Work only in your own git worktree on branch

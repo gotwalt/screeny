@@ -1,7 +1,7 @@
 //! Generative art for the screeny panel: 64x32 RGB LEDs, 6-bit linear, one
 //! frame per 1464-byte datagram. See `docs/design/generative-art-brief.md`.
 //!
-//! Pieces make frames; the pipeline makes them safe and displayable; outputs
+//! Patches make frames; the pipeline makes them safe and displayable; outputs
 //! take them away.
 //!
 //! Frame costs and the preview are the real encoder's answers, not estimates
@@ -20,23 +20,23 @@ pub mod meter;
 pub mod output;
 pub mod palette;
 pub mod panel;
-pub mod piece;
-pub mod pieces;
+pub mod patch;
+pub mod patches;
 pub mod pipeline;
 pub mod preview;
 pub mod rng;
 pub mod snapshot;
 pub mod variety;
 
-/// Whether this process can render the GPU pieces, and why not when it cannot
+/// Whether this process can render the GPU patches, and why not when it cannot
 /// (card 145).
 ///
 /// It exists in both builds on purpose: without the `gpu` feature there is no
-/// [`gpu`] module at all, and "this build has no GPU pieces" is itself the
+/// [`gpu`] module at all, and "this build has no GPU patches" is itself the
 /// answer a person deserves instead of a black rectangle.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct GpuStatus {
-    /// True when an adapter was opened and the GPU pieces will draw.
+    /// True when an adapter was opened and the GPU patches will draw.
     pub available: bool,
     /// The adapter's own name. Empty when there is none.
     pub adapter: String,
@@ -73,7 +73,7 @@ pub fn gpu_status() -> GpuStatus {
     {
         GpuStatus {
             available: false,
-            error: Some("this build has no GPU pieces: it was built with --no-default-features".into()),
+            error: Some("this build has no GPU patches: it was built with --no-default-features".into()),
             ..GpuStatus::default()
         }
     }
@@ -82,6 +82,6 @@ pub fn gpu_status() -> GpuStatus {
 pub use color::Rgb;
 pub use frame::{Frame, WireFrame, H, N, W};
 pub use meter::{Measured, Meter};
-pub use piece::{Clock, Ctx, Params, Piece, PieceDef};
+pub use patch::{Clock, Ctx, Params, Patch, PatchDef};
 pub use snapshot::Shot;
-pub use pipeline::{Pipeline, Settings, Stats};
+pub use pipeline::{Output, Pipeline, Stats};

@@ -1,5 +1,5 @@
 //! A torus knot as real geometry: vertex and index buffers, a camera, a depth
-//! buffer. The template for mesh-based 3D pieces, where `lattice` is the
+//! buffer. The template for mesh-based 3D patches, where `lattice` is the
 //! template for shader-only ones.
 
 use crate::dither::Dither;
@@ -7,12 +7,12 @@ use crate::frame::Frame;
 use crate::gpu::mat::{self, Mat4};
 use crate::gpu::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
 use crate::palette::Palette;
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
 use std::f32::consts::TAU;
 use wgpu::util::DeviceExt;
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "knot",
     name: "Torus knot",
     blurb: "GPU, rasterized mesh with a depth buffer, then mapped onto a 31-colour designed palette so it is sent exactly.",
@@ -73,7 +73,7 @@ struct Knot {
     live: Option<Option<Live>>,
 }
 
-fn make(seed: u64) -> Box<dyn Piece> {
+fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = Rng::new(seed);
     let windings = [(2.0, 3.0), (3.0, 2.0), (2.0, 5.0), (3.0, 4.0), (3.0, 5.0)];
     let winding = windings[(rng.u64() % windings.len() as u64) as usize];
@@ -198,7 +198,7 @@ impl Knot {
     }
 }
 
-impl Piece for Knot {
+impl Patch for Knot {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let samples = ctx.get("samples") as u32;
         if self.live.is_none() {

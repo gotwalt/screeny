@@ -15,6 +15,9 @@ The studio should be able to look at `clocks-numerals` at 21:12 without waiting 
 
 ## Context
 
+*(Card 150 renamed a piece to a patch: `piece::Clock` below is `patch::Clock` now, and
+`StoredPlayer::piece` is `StoredPlayer::patch`. Nothing else in this card moved.)*
+
 Card 162 gave `crates/art` the mechanism and deliberately stopped at the edge of
 `crates/studio`, which another worker owned at the time. `piece::Clock` is a value a
 runner carries - `Live`, or `Pinned(seconds)` carried forward by engine time - and

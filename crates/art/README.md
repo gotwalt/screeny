@@ -7,8 +7,8 @@ Two crates in the repo's single workspace (`crates/`; host toolchain, not the `e
 
 | | |
 |---|---|
-| `crates/art` (`screeny-art`) | Library + headless binary. Pieces, panel model, dither, limiter, statistics, outputs. No GUI dependencies; this is what will run on a server. |
-| `crates/studio` (`screeny-studio`) | Tauri v2 desktop app for designing pieces. A window onto the same pipeline, drawn as LEDs. |
+| `crates/art` (`screeny-art`) | Library + headless binary. Patches, panel model, dither, limiter, statistics, outputs. No GUI dependencies; this is what will run on a server. |
+| `crates/studio` (`screeny-studio`) | Tauri v2 desktop app for designing patches. A window onto the same pipeline, drawn as LEDs. |
 
 Nothing here opens the serial port or implements the wire protocol - that is
 `crates/proto` and `crates/screeny`, and this crate calls them. Frames leave
@@ -20,7 +20,7 @@ through the `Output` trait (`crates/art/src/output/`), of which
 ```bash
 # from the repo root
 cargo run -p screeny-studio                      # the designer
-cargo run -p screeny-art -- list                 # pieces and their parameters
+cargo run -p screeny-art -- list                 # patches and their parameters
 cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
 cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.png
@@ -30,13 +30,13 @@ cargo test -p screeny-art                        # includes the end-to-end wire 
 cargo run --release -p screeny-art -- play plasma --to screeny-4a00a4
 
 # the network-free build: no sockets, no mdns-sd, no `play`
-cargo build -p screeny-art --no-default-features            # also no GPU pieces
+cargo build -p screeny-art --no-default-features            # also no GPU patches
 cargo build -p screeny-art --no-default-features --features gpu
 ```
 
 ## Sending to a panel
 
-`play <piece> --to NAME|ADDR` streams a piece over UDP through
+`play <patch> --to NAME|ADDR` streams a patch over UDP through
 [`screeny`](../screeny)'s `Link`. `--to` takes three shapes, told apart by
 `Target::parse` (card 146):
 
@@ -54,8 +54,8 @@ Three things are worth knowing before building on it:
 - **Indexed frames go on the wire exactly.** Up to 32 colours whatever the
   indices, up to 256 when they compress. Pixel-exactness is checked end to end
   against `screeny-sim` in [`tests/sender.rs`](tests/sender.rs).
-- **Render at whatever suits the piece.** The link never sleeps and never
-  bursts: it applies the device's cadence ceiling itself, so a 60 fps piece into
+- **Render at whatever suits the patch.** The link never sleeps and never
+  bursts: it applies the device's cadence ceiling itself, so a 60 fps patch into
   a 30 fps panel puts 30 on the wire and the device supersedes nothing. Half the
   frames come back `Coalesced`, which is the system working.
 - **The network cannot fail a send.** A panel that reboots, moves or is off is a
@@ -79,8 +79,8 @@ live behind the `sender` feature, and that feature is **default-on**, alongside
   without `play`.
 
 **The network-free build is `cargo build -p screeny-art --no-default-features`**
-(add `--features gpu` to keep the GPU pieces). It has no sockets, no mdns-sd and
-no ctrlc, the core - pieces, pipeline, meter, preview - is all there, and
+(add `--features gpu` to keep the GPU patches). It has no sockets, no mdns-sd and
+no ctrlc, the core - patches, pipeline, meter, preview - is all there, and
 `screeny-art play` is gone from the binary with a usage line that says why.
 `cargo test -p screeny-art --no-default-features` is green; `tests/sender.rs`
 compiles to nothing there, which is the point of the `cfg`.
@@ -97,17 +97,17 @@ Studio keys: `Space` pause, `R` restart, `N` new seed, `1` `2` `3` LEDs / squint
 ## Pipeline
 
 ```text
-piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
+patch -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
                                                              \-> meter: real encode
                                                                       -> real decode -> preview
 ```
 
-- A **piece** turns (wall-clock `t`, seed, parameters) into a `Frame`: either
+- A **patch** turns (wall-clock `t`, seed, parameters) into a `Frame`: either
   linear-light RGB, or a palette of up to 256 colours plus indices. Indexed
   frames pass through exactly - 32 colours whatever the indices do, more when
   the index image compresses (see the assumptions section). Prefer them.
 - The **limiter** caps average picture level and the rate at which mean
-  luminance (and mean red) may rise, so no piece can strobe the panel.
+  luminance (and mean red) may rise, so no patch can strobe the panel.
 - The **meter** (`meter.rs`) runs the sender's own chooser and the firmware's
   own decoder over every frame, so the codec, the byte count, the exactness
   decision and the preview picture are measured rather than estimated. The
@@ -116,11 +116,11 @@ piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireF
 
 ## Telling a run what time it is (`--time`)
 
-Pieces that tell the time read `ctx.now` (local time of day), never the system
-clock. Where that comes from is `piece::Clock`, a value the runner carries:
+Patches that tell the time read `ctx.now` (local time of day), never the system
+clock. Where that comes from is `patch::Clock`, a value the runner carries:
 `Clock::Live` reads the machine, `Clock::Pinned` pretends it was a given time
 of day when the run began and lets it run on with engine time. `snapshot` has
-always simulated the clock so a clock piece can be run faster than real time;
+always simulated the clock so a clock patch can be run faster than real time;
 since card 162 it can also be *aimed*, with `--time HH:MM[:SS]` on `snapshot`,
 `pipe` and `play`:
 
@@ -136,15 +136,15 @@ cargo run --release -p screeny-art -- \
 
 | you want | the command |
 |---|---|
-| the numerals piece **settled on 21:12**, hands holding the time | `--time 21:12` |
+| the numerals patch **settled on 21:12**, hands holding the time | `--time 21:12` |
 | it **mid-dance into 21:12**, two seconds from landing | `--time 21:11:20 --at 38 --seed 7` |
-| the dials piece **telling 10:10**, gathered and held | `--time 10:09:50 --at 15` |
+| the dials patch **telling 10:10**, gathered and held | `--time 10:09:50 --at 15` |
 
 Reading those:
 
 - **The settled minute is `--time` and nothing else.** With `--time`, `--at`
   defaults to 20 s and `--warmup` to the whole run: a clock has to be watched
-  from its first frame, and the numerals piece dances onto the minute it was
+  from its first frame, and the numerals patch dances onto the minute it was
   born on in up to about 16 s (15.4 s, the longest over 60 seeds and all
   thirteen choreographies). At 20 s every one of them has landed and settled
   and none has set off for the next minute. **No `--seed` either**: once the
@@ -154,42 +154,42 @@ Reading those:
   after it, and `--at`/`--warmup` given explicitly still mean what they always
   did.
 - **A dance lands exactly as the minute turns.** So the way to catch one is to
-  start before the minute and render just before it: born at 21:11:20 the piece
+  start before the minute and render just before it: born at 21:11:20 the patch
   dances onto 21:11, holds, sets off again around t=31 and lands at t=40, which
   is 21:12:00. `--at 38` is two seconds from the end of that dance. This one
   *is* the choreography, so pin `--seed`.
-- **The pinned day is day zero, not today.** The numerals piece seeds each
+- **The pinned day is day zero, not today.** The numerals patch seeds each
   minute's choreography from the absolute minute number, so "21:12 today" would
   pick a different dance tomorrow. `--time` means one thing for ever.
 - **`--seed` is still the system clock by default.** Anything whose picture
-  depends on the piece's own randomness wants `--seed N` as well.
-- The pieces' `offset` parameter is unchanged: an offset in minutes, relative
+  depends on the patch's own randomness wants `--seed N` as well.
+- The patches' `offset` parameter is unchanged: an offset in minutes, relative
   to whatever the clock says, which is what the studio's slider wants.
 
 `snapshot::take` is the whole run - it is what the command calls and what the
 tests in [`tests/pinned_time.rs`](tests/pinned_time.rs) render through, so the
 determinism claim is checked on the code that is shipped.
 
-## Adding a piece
+## Adding a patch
 
-1. Copy `crates/art/src/pieces/metaballs.rs` (continuous colour) or
+1. Copy `crates/art/src/patches/metaballs.rs` (continuous colour) or
    `plasma.rs` (indexed).
 2. Give it a `DEF` with an id, a one-line blurb and `ParamSpec`s. The studio
    builds its controls from those: `param(..)` for a number is a slider,
    `choice(id, label, &["..", ".."], default)` for a list of named stops is a
    list, and `toggle(id, label, default)` for off-or-on is a switch (card 163).
-   A choice is still an `f32` from end to end - wire, state file, per-piece
+   A choice is still an `f32` from end to end - wire, state file, per-patch
    memory - so use one whenever a parameter's values have names, rather than
-   putting the key in the label. Take the names from the piece's own words.
-3. List it in `ALL` in `crates/art/src/pieces/mod.rs`. If it needs a GPU, list
+   putting the key in the label. Take the names from the patch's own words.
+3. List it in `ALL` in `crates/art/src/patches/mod.rs`. If it needs a GPU, list
    its id in `NEEDS_GPU` beside it, so the studio can say why it is black on a
    machine with no adapter (card 145).
 
 Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive
-everything from `ctx.t`. State between frames is fine; keep it in the piece.
+everything from `ctx.t`. State between frames is fine; keep it in the patch.
 
-## Clocks: numerals (`pieces/clocks/`, id `clocks-numerals`)
+## Clocks: numerals (`patches/clocks/`, id `clocks-numerals`)
 
 Kinetic choreography after Humans since 1982's ClockClock 24: a 3 x 8 grid of
 two-handed clocks whose hands draw the time. 8 x 8 LED cells fit the panel
@@ -239,11 +239,11 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   "direct" kind (it did, twice, while being written).
   Left to vary, six dances in ten are composed; `dance` 13 is always composed,
   1-12 are the named ones.
-- **Now playing.** A piece that composes as it goes can say what it is
-  performing (`Piece::playing`) and offer a control or two (`Piece::act`); the
+- **Now playing.** A patch that composes as it goes can say what it is
+  performing (`Patch::playing`) and offer a control or two (`Patch::act`); the
   studio shows this in its inspector. The clock names its dance ("rings > morph
   > split, point") and offers "Play it again" and "Compose another", which
-  perform at once to the time already showing. The dials piece names its mood and offers
+  perform at once to the time already showing. The dials patch names its mood and offers
   "Move on". (A ratings mechanism was tried and removed: the owner likes nearly
   every dance, so the composer is steered by variety, not taste.)
 - **A minute has a shape**: the dance lands as the minute turns, the time is
@@ -267,7 +267,7 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   blurred slashes are a texture. Dimming costs no palette entry: a hand's ink scaled
   in linear light is what its own anti-aliasing ramp already is, so it lands on a step
   of that ramp and the frame stays 31 colours. The other treatments (including `0`,
-  exactly what the piece did before) are switchable live so the panel can settle it -
+  exactly what the patch did before) are switchable live so the panel can settle it -
   by name since card 163, rather than by counting a slider's stops against a legend;
   the evidence is `docs/research/010-numerals-rest-pose.md`. Resting dials only recede
   while the time is being held: a dance is always drawn at full strength, and the
@@ -279,16 +279,16 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   3, 4, 7, 8 follow manu.ninja's table (from the studio's promotional films).
 - **To render a chosen minute**, `--time` (above): `snapshot clocks-numerals
   --time 21:12 --out x.png` is the settled picture of 21:12, the same PNG every
-  time it is typed, whatever the seed. Before/after comparisons of this piece
+  time it is typed, whatever the seed. Before/after comparisons of this patch
   are only comparable that way.
 - In the studio, drag "Seconds per minute" down to ~30 to see the whole cycle
   quickly, and "Choreography" to pick a dance; dances and moods are logged to
   stderr with their start times. At 60 it is a real clock on local time. Set
   "Seconds the time is held" to 60 for a clock that only moves on the minute.
 
-## Clocks: dials (`pieces/clocks/dials.rs`, id `clocks-dials`)
+## Clocks: dials (`patches/clocks/dials.rs`, id `clocks-dials`)
 
-The same instrument as the numerals piece, with the other face. The two are a
+The same instrument as the numerals patch, with the other face. The two are a
 pair, not rivals: numerals need eight columns, so 8-LED dials, and can be read
 across a room; larger dials can only tell the time as analog hands, and are a
 moving field first. This one is the spirit of the original rather than its
@@ -306,7 +306,7 @@ colours, exact), drifting slowly by palette animation.
 
 It is still a clock. Drawn digits need two dials side by side per digit, so
 eight columns, so 8-LED dials: numerals and large dials cannot both fit in 64
-LEDs (the `clocks` piece is the numeral version). But the dials are clocks, so
+LEDs (the `clocks` patch is the numeral version). But the dials are clocks, so
 as each minute turns (`tell`), the flow gathers until every dial reads the time
 as an analog clock, holds, and lets go: `Ambient::step_holding` draws every
 hand to a pose exactly, under the same motor limits, and releases it back into
@@ -317,40 +317,40 @@ set relative to the hands' own (`contrast`, by default the complement), because
 the hands' hue drifts round the wheel and any fixed colour would sometimes be
 the one they already are. Legible on 4x2, readable on 6x3.
 
-Hands are drawn by `draw.rs`, shared with the numerals piece. Each hand's
+Hands are drawn by `draw.rs`, shared with the numerals patch. Each hand's
 anti-aliasing ramp is its ink scaled in linear light, which is what partial
 coverage is; a ramp at constant OKLCH chroma is a different colour from the ink
 dimmed (light blue cannot hold much chroma), and edge pixels used to fall onto
 the other hand's ramp. There is a regression test.
 
-## GPU and 3D pieces
+## GPU and 3D patches
 
-GPU pieces render through [wgpu](https://wgpu.rs) (`crates/art/src/gpu/`). It
+GPU patches render through [wgpu](https://wgpu.rs) (`crates/art/src/gpu/`). It
 needs no window or event loop, so the same code runs on the studio's engine
 thread (Metal on a Mac) and headless on a Linux box: Vulkan where there is a
 driver, otherwise OpenGL ES 3 over EGL. `WGPU_BACKEND=gl` (or `vulkan`) forces
 one; the adapter in use is logged at start-up. Device limits are held to
 `downlevel_defaults`, i.e. GLES 3 class hardware.
 
-A GPU piece is an ordinary `Piece`. It draws in linear light into an `Offscreen`
+A GPU patch is an ordinary `Patch`. It draws in linear light into an `Offscreen`
 target `samples` times the panel's resolution per axis (RGBA16F + depth), and
 `Offscreen::finish` reads it back and box-filters it to 64x32. Limiter, dither,
-panel model and statistics are shared with CPU pieces.
+panel model and statistics are shared with CPU patches.
 
 Two templates:
 
-- **Shader only** (`pieces/lattice.rs` + `lattice.wgsl`): write
-  `fn piece(uv: vec2<f32>) -> vec3<f32>`, list the parameters, hand both to
-  `ShaderPiece::boxed`. Parameters arrive as `P(0)`, `P(1)`, ... in list order;
+- **Shader only** (`patches/lattice.rs` + `lattice.wgsl`): write
+  `fn shade(uv: vec2<f32>) -> vec3<f32>`, list the parameters, hand both to
+  `ShaderPatch::boxed`. Parameters arrive as `P(0)`, `P(1)`, ... in list order;
   `u.t`, `u.seed` and `oklch()` are provided. This is the fast path for
   raymarching and Shadertoy-style experiments.
-- **Mesh** (`pieces/knot.rs` + `knot.wgsl`): vertex/index buffers, a camera from
+- **Mesh** (`patches/knot.rs` + `knot.wgsl`): vertex/index buffers, a camera from
   `gpu::mat`, a depth-tested pass from `Offscreen::pass`.
 
 ### Painting by palette index (`overland`)
 
 The third template, and the one built for this panel rather than shrunk onto
-it. `ShaderPiece::with_scene` takes a function that runs on the CPU every frame
+it. `ShaderPatch::with_scene` takes a function that runs on the CPU every frame
 and returns a `Scene`: a palette of up to 32 colours and a few floats. The
 shader then never computes a colour. Each surface picks a palette entry
 (`PAL(i)`), or a mix of two neighbouring entries (`ramp()`), and the frame is
@@ -358,7 +358,7 @@ mapped back onto the same palette after the downsample. Pure entries map to
 themselves; mixes and anti-aliased edges become fixed blue-noise dither. The
 result is a 3D scene that is an exact indexed frame.
 
-What that buys, all of it used in `pieces/overland.rs` + `overland.wgsl`:
+What that buys, all of it used in `patches/overland.rs` + `overland.wgsl`:
 
 - **Time of day is palette animation.** Geometry and indices do not care what
   hour it is; the 32 colours move through dawn, noon, dusk and night. Lossless
@@ -394,8 +394,8 @@ Things to know:
   needs a working Vulkan or EGL/GLES 3 driver and access to `/dev/dri/renderD*`;
   no X or Wayland session.
 - `cargo build -p screeny-art --no-default-features` leaves wgpu and the GPU
-  pieces out (and the network stack with them; `--features gpu` keeps the GPU
-  pieces and drops only the network).
+  patches out (and the network stack with them; `--features gpu` keeps the GPU
+  patches and drops only the network).
 
 ## Provisional assumptions
 
@@ -441,7 +441,7 @@ brightness and only the light goes away (card 066). A dim room is the table
 above times `screeny_panel::oe_light(brightness)`.
 
 **Dither is in duty steps, so it lands where the panel needs it.**
-`Settings::dither`'s bias is one duty step, which above sRGB 38 is a tenth of
+`Output::dither`'s bias is one duty step, which above sRGB 38 is a tenth of
 an 8-bit code - it rounds away, and no noise the panel cannot show is spent on
 the wire. Below 38, where up to four codes share a level, a duty step is bigger
 than a code and the dither does the whole job of mixing the two levels either
@@ -461,7 +461,7 @@ fits where a 40-colour field of confetti does not.
 One thing to know about the meter rather than assume: it and the sender each
 hold their own `Encoder`, and the chooser gives the previous frame's codec a
 small advantage. Fed the same frames they answer identically (there is a test);
-under the link's default cadence ceiling a 60 fps piece sends every other frame,
+under the link's default cadence ceiling a 60 fps patch sends every other frame,
 so the two histories differ and a *marginal* frame can take a different codec.
 Never a different exactness. Point the meter at the connected device with
 `pipeline.meter().set_limits(lim.budget, lim.codecs)` so it is at least

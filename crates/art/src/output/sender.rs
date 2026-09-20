@@ -1,4 +1,4 @@
-//! Frames to a real panel, over the wire, exactly when the piece made them
+//! Frames to a real panel, over the wire, exactly when the patch made them
 //! exactly.
 //!
 //! This is the whole of the network side of the art system, and it is thin on
@@ -63,7 +63,7 @@ pub struct PanelStatus {
     /// Frames that reached the wire.
     pub frames_sent: u64,
     /// Frames folded away by the cadence ceiling. Not a problem: a 60 fps
-    /// piece into a 30 fps panel coalesces half of them by design.
+    /// patch into a 30 fps panel coalesces half of them by design.
     pub frames_coalesced: u64,
     /// Frames lost because the link was down.
     pub frames_dropped: u64,
@@ -165,7 +165,7 @@ impl SenderOutput {
     }
 
     /// Drain telemetry and drive reconnection while frames are not flowing -
-    /// between pieces, while one is loading, or when the studio is paused.
+    /// between patches, while one is loading, or when the studio is paused.
     /// [`Output::send`] does this itself.
     pub fn poll(&mut self) {
         self.link.poll();
@@ -243,10 +243,10 @@ impl Output for SenderOutput {
     fn send(&mut self, frame: &WireFrame) -> io::Result<()> {
         let px = match &frame.indexed {
             // The preferred path: palette and indices go on the wire exactly
-            // as the piece made them, up to 32 colours whatever the indices,
+            // as the patch made them, up to 32 colours whatever the indices,
             // and up to 256 when they compress.
             Some((palette, indices)) => Pixels::indexed(palette, indices),
-            // A piece that renders continuous colour: the chooser quantises,
+            // A patch that renders continuous colour: the chooser quantises,
             // which is the best that fits.
             None => Pixels::rgb(&frame.rgb),
         };

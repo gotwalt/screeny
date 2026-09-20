@@ -1,13 +1,13 @@
-//! Full-frame shader pieces: the quickest way to try a 3D idea. Write one WGSL
-//! function, `fn piece(uv: vec2<f32>) -> vec3<f32>`, list its parameters, done.
-//! See `fragment.wgsl` for what the shader is given and `pieces/lattice.rs` for
+//! Full-frame shader patches: the quickest way to try a 3D idea. Write one WGSL
+//! function, `fn shade(uv: vec2<f32>) -> vec3<f32>`, list its parameters, done.
+//! See `fragment.wgsl` for what the shader is given and `patches/lattice.rs` for
 //! a worked example.
 
 use super::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
 use crate::dither::Dither;
 use crate::frame::Frame;
 use crate::palette::Palette;
-use crate::piece::{Ctx, ParamSpec, Piece};
+use crate::patch::{Ctx, ParamSpec, Patch};
 use crate::rng::Rng;
 
 const HARNESS_WGSL: &str = include_str!("fragment.wgsl");
@@ -34,7 +34,7 @@ struct Uniforms {
     palette: [[f32; 4]; SCENE_PALETTE],
 }
 
-/// What a piece's scene function works out on the CPU each frame.
+/// What a patch's scene function works out on the CPU each frame.
 pub struct Scene {
     /// Anything the shader needs that is not a parameter: light direction,
     /// phase of a cycle, camera state. Read in the shader as `X(i)`.
@@ -64,7 +64,7 @@ struct Live {
     target: Offscreen,
 }
 
-pub struct ShaderPiece {
+pub struct ShaderPatch {
     label: &'static str,
     source: &'static str,
     params: &'static [ParamSpec],
@@ -76,23 +76,23 @@ pub struct ShaderPiece {
     live: Option<Option<Live>>,
 }
 
-impl ShaderPiece {
-    /// `source` must define `fn piece(uv: vec2<f32>) -> vec3<f32>`. Parameters
+impl ShaderPatch {
+    /// `source` must define `fn shade(uv: vec2<f32>) -> vec3<f32>`. Parameters
     /// reach it as `P(0)`, `P(1)`, ... in the order of `params`. If one of them
     /// is called `samples`, it sets the supersampling; otherwise 4 per axis.
-    pub fn boxed(label: &'static str, source: &'static str, params: &'static [ParamSpec], seed: u64) -> Box<dyn Piece> {
+    pub fn boxed(label: &'static str, source: &'static str, params: &'static [ParamSpec], seed: u64) -> Box<dyn Patch> {
         Self::build(label, source, params, seed, None)
     }
 
     /// As `boxed`, plus a function run on the CPU every frame to give the
-    /// shader a palette and scene values. See `pieces/overland.rs`.
+    /// shader a palette and scene values. See `patches/overland.rs`.
     pub fn with_scene(
         label: &'static str,
         source: &'static str,
         params: &'static [ParamSpec],
         seed: u64,
         scene: SceneFn,
-    ) -> Box<dyn Piece> {
+    ) -> Box<dyn Patch> {
         Self::build(label, source, params, seed, Some(scene))
     }
 
@@ -102,9 +102,9 @@ impl ShaderPiece {
         params: &'static [ParamSpec],
         seed: u64,
         scene: Option<SceneFn>,
-    ) -> Box<dyn Piece> {
+    ) -> Box<dyn Patch> {
         assert!(params.len() <= MAX_PARAMS, "{label}: at most {MAX_PARAMS} parameters");
-        Box::new(ShaderPiece {
+        Box::new(ShaderPatch {
             label,
             source,
             params,
@@ -137,7 +137,7 @@ impl ShaderPiece {
                 buffers: &[],
             },
             primitive: Default::default(),
-            // Unused by a full-frame shader, but it keeps every piece compatible
+            // Unused by a full-frame shader, but it keeps every patch compatible
             // with the one kind of pass `Offscreen` hands out.
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
@@ -171,7 +171,7 @@ impl ShaderPiece {
     }
 }
 
-impl Piece for ShaderPiece {
+impl Patch for ShaderPatch {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let samples = self.samples_param.map_or(4, |id| ctx.get(id) as u32);
         if self.live.is_none() {

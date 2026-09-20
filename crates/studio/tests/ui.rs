@@ -180,9 +180,9 @@ fn the_two_screens_hold_what_the_split_says_they_do() {
     for word in ["WiFi", "Reboot", "heap", "discovery", "mDNS"] {
         assert!(!INDEX_HTML.contains(word), "the Picture screen should not talk about {word}");
     }
-    // The two that stay, and why: brightness changes how the piece looks on
+    // The two that stay, and why: brightness changes how the patch looks on
     // the LEDs, and the chip is the link to the other screen.
-    assert!(INDEX_HTML.contains("id=\"bright\""), "brightness stays reachable while judging a piece");
+    assert!(INDEX_HTML.contains("id=\"bright\""), "brightness stays reachable while judging a patch");
     assert!(PANEL_HTML.contains("id=\"bright\""), "and is the same control on the Panel screen");
     assert!(COMMON_JS.contains("export function bindBrightness"), "bound once, so the two cannot drift");
     assert!(
@@ -275,7 +275,7 @@ fn the_page_can_say_whether_it_is_looking_for_panels() {
 }
 
 /// Card 145: the GPU outcome is part of the studio's state rather than a line
-/// on stderr. `bootstrap` says which pieces need an adapter and whether there
+/// on stderr. `bootstrap` says which patches need an adapter and whether there
 /// is one; `/api/v1/status` says the same thing; and a missing adapter is
 /// never a 503.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -286,16 +286,16 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
     let boot = get(at, "/api/v1/bootstrap").await.json();
     let gpu = &boot["gpu"];
     assert!(gpu["available"].is_boolean(), "bootstrap should carry the adapter outcome: {boot}");
-    let pieces = boot["pieces"].as_array().expect("a list of pieces");
-    assert!(pieces.iter().all(|p| p["needs_gpu"].is_boolean()), "every piece says whether it needs an adapter");
+    let patches = boot["patches"].as_array().expect("a list of patches");
+    assert!(patches.iter().all(|p| p["needs_gpu"].is_boolean()), "every patch says whether it needs an adapter");
     // Built with the `gpu` feature, so there are some; without it there are
     // none, and that is the truth for that build.
-    let marked: Vec<&str> = pieces
+    let marked: Vec<&str> = patches
         .iter()
         .filter(|p| p["needs_gpu"] == true)
         .filter_map(|p| p["id"].as_str())
         .collect();
-    assert_eq!(marked, screeny_art::pieces::NEEDS_GPU.to_vec(), "the marked pieces are exactly the GPU ones");
+    assert_eq!(marked, screeny_art::patches::NEEDS_GPU.to_vec(), "the marked patches are exactly the GPU ones");
 
     let status = get(at, "/api/v1/status").await.json();
     assert_eq!(status["gpu"], *gpu, "the two routes must not be able to disagree");
@@ -311,14 +311,14 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
     }
 }
 
-/// And the page draws it: the GPU pieces are marked unavailable rather than
+/// And the page draws it: the GPU patches are marked unavailable rather than
 /// offered and then black, and the reason is on the page.
 #[test]
-fn the_page_says_why_a_gpu_piece_is_not_available() {
-    assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the piece list needs a line for the adapter");
-    assert!(PICTURE_JS.contains("input.disabled = true"), "a piece that cannot draw must not be offered");
-    assert!(PICTURE_JS.contains("needs_gpu"), "the page reads the per-piece flag from bootstrap");
-    assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable piece has to look unavailable");
+fn the_page_says_why_a_gpu_patch_is_not_available() {
+    assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the patch list needs a line for the adapter");
+    assert!(PICTURE_JS.contains("input.disabled = true"), "a patch that cannot draw must not be offered");
+    assert!(PICTURE_JS.contains("needs_gpu"), "the page reads the per-patch flag from bootstrap");
+    assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable patch has to look unavailable");
 }
 
 /// Card 180: the page has somewhere to put what only the device knows, it is
@@ -589,15 +589,15 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
     let at = studio.addr;
 
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    let piece = boot["pieces"]
+    let patch = boot["patches"]
         .as_array()
-        .expect("pieces")
+        .expect("patches")
         .iter()
         .find(|p| p["id"] == "clocks-numerals")
         .expect("clocks-numerals")
         .clone();
     let param = |id: &str| {
-        piece["params"]
+        patch["params"]
             .as_array()
             .expect("params")
             .iter()
@@ -628,7 +628,7 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
 
     // The value is still an `f32` on the wire and in the state: nothing about
     // a choice changes how it is set or stored.
-    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"clocks-numerals"}"#).await.status, 200);
     let set = post(at, "/api/v1/set_param", r#"{"id":"rest","value":4.0}"#).await.json();
     assert_eq!(set["params"]["rest"], 4.0);
     let clamped = post(at, "/api/v1/set_param", r#"{"id":"rest","value":9.0}"#).await.json();

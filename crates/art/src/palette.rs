@@ -2,7 +2,7 @@
 //!
 //! This is how continuous renders (3D shading, simulations) get "inside" what
 //! the panel can carry: instead of handing the sender hundreds of colours to
-//! quantise as it sees fit, the piece chooses them itself, in a perceptual
+//! quantise as it sees fit, the patch chooses them itself, in a perceptual
 //! space, and the frame goes out indexed and exact (brief section 2.3).
 //!
 //! **How many is "itself"?** Up to [`MAX_PALETTE`] - 256 - not 32 (card 102).
@@ -145,9 +145,9 @@ mod tests {
             let u = x as f32 / 63.0;
             crate::color::oklch(0.2 + 0.7 * u, 0.12, 20.0 + 80.0 * (y as f32 / 31.0).floor())
         });
-        let mut settings = crate::pipeline::Settings::default();
-        settings.limiter.enabled = false;
-        let out = crate::Pipeline::new(settings).process(pal.map(&f, Dither::None, 0.0), 1.0 / 30.0);
+        let mut output = crate::pipeline::Output::default();
+        output.limiter.enabled = false;
+        let out = crate::Pipeline::new(output).process(pal.map(&f, Dither::None, 0.0), 1.0 / 30.0);
         assert!(out.stats.exact, "{} colours went lossy", out.stats.distinct_colours);
         assert_eq!(out.stats.codec, screeny_proto::dec::codec::PAL8_LZ);
         assert!(out.stats.encoded_bytes <= crate::meter::PAYLOAD_BYTES);

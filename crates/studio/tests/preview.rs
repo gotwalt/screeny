@@ -22,9 +22,9 @@ const PACKET: usize = screeny_studio::page::PACKET_BYTES;
 /// A window long enough to average a rate over without the test being slow.
 const WINDOW: Duration = Duration::from_secs(2);
 
-/// Put the page on a piece, at a known rate, with nothing else moving.
-async fn playing(at: std::net::SocketAddr, piece: &str, fps: f64, paused: bool) {
-    post(at, "/api/v1/set_piece", &format!(r#"{{"id":"{piece}"}}"#)).await;
+/// Put the page on a patch, at a known rate, with nothing else moving.
+async fn playing(at: std::net::SocketAddr, patch: &str, fps: f64, paused: bool) {
+    post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
     let body = format!(r#"{{"paused":{paused},"speed":1.0,"fps":{fps}}}"#);
     assert_eq!(post(at, "/api/v1/set_playback", &body).await.status, 200);
     // And wait until the render loop is really on that rate, so the window

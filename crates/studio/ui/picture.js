@@ -8,7 +8,7 @@
 // device's facts, identify/rename/reboot - to a screen of their own at
 // `/panel`, so that this one is about the picture and nothing else. What is
 // left of the panel here is two things, both of which change how the *picture*
-// is judged: **brightness**, which is how the piece looks on the LEDs, and the
+// is judged: **brightness**, which is how the patch looks on the LEDs, and the
 // **status chip** in the title block, which says what the panel is doing, wears
 // a fault tone when it needs attention, and is the way to the Panel screen.
 //
@@ -32,7 +32,7 @@ const W = 64, H = 32;
 const HEADER = 52; // keep in step with studio/src/page.rs
 const PITCH_MM = 3; // LED pitch: the lit area is 192 x 96 mm
 
-// ---------- per-viewer view settings (never sent to the server) ----------
+// ---------- per-viewer view options (never sent to the server) ----------
 
 const view = Object.assign(
   { mode: 'dots', size: 'fit', dot: 0.66, bloom: 0.3, pxPerMm: 4.96 }, // 4.96 = a 14" MacBook Pro
@@ -189,28 +189,28 @@ async function start() {
   // Controls that show a value from `state`. Another browser changing
   // something is the same thing as this one doing it, so both paths end here.
   const refreshers = [];              // bound once, below
-  let paramControls = [];             // rebuilt whenever the piece changes
+  let paramControls = [];             // rebuilt whenever the patch changes
   const bind = (control) => { refreshers.push(control); return control; };
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  const pushSettings = () => call('set_settings', { settings: state.settings });
+  const pushOutput = () => call('set_output', { output: state.output });
   const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed, fps: state.fps });
 
-  // ---- piece, seed, parameters ----
+  // ---- patch, seed, parameters ----
 
-  const pieceById = Object.fromEntries(boot.pieces.map((p) => [p.id, p]));
+  const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
-  // Card 145: a GPU piece with no adapter renders black, and used to say so
+  // Card 145: a GPU patch with no adapter renders black, and used to say so
   // only on the process's stderr - which in a container is `docker logs`,
   // which nobody is reading. The outcome is decided once by the server and
   // comes down in `bootstrap`.
   const gpu = boot.gpu || { available: true };
   const unplayable = (p) => Boolean(p && p.needs_gpu && !gpu.available);
-  const blocked = boot.pieces.filter(unplayable);
+  const blocked = boot.patches.filter(unplayable);
 
-  $('#pieces').replaceChildren(...boot.pieces.map((p) => {
+  $('#patches').replaceChildren(...boot.patches.map((p) => {
     const label = document.createElement('label');
-    const input = Object.assign(document.createElement('input'), { type: 'radio', name: 'piece', value: p.id });
+    const input = Object.assign(document.createElement('input'), { type: 'radio', name: 'patch', value: p.id });
     const span = Object.assign(document.createElement('span'), { textContent: p.name });
     if (unplayable(p)) {
       // Not offered, rather than offered and then black.
@@ -219,7 +219,7 @@ async function start() {
       label.title = 'Needs a graphics adapter, and there is none here.';
       span.append(Object.assign(document.createElement('em'), { textContent: 'no GPU' }));
     }
-    input.addEventListener('change', async () => adopt(await call('set_piece', { id: p.id })));
+    input.addEventListener('change', async () => adopt(await call('set_patch', { id: p.id })));
     label.append(input, span);
     return label;
   }));
@@ -230,10 +230,10 @@ async function start() {
     $('#gpu-note').textContent = `${names} cannot be drawn here — ${gpu.error || 'no graphics adapter'}.`;
   }
 
-  /** A black picture never passes silently: if the piece that is *already*
+  /** A black picture never passes silently: if the patch that is *already*
    *  loaded needs an adapter there is none for - which is how a state file
    *  from a machine with a GPU arrives in a container without one - the stage
-   *  says so until another piece is picked.
+   *  says so until another patch is picked.
    *
    *  It is re-asserted rather than said once, because the notice line is
    *  shared: the socket clears it when it (re)connects, and a transient
@@ -242,23 +242,23 @@ async function start() {
    *  somebody is reading. */
   let blackNotice = '';
   function sayIfBlack() {
-    const piece = pieceById[state.piece];
+    const patch = patchById[state.patch];
     const el = $('#notice');
-    if (!unplayable(piece)) {
+    if (!unplayable(patch)) {
       if (el.textContent === blackNotice) notice('');
       delete $('#gpu-note').dataset.tone;
       blackNotice = '';
       return;
     }
     $('#gpu-note').dataset.tone = 'bad';
-    blackNotice = `${piece.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another piece.`;
+    blackNotice = `${patch.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another patch.`;
     if (el.hidden || el.textContent === blackNotice) notice(blackNotice);
   }
 
   /** One parameter's control (card 163).
    *
    *  A parameter is still an `f32` from end to end - wire, state file,
-   *  per-piece memory - and every one of these sets it with `set_param`. What
+   *  per-patch memory - and every one of these sets it with `set_param`. What
    *  the spec now *declares* is what shape the thing is: an ordinary number is
    *  a slider, a list of named stops is a list, and off-or-on is a switch. A
    *  parameter whose values are a list used to be a slider with the key
@@ -334,16 +334,16 @@ async function start() {
   function adopt(next) {
     if (!next) return;
     state = next;
-    const piece = pieceById[state.piece];
-    $('#piece-name').textContent = piece ? piece.name : state.piece;
-    $('#piece-blurb').textContent = piece ? piece.blurb : '';
+    const patch = patchById[state.patch];
+    $('#patch-name').textContent = patch ? patch.name : state.patch;
+    $('#patch-blurb').textContent = patch ? patch.blurb : '';
     $('#ro-seed').textContent = state.seed;
     if (!busy($('#seed'))) $('#seed').value = state.seed;
-    document.querySelectorAll('#pieces input').forEach((i) => { i.checked = i.value === state.piece; });
+    document.querySelectorAll('#patches input').forEach((i) => { i.checked = i.value === state.patch; });
 
     paramControls = [];
-    $('#params').replaceChildren(...(piece ? piece.params : []).map((spec) => paramControl(spec)));
-    $('#reset-params').hidden = !piece || piece.params.length === 0;
+    $('#params').replaceChildren(...(patch ? patch.params : []).map((spec) => paramControl(spec)));
+    $('#reset-params').hidden = !patch || patch.params.length === 0;
     sayIfBlack();
     // Empty until the controls below are bound, which is the first call.
     for (const control of refreshers) control.refresh();
@@ -354,7 +354,7 @@ async function start() {
   // does not have to be rebuilt, so a slider being dragged here keeps its grip.
   function sync(next) {
     if (!next) return;
-    if (next.piece !== state.piece) { adopt(next); return; }
+    if (next.patch !== state.patch) { adopt(next); return; }
     state = next;
     $('#ro-seed').textContent = state.seed;
     if (!busy($('#seed'))) $('#seed').value = state.seed;
@@ -410,7 +410,7 @@ async function start() {
     set: (v) => { state.speed = v; pushPlayback(); },
     format: (v) => `${v.toFixed(2)}×`,
   }));
-  // Card 197: 1.00x - "play it as the piece intended" - is one of 79 positions
+  // Card 197: 1.00x - "play it as the patch intended" - is one of 79 positions
   // and the only way back to it was the keyboard. It is a drawn stop now (the
   // datalist, card 183's `drawStops`) and a **double-click** goes home, which
   // is the way back the card asked for. The stops still do not snap: a magnet
@@ -425,26 +425,26 @@ async function start() {
 
   // ---- panel model ----
 
-  const s = () => state.settings;
-  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushSettings(); } }));
-  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushSettings(); } }));
-  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushSettings(); } }));
-  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushSettings(); } }));
+  const s = () => state.output;
+  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
+  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
+  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
+  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
 
   // ---- limiter ----
 
   bind(bindSwitch($('#limiter-on'), {
     get: () => s().limiter.enabled,
-    set: (v) => { s().limiter.enabled = v; pushSettings(); },
+    set: (v) => { s().limiter.enabled = v; pushOutput(); },
   }));
   bind(bindSlider($('#apl-slider'), {
     get: () => s().limiter.apl_cap,
-    set: (v) => { s().limiter.apl_cap = v; pushSettings(); },
+    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
     format: pct,
   }));
   bind(bindSlider($('#rise-slider'), {
     get: () => s().limiter.max_rise_per_s,
-    set: (v) => { s().limiter.max_rise_per_s = v; pushSettings(); },
+    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
     format: (v) => `${Math.round(1000 / v)} ms to full`,
   }));
 
@@ -503,7 +503,7 @@ async function start() {
 
     brightness.show(device);
     // Card 145, on the half-second heartbeat: the notice line is shared, so a
-    // black GPU piece says so again as soon as the line is free.
+    // black GPU patch says so again as soon as the line is free.
     sayIfBlack();
   }
   bind({ refresh: showChip });
@@ -613,7 +613,7 @@ async function start() {
     mApl.tick.style.left = `${cap * 100}%`;
     mApl.root.dataset.state = limiting ? 'warn' : !s().limiter.enabled && st.apl > cap ? 'over' : '';
     mApl.note.textContent = limiting
-      ? `The piece asked for ${pct(st.aplIn)}. Limiter is holding it at ×${st.gain.toFixed(2)}.`
+      ? `The patch asked for ${pct(st.aplIn)}. Limiter is holding it at ×${st.gain.toFixed(2)}.`
       : 'Limiter idle.';
 
     // Bar spans 0..10% of full scale per frame; the tick is the limiter's rise rate.
@@ -652,7 +652,7 @@ async function start() {
     $('#playing-actions').replaceChildren(...p.actions.map((a) => {
       const b = Object.assign(document.createElement('button'), { type: 'button', textContent: a.label });
       b.dataset.id = a.id;
-      b.addEventListener('click', () => call('piece_act', { action: a.id }));
+      b.addEventListener('click', () => call('patch_act', { action: a.id }));
       return b;
     }));
   }

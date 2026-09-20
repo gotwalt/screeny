@@ -35,7 +35,7 @@ const MAX_BACKOFF: u32 = 12;
 /// This is the one place a panel becomes "the panel this studio is connected
 /// to", and the rule that matters is the middle branch: if the page is showing
 /// the *unbound* player - a studio that has not met a panel yet - that same
-/// player is renamed onto the device. The thread, the core and the piece carry
+/// player is renamed onto the device. The thread, the core and the patch carry
 /// on, so the picture the browser is watching simply starts reaching the
 /// panel instead of restarting on it.
 pub fn attach(st: &AppState, device: &str) -> Arc<Player> {
@@ -46,7 +46,7 @@ pub fn attach(st: &AppState, device: &str) -> Arc<Player> {
     if st.players.get(UNBOUND).is_some() {
         st.players.rekey(UNBOUND, device);
     } else {
-        st.players.ensure(device, st.cfg.fault_pieces, StoredPlayer::default);
+        st.players.ensure(device, st.cfg.fault_patches, StoredPlayer::default);
     }
     st.players.set_focus(device);
     st.players.get(device).unwrap_or_else(|| st.page())
@@ -63,7 +63,7 @@ pub fn player_for(st: &AppState, device: &str) -> Arc<Player> {
     if st.players.bound().is_empty() {
         return attach(st, device);
     }
-    st.players.ensure(device, st.cfg.fault_pieces, StoredPlayer::default)
+    st.players.ensure(device, st.cfg.fault_patches, StoredPlayer::default)
 }
 
 /// Point a player's link at wherever its device is now, or at nothing.
@@ -114,7 +114,7 @@ fn adopt_first_device(st: &AppState) -> bool {
     let _ = player.configure(&PlayerChange { on: Some(true), ..PlayerChange::default() });
     aim_at_device(st, &player);
     player.ensure_running();
-    eprintln!("studio: attaching to the first panel found: `{}` will play `{}`", first, player.stored().piece);
+    eprintln!("studio: attaching to the first panel found: `{}` will play `{}`", first, player.stored().patch);
     st.persist();
     true
 }
@@ -130,7 +130,7 @@ async fn supervise(st: &AppState) {
         }
     }
     // The page always has something to show, whatever just happened.
-    st.players.ensure_page(st.cfg.fault_pieces);
+    st.players.ensure_page(st.cfg.fault_patches);
 
     let mut jobs: Vec<BrightnessJob> = Vec::new();
     for player in st.players.all() {
@@ -273,7 +273,7 @@ fn probe_targets(st: &AppState) -> Vec<std::net::SocketAddr> {
 /// One `GET_INFO` to the broadcast address; every panel answers with its own
 /// `id=`; a known id at a new address is that panel, moved
 /// ([`devices::Registry::probed`]). The studio's registry is keyed by that id,
-/// so following it costs the panel nothing: same player, same piece, same
+/// so following it costs the panel nothing: same player, same patch, same
 /// seed, new address.
 ///
 /// Bounded, and each bound is deliberate:

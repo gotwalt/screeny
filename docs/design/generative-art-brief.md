@@ -147,14 +147,14 @@ Two consequences worth internalising:
    - *Palette animation*: keep the index image fixed or slow-moving and animate the
      palette (colour cycling, palette rotation through a fractal, day/night shifts).
      Perfectly lossless and nearly free.
-   - *Deliberate palettes*: choose 8-32 colours per piece or per scene, as a design
+   - *Deliberate palettes*: choose 8-32 colours per patch or per scene, as a design
      decision, in a perceptual space, snapped to panel levels (section 2.1). Render
      directly into indices. You control quantisation instead of a generic quantiser
      guessing, and the result is exact on the wire.
    - *Ramps*: a 32-entry palette is one 32-step ramp, or four 8-step ramps in
-     different hues, or 8 hues x 4 brightnesses. Pick the structure the piece needs.
+     different hues, or 8 hues x 4 brightnesses. Pick the structure the patch needs.
 
-If a piece genuinely needs continuous colour (a photographic source, a many-hue
+If a patch genuinely needs continuous colour (a photographic source, a many-hue
 field), it will still work, lossy, at a quality the lab measured as good (SSIM
 ~0.98). But prefer designing within a palette: it will look better *and* be exact.
 
@@ -209,7 +209,7 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
 - Text, if you use it: a 5x7 font gives about 10 characters x 4 lines; 3x5 is the
   legibility floor and only for upper case and digits. Hand-made bitmap fonts only;
   never rasterise an outline font at this size.
-- The aspect ratio is 2:1. Radially symmetric pieces waste a third of the panel
+- The aspect ratio is 2:1. Radially symmetric patches waste a third of the panel
   unless you let them overflow. Compose for wide.
 
 ---
@@ -220,7 +220,7 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
   a bad WiFi day) and arrive with 10-25 ms of jitter. So:
   - Drive all animation from **elapsed wall-clock time `t`**, never from a frame
     counter. A dropped frame must cause a skip, not a slowdown.
-  - Every frame must be a **complete, self-contained image**. If the piece uses
+  - Every frame must be a **complete, self-contained image**. If the patch uses
     feedback (trails, reaction-diffusion, cellular automata, accumulation buffers),
     keep that state in *your* process and send the rendered result. The device never
     sees deltas.
@@ -228,7 +228,7 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
     anything that must not be missed). A one-frame event should last at least 3
     frames if it matters.
 - Speed feel: 1 px/frame is the full width in ~2 s, which is brisk on this display.
-  Ambient pieces want much slower motion, which is why sub-pixel rendering matters.
+  Ambient patches want much slower motion, which is why sub-pixel rendering matters.
 - The panel itself refreshes at 154 Hz with no tearing at frame swaps **[measured]**,
   so what you send is what is shown; there is no vsync for you to chase.
 - **Photosensitivity: no full-field flashing above 3 Hz**, and avoid large-area
@@ -254,7 +254,7 @@ no subprocess and no framing to agree on. `crates/screeny/README.md`'s
 **Embedding** section is the reference; `crates/screeny/examples/art_output.rs`
 is a working sketch of the impl written against your `Output` and `WireFrame` as
 they stand. **[built, card 101]** It is now `crates/art/src/output/sender.rs`
-(`SenderOutput`, behind the `sender` feature) and `screeny-art play <piece> --to
+(`SenderOutput`, behind the `sender` feature) and `screeny-art play <patch> --to
 NAME|ADDR`.
 
 ```rust
@@ -262,7 +262,7 @@ use screeny::{Link, LinkConfig, Pixels, Target};
 
 let mut link = Link::open(Target::default(), LinkConfig::default())?;
 loop {
-    let wire = pipeline.process(piece.frame(ctx), dt);     // your loop, your clock
+    let wire = pipeline.process(patch.frame(ctx), dt);     // your loop, your clock
     link.send(match &wire.indexed {
         Some((palette, indices)) => Pixels::indexed(palette, indices),
         None => Pixels::rgb(&wire.rgb),
@@ -302,7 +302,7 @@ Seven things about it that should change how you build the output stage.
    sending them, on an absolute schedule. A 60 fps producer into a 30 fps panel puts
    30 fps on the wire and the device's superseded counter stays at zero.
    **[measured]** Do *not* solve this by rendering at 30: render at whatever suits
-   the piece and let the link decimate. `Link::fps()` is the rate the panel is
+   the patch and let the link decimate. `Link::fps()` is the rate the panel is
    actually keeping up with, which moves - the firmware is clean to 120 fps
    **[measured]**, the owner's target is 30, and sustained packet loss steps it down
    and back up by itself.
@@ -351,7 +351,7 @@ what your framebuffer contains. It should:
    A slight bloom on bright dots gets closer still.
 4. Offer a "squint" view: the same thing blurred, to approximate viewing distance.
 
-Judge every piece in that preview, at actual physical size on your screen if you
+Judge every patch in that preview, at actual physical size on your screen if you
 can (the panel is about 19 x 10 cm), not zoomed to fill a monitor.
 
 A statistics overlay is worth having: distinct colours this frame, estimated encoded
@@ -395,11 +395,11 @@ Fights the panel:
   64+ samples per pixel, raymarching, per-pixel iterative maths, multi-pass
   simulation. Spend it on supersampling and on rendering in linear light.
 - Seed your randomness and log the seed, so a good run can be reproduced and refined.
-- Separate *piece* (a pure function of time, seed and parameters -> frame) from
-  *output* (preview, pipe, sender). It makes pieces testable and lets one process
+- Separate *patch* (a pure function of time, seed and parameters -> frame) from
+  *output* (preview, pipe, sender). It makes patches testable and lets one process
   render to the preview and the panel at once.
 - Build in a global brightness/limiter stage at the end of your pipeline (average
-  picture level cap, flash limiter from section 4). Pieces should not each have to
+  picture level cap, flash limiter from section 4). Patches should not each have to
   remember the rules.
 - When something looks wrong on the device but right in your preview, that is a bug
   in the preview's panel model or in our pipeline. Capture the frame bytes that

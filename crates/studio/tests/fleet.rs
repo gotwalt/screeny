@@ -139,7 +139,7 @@ async fn a_typed_address_becomes_a_device_and_starts_playing() {
 }
 
 /// **Card 170's acceptance, in one test**: the page and the panel are one
-/// picture. Changing the piece through the design view's own route changes
+/// picture. Changing the patch through the design view's own route changes
 /// what the panel is playing, at once and with nothing promoted.
 ///
 /// This replaces `promoting_the_preview_is_explicit`, which pinned the
@@ -158,14 +158,14 @@ async fn the_page_and_the_panel_are_one() {
 
     // The design view's routes, unchanged since card 105 - and now they are
     // the panel's.
-    post(at, "/api/v1/set_piece", r#"{"id":"metaballs"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":777}"#).await;
     let s = until_json(at, PATIENCE, "the panel to follow the page", "/api/v1/status", |s| {
         let d = device_of(s);
-        d["player"]["piece"] == "metaballs" && d["player"]["seed"] == 777
+        d["player"]["patch"] == "metaballs" && d["player"]["seed"] == 777
     })
     .await;
-    assert_eq!(s["preview"]["piece"], "metaballs", "and the page says the same thing: {}", s["preview"]);
+    assert_eq!(s["preview"]["patch"], "metaballs", "and the page says the same thing: {}", s["preview"]);
     assert_eq!(s["preview"]["seed"], 777);
 
     // A parameter, too - the half card 166 was written for.
@@ -227,9 +227,9 @@ async fn the_panel_comes_back_whatever_is_restarted() {
     wait_until_streaming(at, "the first run to start playing").await;
 
     // Something specific, so "showing what it was showing" is checkable.
-    let set = post(at, "/api/v1/player/set", r#"{"device":"cc22dd","piece":"metaballs","seed":4242,"fps":30}"#).await;
+    let set = post(at, "/api/v1/player/set", r#"{"device":"cc22dd","patch":"metaballs","seed":4242,"fps":30}"#).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
-    wait_until_streaming(at, "the chosen piece to start playing").await;
+    wait_until_streaming(at, "the chosen patch to start playing").await;
 
     for (round, what) in [(1, "the simulator"), (2, "the server"), (3, "both, server first"), (4, "both, panel first")] {
         match round {
@@ -265,12 +265,12 @@ async fn the_panel_comes_back_whatever_is_restarted() {
         let s = wait_until_streaming(at, &format!("the panel to come back after restarting {what}")).await;
         let d = device_of(&s);
         assert_eq!(d["id"], "cc22dd", "after restarting {what}: {d}");
-        assert_eq!(d["player"]["piece"], "metaballs", "after restarting {what}, it is playing something else: {d}");
+        assert_eq!(d["player"]["patch"], "metaballs", "after restarting {what}, it is playing something else: {d}");
         assert_eq!(d["player"]["seed"], 4242, "after restarting {what}, the seed changed: {d}");
         assert_eq!(d["player"]["fps"], 30.0, "after restarting {what}, the rate changed: {d}");
         println!(
             "after restarting {what}: {} playing {} seed {}, {} frames sent, link {}",
-            d["id"], d["player"]["piece"], d["player"]["seed"], d["player"]["panel"]["frames_sent"], d["player"]["panel"]["state"]
+            d["id"], d["player"]["patch"], d["player"]["seed"], d["player"]["panel"]["frames_sent"], d["player"]["panel"]["state"]
         );
     }
     studio.stop().await;
@@ -287,7 +287,7 @@ async fn the_page_resumes_where_it_was() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
 
-    post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":1234}"#).await;
     post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0,"fps":30.0}"#).await;
     let panel = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
@@ -297,7 +297,7 @@ async fn the_page_resumes_where_it_was() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let state = get(at, "/api/v1/bootstrap").await.json()["state"].clone();
-    assert_eq!(state["piece"], "plasma");
+    assert_eq!(state["patch"], "plasma");
     assert_eq!(state["seed"], 1234);
     assert_eq!(state["paused"], true);
     assert_eq!(state["speed"], 2.0);
@@ -309,7 +309,7 @@ async fn the_page_resumes_where_it_was() {
         s["preview"]["panel"]["connected"] == true
     })
     .await;
-    assert_eq!(s["preview"]["piece"], "plasma", "{}", s["preview"]);
+    assert_eq!(s["preview"]["patch"], "plasma", "{}", s["preview"]);
     assert_eq!(s["preview"]["panel_on"], true, "it should still be driving a panel: {}", s["preview"]);
     assert_eq!(s["preview"]["panel_to"], format!("127.0.0.1:{port}"));
     assert_eq!(s["preview"]["paused"], true, "including the playback state, which used to be the preview's");
@@ -317,11 +317,11 @@ async fn the_page_resumes_where_it_was() {
     studio.stop().await;
 }
 
-/// Containment. A piece that panics and one that stalls are each caught,
+/// Containment. A patch that panics and one that stalls are each caught,
 /// logged once, and replaced by the fallback; the server and the other players
-/// carry on. Neither piece ships in the normal list.
+/// carry on. Neither patch ships in the normal list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_bad_piece_is_contained_and_the_rest_carries_on() {
+async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
     let dir = Temp::new("faults");
     let (_bad_sim, bad_port) = start_sim("bad001");
     let (_good_sim, good_port) = start_sim("good01");
@@ -335,11 +335,11 @@ async fn a_bad_piece_is_contained_and_the_rest_carries_on() {
         s["devices"].as_array().is_some_and(|d| d.len() == 2 && d.iter().all(|x| x["resolved"] == true))
     })
     .await;
-    post(at, "/api/v1/player/set", r#"{"device":"good01","piece":"plasma"}"#).await;
+    post(at, "/api/v1/player/set", r#"{"device":"good01","patch":"plasma"}"#).await;
 
     for (bad, kind) in [("fault-panic", "panicking"), ("fault-stall", "stalling")] {
-        let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"bad001","piece":"{bad}","seed":1}}"#)).await;
-        assert_eq!(set.status, 200, "the fault pieces should be offered here: {}", String::from_utf8_lossy(&set.body));
+        let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"bad001","patch":"{bad}","seed":1}}"#)).await;
+        assert_eq!(set.status, 200, "the fault patches should be offered here: {}", String::from_utf8_lossy(&set.body));
 
         // The watchdog is 5 s, so a stall takes a little longer to notice - and
         // the answer that says it has been replaced is the one every assertion
@@ -347,23 +347,23 @@ async fn a_bad_piece_is_contained_and_the_rest_carries_on() {
         let s = until_json(
             at,
             Duration::from_secs(30),
-            &format!("the {kind} piece to be replaced"),
+            &format!("the {kind} patch to be replaced"),
             "/api/v1/status",
             |s| {
                 let bad_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "bad001")).cloned().unwrap_or_default();
-                bad_dev["player"]["piece"] != bad && bad_dev["player"]["running"] == true
+                bad_dev["player"]["patch"] != bad && bad_dev["player"]["running"] == true
             },
         )
         .await;
 
         let bad_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "bad001")).cloned().expect("the bad panel");
         let good_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "good01")).cloned().expect("the good panel");
-        assert_ne!(bad_dev["player"]["piece"], bad, "the bad piece is still loaded: {bad_dev}");
+        assert_ne!(bad_dev["player"]["patch"], bad, "the bad patch is still loaded: {bad_dev}");
         assert_eq!(bad_dev["player"]["health"]["fell_back_from"], bad, "{bad_dev}");
         assert_eq!(bad_dev["player"]["running"], true, "the bad panel's player did not come back: {bad_dev}");
 
         // The other player never noticed.
-        assert_eq!(good_dev["player"]["piece"], "plasma", "the other player was disturbed: {good_dev}");
+        assert_eq!(good_dev["player"]["patch"], "plasma", "the other player was disturbed: {good_dev}");
         assert_eq!(good_dev["player"]["running"], true, "the other player stopped: {good_dev}");
         assert_eq!(good_dev["player"]["health"]["panics"], 0);
         assert_eq!(good_dev["player"]["health"]["stalls"], 0);
@@ -374,22 +374,22 @@ async fn a_bad_piece_is_contained_and_the_rest_carries_on() {
 
         println!(
             "{kind}: bad panel now plays {} (panics {}, stalls {}, restarts {}, abandoned {}); good panel still on {} with {} frames sent",
-            bad_dev["player"]["piece"],
+            bad_dev["player"]["patch"],
             bad_dev["player"]["health"]["panics"],
             bad_dev["player"]["health"]["stalls"],
             bad_dev["player"]["health"]["restarts"],
             bad_dev["player"]["health"]["abandoned"],
-            good_dev["player"]["piece"],
+            good_dev["player"]["patch"],
             good_dev["player"]["panel"]["frames_sent"],
         );
     }
     studio.stop().await;
 }
 
-/// A studio that was never told about the fault pieces will not load one, and
+/// A studio that was never told about the fault patches will not load one, and
 /// says so rather than dying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_fault_pieces_are_not_on_the_menu() {
+async fn the_fault_patches_are_not_on_the_menu() {
     let dir = Temp::new("nofaults");
     let (_sim, port) = start_sim("aa55aa");
     let studio = studio_in(&dir.0, false).await;
@@ -397,13 +397,13 @@ async fn the_fault_pieces_are_not_on_the_menu() {
     add_and_play(at, port).await;
     until(Duration::from_secs(20), "the panel to resolve", || async { device_status(at).await["resolved"] == true }).await;
 
-    let refused = post(at, "/api/v1/player/set", r#"{"device":"aa55aa","piece":"fault-panic"}"#).await;
+    let refused = post(at, "/api/v1/player/set", r#"{"device":"aa55aa","patch":"fault-panic"}"#).await;
     assert_eq!(refused.status, 400, "{}", String::from_utf8_lossy(&refused.body));
     assert!(String::from_utf8_lossy(&refused.body).contains("fault-panic"));
 
-    // And it is not in the piece list a browser is handed either.
-    let pieces = get(at, "/api/v1/bootstrap").await.json()["pieces"].clone();
-    let ids: Vec<String> = pieces.as_array().expect("a list").iter().map(|p| p["id"].as_str().unwrap_or("").to_string()).collect();
+    // And it is not in the patch list a browser is handed either.
+    let patches = get(at, "/api/v1/bootstrap").await.json()["patches"].clone();
+    let ids: Vec<String> = patches.as_array().expect("a list").iter().map(|p| p["id"].as_str().unwrap_or("").to_string()).collect();
     assert!(!ids.iter().any(|i| i.starts_with("fault-")), "{ids:?}");
     studio.stop().await;
 }
@@ -446,8 +446,8 @@ async fn a_missing_panel_is_never_unhealthy() {
     studio.stop().await;
 }
 
-/// **Card 143's acceptance, which card 170 closes by construction**: the piece
-/// the page is showing is a player's, so a piece that stops returning is
+/// **Card 143's acceptance, which card 170 closes by construction**: the patch
+/// the page is showing is a player's, so a patch that stops returning is
 /// caught by the same watchdog every panel has, replaced by the fallback, and
 /// the page is drawing again within seconds - without a 503 and without a
 /// restart.
@@ -455,16 +455,16 @@ async fn a_missing_panel_is_never_unhealthy() {
 /// Card 106's version of this test asserted the opposite, because the design
 /// view's engine had no stall recovery: it waited for `/healthz` to go 503 and
 /// stay there. What survives is the part that mattered at three in the
-/// morning - **`/api/v1/status` answers while a piece is stuck** - and it is
+/// morning - **`/api/v1/status` answers while a patch is stuck** - and it is
 /// now true for a better reason. A player's core is owned by its render thread
-/// and is behind no shared lock at all, so there is nothing for a wedged piece
+/// and is behind no shared lock at all, so there is nothing for a wedged patch
 /// to hold.
 ///
 /// The latency bound is measured against a baseline taken in this same test,
 /// so a loaded host makes both numbers bigger and the assertion still means
 /// "the wedge cost nothing".
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn a_wedged_piece_is_replaced_and_the_status_route_never_stalls() {
+async fn a_wedged_patch_is_replaced_and_the_status_route_never_stalls() {
     let dir = Temp::new("wedged");
     let studio = studio_in(&dir.0, true).await;
     let at = studio.addr;
@@ -478,7 +478,7 @@ async fn a_wedged_piece_is_replaced_and_the_status_route_never_stalls() {
         started.elapsed() / 5
     };
 
-    let set = post(at, "/api/v1/set_piece", r#"{"id":"fault-stall"}"#).await;
+    let set = post(at, "/api/v1/set_patch", r#"{"id":"fault-stall"}"#).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
 
     // `fault-stall` stops returning on its fourth frame and stays stopped for
@@ -492,31 +492,31 @@ async fn a_wedged_piece_is_replaced_and_the_status_route_never_stalls() {
         let r = get(at, "/api/v1/status").await;
         worst = worst.max(started.elapsed());
         asked += 1;
-        assert_eq!(r.status, 200, "the status route stopped answering while a piece was stuck");
+        assert_eq!(r.status, 200, "the status route stopped answering while a patch was stuck");
         assert_eq!(
             get(at, "/healthz").await.status,
             200,
-            "a piece that stalls is recovered, not a reason to restart the container"
+            "a patch that stalls is recovered, not a reason to restart the container"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let allowed = (baseline * 25).max(Duration::from_secs(1));
     assert!(
         worst < allowed,
-        "the status route took {worst:?} at worst while a piece was stuck (baseline {baseline:?}, allowed {allowed:?})"
+        "the status route took {worst:?} at worst while a patch was stuck (baseline {baseline:?}, allowed {allowed:?})"
     );
 
-    // And it recovered by itself, on the fallback piece, with nobody asked.
-    let s = until_json(at, Duration::from_secs(30), "the wedged piece to be replaced", "/api/v1/status", |s| {
-        s["preview"]["piece"] != "fault-stall" && s["preview"]["alive"] == true && s["preview"]["wedged"] == false
+    // And it recovered by itself, on the fallback patch, with nobody asked.
+    let s = until_json(at, Duration::from_secs(30), "the wedged patch to be replaced", "/api/v1/status", |s| {
+        s["preview"]["patch"] != "fault-stall" && s["preview"]["alive"] == true && s["preview"]["wedged"] == false
     })
     .await;
     assert_eq!(s["preview"]["fell_back_from"], "fault-stall", "{}", s["preview"]);
     assert_eq!(s["ok"], true, "a recovered stall is not an unwell server: {}", s["problems"]);
     println!(
-        "wedged piece: {asked} status reads while it was stuck, worst {worst:?} (baseline {baseline:?}); \
+        "wedged patch: {asked} status reads while it was stuck, worst {worst:?} (baseline {baseline:?}); \
          recovered onto `{}` with {} stalls counted",
-        s["preview"]["piece"], s["devices"]
+        s["preview"]["patch"], s["devices"]
     );
 
     // Dropped rather than stopped on purpose: the abandoned thread is still

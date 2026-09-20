@@ -57,16 +57,16 @@ fn sim_on(port: u16) -> SimDevice {
     SimDevice::start_with(cfg, None).expect("the ports the first simulator had")
 }
 
-/// Stop the piece and the limiter, so every frame the engine makes is the
+/// Stop the patch and the limiter, so every frame the engine makes is the
 /// same frame and "the panel shows the preview" is a statement about bytes
 /// rather than about timing.
-async fn hold_still(at: std::net::SocketAddr, piece: &str) {
-    post(at, "/api/v1/set_piece", &format!(r#"{{"id":"{piece}"}}"#)).await;
+async fn hold_still(at: std::net::SocketAddr, patch: &str) {
+    post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
     post(at, "/api/v1/set_seed", r#"{"seed":7}"#).await;
     let state = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0,"fps":60.0}"#).await.json();
-    let mut settings = state["settings"].clone();
-    settings["limiter"]["enabled"] = false.into();
-    post(at, "/api/v1/set_settings", &serde_json::json!({ "settings": settings }).to_string()).await;
+    let mut output = state["output"].clone();
+    output["limiter"]["enabled"] = false.into();
+    post(at, "/api/v1/set_output", &serde_json::json!({ "output": output }).to_string()).await;
 }
 
 /// Card 105's half of card 101's acceptance, which card 170 makes a tautology
@@ -89,7 +89,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(first.status, 200, "{}", String::from_utf8_lossy(&first.body));
     assert_eq!(first.json()["on"], true, "the answer says what happened: {}", first.json());
     assert_eq!(first.json()["panel"]["target"], format!("127.0.0.1:{port}"));
-    assert_eq!(first.json()["state"]["piece"], "plasma", "and what the page is showing");
+    assert_eq!(first.json()["state"]["patch"], "plasma", "and what the page is showing");
 
     // The link is deferred, so it comes up on its own; the status route is
     // what the UI's status line reads.
@@ -105,7 +105,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(status["state"], "up");
     assert!(status["device"].is_string(), "the link says which device it settled on: {status}");
     assert!(status["frames_sent"].as_u64().unwrap() > 5, "nothing reached the wire: {status}");
-    assert_eq!(status["indexed_fallback"], 0, "plasma is an indexed piece: {status}");
+    assert_eq!(status["indexed_fallback"], 0, "plasma is an indexed patch: {status}");
     // Frames the engine offered while the deferred link was still finding the
     // device are counted as dropped, by design. Once it is up, nothing is.
     let dropped_while_connecting = status["frames_dropped"].as_u64().expect("a count");
@@ -137,7 +137,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     );
     // And it is a still picture, so that comparison is not luck.
     for s in &shown[1..] {
-        assert_eq!(s.decoded, last.decoded, "a paused piece sent two different frames");
+        assert_eq!(s.decoded, last.decoded, "a paused patch sent two different frames");
     }
     let now = get(at, "/api/v1/panel_status").await.json();
     assert_eq!(
@@ -162,9 +162,9 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(off.json()["on"], false);
     assert_eq!(off.json()["panel"], serde_json::Value::Null);
     assert_eq!(get(at, "/api/v1/panel_status").await.json(), serde_json::Value::Null);
-    // ...and the page carries on showing the piece, which is the half of this
+    // ...and the page carries on showing the patch, which is the half of this
     // that card 170 added.
-    assert_eq!(off.json()["state"]["piece"], "plasma");
+    assert_eq!(off.json()["state"]["patch"], "plasma");
 }
 
 /// **`set_panel`, as another session drives it**, with the two exact bodies a
@@ -196,7 +196,7 @@ async fn set_panel_hands_the_panel_over_and_takes_it_back() {
     let body = off.json();
     assert_eq!(body["on"], false, "the answer says what happened rather than null: {body}");
     assert_eq!(body["panel"], serde_json::Value::Null, "the link is gone");
-    assert!(body["state"]["piece"].is_string(), "and the page is still showing something: {body}");
+    assert!(body["state"]["patch"].is_string(), "and the page is still showing something: {body}");
 
     // The device: FINAL arrived, so it leaves LIVE and lets its source go.
     until(Duration::from_secs(10), "the panel to leave LIVE", || async {

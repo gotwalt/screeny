@@ -19,11 +19,11 @@ pub(crate) mod dials;
 pub(crate) mod draw;
 
 use crate::frame::Frame;
-use crate::piece::{choice, param, toggle, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
+use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use dance::Motor;
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "clocks-numerals",
     name: "Clocks: numerals",
     blurb: "After ClockClock 24: 24 small dials whose hands draw the time in digits, and dance to the next minute. For a clock you read from across the room.",
@@ -55,7 +55,7 @@ pub(crate) const CLOCKS: usize = COLS * ROWS;
 /// LEDs per clock; the grid is 64 x 24, centred in 64 x 32.
 const CELL: f32 = 8.0;
 
-/// Both hands at 7:30: how the original's clocks rest, and how this piece
+/// Both hands at 7:30: how the original's clocks rest, and how this patch
 /// rested until card 160. Also where every hand starts before the first dance.
 const REST: f32 = 225.0;
 /// Degrees clockwise from 12 o'clock.
@@ -100,7 +100,7 @@ const fn rest(name: &'static str, hands: Hands, zigzag: bool, ink: f32, reach: f
 const HATCH: f32 = 45.0;
 
 /// The treatments, switchable live (the `rest` parameter) so they can be
-/// judged on the panel rather than in a preview. `0` is what the piece did
+/// judged on the panel rather than in a preview. `0` is what the patch did
 /// before card 160; `DEFAULT_REST` is the recommendation.
 pub(crate) const RESTS: &[Rest] = &[
     rest("as it was", [REST, REST], false, 1.0, 1.0),
@@ -112,7 +112,7 @@ pub(crate) const RESTS: &[Rest] = &[
 pub(crate) const DEFAULT_REST: usize = 2;
 
 /// Card 163: the `rest` parameter's stops, in the treatments' own words.
-/// Taken from `RESTS` itself, so the page and the piece cannot disagree about
+/// Taken from `RESTS` itself, so the page and the patch cannot disagree about
 /// what a treatment is called.
 pub(crate) const REST_CHOICES: &[&str] = &[RESTS[0].name, RESTS[1].name, RESTS[2].name, RESTS[3].name, RESTS[4].name];
 
@@ -121,7 +121,7 @@ pub(crate) const REST_CHOICES: &[&str] = &[RESTS[0].name, RESTS[1].name, RESTS[2
 ///
 /// Card 182: the middle **is** `dance::NAMES`, so a new dance is one name in
 /// one place. What is still written by hand is the two ends and the offset,
-/// and `piece::tests::the_named_stops_are_the_pieces_own_names` guards those.
+/// and `patch::tests::the_named_stops_are_the_patches_own_names` guards those.
 pub(crate) const DANCE_CHOICES: &[&str] = &dance_choices();
 
 const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
@@ -189,7 +189,7 @@ fn direction(c: u8) -> f32 {
 
 /// Hand angles for all 24 clocks showing `hh:mm`. Four digits, leading zeros,
 /// no separator: `09:05` is `0905`. That is the original's format and the
-/// owner's decision (card 160); a colon is not this piece's to add.
+/// owner's decision (card 160); a colon is not this patch's to add.
 pub(crate) fn pose(hh: u32, mm: u32, rest: Rest) -> [Hands; CLOCKS] {
     let mut out = [[REST; 2]; CLOCKS];
     for (d, digit) in [hh / 10, hh % 10, mm / 10, mm % 10].into_iter().enumerate() {
@@ -271,7 +271,7 @@ struct Clocks {
     treatment: &'static str,
 }
 
-fn make(seed: u64) -> Box<dyn Piece> {
+fn make(seed: u64) -> Box<dyn Patch> {
     Box::new(Clocks {
         seed,
         born: None,
@@ -292,7 +292,7 @@ fn make(seed: u64) -> Box<dyn Piece> {
 }
 
 impl Clocks {
-    /// The hours and minutes a minute-of-day shows, in the piece's format.
+    /// The hours and minutes a minute-of-day shows, in the patch's format.
     fn digits(minute: i64, hours24: bool) -> (u32, u32) {
         let (h, m) = ((minute.div_euclid(60).rem_euclid(24)) as u32, minute.rem_euclid(60) as u32);
         (if hours24 { h } else { (h + 11) % 12 + 1 }, m)
@@ -364,7 +364,7 @@ impl Clocks {
     fn step(&mut self, ctx: &Ctx) {
         let pace = ctx.get("pace");
         // Display seconds per engine second. At pace 60 the wall clock is used
-        // directly, so the time is right however long the piece has run.
+        // directly, so the time is right however long the patch has run.
         let rate = 60.0 / pace as f64;
         let born = *self.born.get_or_insert(ctx.now - ctx.t);
         let clock = if pace >= 59.5 { ctx.now } else { born + ctx.t * rate } + ctx.get("offset") as f64 * 60.0;
@@ -451,7 +451,7 @@ impl Clocks {
     }
 }
 
-impl Piece for Clocks {
+impl Patch for Clocks {
     fn playing(&self) -> Option<Playing> {
         let performed = self.performed.as_ref()?;
         let actions = vec![
@@ -535,7 +535,7 @@ mod tests {
     use crate::color::Rgb;
     use crate::frame::{GUARANTEED_PALETTE, W};
 
-    /// The times the owner found this piece failing at (card 160), and what
+    /// The times the owner found this patch failing at (card 160), and what
     /// each must draw. Every one of them contains a digit that leaves dials
     /// resting: `1`, `4` or `7`.
     const AWKWARD: [(u32, u32, [usize; 4]); 7] = [
@@ -608,7 +608,7 @@ mod tests {
     /// The format, pinned. Four digits, leading zeros kept, no separator of any
     /// kind: `09:05` is `0905` and the 24 dials are four numerals and nothing
     /// else. This is the original's format and the owner's decision (card 160);
-    /// the piece is not to grow a colon.
+    /// the patch is not to grow a colon.
     #[test]
     fn the_time_is_four_digits_with_no_punctuation() {
         for &rest in RESTS {
@@ -649,7 +649,7 @@ mod tests {
                 let ratio = at_rest / drawing;
                 if v == 0 {
                     // The treatment that is kept only for comparison.
-                    assert!(ratio > 0.5, "rest 0 is supposed to be what the piece did before");
+                    assert!(ratio > 0.5, "rest 0 is supposed to be what the patch did before");
                 } else {
                     assert!(ratio < 0.5, "rest {v} (`{}`) at {hh:02}:{mm:02}: rest/digit ink {ratio:.2}", rest.name);
                 }

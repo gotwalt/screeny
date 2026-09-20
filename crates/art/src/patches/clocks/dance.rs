@@ -845,14 +845,14 @@ pub fn named(which: usize, rng: &mut Rng) -> Composition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pieces::clocks::{Rest, DEFAULT_REST};
+    use crate::patches::clocks::{Rest, DEFAULT_REST};
 
     const MOTOR: Motor = Motor { speed: 100.0, acc: 160.0 };
 
-    /// The digits pose under the treatment the piece ships with. Every
+    /// The digits pose under the treatment the patch ships with. Every
     /// treatment is exercised by `clocks::tests::every_rest_treatment_dances`.
     fn pose(hh: u32, mm: u32) -> [Hands; CLOCKS] {
-        crate::pieces::clocks::pose(hh, mm, Rest::of(DEFAULT_REST as f32))
+        crate::patches::clocks::pose(hh, mm, Rest::of(DEFAULT_REST as f32))
     }
 
     #[test]

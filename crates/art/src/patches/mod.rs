@@ -1,6 +1,6 @@
-//! The pieces. To add one: write a module with a `DEF`, list it in `ALL`.
+//! The patches. To add one: write a module with a `DEF`, list it in `ALL`.
 
-use crate::piece::PieceDef;
+use crate::patch::PatchDef;
 
 pub(crate) mod clocks;
 #[cfg(feature = "gpu")]
@@ -13,7 +13,7 @@ mod overland;
 mod plasma;
 mod testcard;
 
-pub static ALL: &[PieceDef] = &[
+pub static ALL: &[PatchDef] = &[
     clocks::DEF,
     clocks::dials::DEF,
     plasma::DEF,
@@ -27,7 +27,7 @@ pub static ALL: &[PieceDef] = &[
     testcard::DEF,
 ];
 
-/// The pieces that need a graphics adapter (card 145).
+/// The patches that need a graphics adapter (card 145).
 ///
 /// They are exactly the ones behind the `gpu` feature, so this list is built
 /// from the same `cfg`s as `ALL` and cannot drift from it. Without an adapter
@@ -44,7 +44,7 @@ pub static NEEDS_GPU: &[&str] = &[
     knot::DEF.id,
 ];
 
-/// True when this piece cannot draw without a graphics adapter.
+/// True when this patch cannot draw without a graphics adapter.
 #[must_use]
 pub fn needs_gpu(id: &str) -> bool {
     NEEDS_GPU.contains(&id)

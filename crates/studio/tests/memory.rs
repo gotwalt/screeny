@@ -1,6 +1,6 @@
-//! Card 165: the studio remembers each piece's settings.
+//! Card 165: the studio remembers how each patch was left.
 //!
-//! Tune a piece, go and tune another, come back, and it is as you left it -
+//! Tune a patch, go and tune another, come back, and it is as you left it -
 //! in the design view, on a panel, in a second browser, and after the process
 //! has been restarted. The memory lives in `state.json` in the state
 //! directory and nowhere else, which is what makes it survive a deploy: the
@@ -15,13 +15,13 @@ mod common;
 use common::{get, post, post_as, studio, studio_in, Temp, Ws};
 use std::net::SocketAddr;
 
-/// A parameter of the current piece, as the API answers it.
+/// A parameter of the current patch, as the API answers it.
 fn param(state: &serde_json::Value, id: &str) -> f64 {
     state["params"][id].as_f64().unwrap_or_else(|| panic!("`{id}` in {state}"))
 }
 
-async fn set_piece(at: SocketAddr, id: &str) -> serde_json::Value {
-    let r = post(at, "/api/v1/set_piece", &format!(r#"{{"id":"{id}"}}"#)).await;
+async fn set_patch(at: SocketAddr, id: &str) -> serde_json::Value {
+    let r = post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{id}"}}"#)).await;
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     r.json()
 }
@@ -36,39 +36,40 @@ async fn set_seed(at: SocketAddr, seed: u32) -> serde_json::Value {
     post(at, "/api/v1/set_seed", &format!(r#"{{"seed":{seed}}}"#)).await.json()
 }
 
-/// The owner's request, in the design view: *"changing settings for a given art
-/// piece persists the settings so that if we switch pieces and then switch
-/// back, it restores the settings"*.
+/// The owner's request, in the design view, in his own words (card 150 leaves
+/// them as he said them): *"changing settings for a given art piece persists
+/// the settings so that if we switch pieces and then switch back, it restores
+/// the settings"*.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn switching_away_and_back_restores_the_settings() {
     let studio = studio().await;
     let at = studio.addr;
 
-    set_piece(at, "plasma").await;
+    set_patch(at, "plasma").await;
     set_seed(at, 111).await;
     set_param(at, "scale", 2.5).await;
     let plasma_default_drift = param(&set_param(at, "hue", 12.0).await, "drift");
 
-    set_piece(at, "metaballs").await;
+    set_patch(at, "metaballs").await;
     set_seed(at, 222).await;
     let away = set_param(at, "count", 8.0).await;
-    assert!(away["params"].get("scale").is_none(), "the other piece's parameters do not come along");
+    assert!(away["params"].get("scale").is_none(), "the other patch's parameters do not come along");
 
-    let back = set_piece(at, "plasma").await;
-    assert_eq!(back["piece"], "plasma");
+    let back = set_patch(at, "plasma").await;
+    assert_eq!(back["patch"], "plasma");
     assert_eq!(back["seed"], 111, "and on the seed it was left on");
     assert_eq!(param(&back, "scale"), 2.5);
     assert_eq!(param(&back, "hue"), 12.0);
     assert_eq!(param(&back, "drift"), plasma_default_drift, "an untouched parameter is still its default");
 
-    // And the piece we went to is still where *it* was left.
-    let other = set_piece(at, "metaballs").await;
+    // And the patch we went to is still where *it* was left.
+    let other = set_patch(at, "metaballs").await;
     assert_eq!(other["seed"], 222);
     assert_eq!(param(&other, "count"), 8.0);
 }
 
 /// The restored values have to reach the sliders. The design view redraws from
-/// what `set_piece` answers, and every *other* browser redraws from the state
+/// what `set_patch` answers, and every *other* browser redraws from the state
 /// change the server pushes - so both paths carry them or only one browser is
 /// right.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -78,18 +79,18 @@ async fn a_second_browser_sees_the_restored_values() {
     let mut bob = Ws::connect(at, Some("bob")).await;
     bob.event("state").await; // the hello
 
-    post_as(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#, Some("alice")).await;
+    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
     bob.event("state").await;
     post_as(at, "/api/v1/set_param", r#"{"id":"scale","value":2.5}"#, Some("alice")).await;
     bob.event("state").await;
-    post_as(at, "/api/v1/set_piece", r#"{"id":"metaballs"}"#, Some("alice")).await;
+    post_as(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#, Some("alice")).await;
     bob.event("state").await;
 
     // Alice switches back. Bob is told, and what he is told is the restored
-    // value - not the default he would draw if he rebuilt from the piece spec.
-    post_as(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#, Some("alice")).await;
+    // value - not the default he would draw if he rebuilt from the patch spec.
+    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
     let ev = bob.event("state").await;
-    assert_eq!(ev["state"]["piece"], "plasma");
+    assert_eq!(ev["state"]["patch"], "plasma");
     assert_eq!(param(&ev["state"], "scale"), 2.5, "the push carries the restored value: {ev}");
 
     // And a browser that arrives afterwards is handed the same thing.
@@ -106,34 +107,34 @@ async fn reset_means_the_old_value_does_not_come_back() {
     let studio = studio().await;
     let at = studio.addr;
 
-    set_piece(at, "plasma").await;
+    set_patch(at, "plasma").await;
     let default_scale = param(&set_param(at, "scale", 2.5).await, "scale");
     assert_eq!(default_scale, 2.5);
     let reset = post(at, "/api/v1/reset_params", "{}").await.json();
     let default_scale = param(&reset, "scale");
     assert_ne!(default_scale, 2.5);
 
-    set_piece(at, "metaballs").await;
-    let back = set_piece(at, "plasma").await;
+    set_patch(at, "metaballs").await;
+    let back = set_patch(at, "plasma").await;
     assert_eq!(param(&back, "scale"), default_scale, "Reset was forgotten rather than obeyed: {back}");
 }
 
 /// The memory is in the state file, so a fresh process on the same state
-/// directory has it - **including for a piece that is not the one showing**,
+/// directory has it - **including for a patch that is not the one showing**,
 /// which is the half that a "resumes what it was playing" test would miss.
 /// That file is the container's volume, so this is also what makes the memory
 /// survive an image rebuild.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_memory_survives_a_restart_including_a_piece_that_is_not_showing() {
+async fn the_memory_survives_a_restart_including_a_patch_that_is_not_showing() {
     let dir = Temp::new("memory-restart");
     {
         let studio = studio_in(&dir.0, false).await;
         let at = studio.addr;
-        set_piece(at, "plasma").await;
+        set_patch(at, "plasma").await;
         set_seed(at, 111).await;
         set_param(at, "scale", 2.5).await;
         // Leave it showing something else entirely.
-        set_piece(at, "metaballs").await;
+        set_patch(at, "metaballs").await;
         set_param(at, "count", 8.0).await;
         studio.stop().await;
     }
@@ -141,23 +142,23 @@ async fn the_memory_survives_a_restart_including_a_piece_that_is_not_showing() {
     // What is on disk, before anything reads it back.
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 3, "schema v3");
-    assert_eq!(file["pieces"]["plasma"]["params"]["scale"], 2.5, "in state.json and nowhere else:\n{text}");
-    assert_eq!(file["pieces"]["plasma"]["seed"], 111);
+    assert_eq!(file["version"], 4, "schema v4");
+    assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "in state.json and nowhere else:\n{text}");
+    assert_eq!(file["patches"]["plasma"]["seed"], 111);
 
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["piece"], "metaballs", "it resumes what it was showing (card 106)");
+    assert_eq!(boot["state"]["patch"], "metaballs", "it resumes what it was showing (card 106)");
     assert_eq!(boot["state"]["params"]["count"], 8.0);
 
-    // And the piece that was *not* showing is still as it was left.
-    let back = set_piece(at, "plasma").await;
+    // And the patch that was *not* showing is still as it was left.
+    let back = set_patch(at, "plasma").await;
     assert_eq!(back["seed"], 111);
-    assert_eq!(param(&back, "scale"), 2.5, "a new process restored a piece it was not playing: {back}");
+    assert_eq!(param(&back, "scale"), 2.5, "a new process restored a patch it was not playing: {back}");
 }
 
-/// A panel's player restores settings the same way, reached the way a script
+/// A panel's player restores it the same way, reached the way a script
 /// reaches it. The device here is an address nothing answers on, and panel
 /// output is off, so nothing leaves the process: this is the configuration and
 /// nothing else.
@@ -166,7 +167,7 @@ async fn the_memory_survives_a_restart_including_a_piece_that_is_not_showing() {
 /// onto, so the page says exactly the same thing. Before this card the two
 /// were different contexts and this test had to say so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_panel_restores_a_pieces_settings_too() {
+async fn a_panel_restores_a_patchs_memory_too() {
     let studio = studio().await;
     let at = studio.addr;
     let added = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50999","name":"bench","play":false}"#).await;
@@ -181,21 +182,21 @@ async fn a_panel_restores_a_pieces_settings_too() {
     assert_eq!(off.json()["on"], false);
     assert_eq!(off.json()["panel"], serde_json::Value::Null, "no link while output is off");
 
-    set(format!(r#"{{"device":"{id}","piece":"plasma","seed":11}}"#)).await;
+    set(format!(r#"{{"device":"{id}","patch":"plasma","seed":11}}"#)).await;
     set(format!(r#"{{"device":"{id}","param":{{"id":"scale","value":2.5}}}}"#)).await;
-    set(format!(r#"{{"device":"{id}","piece":"metaballs","seed":22}}"#)).await;
+    set(format!(r#"{{"device":"{id}","patch":"metaballs","seed":22}}"#)).await;
     let away = set(format!(r#"{{"device":"{id}","param":{{"id":"count","value":8.0}}}}"#)).await.json();
     assert!(away["params"].get("scale").is_none());
 
-    let back = set(format!(r#"{{"device":"{id}","piece":"plasma"}}"#)).await.json();
+    let back = set(format!(r#"{{"device":"{id}","patch":"plasma"}}"#)).await.json();
     assert_eq!(back["seed"], 11);
     assert_eq!(param(&back, "scale"), 2.5);
 
     // One panel, one picture: the page is a window onto that player, so what
-    // it says is what the panel says - the piece, the seed, the parameter and
+    // it says is what the panel says - the patch, the seed, the parameter and
     // the fact that output is off.
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["piece"], "plasma", "the page shows the attached panel: {}", boot["state"]);
+    assert_eq!(boot["state"]["patch"], "plasma", "the page shows the attached panel: {}", boot["state"]);
     assert_eq!(boot["state"]["device"], id);
     assert_eq!(boot["state"]["seed"], 11);
     assert_eq!(boot["state"]["on"], false);
@@ -204,15 +205,15 @@ async fn a_panel_restores_a_pieces_settings_too() {
     // The player's Reset, and it stays reset.
     let reset = set(format!(r#"{{"device":"{id}","reset_params":true}}"#)).await.json();
     assert!(reset["params"].as_object().expect("params").is_empty());
-    set(format!(r#"{{"device":"{id}","piece":"metaballs"}}"#)).await;
-    let after = set(format!(r#"{{"device":"{id}","piece":"plasma"}}"#)).await.json();
+    set(format!(r#"{{"device":"{id}","patch":"metaballs"}}"#)).await;
+    let after = set(format!(r#"{{"device":"{id}","patch":"plasma"}}"#)).await.json();
     assert!(after["params"].as_object().expect("params").is_empty(), "Reset on a panel means it stays reset: {after}");
 }
 
 /// **One memory for the whole studio**, which is what card 165 settled once
 /// the orchestrator reversed its per-context decision. With card 170 the page
 /// *is* one of the panels, so the interesting version of this is two panels:
-/// tuning a piece on one is tuning it everywhere.
+/// tuning a patch on one is tuning it everywhere.
 ///
 /// (This replaces `promoting_the_preview_needs_no_copy_step` and
 /// `the_design_view_and_the_panel_share_one_memory`. Both were about the
@@ -235,23 +236,23 @@ async fn two_panels_share_the_one_memory() {
 
     // The page is a window onto the first one, so tuning it through the
     // design view's own routes is tuning that panel.
-    set_piece(at, "plasma").await;
+    set_patch(at, "plasma").await;
     set_param(at, "scale", 2.5).await;
     set_seed(at, 505).await;
-    let on_the_first = set(format!(r#"{{"device":"{first}","piece":"plasma"}}"#)).await.json();
+    let on_the_first = set(format!(r#"{{"device":"{first}","patch":"plasma"}}"#)).await.json();
     assert_eq!(param(&on_the_first, "scale"), 2.5, "the page and the panel it shows are one player");
 
-    // The *other* panel, asked for that piece, plays it the same way: there is
+    // The *other* panel, asked for that patch, plays it the same way: there is
     // one answer to "how is plasma set", not one per panel.
-    let on_the_second = set(format!(r#"{{"device":"{second}","piece":"plasma"}}"#)).await.json();
+    let on_the_second = set(format!(r#"{{"device":"{second}","patch":"plasma"}}"#)).await.json();
     assert_eq!(param(&on_the_second, "scale"), 2.5);
     assert_eq!(on_the_second["seed"], 505);
 
     // And the other way round: tune it there, and the page follows on the
     // next switch back.
     set(format!(r#"{{"device":"{second}","param":{{"id":"scale","value":0.6}}}}"#)).await;
-    set_piece(at, "metaballs").await;
-    let back = set_piece(at, "plasma").await;
+    set_patch(at, "metaballs").await;
+    let back = set_patch(at, "plasma").await;
     assert_eq!(param(&back, "scale"), 0.6, "one memory, one answer: {back}");
 }
 
@@ -289,10 +290,10 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
     assert!(!dir.0.join("state.bad.json").exists(), "a bad value must not condemn the file");
 
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["piece"], "metaballs");
-    let spec = boot["pieces"]
+    assert_eq!(boot["state"]["patch"], "metaballs");
+    let spec = boot["patches"]
         .as_array()
-        .expect("pieces")
+        .expect("patches")
         .iter()
         .find(|p| p["id"] == "plasma")
         .expect("plasma is on the menu")
@@ -308,7 +309,7 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
             .expect("a number")
     };
 
-    let plasma = set_piece(at, "plasma").await;
+    let plasma = set_patch(at, "plasma").await;
     assert_eq!(plasma["seed"], 11, "the good half of the entry was used");
     assert_eq!(param(&plasma, "scale"), 2.5, "and so was the one good value");
     assert_eq!(param(&plasma, "drift"), max_of("drift"), "out of range is clamped");
@@ -324,7 +325,7 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
 }
 
 /// A v1 file - what the deployed service has today - comes up with everything
-/// it had, and what it was playing is now that piece's memory.
+/// it had, and what it was playing is now that patch's memory.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_v1_state_file_comes_up_with_what_it_had() {
     let dir = Temp::new("memory-v1");
@@ -352,14 +353,14 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["piece"], "plasma", "a v1 file still resumes what it was showing");
+    assert_eq!(boot["state"]["patch"], "plasma", "a v1 file still resumes what it was showing");
     assert_eq!(boot["state"]["seed"], 4242);
     assert_eq!(boot["state"]["params"]["scale"], 2.5);
 
     // And the tuning it had is now remembered: go away and come back.
-    set_piece(at, "metaballs").await;
-    let back = set_piece(at, "plasma").await;
-    assert_eq!(back["seed"], 4242, "what v1 was playing became that piece's first memory");
+    set_patch(at, "metaballs").await;
+    let back = set_patch(at, "plasma").await;
+    assert_eq!(back["seed"], 4242, "what v1 was playing became that patch's first memory");
     assert_eq!(param(&back, "scale"), 2.5);
 
     // The file it rewrites is v3, and the v1 file was not condemned.
@@ -367,6 +368,6 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     assert!(!dir.0.join("state.bad.json").exists());
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 3);
-    assert_eq!(file["pieces"]["plasma"]["params"]["scale"], 2.5, "{text}");
+    assert_eq!(file["version"], 4);
+    assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "{text}");
 }

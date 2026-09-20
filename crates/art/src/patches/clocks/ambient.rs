@@ -381,7 +381,7 @@ impl Ambient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pieces::clocks::{pose, Rest, DEFAULT_REST};
+    use crate::patches::clocks::{pose, Rest, DEFAULT_REST};
 
     /// From the digits, through every mood and a change of mood, and back to
     /// rest: speed stays bounded, acceleration never exceeds the motor's, and

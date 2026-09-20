@@ -1,11 +1,11 @@
-//! Raymarched flight through a lattice. The whole piece is `lattice.wgsl`; this
+//! Raymarched flight through a lattice. The whole patch is `lattice.wgsl`; this
 //! file only names it and lists its parameters. Copy both to start a new
-//! full-frame shader piece.
+//! full-frame shader patch.
 
-use crate::gpu::ShaderPiece;
-use crate::piece::{param, ParamSpec, Piece, PieceDef};
+use crate::gpu::ShaderPatch;
+use crate::patch::{param, ParamSpec, Patch, PatchDef};
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "lattice",
     name: "Lattice",
     blurb: "GPU, raymarched. Solids on true black, lit into the mid-to-bright range, supersampled for slow flight.",
@@ -25,6 +25,6 @@ const PARAMS: &[ParamSpec] = &[
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
 ];
 
-fn make(seed: u64) -> Box<dyn Piece> {
-    ShaderPiece::boxed("lattice", include_str!("lattice.wgsl"), PARAMS, seed)
+fn make(seed: u64) -> Box<dyn Patch> {
+    ShaderPatch::boxed("lattice", include_str!("lattice.wgsl"), PARAMS, seed)
 }

@@ -3,7 +3,7 @@
 Screeny Studio is one Rust binary that serves its own web UI and streams frames to
 the panel. This is how it becomes a service on `workbench.local` that nobody has to
 log in to: a container, started by Docker on boot, restarted if it dies, showing the
-same piece it was showing before the machine went down.
+same patch it was showing before the machine went down.
 
 The vision and the survey of the host are in
 [`studio-vision.md`](studio-vision.md). This file is the operational half: what the
@@ -122,7 +122,7 @@ and whose `deviceType` is `PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, with
 through `WGPU_BACKEND=vulkan`.
 
 The studio's own confirmation, since card 145, is **one line on stdout at startup**,
-whichever way it went, and nobody has to select a piece first:
+whichever way it went, and nobody has to select a patch first:
 
 ```bash
 ssh workbench.local -- docker logs --tail 50 screeny-studio | grep 'studio: '
@@ -130,15 +130,15 @@ ssh workbench.local -- docker logs --tail 50 screeny-studio | grep 'studio: '
 
 **Good:** `studio: gpu Intel(R) Graphics (RPL-P) (Vulkan)`. With no adapter it reads
 `studio: no GPU adapter: ... - overland, lattice, knot cannot be played here`, and the
-same fact is on `GET /api/v1/status` as `gpu` and on the page, where those three pieces
+same fact is on `GET /api/v1/status` as `gpu` and on the page, where those three patches
 are struck through with the reason under them. **A missing adapter is never a 503**:
-the CPU pieces are unaffected and no restart conjures a GPU.
+the CPU patches are unaffected and no restart conjures a GPU.
 
 ```bash
 ssh workbench.local -- curl -s localhost:8787/api/v1/status | jq .gpu
 ```
 
-The older per-piece line on stderr is still there the first time a GPU piece opens:
+The older per-patch line on stderr is still there the first time a GPU patch opens:
 `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`. (On this Mac,
 in a container with no `/dev/dri`, the same line reads
 `gpu=llvmpipe (LLVM 19.1.7, 128 bits) backend=Vulkan` - the code path is identical,
@@ -157,11 +157,11 @@ tools/deploy-workbench.sh --render-gid <gid>
 ```
 
 lavapipe still renders - it is Mesa's software rasteriser and 64x32 is small - so the
-GPU pieces will work, slowly, rather than fail. **If there is no adapter at all**, the
-GPU pieces render black and say so once on stderr per piece
-(`screeny-art: <piece>: no GPU adapter: ...; rendering black`) - and, since card 145,
+GPU patches will work, slowly, rather than fail. **If there is no adapter at all**, the
+GPU patches render black and say so once on stderr per patch
+(`screeny-art: <patch>: no GPU adapter: ...; rendering black`) - and, since card 145,
 the page says it too: `overland`, `lattice` and `knot` are struck through with "no GPU"
-and the reason is the line under the list, so the fallback (stay on the CPU pieces -
+and the reason is the line under the list, so the fallback (stay on the CPU patches -
 `clocks-numerals`, `clocks-dials`, `plasma`, `metaballs`, `testcard`) is the obvious
 thing to do rather than something to be told. The heavier alternative is to rebuild
 with no graphics driver in the tree at all:
@@ -175,7 +175,7 @@ this reverts on the next `tools/deploy-workbench.sh`, which builds with the defa
 features - set `SCREENY_FEATURES=none` in an `.env` beside the compose file on the
 host if it should stick.)
 
-### (c) Do the clock pieces show local time?
+### (c) Do the clock patches show local time?
 
 ```bash
 ssh workbench.local -- docker exec screeny-studio date
@@ -255,9 +255,9 @@ What is different there:
   in it goes to the system resolver, a bare name is still an mDNS instance name - so
   it can be given to `set_panel` as it stands, and a name that means nothing says so
   instead of reporting a missing panel.
-- **No GPU.** The GPU pieces fall back to lavapipe, Mesa's software rasteriser, which
+- **No GPU.** The GPU patches fall back to lavapipe, Mesa's software rasteriser, which
   the image carries. Build with `SCREENY_FEATURES=none` for a studio with the CPU
-  pieces only and no graphics driver compiled in at all.
+  patches only and no graphics driver compiled in at all.
 
 ## Knobs
 
@@ -268,8 +268,8 @@ beside the compose file on the host, or pass the matching flag to the deploy scr
 |---|---|---|
 | `SCREENY_PORT` | `8787` | the web port. 8787 is free on workbench; 8000, 8443, 9000, 9443, 3002, 5002, 1080 and 11434 are not. |
 | `SCREENY_RENDER_GID` | `993` | the host's `render` group, which owns `/dev/dri/renderD128`. `stat -c %g /dev/dri/renderD128`. |
-| `TZ` | `America/Los_Angeles` | what the clock pieces call "now". |
-| `SCREENY_FEATURES` | *(empty)* | cargo features for the build. `none` = no graphics driver at all, CPU pieces only. |
+| `TZ` | `America/Los_Angeles` | what the clock patches call "now". |
+| `SCREENY_FEATURES` | *(empty)* | cargo features for the build. `none` = no graphics driver at all, CPU patches only. |
 
 An `.env` is host state, not repo state: it is in `.gitignore` and in
 `.dockerignore`, and it must never hold a credential.
@@ -280,8 +280,9 @@ An `.env` is host state, not repo state: it is in `.gitignore` and in
   writes `state.json` under `SCREENY_STATE_DIR=/data` (a named volume owned by uid 10001)
   and listens on `SCREENY_LISTEN`. A restart resumes what every panel was playing. The
   image has no `CMD` on purpose: a flag would silently beat the environment.
-- **Settings survive deploys** (the owner's requirement, 2026-09-19): everything the studio
-  remembers - devices, what each panel plays, each piece's tuned settings (card 165) - is in
+- **What it remembers survives deploys** (the owner's requirement, 2026-09-19): everything
+  the studio remembers - devices, what each panel plays, how each patch was left tuned
+  (card 165) - is in
   `/data/state.json` on the named volume `screeny_state`. A redeploy rebuilds the image and
   recreates the container but keeps the volume; verified on workbench (a panel playing
   `overland` seed 4242 was playing it again 4 s after a full redeploy). Only

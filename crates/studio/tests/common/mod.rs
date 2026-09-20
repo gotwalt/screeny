@@ -46,7 +46,7 @@ pub fn test_config() -> Config {
 
 /// A studio that keeps its state in `dir`, so it can be restarted.
 pub async fn studio_in(dir: &Path, faults: bool) -> Running {
-    let cfg = Config { state_dir: Some(dir.to_path_buf()), fault_pieces: faults, ..test_config() };
+    let cfg = Config { state_dir: Some(dir.to_path_buf()), fault_patches: faults, ..test_config() };
     Studio::bind(cfg).await.expect("bind an ephemeral loopback port").spawn()
 }
 

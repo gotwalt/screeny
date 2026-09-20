@@ -24,7 +24,7 @@ fn normal_at(p: vec3<f32>) -> vec3<f32> {
   ));
 }
 
-fn piece(uv: vec2<f32>) -> vec3<f32> {
+fn shade(uv: vec2<f32>) -> vec3<f32> {
   let t = u.t * P(0);
   // Fly down the gap between rows (half a cell off the lattice), swaying a little.
   let sway = vec2<f32>(sin(t * 0.37), cos(t * 0.29)) * 0.12 * P(1);

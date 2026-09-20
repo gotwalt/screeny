@@ -5,11 +5,11 @@
 use crate::color::{oklch, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, GUARANTEED_PALETTE, H, N, W};
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
 use std::f32::consts::{PI, TAU};
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "plasma",
     name: "Plasma",
     blurb: "Indexed and palette-cycled. Black is a band in the palette, not the bottom of a fade.",
@@ -29,7 +29,7 @@ const PARAMS: &[ParamSpec] = &[
     param("dither", "Index dither", 0.0, 1.0, 0.01, 1.0),
 ];
 
-fn make(seed: u64) -> Box<dyn Piece> {
+fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = Rng::new(seed);
     let waves = std::array::from_fn(|_| {
         let angle = rng.range(0.0, TAU);
@@ -59,7 +59,7 @@ struct Plasma {
     ring_freq: f32,
 }
 
-impl Piece for Plasma {
+impl Patch for Plasma {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let t = ctx.t as f32;
         let scale = ctx.get("scale");

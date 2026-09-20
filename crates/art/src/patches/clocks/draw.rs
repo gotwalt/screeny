@@ -1,4 +1,4 @@
-//! Drawing a grid of two-handed dials, shared by the pieces built on them.
+//! Drawing a grid of two-handed dials, shared by the patches built on them.
 
 use super::Hands;
 use crate::color::{oklch, Rgb};

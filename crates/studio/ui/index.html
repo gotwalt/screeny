@@ -8,9 +8,9 @@
 </head>
 <body class="picture-page">
   <header class="titleblock">
-    <div class="titleblock__piece">
-      <h1 id="piece-name">&nbsp;</h1>
-      <p id="piece-blurb"></p>
+    <div class="titleblock__patch">
+      <h1 id="patch-name">&nbsp;</h1>
+      <p id="patch-blurb"></p>
     </div>
     <dl class="readouts" aria-label="Run">
       <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
@@ -40,8 +40,8 @@
       <p class="playing__detail" id="playing-detail" hidden></p>
       <div class="playing__actions" id="playing-actions"></div>
       <ul class="playing__notes" id="playing-notes"></ul>
-      <div class="pieces" id="pieces" role="radiogroup" aria-label="Piece"></div>
-      <!-- Card 145: why the GPU pieces are greyed out, said once, here rather
+      <div class="patches" id="patches" role="radiogroup" aria-label="Patch"></div>
+      <!-- Card 145: why the GPU patches are greyed out, said once, here rather
            than only on stderr. -->
       <p class="hint" id="gpu-note" hidden></p>
       <div class="row row--seed">
@@ -60,7 +60,7 @@
     </section>
 
     <!-- Card 198: brightness is the one panel control that stays on this
-         screen, because it changes how the piece looks on the LEDs and is part
+         screen, because it changes how the patch looks on the LEDs and is part
          of judging it. It is the same control as the Panel screen's, bound
          once in `common.js`; everything else about the panel is over there. -->
     <section id="sec-bright">
@@ -104,7 +104,7 @@
         </datalist>
       </div>
       <!-- Card 197: Speed runs 0.1 to 4.0 in steps of 0.05, and 1.00x - "play
-           it as the piece intended" - was one of 79 positions with no mark and
+           it as the patch intended" - was one of 79 positions with no mark and
            no way back except the keyboard. Three stops, drawn by the same
            mechanism as the rate slider's, and a double-click on the thumb
            returns it to 1.00x. They do not snap. -->
@@ -114,7 +114,7 @@
                title="Double-click for 1.00×">
         <datalist id="speed-stops">
           <option value="0.5" label="half speed"></option>
-          <option value="1" label="as the piece intended"></option>
+          <option value="1" label="as the patch intended"></option>
           <option value="2" label="twice as fast"></option>
         </datalist>
       </div>

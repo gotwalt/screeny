@@ -7,10 +7,10 @@ answers to the open questions are recorded at the end and folded in throughout.
 
 Screeny Studio is run two ways from one codebase:
 
-1. **Locally**, for experimenting: design pieces, preview them as LEDs, push them to a
+1. **Locally**, for experimenting: design patches, preview them as LEDs, push them to a
    panel on the desk.
 2. **As a dockerized web app** on the network: opened in a browser from anywhere on
-   the LAN, it controls what is streaming to the device(s) - which piece, which
+   the LAN, it controls what is streaming to the device(s) - which patch, which
    parameters, which panel, on what schedule - and keeps streaming whether or not a
    browser is open.
 
@@ -18,12 +18,13 @@ First milestone: the Studio streams to the real hardware. Then keep going.
 
 ## What exists today
 
-- `crates/art`: pieces -> limiter -> panel-aware quantise -> `WireFrame` ->
+- `crates/art`: patches -> limiter -> panel-aware quantise -> `WireFrame` ->
   `Output` trait. Headless binary (`list`, `pipe`, `snapshot`). Optional wgpu.
 - `crates/studio`: Tauri v2 desktop app, ~1.2k lines. One `Engine` on its own thread; 11
-  Tauri commands (`bootstrap`, `frame`, `set_piece`, `set_param`, `reset_params`,
-  `set_seed`, `set_settings`, `set_playback`, `piece_playing`, `piece_act`,
-  `restart`); a static three-file front end whose every call goes through one
+  Tauri commands, in the names they had then (card 150 renamed them: a piece is a
+  patch, and `set_settings` is `set_output`) - `bootstrap`, `frame`, `set_piece`,
+  `set_param`, `reset_params`, `set_seed`, `set_settings`, `set_playback`,
+  `piece_playing`, `piece_act`, `restart`; a static three-file front end whose every call goes through one
   `invoke()` wrapper that already has a non-Tauri (mock) path. The window polls
   `frame` for the newest frame.
 - `crates/screeny`: sender library (card 011 is adding exact indexed sends, a push
@@ -48,7 +49,7 @@ WebSocket that pushes preview frames (6 KB RGB at 30-60 fps is ~200-370 KB/s).
 
 ```
                        ┌──────────────── screeny-studio (one process) ────────────────┐
- browser(s) ──HTTP/WS──┤ api ── Players: one per panel ── piece + params + seed + fps  │
+ browser(s) ──HTTP/WS──┤ api ── Players: one per panel ── patch + params + seed + fps  │
                        │          │  render (screeny-art pipeline)                    │
                        │          ├─> screeny::Sender (exact indexed, reconnects) ────┼──UDP──> panel(s)
                        │          └─> the page's frame cell ──WS──> browsers          │
@@ -63,8 +64,8 @@ Properties that matter:
 - **Streaming does not depend on a browser.** Players belong to the server. The UI is
   a remote control and a window. Restart the container and it resumes what it was
   playing (state store).
-- **One player per device.** Same piece to several panels, or different ones. The
-  multi-device sender (parked card 091) and the piece runner/scheduler (card 104)
+- **One player per device.** Same patch to several panels, or different ones. The
+  multi-device sender (parked card 091) and the patch runner/scheduler (card 104)
   land here, as parts of the server rather than as separate programs.
 - **Device controls** (brightness, identify, name, stats, reboot) are proxied through
   the existing control client. The device's own future captive-portal/HTTP settings
@@ -74,7 +75,7 @@ Properties that matter:
   connected to it - one panel per Studio, almost always one panel on a network. The web
   page is a window onto what that panel is doing, for when the panel is not within
   eyesight: what is on screen is what the device is showing, at the same time. Changing a
-  piece, a slider or a seed in the browser changes the panel. There is no separate preview
+  patch, a slider or a seed in the browser changes the panel. There is no separate preview
   stream with its own state, and no "promote to the panel" step (card 170 removed the one
   card 106 built, and folded the separate `/dashboard` into the one page). The data model
   stays a collection (decision 3 below); the UI assumes one.
@@ -87,8 +88,8 @@ That is a design requirement, not an afterthought:
 - The sender reconnects by itself across panel reboots, WiFi drops and DHCP changes
   (card 011), re-resolving by mDNS name with backoff. While a panel is away, players
   keep rendering (cheaply) or idle; nothing errors out, nothing piles up.
-- Players never stop on their own. A piece that panics is caught, logged, and replaced
-  by the next piece / a safe fallback; the process does not die with it.
+- Players never stop on their own. A patch that panics is caught, logged, and replaced
+  by the next patch / a safe fallback; the process does not die with it.
 - State (what plays where, schedules, brightness policy) lives in a small file on a
   volume, written atomically; the container resumes exactly where it was after a
   restart, a host reboot or an image update. `restart: unless-stopped`.
@@ -97,7 +98,7 @@ That is a design requirement, not an afterthought:
 - A `/healthz` endpoint reporting per-device `last frame sent`, `last telemetry
   heard`, fps and drops, wired to the compose healthcheck; the device's own telemetry
   (uptime, RSSI, drops by cause) is exposed so a glance answers "is it fine".
-- Wall-clock pieces (the clocks) need correct time and time zone in the container
+- Wall-clock patches (the clocks) need correct time and time zone in the container
   (`TZ`, host clock via NTP).
 - Quiet hours / brightness schedule belong here eventually (a panel that runs for
   months lives in a room at night).
@@ -114,7 +115,7 @@ That is a design requirement, not an afterthought:
 So the compose service uses `network_mode: host` (mDNS + unicast UDP just work),
 passes `/dev/dri` with `group_add` for the host's `render` gid (993), and the image
 carries Mesa's Vulkan driver (`mesa-vulkan-drivers`, ANV) for wgpu. No NVIDIA toolkit.
-`WGPU_BACKEND=vulkan`; fall back to CPU pieces if no adapter is found and say so in
+`WGPU_BACKEND=vulkan`; fall back to CPU patches if no adapter is found and say so in
 the UI. The web port must avoid what is already listening there (8000, 8443, 9000,
 9443, 3002, 5002, 1080, ... ); default **8787**.
 
@@ -149,9 +150,9 @@ crates/
   receiver/   no_std receive state machine (card 016)  (firmware + sim)
   screeny/    sender library + `screeny` CLI
   sim/        fake panel          probe/   bench instrument
-  art/        was crates/art: pieces, pipeline, headless bin   (pkg screeny-art)
+  art/        was crates/art: patches, pipeline, headless bin   (pkg screeny-art)
   studio/     was crates/studio: the server + embedded UI, no Tauri    (pkg screeny-studio)
-  demos/      fractal + word clock - to be ported into art as pieces, then retired
+  demos/      fractal + word clock - to be ported into art as patches, then retired
 firmware/  lab/  docs/  tools/
 ```
 
@@ -168,7 +169,7 @@ One `Cargo.lock`, one `target/` (the separate target dirs currently cost gigabyt
    new work, so nobody builds on the old layout.
 3. **101 Studio streams to hardware**: `SenderOutput` on `crates/screeny`; the engine
    gets a device target (picker: discovered + manual); real encoder stats replace the
-   estimates. Milestone: design a piece in the Studio, watch it on the panel.
+   estimates. Milestone: design a patch in the Studio, watch it on the panel.
 4. **105 server-first Studio**: axum server + embedded UI, routes replacing Tauri
    IPC, WS preview, Tauri removed.
 5. **106 players, devices, state - built to be forgotten**: device registry (mDNS +

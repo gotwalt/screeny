@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-screeny-studio - play generative pieces on the panels, and design them in a browser
+screeny-studio - play generative patches on the panels, and design them in a browser
 
     screeny-studio [--listen ADDR] [--state-dir DIR] [--ui-dir DIR] [--no-discover]
                    [--device-http-port PORT] [--no-device-http]
@@ -30,7 +30,7 @@ screeny-studio - play generative pieces on the panels, and design them in a brow
                      telemetry says and nothing more
     -h, --help       this
 
-    SCREENY_STUDIO_FAULTS=1 also offers two pieces that misbehave on purpose
+    SCREENY_STUDIO_FAULTS=1 also offers two patches that misbehave on purpose
     (fault-panic, fault-stall), for watching the containment work.
 ";
 
@@ -81,16 +81,16 @@ fn main() -> ExitCode {
         } else if cfg.device_http_port != screeny_studio::devhttp::DEFAULT_PORT {
             println!("studio: reading each panel's own status API on port {}", cfg.device_http_port);
         }
-        if cfg.fault_pieces {
-            println!("studio: the fault pieces are offered (SCREENY_STUDIO_FAULTS=1)");
+        if cfg.fault_patches {
+            println!("studio: the fault patches are offered (SCREENY_STUDIO_FAULTS=1)");
         }
         // Card 145: the adapter, decided once and said here, so `docker logs`
         // answers "why is overland black" without anybody having to select a
-        // piece first. Opening the device is what the first GPU piece would do
+        // patch first. Opening the device is what the first GPU patch would do
         // anyway, and doing it now keeps the first `/api/v1/status` prompt.
-        // It is never fatal: the CPU pieces do not care.
+        // It is never fatal: the CPU patches do not care.
         let gpu = screeny_art::gpu_status();
-        let blocked = screeny_art::pieces::NEEDS_GPU;
+        let blocked = screeny_art::patches::NEEDS_GPU;
         if gpu.available || blocked.is_empty() {
             println!("studio: {}", gpu.line());
         } else {
@@ -133,7 +133,7 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
         cfg.listen = resolve(&v).map_err(|e| e.replace("--listen", "SCREENY_LISTEN"))?;
     }
     cfg.state_dir = Some(PathBuf::from(env("SCREENY_STATE_DIR").unwrap_or_else(|| DEFAULT_STATE_DIR.to_string())));
-    cfg.fault_pieces = env("SCREENY_STUDIO_FAULTS").as_deref() == Some("1");
+    cfg.fault_patches = env("SCREENY_STUDIO_FAULTS").as_deref() == Some("1");
     // Card 180: said here rather than inherited, because it is the one number
     // in this program a real panel can be hurt by. `MIN_DEVICE_HTTP_EVERY`
     // says why ten seconds; there is deliberately no flag to go faster.
@@ -262,10 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn the_fault_pieces_need_asking_for() {
-        assert!(!parse_env(&[], &[]).unwrap().unwrap().fault_pieces);
-        assert!(!parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "0")]).unwrap().unwrap().fault_pieces);
-        assert!(parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "1")]).unwrap().unwrap().fault_pieces);
+    fn the_fault_patches_need_asking_for() {
+        assert!(!parse_env(&[], &[]).unwrap().unwrap().fault_patches);
+        assert!(!parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "0")]).unwrap().unwrap().fault_patches);
+        assert!(parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "1")]).unwrap().unwrap().fault_patches);
     }
 
     #[test]

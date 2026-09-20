@@ -14,24 +14,24 @@ async fn the_api_round_trips() {
     let studio = studio().await;
     let at = studio.addr;
 
-    // bootstrap: every piece, the payload budget, the current state.
+    // bootstrap: every patch, the payload budget, the current state.
     let boot = get(at, "/api/v1/bootstrap").await;
     assert_eq!(boot.status, 200);
     let boot = boot.json();
-    assert!(boot["pieces"].as_array().expect("a list of pieces").len() >= 4);
+    assert!(boot["patches"].as_array().expect("a list of patches").len() >= 4);
     assert_eq!(boot["payload_bytes"], 1464, "the spec's pixel payload");
-    let first = boot["state"]["piece"].as_str().expect("a piece").to_string();
+    let first = boot["state"]["patch"].as_str().expect("a patch").to_string();
 
-    // set_piece, and the error a typo gets.
-    let plasma = post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await;
+    // set_patch, and the error a typo gets.
+    let plasma = post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
     assert_eq!(plasma.status, 200);
-    assert_eq!(plasma.json()["piece"], "plasma");
-    let wrong = post(at, "/api/v1/set_piece", r#"{"id":"no-such-piece"}"#).await;
+    assert_eq!(plasma.json()["patch"], "plasma");
+    let wrong = post(at, "/api/v1/set_patch", r#"{"id":"no-such-patch"}"#).await;
     assert_eq!(wrong.status, 400);
-    assert_eq!(wrong.json()["error"], "no piece called `no-such-piece`");
+    assert_eq!(wrong.json()["error"], "no patch called `no-such-patch`");
     assert_ne!(first, "plasma", "this test assumes the studio does not start on plasma");
 
-    // set_param, clamped by the piece's own spec, and the error for a typo.
+    // set_param, clamped by the patch's own spec, and the error for a typo.
     let set = post(at, "/api/v1/set_param", r#"{"id":"scale","value":2.0}"#).await;
     assert_eq!(set.status, 200);
     assert_eq!(set.json()["params"]["scale"], 2.0);
@@ -39,7 +39,7 @@ async fn the_api_round_trips() {
     assert_eq!(wrong.status, 400);
     assert_eq!(wrong.json()["error"], "plasma has no parameter `nonesuch`");
 
-    // reset_params puts it back where the piece asked.
+    // reset_params puts it back where the patch asked.
     let reset = post(at, "/api/v1/reset_params", "{}").await;
     assert_eq!(reset.status, 200);
     let default_scale = reset.json()["params"]["scale"].clone();
@@ -51,18 +51,18 @@ async fn the_api_round_trips() {
     let fresh = post(at, "/api/v1/set_seed", r#"{"seed":null}"#).await.json();
     assert_ne!(fresh["seed"], 4242, "a null seed means a new one");
 
-    // set_settings: the panel model the preview is drawn through.
-    let mut settings = fresh["settings"].clone();
-    settings["panel"] = "bit_planes".into();
-    settings["dither"] = "bayer4".into();
-    settings["limiter"]["enabled"] = false.into();
-    let body = serde_json::json!({ "settings": settings }).to_string();
-    let after = post(at, "/api/v1/set_settings", &body).await;
+    // set_output: the panel model the preview is drawn through.
+    let mut output = fresh["output"].clone();
+    output["panel"] = "bit_planes".into();
+    output["dither"] = "bayer4".into();
+    output["limiter"]["enabled"] = false.into();
+    let body = serde_json::json!({ "output": output }).to_string();
+    let after = post(at, "/api/v1/set_output", &body).await;
     assert_eq!(after.status, 200);
     let after = after.json();
-    assert_eq!(after["settings"]["panel"], "bit_planes");
-    assert_eq!(after["settings"]["dither"], "bayer4");
-    assert_eq!(after["settings"]["limiter"]["enabled"], false);
+    assert_eq!(after["output"]["panel"], "bit_planes");
+    assert_eq!(after["output"]["dither"], "bayer4");
+    assert_eq!(after["output"]["limiter"]["enabled"], false);
 
     // set_playback, with the speed and the rate clamped to the player's range.
     let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
@@ -88,23 +88,23 @@ async fn the_api_round_trips() {
     let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
     assert_eq!(play["fps"], 30.0);
 
-    // restart keeps the seed and starts the piece's clock again.
+    // restart keeps the seed and starts the patch's clock again.
     let restarted = post(at, "/api/v1/restart", "{}").await;
     assert_eq!(restarted.status, 200);
     assert_eq!(restarted.json()["seed"], fresh["seed"]);
 
-    // piece_playing / piece_act: plasma composes nothing, so both are null.
-    let playing = get(at, "/api/v1/piece_playing").await;
+    // patch_playing / patch_act: plasma composes nothing, so both are null.
+    let playing = get(at, "/api/v1/patch_playing").await;
     assert_eq!(playing.status, 200);
     assert_eq!(playing.json(), serde_json::Value::Null);
-    let acted = post(at, "/api/v1/piece_act", r#"{"action":"next"}"#).await;
+    let acted = post(at, "/api/v1/patch_act", r#"{"action":"next"}"#).await;
     assert_eq!(acted.status, 200);
 
-    // A piece that does compose answers both - once it has rendered a frame
+    // A patch that does compose answers both - once it has rendered a frame
     // and so knows what it is doing.
-    post(at, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"clocks-numerals"}"#).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let playing = get(at, "/api/v1/piece_playing").await.json();
+    let playing = get(at, "/api/v1/patch_playing").await.json();
     assert!(playing["title"].is_string(), "clocks-numerals says what it is performing: {playing}");
 
     // panel_status: off until something turns it on.
@@ -156,7 +156,7 @@ async fn a_studio_with_no_panel_still_plays_something() {
     let at = studio.addr;
 
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert!(boot["state"]["piece"].as_str().is_some_and(|p| !p.is_empty()));
+    assert!(boot["state"]["patch"].as_str().is_some_and(|p| !p.is_empty()));
     assert_eq!(boot["state"]["device"], "", "nothing is attached");
     assert_eq!(get(at, "/api/v1/panel_status").await.json(), serde_json::Value::Null);
 
@@ -212,7 +212,7 @@ async fn the_socket_delivers_frames() {
 
     // The first thing a browser gets is the state, so it need not ask.
     let hello = ws.event("state").await;
-    assert!(hello["state"]["piece"].is_string());
+    assert!(hello["state"]["patch"].is_string());
 
     let a = ws.frame().await;
     assert_eq!(a.len(), screeny_studio::page::PACKET_BYTES);
@@ -236,13 +236,13 @@ async fn two_browsers_see_each_others_changes() {
     alice.event("state").await; // the hello
     bob.event("state").await;
 
-    // Alice changes the piece and the seed.
-    post_as(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#, Some("alice")).await;
+    // Alice changes the patch and the seed.
+    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
     post_as(at, "/api/v1/set_seed", r#"{"seed":1234}"#, Some("alice")).await;
 
     // Bob is told, in order, and the event says who did it.
     let ev = bob.event("state").await;
-    assert_eq!(ev["state"]["piece"], "plasma");
+    assert_eq!(ev["state"]["patch"], "plasma");
     assert_eq!(ev["from"], "alice");
     let ev = bob.event("state").await;
     assert_eq!(ev["state"]["seed"], 1234);
@@ -279,25 +279,25 @@ async fn two_browsers_see_each_others_changes() {
 async fn a_late_browser_starts_in_step() {
     let studio = studio().await;
     let at = studio.addr;
-    post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":77}"#).await;
 
     let mut late = Ws::connect(at, None).await;
     let hello = tokio::time::timeout(PATIENCE, late.event("state")).await.expect("a hello");
-    assert_eq!(hello["state"]["piece"], "plasma");
+    assert_eq!(hello["state"]["patch"], "plasma");
     assert_eq!(hello["state"]["seed"], 77);
     assert_eq!(hello["from"], serde_json::Value::Null, "a resync is for everyone");
 }
 
-/// The heartbeat: twice a second, what the piece is performing and what the
+/// The heartbeat: twice a second, what the patch is performing and what the
 /// panel link is doing. It is what replaced the UI's two polling timers.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_socket_carries_the_heartbeat() {
     let studio = studio().await;
-    post(studio.addr, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await;
+    post(studio.addr, "/api/v1/set_patch", r#"{"id":"clocks-numerals"}"#).await;
     let mut ws = Ws::connect(studio.addr, None).await;
     // Heartbeats are taken while the engine is between frames, so the first
-    // one after a piece is rebuilt can legitimately have nothing to perform
+    // one after a patch is rebuilt can legitimately have nothing to perform
     // yet. What is being pinned is that the heartbeat carries it at all.
     let mut status = ws.event("status").await;
     let deadline = tokio::time::Instant::now() + PATIENCE;
@@ -344,4 +344,73 @@ async fn a_frame_packet_is_a_header_and_a_picture() {
     let bytes = u32::from_le_bytes(packet[12..16].try_into().unwrap());
     assert!(colours > 0 && colours <= 256, "distinct colours: {colours}");
     assert!(bytes > 0 && bytes <= 1464, "encoded bytes: {bytes}");
+}
+
+// ------------------ card 150: the names a piece went by ------------------
+
+/// **Every old route still answers**, on the same handler as its new name.
+///
+/// The card's promise is that nothing that works today stops working: the
+/// firmware session drives this API from shell scripts, and a script written
+/// before card 150 says `set_piece`, `set_settings`, `piece_playing` and
+/// `piece_act`. What comes *back* is the new vocabulary, which is the other
+/// half of the promise - one name per thing, on the way out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_routes_a_piece_had_still_answer() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    // POST /set_piece, with `id` as it always took it.
+    let r = post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await;
+    assert_eq!(r.status, 200);
+    let state = r.json();
+    assert_eq!(state["patch"], "plasma");
+    assert!(state.get("piece").is_none(), "the reply says `patch` and only `patch`: {state}");
+    assert!(state.get("output").is_some() && state.get("settings").is_none(), "and `output`: {state}");
+
+    // The card's own acceptance line: the body may name the patch `piece`.
+    let r = post(at, "/api/v1/set_piece", r#"{"piece":"metaballs"}"#).await;
+    assert_eq!(r.status, 200, "{:?}", r.json());
+    assert_eq!(r.json()["patch"], "metaballs");
+    // ...or `patch`, on either route.
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"patch":"plasma"}"#).await.json()["patch"], "plasma");
+
+    // POST /set_settings, with the block still called `settings`.
+    let mut output = state["output"].clone();
+    output["dither"] = "bayer8".into();
+    let body = serde_json::json!({ "settings": output }).to_string();
+    let after = post(at, "/api/v1/set_settings", &body).await;
+    assert_eq!(after.status, 200);
+    assert_eq!(after.json()["output"]["dither"], "bayer8");
+
+    // GET /piece_playing and POST /piece_act.
+    assert_eq!(get(at, "/api/v1/piece_playing").await.status, 200);
+    assert_eq!(post(at, "/api/v1/piece_act", r#"{"action":"next"}"#).await.status, 200);
+}
+
+/// `POST /player/set` is what another session's scripts drive, so both of its
+/// renamed fields are taken under either name - and its answer, like every
+/// other, carries the new ones.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn player_set_takes_piece_and_settings_too() {
+    let studio = studio().await;
+    let at = studio.addr;
+    let id = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:49999","name":"ghost"}"#).await.json()["id"]
+        .as_str()
+        .expect("a device id")
+        .to_string();
+
+    let old = format!(r#"{{"device":"{id}","piece":"plasma","seed":7,"settings":{{"dither":"bayer8"}}}}"#);
+    let r = post(at, "/api/v1/player/set", &old).await;
+    assert_eq!(r.status, 200, "{:?}", r.json());
+    let status = r.json();
+    assert_eq!(status["patch"], "plasma");
+    assert_eq!(status["seed"], 7);
+    assert_eq!(status["output"]["dither"], "bayer8");
+    assert!(status.get("piece").is_none() && status.get("settings").is_none(), "the reply is in one vocabulary: {status}");
+
+    let new = format!(r#"{{"device":"{id}","patch":"metaballs","output":{{"dither":"bayer4"}}}}"#);
+    let status = post(at, "/api/v1/player/set", &new).await.json();
+    assert_eq!(status["patch"], "metaballs");
+    assert_eq!(status["output"]["dither"], "bayer4");
 }

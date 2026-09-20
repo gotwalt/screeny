@@ -1,4 +1,4 @@
-//! A small seeded PRNG we own, so a logged seed reproduces a piece exactly no
+//! A small seeded PRNG we own, so a logged seed reproduces a patch exactly no
 //! matter what happens to third-party crates.
 
 #[derive(Clone, Debug)]

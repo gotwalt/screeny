@@ -2,8 +2,8 @@
 //!
 //! This is card 101's acceptance. The claim being checked is the one the whole
 //! generative art system is built on (`docs/design/generative-art-brief.md`
-//! section 5): a piece that renders a palette and an index plane gets *those
-//! pixels* on the panel, and a piece that renders continuous colour gets
+//! section 5): a patch that renders a palette and an index plane gets *those
+//! pixels* on the panel, and a patch that renders continuous colour gets
 //! exactly what the studio's preview drew - not an approximation of it, and
 //! not something the preview lied about.
 //!
@@ -22,9 +22,10 @@ use std::time::{Duration, Instant};
 use screeny::{Cadence, Device, LinkConfig, Sent};
 use screeny_art::frame::WireFrame;
 use screeny_art::output::{Output, SenderOutput};
-use screeny_art::piece::{self, local_now, Ctx, Params};
 use screeny_art::panel::Panel;
-use screeny_art::{Measured, Pipeline, Settings};
+use screeny_art::patch::{self, local_now, Ctx, Params};
+// `pipeline::Output` is spelled out: the sink trait above is also `Output`.
+use screeny_art::{pipeline, Measured, Pipeline};
 use screeny_sim::{Config, SimDevice};
 
 /// Nothing here waits longer than this.
@@ -107,15 +108,15 @@ struct Run {
 /// shows" a checkable statement rather than a usually-true one.
 fn run(id: &str) -> Run {
     let (_dev, device, rx) = start_sim();
-    let def = piece::find(id).unwrap_or_else(|| panic!("no piece called `{id}`"));
+    let def = patch::find(id).unwrap_or_else(|| panic!("no patch called `{id}`"));
     let params = Params::defaults(def.params);
-    let mut piece = (def.make)(7);
+    let mut patch = (def.make)(7);
 
-    let mut settings = Settings::default();
+    let mut output = pipeline::Output::default();
     // The limiter is a time-varying gain; leaving it on would be fine but it
     // makes a failure harder to read.
-    settings.limiter.enabled = false;
-    let mut pipeline = Pipeline::new(settings);
+    output.limiter.enabled = false;
+    let mut pipeline = Pipeline::new(output);
 
     let cfg = LinkConfig { cadence: Cadence::Free, ..LinkConfig::default() };
     let mut out =
@@ -132,7 +133,7 @@ fn run(id: &str) -> Run {
     let began = local_now();
     for i in 0..FRAMES {
         let t = i as f64 * dt;
-        let frame = piece.render(&Ctx { t, dt, now: began + t, params: &params });
+        let frame = patch.render(&Ctx { t, dt, now: began + t, params: &params });
         let result = pipeline.process(frame, dt);
         out.send(&result.wire).expect("the network cannot fail a send");
         let sent = out.last_sent().expect("every frame reached the wire under Cadence::Free");
@@ -197,10 +198,10 @@ fn report(label: &str, sents: &[Sent], shown: &[Shown]) {
     );
 }
 
-/// An indexed piece arrives **pixel-exact**: every pixel the panel lights is
-/// `palette[index]`, as the piece drew it.
+/// An indexed patch arrives **pixel-exact**: every pixel the panel lights is
+/// `palette[index]`, as the patch drew it.
 #[test]
-fn an_indexed_piece_arrives_pixel_exact() {
+fn an_indexed_patch_arrives_pixel_exact() {
     for id in ["clocks-numerals", "plasma"] {
         let Run { wires, previews, measured, sents, shown } = run(id);
         report(id, &sents, &shown);
@@ -222,10 +223,10 @@ fn an_indexed_piece_arrives_pixel_exact() {
     }
 }
 
-/// A continuous piece cannot be sent exactly - and the preview shows the
+/// A continuous patch cannot be sent exactly - and the preview shows the
 /// damage the codec really does, pixel for pixel, rather than a model of it.
 #[test]
-fn a_continuous_piece_matches_the_preview() {
+fn a_continuous_patch_matches_the_preview() {
     let id = "metaballs";
     let Run { wires, previews, measured, sents, shown } = run(id);
     report(id, &sents, &shown);
@@ -234,7 +235,7 @@ fn a_continuous_piece_matches_the_preview() {
 
     let mut lossy = 0;
     for (i, j) in pairs {
-        assert!(wires[i].indexed.is_none(), "{id} is supposed to be a continuous piece");
+        assert!(wires[i].indexed.is_none(), "{id} is supposed to be a continuous patch");
         assert_eq!(
             as_shown(&shown[j].decoded), previews[i],
             "{id}: frame {i} reached the panel as something other than the preview"
