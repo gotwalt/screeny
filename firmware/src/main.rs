@@ -433,15 +433,15 @@ async fn telemetry_task() {
     loop {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
         tick += 1;
-        if tick == STACK_TICK {
-            if let Some(hw) = stack_probe::high_water() {
-                info!(
-                    "stack: core 0 main high-water {} of {} bytes, {} free (painted at boot)",
-                    hw,
-                    stack_probe::size(),
-                    stack_probe::headroom().unwrap_or(0),
-                );
-            }
+        if tick == STACK_TICK
+            && let Some(hw) = stack_probe::high_water()
+        {
+            info!(
+                "stack: core 0 main high-water {} of {} bytes, {} free (painted at boot)",
+                hw,
+                stack_probe::size(),
+                stack_probe::headroom().unwrap_or(0),
+            );
         }
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
