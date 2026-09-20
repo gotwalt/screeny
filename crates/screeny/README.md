@@ -469,13 +469,17 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 |---|---|
 | `tests/encode.rs` | every payload decodes and fits, for every pattern, adversarial frame and random frame, at budgets from 1464 down to 3; 32 colours or fewer are exact whatever the content; the advertised codec list is honoured; hysteresis |
 | `tests/loopback.rs` | handshake, a stream arriving intact, pixel-exact low-colour frames, `STATS_REQ` cadence, 25% loss stepping the rate down, a clean link not adapting, every control op, timeouts and their hints |
-| `tests/pacing.rs` | 30.0 fps within 1% over ten seconds, no drift, no burst; a 300 ms stall skipped rather than caught up; 10/24/60 fps |
+| `tests/pacing.rs` | 30.0 fps within 1% - the median interval between wake-ups, so the answer does not depend on how long the run was - no drift over the run, no gap short enough to be a burst behind a frame that was on time; three stalls at different points in a period skipped rather than caught up; 10/24/60 fps |
 | `tests/cli.rs` | the binary end to end: `pattern` at 30 fps, `pipe`, `encode-stats`, the control subcommands, and the failure messages |
 | `tests/color.rs` | the fast cube root against libm, and the panel model against card 001's measurements |
 | `tests/indexed.rs` | indexed frames are bit-exact end to end through `screeny-sim`: palettes of 2, 16, 17 and 32 colours, structured and incompressible, over a stream; the over-budget fallback and both malformed-frame errors |
 | `tests/embed.rs` | `Link`: the device rebooting on the same ports and moving to new ones mid-stream, the silence watchdog, reconnection off, a deferred link, `FINAL` on drop, a 60 fps producer decimated to 30 with nothing superseded, and `attach` reaching a device on an ephemeral, non-consecutive port pair and reconnecting to exactly those ports |
 
-`SCREENY_PACING_SECS` shortens the ten-second run while iterating.
+`SCREENY_PACING_SECS` shortens the ten-second run while iterating, and every
+assertion in it means the same thing at every length: `SCREENY_PACING_SECS=2`
+turns the suite's slowest test into a two-second one without weakening it
+(card 093). Run it with `-- --nocapture` and each test prints its schedule -
+median period, drift, how late the host woke it - whether it passed or not.
 
 ## Things worth knowing before you build on it
 
