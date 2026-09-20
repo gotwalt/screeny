@@ -1,0 +1,277 @@
+---
+id: 200
+title: Research - flash layout, a settings store, and a firmware update that cannot brick the device
+type: research
+hardware: no
+depends: [008]
+owner: worker-200
+branch: card/200-research-flash-store-ota
+---
+
+## Goal
+
+The owner wants (2026-09-20) the device to take firmware updates over HTTP,
+**safely**, and to keep its network settings in flash. Find out exactly how that is
+done on *this* stack, prove the pieces link and fit, and recommend a design the
+build cards can follow without rediscovering anything.
+
+This is the device-web track: cards 200-249, coordinated by the `firmware` session.
+Sibling research cards running in parallel: 201 (HTTP server, soft-AP, captive
+portal) and 202 (the button's GPIO). Stay out of their questions.
+
+## Context
+
+Read first: `CLAUDE.md`, `firmware/src/main.rs` (the module doc and `main`),
+`firmware/Cargo.toml`, `docs/research/001-firmware-stack.md`,
+`docs/design/protocol-v1.md` section 8, `backup/README.md`,
+`docs/board/parked/063-persist-settings.md`.
+
+What is already known:
+
+- ESP32-D0WD-V3, 8 MB flash, no usable PSRAM assumption. Firmware is `no_std`
+  embassy on `esp-hal =1.2.2`, `esp-rtos =0.4.0`, `esp-radio =1.0.0-beta.1`,
+  `esp-bootloader-esp-idf =0.6.0`. Versions are pinned for reasons in research 001;
+  do not propose bumping them unless a finding forces it, and then say what breaks.
+- We flash with `espflash flash` and **no partition table argument**, so the device
+  currently carries espflash's default table (one `factory` app, no `otadata`). The
+  stock Tidbyt table was nvs 0x9000+0x5000, otadata 0xe000+0x2000, app0
+  0x10000+0x3f0000, app1 0x400000+0x3f0000. `tools/fw-run.sh` is the only flashing
+  path and must stay the only one.
+- **The display runs on core 1, permanently**: with dither on it rewrites a DMA
+  buffer every refresh (154 Hz) from code that lives in flash. The HUB75 refresh ISR
+  is in IRAM (`iram` feature) and the DMA is circular, so the panel keeps scanning
+  the last buffer with no CPU at all. A flash erase/write disables the cache: what
+  happens to core 1 while core 0 writes flash is the central risk of this card.
+- Memory trap: `.bss` and core 0's main stack share one region; every static buffer
+  shrinks the stack. Heap is 64 KB reclaimed + 32 KB. Report what your proposal costs.
+- Spec section 8 already says the store is `esp-storage` + `sequential-storage` on a
+  dedicated partition. Card 063 (parked) lists the settings that must persist
+  (brightness, idle mode, name) and the write-amplification concern.
+- The serial port and `backup/tidbyt-stock-*.bin` are always there as the last-resort
+  recovery. "Safe" means the owner never needs them after a bad OTA.
+
+## Questions to answer
+
+1. **Partition table.** Propose `firmware/partitions.csv`: `nvs`, `otadata`, two app
+   slots, a `screeny` config partition, (coredump? no - say why or why not). Sizes,
+   offsets, and how the current image size compares to the slot. How `espflash`
+   takes it (`--partition-table`, or `espflash.toml`), and the exact change to
+   `tools/fw-run.sh`. What the first flash of the new table does to a device that
+   has the old one. Does espflash write to `ota_0` and reset `otadata` on a serial
+   flash, so that a serial flash always wins over a stale OTA slot?
+2. **OTA API.** What `esp-bootloader-esp-idf 0.6.0` gives us (`ota`, `OtaUpdater` or
+   whatever it is called in this version - read the source in `~/.cargo/registry`),
+   what it needs from `esp-storage`, and what is missing. Image validation before
+   switching slots: ESP image header magic, chip id, segment checksum, the appended
+   SHA-256, and the `esp_app_desc` (project name `screeny-fw`, version) so that a
+   wrong file is refused *before* `otadata` changes.
+3. **Rollback.** Does the second-stage bootloader espflash ships honour
+   `ESP_OTA_IMG_PENDING_VERIFY` and roll back an image that never confirms itself?
+   If not: what it takes to build one that does (ESP-IDF needed? is it installed
+   here?), how espflash is told to use it, and what the app-side "I am healthy,
+   confirm me" call looks like. Propose the health criterion (e.g. joined WiFi or
+   reached the portal, and served one HTTP request or N seconds alive) and the
+   behaviour when it is not met. If real rollback is out of reach, say plainly what
+   the residual risk is and what the cheapest mitigation is.
+4. **Flash writes with the display on core 1.** Read `esp-storage` (the version that
+   matches `esp-hal 1.2.2`): does it stall or park the other core during an
+   erase/write, and is that sound with our core-1 executor and the Priority3 DMA
+   interrupt? What does the panel do during a 4 KB erase (tens of ms) and during a
+   ~1 MB OTA write (tens of seconds in total)? Recommend the display behaviour for
+   small config writes (invisible? one dropped dither phase?) and for OTA (a static
+   "updating" frame with dither off, display task quiesced, or core 1 parked).
+5. **The settings store.** `sequential-storage` map over the config partition: key
+   set (wifi ssid/psk, name, brightness, idle mode, a schema version), record
+   format, wear, the debounce card 063 asks for, and behaviour on a corrupt or blank
+   partition (must boot to defaults, never panic). Where the code should live so the
+   record encoding is host-testable (a `no_std` module in `crates/`?).
+6. **Streaming the upload.** An image is ~1 MB and RAM is ~100 KB: the HTTP body must
+   stream into flash in chunks. Chunk size, erase strategy (erase-as-you-go vs
+   up-front), what a dropped connection or power loss at each stage leaves behind,
+   and why each of those states still boots.
+7. **Proof it links.** A compile-only spike in your worktree: add the OTA + storage
+   dependencies to `firmware/`, call the APIs from a function that is reachable, build
+   release (`. ~/export-esp.sh && cd firmware && cargo build --release`), and report
+   the image size and `.bss`/`.data` growth (`xtensa-esp32-elf-size`). Do not flash.
+   Keep the spike on your branch under `lab/` or behind a cargo feature; it is
+   evidence, not the implementation.
+
+## Deliverables
+
+- `docs/research/006-flash-store-ota.md`: conclusions first, then the evidence, with
+  file and line references into the crate sources you read. End with a recommended
+  design and a list of proposed build cards (titles + one paragraph each; do not
+  write the card files).
+- The proposed `firmware/partitions.csv` as a file in the research doc (fenced), not
+  yet in `firmware/`.
+- The compile-only spike, on your branch.
+
+## Acceptance
+
+The orchestrator can write the build cards from the research doc alone, and every
+claim about a crate's behaviour cites the source line that shows it.
+
+## Log
+
+### 2026-09-19 — crate sources read (esp-bootloader-esp-idf 0.6.0, esp-storage 0.10.0)
+
+Working through questions 2 and 4 first, because they decide whether the rest is
+buildable at all. Notes so far, all from `~/.cargo/registry/src/index.crates.io-.../`:
+
+- `esp-bootloader-esp-idf-0.6.0/src/ota.rs` — `Ota` manipulates only the 0x2000-byte
+  `otadata` partition (two 32-byte `OtaSelectEntry` at +0x0000 and +0x1000, `ota_seq` +
+  CRC32 of the seq + `ota_state`). `Ota::new` (line 200) *requires* `capacity() == 0x2000`
+  and `PartitionType::Data(Ota)`. `OtaImageState` (line 75) is the full IDF enum including
+  `PendingVerify`/`Aborted`.
+- `src/ota_updater.rs` — `OtaUpdater::new` (line 24) refuses unless there is an otadata
+  partition *and* >= 2 non-factory app partitions. `next_partition()` (line 141) hands back
+  a `FlashRegion` for the slot that is not booted; `activate_next_partition()` (line 134)
+  flips otadata. Nothing in this crate validates the image before the flip.
+- `src/partitions.rs` — `PartitionEntry::sha256` (line 161) parses the ESP image header,
+  walks segments, and *verifies the appended SHA-256* (`Error::InvalidImage` on mismatch).
+  `get_image_metadata` (line 670) is the header/segment walker. `booted_partition()`
+  (line 389) works on esp32 by reading MMU entry 0 at 0x3FF10000. `PARTITION_TABLE_MAX_LEN`
+  = 0xC00 (3 KB buffer needed to read the table).
+- The crate's `validation` feature (default on) MD5-checks the partition table itself
+  (line 301).
+- **The central finding for question 4**: `esp-storage-0.10.0/src/common.rs` line 235,
+  `MultiCoreStrategy`. On a multi-core chip the *default* is `Error`: every erase/write
+  returns `FlashStorageError::OtherCoreRunning` if the other core is running (line 280).
+  Our display owns core 1 forever, so a naive `FlashStorage::new(...)` can never write.
+  The two escapes are `multicore_auto_park()` (line 255) and `unsafe multicore_ignore()`
+  (line 265).
+- `park_core` on esp32 is `esp-hal-1.2.2/src/soc/esp32/cpu_control.rs` line 16: it writes
+  the RTC_CNTL `SW_STALL_APPCPU_C0/C1` fields (0x02/0x21 -> the 0x86 stall pattern). That
+  is a *hardware clock stall* of core 1, not a software park: core 1 freezes mid-instruction
+  and resumes exactly where it was. Peripherals and DMA are untouched.
+- Granularity is good news: `esp-storage/src/nor_flash.rs` `erase()` (line 206) loops
+  sector-by-sector then block-by-block, and **each** `internal_erase_sector` /
+  `internal_erase_block` / `internal_write` does its own park + unpark
+  (`common.rs` line 172-199 -> `MultiCoreStrategy::with`, line 339). So core 1 is stalled
+  per 4 KB sector / 64 KB block, not for the whole OTA.
+- `esp-storage/src/hardware.rs` — the ROM calls are `#[ram]` and wrapped in
+  `maybe_with_critical_section` (`lib.rs` line 66), which is an `esp_sync::RawMutex` and is
+  only present when the `critical-section` feature is on. `esp-bootloader-esp-idf` pulls
+  `esp-storage` with `default-features = false`, so we must enable it ourselves.
+- Stack cost warning (`esp-storage/src/lib.rs` "Buffer alignment and stack usage"):
+  `FlashStorage::read`/`write` *always* put a 4096-byte sector buffer on the caller's stack;
+  `read_nor`/`write_nor` only do it when the caller's slice is not word-aligned. Everything
+  `esp-bootloader-esp-idf`'s `FlashRegion::read/write` does goes through the 4 KB-stack
+  versions (`flash/flash_access.rs`).
+
+### 2026-09-19 — espflash 4.6.0, the bundled bootloader, and the rollback answer
+
+- `espflash 4.6.0` is what is installed. `espflash flash` takes `--partition-table <CSV>`,
+  `--partition-table-offset`, `--bootloader <FILE>`, `--target-app-partition <LABEL>`,
+  `--erase-parts <LABELS>` and `--erase-data-parts <PARTS>`; an `espflash.toml` with an
+  `[idf]` table can carry the same keys (`src/cli/config.rs` line 94, alias `idf`).
+- **espflash never touches otadata on a flash.** `src/image_format/idf.rs` line 614-631:
+  it writes exactly three segments — bootloader, partition table, app — and picks the app
+  partition as `find("factory")` else the first `Type::App`. So with a table that has
+  ota_0/ota_1 and no factory, a serial flash overwrites **ota_0 only** and a stale otadata
+  pointing at ota_1 still wins on the next boot. A serial flash does *not* automatically
+  win. Fix: `--erase-data-parts ota` (erases otadata -> bootloader falls back to
+  slot 0) on every `tools/fw-run.sh` flash.
+- espflash's built-in default table (`idf.rs` line 745) is nvs 0x9000+0x5000,
+  phy_init 0xf000+0x1000, factory 0x10000+0x3f0000 — that is what is on the device today.
+- The bundled `resources/bootloaders/esp32-bootloader.bin` (26112 bytes) is built from
+  **ESP-IDF release/v6.1 with stock defaults**; `resources/bootloaders/manifest.yaml`
+  shows the only sdkconfig fragment for esp32 is
+  `# CONFIG_BOOTLOADER_COMPILE_TIME_DATE is not set`.
+- `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` defaults to **No** in ESP-IDF
+  (kconfig reference, stable/esp32). So the shipped bootloader has the OTA *slot selection*
+  (strings in the binary: "No factory image, trying OTA 0", "ota data partition invalid,
+  falling back to factory", "Set actual ota_seq=%lu in otadata[0]") but **not** the
+  `New -> PendingVerify -> Aborted` state machine
+  (`bootloader_utility.c` lines 392-402 and 442-448 in v6.1 are both inside
+  `#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`).
+- What that machinery buys, when enabled: `bootloader_common_loader.c` line 78-86 —
+  an otadata entry whose state is `ABORTED` or `INVALID` is *not valid*, so
+  `bootloader_common_get_active_otadata` picks the other entry, i.e. the previous slot.
+  That is the real rollback.
+- Even without it, `bootloader_utility_load_boot_image` (v6.1 line 590-612) walks
+  backwards from the selected slot to factory and *fully verifies* each candidate, so a
+  truncated or corrupt image already falls back. What is missing is only the case of an
+  image that is structurally perfect but does not work.
+- **ESP-IDF is not installed on this bench** (`IDF_PATH` unset, no `idf.py`, no `~/esp`);
+  `~/export-esp.sh` only sets the Xtensa Rust toolchain paths. Building a rollback
+  bootloader means installing ESP-IDF v6.1 first.
+- Baseline measurement, `cargo build --release` in a clean worktree (40 s, not minutes,
+  because the registry is warm): `.bss` 127040, `.data` 31492, `.stack` 37536,
+  `.text` 531205, `.rodata` 73064. `espflash save-image` -> **743,408 byte** app image.
+
+### 2026-09-19 — the compile-only spike (question 7)
+
+`firmware/src/spike_ota.rs` behind `--features spike-ota`, called from `main` so the
+linker keeps it. It reads the partition table, reads/writes otadata through `Ota`, walks
+`OtaUpdater::next_partition`, stages one 4 KB sector into the other slot, validates that
+slot (header magic, chip id, `esp_app_desc` magic + project name, appended SHA-256 via
+`PartitionEntry::sha256`), and does a `sequential-storage` `MapStorage` fetch+store over
+the `screeny` partition through `embassy_embedded_hal::adapter::BlockingAsync`.
+
+Two API surprises: `sequential-storage 8.0.1` is **async-only**
+(`embedded-storage-async 0.4.1`), so the blocking `NorFlashRegion` needs an adapter; and
+its no-cache type is `cache::Cache::new_uncached()`, not `NoCache`.
+
+Both builds clean (`. ~/export-esp.sh && cargo build --release [--features spike-ota]`,
+~11-40 s each in this worktree).
+
+| section | baseline | +spike | delta |
+|---|---|---|---|
+| `.text` (flash) | 531205 | 571233 | **+40028** |
+| `.rodata` (flash) | 73064 | 76632 | +3568 |
+| `.rwtext` (IRAM) | 11812 | 15516 | **+3704** |
+| `.data` | 31492 | 32176 | +684 |
+| `.bss` | 127040 | 138080 | **+11040** |
+| `.stack` (core 0) | 37536 | 25808 | **-11728** |
+| app image (`espflash save-image`) | 743408 | 791392 | **+47984** |
+
+The `.bss` growth is **not** library static state. `xtensa-esp32-elf-nm` says
+`___embassy_main4POOL` goes from **96** to **11136** bytes: it is the spike's own buffers
+(two 0xC00 partition-table buffers plus a 4096-byte staging chunk) held across `await`
+points inside the `main` task's future. Core 0's stack shrinks by the same amount, which
+is the `.bss`/stack sharing the card warned about, demonstrated to the byte. The design
+rule that falls out: **the 3 KB partition-table buffer and the OTA staging buffer must
+not be live across an `await`** - put them in synchronous helpers or on the heap.
+
+`espflash save-image --partition-table <the proposed csv>` confirms espflash picks
+`ota_0` (2,097,152 bytes) when the table has no `factory`: the app is 35.4% of a slot
+today, 37.7% with the spike's extra 47 KB.
+
+The proposed CSV round-trips through `espflash partition-table --to-binary` (3072 bytes,
+MD5 entry included, which `esp-bootloader-esp-idf`'s default `validation` feature
+requires) and the `undefined` data subtype (0x06) is accepted by both esp-idf-part and
+`DataPartitionSubType` (`partitions.rs` line 565), so `partition_type()` will not panic
+on it.
+
+### 2026-09-19 — research doc written
+
+`docs/research/006-flash-store-ota.md`: conclusions first, then evidence with file+line
+citations, the proposed `firmware/partitions.csv` fenced in section 3, the exact
+`tools/fw-run.sh` diff, and seven proposed build cards (A-G) in section 9.
+
+Things that surprised me and are worth the orchestrator's attention:
+
+1. **A serial flash does not beat a stale OTA slot.** espflash writes bootloader, table
+   and app and nothing else; with no `factory` partition it writes `ota_0` while otadata
+   may still select `ota_1`. `--erase-data-parts ota` must be permanent in `fw-run.sh`.
+2. **The default multi-core strategy makes flash writes impossible on this device.**
+   `MultiCoreStrategy::Error` + a display that owns core 1 forever = every write returns
+   `OtherCoreRunning`. `multicore_auto_park()` is not an optimisation, it is the only
+   way this works at all.
+3. **The atomicity of the otadata flip is real and provable**: `set_current_app_partition`
+   always writes the *inactive* entry, and a half-written entry fails CRC, so a power cut
+   during the flip lands on the previous slot.
+4. **Rollback is one Kconfig option away**, but the option is off in espflash's bundled
+   bootloader and ESP-IDF is not installed on this bench. The app-side revert I propose
+   covers everything except an image that dies before its own confirm timer arms.
+5. `sequential-storage 8` is async-only; `MapConfig::new` panics on a bad range (use
+   `try_new`); a custom data partition must use subtype `undefined` or
+   `PartitionEntry::partition_type()` panics on the device.
+6. **No coredump partition**, and the reasoning is not just "we don't need it": writing
+   flash from a panic handler is the one context where the core-park discipline cannot be
+   honoured. Proposed card G offers an RTC-slow-memory breadcrumb instead.
+
+Open questions for the owner are listed in the report; the one that blocks a build card is
+whether to install ESP-IDF v6.1 and commit a 26 KB bootloader blob to a repo that is meant
+to go public.
