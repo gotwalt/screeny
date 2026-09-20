@@ -1,0 +1,237 @@
+# Deploying Screeny Studio
+
+Screeny Studio is one Rust binary that serves its own web UI and streams frames to
+the panel. This is how it becomes a service on `workbench.local` that nobody has to
+log in to: a container, started by Docker on boot, restarted if it dies, showing the
+same piece it was showing before the machine went down.
+
+The vision and the survey of the host are in
+[`studio-vision.md`](studio-vision.md). This file is the operational half: what the
+files are, how to deploy, what to check, and how to take it all away again.
+
+| file | what it is |
+|---|---|
+| `Dockerfile` | two stages. Builder: the official Rust image, cargo registry and `target/` in BuildKit cache mounts. Runtime: `debian:trixie-slim` + Mesa's Vulkan driver, `screeny-studio` and the `screeny` CLI, running as uid 10001. |
+| `docker-compose.yml` | the service on a Linux host with a GPU: host networking, `/dev/dri`, a named state volume, healthcheck, capped logs, `restart: unless-stopped`. |
+| `docker-compose.portable.yml` | the same service on a Mac or on any host with no `/dev/dri` and no host networking: a published port, no GPU, discovery not expected to work. A whole file, not an override - see below. |
+| `tools/deploy-workbench.sh` | does the deployment over SSH, and `--status`, `--logs`, `--down` afterwards. |
+| `.dockerignore` | keeps `target/`, `.git/`, `docs/`, `.claude/`, `captures/`, `backup/` and **all of `firmware/`** out of the build context. |
+
+## Before anything else: there is no password
+
+The studio has no authentication (parked card 041). On workbench it listens on every
+interface, which is the owner's choice for a machine on the home LAN and the tailnet:
+anyone who can reach `workbench.local:8787` can change what is playing and can point
+the studio at any panel on the network.
+
+That is fine, and it is also the whole security model. **Do not publish the port
+further.** No reverse proxy, no port forward, no tunnel, no firewall change. If this
+ever needs to leave the LAN, it needs card 041 first.
+
+## The first deployment, over the GitHub route
+
+The host pulls the private repo from GitHub itself (it authenticates as `gotwalt`).
+The owner allowed `main` to be pushed to that repo on 2026-09-20.
+
+```bash
+# 1. On the bench Mac, from the screeny checkout. Read the plan first; this
+#    prints every local and remote command and runs none of them.
+tools/deploy-workbench.sh --dry-run
+
+# 2. Push main. The script will never do this for you: it is a decision.
+git push origin main
+
+# 3. Deploy. Clones into ~/src/screeny on the host if it is not there, checks
+#    out origin/main, builds, starts, waits for /healthz.
+tools/deploy-workbench.sh
+
+# 4. Look at it.
+open http://workbench.local:8787/
+```
+
+The first build is slow - it is Rust plus wgpu plus a Mesa install - and it happens
+on the host, over SSH, not inside Portainer. Later builds reuse the cargo registry
+and `target/` cache mounts and are incremental.
+
+If `main` is ahead of `origin/main`, step 3 stops before touching the host and says
+`git push origin main`. That is on purpose: deploying an old commit silently is worse
+than not deploying.
+
+### The route with no GitHub
+
+For a host that cannot reach GitHub, or for a repo that is not allowed off the bench:
+
+```bash
+tools/deploy-workbench.sh --route workbench --dry-run
+git push workbench main        # the script adds the `workbench` remote for you
+tools/deploy-workbench.sh --route workbench
+```
+
+The remote is `workbench.local:srv/screeny.git`, a bare repo the script creates on
+the host on first use. The script never creates or changes `origin`.
+
+## After the deployment: three questions, three one-liners
+
+These are the things worth knowing once, on the real host. Each is one command and
+what good output looks like.
+
+### (a) Does mDNS work inside a host-network container, next to the host's avahi?
+
+```bash
+ssh workbench.local -- docker exec screeny-studio screeny discover
+```
+
+**Good:** a line naming `screeny-4a00a4` at `192.168.7.221:49374`. The `mdns-sd`
+crate binds UDP 5353 with `SO_REUSEPORT`, so it shares the port with the avahi daemon
+that already owns it on the host.
+
+**If it finds nothing:** discovery is a convenience, not a requirement. The studio
+takes an address directly, so set the panel by address and carry on:
+
+```bash
+curl -fsS -X POST http://workbench.local:8787/api/v1/set_panel \
+  -H 'content-type: application/json' -d '{"on":true,"to":"192.168.7.221"}'
+```
+
+Then write it up - it is the "avahi owns 5353" risk in `studio-vision.md` coming
+true, and the answer is either browsing through avahi over D-Bus or living on
+configured addresses. `avahi-resolve -n screeny-4a00a4.local` on the host answers
+`192.168.7.221` either way, so the host is not the problem if the container is blind.
+
+### (b) Does wgpu find the Intel iGPU inside the container?
+
+```bash
+ssh workbench.local -- docker exec screeny-studio vulkaninfo --summary
+```
+
+**Good:** a `GPU0` whose `deviceName` names Intel (Raptor Lake / Xe / UHD Graphics)
+and whose `deviceType` is `PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`, with
+`driverName = intel_open_source_mesa_driver`. That is ANV, and wgpu will pick it up
+through `WGPU_BACKEND=vulkan`.
+
+The studio's own confirmation is one line on stderr the first time a GPU piece opens:
+
+```bash
+ssh workbench.local -- sh -c "curl -fsS -X POST http://127.0.0.1:8787/api/v1/set_piece -H 'content-type: application/json' -d '{\"id\":\"overland\"}' >/dev/null; sleep 3; docker logs --tail 50 screeny-studio | grep 'screeny-art: gpu='"
+```
+
+**Good:** `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`.
+
+**If the only device is `llvmpipe`** (`PHYSICAL_DEVICE_TYPE_CPU`), the container is
+not reaching `/dev/dri`. Almost always the render gid: check it and redeploy with the
+right one.
+
+```bash
+ssh workbench.local -- stat -c '%G %g' /dev/dri/renderD128     # expect: render 993
+tools/deploy-workbench.sh --render-gid <gid>
+```
+
+lavapipe still renders - it is Mesa's software rasteriser and 64x32 is small - so the
+GPU pieces will work, slowly, rather than fail. **If there is no adapter at all**, the
+GPU pieces render black and say so once on stderr per piece
+(`screeny-art: <piece>: no GPU adapter: ...; rendering black`). The UI does not show
+that yet: see card 145. Until it does, the fallback is to stay on the CPU pieces -
+`clocks-numerals`, `clocks-dials`, `plasma`, `metaballs`, `testcard` - or to rebuild
+with no graphics driver in the tree at all:
+
+```bash
+ssh workbench.local -- "cd ~/src/screeny && SCREENY_FEATURES=none docker compose -p screeny -f docker-compose.yml build"
+```
+
+### (c) Do the clock pieces show local time?
+
+```bash
+ssh workbench.local -- docker exec screeny-studio date
+```
+
+**Good:** the owner's wall-clock time, with `PDT`/`PST` on the end. workbench's own
+timezone is `Etc/UTC`, so this only works because the compose file sets
+`TZ=America/Los_Angeles` and the image installs `tzdata`. Change it with
+`tools/deploy-workbench.sh --tz <zone>` or `TZ=<zone>` in an `.env` beside the
+compose file on the host.
+
+**If it says UTC:** `tzdata` is missing from the image or `TZ` did not reach the
+container. `docker exec screeny-studio printenv TZ` tells you which.
+
+## Day to day
+
+```bash
+tools/deploy-workbench.sh --status     # docker compose ps, and /healthz
+tools/deploy-workbench.sh --logs       # the last 200 lines
+tools/deploy-workbench.sh              # redeploy whatever is on origin/main now
+```
+
+Portainer (`https://workbench.local:9443`) sees the stack as the `screeny` project
+and can stop, start and inspect it. Do the *building* over SSH: a Rust + wgpu image is
+far too slow to build inside Portainer, and Portainer's editor is not where a
+`docker-compose.yml` should be edited when the repo has one.
+
+### Rolling back, and removing every trace
+
+```bash
+tools/deploy-workbench.sh --down                       # stop and remove the container
+tools/deploy-workbench.sh --down --volumes             # ... and forget the saved state
+
+# roll back to an older commit: check it out on the host, rebuild, restart
+ssh workbench.local -- "cd ~/src/screeny && git checkout <sha>"
+tools/deploy-workbench.sh --no-build --branch <sha>    # or re-run with --build
+
+# remove everything this ever created on the host
+ssh workbench.local -- docker compose -p screeny -f ~/src/screeny/docker-compose.yml down --volumes
+ssh workbench.local -- docker image rm screeny-studio:local
+ssh workbench.local -- rm -rf ~/src/screeny
+```
+
+Nothing above touches another container, another volume, another network or the
+Docker daemon's configuration, and nothing prunes. Five other compose projects live
+on that host - `docker`, `homework`, `homework-work`, `june`, `scrypted` - and the
+explicit `-p screeny` project name on every invocation is what keeps them apart.
+
+## Running it somewhere else
+
+`docker-compose.portable.yml` is for a Mac, or any host with no `/dev/dri` and no
+host networking:
+
+```bash
+docker compose -p screeny -f docker-compose.portable.yml up -d --build
+open http://localhost:8787/
+```
+
+It is a complete file rather than an override of `docker-compose.yml`, which is worth
+knowing why: compose merges list-valued keys like `devices:` and `group_add:` by
+appending, so an override can add a device but can never take one away. `-f base.yml
+-f override.yml` would still try to open `/dev/dri` on a machine that has none.
+
+What is different there:
+
+- **No discovery.** On a Mac the engine runs inside a VM with no access to the LAN's
+  multicast. Outbound unicast UDP is NATed and does work, so a configured address
+  does: `host.docker.internal:49374` reaches a `screeny-sim` on the host.
+- **No GPU.** The GPU pieces fall back to lavapipe, Mesa's software rasteriser, which
+  the image carries. Build with `SCREENY_FEATURES=none` for a studio with the CPU
+  pieces only and no graphics driver compiled in at all.
+
+## Knobs
+
+All of these have defaults that are right for workbench; set them in an `.env` file
+beside the compose file on the host, or pass the matching flag to the deploy script.
+
+| variable | default | what it does |
+|---|---|---|
+| `SCREENY_PORT` | `8787` | the web port. 8787 is free on workbench; 8000, 8443, 9000, 9443, 3002, 5002, 1080 and 11434 are not. |
+| `SCREENY_RENDER_GID` | `993` | the host's `render` group, which owns `/dev/dri/renderD128`. `stat -c %g /dev/dri/renderD128`. |
+| `TZ` | `America/Los_Angeles` | what the clock pieces call "now". |
+| `SCREENY_FEATURES` | *(empty)* | cargo features for the build. `none` = no graphics driver at all, CPU pieces only. |
+
+An `.env` is host state, not repo state: it is in `.gitignore` and in
+`.dockerignore`, and it must never hold a credential.
+
+## Two things the container cannot fix
+
+- **The state volume is only as good as the binary.** `SCREENY_STATE_DIR=/data` is
+  set and `/data` is a named volume owned by uid 10001, but the studio does not write
+  a state file yet - card 106 is what makes a restart resume what was playing. Until
+  it lands, a restart comes back on the default piece with the panel switch off.
+- **`SCREENY_LISTEN` is set and ignored.** Same card. That is why the compose files
+  also pass `--listen` on the command line; delete the `command:` lines once the env
+  var is honoured.
