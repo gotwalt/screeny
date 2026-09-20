@@ -237,3 +237,43 @@ Four strings were **not** given the new word, because "settings" there is not ou
 `node --check` passes on all three scripts (node v24.19.0 was already on the machine;
 nothing was installed). Every `#id` the three scripts ask for exists in one of the two
 pages - 84 ids, none missing - checked by script before the commit.
+
+### Area 5 - the studio's integration tests and its README (2026-09-20)
+
+203 hits across the twelve test files plus 43 in the README, all read.
+
+The tests now drive the **new** routes and read the **new** reply fields, because that
+is what the page does. What was left spelled the old way, deliberately:
+
+- The two legacy **state-file fixtures** in `tests/memory.rs` - the v2 hand-edited file
+  and the v1 file - keep `piece`, `pieces`, `no-such-piece` and `settings`. They are
+  old files; writing them in the new names would test nothing. The v1 test's
+  `file["version"]` assertion is 4 now, and the memory it looks for afterwards is
+  `file["patches"]`.
+- The **owner's own words** in `tests/memory.rs`'s doc comment - *"changing settings for
+  a given art piece persists the settings so that if we switch pieces and then switch
+  back, it restores the settings"* - are back verbatim, with a line saying why. The
+  mechanical pass had rewritten the quotation; caught on review.
+
+Two new tests in `tests/api.rs` cover the compatibility the card asks for, one per
+mechanism:
+
+- `the_routes_a_piece_had_still_answer`: `POST /set_piece` (with `{"id":...}` **and**
+  with `{"piece":...}`, which is the card's acceptance line and which did not work
+  before - that route only ever read `id`), `POST /set_settings` with the block still
+  called `settings`, `GET /piece_playing`, `POST /piece_act`. It also asserts the
+  *replies* carry `patch` and `output` and carry no `piece` or `settings` at all.
+- `player_set_takes_piece_and_settings_too`: `POST /player/set` with `piece` and
+  `settings`, then the same with `patch` and `output`, and the same one-vocabulary
+  check on the answer. This is the route another session's shell scripts drive.
+
+(The state file's own aliases are tested next door, in `state.rs`: area 3.)
+
+`crates/studio/README.md`: the API table is in the new names, with a paragraph under it
+saying which old paths and body keys still work and that answers use the new names
+only; the state-file section is v4, with the example JSON and the schema paragraph
+updated and the backup named. Two lines kept "settings" on purpose - the device's own
+settings store in the telemetry list, and `devices/forget`, whose row now says "the
+player goes with it" because that is what it does.
+
+`cargo test -p screeny-studio`: all green (62 lib + 14 api + the rest). Clippy silent.
