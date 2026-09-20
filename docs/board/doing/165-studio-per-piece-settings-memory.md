@@ -207,3 +207,167 @@ seed the *other* piece happened to be on - a visible, arbitrary change that nobo
 for by pressing a button labelled "Reset parameters". If the orchestrator wants the literal
 reading it is one line: `forget_params` also sets `entry.seed = None`, and two test
 assertions move with it.
+
+### Step 4 - it has to be in the volume (owner, relayed mid-card)
+
+The requirement was already the design - the memory is a field of `Persisted` and goes
+through card 106's `Store`, so there is no second file and nothing in `localStorage` - but
+it is now *pinned* rather than merely true:
+
+- `the_memory_survives_a_restart_including_a_piece_that_is_not_showing` reads
+  `state.json` off the disk between the two processes and asserts the values are in it,
+  then starts a **fresh process** on the same `--state-dir` and asks for a piece that was
+  **not** the one showing. That second half is the part a "resumes what it was playing"
+  test would miss, and it is the part that matters for a deploy.
+- `a_memory_round_trips_through_the_file` asserts the written file contains `"pieces"`.
+- `crates/studio/README.md` says where the memory lives, why it is that file, and what
+  happens to a value this build cannot use.
+
+### Step 5 - the evidence
+
+**Root `cargo test --release --no-fail-fast`: 471 passed, 0 failed, 1 ignored.**
+`cargo clippy -p screeny-studio --all-targets`: **no warnings in this crate.** (The
+pre-existing `screeny-art` and `screeny-demos` warnings are card 125's and were not
+touched; nothing clippy says points at `crates/art/src/piece.rs`.)
+
+New tests: 9 in `state.rs`, 6 in `player.rs`, 2 in `crates/art/src/piece.rs`, 9 in
+`crates/studio/tests/memory.rs`.
+
+**Rendered in a real browser** - the Chrome extension was connected. A `screeny-sim` on
+`127.0.0.1:50801/50802` (`--no-mdns`), a studio on `127.0.0.1:8899` with `--no-discover`
+and a temporary `--state-dir`, both under `timeout`. Two tabs.
+
+1. The design view drew and ran at ~62 fps. Picked **Plasma**, dragged the **Scale** thumb
+   from 1.20 to **2.97** - a real drag, not a scripted `input` event - and the picture got
+   visibly finer.
+2. Clicked **Metaballs**, then **Plasma**. The readout said `2.97` and **the thumb was
+   back where it had been left**, which is the card's acceptance by eye.
+3. **The second tab** opened on `2.97` already. Doing the away-and-back switch *in the
+   second tab* moved the **first** tab's slider to the restored value too, so the state
+   push carries it and not just the `set_piece` answer.
+4. **The dashboard** drew the panel (`bench`, PLAYING, link up, ~2,800 frames sent, `pal8-lz`,
+   exact). Changing its **Piece** to Plasma there gave the player `{"scale": 2.97}` in
+   `/api/v1/status` - the value tuned in the browser, on the panel, through the one memory.
+5. No console errors in either page. Both tabs closed.
+
+Then the restart, with the real binary rather than a test harness: `SIGTERM`, start again
+on the same `--state-dir`. The design view came back on `metaballs` with `count 8`, the
+**panel** came back on `plasma` with `scale 2.97`, and asking the design view for
+`plasma` - **a piece that was not showing** - gave `2.97`. The file itself:
+
+```jsonc
+"pieces": {
+  "clocks-numerals": { "seed": 0 },
+  "metaballs": { "seed": 0, "params": { "count": 8.0 } },
+  "plasma":    { "seed": 0, "params": { "scale": 2.97 } }
+}
+```
+
+One value per piece, because one value per piece is all that was moved.
+
+**Nothing left running.** The simulator and both studios were started under `timeout` and
+stopped by hand; `pgrep` for this worktree's path finds nothing. (Two other worktrees'
+processes are up - the firmware session's `espflash monitor` on the serial port and
+another worker's `fleet` test binary. Not mine, not touched.)
+
+**No hardware, no LAN.** No serial, no flash, no camera. Every address in every run was an
+explicit `127.0.0.1`; `--no-discover` on both studios and `--no-mdns` on the simulator, so
+nothing could have reached `screeny-4a00a4` or `workbench.local` even by accident.
+
+### Cards written, not done (reserved range 166-169)
+
+- **166** - the dashboard can change a panel's piece and seed but not its parameters, so
+  this card's memory and Reset are only reachable for a panel through the API. Says to read
+  card 170 first: if the preview and the player become one engine, this is the design
+  view's parameter panel pointed at a panel rather than a second set of controls.
+- **167** - `state.repaired` is in `/api/v1/status` and in one startup log line, and the
+  dashboard does not draw it. That is the one place somebody looks when a piece "came back
+  wrong".
+
+168 and 169 are unused.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| the memory in `state.rs` (+ migration) | `PieceMemory` / `Memory` / `SharedMemory`, `remember` / `recall` / `forget_params` / `usable_params`, `migrate_v1_to_v2` |
+| used by `set_piece` / `set_param` / `set_seed` / `reset_params` and the players' equivalents | `engine.rs`, `player.rs`; `player/set {reset_params}` for the last one |
+| no new routes; `bootstrap`/`status` expose enough for the UI | verified: `set_piece` answers with the restored state, the state push carries it, and a second browser and a late one both get it (`a_second_browser_sees_the_restored_values`, and rendered) |
+| switch away and back, preview and player | `switching_away_and_back_restores_the_settings`, `a_panel_restores_a_pieces_settings_too`, `a_panel_comes_back_to_a_piece_as_it_left_it` |
+| survives a server restart | `the_memory_survives_a_restart_including_a_piece_that_is_not_showing`, and by hand with the release binary |
+| each error-handling case | `a_value_this_build_cannot_use_becomes_the_default_and_the_rest_survive`, `rubbish_in_the_memory_costs_exactly_the_rubbish`, `a_hand_edited_state_file_starts_a_working_server`, `a_remembered_value_this_build_cannot_use_is_corrected` |
+| a v1 file migrates | `a_real_v1_file_migrates_without_losing_anything`, `a_v1_merge_prefers_what_the_panel_was_playing`, `a_v1_state_file_comes_up_with_what_it_had` |
+| Reset forgets | `reset_means_the_old_value_does_not_come_back`, `reset_makes_a_panel_forget_that_piece` (parameters; the seed is kept - see the push-back above) |
+| "Play my preview" copies | no copy step needed after the reversal: `promoting_the_preview_needs_no_copy_step` |
+| bounded | per known piece id, unknown entries capped at 64 (`unknown_pieces_are_capped`), `repaired` capped at 16, and the writer is card 106's unchanged one-slot atomic one |
+| a v2 binary never destroys a file it cannot read | card 106's four cases still pass unchanged, and a bad *value* now never reaches that path at all |
+| root `cargo test --release --no-fail-fast` green; clippy clean | 471 passed, 0 failed, 1 ignored; 0 clippy warnings in `screeny-studio` |
+
+**Not done here, on purpose**: the narrow-window layout (161), preview/player fighting over
+a panel (144), piece actions on players (140), a scheduler (104), and the unification
+itself (170) - the orchestrator said to keep this small so 170 can build on it.
+
+**Changes outside `crates/studio`, in full**: `ParamSpec::sanitise` and one line in
+`Params::set` in `crates/art/src/piece.rs`, plus two unit tests in the same file. Nothing in
+`crates/art/src/pieces/**` (card 160's worker owns that), nothing in `crates/screeny`,
+nothing in `crates/proto`, nothing in `firmware/`.
+
+### For the orchestrator: the deployed service
+
+This is a **schema change against production data**. The live `/data/state.json` is v1
+today, so the upgrade migrates it in place on the first start. The migration is read-once
+and write-normally: if it is wrong, the old file is gone, so look before and after.
+
+**Before the upgrade**, take a copy and note two things:
+
+```sh
+docker exec screeny-studio cat /data/state.json > /tmp/state-v1-$(date +%s).json
+python3 -m json.tool < /tmp/state-v1-*.json | head -40
+#   "version": 1
+#   players[].piece / .seed / .params      <- what the panel is playing
+#   preview.piece  / .seed  / .params      <- what the design view was on
+```
+
+**After** `tools/deploy-workbench.sh`:
+
+```sh
+curl -s localhost:8787/healthz                         # ok
+docker logs screeny-studio 2>&1 | grep 'studio: state'
+#   "the state file was schema v1; migrated to v2"     <- expected, once
+#   anything else on that prefix is worth reading
+docker exec screeny-studio cat /data/state.json | python3 -m json.tool
+```
+
+In the new file, check:
+
+1. **`"version": 2`**, and a new top-level **`"pieces"`** object.
+2. `pieces[<what the panel was playing>]` holds that piece's **seed** and *only the
+   parameters that were off their defaults* - so a piece that was never tuned may have an
+   entry with just a seed, and that is right, not a loss.
+3. `players[0]` and `preview` still say the same piece, seed and params they said in the v1
+   copy. **Nothing in the old file is dropped**; `pieces` is added beside it.
+4. `/api/v1/status` -> `state.repaired` is `[]`. A non-empty list is not a fault - it is
+   "this value did not fit any more, and here is what I did" - but on a file the studio
+   wrote itself it should be empty, so a surprise there is worth reading.
+5. `state.bad.json` and `state.v3.json` **do not exist** in `/data`. Either would mean the
+   file was not used, and card 106's rule would have kept it.
+
+Then the behaviour, in the browser at `workbench.local:8787`:
+
+- Tune `clocks-numerals` (card 160 gave it a `rest` slider - a parameter that did not exist
+  when the v1 file was written, which is the case this card is built for), switch to
+  `plasma`, tune that, switch back. Both come back as left, sliders and all.
+- `docker restart screeny-studio`. The panel resumes what it was playing (card 106, ~6 s),
+  and then switch the design view to a piece it was **not** showing: it comes up tuned.
+- One thing to know before you look: the memory is **shared** now. Tuning a piece in the
+  browser is tuning it on the panel, because the orchestrator reversed the per-context
+  decision. Which piece is showing where is still per context; only how a piece is set is
+  one fact.
+
+**Rolling back**: a v1 binary handed a v2 file takes card 106's from-the-future path. It
+does **not** parse it: it renames it to `/data/state.v2.json`, says so once, and starts
+from defaults - which on that box means discovery adopts `screeny-4a00a4` and plays
+`clocks-numerals`. Nothing is destroyed, but the panel stops playing what it was playing
+until somebody says otherwise. To undo a rollback: put the v2 image back and
+`mv /data/state.v2.json /data/state.json`. (I did not run this against the live service;
+it is what `a_state_file_from_the_future_is_kept_not_parsed` pins, unchanged by this card.)
