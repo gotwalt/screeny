@@ -118,3 +118,15 @@ five WGSL files are byte-identical to `main`'s once `piece`->`patch` and
 three GPU patches were each rendered through `screeny-art snapshot` to prove the
 modules still compile (`lattice` 1277 B lossy, `overland` 832 B exact, `knot` 668 B
 exact, all on Metal).
+
+### Area 2 - `crates/art/README.md` (2026-09-20)
+
+51 hits, all read. Prose and paths (`patches/clocks/`, `patches/knot.rs`, "Adding a
+patch", "GPU and 3D patches"), `Piece::playing`/`Piece::act` -> `Patch::...`,
+`ShaderPiece::boxed`/`with_scene` -> `ShaderPatch::...`, `Settings::dither` ->
+`Output::dither`, and the shader template's `fn piece(uv)` -> `fn shade(uv)` to match
+the code.
+
+Left as it was, beyond the one word: line 11 still calls `crates/studio` a "Tauri v2
+desktop app for designing patches". That has been wrong since card 105 made the studio a
+server, and putting it right is not this card's business.
