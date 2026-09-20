@@ -226,3 +226,31 @@ suspected but could not prove.
 Station-only heap steady state: **45,488-45,612 used of 98,304**, matching the
 ~45 KB card 007 measured. Stream healthy: 30 fps rx, 30 fps shown, 154-155
 swaps/s, zero stale/decode/rejected drops, render 3,081-3,147 us.
+
+### Flash 3 - "after": 26,508 -> 6,304
+
+The branch's default build, 115 s, clean boot.
+
+```
+INFO - display: core 1, 6 planes, 154 Hz refresh (driver), 12312 bytes/buffer, OE slots 0..=55 (cap 25), OE start 8
+INFO - stack: core 0 main high-water 6304 of 37512 bytes, 30184 free (painted at boot)
+INFO - telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops stale 0 superseded 1 decode 0 rejected 0 gaps 0 | ia 33333 us jit 1371 us | decode 489 us (max 2556) | render 3086 us (max 3214 window, 3457 boot) | state 1 codec 0x10 rssi -57 bright 96 | heap 45540/98304
+```
+
+| | `.bss` | `.stack` | high-water | free | heap used |
+|---|---|---|---|---|---|
+| before (`fb-on-stack`) | 127064 | 37512 | **26508** | 9980 | 45488-45612 |
+| after (default) | 102424 | 37512 | **6304** | 30184 | 45540 |
+
+**20,204 bytes came off the stack.** Slightly less than the 24,624 two buffers
+weigh, so the old build was already reusing part of one slot for the other -
+which is exactly why "how big is the temporary" was never a safe thing to
+reason about from the source, and why the number had to be measured.
+
+6,304 bytes is now the true depth of everything else this firmware does:
+`esp_hal::init`, `esp_rtos::start`, the HUB75 construction, the WiFi
+association, DHCP, mDNS, the decode path and whatever interrupts land on core 0.
+
+Stream unchanged by the move: 30 fps rx, 30 fps shown, 154-155 swaps/s, zero
+stale/decode/rejected drops, render 3,086 us against 3,081-3,147 before. Heap
+unchanged at 45,540 of 98,304 - as expected, nothing moved to the heap.
