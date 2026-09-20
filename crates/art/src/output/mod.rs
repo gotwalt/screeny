@@ -1,10 +1,21 @@
-//! Where finished frames go. The sender's interface is not final, so this is
-//! deliberately the smallest thing that covers both hand-over formats in the
-//! brief: every `WireFrame` carries raw RGB, and the palette + indices too when
-//! the piece rendered indexed. A future `SenderOutput` plugs in here.
+//! Where finished frames go.
+//!
+//! Every `WireFrame` carries raw RGB, and the palette + indices too when the
+//! piece rendered indexed, so an output can take whichever it can use.
+//!
+//! * [`PipeOutput`] writes the RGB: 6144 bytes a frame on a pipe, for anything
+//!   that is not this process.
+//! * [`SenderOutput`] is the real one - frames to a panel over UDP through
+//!   `screeny`'s `Link`, indexed frames exactly - and lives behind the
+//!   `sender` feature so the art core still builds with no network stack.
 
 use crate::frame::WireFrame;
 use std::io::{self, Write};
+
+#[cfg(feature = "sender")]
+mod sender;
+#[cfg(feature = "sender")]
+pub use sender::{target_for, PanelStatus, SenderOutput};
 
 pub trait Output {
     fn send(&mut self, frame: &WireFrame) -> io::Result<()>;

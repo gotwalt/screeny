@@ -3276,9 +3276,14 @@ name = "screeny-art"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "ctrlc",
  "libc",
  "png 0.17.16",
  "pollster",
+ "screeny",
+ "screeny-encode",
+ "screeny-proto",
+ "screeny-sim",
  "serde",
  "wgpu",
 ]

@@ -101,3 +101,50 @@ confirmed the device is up and discoverable (firmware 0.2.0, codecs pal8-lz / pa
 bc1-dual / pal5 / solid, mtu 1464) and is staying off it meanwhile. Serial, flashing,
 the camera, `reboot` and `brightness` stay forbidden; control queries are read-only
 (`info`, `stats`, `ping`). Acceptance section updated above.
+
+### Step 1 - the real encoder replaces the estimates; `SenderOutput` exists
+
+`budget.rs` is deleted. `meter.rs` replaces it and is not an estimate of anything: it
+runs `screeny-encode`'s chooser (the code the sender runs) and then `screeny-proto`'s
+decoder (the code the *firmware* runs), so `Measured { codec, bytes, exact, colours }`
+and `Meter::decoded()` are the real codec, the real datagram size, the real exactness
+decision and the real picture the panel will put up. `Encoding::for_colours` and
+`simulate_lossy` (median cut + ordered dither, a stand-in for "what a lossy codec might
+do") are gone with it.
+
+Both crates are pure codec crates - `screeny-proto` has no dependencies at all - so
+`crates/art` depends on them **unconditionally** and the studio's meters and preview are
+honest with no panel and no network stack anywhere. Only `screeny` itself (sockets,
+mDNS, `Link`) is optional, behind the new `sender` feature.
+
+- `crates/art/src/meter.rs`: `Meter`, `Measured`, `PAYLOAD_BYTES` (now
+  `screeny_proto::MAX_PIXEL_PAYLOAD`, which is the same 1464 the brief quotes, but from
+  the spec rather than from a comment), `distinct_colours` kept.
+- `crates/art/src/pipeline.rs`: `Pipeline` owns a `Meter`. `Stats.encoding: Encoding`
+  becomes `codec: u8` + `exact: bool`, `encoded_bytes` is now measured rather than
+  looked up, `Output` gains `measured`, and `Settings.lossy_sim` becomes
+  `codec_preview` (serde `alias` so an old saved settings blob still loads). The
+  preview is the decoded datagram when it is on.
+- `crates/art/src/output/` is now a directory: `mod.rs` (the trait, `PipeOutput`) and
+  `sender.rs` (`SenderOutput`, `PanelStatus`, `target_for`), the latter `#[cfg(feature
+  = "sender")]`.
+- `screeny-art play <piece> --to NAME|ADDR [--fps] [--seconds] [--wait] ...`, with a
+  ctrl-c handler so `FINAL` goes out on a signal (`Drop` does not run on one).
+
+The meter is stateful because the chooser's hysteresis is: it gives the previous
+frame's codec an 8% advantage, so a meter fed a whole stream answers the same as a
+sender fed the same stream, and a meter fed a *different subset* can differ on a
+marginal frame. That matters for the preview-vs-sim comparison and is why the test
+below sends 1:1.
+
+Measured, not assumed, in `meter.rs`'s own tests: palettes of 2/16/17/32 colours are
+exact and decode to themselves; 32 colours of pure index noise take `pal5` at exactly
+1376 bytes and are still exact; 64 flat bands take `pal8-lz` and are still exact; a
+continuous frame is not exact and the decode really differs from the framebuffer. Two
+first attempts at test expectations were wrong and are worth recording: a 32-colour
+frame with *structured* indices is exact even at a 600-byte budget (`pal8-lz`
+compresses it), and a lossy continuous frame does **not** always land inside 256
+colours, because `bc1-dual` is a block codec rather than a palette one.
+
+`cargo build -p screeny-art --no-default-features` and `--features sender` both clean;
+`cargo test --release -p screeny-art --features sender` 37 passed.
