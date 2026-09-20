@@ -54,10 +54,12 @@ Three things are worth knowing before building on it:
 - **Indexed frames go on the wire exactly.** Up to 32 colours whatever the
   indices, up to 256 when they compress. Pixel-exactness is checked end to end
   against `screeny-sim` in [`tests/sender.rs`](tests/sender.rs).
-- **Render at whatever suits the patch.** The link never sleeps and never
-  bursts: it applies the device's cadence ceiling itself, so a 60 fps patch into
-  a 30 fps panel puts 30 on the wire and the device supersedes nothing. Half the
-  frames come back `Coalesced`, which is the system working.
+- **One rate: 30 fps** (`screeny_art::FPS`, card 161). It is the panel's rate,
+  it is what `play`, `pipe` and the studio's players render at, and there is no
+  flag or control that offers another. The link still applies the device's
+  cadence ceiling itself - it never sleeps and never bursts - but a patch handed
+  to it at 30 has nothing to fold away, so `Coalesced` sits at zero instead of
+  taking half the frames.
 - **The network cannot fail a send.** A panel that reboots, moves or is off is a
   run of counters in `PanelStatus`, not an error in the render loop.
 
@@ -504,7 +506,7 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 | Assumption | Where |
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
-| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). Players and `pipe` default to 60; the studio's page offers the whole 1..60 range (card 172) | `crates/studio/src/player.rs`: `MIN_FPS`/`MAX_FPS`; `screeny-art pipe --fps` |
+| The panel takes 30 fps. This stopped being an assumption in card 161: the brief measured ~30, the device's cadence ceiling is 30, and the owner asked for one rate with no variability. `screeny_art::FPS` is it, and nothing offers a choice | `crates/art/src/lib.rs`: `FPS` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 
@@ -558,8 +560,9 @@ fits where a 40-colour field of confetti does not.
 One thing to know about the meter rather than assume: it and the sender each
 hold their own `Encoder`, and the chooser gives the previous frame's codec a
 small advantage. Fed the same frames they answer identically (there is a test);
-under the link's default cadence ceiling a 60 fps patch sends every other frame,
-so the two histories differ and a *marginal* frame can take a different codec.
+if the link's cadence ceiling ever does fold a frame away - under spec 6.9 a
+sender that is losing frames steps its rate down - the two histories differ and
+a *marginal* frame can take a different codec.
 Never a different exactness. Point the meter at the connected device with
 `pipeline.meter().set_limits(lim.budget, lim.codecs)` so it is at least
 measuring against the right budget.

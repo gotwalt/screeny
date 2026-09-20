@@ -13,7 +13,11 @@ use crate::pipeline::{self, Output, Pipeline};
 
 /// Frames a second the run is stepped at. Stateful patches and the limiter are
 /// then where a live run would have put them.
-pub const FPS: f64 = 30.0;
+///
+/// Card 161: this is [`crate::FPS`], re-exported rather than written down
+/// twice. The snapshot has always stepped at 30 - it is now the only rate
+/// there is.
+pub use crate::FPS;
 
 /// Which frame of which run to keep.
 #[derive(Clone, Copy, Debug)]
