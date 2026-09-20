@@ -133,3 +133,37 @@ lacks something, wrap it locally and report); the spec; `tools/` other than
   unchanged**; conformance 60/0/4; `dns-sd -B _http._tcp` finds it.
 
 ## Log
+
+### worker-222
+
+**Step 1 - the card, the reading, and the "before" numbers.**
+
+Merged `main` into the worktree (the branch was based on a commit that predated
+the card), read `CLAUDE.md`, `docs/README.md`, the card, all of
+`docs/design/device-web.md`, `crates/device-api`'s README and its five source
+files, `firmware/src/{main,net,mdns,store,receiver,stack_probe}.rs` and the
+card 201 spike, plus the registry sources for `picoserve 0.20.0`
+(`lib.rs`, `routing.rs`, `extract.rs`, `response.rs`, `response/json.rs`),
+`edge-mdns 0.8.0` (`host.rs`, the `ChainedHostAnswers` chain),
+`esp-bootloader-esp-idf 0.6.0` (`ota.rs`) and `esp-hal 1.2.2`'s
+`SocResetReason`. Nothing about these APIs was taken from memory.
+
+Wrote `tools/fw-size.sh`: one `xtensa-esp32-elf-size -A` pass, parsed with awk,
+printing `.data` / `.bss` / `.stack` / `.rwtext` / image, and exiting non-zero
+when `.stack` is below the 16384 floor (the header says why that is the floor
+and why a card's own budget is tighter).
+
+**Before** (default `cargo build --release`, fw 0.3.0, commit 328eae7):
+
+```
+  .data      57388  (incl. .data.wifi 540)
+  .bss      106712
+  .stack     32504   <- the remainder of main DRAM; floor 16384
+  .rwtext    66540  (incl. .rwtext.wifi 51416)  IRAM
+  image     816305  (loadable sections only)
+  main DRAM: .data + .bss + .stack = 196604
+```
+
+So the card's `.stack >= 22 KB` budget leaves **9976 bytes** of new `.data` +
+`.bss` for the whole server. That is the number every sizing decision below is
+measured against.
