@@ -77,8 +77,23 @@ impl DrawTarget for Frame {
 /// (since iOS 11) and Android (since 10) both parse. `T:nopass` is an open
 /// network and the password field is then omitted entirely.
 fn wifi_uri(ssid: &str) -> String {
-    // `\ ; , : "` must be backslash-escaped. Our SSIDs are `screeny-<6 hex>`
-    // so nothing ever escapes, but the rule belongs in the code that builds it.
+    // `\ ; , : "` must be backslash-escaped, per the ZXing convention that
+    // Android's own `WifiQrCode.java` implements. The normative Wi-Fi Alliance
+    // WPA3 spec v3.5 section 7.1 percent-encodes instead and Android does not
+    // understand that, so an SSID outside `A-Za-z0-9-` has no portable
+    // encoding at all. Ours never is.
+    format!("WIFI:T:nopass;S:{};;", escape(ssid))
+}
+
+/// The two-spec-portable form for an **open** network: the WFA spec omits `T`
+/// entirely for an unauthenticated network, and ZXing's parser defaults an
+/// absent `T` to `nopass`. One string satisfies both, and it is nine bytes
+/// shorter - which buys nine more characters of SSID inside the same 2-L code.
+fn wifi_uri_open_short(ssid: &str) -> String {
+    format!("WIFI:S:{};;", escape(ssid))
+}
+
+fn escape(ssid: &str) -> String {
     let mut esc = String::new();
     for c in ssid.chars() {
         if matches!(c, '\\' | ';' | ',' | ':' | '"') {
@@ -86,7 +101,7 @@ fn wifi_uri(ssid: &str) -> String {
         }
         esc.push(c);
     }
-    format!("WIFI:T:nopass;S:{esc};;")
+    esc
 }
 
 struct Qr {
@@ -96,12 +111,19 @@ struct Qr {
 }
 
 fn encode(ssid: &str, max_version: u8) -> Option<Qr> {
-    let uri = wifi_uri(ssid);
+    encode_payload(&wifi_uri(ssid), max_version)
+}
+
+fn encode_uri(uri: &str) -> Option<Qr> {
+    encode_payload(uri, 4)
+}
+
+fn encode_payload(uri: &str, max_version: u8) -> Option<Qr> {
     let cap = Version::new(max_version).buffer_len();
     let mut tmp = vec![0u8; cap];
     let mut out = vec![0u8; cap];
     let qr = QrCode::encode_text(
-        &uri,
+        uri,
         &mut tmp,
         &mut out,
         QrCodeEcc::Low,
@@ -269,12 +291,25 @@ fn main() {
             );
         }
     }
-    // Where the 32-byte version 2-L budget runs out.
-    for n in 10..=20usize {
-        let name = format!("screeny-{}", "x".repeat(n));
-        let u = wifi_uri(&name);
-        let v = encode(&name, 4).map(|q| q.version).unwrap_or(0);
-        println!("  ssid {:2} chars -> {:2} byte payload -> version {v}", name.len(), u.len());
+    let short = wifi_uri_open_short(ssid);
+    println!("short open form {:?} = {} bytes", short, short.len());
+
+    // Where the 32-byte version 2-L budget runs out, both ways.
+    println!("  ssid   T:nopass form       short open form");
+    for n in 6..=26usize {
+        let name: String = core::iter::repeat('x').take(n).collect();
+        let a = wifi_uri(&name);
+        let b = wifi_uri_open_short(&name);
+        let va = encode_uri(&a).map(|q| q.version).unwrap_or(0);
+        let vb = encode_uri(&b).map(|q| q.version).unwrap_or(0);
+        println!(
+            "  {:2}     {:2} bytes -> v{}        {:2} bytes -> v{}",
+            n,
+            a.len(),
+            va,
+            b.len(),
+            vb
+        );
     }
 
     let mut frames: Vec<(&str, Frame)> = Vec::new();
