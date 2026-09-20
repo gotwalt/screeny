@@ -37,7 +37,13 @@ encoder. Replace the stand-in byte-budget estimates with the real encoder's answ
 
 - Against `crates/sim`: an indexed piece (`clocks-numerals`, `overland`) arrives
   pixel-exact; a continuous piece arrives and the studio preview matches the sim.
-- Only the orchestrator (or a `hardware: yes` card) points it at the real panel.
+- On the real panel (`screeny-4a00a4`, 192.168.7.221): `screeny-art play <piece> --to
+  screeny-4a00a4` streams an indexed piece and a continuous piece; link state
+  connected, frames accepted by the device, exact/fallback counts recorded. The owner
+  judges the picture by eye.
+- The sim acceptance passes first; the panel run is one bounded step at the end.
+  WiFi streaming and read-only control queries only - never the serial port, flashing,
+  the camera, `reboot` or `brightness`.
 
 ## Update from the orchestrator (2026-09-19): card 011 has merged - this is unblocked
 
@@ -83,3 +89,15 @@ let sent = match &frame.indexed {
   from this card is expected and fine; serial and flashing stay with the orchestrator.
 
 ## Log
+
+### 2026-09-19 - acceptance widened to the real panel (owner)
+
+The owner decided this workstream is only accepted when it runs on the real panel, so
+the orchestrator lifted the "sim only" rule for **one bounded step at the end**: after
+the simulator acceptance is green, stream one indexed piece and one continuous piece to
+`screeny-4a00a4` by mDNS name with `screeny-art play`, about 60 s each, under a
+timeout, letting the link drop cleanly so `FINAL` releases the panel. The orchestrator
+confirmed the device is up and discoverable (firmware 0.2.0, codecs pal8-lz / pal4-lz /
+bc1-dual / pal5 / solid, mtu 1464) and is staying off it meanwhile. Serial, flashing,
+the camera, `reboot` and `brightness` stay forbidden; control queries are read-only
+(`info`, `stats`, `ping`). Acceptance section updated above.
