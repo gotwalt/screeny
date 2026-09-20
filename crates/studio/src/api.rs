@@ -226,22 +226,17 @@ async fn set_output(State(st): State<AppState>, headers: HeaderMap, Json(req): J
     on_page(&st, &headers, &PlayerChange { output: Some(req.output), ..PlayerChange::default() })
 }
 
+/// **`fps` is gone from this body** (card 161). It is not declared here and
+/// serde ignores what it does not know, so a page or a script that still sends
+/// `{paused, speed, fps}` is accepted in full and the rate is simply not a
+/// thing any more. Card 172's slider over `MIN_FPS..=MAX_FPS` went with it:
+/// there is one rate, `screeny_art::FPS`, and `StudioState::fps` reports it.
 #[derive(Deserialize)]
 struct SetPlayback {
     paused: bool,
     speed: f64,
-    fps: f64,
 }
 
-/// **Card 172 changed this.** Card 105's rule was "the page offers 30 and 60,
-/// so anything else leaves the rate where it is" - which meant a panel a
-/// script had set to 10 fps showed a control with neither button lit, and
-/// clicking either silently *changed* the rate rather than revealing it.
-///
-/// The page's control is a slider over the player's whole range now, so this
-/// route accepts what `POST /player/set {fps}` has always accepted: any rate
-/// in `player::MIN_FPS..=player::MAX_FPS`, clamped there rather than ignored.
-/// The two routes can no longer disagree about what a rate is.
 async fn set_playback(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPlayback>) -> ApiResult<Json<StudioState>> {
     on_page(
         &st,
@@ -249,7 +244,6 @@ async fn set_playback(State(st): State<AppState>, headers: HeaderMap, Json(req):
         &PlayerChange {
             paused: Some(req.paused),
             speed: Some(req.speed),
-            fps: Some(req.fps),
             ..PlayerChange::default()
         },
     )
@@ -592,8 +586,9 @@ struct SetPlayer {
     /// `POST /reset_params`.
     #[serde(default)]
     reset_params: bool,
-    #[serde(default)]
-    fps: Option<f64>,
+    // Card 161: `fps` was here. It is not declared any more and serde ignores
+    // unknown keys, so a script that still sends it is accepted and the field
+    // does nothing - which is the whole of what it can mean now.
     #[serde(default)]
     paused: Option<bool>,
     #[serde(default)]
@@ -640,7 +635,6 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
             seed: req.seed,
             param: req.param.map(|p| (p.id, p.value)),
             reset_params: req.reset_params,
-            fps: req.fps,
             paused: req.paused,
             speed: req.speed,
             output: req.output,

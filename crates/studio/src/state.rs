@@ -287,7 +287,6 @@ pub struct StoredPlayer {
     /// Only the values that differ from the patch's defaults; the rest come
     /// from the patch's own spec every time it is built.
     pub params: BTreeMap<String, f32>,
-    pub fps: f64,
     /// How a frame is finished for the panel. `settings` up to v3 (card 150).
     #[serde(alias = "settings")]
     pub output: Output,
@@ -309,7 +308,6 @@ impl Default for StoredPlayer {
             patch: default_patch().to_string(),
             seed: 1,
             params: BTreeMap::new(),
-            fps: 60.0,
             output: Output::default(),
             brightness: None,
             paused: false,
@@ -336,7 +334,6 @@ struct LegacyPreview {
     output: Output,
     paused: bool,
     speed: f64,
-    fps: f64,
     /// "Send to panel", v1/v2's answer to the question card 170 replaces with
     /// the player's own `on`.
     panel_on: bool,
@@ -353,7 +350,6 @@ impl Default for LegacyPreview {
             output: Output::default(),
             paused: false,
             speed: 1.0,
-            fps: 60.0,
             panel_on: false,
             panel_to: String::new(),
         }
@@ -1040,6 +1036,48 @@ fn note_retired_levels(raw: &serde_json::Value, repaired: &mut Vec<String>) {
     ));
 }
 
+/// Card 161: a file's `fps` is not a setting any more.
+///
+/// A player used to carry its own frame rate, 1 to 60, and a fresh one started
+/// at 60. There is one rate now - [`screeny_art::FPS`], the panel's own - and
+/// nothing offers a choice, because the link folded half of a 60 fps player's
+/// frames away and the picture was being sampled at 60 and shown at 30.
+///
+/// A file that still names `fps` **loads**: serde ignores the key and the
+/// player renders at 30. This is only how the studio *says so*, once, beside
+/// everything else it had to correct - exactly what card 102 did for
+/// `settings.levels`. **No schema bump**, for card 102's reason: nothing about
+/// the file's shape changed, a v5 file with an `fps` key is a perfectly good v5
+/// file, and bumping would send every deployed studio through a migration and a
+/// backup copy to delete one number. (It is dropped for good on the next save,
+/// which is what writing the file has always done with keys this build has no
+/// field for.)
+fn note_retired_fps(raw: &serde_json::Value, repaired: &mut Vec<String>) {
+    let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut look = |block: Option<&serde_json::Value>| {
+        if let Some(v) = block.and_then(|b| b.get("fps")) {
+            found.insert(v.to_string());
+        }
+    };
+    // The design view's own block, up to v2, and every player.
+    look(raw.get("preview"));
+    if let Some(serde_json::Value::Array(players)) = raw.get("players") {
+        for p in players {
+            look(Some(p));
+        }
+    }
+    if found.is_empty() {
+        return;
+    }
+    let values: Vec<&str> = found.iter().map(String::as_str).collect();
+    repaired.push(format!(
+        "`fps` ({}) is not a setting any more: there is one rate, {} fps, which is the panel's own \
+         (card 161) - rendering above it only fed the link frames it folded away",
+        values.join(", "),
+        screeny_art::FPS
+    ));
+}
+
 /// A file that did not name a schema version at all.
 fn no_version() -> u32 {
     0
@@ -1141,6 +1179,7 @@ fn load(path: &Path) -> Loaded {
     // `patches` from v4, `pieces` before it (card 150).
     let patches = clean_memory(raw.get("patches").or_else(|| raw.get("pieces")), &mut repaired);
     note_retired_levels(&raw, &mut repaired);
+    note_retired_fps(&raw, &mut repaired);
     // The `preview` block of a v1/v2 file, lifted out for the same reason as
     // `patches`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
@@ -1314,7 +1353,6 @@ fn migrate_to_v3(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
             patch: preview.patch.clone(),
             seed: preview.seed,
             params: preview.params.clone(),
-            fps: preview.fps,
             output: preview.output,
             brightness: None,
             paused: preview.paused,
@@ -1717,7 +1755,6 @@ mod tests {
         assert_eq!(loaded.players[0].seed, 3);
         // Fields the old file did not have take their defaults, not zeroes.
         assert!(loaded.players[0].on);
-        assert_eq!(loaded.players[0].fps, 60.0);
         assert_eq!(loaded.players[0].speed, 1.0, "v3's new fields take their defaults");
         assert!(!loaded.players[0].paused);
         assert_eq!(loaded.focus, "abc", "and the page looks at the one player there is");
@@ -1950,10 +1987,12 @@ mod tests {
         assert_eq!(loaded.version, SCHEMA_VERSION);
         // The one thing a good v1 file now needs said about it: every one of
         // them names `settings.levels`, and card 102 retired it.
+        // ... and, since card 161, its `fps`.
         let said = store.health().repaired;
-        assert_eq!(said.len(), 1, "a good v1 file needs no other repair: {said:?}");
+        assert_eq!(said.len(), 2, "a good v1 file needs no other repair: {said:?}");
         assert!(said[0].contains("`settings.levels` (64)"), "{}", said[0]);
         assert!(said[0].contains("`output.panel`"), "and says what replaced it: {}", said[0]);
+        assert!(said[1].starts_with("`fps`"), "and the retired rate: {}", said[1]);
         assert_eq!(
             loaded.players[0].output.panel,
             screeny_art::panel::Panel::Dithered,
@@ -2046,7 +2085,6 @@ mod tests {
         assert_eq!(p.device, "4a00a4");
         assert_eq!(p.patch, "overland");
         assert_eq!(p.seed, 4242);
-        assert_eq!(p.fps, 30.0);
         assert!(p.on);
         assert!(!p.paused);
         assert_eq!(p.speed, 1.0);
@@ -2063,8 +2101,9 @@ mod tests {
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v2")), "it says so once");
         let said = store.health().repaired;
-        assert_eq!(said.len(), 1, "only the retired `levels` (card 102): {said:?}");
+        assert_eq!(said.len(), 2, "the retired `levels` (card 102) and `fps` (card 161): {said:?}");
         assert!(said[0].contains("`settings.levels`"), "{}", said[0]);
+        assert!(said[1].starts_with("`fps`"), "{}", said[1]);
         assert!(!dir.0.join(BAD_FILE).exists(), "a v2 file is migrated, not condemned");
     }
 
@@ -2102,6 +2141,69 @@ mod tests {
             assert!(store.health().recovered.is_none(), "levels {level}: not a recovery, the file was used");
             assert!(!dir.0.join(BAD_FILE).exists(), "levels {level}: and certainly not condemned");
         }
+    }
+
+    /// Card 161. A current (v5) file that still names `fps` - 60, or any of
+    /// the rates card 172's slider could reach - loads, keeps everything else
+    /// it says, plays at the one rate, and is told about **once**. No schema
+    /// bump, for card 102's reason: the shape of the file did not change, only
+    /// that one key has stopped meaning anything.
+    #[test]
+    fn a_retired_fps_loads_and_is_reported() {
+        for rate in ["60.0", "10.0", "30.0"] {
+            let dir = Temp::new(&format!("fps-{rate}"));
+            std::fs::write(
+                dir.0.join(FILE),
+                format!(
+                    r#"{{"version":{SCHEMA_VERSION},"focus":"","players":[{{"device":"","patch":"plasma","seed":9,
+                       "fps":{rate},"paused":true,"speed":0.5,
+                       "output":{{"dither":"bayer8","panel_model":false}}}}]}}"#
+                ),
+            )
+            .expect("write the file");
+            let (store, loaded) = Store::open(Some(&dir.0));
+
+            assert_eq!(loaded.players.len(), 1, "fps {rate}: the file was used");
+            assert_eq!(loaded.players[0].seed, 9, "fps {rate}: the rest of the file survives");
+            assert!(loaded.players[0].paused, "fps {rate}: including the playback state that is still a thing");
+            assert_eq!(loaded.players[0].speed, 0.5);
+            assert_eq!(loaded.players[0].output.dither, screeny_art::dither::Dither::Bayer8);
+
+            let said = store.health().repaired;
+            assert_eq!(said.len(), 1, "fps {rate}: said once, not per player: {said:?}");
+            assert!(said[0].contains(&format!("`fps` ({rate})")), "{}", said[0]);
+            assert!(
+                said[0].contains(&format!("{} fps", screeny_art::FPS)),
+                "and says what there is instead: {}",
+                said[0]
+            );
+            assert!(store.health().recovered.is_none(), "fps {rate}: not a recovery - the file is v{SCHEMA_VERSION}");
+            assert!(!dir.0.join(BAD_FILE).exists(), "fps {rate}: and certainly not condemned");
+            assert!(
+                !dir.0.join(format!("state.v{SCHEMA_VERSION}.json")).exists(),
+                "fps {rate}: no schema bump means no migration and no backup copy"
+            );
+        }
+    }
+
+    /// Two players that both name the retired key are still **one** sentence,
+    /// in the `repaired` style: it is about the key, not about each player.
+    #[test]
+    fn a_retired_fps_is_said_once_for_the_whole_file() {
+        let dir = Temp::new("fps-many");
+        std::fs::write(
+            dir.0.join(FILE),
+            format!(
+                r#"{{"version":{SCHEMA_VERSION},"focus":"a","players":[
+                   {{"device":"a","patch":"plasma","fps":60.0}},
+                   {{"device":"b","patch":"metaballs","fps":60.0}}]}}"#
+            ),
+        )
+        .expect("write the file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.players.len(), 2);
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "one sentence about the key, not one per player: {said:?}");
     }
 
     /// The design view's patch is only merged into the memory where the memory
@@ -2154,7 +2256,6 @@ mod tests {
         assert_eq!(p.params["scale"], 2.5);
         assert!(p.paused);
         assert_eq!(p.speed, 2.0);
-        assert_eq!(p.fps, 30.0);
         assert_eq!(loaded.focus, "4a00a4");
     }
 
@@ -2311,7 +2412,6 @@ mod tests {
         assert_eq!(p.patch, "clocks-dials", "`piece` is read as `patch`");
         assert_eq!(p.seed, 4242);
         assert_eq!(p.params, BTreeMap::from([("grid".to_string(), 2.0), ("mood".to_string(), 3.0)]));
-        assert_eq!(p.fps, 30.0);
         assert_eq!(p.brightness, Some(96), "the brightness policy");
         assert!(!p.paused);
         assert_eq!(p.speed, 0.75);
@@ -2333,8 +2433,11 @@ mod tests {
         assert_eq!(loaded.patches["plasma"].params["scale"], 2.97);
         assert_eq!(loaded.patches["long-gone"].seed, Some(5));
 
-        // Nothing needed correcting: a v3 file names no retired `levels`.
-        assert!(store.health().repaired.is_empty(), "{:?}", store.health().repaired);
+        // The one thing that needed saying: a v3 file names `fps`, which card
+        // 161 retired. It names no retired `levels`.
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].starts_with("`fps`"), "{}", said[0]);
         assert!(!dir.0.join(BAD_FILE).exists(), "a v3 file is migrated, not condemned");
     }
 
@@ -2695,7 +2798,9 @@ mod tests {
         assert_eq!(loaded.patches["metaballs"].speed, None, "a patch nothing was playing is left alone");
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v4")), "it says so once");
-        assert!(store.health().repaired.is_empty(), "a good v4 file needs no repair: {:?}", store.health().repaired);
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "a good v4 file needs only the retired `fps` said: {said:?}");
+        assert!(said[0].starts_with("`fps`"), "{}", said[0]);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(4))).expect("the backup"), v4, "kept byte for byte");
         assert!(!dir.0.join(BAD_FILE).exists(), "a v4 file is migrated, not condemned");
     }

@@ -109,3 +109,52 @@ away by the link's cadence ceiling** - exactly what the card says.
 
 Process CPU over the same window, `ps -o cputime=` on the studio's own pid (not the `timeout`
 wrapper): 3.83 core-seconds in 30 s = **12.8% of one core** on this M4.
+
+### The Studio: what came out
+
+Everything that let anybody name a rate, gone; everything that *reports* one, kept.
+
+Removed:
+- `player::MIN_FPS` and `player::MAX_FPS`. `IDLE_FPS` (5) stays, with a line saying why.
+- `PlayerChange::fps` and the clamping branch in `Player::configure`.
+- `StoredPlayer::fps` (and its 60.0 default), and `LegacyPreview::fps` with it.
+- `SetPlayback::fps` and `SetPlayer::fps`. Neither struct declares the field now and
+  neither has `deny_unknown_fields`, so **a body that still sends `fps` is accepted in
+  full and the field does nothing** - `tests/ui.rs::a_rate_sent_by_an_older_client_is_
+  accepted_and_ignored` posts 10, 15, 24, 45, 60, 0, `1e400` and `null` to `player/set`
+  and card 172's `{paused, speed, fps}` to `set_playback`, and checks the rest of each
+  body was applied.
+- The `#fps` slider, its `#fps-stops` datalist and `showFps` from the Picture screen;
+  `pushPlayback` no longer sends a rate. `drawStops` stays, as card 183 built it: it is
+  Speed's mechanism now, and `ui.rs`'s stop test belongs to Speed.
+
+Kept, and why:
+- **The Rate readout (`#ro-fps`) stays.** It never was the setting: it is
+  `core.fps`, the rate the render loop is actually achieving, off the frame packet. It
+  is not a control, and it is the one place a machine that cannot hold 30 says so - a
+  debug build will not (`crates/studio/README.md` line 16). A readout of reality is
+  worth keeping when there is one rate; a *control* is not.
+- `StudioState::fps`, `PlayerStatus::fps`, `PreviewStatus::fps`: reported, never set,
+  always `screeny_art::FPS`. This is what lets the page draw the limiter's per-frame
+  tick without writing 30 into the JavaScript - there is still exactly one constant -
+  and it keeps every script that reads `/api/v1/bootstrap` or `/status` working.
+- `ws`'s `fps` query: `DEFAULT_FPS` and the pace ceiling now both read
+  `screeny_art::FPS`. `0` still means "send me nothing", which is how a hidden tab gives
+  up its claim, and asking for more than is rendered simply means "everything".
+
+**No schema bump**, and the card guessed right: nothing about the file's *shape*
+changed, only that one key stopped meaning anything - exactly card 102's `levels`. A
+bump would send every deployed studio through a migration, a backup copy and a
+`recovered` sentence to delete one number. `note_retired_fps` says it once, in the
+`repaired` voice, listing the values it found; the key is dropped for good on the next
+save. Tests: `a_retired_fps_loads_and_is_reported` (60, 10 and 30, each checking the rest
+of the file survives, that there is no backup file and no recovery) and
+`a_retired_fps_is_said_once_for_the_whole_file` (two players, one sentence).
+
+Docs: `crates/studio/README.md` (idle rate, the two route tables, the socket's default,
+the test index), `crates/art/README.md`, `docs/design/generative-art-brief.md` (the
+frame-rate row, and rule 5 - which said "keep your 60 fps loop, do *not* solve this by
+rendering at 30" and is now reversed, saying so, with "step by `ctx.dt`" in its place),
+`docs/design/studio-vision.md`.
+
+`cargo clippy --workspace --all-targets`: silent.

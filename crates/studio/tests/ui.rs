@@ -459,30 +459,41 @@ async fn status_says_whether_discovery_is_on() {
     assert_eq!(status["ok"], true, "not looking for panels is never unhealthy");
 }
 
-/// Card 172: the rate control can show any rate a player may be on, and its
-/// range is the player's range rather than a second opinion about it.
+/// Card 161: **no control on either screen offers a frame rate.** The owner
+/// asked for one rate with no variability, so the rate slider card 172 built
+/// (and the two buttons card 105 had before it) are gone, and nothing was left
+/// behind that could set one.
 #[test]
-fn the_rate_control_spans_the_players_whole_range() {
-    let span = format!(
-        r#"id="fps" type="range" min="{}" max="{}" step="1""#,
-        screeny_studio::player::MIN_FPS as u32,
-        screeny_studio::player::MAX_FPS as u32
-    );
-    assert!(INDEX_HTML.contains(&span), "the rate slider must span MIN_FPS..=MAX_FPS; looked for {span}");
-    assert!(!INDEX_HTML.contains(r#"name="fps""#), "the two-stop radio group is gone");
+fn no_control_offers_a_frame_rate() {
+    for (what, html) in [("the Picture screen", INDEX_HTML), ("the Panel screen", PANEL_HTML)] {
+        assert!(!html.contains(r#"id="fps""#), "{what} still has a rate input");
+        assert!(!html.contains(r#"name="fps""#), "{what} still has a rate radio group");
+        assert!(!html.contains("fps-stops"), "{what} still declares rate stops");
+        assert!(!html.contains(">Frames per second<"), "{what} still labels a rate control");
+    }
+    for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
+        assert!(!js.contains("'set_playback', { paused: state.paused, speed: state.speed, fps"), "{what} still sends a rate");
+        assert!(!js.contains("$('#fps')"), "{what} still reaches for a rate control");
+    }
+    // What is left is a **readout** of the rate the render loop is achieving,
+    // which is not a control and is the one place a machine that cannot hold
+    // 30 says so.
+    assert!(INDEX_HTML.contains(r#"id="ro-fps""#), "the Rate readout stays");
+    assert!(PICTURE_JS.contains("$('#ro-fps')"), "and something fills it in");
 }
 
-/// Card 183: the stops the rate slider declares are **drawn**, and drawn where
-/// the thumb actually lands.
+/// Card 183: the stops a slider declares are **drawn**, and drawn where the
+/// thumb actually lands.
 ///
 /// The drift this guards against is the one the card was written about: the
 /// mark's position is `3.5px + frac * (W - 7px)`, which is the thumb's own
 /// geometry, and the thumb's width lives in `style.css`. If somebody changes
-/// the thumb and not the arithmetic, the marks go quietly out of line - worst
-/// at the right-hand end, where 60 fps is - and nothing else would say so.
+/// the thumb and not the arithmetic, the marks go quietly out of line and
+/// nothing else would say so. Card 161 removed the rate slider this was written
+/// for; the mechanism and this test belong to Speed now.
 #[test]
-fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
-    assert!(INDEX_HTML.contains(r#"list="fps-stops""#), "the rate slider still declares its stops");
+fn a_sliders_stops_are_drawn_where_the_thumb_lands() {
+    assert!(INDEX_HTML.contains(r#"list="speed-stops""#), "the speed slider still declares its stops");
     assert!(COMMON_JS.contains("function drawStops"), "and something draws them");
     assert!(PICTURE_JS.contains("drawStops)"), "drawStops has to actually be called");
     assert!(STYLE_CSS.contains(".slider .stops"), "the marks need somewhere to be");
@@ -505,14 +516,11 @@ fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
         "the marks must use the thumb's own geometry: 3.5px + frac * (W - 7px)"
     );
 
-    // And every stop is a rate the slider can actually reach.
-    let stops = stops_of(INDEX_HTML, "fps-stops");
-    assert!(stops.len() >= 4, "found only {stops:?}");
+    // And every stop is a speed the slider can actually reach.
+    let stops = stops_of(INDEX_HTML, "speed-stops");
+    assert!(stops.len() >= 3, "found only {stops:?}");
     for stop in &stops {
-        assert!(
-            (screeny_studio::player::MIN_FPS..=screeny_studio::player::MAX_FPS).contains(stop),
-            "{stop} is not a rate the player can be on"
-        );
+        assert!((0.1..=4.0).contains(stop), "{stop} is not a speed the slider can reach");
     }
 }
 
@@ -561,7 +569,9 @@ fn every_slider_that_declares_stops_declares_reachable_ones() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 2, "the rate slider and the speed slider declare stops");
+    // Card 161 removed the rate slider; Speed is the one that declares stops
+    // now, and the mechanism is the same one card 183 built.
+    assert_eq!(checked, 1, "the speed slider declares stops");
 
     // Speed's own three, and the way home.
     assert_eq!(stops_of(INDEX_HTML, "speed-stops"), vec![0.5, 1.0, 2.0], "0.5x, 1.00x and 2x");
@@ -578,7 +588,7 @@ fn every_slider_that_declares_stops_declares_reachable_ones() {
 /// And the rate a script set is the rate the page reports - it is not quietly
 /// changed by a control that could not express it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_rate_set_through_the_api_is_what_the_page_reports() {
+async fn a_rate_sent_by_an_older_client_is_accepted_and_ignored() {
     let studio = studio().await;
     let at = studio.addr;
 
@@ -588,26 +598,31 @@ async fn a_rate_set_through_the_api_is_what_the_page_reports() {
     let device = add.json()["id"].as_str().expect("an id").to_string();
 
     // The page is a window onto this player, so `player/set` and the page's
-    // own state are the same fps.
+    // own state are the same player.
     let set = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"{device}"}}"#)).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
 
-    for rate in [10.0, 15.0, 24.0, 45.0] {
-        let body = format!(r#"{{"device":"{device}","fps":{rate}}}"#);
+    // Every rate card 172's slider could reach, plus the ones that used to
+    // need special handling: a body that still carries `fps` is taken in full
+    // and the field does nothing.
+    for rate in ["10", "15", "24", "45", "60", "0", "1e400", "null"] {
+        let body = format!(r#"{{"device":"{device}","seed":7,"fps":{rate}}}"#);
         let player = post(at, "/api/v1/player/set", &body).await;
-        assert_eq!(player.status, 200, "{}", String::from_utf8_lossy(&player.body));
-        assert_eq!(player.json()["fps"], rate);
-        // What a browser reloading would draw its control from.
+        assert_eq!(player.status, 200, "fps {rate}: {}", String::from_utf8_lossy(&player.body));
+        assert_eq!(player.json()["seed"], 7, "fps {rate}: the rest of the body was applied");
+        assert_eq!(player.json()["fps"], 30.0, "fps {rate}: the one rate is what comes back");
+        // What a browser reloading would draw itself from.
         let boot = get(at, "/api/v1/bootstrap").await.json();
-        assert_eq!(boot["state"]["fps"], rate, "the page has to be able to show {rate} fps");
+        assert_eq!(boot["state"]["fps"], 30.0, "fps {rate}: and the page is told the one rate");
     }
 
-    // And a rate that is not a number does not reach the render loop, where
-    // `Duration::from_secs_f64(NaN)` would panic.
-    let body = format!(r#"{{"device":"{device}","fps":1e400}}"#);
-    let player = post(at, "/api/v1/player/set", &body).await;
-    let still = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(still["state"]["fps"], 45.0, "an infinite rate left it where it was: {}", player.status);
+    // The page's own route, with card 172's body shape.
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0,"fps":60.0}"#).await;
+    assert_eq!(play.status, 200, "{}", String::from_utf8_lossy(&play.body));
+    let play = play.json();
+    assert_eq!(play["paused"], true, "the fields that are still fields were applied");
+    assert_eq!(play["speed"], 2.0);
+    assert_eq!(play["fps"], 30.0);
     studio.stop().await;
 }
 

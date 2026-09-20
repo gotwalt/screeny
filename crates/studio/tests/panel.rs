@@ -63,7 +63,7 @@ fn sim_on(port: u16) -> SimDevice {
 async fn hold_still(at: std::net::SocketAddr, patch: &str) {
     post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
     post(at, "/api/v1/set_seed", r#"{"seed":7}"#).await;
-    let state = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0,"fps":60.0}"#).await.json();
+    let state = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0}"#).await.json();
     let mut output = state["output"].clone();
     output["limiter"]["enabled"] = false.into();
     post(at, "/api/v1/set_output", &serde_json::json!({ "output": output }).to_string()).await;
@@ -280,8 +280,9 @@ async fn a_stalled_browser_does_not_hold_up_the_engine_or_the_panel() {
     let sent = after_sent - before_sent;
     println!("stalled browser: engine {ticks} ticks, panel {sent} frames, healthy browser {frames} frames in 2 s");
 
-    // 60 fps for two seconds. Generous bounds: this runs on a loaded bench.
-    assert!(ticks > 60, "the engine slowed to {ticks} ticks in 2 s behind a stalled browser");
+    // 30 fps for two seconds, which is 60 of each (card 161; it was 60 fps in
+    // and 30 out). Generous bounds: this runs on a loaded bench.
+    assert!(ticks > 30, "the engine slowed to {ticks} ticks in 2 s behind a stalled browser");
     assert!(sent > 30, "the panel link sent only {sent} frames in 2 s behind a stalled browser");
     assert!(frames > 30, "a healthy browser got only {frames} frames in 2 s beside a stalled one");
     drop(stalled);

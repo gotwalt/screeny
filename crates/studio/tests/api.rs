@@ -64,29 +64,15 @@ async fn the_api_round_trips() {
     assert_eq!(after["output"]["dither"], "bayer4");
     assert_eq!(after["output"]["limiter"]["enabled"], false);
 
-    // set_playback, with the speed and the rate clamped to the player's range.
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
+    // set_playback, with the speed clamped to the player's range. Card 161:
+    // `fps` is not a field of this body any more, and one that still carries
+    // it is accepted with the field ignored - `tests/ui.rs` has that test.
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0}"#).await.json();
     assert_eq!(play["paused"], true);
     assert_eq!(play["speed"], 8.0, "speed is clamped to 8x");
-    assert_eq!(play["fps"], 30.0);
-    // Card 172 changed this line, and it is the point of that card: 45 used to
-    // be *ignored*, because the page could only offer 30 and 60. A player may
-    // be at any rate in MIN_FPS..=MAX_FPS - the soak uses 10, 15 and 24 - and
-    // a control that cannot show where the panel actually is was lying. The
-    // page's control is a slider over the whole range now, and this route
-    // takes what `player/set {fps}` has always taken.
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":45.0}"#).await.json();
-    assert_eq!(play["fps"], 45.0, "any rate the player may be on is accepted");
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":10.0}"#).await.json();
-    assert_eq!(play["fps"], 10.0, "including the ones the soak uses");
-    // Out of range is clamped, not refused: a slider cannot ask for these, but
-    // a script can, and the player has one rule about rates.
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":9000.0}"#).await.json();
-    assert_eq!(play["fps"], 60.0, "clamped to MAX_FPS");
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":0.0}"#).await.json();
-    assert_eq!(play["fps"], 1.0, "clamped to MIN_FPS");
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
-    assert_eq!(play["fps"], 30.0);
+    assert_eq!(play["fps"], 30.0, "and the one rate is reported back");
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0}"#).await.json();
+    assert_eq!(play["fps"], 30.0, "which nothing can move");
 
     // restart keeps the seed and starts the patch's clock again.
     let restarted = post(at, "/api/v1/restart", "{}").await;
@@ -130,14 +116,14 @@ async fn a_player_renders_with_nobody_watching() {
     assert!(later > first, "the render loop stopped: {first} -> {later}");
 }
 
-/// ...and it speeds up the moment somebody is. The rate a player renders at is
-/// what card 105 called the engine's rate; nothing about a browser may hold it
-/// back, but with nobody there it need not be 60 fps.
+/// ...and it speeds up the moment somebody is. With nobody there a player
+/// idles at `player::IDLE_FPS`; with somebody watching it runs at the full
+/// rate, which since card 161 is `screeny_art::FPS` and nothing else.
 ///
-/// The socket asks for `fps=60` because since card 120 a socket that asks for
-/// nothing is paced to `ws::DEFAULT_FPS`. That is the browser's side of the
-/// bargain and not the player's: what is being measured here is that the
-/// *player* is rendering fast, so this one asks for everything it makes.
+/// The socket asks for everything (`fps=60` is clamped to the render rate,
+/// which is all there is to send). That is the browser's side of the bargain
+/// and not the player's: what is being measured here is that the *player* is
+/// rendering fast.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_watching_browser_gets_the_full_rate() {
     let studio = studio().await;
@@ -145,7 +131,9 @@ async fn a_watching_browser_gets_the_full_rate() {
     let mut ws = Ws::connect_asking(at, "fps=60").await;
     ws.frame().await;
     let n = ws.count_frames(Duration::from_secs(1)).await;
-    assert!(n > 30, "only {n} frames in a second with a browser watching");
+    // Generously clear of IDLE_FPS (5) and below the 30 it is aiming at: this
+    // runs on a loaded bench.
+    assert!(n > 18, "only {n} frames in a second with a browser watching");
 }
 
 /// A studio that has never seen a panel still has a picture, and says plainly
@@ -203,8 +191,8 @@ async fn healthz_answers() {
 }
 
 /// The socket delivers frames, and they are the frames the engine is making.
-/// `fps=60` for the same reason as above: this is about what the engine makes,
-/// not about what a browser chooses to be sent (card 120).
+/// It asks for everything for the same reason as above: this is about what the
+/// engine makes, not about what a browser chooses to be sent (card 120).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_socket_delivers_frames() {
     let studio = studio().await;
@@ -219,9 +207,9 @@ async fn the_socket_delivers_frames() {
     let b = ws.frame().await;
     assert!(seq_of(&b) > seq_of(&a), "frames did not advance: {} -> {}", seq_of(&a), seq_of(&b));
 
-    // At 60 fps a second should bring a lot more than a handful.
+    // At the full rate a second should bring a lot more than a handful.
     let n = ws.count_frames(Duration::from_secs(1)).await;
-    assert!(n > 30, "only {n} frames in a second");
+    assert!(n > 18, "only {n} frames in a second");
 }
 
 /// Two browsers, and what one does the other is told about - without the one
@@ -267,7 +255,7 @@ async fn two_browsers_see_each_others_changes() {
     assert!(quiet.is_err(), "the studio echoed Alice her own change: {quiet:?}");
 
     // And Bob changing something reaches Alice, so it is not one-way.
-    post_as(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0,"fps":30.0}"#, Some("bob")).await;
+    post_as(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0}"#, Some("bob")).await;
     let ev = alice.event("state").await;
     assert_eq!(ev["state"]["paused"], true);
     assert_eq!(ev["from"], "bob");

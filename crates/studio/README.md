@@ -119,7 +119,7 @@ seconds is closed. There is one render thread per player, one link, one control 
 in flight, one browse and one probe at a time, a one-slot mailbox in front of the state
 file, and every fault is logged *once* rather than once a frame. A device that does not
 answer is polled on capped, jittered backoff. While a panel is away its player renders at
-5 fps instead of 60: a panel unplugged for a month must not cost a core for a month.
+5 fps instead of 30: a panel unplugged for a month must not cost a core for a month.
 
 **A bad patch cannot take the process down.** A patch that panics is caught
 (`catch_unwind`), logged once and replaced by a safe fallback in milliseconds. A patch
@@ -192,8 +192,8 @@ fact.
 default still reaches everybody who never moved that slider, and the file stays small.
 The seed is remembered with the parameters, and since card 151 so is the **speed**,
 because a setting carries it; the pipeline `output` (panel model, dither, limiter) is not,
-and neither are `fps` and `paused` - those are about the panel and about playback, not
-about the patch.
+and neither is `paused` - that is about playback, not about the patch. (`fps` was in
+this sentence until card 161, which made it not a setting of anything.)
 
 **A remembered value can never break a patch.** Patches gain, lose and re-range
 parameters between releases, so every value is checked against this build's own spec on
@@ -460,7 +460,7 @@ it changes the panel, which is the point of card 170.
 | `POST /reset_params` | `{}` | the new state |
 | `POST /set_seed` | `{seed}` (`null` = a new one) | the new state |
 | `POST /set_output` | `{output}` | the new state |
-| `POST /set_playback` | `{paused, speed, fps}` | the new state. `fps` is any rate in `MIN_FPS..=MAX_FPS` (1..60), clamped there; card 172 replaced card 105's "30 or 60, anything else ignored" |
+| `POST /set_playback` | `{paused, speed}` | the new state. **Card 161 removed `fps`**: one rate, 30, and a body that still carries the field is accepted with it ignored |
 | `POST /patch_act` | `{action, device?}` | what it is performing; `device` names a panel other than the page's (card 140) |
 | `POST /restart` | `{}` | the new state |
 | `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |
@@ -507,7 +507,7 @@ once whether or not the panel is there. Every change is persisted.
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |
 | `POST /devices/forget` | `{device}` | the player goes with it |
 | `POST /devices/refresh` | `{}` | ask every unresolved panel who it is, now |
-| `POST /player/set` | `{device, on?, patch?, seed?, param?, reset_params?, setting?, fps?, paused?, speed?, output?, brightness?, restart?}` | the player |
+| `POST /player/set` | `{device, on?, patch?, seed?, param?, reset_params?, setting?, paused?, speed?, output?, brightness?, restart?}` | the player. `fps?` was here until card 161; still accepted, still ignored |
 | `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the policy |
 | `POST /device/identify` | `{device, ms?}` | |
 | `POST /device/name` | `{device, name}` | renames it here, and on the device when it can be reached |
@@ -548,7 +548,8 @@ is 6.2 KB/s per tab; a socket says how many of them it wants, on the way in with
 - `fps` - the most frame packets a second. **`0` means none**: what the page sends when
   its tab is hidden, where every frame would be received and thrown away. State changes
   and the heartbeat carry on, so a hidden tab stays correct for about half a kilobyte a
-  second. Default 30; a client that wants every frame of a 60 fps player asks for 60.
+  second. Default 30, which since card 161 is every frame there is; more than that is
+  taken as "everything".
 - `repeat` - whether to send a picture identical to the one this socket was last sent.
   `false` skips it, except once a second so the header's counters keep moving; a held
   clock face is the same 6196 bytes for fifteen seconds at a time. Default `true`.
@@ -558,7 +559,7 @@ or the owner has asked for less data, and 0 when hidden. Anything else a browser
 ignored, so an old page and a new server understand each other in both directions.
 
 Asking for frames is also how the server knows somebody is watching: a player whose panel
-is away and whose page nobody is **looking at** drops to 5 fps rather than rendering 60
+is away and whose page nobody is **looking at** drops to 5 fps rather than rendering 30
 for a month - a hidden tab is not a watcher, or a phone left on the page in a pocket
 would hold a core open. Nothing a browser does can slow a player down: the frame cell has
 one slot, the render loop never waits for a reader, and pacing is done by dropping a
@@ -650,7 +651,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | file | what it pins |
 |---|---|
 | `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
-| `tests/preview.rs` | card 120: a hidden tab is sent no pictures, keeps its heartbeat and comes straight back; a socket is paced to what it asked for; an unchanged picture is not sent again; **a hidden tab is not a watcher**, so a studio with no panel and only hidden tabs idles at 5 fps; and `sockets` on `/status` counts at least what a browser received |
+| `tests/preview.rs` | card 120: a hidden tab is sent no pictures, keeps its heartbeat and comes straight back; a socket is paced to what it asked for, and asking for more than is rendered means "everything" (161); an unchanged picture is not sent again; **a hidden tab is not a watcher**, so a studio with no panel and only hidden tabs idles at 5 fps; and `sockets` on `/status` counts at least what a browser received |
 | `tests/pacing.rs` | card 196: with two browsers open and one of them dragging a slider at 60 Hz, the other is sent a bounded number of state messages a second (measured 19.3-19.7/s and 8.0 KB/s, against 60.0/s and 24.9 KB/s before the card) and the dragging one is sent none; a single deliberate change still crosses in a few milliseconds; and the value a drag **ended on** always arrives, within one gap of the drag stopping |
 | `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
@@ -659,7 +660,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
-| `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), and that a parameter with named stops carries them (163) |
+| `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on either screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |
