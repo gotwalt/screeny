@@ -16,7 +16,14 @@ mkdir -p captures
   echo "refusing to flash: no stock backup in backup/" >&2; exit 1; }
 
 # 230400 is the fastest baud this bench's serial link survives.
-espflash flash --chip esp32 --port "$PORT" --baud 230400 --non-interactive "$ELF" 2>&1 | tail -2
+# --partition-table: two OTA slots + the settings partition (docs/research/006).
+# --erase-data-parts ota: espflash never touches otadata, so without this a stale
+# OTA selection survives a serial flash and the device boots the *other* slot.
+# With it, a serial flash always wins. --flash-size: the table needs more than
+# espflash's 4 MB assumption; say so rather than rely on detection.
+espflash flash --chip esp32 --port "$PORT" --baud 230400 --non-interactive \
+  --flash-size 8mb --partition-table firmware/partitions.csv --erase-data-parts ota \
+  "$ELF" 2>&1 | tail -2
 
 espflash monitor --chip esp32 --port "$PORT" --non-interactive --elf "$ELF" \
   > "captures/$NAME.raw.log" 2>&1 &

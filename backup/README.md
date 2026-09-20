@@ -10,6 +10,10 @@ somewhere safe.
 Partition table (at 0x8000): nvs 0x9000+0x5000, otadata 0xe000+0x2000,
 app0 0x10000+0x3f0000, app1 0x400000+0x3f0000.
 
+Since card 210 (2026-09-20) the device carries screeny's own table instead
+(`firmware/partitions.csv`: nvs, otadata, ota_0 and ota_1 at 2 MB each, a 64 KB
+`screeny` settings partition). Restoring the stock image below overwrites all of it.
+
 Restore (baud must stay <= 230400 on this bench):
 
     esptool --port /dev/cu.usbserial-2140 --baud 230400 write-flash 0 tidbyt-stock-b48a0a4a00a4.bin

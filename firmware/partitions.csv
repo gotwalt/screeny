@@ -1,0 +1,10 @@
+# screeny partition table - 8 MB flash, two OTA slots, one settings partition.
+# Flashed by tools/fw-run.sh via `espflash --partition-table`. Why each line is what
+# it is: docs/research/006-flash-store-ota.md section 3.
+# App partitions must be 64 KB aligned; data partitions 4 KB aligned.
+# Name,    Type, SubType,   Offset,   Size,     Flags
+nvs,       data, nvs,       0x9000,   0x5000,
+otadata,   data, ota,       0xE000,   0x2000,
+ota_0,     app,  ota_0,     0x10000,  0x200000,
+ota_1,     app,  ota_1,     0x210000, 0x200000,
+screeny,   data, undefined, 0x410000, 0x10000,
