@@ -60,7 +60,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     mkdir -p /out; \
     cp target/release/screeny-studio /out/; \
     cp target/release/screeny /out/; \
-    strip /out/screeny-studio /out/screeny
+    ls -l /out/
+# Deliberately not stripped. The workspace builds release with `debug = 1` -
+# line tables, no full debug info - and that is exactly what turns a panic
+# backtrace from a column of hex into function names and line numbers. This is
+# a service meant to run unwatched for months; the tens of megabytes are worth
+# less than being able to read the one crash that matters.
 
 # ---------------------------------------------------------------- runtime ---
 FROM ${RUNTIME_IMAGE} AS runtime

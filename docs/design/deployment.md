@@ -91,6 +91,13 @@ ssh workbench.local -- docker exec screeny-studio screeny discover
 crate binds UDP 5353 with `SO_REUSEPORT`, so it shares the port with the avahi daemon
 that already owns it on the host.
 
+**Ignore the advice it prints when it finds nothing.** `screeny`'s "no devices
+found" hint is about macOS Local Network permission and it is printed on every
+platform, including inside this Linux container, where there is no System Settings
+and no `dns-sd`. Card 147. The Linux equivalent of that check is
+`ssh workbench.local -- avahi-browse -rt _screeny._udp`, run on the host: if the host
+sees the panel and the container does not, the container is the problem.
+
 **If it finds nothing:** discovery is a convenience, not a requirement. The studio
 takes an address directly, so set the panel by address and carry on:
 
