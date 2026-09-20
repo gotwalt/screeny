@@ -257,10 +257,10 @@ backlog owes.
 
 | build | `.stack` before | `.stack` after | `.bss` before | `.bss` after | image before | image after |
 |---|---|---|---|---|---|---|
-| default | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,181 | 971,961 |
+| default | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,181 | 971,965 |
 | `panic-test` | 27,024 | **27,152** (+128) | 110,336 | 110,224 (-112) | 975,137 | 972,853 |
-| `http-selftest` | 26,784 | **26,800** (+16) | 110,544 | 110,544 (0) | 1,008,689 | 1,006,249 |
-| `start-in-portal` | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,125 | 971,913 |
+| `http-selftest` | 26,784 | **26,800** (+16) | 110,544 | 110,544 (0) | 1,008,689 | 1,006,293 |
+| `start-in-portal` | 27,088 | **27,232** (+144) | 110,272 | 110,160 (-112) | 974,125 | 971,909 |
 
 All four are above the 24,576 floor and none fell; the card's "must not drop by more than
 ~200 bytes" is comfortably met in the other direction. The `.bss` that goes is
@@ -274,7 +274,20 @@ its second, in-memory `Server::serve` chain (`selftest_one`) never went near
 and `serve_on`'s 8 arguments, which it already had).
 
 `timeout 1200 cargo test` from the repo root: **759 passed, 0 failed, 1 ignored**, 49 test
-binaries. (Card 117's port re-bind flake, which the card-198 merge saw, did not appear.)
+binaries.
+
+Ran it four times to be sure of that. Three of the four runs had **one** failure each, a
+different one every time - `screeny-studio --test moved`
+(`the_status_poll_follows_a_panel_that_moved`), `screeny-studio --test soak`, `screeny
+--test pacing` (`holds_thirty_fps_within_one_percent`), `screeny --test loopback`
+(`the_reported_rate_is_the_same_at_any_stream_length`). Every one of them passed on its
+own immediately afterwards, every one of them is a wall-clock or port-binding assertion,
+and none of them is reachable from anything this card touched (the probe's HTTP client,
+the probe's summary, one `sim` assertion, `firmware/`). It is the same class as card 117's
+port re-bind under parallel worktrees that the card-198 merge recorded, and this machine
+was building Xtensa firmware between runs. **It is not caused by this card, and it is
+worth a card of its own**: four host tests that fail under load are four tests that will
+eventually be ignored by a human, which is how a suite stops meaning anything.
 
 End-to-end smoke against the simulator (`screeny-sim --headless --no-mdns --http-port
 8099`, `screeny-probe --addr 127.0.0.1:49475 http --http 127.0.0.1:8099`): 34 passed, 0

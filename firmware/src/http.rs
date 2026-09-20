@@ -1578,7 +1578,13 @@ async fn serve_on(
         socket.set_keep_alive(Some(Duration::from_secs(30)));
         socket.set_timeout(Some(Duration::from_secs(45)));
         if let Err(e) = socket.accept(HTTP_PORT).await {
+            // picoserve logged and went straight round again. A fresh socket is
+            // always in `Closed` and the port is a constant, so neither
+            // `AcceptError` can actually happen - but "cannot happen" plus a
+            // loop with a log line in it is how a device fills a serial log at
+            // line rate, so this one pauses.
             warn!("net: http worker {} could not accept: {:?}", id, e);
+            Timer::after(Duration::from_millis(100)).await;
             continue;
         }
         // The result is the connection's, not the server's: a client that
