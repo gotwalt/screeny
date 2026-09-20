@@ -43,6 +43,15 @@ owner opening the tab is the first real render - card 121). Follow-up cards: 120
 130-133, 135, 136 (**136 needs the owner**: brightness has 25 real steps and 1..=5 is
 black while `applied` echoes the value).
 
+In flight since 2026-09-20, four Opus workers: **106** (players, devices, state, the
+dashboard; cards 140-144), **107** (Dockerfile, compose, `tools/deploy-workbench.sh`; the
+worker builds and proves the artifacts locally, the orchestrator deploys to workbench over
+the no-GitHub route - a bare repo on workbench as git remote `workbench`, never `origin`;
+145-149), **092** (150-152), **093** (153-155). Agreed between 106 and 107: state volume at
+`/data`, `SCREENY_STATE_DIR`, `SCREENY_LISTEN`; `/healthz` must never go 503 just because
+the panel is unplugged. The owner asked (2026-09-20) for the Studio "running on workbench as
+a service with a web dashboard for controlling it".
+
 **Next up, in order:** 106 (players, devices, state; built to be forgotten) -> 107
 (docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
