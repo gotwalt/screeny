@@ -15,12 +15,15 @@ cargo run -p screeny-studio -- --ui-dir crates/studio/ui    # edit the UI, reloa
 
 Use `--release` for anything that streams: a debug build's encoder will not hold 30 fps.
 
-Two pages:
+**One panel, one picture.** A Studio is set up once against a panel and is then
+almost always connected to it, and the page is a *window* onto what that panel is
+doing - for when the panel is not within eyesight. The frames the browser draws are
+the same decoded datagrams the panel is being sent, and every control on the page
+changes the panel: a piece, a slider, a seed, the seconds a clock holds a time.
 
-| | |
-|---|---|
-| **`/`** | the design view. One piece, previewed as LEDs, with every parameter, the seed, the limiter and the panel model to play with. |
-| **`/dashboard`** | the panels. What each one is playing, whether it is well, and how to change it - from a phone. |
+So there is **one page**, at `/`: the picture, what is playing, its parameters, and
+the panel itself - connection, brightness, identify, rename, reboot. `/dashboard`,
+which was a second app until card 170, is folded into it and redirects.
 
 | flag | | env |
 |---|---|---|
@@ -43,26 +46,42 @@ Pieces, the pipeline, the panel model and the studio's meters are documented in
 ## What it is made of
 
 ```
- state file ──> device registry ──> one player per device ──> screeny::Link ──UDP──> panel
-      ^              ^                      ^
-      │       mDNS browse + typed addresses │
-      │                                     │
-      └── every change ──  supervisor (1 Hz): watchdog, fallback, reconnect, brightness
-
- the design view's own preview player ── WebSocket ──> browsers
+ state file ──> device registry ──> one player per panel ──> screeny::Link ──UDP──> panel
+      ^              ^                      │   ^
+      │       mDNS browse + typed addresses │   │
+      │                                     │   └── supervisor (1 Hz): watchdog,
+      └── every change ──────────────────── │       fallback, reconnect, brightness
+                                            │
+                                            └── the page's frame cell ──WS──> browsers
 ```
+
+**There is one thing that renders**, and it is the player for the attached panel. The
+page reads its frames out of a one-slot cell and its controls go straight to it, so
+"what the browser is drawing" and "what the panel is showing" are the same bytes by
+construction rather than by agreement.
 
 - **Devices are keyed by their own stable id** (the `id=` TXT key, or what `GET_INFO`
   answers), never by IP. A panel that takes a new DHCP lease is the same panel with the
   same player. A typed address is a *way of reaching* a panel and not a name for it: a
   device added by address gets a provisional `pending:<what was typed>` id and adopts
   its real one the first time it answers.
-- **One player per device**, each rendering on its own thread. A collection from day
-  one even though one panel is the expected case; no multi-panel UI, sync or fan-out
-  (card 091 stays parked).
-- **The design view is separate.** Its preview player can be pointed at a panel, but
-  nothing it does reaches a *player* until somebody says so: "Play my preview" on the
-  dashboard, or `POST /api/v1/player/adopt_preview`.
+- **One player per panel**, each rendering on its own thread. A collection from day
+  one even though one panel is the expected case; several panels get a plain chooser
+  and nothing more, and no multi-panel sync or fan-out is built (card 091 stays
+  parked). The page shows the **focused** one.
+- **A studio always has a picture**, even before it has a panel. With none found yet
+  the player is *unbound*: it renders for the page and has no link. The first panel
+  found is **adopted into that same player** - renamed onto it, same thread, same
+  piece - so the picture the browser is watching simply starts reaching the panel
+  rather than restarting on it.
+- **Panel output off** (`POST /api/v1/set_panel {"on":false}`, or the switch on the
+  page) releases the link with `FINAL`. The panel goes back to its own idle screen
+  and **stops receiving frames**; the page carries on showing the piece. That is the
+  one way to look without touching the panel, and it is deliberately the only one.
+- **Changes are drained, not thrown at a new thread.** A change goes into a one-slot
+  mailbox that the render loop applies before its next frame, so dragging a slider -
+  sixty changes a second - costs one re-read per frame. Only a panic or a stall
+  replaces a render thread, which is why `health.restarts` counts faults.
 - **Reaching a panel**: by instance name when a human typed a name, which re-resolves on
   every reconnect and so follows a DHCP lease; by `Link::attach` to its exact two ports
   when the registry has resolved it.
@@ -70,7 +89,7 @@ Pieces, the pipeline, the panel model and the studio's meters are documented in
 ## Built to be forgotten
 
 The point of the whole crate. It is expected to run for months with nobody opening the
-dashboard, so:
+page, so:
 
 **Nothing grows without bound.** Preview frames live in a one-slot `watch` cell, state
 changes in a fixed-depth broadcast, and a socket that cannot take a message in three
@@ -90,7 +109,7 @@ panel's source lock. Three faults in a row and the player stops trying and says 
 a restart loop is worse than a stopped player.
 
 **The state file.** One small JSON file, `state.json`, in the state directory: what
-devices are known, what each plays, and the design view's own state. Written atomically
+devices are known, what each plays, and which one the page is showing. Written atomically
 (temp file, `fsync`, rename) by one thread, newest-wins, and not written at all when
 nothing has changed. It is versioned, and a version this build does not understand is
 moved aside rather than parsed or deleted. **Missing, empty, truncated, corrupt,
@@ -105,13 +124,24 @@ why switching pieces and switching back gives you what you had, before and after
 `docker restart`.
 
 ```jsonc
-"preview": { "piece": "metaballs", ... },   // what the design view is showing
-"players": [ { "device": "4a00a4", "piece": "plasma", ... } ],
+"version": 3,
+"devices": [ { "id": "4a00a4", "name": "Desk", ... } ],
+"players": [ { "device": "4a00a4", "piece": "plasma", "on": true,
+               "paused": false, "speed": 1.0, ... } ],
+"focus": "4a00a4",                          // which panel the page is a window onto
 "pieces": {                                 // and how each piece is set, once
   "plasma":    { "seed": 111, "params": { "scale": 2.5 } },
   "metaballs": { "seed": 222, "params": { "count": 8 } }
 }
 ```
+
+Schema **v3** (card 170). v1 and v2 files are migrated in place, never thrown away:
+v2's `preview` block - the design view's own piece, back when it had one - is merged
+into `pieces` where the memory knows nothing about that piece, and dropped otherwise,
+because a player's tuning must not be overwritten by a context that no longer exists.
+`panel_on`/`panel_to` become the player's own `on`. A v2 file with **no** players, where
+the design view was the only thing playing, becomes a player rather than losing what it
+was showing.
 
 There is **one** memory for the whole studio, not one per context: tuning a piece
 anywhere updates it, switching to a piece anywhere restores from it. (The card asked for
@@ -163,24 +193,29 @@ that runs for months, and restarting the container is never the right answer to 
 missing panel, a link that is `connecting`, a device that has not been heard from and an
 empty device list are all **200**.
 
-503 is the four ways the *process* can be broken, each of which a restart genuinely does
-fix:
+503 is the three ways the *process* can be broken, each of which a restart genuinely
+does fix:
 
 1. **the state file cannot be written** - a studio that cannot save will not come back
    as itself;
 2. **a player has given up** - three panics or stalls in a row, so it is no longer
    trying;
-3. **a player that should be running is not**, and has not been for longer than the
-   fifteen-second start grace - a render thread that died and was not replaced;
-4. **the preview engine is wedged or gone** - no frame for longer than twice the
-   watchdog.
+3. **a player is not running**, and has not been for longer than the fifteen-second
+   start grace - a render thread that died and was not replaced.
+
+Card 106 had a fourth, "the preview engine is wedged", and card 170 deleted the thing
+it was about. A piece that stops returning is now caught by the same five-second
+watchdog every panel has, abandoned, and replaced by the fallback - so it is recovered
+in seconds rather than waiting for somebody to restart the container. (That was card
+143, closed by construction.)
 
 `GET /api/v1/status` is the same judgement with everything behind it: per device, the
 last frame sent, the last telemetry heard, fps, drops by cause, RSSI, uptime, reconnects
-and what it is playing. **Both answer even when the design view's engine is wedged**,
-because that is the moment somebody wants them: the half-second heartbeat takes the
-engine's lock with `try_lock` and keeps the last readable view, and these two routes read
-that rather than the engine.
+and what it is playing. **Both answer even while a piece is wedged**, because that
+is the moment somebody wants them. Card 106 had to work at this - the design view's
+engine lived behind a `Mutex` that a stuck piece held for ever, so the heartbeat cached
+the last readable view. A player's core is owned by its own render thread and is behind
+no shared lock at all, so there is nothing left for a stuck piece to hold.
 
 ## The API
 
@@ -189,7 +224,12 @@ are `POST` with a JSON body. A failed change is a 400 with `{"error": "..."}`; a
 device is a 404; a device that is known but cannot be reached right now is a **409**,
 which is a fact about the panel and not a fault in the server.
 
-### The design view (card 105, unchanged)
+### What is playing (card 105's routes; card 170 pointed them at the panel)
+
+These are unchanged in name and shape. What changed is *what they act on*: there is no
+design-view engine any more, so they configure the player for the attached panel - the
+one the page is a window onto. A script written against card 105 still works, and now
+it changes the panel, which is the point of card 170.
 
 | route | body | answer |
 |---|---|---|
@@ -203,36 +243,55 @@ which is a fact about the panel and not a fault in the server.
 | `POST /set_seed` | `{seed}` (`null` = a new one) | the new state |
 | `POST /set_settings` | `{settings}` | the new state |
 | `POST /set_playback` | `{paused, speed, fps}` | the new state |
-| `POST /piece_act` | `{action}` | what it is performing now |
+| `POST /piece_act` | `{action, device?}` | what it is performing; `device` names a panel other than the page's (card 140) |
 | `POST /restart` | `{}` | the new state |
-| `POST /set_panel` | `{on, to}` | the preview's panel link, or `null` |
-| `GET /ws` | | the preview socket |
+| `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |
+| `GET /ws` | | the frame socket |
 
-`to` is a device id, an mDNS instance name (`screeny-4a00a4`) or an address
-(`192.168.7.221`, `127.0.0.1:49374`); it is looked up in the background, so turning the
-switch on answers at once whether or not the panel is there. Every change is persisted.
+**`set_panel` is how a script borrows the panel**, and the two bodies that matter are:
+
+```sh
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":false}' localhost:8787/api/v1/set_panel
+#  -> {"on":false,"panel":null,...}   FINAL is sent, the panel goes to its own idle
+#     screen and stops receiving frames. The page carries on showing the piece.
+
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"on":true,"to":"screeny-4a00a4"}' localhost:8787/api/v1/set_panel
+#  -> {"on":true,"device":"4a00a4","panel":{...},...}
+```
+
+Off is off for **every** player, not only the one the page shows. The answer says what
+happened rather than `null`, because a 200 that means "I have let it go" and a 200 that
+means "I am still streaming to it at 30 fps" must not look the same. (They did, until
+card 170: a firmware conformance suite ran against a panel it believed it had borrowed.)
+
+`to` is a device id, an mDNS instance name (`screeny-4a00a4`), a host name or an address
+(`192.168.7.221`, `127.0.0.1:49374`); one this studio has not heard of is added, exactly
+as `POST /devices/add` would. It is looked up in the background, so attaching answers at
+once whether or not the panel is there. Every change is persisted.
 
 ### Panels, players and health (card 106)
 
 | route | body | answer |
 |---|---|---|
-| `GET /status` | | everything: health, the state file, discovery, the design view, every device |
+| `GET /status` | | everything: health, the state file, discovery, what the page is showing (still keyed `preview`, for scripts written against card 106), every device |
 | `GET /devices` | | the device half of `/status` on its own |
 | `POST /devices/add` | `{to, name?, play?}` | `{id}` - a new panel, by name or address |
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |
 | `POST /devices/forget` | `{device}` | the player and the settings go with it |
 | `POST /devices/refresh` | `{}` | ask every unresolved panel who it is, now |
-| `POST /player/set` | `{device, on?, piece?, seed?, param?, reset_params?, fps?, settings?, brightness?}` | the player |
-| `POST /player/adopt_preview` | `{device}` | the player - "play what I am previewing" |
+| `POST /player/set` | `{device, on?, piece?, seed?, param?, reset_params?, fps?, paused?, speed?, settings?, brightness?, restart?}` | the player |
 | `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the policy |
 | `POST /device/identify` | `{device, ms?}` | |
 | `POST /device/name` | `{device, name}` | renames it here, and on the device when it can be reached |
 | `POST /device/reboot` | `{device, confirm}` | `confirm: true` is required |
 | `POST /device/stats` | `{device}` | telemetry, read now rather than from the poll |
 
-Three kinds of message come out of the preview socket:
+Three kinds of message come out of the frame socket:
 
-- **binary**: one frame packet, as `GET /api/v1/frame` returns;
+- **binary**: one frame packet, as `GET /api/v1/frame` returns - the attached panel's,
+  and the same bytes it is being sent;
 - `{"type":"state","rev":N,"from":"<client>"|null,"state":{...}}` whenever anything
   changes, so several browsers stay in step;
 - `{"type":"status","playing":...,"panel":...}` twice a second.
@@ -240,21 +299,31 @@ Three kinds of message come out of the preview socket:
 A browser identifies itself with an `X-Studio-Client` header on changes and
 `?client=<id>` on the socket; the server does not echo a browser its own change.
 
+Subscribing to the socket is also how the server knows somebody is watching: a player
+whose panel is away and whose page nobody has open drops to 5 fps rather than rendering
+60 for a month. Nothing a browser does can slow a player down - the frame cell has one
+slot and the render loop never waits for a reader.
+
 **Brightness** is a policy, not a one-off: it is re-applied whenever the link comes back,
 and whenever the panel's own telemetry disagrees with what it last said it applied - a
 panel that power-cycles faster than UDP notices comes back at full brightness otherwise.
 The answer is what the device *applied*, which its own cap may make lower than what was
 asked; the policy is then lowered to match, so the studio does not ask for something the
-panel will not give. The dashboard's slider maximum is that cap, and its lowest non-zero
+panel will not give. The page's slider maximum is that cap, and its lowest non-zero
 stop is 6, because values 1..=5 light nothing on this firmware (card 136).
 
 ## Editing the UI
 
-`ui/` is six static files and no build step: `index.html`, `main.js` and `style.css` for
-the design view, and `dashboard.html`, `dashboard.js` and `dashboard.css` for the
-dashboard, which borrows the first one's tokens. They are `include_bytes!`d into the
-binary, so `cargo run` always serves what is in the tree; `--ui-dir` serves them off disk
-for a reload-to-see-it loop. A new file has to be listed in `src/ui.rs`.
+`ui/` is three static files and no build step: `index.html`, `main.js` and `style.css`.
+They are `include_bytes!`d into the binary, so `cargo run` always serves what is in the
+tree; **`--ui-dir` serves them off disk** for a reload-to-see-it loop, which is what to
+use while editing. A new file has to be listed in `src/ui.rs`.
+
+The layout is a **scrolling column by default** - picture, now playing, parameters,
+panel - and becomes the two-column bench only above 1100 px, where there is room for
+both. Doing it the other way round is what used to put the walnut frame on top of the
+controls at around 600 px. Checked at 390, 600, 900 and 1400 px in a browser; the
+screenshots are in card 170's Log.
 
 No framework, no bundler, no CDN: the box this runs on has no promise of internet, and a
 test asserts that neither page reaches outside it.
@@ -267,10 +336,10 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 
 | file | what it pins |
 |---|---|
-| `tests/api.rs` | the design view's routes, the preview socket, two browsers in step, the heartbeat, a frame packet's shape |
-| `tests/panel.rs` | "send to panel" into `screeny-sim`, byte for byte; a stalled browser holding up neither the engine nor the link |
+| `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
+| `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
-| `tests/ui.rs` | both pages are served, every element the dashboard reaches for exists, and every route it calls exists |
-| `tests/memory.rs` | card 165: switch away and back in the design view and on a panel; a second browser sees the restored values; one memory shared by the browser and the panel; Reset stays reset; promoting the preview needs no copy; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
+| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, and the narrow layout stays the default |
+| `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

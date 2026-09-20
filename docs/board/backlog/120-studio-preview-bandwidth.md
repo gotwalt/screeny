@@ -16,11 +16,19 @@ and no more. Today it is sent all of them.
 ## Context
 
 Card 105 made the preview a WebSocket push (`crates/studio/src/ws.rs`). Every open
-socket gets every frame the engine makes: **6196 bytes at 60 fps = 372 KB/s per tab**,
-whether or not the tab is visible, and whether or not it can draw that fast. The
-design is already safe - the frame lives in a one-slot `watch` cell, so a slow browser
-misses frames rather than queueing them, and a stalled one is dropped after three
-seconds - so this is about waste, not about risk.
+socket gets every frame the attached panel's player makes: **6196 bytes at 60 fps =
+372 KB/s per tab**, whether or not the tab is visible, and whether or not it can draw
+that fast. The design is already safe - the frame lives in a one-slot `watch` cell, so
+a slow browser misses frames rather than queueing them, and a stalled one is dropped
+after three seconds - so this is about waste, not about risk.
+
+**Card 170 made this the only page**, which cuts both ways. There is no second page a
+phone can sit on cheaply any more, so a page left open is always a frame stream; but
+the page is also the thing somebody actually watches, so the frames are less often
+wasted than they were. Card 170 did take the easy half: a player renders at 5 fps when
+its panel is away *and* no socket is open (`Screen::watchers`), so an idle studio with
+nobody looking costs almost nothing. What is left is the case this card is for - a tab
+that is open, visible, and being sent more frames than it draws.
 
 Where it starts to matter:
 

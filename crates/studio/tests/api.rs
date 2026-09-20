@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{get, post, post_as, preview_of, seq_of, studio, Msg, Ws, PATIENCE};
+use common::{get, post, post_as, preview_of, seq_of, studio, until, Msg, Ws, PATIENCE};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -97,18 +97,58 @@ async fn the_api_round_trips() {
     // frame: the packet the preview is drawn from, and nothing else.
     let frame = get(at, "/api/v1/frame").await;
     assert_eq!(frame.status, 200);
-    assert_eq!(frame.body.len(), screeny_studio::engine::PACKET_BYTES);
+    assert_eq!(frame.body.len(), screeny_studio::page::PACKET_BYTES);
 }
 
-/// The engine runs whether or not a browser is watching; the frame it serves
-/// keeps moving.
+/// The studio renders whether or not a browser is watching; the frame it
+/// serves keeps moving. (Slowly: with no panel connected and no socket open a
+/// player drops to `player::IDLE_FPS`, which is the whole point - a panel that
+/// is away for a month with nobody looking must not cost a core for a month.
+/// A second is several frames at that rate.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_engine_runs_with_nobody_watching() {
+async fn a_player_renders_with_nobody_watching() {
     let studio = studio().await;
     let first = seq_of(&get(studio.addr, "/api/v1/frame").await.body);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let later = seq_of(&get(studio.addr, "/api/v1/frame").await.body);
-    assert!(later > first, "the engine stopped: {first} -> {later}");
+    assert!(later > first, "the render loop stopped: {first} -> {later}");
+}
+
+/// ...and it speeds up the moment somebody is. The rate a player renders at is
+/// what card 105 called the engine's rate; nothing about a browser may hold it
+/// back, but with nobody there it need not be 60 fps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watching_browser_gets_the_full_rate() {
+    let studio = studio().await;
+    let at = studio.addr;
+    let mut ws = Ws::connect(at, None).await;
+    ws.frame().await;
+    let n = ws.count_frames(Duration::from_secs(1)).await;
+    assert!(n > 30, "only {n} frames in a second with a browser watching");
+}
+
+/// A studio that has never seen a panel still has a picture, and says plainly
+/// that there is no panel rather than pretending there is one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_studio_with_no_panel_still_plays_something() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    assert!(boot["state"]["piece"].as_str().is_some_and(|p| !p.is_empty()));
+    assert_eq!(boot["state"]["device"], "", "nothing is attached");
+    assert_eq!(get(at, "/api/v1/panel_status").await.json(), serde_json::Value::Null);
+
+    let s = get(at, "/api/v1/status").await.json();
+    assert_eq!(s["ok"], true, "no panel is not a fault: {s}");
+    assert_eq!(s["preview"]["device"], "");
+    assert_eq!(s["preview"]["panel_to"], "");
+    assert_eq!(s["devices"].as_array().map(Vec::len), Some(0));
+    // And it is really rendering, not idling on a black frame.
+    until(PATIENCE, "the unattached studio to render", || async {
+        get(at, "/api/v1/status").await.json()["preview"]["alive"] == true
+    })
+    .await;
 }
 
 /// The UI is in the binary, one directory deep, and nothing else is.
@@ -148,7 +188,7 @@ async fn the_socket_delivers_frames() {
     assert!(hello["state"]["piece"].is_string());
 
     let a = ws.frame().await;
-    assert_eq!(a.len(), screeny_studio::engine::PACKET_BYTES);
+    assert_eq!(a.len(), screeny_studio::page::PACKET_BYTES);
     let b = ws.frame().await;
     assert!(seq_of(&b) > seq_of(&a), "frames did not advance: {} -> {}", seq_of(&a), seq_of(&b));
 

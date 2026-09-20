@@ -48,10 +48,11 @@ WebSocket that pushes preview frames (6 KB RGB at 30-60 fps is ~200-370 KB/s).
 
 ```
                        ┌──────────────── screeny-studio (one process) ────────────────┐
- browser(s) ──HTTP/WS──┤ api ── Players: one per device ── piece + params + seed + fps │
+ browser(s) ──HTTP/WS──┤ api ── Players: one per panel ── piece + params + seed + fps  │
                        │          │  render (screeny-art pipeline)                    │
-                       │          ├─> preview hub ──WS──> browsers                    │
-                       │          └─> screeny::Sender (exact indexed, reconnects) ────┼──UDP──> panel(s)
+                       │          ├─> screeny::Sender (exact indexed, reconnects) ────┼──UDP──> panel(s)
+                       │          └─> the page's frame cell ──WS──> browsers          │
+                       │             (the same decoded datagrams the panel is sent)   │
                        │ device registry: mDNS browse + manual addresses; control ops │
                        │ state store: what plays where, playlists/schedule (a volume) │
                        └───────────────────────────────────────────────────────────────┘
@@ -60,7 +61,7 @@ WebSocket that pushes preview frames (6 KB RGB at 30-60 fps is ~200-370 KB/s).
 Properties that matter:
 
 - **Streaming does not depend on a browser.** Players belong to the server. The UI is
-  a remote control and a preview. Restart the container and it resumes what it was
+  a remote control and a window. Restart the container and it resumes what it was
   playing (state store).
 - **One player per device.** Same piece to several panels, or different ones. The
   multi-device sender (parked card 091) and the piece runner/scheduler (card 104)
@@ -74,12 +75,13 @@ Properties that matter:
   page is a window onto what that panel is doing, for when the panel is not within
   eyesight: what is on screen is what the device is showing, at the same time. Changing a
   piece, a slider or a seed in the browser changes the panel. There is no separate preview
-  stream with its own state, and no "promote to the panel" step (card 170 removes the one
-  card 106 built). The data model stays a collection (decision 3 below); the UI assumes one.
+  stream with its own state, and no "promote to the panel" step (card 170 removed the one
+  card 106 built, and folded the separate `/dashboard` into the one page). The data model
+  stays a collection (decision 3 below); the UI assumes one.
 
 ## Built to be forgotten
 
-The owner expects this to run **for months without anyone opening the dashboard**.
+The owner expects this to run **for months without anyone opening the page**.
 That is a design requirement, not an afterthought:
 
 - The sender reconnects by itself across panel reboots, WiFi drops and DHCP changes

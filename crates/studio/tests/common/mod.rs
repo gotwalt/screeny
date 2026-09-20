@@ -87,6 +87,38 @@ where
     }
 }
 
+/// Poll a JSON route until it says what the test is waiting for, and hand back
+/// **the answer that said it**.
+///
+/// The point of returning it is that it removes a whole class of flake: a test
+/// that waits for a condition and then fetches again is asserting on a
+/// different moment from the one it waited for, and on a loaded host those two
+/// moments are far enough apart to matter. Everything a test wants to know
+/// about one moment should come out of one read of it.
+///
+/// The timeout message carries the last answer, so a failure on a busy machine
+/// says what the server actually thought rather than only that time ran out.
+pub async fn until_json<F>(
+    at: SocketAddr,
+    patience: Duration,
+    what: &str,
+    path: &str,
+    mut ok: F,
+) -> serde_json::Value
+where
+    F: FnMut(&serde_json::Value) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        let last = get(at, path).await.json();
+        if ok(&last) {
+            return last;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}; the last answer was {last}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 pub struct Response {
     pub status: u16,
     pub body: Vec<u8>,
@@ -302,5 +334,5 @@ pub fn seq_of(packet: &[u8]) -> u32 {
 /// The 64x32 sRGB picture in a frame packet: what the browser draws.
 #[must_use]
 pub fn preview_of(packet: &[u8]) -> Vec<u8> {
-    packet[screeny_studio::engine::HEADER..].to_vec()
+    packet[screeny_studio::page::HEADER..].to_vec()
 }

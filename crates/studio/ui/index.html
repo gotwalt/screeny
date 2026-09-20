@@ -7,60 +7,35 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="bench">
-    <header class="titleblock">
-      <div class="titleblock__piece">
-        <h1 id="piece-name">&nbsp;</h1>
-        <p id="piece-blurb"></p>
-      </div>
-      <dl class="readouts" aria-label="Run">
-        <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
-        <div><dt>Time</dt><dd id="ro-time">–</dd></div>
-        <div><dt>Engine</dt><dd id="ro-fps">–</dd></div>
-        <div><dt>Panels</dt><dd><a class="titleblock__link" href="/dashboard">Dashboard →</a></dd></div>
-      </dl>
-    </header>
+  <header class="titleblock">
+    <div class="titleblock__piece">
+      <h1 id="piece-name">&nbsp;</h1>
+      <p id="piece-blurb"></p>
+    </div>
+    <dl class="readouts" aria-label="Run">
+      <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
+      <div><dt>Time</dt><dd id="ro-time">–</dd></div>
+      <div><dt>Rate</dt><dd id="ro-fps">–</dd></div>
+      <div class="readouts__panel"><dt>Panel</dt><dd><span class="pill" id="ro-panel">–</span></dd></div>
+    </dl>
+  </header>
 
-    <section class="stage" id="stage" aria-label="Panel preview">
-      <div class="device" id="device">
-        <div class="device__face">
-          <canvas id="panel" width="768" height="384" aria-label="64 by 32 LED panel preview"></canvas>
-        </div>
+  <section class="stage" id="stage" aria-label="What the panel is showing">
+    <div class="device" id="device">
+      <div class="device__face">
+        <canvas id="panel" width="768" height="384" aria-label="64 by 32 LED panel"></canvas>
       </div>
-      <p class="stage__notice" id="notice" role="status" hidden></p>
-    </section>
-
-    <section class="meters" aria-label="Frame statistics">
-      <div class="meter" id="m-colours">
-        <h2>Colours</h2>
-        <p class="meter__value"><output></output><span class="meter__of">of 32 exact</span></p>
-        <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:25%"></i><i class="tick" style="left:50%"></i></div>
-        <p class="meter__note"></p>
-      </div>
-      <div class="meter" id="m-bytes">
-        <h2>Frame size</h2>
-        <p class="meter__value"><output></output><span class="meter__of"></span></p>
-        <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:100%"></i></div>
-        <p class="meter__note"></p>
-      </div>
-      <div class="meter" id="m-apl">
-        <h2>Average level</h2>
-        <p class="meter__value"><output></output><span class="meter__of"></span></p>
-        <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
-        <p class="meter__note"></p>
-      </div>
-      <div class="meter" id="m-dluma">
-        <h2>Luminance change</h2>
-        <p class="meter__value"><output></output><span class="meter__of">per frame</span></p>
-        <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
-        <p class="meter__note"></p>
-      </div>
-    </section>
-  </main>
+    </div>
+    <p class="stage__notice" id="notice" role="status" hidden></p>
+  </section>
 
   <aside class="inspector" aria-label="Controls">
-    <section>
-      <h2>Piece</h2>
+    <section id="sec-now">
+      <h2>Now playing</h2>
+      <p class="playing__title" id="playing-title" hidden></p>
+      <p class="playing__detail" id="playing-detail" hidden></p>
+      <div class="playing__actions" id="playing-actions"></div>
+      <ul class="playing__notes" id="playing-notes"></ul>
       <div class="pieces" id="pieces" role="radiogroup" aria-label="Piece"></div>
       <div class="row row--seed">
         <label for="seed">Seed</label>
@@ -69,15 +44,7 @@
       </div>
     </section>
 
-    <section id="playing" hidden>
-      <h2>Now playing</h2>
-      <p class="playing__title" id="playing-title"></p>
-      <p class="playing__detail" id="playing-detail"></p>
-      <div class="playing__actions" id="playing-actions"></div>
-      <ul class="playing__notes" id="playing-notes"></ul>
-    </section>
-
-    <section>
+    <section id="sec-params">
       <div class="section-head">
         <h2>Parameters</h2>
         <button type="button" class="quiet" id="reset-params">Reset</button>
@@ -85,7 +52,49 @@
       <div id="params"></div>
     </section>
 
-    <section>
+    <section id="sec-panel">
+      <div class="section-head">
+        <h2>Panel</h2>
+        <span class="pill" id="panel-pill">–</span>
+      </div>
+      <p class="panel__name" id="panel-name">Looking for a panel…</p>
+      <p class="hint" id="panel-help"></p>
+
+      <label class="switch"><input type="checkbox" id="panel-out"><span>Show it on the panel</span></label>
+
+      <div class="slider" id="bright-slider">
+        <label for="bright">Brightness</label><output></output>
+        <input id="bright" type="range" min="0" max="255" step="1" value="0">
+      </div>
+      <p class="hint" id="bright-note"></p>
+
+      <dl class="facts" id="panel-facts"></dl>
+      <p class="hint" id="panel-repairs" hidden></p>
+
+      <div class="row row--actions">
+        <button type="button" id="identify">Identify</button>
+        <button type="button" id="rename">Rename</button>
+        <button type="button" id="reboot" class="danger">Reboot</button>
+      </div>
+
+      <details class="setup" id="setup">
+        <summary>Change which panel</summary>
+        <div class="setup__body">
+          <div class="found" id="found"></div>
+          <div class="row row--seed">
+            <label for="add-to">Panel</label>
+            <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-4a00a4, panel.local or 192.168.7.221">
+          </div>
+          <div class="row row--actions">
+            <button type="button" id="add">Use this panel</button>
+            <button type="button" id="look" class="quiet">Look again</button>
+          </div>
+          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="sec-time">
       <h2>Time</h2>
       <div class="row">
         <button type="button" id="pause" title="Space">Pause</button>
@@ -102,7 +111,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="sec-model">
       <h2>Panel model</h2>
       <fieldset class="seg" id="levels">
         <legend>Levels per channel</legend>
@@ -121,17 +130,7 @@
       <label class="switch"><input type="checkbox" id="codec-preview"><span>Show the frame after the real codec</span></label>
     </section>
 
-    <section>
-      <h2>Panel</h2>
-      <label class="switch"><input type="checkbox" id="panel-send"><span>Send to panel</span></label>
-      <div class="slider">
-        <label for="panel-to">Name or address</label>
-      </div>
-      <input id="panel-to" type="text" spellcheck="false" placeholder="screeny-4a00a4 or 192.168.1.20">
-      <p class="meter__note" id="panel-note">Off. Nothing is being sent.</p>
-    </section>
-
-    <section>
+    <section id="sec-limiter">
       <h2>Limiter</h2>
       <label class="switch"><input type="checkbox" id="limiter-on"><span>Limit brightness and flashing</span></label>
       <div class="slider" id="apl-slider">
@@ -144,8 +143,9 @@
       </div>
     </section>
 
-    <section>
+    <section id="sec-view">
       <h2>View</h2>
+      <p class="hint">How this browser draws the panel. Nothing here reaches the panel.</p>
       <fieldset class="seg" id="view-mode">
         <legend>Show as</legend>
         <label title="1"><input type="radio" name="mode" value="dots"><span>LEDs</span></label>
@@ -174,6 +174,33 @@
       </div>
     </section>
   </aside>
+
+  <section class="meters" aria-label="Frame statistics">
+    <div class="meter" id="m-colours">
+      <h2>Colours</h2>
+      <p class="meter__value"><output></output><span class="meter__of">of 32 exact</span></p>
+      <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:25%"></i><i class="tick" style="left:50%"></i></div>
+      <p class="meter__note"></p>
+    </div>
+    <div class="meter" id="m-bytes">
+      <h2>Frame size</h2>
+      <p class="meter__value"><output></output><span class="meter__of"></span></p>
+      <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:100%"></i></div>
+      <p class="meter__note"></p>
+    </div>
+    <div class="meter" id="m-apl">
+      <h2>Average level</h2>
+      <p class="meter__value"><output></output><span class="meter__of"></span></p>
+      <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
+      <p class="meter__note"></p>
+    </div>
+    <div class="meter" id="m-dluma">
+      <h2>Luminance change</h2>
+      <p class="meter__value"><output></output><span class="meter__of">per frame</span></p>
+      <div class="meter__bar"><i class="fill"></i><i class="ghost"></i><i class="tick"></i></div>
+      <p class="meter__note"></p>
+    </div>
+  </section>
 
   <script src="main.js"></script>
 </body>

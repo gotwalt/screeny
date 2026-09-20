@@ -30,10 +30,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The schema this build writes and is willing to read.
 ///
-/// v2 (card 165) adds `pieces`: one settings memory for the whole studio,
-/// keyed by piece id. v1 files are migrated - what each context was playing at
-/// the time is merged into it, so nobody loses what they have today.
-pub const SCHEMA_VERSION: u32 = 2;
+/// - **v1** (card 106): `devices`, `players` and the design view's `preview`.
+/// - **v2** (card 165) adds `pieces`: one settings memory for the whole studio,
+///   keyed by piece id. What each context was playing is merged into it.
+/// - **v3** (card 170) **drops `preview`**. There is one engine now - the
+///   player for the attached panel - so the design view has no separate state
+///   to keep. A player gains `paused` and `speed`, which used to be the
+///   preview's, and the file gains `focus`: which player the page is showing.
+///
+/// Older files are migrated, never thrown away. See [`migrate_to_v3`].
+pub const SCHEMA_VERSION: u32 = 3;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -64,10 +70,14 @@ pub struct Persisted {
     /// though one panel is the expected case (`studio-vision.md`, decision 3).
     pub devices: Vec<StoredDevice>,
     /// One per device. A player may exist for a device that is not currently
-    /// reachable - that is the normal case after a power cut.
+    /// reachable - that is the normal case after a power cut - and exactly one
+    /// may be [`UNBOUND`], which is the studio that has not met a panel yet.
     pub players: Vec<StoredPlayer>,
-    /// The design view's own player, which is not tied to a device.
-    pub preview: StoredPreview,
+    /// Which player the page is a window onto. [`UNBOUND`] (the empty string)
+    /// while no panel is attached. With one panel - the expected case - this
+    /// is that panel's id and nobody ever has to think about it.
+    #[serde(default)]
+    pub focus: String,
     /// What every piece was last left set to, anywhere in the studio
     /// (card 165). One map for the whole studio, keyed by piece id.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -80,11 +90,19 @@ impl Default for Persisted {
             version: SCHEMA_VERSION,
             devices: Vec::new(),
             players: Vec::new(),
-            preview: StoredPreview::default(),
+            focus: UNBOUND.to_string(),
             pieces: Memory::new(),
         }
     }
 }
+
+/// The device id of a player that has no panel yet.
+///
+/// A studio always has at least one player, because the page always has a
+/// picture to show. Before a panel is found that player is *unbound*: it
+/// renders, it fills the page, and it has no link. When a panel turns up the
+/// same player is renamed onto it, so the picture does not restart.
+pub const UNBOUND: &str = "";
 
 /// A device as the store remembers it.
 ///
@@ -110,16 +128,22 @@ pub struct StoredDevice {
     pub manual: bool,
 }
 
-/// What one panel plays.
+/// What one panel plays - and, since card 170, what the page shows, because
+/// they are the same thing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredPlayer {
-    /// The device id this plays to.
+    /// The device id this plays to, or [`UNBOUND`] for the player that has no
+    /// panel yet.
     pub device: String,
-    /// False leaves the player configured but silent - the panel is released.
+    /// **Panel output.** False releases the link - the panel goes back to its
+    /// own idle screen - and the player keeps rendering, because the page is
+    /// still showing the piece.
     pub on: bool,
     pub piece: String,
     pub seed: u32,
+    /// Only the values that differ from the piece's defaults; the rest come
+    /// from the piece's own spec every time it is built.
     pub params: BTreeMap<String, f32>,
     pub fps: f64,
     pub settings: Settings,
@@ -127,6 +151,10 @@ pub struct StoredPlayer {
     /// or `None` to leave whatever the device has. Never raised above the cap
     /// the device reports back.
     pub brightness: Option<u8>,
+    /// Card 170: what used to be the design view's playback state. A paused
+    /// piece is paused on the panel too - one picture, one answer.
+    pub paused: bool,
+    pub speed: f64,
 }
 
 impl Default for StoredPlayer {
@@ -140,33 +168,37 @@ impl Default for StoredPlayer {
             fps: 60.0,
             settings: Settings::default(),
             brightness: None,
+            paused: false,
+            speed: 1.0,
         }
     }
 }
 
-/// The design view: what card 105 kept in `StudioState`, plus the two things
-/// it explicitly left for this card - whether the preview is being sent to a
-/// panel, and to which one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// The `preview` block of a v1 or v2 file: the design view's own piece, before
+/// card 170 made the page a window onto the panel instead.
+///
+/// **Read, never written.** It exists so the migration can carry what a
+/// deployed service was showing into the new shape rather than dropping it.
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
-pub struct StoredPreview {
-    pub piece: String,
-    pub seed: u32,
-    pub params: BTreeMap<String, f32>,
-    pub settings: Settings,
-    pub paused: bool,
-    pub speed: f64,
-    pub fps: f64,
-    /// "Send to panel" - which, before this card, lived only in the browser's
-    /// `localStorage` and in the half-second heartbeat.
-    pub panel_on: bool,
-    /// A device id, a name or an address. Empty means "the first panel found".
-    pub panel_to: String,
+struct LegacyPreview {
+    piece: String,
+    seed: u32,
+    params: BTreeMap<String, f32>,
+    settings: Settings,
+    paused: bool,
+    speed: f64,
+    fps: f64,
+    /// "Send to panel", v1/v2's answer to the question card 170 replaces with
+    /// the player's own `on`.
+    panel_on: bool,
+    /// A device id, a name or an address.
+    panel_to: String,
 }
 
-impl Default for StoredPreview {
+impl Default for LegacyPreview {
     fn default() -> Self {
-        StoredPreview {
+        LegacyPreview {
             piece: default_piece().to_string(),
             seed: 0,
             params: BTreeMap::new(),
@@ -528,8 +560,18 @@ fn load(path: &Path) -> Loaded {
 
     let mut repaired = Vec::new();
     let pieces = clean_memory(raw.get("pieces"), &mut repaired);
+    // The `preview` block of a v1/v2 file, lifted out for the same reason as
+    // `pieces`: this build's `Persisted` has no field for it, and it is read
+    // forgivingly (a missing or malformed one is the default, never a reason
+    // to condemn the file).
+    let legacy: LegacyPreview = raw
+        .get("preview")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
     if let Some(o) = raw.as_object_mut() {
         o.remove("pieces");
+        o.remove("preview");
     }
 
     let mut state: Persisted = match serde_json::from_value(raw) {
@@ -539,8 +581,8 @@ fn load(path: &Path) -> Loaded {
     let was = state.version;
     state.version = SCHEMA_VERSION;
     state.pieces = pieces;
-    if was < 2 {
-        migrate_v1_to_v2(&mut state);
+    if was < SCHEMA_VERSION {
+        migrate_to_v3(&mut state, &legacy, was);
     }
     repaired.truncate(MAX_REPAIRS);
     let recovered =
@@ -548,26 +590,91 @@ fn load(path: &Path) -> Loaded {
     Loaded { state, recovered, repaired }
 }
 
-/// v1 -> v2: what the studio was playing becomes the memory it starts from.
+/// v1/v2 -> v3: the attached panel's player is the truth, and the design
+/// view's own block goes away without taking anything with it.
 ///
-/// v1 kept one `params` map per context, for that context's *current* piece
-/// only. Those are merged into the one map, so nobody loses the tuning they
-/// have today. **When the design view and a panel were on the same piece with
-/// different values, the panel's win**: the panel is what was actually being
-/// looked at. And because [`remember`] drops anything equal to the piece's
-/// default, a v1 file's full parameter dump comes out of the migration as just
-/// the values that were actually moved.
-fn migrate_v1_to_v2(state: &mut Persisted) {
-    let preview = &state.preview;
-    if let Some(def) = screeny_art::piece::find(&preview.piece) {
-        remember(&mut state.pieces, def, &preview.params, preview.seed);
-    }
-    // Second, so a panel overwrites the design view on a shared piece.
-    for player in &state.players {
-        if let Some(def) = screeny_art::piece::find(&player.piece) {
-            remember(&mut state.pieces, def, &player.params, player.seed);
+/// Three rules, in this order:
+///
+/// 1. **The memory.** A v1 file has no `pieces` map at all, so what each
+///    context was playing becomes it - the preview first, then each player, so
+///    **a panel's values win** on a piece both were on (card 165). A v2 file
+///    already has the map and it is already right: the preview's values are
+///    merged in only for a piece the map knows *nothing* about, because
+///    overwriting there would undo exactly the merge v1 -> v2 did.
+/// 2. **`panel_on` / `panel_to` are dropped** in favour of the player's `on`.
+///    The one case where that would lose something is a file with no players
+///    at all: the design view was the only thing playing. That becomes a
+///    player - on the device `panel_to` names when the file knows it, unbound
+///    otherwise - carrying the preview's piece, seed, parameters, settings and
+///    rate, so nothing that was playing stops playing.
+/// 3. **`focus`** becomes the first player's device: with one panel, which is
+///    the expected case, there is nothing to choose.
+///
+/// Because [`remember`] drops anything equal to the piece's default, a v1
+/// file's full parameter dump comes out of the migration as just the values
+/// that were actually moved.
+fn migrate_to_v3(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
+    if was < 2 {
+        if let Some(def) = screeny_art::piece::find(&preview.piece) {
+            remember(&mut state.pieces, def, &preview.params, preview.seed);
+        }
+        // Second, so a panel overwrites the design view on a shared piece.
+        for player in &state.players {
+            if let Some(def) = screeny_art::piece::find(&player.piece) {
+                remember(&mut state.pieces, def, &player.params, player.seed);
+            }
+        }
+    } else if let Some(def) = screeny_art::piece::find(&preview.piece) {
+        // v2: the map is the answer; fill a gap, never overwrite one.
+        if !state.pieces.contains_key(def.id) {
+            remember(&mut state.pieces, def, &preview.params, preview.seed);
         }
     }
+
+    if state.players.is_empty() {
+        // Nothing was configured to play, so the design view was all there
+        // was. Carry it over whole; the page comes back showing it.
+        let device = preview
+            .panel_on
+            .then(|| device_named(&state.devices, &preview.panel_to))
+            .flatten()
+            .unwrap_or_else(|| UNBOUND.to_string());
+        state.players.push(StoredPlayer {
+            device,
+            on: preview.panel_on,
+            piece: preview.piece.clone(),
+            seed: preview.seed,
+            params: preview.params.clone(),
+            fps: preview.fps,
+            settings: preview.settings,
+            brightness: None,
+            paused: preview.paused,
+            speed: preview.speed,
+        });
+    }
+
+    if state.focus.is_empty() {
+        if let Some(first) = state.players.first() {
+            state.focus.clone_from(&first.device);
+        }
+    }
+}
+
+/// The id of the device a v1/v2 `panel_to` was naming, if this file knows it.
+///
+/// `panel_to` was whatever a human typed - an id, an mDNS instance name or an
+/// address - so all three are tried. `None` means the file has no device by
+/// that name, in which case the migrated player is left unbound rather than
+/// pointed at a device that does not exist.
+fn device_named(devices: &[StoredDevice], to: &str) -> Option<String> {
+    let to = to.trim();
+    if to.is_empty() {
+        return None;
+    }
+    devices
+        .iter()
+        .find(|d| d.id == to || d.instance == to || d.address == to)
+        .map(|d| d.id.clone())
 }
 
 // ---------------------------------------------------------------- writing ---
@@ -876,8 +983,7 @@ mod tests {
         let mut want = Persisted::default();
         want.devices.push(StoredDevice { id: "abc123".into(), name: "desk".into(), ..StoredDevice::default() });
         want.players.push(StoredPlayer { device: "abc123".into(), piece: "plasma".into(), seed: 7, ..StoredPlayer::default() });
-        want.preview.panel_on = true;
-        want.preview.panel_to = "screeny-4a00a4".into();
+        want.focus = "abc123".into();
         store.save(want.clone());
         store.flush();
         assert_eq!(store.health().writes, 1);
@@ -943,6 +1049,9 @@ mod tests {
         // Fields the old file did not have take their defaults, not zeroes.
         assert!(loaded.players[0].on);
         assert_eq!(loaded.players[0].fps, 60.0);
+        assert_eq!(loaded.players[0].speed, 1.0, "v3's new fields take their defaults");
+        assert!(!loaded.players[0].paused);
+        assert_eq!(loaded.focus, "abc", "and the page looks at the one player there is");
         assert!(store.health().recovered.is_some());
     }
 
@@ -1130,9 +1239,8 @@ mod tests {
         assert_eq!(loaded.players[0].piece, "plasma");
         assert_eq!(loaded.players[0].seed, 4242);
         assert_eq!(loaded.players[0].brightness, Some(96));
-        assert_eq!(loaded.preview.piece, "metaballs");
-        assert_eq!(loaded.preview.panel_to, "screeny-4a00a4");
-        assert!(loaded.preview.panel_on);
+        assert_eq!(loaded.players.len(), 1, "the panel's player is the truth; the preview block is not a second one");
+        assert_eq!(loaded.focus, "4a00a4", "and it is what the page looks at");
 
         // And what each context was playing is merged into the one memory -
         // only the values that were actually moved, not the whole v1 dump.
@@ -1143,6 +1251,7 @@ mod tests {
         assert_eq!(m["metaballs"].params, BTreeMap::from([("count".to_string(), 7.0)]));
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v1")), "the migration says so once");
+        assert_eq!(loaded.version, SCHEMA_VERSION);
         assert!(store.health().repaired.is_empty(), "a good v1 file needs no repairs");
         assert!(!dir.0.join(BAD_FILE).exists(), "a v1 file is migrated, not condemned");
     }
@@ -1165,6 +1274,162 @@ mod tests {
         let (_store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.pieces["plasma"].params["scale"], 3.0, "the panel's value");
         assert_eq!(loaded.pieces["plasma"].seed, Some(2), "and the panel's seed");
+    }
+
+    // ------------------------- v2 -> v3 (card 170) -------------------------
+
+    /// A **real v2 file**: the shape the live service has today, from card
+    /// 165's Log - one device, one player, a `preview` block and the settings
+    /// memory. Card 170 drops `preview`; nothing else may move.
+    const LIVE_V2: &str = r#"{
+  "version": 2,
+  "devices": [
+    { "id": "4a00a4", "name": "", "instance": "screeny-4a00a4", "address": "", "manual": false }
+  ],
+  "players": [
+    {
+      "device": "4a00a4",
+      "on": true,
+      "piece": "overland",
+      "seed": 4242,
+      "params": {},
+      "fps": 30.0,
+      "settings": {
+        "levels": 64, "dither": "bayer4",
+        "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
+        "panel_model": true, "codec_preview": true
+      },
+      "brightness": null
+    }
+  ],
+  "preview": {
+    "piece": "clocks-numerals",
+    "seed": 7,
+    "params": { "rest": 3.0 },
+    "settings": {
+      "levels": 64, "dither": "bayer4",
+      "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
+      "panel_model": true, "codec_preview": true
+    },
+    "paused": false, "speed": 1.0, "fps": 60.0,
+    "panel_on": false, "panel_to": ""
+  },
+  "pieces": {
+    "clocks-numerals": { "seed": 0 },
+    "metaballs": { "seed": 0, "params": { "count": 8.0 } },
+    "overland": { "seed": 4242 },
+    "plasma": { "seed": 0, "params": { "scale": 2.97 } }
+  }
+}"#;
+
+    /// The panel's player is the truth, the memory is not disturbed, and the
+    /// `preview` block leaves without taking anything with it.
+    #[test]
+    fn a_real_v2_file_migrates_to_v3() {
+        let dir = Temp::new("v2");
+        std::fs::write(dir.0.join(FILE), LIVE_V2).expect("write the v2 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        assert_eq!(loaded.version, 3);
+        assert_eq!(loaded.devices.len(), 1);
+        assert_eq!(loaded.devices[0].id, "4a00a4");
+
+        // The player, untouched, plus v3's two new fields at their defaults.
+        assert_eq!(loaded.players.len(), 1, "the preview block must not become a second player");
+        let p = &loaded.players[0];
+        assert_eq!(p.device, "4a00a4");
+        assert_eq!(p.piece, "overland");
+        assert_eq!(p.seed, 4242);
+        assert_eq!(p.fps, 30.0);
+        assert!(p.on);
+        assert!(!p.paused);
+        assert_eq!(p.speed, 1.0);
+        assert_eq!(loaded.focus, "4a00a4", "the page is a window onto the panel");
+
+        // The memory is v2's, exactly: the preview's piece was already in it,
+        // so its values must not have been written over the top.
+        assert_eq!(loaded.pieces.len(), 4);
+        assert_eq!(loaded.pieces["plasma"].params["scale"], 2.97);
+        assert_eq!(loaded.pieces["metaballs"].params["count"], 8.0);
+        assert_eq!(loaded.pieces["overland"].seed, Some(4242));
+        assert_eq!(loaded.pieces["clocks-numerals"].seed, Some(0), "the v2 entry wins over the preview block's");
+        assert!(loaded.pieces["clocks-numerals"].params.is_empty(), "including its parameters");
+
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v2")), "it says so once");
+        assert!(store.health().repaired.is_empty());
+        assert!(!dir.0.join(BAD_FILE).exists(), "a v2 file is migrated, not condemned");
+    }
+
+    /// The design view's piece is only merged into the memory where the memory
+    /// knows nothing about it - a v2 file whose preview was on a piece no
+    /// player had ever touched.
+    #[test]
+    fn a_v2_preview_on_an_unknown_piece_is_kept() {
+        let dir = Temp::new("v2-gap");
+        std::fs::write(
+            dir.0.join(FILE),
+            r#"{
+              "version": 2,
+              "players": [ { "device": "4a00a4", "piece": "plasma", "seed": 1 } ],
+              "preview": { "piece": "metaballs", "seed": 9, "params": { "count": 8.0 } },
+              "pieces": { "plasma": { "seed": 1 } }
+            }"#,
+        )
+        .expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.pieces["metaballs"].seed, Some(9), "nothing knew about it, so it is kept");
+        assert_eq!(loaded.pieces["metaballs"].params["count"], 8.0);
+        assert_eq!(loaded.players.len(), 1, "and it is still not a player");
+    }
+
+    /// The one case where dropping `panel_on` would lose something: a v2 file
+    /// with **no** players, where the design view was the only thing playing.
+    /// It becomes the player, on the device it was pointed at.
+    #[test]
+    fn a_v2_preview_that_was_the_only_thing_playing_becomes_the_player() {
+        let dir = Temp::new("v2-onlypreview");
+        std::fs::write(
+            dir.0.join(FILE),
+            r#"{
+              "version": 2,
+              "devices": [ { "id": "4a00a4", "instance": "screeny-4a00a4" } ],
+              "players": [],
+              "preview": { "piece": "plasma", "seed": 55, "params": { "scale": 2.5 },
+                           "paused": true, "speed": 2.0, "fps": 30.0,
+                           "panel_on": true, "panel_to": "screeny-4a00a4" }
+            }"#,
+        )
+        .expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.players.len(), 1);
+        let p = &loaded.players[0];
+        assert_eq!(p.device, "4a00a4", "`panel_to` named it by instance name; the id is what a player uses");
+        assert!(p.on, "it was streaming, so it keeps streaming");
+        assert_eq!(p.piece, "plasma");
+        assert_eq!(p.seed, 55);
+        assert_eq!(p.params["scale"], 2.5);
+        assert!(p.paused);
+        assert_eq!(p.speed, 2.0);
+        assert_eq!(p.fps, 30.0);
+        assert_eq!(loaded.focus, "4a00a4");
+    }
+
+    /// The same, with nothing to point at: the player is unbound rather than
+    /// aimed at a device the file has never heard of.
+    #[test]
+    fn a_v2_preview_with_no_panel_becomes_an_unbound_player() {
+        let dir = Temp::new("v2-unbound");
+        std::fs::write(
+            dir.0.join(FILE),
+            r#"{"version":2,"players":[],"preview":{"piece":"metaballs","seed":3,"panel_on":false}}"#,
+        )
+        .expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.players.len(), 1);
+        assert_eq!(loaded.players[0].device, UNBOUND);
+        assert_eq!(loaded.players[0].piece, "metaballs");
+        assert!(!loaded.players[0].on, "nothing to send to");
+        assert_eq!(loaded.focus, UNBOUND);
     }
 
     /// A hand-edited file full of rubbish in the memory. Every one of these is
@@ -1229,7 +1494,7 @@ mod tests {
         let (store, _) = Store::open(Some(&dir.0));
         for i in 0..20 {
             let mut p = Persisted::default();
-            p.preview.seed = i;
+            p.players.push(StoredPlayer { device: "abc".into(), seed: i, ..StoredPlayer::default() });
             store.save(p);
         }
         store.flush();
@@ -1239,6 +1504,6 @@ mod tests {
         assert_eq!(left, vec![FILE.to_string()], "the state directory should hold exactly the state file");
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
         let back: Persisted = serde_json::from_str(&text).expect("the file parses");
-        assert_eq!(back.preview.seed, 19, "the newest save wins");
+        assert_eq!(back.players[0].seed, 19, "the newest save wins");
     }
 }
