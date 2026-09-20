@@ -38,9 +38,9 @@ use Stroke::{Arc, Seg};
 ///
 /// Drawn for this panel rather than borrowed from a typeface: the bowls are
 /// the module's own circles, `1` is given a foot so it does not stand alone in
-/// a 14-LED module, and `4`, `6`, `7` and `9` are kept as far from each other
-/// as the box allows - an open-topped `4`, a `6` and a `9` whose spines leave
-/// the bowl completely, a `7` with no crossbar to confuse with a `1`.
+/// a 14-LED module, `4` is open-topped and `7` has no crossbar to confuse with
+/// a `1`. `0`, `5`, `6` and `9` share one construction - radius-5 arcs joined
+/// by flat sides - so their bowls are tall and the face is a family.
 pub const DIGITS: [&[Stroke]; 10] = [
     // 0: a stadium. Flat sides keep it apart from 8's pinched waist.
     &[Arc(0.0, -5.0, A, 180.0, 360.0), Seg(-A, -5.0, -A, 5.0), Seg(A, -5.0, A, 5.0), Arc(0.0, 5.0, A, 0.0, 180.0)],
@@ -52,16 +52,24 @@ pub const DIGITS: [&[Stroke]; 10] = [
     &[Arc(0.0, -5.0, A, 170.0, 450.0), Arc(0.0, 5.0, A, 270.0, 550.0)],
     // 4: open top - apex, diagonal, crossbar, stem.
     &[Seg(2.6, -B, 2.6, B), Seg(2.6, -B, -5.0, 3.4), Seg(-5.0, 3.4, 5.0, 3.4)],
-    // 5: bar, stem to the shoulder, bowl.
-    &[Seg(-4.7, -B, 4.9, -B), Seg(-4.7, -B, -4.7, 3.29), Arc(0.0, 5.0, A, 200.0, 505.0)],
-    // 6: closed bowl and a spine that leaves it entirely.
-    &[Arc(0.0, 5.0, A, 0.0, 360.0), Arc(8.92, 3.42, 14.0, 173.5, 247.3)],
+    // 5: bar, a short stem, and a tall bowl. The bowl is the 0's own stadium
+    // cut open at the left - the same two arcs and a flat right side - so it
+    // is two thirds of the numeral's height and as wide as the bar above it;
+    // the stem is the remaining third and meets the bowl's shoulder, not its
+    // side. (The first 5 hung a small round bowl off the *side* of a stem 13
+    // LEDs long, and the owner saw it at once: lopsided, all neck.)
+    &[Seg(-4.4, -B, 4.6, -B), Seg(-4.4, -B, -4.4, -1.88), Arc(0.0, 0.5, A, 208.4, 360.0), Seg(A, 0.5, A, 5.0), Arc(0.0, 5.0, A, 0.0, 165.0)],
+    // 6: the 0 with a bowl closed inside its lower two thirds and its top
+    // right left open - one construction with the 0, the 5 and the 9, so the
+    // face reads as a family. Told from the 8 by its flat left side and open
+    // shoulder, from the 0 by the bar across its middle.
+    &[Arc(0.0, -5.0, A, 180.0, 318.0), Seg(-A, -5.0, -A, 5.0), Arc(0.0, 5.0, A, 0.0, 180.0), Seg(A, 1.0, A, 5.0), Arc(0.0, 1.0, A, 180.0, 360.0)],
     // 7: bar and diagonal, no crossbar.
     &[Seg(-4.9, -B, 5.0, -B), Seg(5.0, -B, -1.8, B)],
     // 8: two circles, pinched waist.
     &[Arc(0.0, -5.0, A, 0.0, 360.0), Arc(0.0, 5.0, A, 0.0, 360.0)],
-    // 9: the 6 turned through half a turn.
-    &[Arc(0.0, -5.0, A, 0.0, 360.0), Arc(-8.92, -3.42, 14.0, 353.5, 427.3)],
+    // 9: the 6 turned through half a turn, exactly.
+    &[Arc(0.0, 5.0, A, 0.0, 138.0), Seg(A, -5.0, A, 5.0), Arc(0.0, -5.0, A, 180.0, 360.0), Seg(-A, -5.0, -A, -1.0), Arc(0.0, -1.0, A, 0.0, 180.0)],
 ];
 
 /// Distance in LEDs from `(x, y)` to digit `d`'s skeleton, `(x, y)` measured
