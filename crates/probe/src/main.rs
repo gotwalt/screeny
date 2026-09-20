@@ -532,7 +532,7 @@ fn cmd_stream(
             }
         };
         // Section 6.4: about one frame a second, never more than one in 100 ms.
-        let stats_req = n % 30 == 0;
+        let stats_req = n.is_multiple_of(30);
         let mut flags = screeny_proto::F_KEY;
         if stats_req {
             flags |= screeny_proto::F_STATS_REQ;

@@ -158,7 +158,7 @@ pub fn pal4_frame(n: u64) -> Vec<u8> {
                 (((x + y * 2 + phase) / 4) % 12) as u8
             };
             let p = y * W + x;
-            if p % 2 == 0 {
+            if p.is_multiple_of(2) {
                 idx[p / 2] |= v << 4;
             } else {
                 idx[p / 2] |= v;
