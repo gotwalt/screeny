@@ -92,3 +92,44 @@ What I built, in `crates/art/src/pieces/clocks/`:
   ease). During a dance every hand is a dancer and the grid is at full strength; the
   picture settles onto the time as the hands land. The dances are otherwise untouched.
 
+### The contact sheet, and what I threw away
+
+`docs/research/009-numerals-rest-pose.md`, with three images under
+`docs/research/img/160-rest-*.png` (240 KB the lot). Rest treatments down, the seven
+awkward times across, rendered through `screeny-art snapshot` with the time pinned by a
+fractional `offset` and `still=60` so the hands are holding, not dancing. `09:05` and
+`00:00` have no resting dials at all, so they are the control: identical in every row.
+
+I looked at all of it with the Read tool, and then at the same sheet blurred down to
+about half the panel's resolution, which is the only test that separates the candidates -
+the owner reads this from across the room and I cannot.
+
+What that showed, in order of how much it changed my mind:
+
+1. **The defect is worse than the card says.** `14:47` reads as `1,4,4,7`: the rest
+   strokes land where commas would. `11:11` is four bars and four fake colons.
+2. **Dimming alone does not fix it.** A short stroke dimmed is still a dot, and three
+   dots in a column are still a colon once it is blurred. Kept as treatment 1 anyway: it
+   is the only candidate that changes nothing but brightness, it keeps the original's
+   7:30 rest pose exactly, and the owner may read real LEDs differently from my blur.
+3. **The pose has to leave the digits' axes.** Every digit stroke is up, down, left or
+   right. A diagonal (hour 7:30, minute 1:30 - one stroke corner to corner, a dial
+   reading about 1:37) cannot be read as part of a glyph and survives blur: three blurred
+   dots are a colon, three blurred slashes are a texture.
+4. So the default is **diagonal + dim** (`rest` = 2, "hatched, quiet").
+
+Dropped, with the pictures in the note:
+
+- **hands open, "10:10"** - the wide V reads as a horizontal bar or an arrowhead; it
+  joins the digits' vocabulary instead of leaving it. Fails dimmed too: the shape is what
+  is wrong.
+- **diagonal at full brightness** - 1.27x the light of a digit dial (the test measures
+  this; it is what made the first version of the ink test fail), so the hatching leads.
+- **dim + shortened hands** - shortening pulls the mark to the centre of its cell, which
+  is exactly where a colon's dots go. The cleanest colon on the whole sheet.
+- **diagonal mirrored per row** - alternating `/` and `\` makes `>` and `<` chevrons down
+  the column: punctuation again, just different punctuation.
+- **zigzag (7:30 mirrored per row), dimmed** - the card's "differ per row" idea. It does
+  break the straight line, but three small dim marks are still three small dim marks.
+  Not recommended; kept as treatment 4 because it is worth one look on the panel.
+
