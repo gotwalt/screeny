@@ -10,8 +10,8 @@
 //!    (`FormRejection::BodyIsNotUtf8`) and deserialises into
 //!    `serde::Deserialize` types, so the SSID would have to be a `String`.
 //!    Plenty of real access points are named in some other encoding, and
-//!    `crates/settings`'s [`Ssid`](screeny_settings_docs) is bytes for exactly
-//!    that reason. This parser hands the caller the bytes.
+//!    `crates/settings`'s `Ssid` is a byte vector for exactly that reason.
+//!    This parser hands the caller the bytes.
 //! 2. **The PSK must not be printable.** [`WifiForm`]'s `Debug` prints the
 //!    SSID and the PSK's *length*, and there is no `Display`, no `Deref` and
 //!    no `as_str`. The one way to the secret is [`WifiForm::psk`], which a
@@ -25,8 +25,6 @@
 //! `<form method=post>` and a full-page result, not `fetch()`. A form post is
 //! urlencoded; that is the whole reason this file exists rather than a JSON
 //! request type.
-//!
-//! [`screeny_settings_docs`]: https://docs.rs/
 
 use core::fmt;
 
@@ -48,7 +46,7 @@ use crate::text::{PinText, MAX_PIN_LEN, MAX_PSK_LEN, MAX_SSID_LEN};
 ///                           370
 /// ```
 ///
-/// Rounded up to 384. A body longer than this cannot be a valid WiFi form, so
+/// Rounded up to 384. A body longer than this cannot be a valid Wi-Fi form, so
 /// card 222 can refuse it before reading it all and never has to buffer more.
 pub const MAX_FORM_LEN: usize = 384;
 
@@ -183,6 +181,9 @@ impl WifiForm {
     }
 }
 
+// `psk` is deliberately absent, and `psk_len` stands in its place; that is
+// the whole point of writing this by hand (spec 8.4).
+#[allow(clippy::missing_fields_in_debug)]
 impl fmt::Debug for WifiForm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WifiForm")

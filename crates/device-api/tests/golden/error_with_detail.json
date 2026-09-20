@@ -1,0 +1,4 @@
+{
+  "error": "out_of_range",
+  "detail": "ssid is longer than 32 bytes"
+}

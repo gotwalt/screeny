@@ -110,7 +110,7 @@ impl StatusReply {
         + field("idle_mode", IdleMode::MAX_JSON_LEN)
         + field("wifi_state", WifiState::MAX_JSON_LEN)
         + field("ssid", 2 + MAX_SSID_LEN * ESCAPE_MAX)
-        + field("ip", 2 + MAX_IP_LEN)
+        + field("ip", 2 + MAX_IP_LEN * ESCAPE_MAX)
         + field("state", StreamState::MAX_JSON_LEN)
         + field("portal", "false".len())
         + field("fw_slot", FwSlot::MAX_JSON_LEN)
@@ -364,7 +364,7 @@ impl WifiReply {
     pub const MAX_JSON_LEN: usize = 1
         + field("state", WifiState::MAX_JSON_LEN)
         + field("ssid", 2 + MAX_SSID_LEN * ESCAPE_MAX)
-        + field("ip", 2 + MAX_IP_LEN)
+        + field("ip", 2 + MAX_IP_LEN * ESCAPE_MAX)
         + field("reason", FailReason::MAX_JSON_LEN);
 
     /// Nothing configured, nothing tried.
@@ -548,8 +548,8 @@ mod tests {
     fn networks_are_strongest_first_and_capped() {
         let mut r = NetworksReply::new();
         // Offer 40, weakest first, so every one of them displaces something.
-        for i in 0..40i16 {
-            let rssi = (-90 + i) as i8;
+        for i in 0..40i8 {
+            let rssi = -90 + i;
             assert!(r.offer(b"Example-Wifi1", rssi, true));
         }
         assert_eq!(r.networks.len(), MAX_NETWORKS);

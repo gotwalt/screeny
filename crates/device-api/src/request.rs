@@ -19,6 +19,23 @@ use crate::enums::IdleMode;
 use crate::text::{NameText, PinText, MAX_NAME_LEN, MAX_PIN_LEN};
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN};
 
+/// The unescape buffer every JSON request body must be parsed with.
+///
+/// **`serde_json_core::from_slice` does not unescape strings.** With no
+/// buffer it hands the visitor the raw escaped text, so a name posted with a
+/// six-character `\u00e9` in it arrives holding those six characters and is
+/// stored that way - silently, with no error. `from_slice_escaped` is
+/// the function to use, and picoserve's `Json` extractor is
+/// `JsonWithUnescapeBufferSize<T, 32>` underneath.
+///
+/// The buffer holds one *unescaped* string at a time and is reused between
+/// fields, so it has to be as long as the longest string any request type can
+/// hold: [`NameText`], 32 bytes. picoserve's default of 32 is therefore
+/// exactly enough and not a byte more; card 222 should spell it
+/// `JsonWithUnescapeBufferSize<T, { MIN_UNESCAPE_BUFFER }>` so that raising
+/// [`screeny_proto::control::MAX_NAME_LEN`] raises it too.
+pub const MIN_UNESCAPE_BUFFER: usize = MAX_NAME_LEN;
+
 /// The four ASCII bytes `POST /api/v1/reboot` must send as `confirm`.
 ///
 /// It is the same four bytes as [`screeny_proto::control::REBOOT_MAGIC`] in
