@@ -436,3 +436,21 @@ motion do not exist in a still.
 | `flock-9-slow-fast-beat.png` | `pace 0.3, beat 5.0` | **Yes.** The flock barely drifts while the wings work at a believable rate. More convincingly birds. |
 | `flock-A-sky-dither.png` | the same frame with blue noise / Bayer4 / Bayer8 / no sky dither | The four are **indistinguishable**, at 1245 / 1118 / 1113 / 950 bytes. The choice was made on bytes, not looks. |
 | `flock-B-dusk-contrast-floor.png` | dusk at haze floor 0.46 vs 0.62, dithered and not | 0.62 is clearly the readable one. |
+
+### Handover checks, as actually run
+
+`cargo clippy --workspace --all-targets` on the merged tree: **silent**.
+
+`cargo test --release --no-fail-fast` at the root: **857 passed, 1 failed**.
+
+The one failure is `screeny-studio`'s `the_status_poll_follows_a_panel_that_moved`
+(`crates/studio/tests/moved.rs`) - card 156's known load-sensitive list, by name. It
+timed out waiting for the studio's HTTP status poll to recover, having taken 33.9 s,
+while a firmware session and another worker were building on the same machine. It
+touches nothing this card changed.
+
+**Re-run alone: `cargo test --release -p screeny-studio --test moved` - 2 passed,
+0 failed, in 9.3 s.** Both results are reported; nothing was changed to make it pass.
+
+The card is in `review/`; the `git mv` landed in commit b92e419 together with a
+comment fix rather than as the very last commit on the branch.
