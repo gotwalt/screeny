@@ -181,7 +181,11 @@ async fn the_ui_is_served_from_the_binary() {
     let index = get(at, "/").await;
     assert_eq!(index.status, 200);
     assert!(String::from_utf8_lossy(&index.body).contains("Screeny Studio"));
-    assert_eq!(get(at, "/main.js").await.status, 200);
+    // Card 198: two screens, three scripts.
+    assert_eq!(get(at, "/picture.js").await.status, 200);
+    assert_eq!(get(at, "/common.js").await.status, 200);
+    assert_eq!(get(at, "/panel").await.status, 200);
+    assert_eq!(get(at, "/panel.js").await.status, 200);
     assert_eq!(get(at, "/style.css").await.status, 200);
 
     assert_eq!(get(at, "/nope.js").await.status, 404);

@@ -7,17 +7,31 @@
 //! page, and every route it calls exists on the server. Both of those are
 //! silent failures in a browser and loud ones here.
 //!
-//! Card 170 folded the dashboard into the one page, so there is one set of
-//! files to check instead of two - and `/dashboard` has to keep working as a
-//! bookmark.
+//! Card 170 folded the dashboard into the one page; card 198 split that page
+//! into two **screens** - the Picture at `/` and the Panel at `/panel` - and
+//! `/dashboard` still has to work as a bookmark.
+//!
+//! So the wiring check is now per screen: every element `picture.js` reaches
+//! for is in `index.html`, every element `panel.js` reaches for is in
+//! `panel.html`, and every element `common.js` reaches for is in **both** -
+//! which is the rule that keeps the shared file shared.
 
 mod common;
 
 use common::{get, post, studio};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
-const MAIN_JS: &str = include_str!("../ui/main.js");
+const PANEL_HTML: &str = include_str!("../ui/panel.html");
+const COMMON_JS: &str = include_str!("../ui/common.js");
+const PICTURE_JS: &str = include_str!("../ui/picture.js");
+const PANEL_JS: &str = include_str!("../ui/panel.js");
 const STYLE_CSS: &str = include_str!("../ui/style.css");
+
+/// The whole front end, for the claims that are about it rather than about one
+/// screen.
+fn all_js() -> String {
+    format!("{COMMON_JS}\n{PICTURE_JS}\n{PANEL_JS}")
+}
 
 /// Every `$('#id')` and `$('.class', ...)` in the script.
 fn selectors(js: &str) -> Vec<String> {
@@ -56,19 +70,37 @@ fn routes(js: &str) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn one_page_is_served_and_so_are_its_two_files() {
+async fn both_screens_are_served_and_so_are_their_files() {
     let studio = studio().await;
     let at = studio.addr;
 
-    for path in ["/", "/index.html", "/main.js", "/style.css"] {
+    // (The content types are `ui::content_type`'s and are checked over real
+    // HTTP in the card's Log; the test client keeps only the body.)
+    for path in [
+        "/", "/index.html", "/panel", "/panel/", "/panel.html",
+        "/common.js", "/picture.js", "/panel.js", "/style.css",
+    ] {
         let r = get(at, path).await;
         assert_eq!(r.status, 200, "{path}");
         assert!(!r.body.is_empty(), "{path} is empty");
     }
 
+    // `/panel` is a screen and `/panel.js` is a file: the tidy URL must not
+    // swallow the script that happens to share its name.
+    let screen = String::from_utf8_lossy(&get(at, "/panel").await.body).to_string();
+    let script = String::from_utf8_lossy(&get(at, "/panel.js").await.body).to_string();
+    assert!(screen.starts_with("<!doctype html>"), "/panel should be the screen");
+    assert!(script.starts_with("// The Studio's Panel screen"), "/panel.js should be the script");
+
+    // Each screen loads its own module, and both load the shared one through
+    // it rather than with a second <script> tag.
+    assert!(screen.contains(r#"src="/panel.js""#), "the panel screen loads its own script");
+    assert!(PANEL_JS.contains("from './common.js'"), "...which imports the shared one");
+
     // Still no directory traversal, and still a 404 rather than the index for
     // a mistyped asset.
     assert_eq!(get(at, "/nope.js").await.status, 404);
+    assert_eq!(get(at, "/main.js").await.status, 404, "the one page's script is gone, not renamed in place");
     assert_eq!(get(at, "/../Cargo.toml").await.status, 404);
     assert_eq!(get(at, "/sub/dir.js").await.status, 404);
 }
@@ -92,26 +124,80 @@ async fn the_dashboard_is_folded_in_and_redirects() {
     assert!(!index.contains("/dashboard"), "nothing should link to a page that no longer exists");
 }
 
-/// Every element the script reaches for exists in the page. A typo here is a
-/// silent `null` in a browser.
+/// Is `sel` in this page?
+fn has(html: &str, sel: &str) -> bool {
+    if let Some(id) = sel.strip_prefix('#') {
+        html.contains(&format!("id=\"{id}\""))
+    } else if let Some(class) = sel.strip_prefix('.') {
+        html.contains(&format!("\"{class}\"")) || html.contains(&format!("{class} ")) || html.contains(&format!(" {class}\""))
+    } else {
+        true
+    }
+}
+
+/// Every element a screen's script reaches for exists in that screen. A typo
+/// here is a silent `null` in a browser.
+///
+/// Card 198: three scripts and two screens, so the check is per pair - and
+/// `common.js`, which both screens load, may only reach for what **both** of
+/// them have. That is what stops a shared function quietly half-working on the
+/// screen that has not got the element.
 #[test]
-fn every_element_the_page_reaches_for_exists() {
+fn every_element_each_screen_reaches_for_exists() {
     let mut missing = Vec::new();
-    for sel in selectors(MAIN_JS) {
-        let found = if let Some(id) = sel.strip_prefix('#') {
-            INDEX_HTML.contains(&format!("id=\"{id}\""))
-        } else if let Some(class) = sel.strip_prefix('.') {
-            INDEX_HTML.contains(&format!("\"{class}\""))
-                || INDEX_HTML.contains(&format!("{class} "))
-                || INDEX_HTML.contains(&format!(" {class}\""))
-        } else {
-            true
-        };
-        if !found {
-            missing.push(sel);
+    for (what, js, pages) in [
+        ("picture.js", PICTURE_JS, &[("index.html", INDEX_HTML)][..]),
+        ("panel.js", PANEL_JS, &[("panel.html", PANEL_HTML)][..]),
+        ("common.js", COMMON_JS, &[("index.html", INDEX_HTML), ("panel.html", PANEL_HTML)][..]),
+    ] {
+        for sel in selectors(js) {
+            for (page, html) in pages {
+                if !has(html, &sel) {
+                    missing.push(format!("{what} reaches for {sel}, which {page} has not got"));
+                }
+            }
         }
     }
-    assert!(missing.is_empty(), "the page's script reaches for elements the page does not have: {missing:?}");
+    assert!(missing.is_empty(), "{missing:#?}");
+}
+
+/// Card 198's acceptance, as far as a text file can carry it: **nothing about
+/// devices is on the Picture screen** except the one status chip and
+/// brightness, and everything that was in the old Panel section is on the
+/// Panel screen.
+#[test]
+fn the_two_screens_hold_what_the_split_says_they_do() {
+    // The panel's own affairs, by the ids they are drawn into. Every one of
+    // them was on the one page before this card.
+    for gone in [
+        "discovery-note", "panel-out", "panel-out-label", "panel-facts", "device-block",
+        "device-facts", "device-note", "identify", "rename", "reboot", "setup", "found", "add-to",
+    ] {
+        assert!(!INDEX_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} belongs on the Panel screen");
+        assert!(PANEL_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} has to still exist somewhere");
+    }
+    // Nor is any of it *said* on the Picture screen.
+    for word in ["WiFi", "Reboot", "heap", "discovery", "mDNS"] {
+        assert!(!INDEX_HTML.contains(word), "the Picture screen should not talk about {word}");
+    }
+    // The two that stay, and why: brightness changes how the piece looks on
+    // the LEDs, and the chip is the link to the other screen.
+    assert!(INDEX_HTML.contains("id=\"bright\""), "brightness stays reachable while judging a piece");
+    assert!(PANEL_HTML.contains("id=\"bright\""), "and is the same control on the Panel screen");
+    assert!(COMMON_JS.contains("export function bindBrightness"), "bound once, so the two cannot drift");
+    assert!(
+        INDEX_HTML.contains(r#"<a class="pill pill--link" id="ro-panel" href="/panel">"#),
+        "the status chip is the way to the Panel screen"
+    );
+    assert!(PANEL_HTML.contains(r#"<a class="backlink" href="/">"#), "...and there is a way back");
+
+    // The picture is not on the Panel screen at all - no canvas, and so no
+    // frames asked for (card 120's rule, restated for a screen that draws
+    // none).
+    assert!(!PANEL_HTML.contains("<canvas"), "the Panel screen draws no picture");
+    assert!(PANEL_JS.contains("}, noFrames);"), "so it must ask the socket for none");
+    assert!(COMMON_JS.contains("export const noFrames = () => 0;"), "fps 0 is what asks for none");
+    assert!(!PANEL_JS.contains("requestAnimationFrame"), "and it has no frame pump");
 }
 
 /// Every route the script calls exists on the server. A 404 here is a control
@@ -120,7 +206,7 @@ fn every_element_the_page_reaches_for_exists() {
 async fn every_route_the_page_calls_exists() {
     let studio = studio().await;
     let at = studio.addr;
-    let found = routes(MAIN_JS);
+    let found = routes(&all_js());
     assert!(found.len() >= 14, "the scan found suspiciously few routes: {found:?}");
 
     for route in &found {
@@ -134,25 +220,41 @@ async fn every_route_the_page_calls_exists() {
     println!("routes checked: {}", found.join(", "));
 }
 
-/// The page keeps the promises card 106 made for the dashboard, now that it is
-/// the only page: a brightness that lights nothing is never offered, and
-/// nothing reaches outside the box.
+/// Both screens keep the promises card 106 made for the dashboard: a
+/// brightness that lights nothing is never offered, and nothing reaches
+/// outside the box.
 #[test]
-fn the_page_keeps_its_promises() {
+fn the_screens_keep_their_promises() {
     assert!(
-        MAIN_JS.contains("BRIGHTNESS_FLOOR = 6"),
+        COMMON_JS.contains("BRIGHTNESS_FLOOR = 6"),
         "the slider's lowest non-zero stop should be the first value that lights the panel"
     );
     // Card 136 will delete this; it should be one constant and one helper, not
-    // a rule sprinkled through the file.
-    assert_eq!(MAIN_JS.matches("BRIGHTNESS_FLOOR").count(), 2, "keep the 1..=5 workaround in one place");
+    // a rule sprinkled through the front end. Card 198: the brightness control
+    // is bound once in `common.js`, so both screens inherit the floor and
+    // neither screen's own file mentions it.
+    assert_eq!(COMMON_JS.matches("BRIGHTNESS_FLOOR").count(), 2, "keep the 1..=5 workaround in one place");
+    assert!(!PICTURE_JS.contains("BRIGHTNESS_FLOOR") && !PANEL_JS.contains("BRIGHTNESS_FLOOR"));
 
     // No CDN, no web font from the network, no module import from anywhere but
     // here: this runs on a LAN box with no promise of internet.
     for bad in ["http://", "https://", "cdn.", "unpkg", "jsdelivr", "fonts.googleapis"] {
-        assert!(!MAIN_JS.contains(bad), "the page must not reach outside the box: {bad}");
-        assert!(!INDEX_HTML.contains(bad), "the page must not reach outside the box: {bad}");
-        assert!(!STYLE_CSS.contains(bad), "the stylesheet must not reach outside the box: {bad}");
+        for (what, text) in [
+            ("index.html", INDEX_HTML),
+            ("panel.html", PANEL_HTML),
+            ("common.js", COMMON_JS),
+            ("picture.js", PICTURE_JS),
+            ("panel.js", PANEL_JS),
+            ("style.css", STYLE_CSS),
+        ] {
+            assert!(!text.contains(bad), "{what} must not reach outside the box: {bad}");
+        }
+    }
+    // And no build step: the only thing either script imports is a file in
+    // this directory.
+    for import in all_js().split("from '").skip(1) {
+        let from = import.split('\'').next().unwrap_or_default();
+        assert_eq!(from, "./common.js", "the front end imports nothing but the shared module");
     }
 }
 
@@ -161,14 +263,14 @@ fn the_page_keeps_its_promises() {
 /// empty list to mean all of them.
 #[test]
 fn the_page_can_say_whether_it_is_looking_for_panels() {
-    assert!(INDEX_HTML.contains("id=\"discovery-note\""), "the panel section needs a line for the discovery state");
+    assert!(PANEL_HTML.contains("id=\"discovery-note\""), "the panel section needs a line for the discovery state");
     for case in ["d.enabled", "d.last_error", "d.browses"] {
-        assert!(MAIN_JS.contains(case), "the discovery line must distinguish {case}");
+        assert!(PANEL_JS.contains(case), "the discovery line must distinguish {case}");
     }
     // A browse that finds nothing is normal, so this line is never drawn in
     // the fault tone and never reaches `/healthz`.
-    let line = MAIN_JS.find("function discoveryLine").expect("the discovery line");
-    let body = &MAIN_JS[line..line + 1200];
+    let line = PANEL_JS.find("function discoveryLine").expect("the discovery line");
+    let body = &PANEL_JS[line..line + 1200];
     assert!(!body.contains("'bad'"), "a browse that finds nothing is not a fault");
 }
 
@@ -214,8 +316,8 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
 #[test]
 fn the_page_says_why_a_gpu_piece_is_not_available() {
     assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the piece list needs a line for the adapter");
-    assert!(MAIN_JS.contains("input.disabled = true"), "a piece that cannot draw must not be offered");
-    assert!(MAIN_JS.contains("needs_gpu"), "the page reads the per-piece flag from bootstrap");
+    assert!(PICTURE_JS.contains("input.disabled = true"), "a piece that cannot draw must not be offered");
+    assert!(PICTURE_JS.contains("needs_gpu"), "the page reads the per-piece flag from bootstrap");
     assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable piece has to look unavailable");
 }
 
@@ -225,9 +327,9 @@ fn the_page_says_why_a_gpu_piece_is_not_available() {
 /// reasoning.
 #[test]
 fn the_page_can_show_what_only_the_device_knows() {
-    assert!(INDEX_HTML.contains("id=\"device-block\""), "the panel section needs a block for the device's own facts");
-    assert!(INDEX_HTML.contains("id=\"device-facts\""), "...and a list inside it");
-    assert!(INDEX_HTML.contains("id=\"device-block\" hidden"), "with no HTTP status API the page is the page it was");
+    assert!(PANEL_HTML.contains("id=\"device-block\""), "the panel section needs a block for the device's own facts");
+    assert!(PANEL_HTML.contains("id=\"device-facts\""), "...and a list inside it");
+    assert!(PANEL_HTML.contains("id=\"device-block\" hidden"), "with no HTTP status API the page is the page it was");
     assert!(STYLE_CSS.contains(".device-block"), "the block has to look like part of the panel section");
 
     // Every flag the block draws a tone from is the server's judgement, read
@@ -242,7 +344,7 @@ fn the_page_can_show_what_only_the_device_knows() {
         "f.store_errors",
         "f.unasked_reboots",
     ] {
-        assert!(MAIN_JS.contains(decided), "the page reads {decided} rather than deciding it");
+        assert!(PANEL_JS.contains(decided), "the page reads {decided} rather than deciding it");
     }
     let body = device_block();
     // Every threshold that has ever been one, including the ones card 195
@@ -262,11 +364,11 @@ fn the_page_can_show_what_only_the_device_knows() {
 
 /// `showDevice` and its helpers, from its doc comment to the next one. Sliced
 /// by hand because "the page carries no threshold of its own" is a claim about
-/// this block and not about the whole file - `main.js` is full of numbers that
-/// are layout.
+/// this block and not about the whole file - the front end is full of numbers
+/// that are layout.
 fn device_block() -> &'static str {
-    let start = MAIN_JS.find("function showDevice").expect("the device block");
-    let rest = &MAIN_JS[start..];
+    let start = PANEL_JS.find("function showDevice").expect("the device block");
+    let rest = &PANEL_JS[start..];
     // The next top-level doc comment after `rebootLine`, which is the last
     // helper this block owns.
     let after = rest.find("function rebootLine").expect("the reboots row helper");
@@ -303,15 +405,15 @@ async fn a_device_with_no_http_status_api_leaves_the_page_as_it_was() {
 /// effect on the panel is unclear.
 #[test]
 fn the_output_switch_says_what_it_does_when_there_is_no_panel() {
-    assert!(INDEX_HTML.contains("id=\"panel-out-label\""), "the switch's label has to be writable");
+    assert!(PANEL_HTML.contains("id=\"panel-out-label\""), "the switch's label has to be writable");
     assert!(
-        MAIN_JS.contains("'Drive a panel as soon as one is found'"),
+        PANEL_JS.contains("'Drive a panel as soon as one is found'"),
         "with no panel attached the switch must not promise one"
     );
-    assert!(MAIN_JS.contains("'Show it on the panel'"), "and with one attached it says so again");
+    assert!(PANEL_JS.contains("'Show it on the panel'"), "and with one attached it says so again");
     // Still live, and still the same two bodies a script drives it with.
-    assert!(!MAIN_JS.contains("outSwitch.disabled"), "the switch still decides what the first panel found does");
-    assert!(MAIN_JS.contains("{ on: true, to: '' } : { on: false }"), "`set_panel`'s two bodies are unchanged");
+    assert!(!PANEL_JS.contains("outSwitch.disabled"), "the switch still decides what the first panel found does");
+    assert!(PANEL_JS.contains("{ on: true, to: '' } : { on: false }"), "`set_panel`'s two bodies are unchanged");
 }
 
 /// The same fact over the API, which is what the line is drawn from: with
@@ -351,8 +453,8 @@ fn the_rate_control_spans_the_players_whole_range() {
 #[test]
 fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
     assert!(INDEX_HTML.contains(r#"list="fps-stops""#), "the rate slider still declares its stops");
-    assert!(MAIN_JS.contains("function drawStops"), "and something draws them");
-    assert!(MAIN_JS.contains("drawStops)"), "drawStops has to actually be called");
+    assert!(COMMON_JS.contains("function drawStops"), "and something draws them");
+    assert!(PICTURE_JS.contains("drawStops)"), "drawStops has to actually be called");
     assert!(STYLE_CSS.contains(".slider .stops"), "the marks need somewhere to be");
 
     // The thumb, as the stylesheet has it.
@@ -369,18 +471,12 @@ fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
         .expect("the thumb's width");
     assert_eq!(width, "7px", "the thumb changed width; the marks' arithmetic has to change with it");
     assert!(
-        MAIN_JS.contains("calc(3.5px + ${at} * (100% - 7px))"),
+        COMMON_JS.contains("calc(3.5px + ${at} * (100% - 7px))"),
         "the marks must use the thumb's own geometry: 3.5px + frac * (W - 7px)"
     );
 
     // And every stop is a rate the slider can actually reach.
-    let list = INDEX_HTML.split_once(r#"<datalist id="fps-stops">"#).expect("the stops").1;
-    let list = list.split_once("</datalist>").expect("a closed datalist").0;
-    let stops: Vec<f64> = list
-        .split(r#"<option value=""#)
-        .skip(1)
-        .filter_map(|o| o.split('"').next().and_then(|v| v.parse().ok()))
-        .collect();
+    let stops = stops_of(INDEX_HTML, "fps-stops");
     assert!(stops.len() >= 4, "found only {stops:?}");
     for stop in &stops {
         assert!(
@@ -388,6 +484,65 @@ fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
             "{stop} is not a rate the player can be on"
         );
     }
+}
+
+/// The values a `<datalist>` declares, in the order it declares them.
+fn stops_of(html: &str, list: &str) -> Vec<f64> {
+    let rest = html.split_once(&format!(r#"<datalist id="{list}">"#)).unwrap_or_else(|| panic!("{list}")).1;
+    rest.split_once("</datalist>")
+        .expect("a closed datalist")
+        .0
+        .split(r#"<option value=""#)
+        .skip(1)
+        .filter_map(|o| o.split('"').next().and_then(|v| v.parse().ok()))
+        .collect()
+}
+
+/// Card 197, folded into 198: the Speed slider has a home position.
+///
+/// It is the general mechanism rather than a second one - a `<datalist>` that
+/// `drawStops` draws - so this test is written over **every** slider on either
+/// screen that declares stops: each one's stops are inside its own range, and
+/// each is in the range's own units rather than a percentage. What is special
+/// to Speed is the way *back*: the marks do not snap (a magnet at 1.00 would
+/// make 0.95 and 1.05 unreachable with a mouse, and a speed a script set must
+/// be shown exactly), so a double-click returns it to 1.00x.
+#[test]
+fn every_slider_that_declares_stops_declares_reachable_ones() {
+    let mut checked = 0;
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML)] {
+        for decl in html.split(r#"list=""#).skip(1) {
+            let list = decl.split('"').next().expect("a list name");
+            // The input's own range, from the tag the `list=` is in.
+            let tag = html.split_once(&format!(r#"list="{list}""#)).expect("the input").0;
+            let tag = &tag[tag.rfind("<input").expect("an input tag")..];
+            let attr = |name: &str| -> f64 {
+                tag.split_once(&format!(r#"{name}=""#))
+                    .and_then(|(_, r)| r.split('"').next())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| panic!("{what}: {list}'s input has no {name}"))
+            };
+            let (min, max) = (attr("min"), attr("max"));
+            let stops = stops_of(html, list);
+            assert!(!stops.is_empty(), "{what}: {list} declares no stops");
+            for stop in &stops {
+                assert!((min..=max).contains(stop), "{what}: {list} declares {stop}, outside {min}..={max}");
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 2, "the rate slider and the speed slider declare stops");
+
+    // Speed's own three, and the way home.
+    assert_eq!(stops_of(INDEX_HTML, "speed-stops"), vec![0.5, 1.0, 2.0], "0.5x, 1.00x and 2x");
+    assert!(INDEX_HTML.contains(r#"list="speed-stops""#), "the speed slider declares them");
+    assert!(PICTURE_JS.contains("speedInput.addEventListener('dblclick'"), "a double-click goes home");
+    assert!(PICTURE_JS.contains("state.speed = 1;"), "...to 1.00x");
+    // And still no snapping, on either slider: what draws the marks never
+    // touches the value.
+    let start = COMMON_JS.find("export function drawStops").expect("drawStops");
+    let body = &COMMON_JS[start..start + COMMON_JS[start..].find("\n}").expect("its end")];
+    assert!(!body.contains("input.value"), "the stops are marks, not magnets: {body}");
 }
 
 /// And the rate a script set is the rate the page reports - it is not quietly
@@ -501,21 +656,35 @@ fn the_two_column_layout_is_behind_a_breakpoint() {
     );
 }
 
-/// The sections stack in the order the card asks for: picture, now playing,
-/// parameters, panel. That is DOM order, so it is what a narrow window gets
-/// with no CSS help at all.
+/// Each screen stacks in the order it should. That is DOM order, so it is what
+/// a narrow window gets with no CSS help at all.
 #[test]
-fn the_page_is_in_the_order_it_should_stack_in() {
-    let at = |needle: &str| INDEX_HTML.find(needle).unwrap_or_else(|| panic!("`{needle}` is in the page"));
-    let order = [
-        ("the picture", at("id=\"stage\"")),
-        ("now playing", at("id=\"sec-now\"")),
-        ("parameters", at("id=\"sec-params\"")),
-        ("the panel", at("id=\"sec-panel\"")),
-    ];
-    for pair in order.windows(2) {
-        assert!(pair[0].1 < pair[1].1, "{} should come before {}", pair[0].0, pair[1].0);
-    }
-    // And the meters, which are a detail, come after all of them.
-    assert!(at("class=\"meters\"") > order[3].1, "the meters belong at the bottom of a narrow page");
+fn each_screen_is_in_the_order_it_should_stack_in() {
+    let order = |what: &str, html: &'static str, ids: &[(&str, &str)]| {
+        let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("{what}: `{needle}` is in the page"));
+        let found: Vec<(&str, usize)> = ids.iter().map(|(name, id)| (*name, at(id))).collect();
+        for pair in found.windows(2) {
+            assert!(pair[0].1 < pair[1].1, "{what}: {} should come before {}", pair[0].0, pair[1].0);
+        }
+    };
+    // The Picture screen: the picture, then what changes it, then - since card
+    // 198 - brightness, which is the one panel control that judges a picture.
+    order("the Picture screen", INDEX_HTML, &[
+        ("the picture", "id=\"stage\""),
+        ("now playing", "id=\"sec-now\""),
+        ("parameters", "id=\"sec-params\""),
+        ("brightness", "id=\"sec-bright\""),
+        ("time", "id=\"sec-time\""),
+        // And the meters, which are a detail, come after all of them.
+        ("the meters", "class=\"meters\""),
+    ]);
+    // The Panel screen: which panel and its controls, then what it says about
+    // itself, then what the studio says about itself.
+    order("the Panel screen", PANEL_HTML, &[
+        ("the panel's name", "id=\"panel-name\""),
+        ("the panel's controls", "id=\"sec-panel\""),
+        ("the link", "id=\"sec-link\""),
+        ("the device's own facts", "id=\"device-block\""),
+        ("the studio", "id=\"sec-studio\""),
+    ]);
 }

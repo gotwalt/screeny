@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel · Screeny Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="titleblock">
+    <div class="titleblock__piece">
+      <a class="backlink" href="/">Picture</a>
+      <h1 id="panel-name">Looking for a panel…</h1>
+      <p class="hint" id="panel-help"></p>
+    </div>
+    <dl class="readouts" aria-label="The panel">
+      <!-- Card 198: no canvas here, and so no frames asked for. What is
+           playing is said in words, because "which piece is this panel on" is
+           part of knowing which panel it is. -->
+      <div><dt>Showing</dt><dd id="ro-playing">–</dd></div>
+      <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
+      <div class="readouts__panel"><dt>State</dt><dd><span class="pill" id="panel-pill">–</span></dd></div>
+    </dl>
+  </header>
+
+  <p class="notice sheet__notice" id="notice" role="status" hidden></p>
+
+  <main class="sheet">
+    <section id="sec-panel">
+      <h2>Panel</h2>
+      <!-- Card 173: is the studio even looking? Never a fault tone - a browse
+           that finds nothing is normal - but never silent either. -->
+      <p class="hint" id="discovery-note" hidden></p>
+
+      <!-- Card 181: the label is written by the script. With a panel attached
+           it is "Show it on the panel"; with none it says what the switch
+           really does, which is decide whether the first panel found starts
+           playing. `set_panel` is untouched either way. -->
+      <label class="switch"><input type="checkbox" id="panel-out"><span id="panel-out-label">Show it on the panel</span></label>
+
+      <!-- The same brightness control as the Picture screen's: one binding in
+           `common.js`, so the two cannot drift. -->
+      <div class="slider" id="bright-slider">
+        <label for="bright">Brightness</label><output></output>
+        <input id="bright" type="range" min="0" max="255" step="1" value="0">
+      </div>
+      <p class="hint" id="bright-note"></p>
+
+      <div class="row row--actions">
+        <button type="button" id="identify">Identify</button>
+        <button type="button" id="rename">Rename</button>
+        <button type="button" id="reboot" class="danger">Reboot</button>
+      </div>
+
+      <details class="setup" id="setup">
+        <summary>Change which panel</summary>
+        <div class="setup__body">
+          <div class="found" id="found"></div>
+          <div class="row row--seed">
+            <label for="add-to">Panel</label>
+            <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-4a00a4, panel.local or 192.168.7.221">
+          </div>
+          <div class="row row--actions">
+            <button type="button" id="add">Use this panel</button>
+            <button type="button" id="look" class="quiet">Look again</button>
+          </div>
+          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="sec-link">
+      <h2>Link</h2>
+      <dl class="facts" id="panel-facts"></dl>
+
+      <!-- Card 180: what only the device knows - heap, free stack, firmware
+           slot, WiFi, why it last restarted. It comes from the panel's own
+           GET /api/v1/status, which firmware older than 0.4.0 does not serve;
+           then this block is not here at all and what is above it is exactly
+           what it always was. -->
+      <div class="device-block" id="device-block" hidden>
+        <h3>Device</h3>
+        <dl class="facts" id="device-facts"></dl>
+        <p class="hint" id="device-note" hidden></p>
+      </div>
+    </section>
+
+    <section id="sec-studio">
+      <h2>Studio</h2>
+      <dl class="facts" id="studio-facts"></dl>
+      <!-- Card 167: remembered settings this build could not use as written.
+           Not a fault - it is what the memory is for - so it is said plainly,
+           once, beside the state file it came out of. -->
+      <p class="hint" id="state-repairs" hidden></p>
+    </section>
+  </main>
+
+  <script type="module" src="/panel.js"></script>
+</body>
+</html>

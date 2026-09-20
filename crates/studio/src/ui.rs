@@ -1,14 +1,32 @@
 //! The front end, compiled into the binary.
 //!
-//! **One page** since card 170: the panel, what it is playing, and everything
-//! that changes either. `/dashboard` - card 106's separate app - is folded into
-//! it and now redirects, so an old bookmark still works.
+//! **Two screens** since card 198, one studio behind them:
 //!
-//! Three files, listed by name rather than globbed: there is no Node
+//! - `/` - the **Picture**: the canvas, what is playing, its parameters, how
+//!   the panel is modelled, and brightness. What changes or judges what the
+//!   picture looks like.
+//! - `/panel` - the **Panel**: which panel, discovery, the link, what the
+//!   device says about itself, identify / rename / reboot, and this studio's
+//!   own health.
+//!
+//! They are two documents rather than one document with two views: each screen
+//! then holds only its own markup, which is what makes "nothing about devices
+//! is on the Picture screen" a fact about the file rather than a CSS rule.
+//! Both are ordinary URLs, so reload and the back button are the browser's job
+//! and not ours. What they share is `style.css` and `common.js` - the socket,
+//! the poll, the formatting, and the one judgement of what the panel is doing -
+//! so a change made on one screen shows on the other, in another browser, at
+//! once: they are the same state stream.
+//!
+//! `/dashboard` - card 106's separate app, folded into the one page by card
+//! 170 - still redirects to `/`, so an old bookmark still works.
+//!
+//! The files are listed by name rather than globbed: there is no Node
 //! toolchain, no bundler and no build script in this crate, and `include_str!`
 //! is a build dependency rustc records for us, so editing `ui/style.css`
 //! rebuilds the server and nothing else has to know. `--ui-dir` reads the same
-//! names off disk instead, which is what live editing wants.
+//! names off disk instead, which is what live editing wants. The scripts are
+//! plain ES modules; the browser fetches `common.js` by itself.
 
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -17,12 +35,16 @@ use std::path::PathBuf;
 /// `(path, content type, bytes)`. Add a file here when the UI grows one.
 const EMBEDDED: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
-    ("main.js", "text/javascript; charset=utf-8", include_bytes!("../ui/main.js")),
+    ("panel.html", "text/html; charset=utf-8", include_bytes!("../ui/panel.html")),
+    ("common.js", "text/javascript; charset=utf-8", include_bytes!("../ui/common.js")),
+    ("picture.js", "text/javascript; charset=utf-8", include_bytes!("../ui/picture.js")),
+    ("panel.js", "text/javascript; charset=utf-8", include_bytes!("../ui/panel.js")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
 ];
 
-/// Tidy URLs. There is one page, so this is one entry.
-const PAGES: &[(&str, &str)] = &[("", "index.html")];
+/// Tidy URLs: one per screen. `/panel` and `/panel/` are the same screen, and
+/// neither is `/panel.js`, which is a file and keeps its extension.
+const PAGES: &[(&str, &str)] = &[("", "index.html"), ("panel", "panel.html")];
 
 /// Paths that used to be a page of their own and are now part of `/`.
 const FOLDED_IN: &[&str] = &["dashboard", "dashboard.html"];

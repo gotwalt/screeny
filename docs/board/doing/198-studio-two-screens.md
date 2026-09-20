@@ -107,3 +107,80 @@ so that each one can be pointed at when the screens are built:
    state and the heartbeat.
 6. **183**: a slider's stops are drawn from its own `<datalist>` at the thumb's geometry
    (`3.5px + frac * (100% - 7px)`), and they do not snap.
+
+### Step 1 - two documents, one shared module
+
+**Two documents, not one document with two views.** `index.html` is the Picture and
+`panel.html` is the Panel; `src/ui.rs` serves the second at the tidy URL `/panel`, beside
+`/`. The card left the choice open, and this is the one that makes the acceptance a fact
+about the files rather than a CSS rule: *"nothing about devices is on the Picture screen"*
+is true because that markup is in the other file, not because something is
+`display: none`. Reload, the back button and a bookmark are then the browser's own job and
+not a `popstate` handler of ours, and a screen costs only its own markup. The state stream
+is untouched, so a change made on one screen shows on the other, in another browser, at
+once - both are the same `/api/v1/ws` and the same `/api/v1/status`.
+
+**What they share is a module.** `ui/main.js` (1245 lines) became three files:
+
+| file | what is in it |
+|---|---|
+| `common.js` | the socket, the status poll, the notice line, the formatting, `drawStops`/`bindSlider`/`bindRadios`/`bindSwitch`, the brightness control, and the one judgement of what the panel is doing (`panelState`, `attention`) |
+| `picture.js` | the WebGL renderer, the frame pump, pieces, parameters, seed, time, panel model, limiter, view, the meters, the status chip |
+| `panel.js` | which panel, discovery, the link facts, the device block, identify / rename / reboot, the chooser, and the studio's own health |
+
+Plain ES modules (`<script type="module">`, one relative `import`): no Node, no bundler,
+no build step - the browser fetches `common.js` itself, and `ui.rs` lists the five files
+as it always has. The rule `common.js` lives by, and a test now enforces: **it reaches for
+no element by id except `#notice`, which both screens have.** Everything else is handed
+the element it works on, so a shared function cannot half-work on the screen that has not
+got it.
+
+**The id cross-check is per pair now** (`every_element_each_screen_reaches_for_exists`):
+`picture.js` against `index.html`, `panel.js` against `panel.html`, and `common.js`
+against **both**.
+
+Also in this step, and each one a deliberate choice rather than a move:
+
+- **The status chip** (`#ro-panel`) is the Picture screen's one panel-shaped thing and the
+  link to the other screen (`a.pill`, a chevron from `::after` because the text is
+  rewritten on every heartbeat). It reads `NAME · live · 30 fps`, `NAME · output off`,
+  `NAME · away`, `NAME · stopped`, or `No panel`. When the panel needs attention it takes
+  the **fault tone and says why** - `NAME · live · out of stack`. `attention()` in
+  `common.js` picks one phrase, worst first, and every flag it reads is one the *server*
+  decided (`store_errors`, `stack_fault`, `low_heap`, `odd_reset`, `bad_fw_state`,
+  `last_error`, a player that gave up). Only the fault-level ones: a margin going
+  (`stack_warn`) is amber on the Panel screen and is not a reason to colour the other
+  screen. This is the one thing a second screen could have cost - trouble hiding behind a
+  tab - so it is the chip's whole reason to exist.
+- **Brightness** is on both screens and is **one binding** (`bindBrightness`), so the
+  device's cap, card 136's floor of 6 and "what the device says it applied" cannot drift
+  apart. On the Picture screen it carries a static line the old page never had: *"The
+  panel's own brightness, which is why the picture above does not change with it."* -
+  true, and previously something you had to know. With no panel attached the note now says
+  so instead of staying on the last panel's wording.
+- **The Panel screen asks for no frames** (`noFrames`, `fps: 0`): it has no canvas, so
+  every frame sent to it would be received and thrown away. That is card 120's rule for a
+  hidden tab, applied to a screen that draws none. It still gets the state messages and
+  the half-second heartbeat, which is what it is made of.
+- **The studio's own health** is on the Panel screen (`#sec-studio`), which
+  `/api/v1/status` has always carried and no page ever showed: `ok` and, when it is not,
+  the problems in words - the same judgement `/healthz` makes, so a person can see *why* a
+  container is unhealthy without curl - the version and uptime, the adapter or why there
+  is none, the state file and its writes, what the browsers are costing, and card 167's
+  repairs (`#state-repairs`, renamed from `#panel-repairs`: it is the studio's state file,
+  not the panel's).
+- **The socket's URL is root-absolute** (`new URL('/api/v1/ws', location.href)`), and so
+  are both pages' `href`/`src`. `/panel` and `/panel/` are the same screen, and a relative
+  URL would have aimed the second one's socket at `/panel/api/v1/ws`.
+- **The wide-width bench is scoped to the Picture screen** (`body.picture-page`). It used
+  to be `html, body { height: 100%; overflow: hidden }` at every page above 1100 px, which
+  would have stopped the Panel screen scrolling. The Panel screen is an ordinary scrolling
+  document at every width, and splits into two columns - the panel's controls left, what
+  it and the studio say about themselves right - above the same 1100 px, held to a
+  readable measure rather than stretched across a bench.
+
+Rust touched: `src/ui.rs` (the file list, the second tidy URL, the doc comment),
+`src/page.rs` (two doc comments naming `ui/main.js`), `tests/ui.rs` and one line of
+`tests/api.rs` that named the old script. No route, no state schema, no socket message.
+
+`cargo test -p screeny-studio --test ui`: **20 passed**.

@@ -7,7 +7,7 @@
 //! the browser and the server share, and nothing that runs.
 //!
 //! The frame packet is unchanged from card 105, because the browser's
-//! `ui/main.js` reads it byte by byte: a fixed [`HEADER`] of counters and then
+//! `ui/picture.js` reads it byte by byte: a fixed [`HEADER`] of counters and then
 //! `N` sRGB triples, which are the **decoded datagram** - what the panel will
 //! actually put up, not a copy of the framebuffer.
 
@@ -25,7 +25,7 @@ use tokio::sync::watch;
 // range, with detents at the rates worth reaching for, and `set_playback`
 // clamps instead of ignoring.
 
-/// Frame packet header size; see [`pack`] and `ui/main.js`.
+/// Frame packet header size; see [`pack`] and `ui/picture.js`.
 pub const HEADER: usize = 52;
 /// Bytes in one frame packet: the header and then `N` sRGB triples.
 pub const PACKET_BYTES: usize = HEADER + N * 3;
