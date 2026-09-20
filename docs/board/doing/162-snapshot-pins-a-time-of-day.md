@@ -42,3 +42,68 @@ binary for 21:12.
 
 `screeny-art snapshot clocks-numerals --time 21:12 --out x.png` draws 21:12, twice in a
 row, at any hour of the day, with the hands holding the time rather than mid-dance.
+
+## Log
+
+**Where the time came from.** `Ctx::now` already was the only clock a piece may read
+(`crates/art/src/piece.rs`), and only the two clock pieces read it:
+`pieces/clocks/mod.rs:370` (`clock = ctx.now + offset * 60`) and
+`pieces/clocks/dials.rs:194` (the same line). Nothing else in `crates/art` touches
+`SystemTime`, `chrono` or `Local`; `overland`'s "hour" is a plain parameter, not a wall
+clock. So the missing piece was never in the pieces - it was that every runner passed
+`local_now()` and there was no way to pass anything else.
+
+**What was built.** `piece::Clock`, a value the runner carries rather than a global:
+`Live` (read the machine) or `Pinned(seconds)` (pretend it was that time of day at
+engine time zero and run on with engine time). One method, `now(t)`. `Clock::parse`
+takes `HH:MM` or `HH:MM:SS`, seconds may be fractional. The studio can hold one later
+without anything here changing.
+
+**The day is day zero, not today.** The first version anchored the pinned time to
+today's midnight, which is wrong for the promise in the goal: the numerals piece seeds
+each minute's choreography from the *absolute* minute number
+(`self.seed ^ (next as u64).wrapping_mul(0x51ed_270b)`, and `dance_for(next, ..)`), so
+"21:12 today" would choose a different dance tomorrow. Pinning to day zero costs
+nothing - no piece reads the date - and makes the command mean one thing for ever.
+
+**`snapshot::take`.** The snapshot loop moved out of the binary into
+`crates/art/src/snapshot.rs` so the tests render through the code the command runs
+rather than a copy of it. The arithmetic is unchanged, `began + (t - first)` literally,
+with only `began` now coming from the clock; for `Clock::Live` that is `local_now()`, as
+before.
+
+**Pixel-exactness, measured.** Built `screeny-art` from the pre-change commit (6ea8a3c)
+into a separate target dir and rendered nine snapshots - plasma, metaballs, testcard at
+`--at 3/6/20`, `--seed 7`, full warmup - with both binaries. All nine SHA-256s identical
+(e.g. plasma-6 `01a47dbed917f57b...`, metaballs-20 `a29dd971cc0facc6...`, testcard-3
+`2766a2c660b4733e...`). GPU pieces were out of that build (`--no-default-features`) and
+do not read the clock.
+
+**The one obvious command.** `--at` defaulting to 5 s caught the numerals piece
+mid-dance, so the card's acceptance would have failed as literally written. `--time` now
+also moves `--at` to 20 s (and `--warmup` to the whole run; either given explicitly still
+wins). 20 s is measured: over 60 seeds the opening dance onto the born-on minute is
+8.9-15.4 s, over all thirteen named choreographies 9.1-15.0 s, and the next dance does
+not set off until ~45 s. So:
+
+| picture | command | measured |
+|---|---|---|
+| numerals settled on 21:12 | `--time 21:12` | `e02114173eb0819c...` for all 60 seeds, all 13 dances, and for `--at 40 --set still=60` |
+| numerals 2 s from landing on 21:12 | `--time 21:11:20 --at 38 --seed 7` | `4d4551de149b258e...`, twice |
+| dials telling 10:10 | `--time 10:09:50 --at 15` | `f1d9b5f039ff167a...` for seeds 1/7/42/999, and twice minutes apart |
+
+Two runs of the acceptance command, with different random seeds and four seconds apart
+on the wall clock, gave the same PNG as a run twenty minutes earlier. Checked the
+pictures by eye too: the settled one reads `21:12`, the dials at 02:59:50+15 s have every
+minute hand at 12 and every hour hand at 3.
+
+**Tests.** `crates/art/tests/pinned_time.rs`, four, all through `snapshot::take`: the
+same pinned shot rendered 1.1 s apart in real time is byte-identical for both clock
+pieces; two different pinned times differ, so the flag really reaches the piece; the
+acceptance command's shot is one picture over four seeds and all thirteen dances; and a
+piece that never reads `Ctx::now` does not notice `--time`. Plus three unit tests for
+`Clock::parse` in `piece.rs`, including that a pinned time is a number under 86400.
+
+**Out of scope, left alone.** The pieces' `offset` parameter is untouched. Nothing
+outside `crates/art` was changed: `crates/studio/src/player.rs` still builds its own
+`Ctx { now: local_now(), .. }` and compiles unchanged, because `Ctx` gained no field.
