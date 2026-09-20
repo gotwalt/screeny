@@ -1,9 +1,9 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status: decisions recorded, design pending research (cards 200, 201, 202).** This
-file is the source of truth for the device-web track (cards 200-249, coordinated by
-the `firmware` Claude session). The sections marked *pending* are filled in from
-`docs/research/006`, `007` and `008` when those cards land.
+**Status (2026-09-20): research done (cards 200, 201, 202), the partition table is on
+the device (210), the first build cards are in flight (211, 220).** This file is the
+source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
+Claude session): decisions, what the research settled, and the build order at the end.
 
 ## What the owner asked for (2026-09-20)
 
@@ -87,16 +87,69 @@ and give it back with `{"on":true,"to":"screeny-4a00a4"}`.
 - Fallback (three quick power cycles) is parked unless the probe says the button is
   unusable.
 
-### HTTP, soft-AP, portal (card 201) - pending
+### HTTP, soft-AP, portal (card 201, `docs/research/007-device-web-and-portal.md`)
+
+- **HTTP server: `picoserve 0.20.0`** (matches our embassy-net/embassy-time/heapless
+  pins; streaming request bodies with a per-request timeout, which the firmware upload
+  needs; router, forms, JSON). ~78 KB flash, ~7.6 KB `.bss`.
+- **Radio mode: APSTA** (`Config::AccessPointStation`, second `Interface::access_point()`
+  with its own `embassy-net` stack at 192.168.4.1/24). Chosen on function: AP-only mode
+  cannot scan, and the settings page wants a network list. Single PHY: the AP follows
+  the station's channel, so the phone may briefly lose the AP when a trial join starts.
+- **DHCP + DNS catch-all: `edge-dhcp 0.8` + `edge-captive 0.8`** (same family as our
+  `edge-mdns`; DHCP runs over a plain UDP socket and emits RFC 8910 option 114).
+- **State machine**: BOOT -> JOINING (3 tries, ~45 s) -> ONLINE, else PORTAL (APSTA,
+  QR on the panel, DHCP + DNS + HTTP on 192.168.4.1). Posted credentials go to TRIAL:
+  nothing committed, the AP stays up, and a full-page reload reports "connected, I am
+  at 192.168.x.y" or "wrong password / network not found"; commit and drop the AP only
+  on success. PORTAL is never terminal: every 10 minutes, if no phone is associated,
+  retry the stored credentials (the 3 a.m. router reboot heals itself). Telemetry
+  state is `PROVISIONING` in PORTAL and TRIAL.
+- **Captive-portal rules**: DNS answers everything with 192.168.4.1; unknown hosts get
+  a 302 **with a non-empty body** (Android treats `Content-Length <= 4` as failure;
+  iOS needs content). The iOS mini-browser only re-probes on a full-page navigation, so
+  the provisioning path uses a plain form post and `setTimeout(location.href=...)`, no
+  `fetch()` polling. File inputs do not work in captive mini-browsers: **firmware
+  upload is on the LAN page only.**
+- **Portal screen**: QR version 2-L, 31x31 block including the 3-pixel quiet zone,
+  leaving 32 columns = eight `FONT_4X6` characters per line. `qrcodegen-no-heap 1.8.1`,
+  ~10.5 KB flash, no allocator. Mock-ups: `docs/research/img/201-portal-*.png`.
+  With the measured `WIFI:T:nopass;S:...;;` form the SSID is at most 14 characters, and
+  `screeny-4a00a4` is exactly 14: **the AP name is always `screeny-<id>`**, never the
+  friendly name. (A bench experiment with the short form `WIFI:S:...;;` could raise
+  that to 23.)
+- **The RAM gate**: with everything linked, core 0's `.stack` falls from 37.5 KB to
+  13.7 KB while `main` puts two 12 KB `FrameBuffer` temporaries on it, and APSTA's heap
+  use is unmeasured (~45 of 96 KB is used in station mode). Card 220 fixes the first
+  and measures the second before anything else is built.
+
+Orchestrator's defaults for card 201's open questions (the owner can overrule): the
+portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
+**does answer while a sender is streaming**, and a bench card proves it costs no frame;
+the device advertises **`_http._tcp`** in mDNS; JSON shapes for the HTTP API live in
+`crates/proto` behind a feature so the Studio and the sim share them (notice to the
+software session before that change).
 
 ## Build order
 
 | card | what | hardware |
 |---|---|---|
-| 210 | partition table + `tools/fw-run.sh` flags; first flash of the new layout | yes (orchestrator) |
+| 210 | partition table + `tools/fw-run.sh` flags - **done**, on the device, conformance 60/0/4 | yes (orchestrator) |
 | 211 | `crates/settings`, host-tested against the real map (in flight) | no |
-| 212 | firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 220 | framebuffers off core 0's stack; APSTA heap measured on the device (in flight) - **gates everything below** | yes |
 | 203 | bench: confirm GPIO15 with the probe, owner pressing; set `BUTTON_GPIO` | yes (orchestrator + owner) |
-| 22x | HTTP status + settings, soft-AP + portal + QR screen, sim support (081) - from card 201 | mixed |
-| 23x | button task, hold ladder + countdown, wipe -> portal | yes |
-| 24x | OTA: stage + validate, activate/confirm/revert, "updating" screen, the interrupt-window measurement, rollback bootloader | yes |
+| 212 | firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 221 | `crates/provision`: the join/portal state machine as a pure function, the `WIFI:` URI builder, the portal-screen renderer (QR + text); host-tested | no |
+| 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
+| 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
+| 224 | `crates/sim` serves the same HTTP API and models the WiFi states (delivers 081) | no |
+| 225 | spec: strike 8.1, rewrite 8.3 to end at the portal, add the HTTP API section (shared surface: notice to the software session) | no |
+| 230 | button task: debounce, short press = identify screen | yes |
+| 231 | hold ladder with the on-panel countdown; 5 s wipes WiFi -> portal; held-at-boot | yes |
+| 240 | OTA staging over HTTP into the inactive slot, the five-check validator, per-sector timing (the esp-radio interrupt-window measurement) | yes |
+| 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
+| 242 | rollback-capable bootloader (needs the owner's decision) | yes |
+| 243 | panic breadcrumb in RTC memory, shown on the status page | yes |
+
+Firmware cards touch the same files and share one device, so they run one at a time;
+the `no` rows (211, 221, 224, 225) run in parallel with them.
