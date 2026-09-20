@@ -350,3 +350,16 @@ and `--cap-probe` left off, because it would drive the panel to the firmware's
 brightness cap, which may be brighter than what the suite found. The last two
 lines say what it restored and the tally. `--restore-idle N` if the panel
 should be left in an idle mode other than 0 `STATUS`.
+
+### Orchestrator: merged, and run against the real device (2026-09-19)
+
+Merged to `main` cleanly. Root `cargo test --release --no-fail-fast`: 299 passed, 0 failed
+(the in-process `tests/conformance.rs` stays on: 36 s is a fair price for a suite that
+cannot rot).
+
+`screeny-probe --addr 192.168.7.221 conformance --slow` against the firmware built from
+`main` (0.2.0): **60 passed, 0 failed, 4 skipped**, exit 0. Skips: three "loopback only: the
+radio fragments it away" (card 132) and the brightness-cap rule that needs `--cap-probe`
+(deliberately not run: the panel is on laptop USB). Last line: `restored: brightness 96
+(found 96), idle mode 0, lock released, state IDLE`. So the firmware - the third
+implementation of the spec - agrees with the simulator on every MUST the wire can express.

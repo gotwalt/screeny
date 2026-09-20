@@ -63,6 +63,14 @@ measurement are deferred.
   `clocks-numerals`, `overland` and `metaballs` at 30 fps, 0 drops, indexed frames 100% exact, device
   error counters all 0. Follow-ups: 110 (macOS LAN permission for the new binaries), 111
   (`Link` from a `Device`), 112 (is `sender` default-on)
+- [x] 105 server-first Studio: axum + embedded UI, `/api/v1` + a newest-wins preview WebSocket,
+  Tauri removed (292 -> 160 crates), two browsers stay in sync, a stalled one cannot slow the panel;
+  streams to the real panel over the HTTP API and releases it on SIGTERM. Follow-ups 120, 121
+- [x] 111 `Link::attach` (a resolved `Device`), 112 `sender` default-on in `screeny-art`
+- [x] 066 the simulator dims by output-enable window, like the device (found: 25 real brightness
+  steps, 1..=5 is black - card 136, needs the owner)
+- [x] 080 `screeny-probe conformance`: 64 wire-level rules, same suite against sim and device;
+  firmware 0.2.0: 60 passed, 0 failed, 4 skipped by design. Follow-ups 130-133
 - 102 reconcile art's panel model and colour rules with the measured device - art session
 - 104 piece runner / scheduler (design with the owner) - art session
 

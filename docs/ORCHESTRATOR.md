@@ -16,8 +16,8 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
 - One cargo workspace, ten crates under `crates/`: `proto` (no_std wire + decoders),
   `receiver` (no_std receive state machine, shared by sim and firmware), `panel`,
   `encode`, `screeny` (sender lib + CLI; `Link` is the embedding API), `sim`, `probe`,
-  `demos`, `art` (`screeny-art`), `studio` (`screeny-studio`, still Tauri).
-  `firmware/` and `lab/` are separate cargo projects. 279 tests, `cargo test` at root.
+  `demos`, `art` (`screeny-art`), `studio` (`screeny-studio`, an axum server + browser UI).
+  `firmware/` and `lab/` are separate cargo projects. 299 tests, `cargo test` at root.
 - The device runs the firmware built from `main` and shows its status screen when idle.
 - History was rewritten once (credential scrub). Nothing has been pushed; `origin` is an
   empty GitHub repo the owner intends to make public eventually. **Do not push until
@@ -32,21 +32,20 @@ the art system to the real panel through `screeny::Link`. The `sender` feature i
 default-on since card 112, so a plain build has `play`; `--no-default-features` is the
 network-free build.
 
-In flight since 2026-09-19 evening, four Opus workers in parallel: 105 (server-first
-Studio; follow-up cards 120-124), 111+112 on one branch (`Link` from a `Device`;
-`sender` default-on - the orchestrator's decision; 125-129), 080 (conformance suite
-grown from `screeny-probe`; 130-134), 066 (sim brightness model; 135-139). File
-ownership was split in the prompts; expect small `Cargo.lock`/`Cargo.toml` conflicts.
-After each merges: 105 gets a real-panel run from a browser, 080 gets run against the
-device. Held back: 093 (timing test; wants a quiet machine), 092 (touches
-`crates/screeny`, after 111), hardware cards 062/065/068/110 (one at a time, and the
-owner is using the panel).
+Also done 2026-09-19, by four parallel Opus workers: **105** (the Studio is an axum
+server, `cargo run --release -p screeny-studio` -> http://127.0.0.1:8787/, Tauri gone, the
+whole workspace is default members; streams to the real panel over the HTTP API and
+releases it on SIGTERM), **111** (`Link::attach` for a resolved `Device`), **112**, **066**
+(the sim dims by output-enable window like the device), **080** (the 64-rule conformance
+suite; the firmware passes 60, 4 skipped by design). Not yet verified by anyone but the
+owner: the Studio page rendered in a browser (card 121). Follow-up cards: 120, 121, 125,
+130-133, 135, 136 (**136 needs the owner**: brightness has 25 real steps and 1..=5 is
+black while `applied` echoes the value).
 
-**Next up, in order:** 105 (server-first Studio, Tauri
-removed) -> 106 (players, devices, state; built to be forgotten) -> 107
+**Next up, in order:** 106 (players, devices, state; built to be forgotten) -> 107
 (docker-compose on the Linux box) -> 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
-in `backlog/` (062, 065-068, 080, 082, 092, 093) can run alongside. `parked/` is only
+in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
 on the owner's say-so: WiFi provisioning (will be a captive portal + HTTP settings
 page), camera-based measurement (dropped: camera accuracy unknown, the owner judges by
 eye), DDP proxy, control-channel auth, multi-device.
