@@ -99,6 +99,17 @@ them") - he has said no sandbox, ask only if he raises it. The workbench reboot 
 is the owner's to run (`ssh workbench.local sudo systemctl reboot`): this session's
 permission guard refuses it, and that is fine.
 
+**Waiting on the owner (asked 2026-09-20 morning, not yet answered):** card 104's shape
+(default offered: a playlist of pieces with their remembered settings, rotating every N
+minutes with no near-repeats, time-of-day rules on top, quiet hours at night, ~1 s cross-fade
+instead of today's cut); which `rest` treatment he likes on the panel (default `hatched,
+quiet`); keep or delete the Reconnects row; should the unasked-for reboot count age out or
+notify (default no); is 30 fps right for the browser preview (default yes); a glance at the
+page in a *visible* tab after card 120 (nobody has seen the drawn picture since); the
+workbench reboot for card 107 (his to run). Check that the firmware session handed the panel
+back after borrowing it (`player.on` true in `/api/v1/status`) - `on:false` now survives a
+restart.
+
 **Next up, in order:** 104 (scheduler), 102 (art's panel model vs the
 measured device), porting `crates/demos` into `crates/art`. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
