@@ -4,8 +4,8 @@ title: Research - flash layout, a settings store, and a firmware update that can
 type: research
 hardware: no
 depends: [008]
-owner:
-branch:
+owner: worker-200
+branch: card/200-research-flash-store-ota
 ---
 
 ## Goal
