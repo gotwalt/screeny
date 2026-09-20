@@ -4,8 +4,8 @@ title: The dance and mood names exist twice, kept in step by a test
 type: build
 hardware: no
 depends: [163]
-owner:
-branch:
+owner: worker-120
+branch: card/120-183-182-studio-small
 ---
 
 ## Goal

@@ -4,8 +4,8 @@ title: The rate slider's useful stops are declared but not drawn
 type: build
 hardware: no
 depends: [172]
-owner:
-branch:
+owner: worker-120
+branch: card/120-183-182-studio-small
 ---
 
 ## Goal

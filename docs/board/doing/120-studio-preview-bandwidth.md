@@ -4,8 +4,8 @@ title: Preview bandwidth - pace the WebSocket to what a browser can use
 type: build
 hardware: no
 depends: [105]
-owner:
-branch:
+owner: worker-120
+branch: card/120-183-182-studio-small
 ---
 
 ## Goal
