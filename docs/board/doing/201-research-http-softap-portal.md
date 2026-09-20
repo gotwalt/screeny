@@ -185,3 +185,27 @@ claim about a crate's behaviour cites the source line that shows it.
     `tcp = ["embassy-net/tcp"]` (its `Cargo.toml`). `firmware/Cargo.toml:66` takes
     it with default features, so smoltcp's TCP is *already compiled into the
     current image*. The flash cost of "adding TCP" is therefore mostly already paid.
+- Built the compile-only spike (`firmware/src/web_spike*`, features `spike-ap`,
+  `spike-http`, `spike-portal`, `spike-qr`, umbrella `device-web-spike`). It
+  builds clean on the `esp` toolchain, release, LTO fat. **Never flashed.**
+  Measured with `xtensa-esp32-elf-size -A` and `espflash save-image`:
+
+  | config | .text | .rodata | .data | .bss | .stack (what is left) |
+  |---|---|---|---|---|---|
+  | baseline (main) | 531205 | 73064 | 31492 | 127040 | **37536** |
+  | +AP stack | 533117 | 73264 | 31492 | 131008 | 33568 |
+  | +AP +picoserve | 602917 | 82872 | 31892 | 138640 | 25536 |
+  | +AP +dhcp/dns | 549389 | 74952 | 31708 | 136424 | 27928 |
+  | +QR only | 541693 | 75056 | 31556 | 133240 | 31272 |
+  | everything | 629269 | 86408 | 32172 | 150200 | **13688** |
+
+  Flash image: 743,408 -> 855,488 bytes (+112,080, +15%). 20.7% of a 4 MB slot.
+- **The surprise, and the headline risk**: `.stack` is not a constant, it is
+  whatever is left between `_bss_end` and 0x3ffe0000. The full spike takes core
+  0's main stack from 36.7 KB down to **13.4 KB**, and `main` builds two 12 KB
+  `FrameBuffer` temporaries on that stack. This build would very likely die on
+  the stack guard at boot. The budget, not the API, is the hard part of this
+  card - see the doc's RAM table for what has to move to the heap.
+- The 6 KB `Frame` in the QR column is spike-only scaffolding (the real portal
+  screen draws into the existing triple buffer), so the honest steady-state
+  `.bss` cost is ~17 KB, not 23 KB.

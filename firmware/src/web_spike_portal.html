@@ -1,0 +1,37 @@
+<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>screeny</title><style>
+:root{color-scheme:dark light}
+body{font:16px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:16px;max-width:34rem}
+h1{font-size:1.25rem;margin:0 0 .5rem}
+section{border:1px solid #8884;border-radius:8px;padding:12px;margin:0 0 12px}
+label{display:block;margin:.5rem 0 .15rem;font-size:.85rem;opacity:.8}
+input,select,button{font:inherit;width:100%;box-sizing:border-box;padding:.5rem;border-radius:6px;border:1px solid #8886}
+button{margin-top:.75rem;font-weight:600}
+dl{display:grid;grid-template-columns:auto 1fr;gap:.15rem .75rem;margin:0;font-size:.9rem}
+dt{opacity:.7}dd{margin:0;font-variant-numeric:tabular-nums}
+progress{width:100%}
+</style>
+<h1>screeny</h1>
+<section id=status><dl>
+<dt>state<dd id=s-state>-<dt>address<dd id=s-ip>-<dt>signal<dd id=s-rssi>-
+<dt>uptime<dd id=s-up>-<dt>heap<dd id=s-heap>-<dt>firmware<dd id=s-fw>-
+</dl></section>
+<section><h2>network</h2>
+<form id=wifi method=post action=/api/v1/wifi>
+<label for=ssid>network</label><select id=ssid name=ssid></select>
+<label for=psk>password</label><input id=psk name=psk type=password autocomplete=off>
+<button>join</button></form>
+<p id=wifi-msg></p></section>
+<section><h2>firmware</h2>
+<input id=fw type=file accept=.bin><progress id=fw-p value=0 max=100 hidden></progress>
+<button id=fw-go>upload</button></section>
+<section><button id=reboot>reboot</button></section>
+<script>
+const $=s=>document.querySelector(s);
+async function poll(){try{const r=await fetch('/api/v1/status');const j=await r.json();
+$('#s-fw').textContent=j.fw;$('#s-up').textContent=(j.uptime_ms/1000|0)+'s';
+$('#s-heap').textContent=j.heap_used+'/'+j.heap_size;$('#s-rssi').textContent=j.rssi_dbm+' dBm';
+$('#s-state').textContent=['disconnected','connecting','connected','failed'][j.wifi_state]||'?';
+}catch(e){}}
+poll();setInterval(poll,2000);
+</script>
+</html>
