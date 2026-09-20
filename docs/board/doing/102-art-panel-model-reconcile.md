@@ -79,3 +79,72 @@ end, bring the colour-budget advice and meters in line with the real encoder
 acceptance is tests pinned against `crates/panel` plus the test card's dark ramp.
 Pieces' own look is not to be changed on my taste - the `overland` L 0.3 cut and
 the clocks' L 0.32 ramp floor go under "Open with the owner".
+
+### Step 1 - `crates/panel`: `DEVICE`, and the dark end pinned to the firmware
+
+Read `firmware/src/gamma.rs` and `firmware/src/display.rs` (read only). What the
+device does: the gamma table is the sRGB EOTF scaled to `63 * 16` (`FRAC_BITS = 4`
+fractional bits below a duty level), and `display::quantise_dither` bumps the level
+when the remainder beats the phase threshold, with `phase` advancing once per panel
+refresh in `main.rs`'s display task and a Bayer 4x4 offset per pixel so the whole
+panel does not beat in unison. Over the **full 16-phase cycle** - 16 refreshes,
+about 104 ms at the measured 154 Hz, so three 30 fps frames - a held colour averages
+exactly `SRGB_TO_Q[v] / 16` levels out of 63.
+
+So the model is `Panel::dithered(6, 16)`, added as `screeny_panel::DEVICE` with
+`DITHER_PHASES = 16`. Measured (new tests in `crates/panel/src/model.rs`):
+
+| | `NOMINAL` | `TEMPORAL` | `DEVICE` |
+|---|---|---|---|
+| duty steps | 63 | 315 | 1008 |
+| distinct levels from the 256 sRGB codes | 64 | 195 | 237 |
+| codes that come out black | 22 | 6 | 2 |
+| darkest lit code | 22 | 6 | 2 |
+
+`device_is_the_firmwares_gamma_table` checks all 256 entries against a copy of
+`SRGB_TO_Q` (a fixture, not a second implementation - `firmware/` is a separate
+cargo project on the esp toolchain and cannot be depended on). It reproduces the
+firmware's own comment exactly: "only sRGB 0 and 1 emit nothing". The brief's
+"darkest visible about sRGB 6" is `TEMPORAL`'s first lit code, which is the right
+number for a colour on screen for one frame.
+
+`TEMPORAL` is **unchanged** - the encoder scores against it and that is correct:
+scoring a codec is a per-frame question and a single frame only gets ~5 of the 16
+phases. Its doc now says which question it answers. `DIM`'s "a dim room is half the
+levels" is corrected to card 066's answer.
+
+Also measured: the collapse is confined to codes 0..=38 (19 codes move, at most four
+to a level). Above 38 the device shows back exactly the code it was sent.
+
+### Step 2 - `crates/art`: quantise and preview against the device
+
+`crates/art/src/panel.rs` is now a reading of `screeny_panel` rather than a second
+model. `Settings::levels: u32` becomes `Settings::panel: Panel`, one of `dithered`
+(the device) or `bit_planes` (64 levels, no temporal dither - the comparison the
+brief asks for). `screeny-art --levels` becomes `--panel dithered|bit-planes`.
+
+Two **deliberate pixel changes**, both in the dark end:
+
+1. A linear frame is quantised to 1008 duty steps, not 63. The test card's dark
+   ramp - row 4, sRGB 0..63 stretched across the 64 columns - goes from **4
+   distinct levels to 45**. That is the card's acceptance in one number: the ramp
+   was four bands and three-quarters black, and it is now a ramp.
+2. The dither bias is one **duty step**, not one of 64 levels. Above sRGB 38 a duty
+   step is a tenth of an 8-bit code, so ordered dither now rounds away to nothing
+   in the midtones - no texture the panel cannot show, and nothing spent on the wire
+   compressing noise. Below 38, where up to four codes share a level, a duty step is
+   bigger than a code and the dither does the whole job. Measured in
+   `dither_lands_only_where_the_panel_is_coarser_than_the_codes`: full-amplitude
+   dither moves nothing at sRGB 200 and a whole duty step at sRGB 10.
+
+Hand-over fidelity, measured over 10001 linear values: quantise-then-encode-as-a-code
+costs at most **4 duty steps of 1008** (0.4% of full light), at the top of the range
+where the 8-bit codes are coarser than the panel.
+
+The preview gains the step it was missing: `Panel::show` applies the device's dark-end
+collapse, so the studio stops flattering the darks by up to three codes.
+`crates/art/tests/sender.rs` now compares the studio's preview with the simulator's
+decoded frame *through the same model* and still passes pixel-for-pixel, indexed and
+continuous. All 55 `crates/art` lib tests pass unchanged - including the clocks'
+"every treatment keeps the palette exact" and `overland`'s "no colour lives in the
+shadows", so the finer quantisation splits no palette and merges none.
