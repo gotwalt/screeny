@@ -89,3 +89,14 @@ what it says, and `{"on":false}` / `{"on":true}` still work unchanged.
   `--no-discover` and no state, in Chrome. The section reads `PANEL [NO PANEL] / NO
   PANEL YET / Nothing is being sent… / Not looking for panels… / (•==) Drive a panel as
   soon as one is found`. Nothing in it claims anything is reaching a panel.
+
+### Orchestrator: merged, deployed, verified on the live service (2026-09-20)
+
+Merged to `main` cleanly. Root `cargo test --release --no-fail-fast`: 685 passed, 0 failed; clippy silent.
+Deployed to workbench (state backed up first). Nine seconds after the deploy the Studio had read the real
+panel: firmware 0.4.3, slot `ota_0` `valid`, reset `power_on`, heap 45612/90112, stack_free 20272,
+`wifi_state connected`, `store_errors 0`, every warning flag false, `http: {absent: false, reads: 1}`;
+one log line (`serves its own status API: firmware 0.4.3, slot ota_0`). Checked on the live container,
+without printing it: the SSID is in `/api/v1/status` and in neither the container log nor
+`/data/state.json` (0 matches each). The orchestrator no longer polls the panel's port 80 by hand - the
+Studio is the one reader.

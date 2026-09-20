@@ -242,3 +242,14 @@ with firmware 0.2.0 it looks exactly as it does today.
   "serves its own status API" - which is card 106's rule read properly ("logged once per
   device rather than per attempt"). Two lines a day for a panel that is switched off at
   night, each of which is worth reading, and still nothing per attempt.
+
+### Orchestrator: merged, deployed, verified on the live service (2026-09-20)
+
+Merged to `main` cleanly. Root `cargo test --release --no-fail-fast`: 685 passed, 0 failed; clippy silent.
+Deployed to workbench (state backed up first). Nine seconds after the deploy the Studio had read the real
+panel: firmware 0.4.3, slot `ota_0` `valid`, reset `power_on`, heap 45612/90112, stack_free 20272,
+`wifi_state connected`, `store_errors 0`, every warning flag false, `http: {absent: false, reads: 1}`;
+one log line (`serves its own status API: firmware 0.4.3, slot ota_0`). Checked on the live container,
+without printing it: the SSID is in `/api/v1/status` and in neither the container log nor
+`/data/state.json` (0 matches each). The orchestrator no longer polls the panel's port 80 by hand - the
+Studio is the one reader.
