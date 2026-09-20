@@ -132,3 +132,52 @@ Three decisions worth recording.
 
 `Link` needed nothing, as recorded above: it is push-only and
 `Link::send(Pixels::Indexed { .. })` is already the exact path.
+
+### The demos, and what the CLI now does
+
+`crates/demos` could not implement the trait even if it wanted to: `screeny`
+depends on `screeny-demos`, so the arrow cannot point back. The bridge is
+`PieceSource` in `crates/screeny/src/main.rs`, which now implements
+`IndexedSource` instead of `FrameSource` and serves **both** pieces:
+
+```rust
+fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>> {
+    if self.piece.render_indexed(t.elapsed, &mut self.idx) {
+        Some(Pixels::indexed(&self.idx.palette, &self.idx.indices[..]))
+    } else {
+        self.piece.render(t.elapsed, &mut self.rgb);
+        Some(Pixels::rgb(self.rgb.as_bytes()))
+    }
+}
+```
+
+`Piece::render_indexed` already returned "did I author a palette?" (card 010 /
+016) and `WordClock` already overrode it; nothing in `crates/demos` needed to
+change, which is why that crate's diff is empty. The clock takes the first
+branch and the fractal the second, so no probe and no capability flag was
+needed: the bool the trait already returns *is* the capability, answered per
+frame.
+
+Two things fell out of that:
+
+- The 6144-byte `copy_from_slice` per frame is gone for both pieces - a piece's
+  own buffer is lent straight to the encoder. That is **card 067's prize**,
+  reached from the other end; 067's actual deliverable (`Piece::render` taking
+  a borrowed frame) is still undone, and I have not touched its card.
+- `screeny fractal` now goes through `Sender::send` (RGB arm) rather than
+  `Sender::send_frame`. Same encoder, same accounting - `deliver` and
+  `send_frame` both `record_encode` then `transmit` - plus one `Pixels::check`,
+  which is a length comparison.
+
+`stream_source` grew a sibling, `stream_indexed`, both over a private `Src`
+enum, so the resolve/connect/stats-printing block is written once.
+
+The summary line now says the exactness claim out loud when a stream used the
+indexed door:
+
+```
+20 indexed frames exact on the wire
+```
+
+and, if any frame had to be requantised, how many and how big its palette was.
+That is the line to read after `screeny clock` against the real panel.

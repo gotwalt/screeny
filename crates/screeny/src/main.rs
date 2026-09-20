@@ -19,7 +19,10 @@ use screeny::frame::{FrameTime, RawReader};
 use screeny::panel::TEMPORAL;
 use screeny::proto::control::state;
 use screeny::proto::{dec, NBYTES};
-use screeny::{codec_name, Device, Frame, FrameSource, Pattern, SendStats, Sender, SenderConfig};
+use screeny::{
+    codec_name, Device, Frame, FrameSource, IndexedSource, Pattern, Pixels, SendStats, Sender,
+    SenderConfig,
+};
 
 /// Stream frames to a screeny panel over UDP.
 #[derive(Parser, Debug)]
@@ -599,31 +602,45 @@ fn cmd_pattern(cli: &Cli, name: &str, list: bool, stream: &StreamArgs) -> Result
     stream_source(cli, stream, &mut p)
 }
 
-/// Adapts a `screeny-demos` piece to the sender's `FrameSource`. Pieces are pure
-/// functions of elapsed time, so a skipped frame is a skip, never a slowdown.
+/// Adapts a `screeny-demos` piece to the sender's `IndexedSource`. Pieces are
+/// pure functions of elapsed time, so a skipped frame is a skip, never a
+/// slowdown.
+///
+/// `IndexedSource` rather than `FrameSource` for both kinds of piece, because
+/// it is the seam that can carry either (card 092). A palette-authored piece -
+/// the word clock, eleven colours it chose itself - lends its palette and
+/// index plane straight to `Sender::send_indexed` and reaches the panel
+/// exactly. A continuous-colour piece - the fractal - answers `false` to
+/// `Piece::render_indexed` and its RGB frame is lent to the ordinary chooser
+/// instead. Either way nothing is copied and nothing is expanded on the way.
 struct PieceSource<P: screeny_demos::Piece> {
     piece: P,
-    scratch: screeny_demos::Frame,
+    idx: screeny_demos::Indexed,
+    rgb: screeny_demos::Frame,
 }
 
 impl<P: screeny_demos::Piece> PieceSource<P> {
     fn new(piece: P) -> Self {
         Self {
             piece,
-            scratch: screeny_demos::Frame::black(),
+            idx: screeny_demos::Indexed::default(),
+            rgb: screeny_demos::Frame::black(),
         }
     }
 }
 
-impl<P: screeny_demos::Piece> FrameSource for PieceSource<P> {
+impl<P: screeny_demos::Piece> IndexedSource for PieceSource<P> {
     fn name(&self) -> &str {
         self.piece.name()
     }
 
-    fn render(&mut self, t: FrameTime, out: &mut Frame) -> bool {
-        self.piece.render(t.elapsed, &mut self.scratch);
-        out.as_bytes_mut().copy_from_slice(&self.scratch.px[..]);
-        true
+    fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>> {
+        if self.piece.render_indexed(t.elapsed, &mut self.idx) {
+            Some(Pixels::indexed(&self.idx.palette, &self.idx.indices[..]))
+        } else {
+            self.piece.render(t.elapsed, &mut self.rgb);
+            Some(Pixels::rgb(self.rgb.as_bytes()))
+        }
     }
 }
 
@@ -635,7 +652,7 @@ fn cmd_fractal(cli: &Cli, seed: Option<u64>, stream: &StreamArgs) -> Result<()> 
     });
     eprintln!("screeny: fractal seed {seed}");
     let mut src = PieceSource::new(screeny_demos::fractal::FractalZoom::new(seed));
-    stream_source(cli, stream, &mut src)
+    stream_indexed(cli, stream, &mut src)
 }
 
 fn cmd_clock(cli: &Cli, at: Option<&str>, stream: &StreamArgs) -> Result<()> {
@@ -650,7 +667,7 @@ fn cmd_clock(cli: &Cli, at: Option<&str>, stream: &StreamArgs) -> Result<()> {
         }
     };
     let mut src = PieceSource::new(screeny_demos::clock::WordClock::at(base));
-    stream_source(cli, stream, &mut src)
+    stream_indexed(cli, stream, &mut src)
 }
 
 fn cmd_pipe(cli: &Cli, stream: &StreamArgs) -> Result<()> {
@@ -669,8 +686,34 @@ fn cmd_pipe(cli: &Cli, stream: &StreamArgs) -> Result<()> {
     r
 }
 
+/// Whichever of the two pull seams this command renders through.
+enum Src<'a> {
+    /// An RGB renderer: `pattern`, `pipe`.
+    Rgb(&'a mut dyn FrameSource),
+    /// A renderer that may own its palette: the demos.
+    Indexed(&'a mut dyn IndexedSource),
+}
+
+impl Src<'_> {
+    fn name(&self) -> &str {
+        match self {
+            Src::Rgb(s) => s.name(),
+            Src::Indexed(s) => s.name(),
+        }
+    }
+}
+
 /// Resolve, connect, and run the pacing loop with live stats.
 fn stream_source(cli: &Cli, args: &StreamArgs, src: &mut dyn FrameSource) -> Result<()> {
+    stream(cli, args, Src::Rgb(src))
+}
+
+/// [`stream_source`] for a source that may hand over palette + indices.
+fn stream_indexed(cli: &Cli, args: &StreamArgs, src: &mut dyn IndexedSource) -> Result<()> {
+    stream(cli, args, Src::Indexed(src))
+}
+
+fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
     let device = cli.target.resolve()?;
     let cfg = args.config();
     let mut sender = Sender::connect(device, cfg).hinted()?;
@@ -748,7 +791,10 @@ fn stream_source(cli: &Cli, args: &StreamArgs, src: &mut dyn FrameSource) -> Res
         }
     };
 
-    let r = sender.run_with(src, &stop, &mut tick);
+    let r = match &mut src {
+        Src::Rgb(s) => sender.run_with(*s, &stop, &mut tick),
+        Src::Indexed(s) => sender.run_indexed_with(*s, &stop, &mut tick),
+    };
     let s = sender.stats();
     println!(
         "sent {} frames in {:.1} s ({:.2} fps), {} skipped, {:.0} B mean, \
@@ -762,6 +808,19 @@ fn stream_source(cli: &Cli, args: &StreamArgs, src: &mut dyn FrameSource) -> Res
         s.encode_pct(0.95).as_secs_f64() * 1000.0,
         s.encode_max.as_secs_f64() * 1000.0,
     );
+    // The exactness claim, said out loud: a palette-authored source should
+    // show every frame here and nothing under "requantised". This is the line
+    // to read after `screeny clock`.
+    if s.indexed_exact + s.indexed_fallback > 0 {
+        let mut line = format!("{} indexed frames exact on the wire", s.indexed_exact);
+        if s.indexed_fallback > 0 {
+            line.push_str(&format!(
+                ", {} requantised (the last of them had {} colours)",
+                s.indexed_fallback, s.last_fallback_colours
+            ));
+        }
+        println!("{line}");
+    }
     if !s.codecs_withdrawn.is_empty() {
         eprintln!(
             "screeny: the device failed to decode {}; those codecs were withdrawn \
