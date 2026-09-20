@@ -1,0 +1,19 @@
+[package]
+name = "screeny-fwimage"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "What makes an ESP32 app image one this device will run: research 006 section 5's checks, as a scanner that is fed the upload and never holds it. One definition for the firmware, the simulator and the host tests. no_std, no alloc."
+
+# `no_std`, no alloc, no float, no clock, no I/O: compiled for
+# xtensa-esp32-none-elf by the firmware (card 240) and for the host by the
+# simulator and by these tests, so anything it pulls in, they both pull in.
+# The precedent is `crates/provision` and `crates/device-api`.
+[dependencies]
+# `FirmwareError` is the wire's, and there is one spelling of it.
+screeny-device-api = { path = "../device-api" }
+# **Exactly the version `esp-bootloader-esp-idf 0.6.0` already pulls into the
+# firmware** (`firmware/Cargo.lock`), so the binary carries one SHA-256 and not
+# two. `default-features = false` keeps it `no_std` and drops the `std` impls,
+# which nothing here wants.
+sha2 = { version = "=0.11.0", default-features = false }
