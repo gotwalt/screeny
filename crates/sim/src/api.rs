@@ -146,7 +146,10 @@ pub fn host_is_ours(host: Option<&str>, instance: &str) -> bool {
         // HTTP/1.0 with no Host, or curl on a raw socket. Not a probe.
         return true;
     };
-    let host = host.trim();
+    // Lowercased here rather than trusting the caller: this is the rule, and
+    // a rule that is only right for one caller is not one.
+    let host = host.trim().to_ascii_lowercase();
+    let host = host.as_str();
     if host.is_empty() {
         return true;
     }

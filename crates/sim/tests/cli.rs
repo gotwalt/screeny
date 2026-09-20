@@ -39,6 +39,11 @@ impl Running {
                 "0",
                 "--control-port",
                 "0",
+                // Card 224: several of these tests run at once, so the HTTP
+                // port has to be ephemeral for exactly the reason the other
+                // two are. The binary's own default is 8080.
+                "--http-port",
+                "0",
             ])
             .args(extra)
             .stdout(Stdio::piped())

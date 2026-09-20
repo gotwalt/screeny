@@ -18,7 +18,7 @@ use screeny_proto::control::IdleMode;
 use screeny_sim::config::{PanelModel, Timing};
 use screeny_sim::dump::Dumper;
 use screeny_sim::event::{DropCause, Event};
-use screeny_sim::{Config, SimDevice, SimHandle};
+use screeny_sim::{Config, SimDevice, SimHandle, WifiOutcome};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,6 +58,20 @@ NETWORK
                            (never `screeny`: that is the real device)
     --name NAME            friendly name, the name= TXT key
     --id HEX               short device id, the id= TXT key
+    --http-port N          HTTP API port, 0 for an ephemeral one [8080]
+                           (never 80: binding it needs root)
+    --no-http              do not serve the HTTP API
+
+WIFI (there is no radio; all of this is scripted)
+    --wifi-result WHICH    what a join attempt does: ok | fail | slow [ok]
+                           ok   = joins; fail = wrong password;
+                           slow = the radio never answers, so it times out
+    --wifi-join-ms MS      how long a scripted join takes [200]
+    --wifi-ssid SSID       the SSID the store holds [simulated]
+    --ap-ssid SSID         the soft-AP's name, on the portal screen and its QR
+    --start-in-portal      boot with an empty store: straight to the captive
+                           portal, which is what a factory-fresh device is
+    --link-down            start with the WiFi link down (spec 7.3)
 
 DISPLAY
     --headless             no window; log statistics once a second
@@ -87,6 +101,7 @@ OTHER
 
 struct Opts {
     cfg: Config,
+    link_down: bool,
     headless: bool,
     scale: usize,
     dump_dir: Option<String>,
@@ -104,6 +119,7 @@ impl Opts {
                 mdns: true,
                 ..Config::default()
             },
+            link_down: false,
             headless: false,
             scale: 14,
             dump_dir: None,
@@ -123,6 +139,17 @@ impl Opts {
                 "-h" | "--help" => return Ok(None),
                 "--headless" => o.headless = true,
                 "--no-mdns" => o.cfg.mdns = false,
+                "--no-http" => o.cfg.http = false,
+                "--start-in-portal" => o.cfg.start_in_portal = true,
+                "--link-down" => o.link_down = true,
+                "--http-port" => o.cfg.http_port = num(&value()?, "--http-port")?,
+                "--wifi-ssid" => o.cfg.wifi_ssid = value()?,
+                "--ap-ssid" => o.cfg.ap_ssid = value()?,
+                "--wifi-join-ms" => o.cfg.wifi_join_ms = num(&value()?, "--wifi-join-ms")?,
+                "--wifi-result" => {
+                    o.cfg.wifi_outcome =
+                        WifiOutcome::parse(&value()?).map_err(|e| format!("--wifi-result: {e}"))?;
+                }
                 "--verbose" => o.verbose = true,
                 "--quiet" => o.quiet = true,
                 "--bind" => {
@@ -208,6 +235,7 @@ fn run(opts: Opts) -> Result<(), String> {
     });
 
     let headless = opts.headless;
+    let link_down = opts.link_down;
     let quiet = opts.quiet;
     let verbose = opts.verbose;
     let scale = opts.scale;
@@ -216,8 +244,13 @@ fn run(opts: Opts) -> Result<(), String> {
     let mdns = opts.cfg.mdns;
     let instance = opts.cfg.instance.clone();
 
+    let start_in_portal = opts.cfg.start_in_portal;
+    let wifi_outcome = opts.cfg.wifi_outcome;
     let dev = SimDevice::start_with(opts.cfg, sink).map_err(|e| e.to_string())?;
     let sim = dev.handle();
+    if link_down {
+        sim.set_link_down(true);
+    }
 
     if !quiet {
         println!(
@@ -225,8 +258,24 @@ fn run(opts: Opts) -> Result<(), String> {
             dev.frame_addr(),
             dev.control_addr()
         );
+        // A second line, deliberately: `tests/cli.rs` reads the addresses off
+        // the first one and has since card 006.
+        if let Some(addr) = dev.http_addr() {
+            println!("screeny-sim: HTTP API on http://{addr}/");
+        }
         if mdns {
             println!("screeny-sim: advertising _screeny._udp as {instance:?}");
+        }
+        if start_in_portal || wifi_outcome != WifiOutcome::Ok {
+            println!(
+                "screeny-sim: wifi: result {}{}",
+                wifi_outcome.as_str(),
+                if start_in_portal {
+                    ", starting in the captive portal"
+                } else {
+                    ""
+                }
+            );
         }
         if !faults.is_clean() {
             println!(
