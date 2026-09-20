@@ -175,7 +175,16 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// boot slot: `otadata` is untouched and card 241 is what makes a staged image
 /// bootable. From this version the string is also `esp_app_desc.version`
 /// inside the image, so an upload can say which build it just staged.
-pub const FW_VERSION: &str = "0.6.0";
+/// **0.7.0 is card 241: a staged image is activated, boots on trial, and
+/// either proves itself or is replaced by the one before it.** An accepted
+/// upload now writes `otadata` and restarts the device; the image that comes
+/// up has to show a DHCP address, a served request (or two minutes) and a
+/// panel swap before 60 s to confirm itself, and is reverted at 180 s if it
+/// does not. A panic, a watchdog, a brownout or a pulled cable during that
+/// window is handled by the bootloader instead, which turns the trial entry
+/// into `ABORTED` on any reset and boots the other slot. `GET /api/v1/panic`
+/// gains an `update` object saying which of those happened.
+pub const FW_VERSION: &str = "0.7.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -710,6 +719,19 @@ async fn main(spawner: Spawner) {
     let crashed = panic::boot();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
+    // Card 241, and **the first thing after `esp_hal::init`** on purpose.
+    // `esp_hal::init` has just disabled every watchdog this chip has
+    // (`rtc.swd`, `rtc.rwdt` and both timer-group WDTs), so from here until
+    // something arms one there is nothing at all that would catch a hang. If
+    // RTC memory says the boot starting now is a firmware update's trial, arm
+    // the RTC watchdog before the heap, the store, the panel or the radio get
+    // a chance to wedge: that is the one failure the bootloader's rollback
+    // cannot see, because a device that never resets never asks it anything.
+    // Everything else about the trial needs `otadata` and waits for the store.
+    if panic::ota_trial_armed() {
+        ota::arm_watchdog(esp_hal::rtc_cntl::Rtc::new(peripherals.RTC_TIMER)).await;
+    }
+
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
     // costs nothing, plus a smaller slice of ordinary `.bss`.
     //
@@ -762,6 +784,16 @@ async fn main(spawner: Spawner) {
     // flash handle, instead of reading the 3 KB table a second time underneath
     // esp-storage's own frames.
     http::read_fw_health().await;
+    // Card 241: `read_fw_health` has just classified this boot from `otadata`
+    // and the MMU, which is the authoritative answer - RTC memory only ever
+    // said "arm the watchdog, just in case". If this is not a trial after all
+    // (the commonest reason being that the bootloader already rolled the
+    // update back on the reset that got us here), turn it off now, a second
+    // into a boot that has 239 to spare.
+    let on_trial = ota::boot_class().on_trial();
+    if !on_trial {
+        ota::disarm_watchdog().await;
+    }
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
 
@@ -1079,6 +1111,29 @@ async fn main(spawner: Spawner) {
         spawner.spawn(http::http_task(i, stack, ap_stack).unwrap());
     }
     spawner.spawn(http::deferred_task().unwrap());
+    // Card 241. `activate_task` sleeps on a signal that only an accepted
+    // upload raises, and is what writes `otadata` and resets the chip - out of
+    // the HTTP handler, after the reply has been acknowledged.
+    spawner.spawn(ota::activate_task().unwrap());
+    // `trial_task` is spawned **only on a trial boot**, which is what makes
+    // "this firmware cannot confirm an image that is not on trial" a property
+    // of the program rather than of a check inside a loop: on an ordinary boot
+    // the task does not exist and nothing writes `otadata` at all.
+    if on_trial {
+        spawner.spawn(ota::trial_task().unwrap());
+    }
+    // Card 241's two bench builds, each a deliberately broken update. Neither
+    // does anything on a boot that is not a trial, because neither is any use
+    // except as the image being tried.
+    #[cfg(feature = "ota-test-unhealthy")]
+    if on_trial {
+        warn!(
+            "ota-test: BENCH BUILD - this image will never report healthy, so it must be reverted at {} s (card 241)",
+            screeny_otastate::REVERT_AT_MS / 1000
+        );
+    }
+    #[cfg(feature = "ota-test-panic")]
+    spawner.spawn(ota::panic_test_task().unwrap());
     // Card 222's `http-selftest` used to be spawned here. Card 243 moved it
     // into HTTP worker 0, where it borrows that worker's buffers instead of
     // carrying 5.6 KB of `.bss` of its own - which is what put the build 4 KB

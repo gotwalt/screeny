@@ -287,7 +287,11 @@ pub async fn frames_task(
         // with an 'updating' screen". So it is tested *before* the portal's
         // own screen and before `intent`, and it is the only thing in this
         // task that can be up while a sender is streaming.
-        let ota = crate::ota::updating().then(crate::ota::percent);
+        // Card 241 makes this two screens rather than one: the progress bar
+        // while the bytes arrive, and `installing` for the two seconds between
+        // the reply and the restart. One call, because they are mutually
+        // exclusive and the second outranks the first.
+        let ota = crate::ota::panel();
         let setup_screen_up =
             ota.is_some() || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
         if published {
@@ -351,14 +355,14 @@ pub async fn frames_task(
             phase = phase.wrapping_add(1);
             let hold = crate::PATTERN_HOLD.load(Ordering::Relaxed);
             let mut drew = true;
-            if let Some(percent) = ota {
+            if let Some(what) = ota {
                 // Drawn by `crates/provision`, like the portal screens, so
                 // the simulator and the device draw the same thing. Dither is
                 // already off - `crate::ota::Upload` turned it off when it
                 // took the claim - so core 1 sleeps between refreshes and the
                 // 50 ms stalls around each sector erase cost nothing.
                 portal_at_ms = now_ms;
-                crate::provision::render_updating(percent, &mut producer.back().px);
+                crate::provision::render_updating(what, &mut producer.back().px);
             } else if let Some(s) = portal.as_ref() {
                 // Drawn with nothing locked: `provision::screen` copied the
                 // name out of the machine and released it, because a QR encode

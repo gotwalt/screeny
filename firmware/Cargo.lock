@@ -1979,6 +1979,7 @@ dependencies = [
  "rand_core 0.10.1",
  "screeny-device-api",
  "screeny-fwimage",
+ "screeny-otastate",
  "screeny-proto",
  "screeny-provision",
  "screeny-receiver",
@@ -1996,6 +1997,13 @@ version = "0.1.0"
 dependencies = [
  "screeny-device-api",
  "sha2",
+]
+
+[[package]]
+name = "screeny-otastate"
+version = "0.1.0"
+dependencies = [
+ "screeny-device-api",
 ]
 
 [[package]]
