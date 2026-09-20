@@ -134,6 +134,10 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   things against `screeny-sim` on localhost only. Anything on the real panel, WiFi
   streaming included, is the orchestrator's step after the merge. The owner's bar for a
   workstream is that it runs on the real panel, not only the sim: plan that step.
+- **Several simulators on one machine**: since firmware card 224 the `screeny-sim` binary
+  also serves HTTP, by default on a fixed port 8080, so a second sim fails to start. Until
+  card 232 lands (busy 8080 -> ephemeral fallback), tell workers to pass `--no-http` or
+  `--http-port 0` to every sim they start by hand. `Config::for_test()` is already ephemeral.
 - **Check the instructions you give other sessions against the running system.** After card
   106 the orchestrator kept telling the firmware session that `set_panel {"on":false}`
   releases the panel; it had become a silent no-op (200, body `null`) and cost that session a
