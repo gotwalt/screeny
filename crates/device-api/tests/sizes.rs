@@ -137,3 +137,48 @@ fn the_numbers_card_222_needs_are_printed_here() {
     }
     assert_eq!(MAX_REQUEST_LEN, MAX_FORM_LEN);
 }
+
+/// Card 243b's lesson, as a test: **a reply type is paid many times over in
+/// the firmware's request path**, because one of these is moved through
+/// picoserve's response chain repeatedly inside a single inlined async frame.
+/// 44 bytes added to `StatusReply` cost 3,488 bytes of core 0's stack on the
+/// bench.
+///
+/// The firmware's `ApiBody` enum is as big as its biggest variant, so the
+/// question any new reply type has to answer is "is it bigger than
+/// `StatusReply`?". This writes the answers down. It is not a budget - a card
+/// that needs a bigger reply can have one and pay for it - it is the number to
+/// look at before deciding that. Card 240 added `FirmwareReply` and this is
+/// where it was checked.
+#[test]
+fn no_reply_is_bigger_than_the_one_on_the_hot_path() {
+    use core::mem::size_of;
+    let status = size_of::<StatusReply>();
+    println!("StatusReply = {status} bytes (the hot path, GET /api/v1/status)");
+    for (name, n) in [
+        ("TelemetryReply", size_of::<TelemetryReply>()),
+        ("PanicReply", size_of::<PanicReply>()),
+        ("WifiReply", size_of::<WifiReply>()),
+        ("SettingsReply", size_of::<SettingsReply>()),
+        ("AcceptedReply", size_of::<AcceptedReply>()),
+        ("FirmwareReply", size_of::<FirmwareReply>()),
+    ] {
+        println!("{name} = {n} bytes");
+        assert!(
+            n <= status,
+            "{name} is {n} bytes against StatusReply's {status}: it, and not status, \
+             now sets the size of the firmware's reply enum and of every frame that \
+             holds one. That may be the right trade - card 243b priced it at about \
+             12x in the request path - but it is a decision, so make it here."
+        );
+    }
+    // `NetworksReply` is the exception and is left out on purpose: it holds 16
+    // entries and is far bigger than any of these. The firmware does not serve
+    // it (device-web decision 10 dropped card 229) and its reply enum has no
+    // variant for it, which is why this list is explicit rather than "every
+    // type in the module".
+    println!(
+        "NetworksReply = {} bytes (not served by the firmware)",
+        size_of::<NetworksReply>()
+    );
+}

@@ -156,7 +156,13 @@ owner: "not interesting to humans" - leaving one "Another" button on patches tha
 the panel" - spend the pixels, the flip sizes the clock; its PNGs land in the scratchpad's
 `vesta/` for showing him), 164 (`card/164-network-per-panel`: KB/s out and in per panel on
 `/panel`; fenced away from 151's files, expect a small reconcile in `player.rs`/`api.rs`).
-**Queued behind 151:** 161 (30 fps and nothing else: the owner wants 60 fps support and the
+Also in flight: **168** (`card/168-flock`: the owner's second new patch - a slow 3D flock seen by a
+camera that is itself a boid, invisible geometry, a hue wheel; PNG strips land in the
+scratchpad's `flock/`). **The owner's limit since 2026-09-20 ~15:00: at most TWO workers at a time, for now.** 164
+and 168 were asked to pause (WIP commit + a "Paused" Log entry on their branches, cards
+left in `doing/`); resume each with a SendMessage to the same agent when a slot frees -
+168 (flock) first, it is the owner's design ask - or, after a context reset, start a new
+worker from the branch. Running: 151 and 155. **Queued behind 151:** 161 (30 fps and nothing else: the owner wants 60 fps support and the
 rate control gone; the sender's spec 6.9 loss ladder stays and the card says why), then 157
 (two things called `Output`). At merge: vesta's `PatchDef` literal needs 151's new `seeded`
 field. The firmware session's long soak was cancelled by the owner; redeploy freely, with

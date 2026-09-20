@@ -1,6 +1,6 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status (2026-09-20, evening): the device runs fw 0.5.3 - settings and WiFi
+**Status (2026-09-20, evening): the device runs fw 0.6.0 - settings and WiFi
 credentials in flash, an HTTP status/settings page and JSON API on the LAN, the setup
 portal (open soft-AP, DHCP, DNS catch-all, QR screen, trial join before commit), a
 rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5.1** after five fixes
@@ -103,7 +103,11 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   shows a static "updating" screen with dither off.
 - **Open risk, bench only**: core 0 has interrupts masked for the same ~50 ms per
   sector erase. Whether esp-radio's WiFi survives that during an upload is the first
-  thing to measure on hardware.
+  thing to measure on hardware. Card 240 builds the instrument - one log line
+  per upload with per-sector erase/write min/mean/max, the fraction of the
+  upload spent inside a ROM call, and the frames, stream losses and link-down
+  edges over the same window - and the orchestrator's bench run is what
+  answers it.
 - **Rollback**: espflash's bundled bootloader has `APP_ROLLBACK_ENABLE` off. App-side
   revert (mark the running slot `Invalid`, reboot) covers every image that boots but
   never becomes healthy. Only a rebuilt ESP-IDF v6.1 bootloader covers an image that
@@ -333,7 +337,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
 | 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
-| 240 | OTA staging over HTTP into the inactive slot, the five-check validator, per-sector timing (the esp-radio interrupt-window measurement) | yes |
+| 240 | **done, on the device (fw 0.6.0)** - `POST /api/v1/firmware` streams an image sector by sector into the inactive slot (`crates/fwimage`: 006's checks as a scanner; wrong chip/project refused before the first erase; SHA checked on arrival and read back from flash); `otadata` untouched, so nothing it does can change what boots. Bench: 998 KB in 25 s under a live stream, erases ~40 ms (55 worst), **link downs 0**, ~21% of stream frames lost during the upload, the updating screen on the panel | yes |
 | 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | **done, on the device (fw 0.5.2)** - a panic prints its backtrace, leaves a breadcrumb in RTC slow memory and resets (proved with the `panic-test` build: panic -> `SW_RESET` -> rejoined -> `GET /api/v1/panic` reports it); crash-loop guard (5 panics under 60 s -> CRASHED screen, halt); boot-path stack lever; `http-selftest` fits again; `stack_free` 12.4 KB after the HTTP suite | yes |

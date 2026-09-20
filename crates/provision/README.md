@@ -130,6 +130,20 @@ does not fit is **refused**, not silently grown to version 3, and gets the text-
 screen instead. `tests/render.rs` decodes the rendered frame with `rqrr`, which has never
 seen our encoder, so none of this can rot quietly.
 
+## The one screen here that is not about provisioning
+
+`Screen::Updating { percent }` (card 240) is drawn while a firmware image is
+being written to the inactive slot. The state machine knows nothing about it and
+should not learn: the firmware asks `crate::ota` whether an upload is in flight
+and calls `render` with this variant directly. It lives here because the
+*renderer* is here - the two things that can take the panel from a sender should
+be drawn by one crate with host tests, not by two that look almost alike.
+
+It is the only screen that outranks a live stream, which `docs/design/device-web.md`
+decision 7 allows for a firmware update and for nothing else. The bar is an
+outline that fills, so "no `Content-Length`, nothing to show yet" and "the panel
+has died" do not look the same.
+
 ## Cost to the firmware
 
 No `static`, no `.bss`. `Provisioner` 168 bytes, `Qr` 79, `Actions` 16, and `render`

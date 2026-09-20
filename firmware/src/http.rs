@@ -56,11 +56,17 @@
 //! core does the work and hands back no datagram.
 //!
 //! Out of scope here and named where they belong: the soft-AP, DHCP, DNS and
-//! the captive-portal catch-all (card 223), `GET /api/v1/networks` (card 229,
-//! **dropped** by device-web decision 10 - the route stays and keeps answering
-//! `unavailable`), and `POST /api/v1/firmware` (card 240). The last two
-//! answer `ErrorCode::Unavailable` today rather than 404, because the route
-//! exists and the device is simply not able to serve it yet.
+//! the captive-portal catch-all (card 223), and `GET /api/v1/networks` (card
+//! 229, **dropped** by device-web decision 10 - the route stays and keeps
+//! answering `ErrorCode::Unavailable` rather than 404, because the route
+//! exists and the device is simply not able to serve it).
+//!
+//! `POST /api/v1/firmware` is card 240 and is here, in [`post_firmware`]. It
+//! is the one route that does not buffer its body: `route::Body::Stream` means
+//! no `max_request_len` check and no `read_all`, the handler reads the socket
+//! itself into [`crate::ota::Upload`]'s heap buffer, and the flash work is
+//! `crate::ota`'s. It is also the one route allowed to take the panel from a
+//! streaming sender (decision 7).
 
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
@@ -78,14 +84,15 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    AcceptedReply, FirmwareReply, PanicRecord, PanicReply, SettingsReply, StatusReply,
+    TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
     IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
 };
 use screeny_device_api::{
-    form, route, text, ErrorCode, ErrorReply, FwSlot, FwState, IdleMode, ResetReason,
-    StreamState, WifiState,
+    form, route, text, ErrorCode, ErrorReply, FirmwareError, FwSlot, FwState, IdleMode,
+    ResetReason, StreamState, WifiState,
 };
 use screeny_proto::control::Request as ControlRequest;
 use screeny_settings::Wifi;
@@ -377,6 +384,15 @@ enum ApiBody {
     Settings(SettingsReply),
     /// The three routes that answer `{"result":...}`.
     Accepted(AcceptedReply),
+    /// `POST /api/v1/firmware` (card 240). **Eight bytes**, and that is the
+    /// whole of what it costs this enum: `size_of::<FirmwareReply>()` is 8
+    /// against `StatusReply`'s 208, so it fits inside the variant
+    /// [`ApiBody::Status`] already pays for and no frame that holds one of
+    /// these grows by a byte. Card 243b's lesson is that a reply type is paid
+    /// about twelve times over in the request path; the way to honour it is to
+    /// check, and `crates/device-api`'s `sizes.rs` is where it is checked
+    /// (`no_reply_is_bigger_than_the_one_on_the_hot_path`).
+    Firmware(FirmwareReply),
     /// Every refusal on this server, including the 404 for an unknown path and
     /// the 400 for malformed JSON, so a caller never has to parse two kinds of
     /// error body.
@@ -392,6 +408,7 @@ impl serde::Serialize for ApiBody {
             ApiBody::Wifi(v) => v.serialize(s),
             ApiBody::Settings(v) => v.serialize(s),
             ApiBody::Accepted(v) => v.serialize(s),
+            ApiBody::Firmware(v) => v.serialize(s),
             ApiBody::Error(v) => v.serialize(s),
         }
     }
@@ -868,13 +885,166 @@ fn post_reboot(req: RebootRequest) -> Reply {
     Reply::ok(ApiBody::Accepted(AcceptedReply::REBOOTING))
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/v1/firmware (card 240)
+// ---------------------------------------------------------------------------
+
+/// How long the whole body has to arrive.
+///
+/// picoserve's `read_request` timeout is 5 s, which is right for every other
+/// route on this device and impossible for this one: a ~950 KB image over this
+/// radio, interleaved with 232 sector erases, is tens of seconds of wall
+/// clock. `RequestBodyReader::with_different_timeout` is picoserve's own
+/// answer - its documentation names "uploading large files" as the case - and
+/// it replaces the 5 s signal for the body of this request only.
+///
+/// 180 s is the worst case the bench has any reason to allow: 950 KB at the
+/// ~70 KB/s this path can manage (one 4 KB read, then ~58 ms of flash, then
+/// the next) is ~14 s, so the bound is an order of magnitude clear of a
+/// healthy upload and still a bound. It is also the longest a client can hold
+/// one HTTP worker, which is why it is not simply "no timeout": with two
+/// workers the other one keeps answering throughout.
+const UPLOAD_TOTAL_S: u64 = 180;
+
+/// How long one read may stall before the upload is abandoned.
+///
+/// The 180 s above is the outer bound; this is the one that fires in practice.
+/// A sender that has stopped sending - a laptop that went to sleep mid-`curl`,
+/// a cable pulled - should not hold the flash, the panel and a worker for
+/// three minutes to prove it. Five seconds is far longer than any gap a
+/// healthy upload has, because the device is the slow end: the reads are
+/// waiting on smoltcp, not the other way round.
+const UPLOAD_STALL: Duration = Duration::from_secs(5);
+
+/// A refusal in the route's own reply shape.
+///
+/// **200, not a 4xx**, and that is deliberate: `FirmwareReply` *is* this
+/// route's reply, `error` is a field of it, and `written` - how far the upload
+/// got before it was refused - is only there. A caller switching on the HTTP
+/// status would learn less than one reading two fields of the body it already
+/// has to parse. `crates/sim` has answered this way since card 224 and probe
+/// rules 23 and 24 are written against it. The generic `{"error":...}` shape
+/// of spec 8.7 is still what a request that never reached the validator gets:
+/// `unavailable` when the device has no inactive slot, `bad_request` when the
+/// body did not arrive at all.
+fn firmware_failed(written: u32, e: FirmwareError) -> Reply {
+    Reply::ok(ApiBody::Firmware(FirmwareReply::failed(written, e)))
+}
+
+/// `POST /api/v1/firmware`: stream the body into the inactive slot.
+///
+/// The bytes go socket -> [`crate::ota::Upload`]'s heap buffer -> flash, one
+/// sector at a time, and are never anywhere else. Nothing in this function
+/// holds a buffer across an `await`: the only thing alive across the read is
+/// the `Upload`, which is a pointer to the heap, the scanner and the counters.
+///
+/// What a caller gets back:
+///
+/// * a good image - `{"ok":true,"written":N}`, and the slot now holds a
+///   firmware the bootloader could run. **It will not run it**: `otadata` is
+///   untouched by this card, so the device keeps booting what it boots today
+///   until card 241 lands. A reboot now changes nothing.
+/// * anything the validator refused - `{"ok":false,"written":N,"error":...}`.
+/// * a second upload while one is in flight - `error: "busy"`, nothing
+///   touched.
+/// * a device with no inactive slot - `unavailable`, in the generic shape.
+///
+/// One thing it deliberately does not do is drain a body it has refused.
+/// picoserve's `finalize` does that, bounded by the request's own 5 s read
+/// timeout, and then aborts the connection - so a client that declared a
+/// megabyte and was refused on the header gets its JSON reply and a RST,
+/// rather than the device spending fifteen seconds reading bytes it has
+/// already decided to throw away.
+///
+/// ## What it costs the stack, and why `#[inline(never)]` is not the answer
+///
+/// LLVM inlines this into [`route_request`]'s `poll`, which is the one frame
+/// every request on this device pays for: it grew from **1,552 bytes on
+/// firmware 0.5.3 to 2,304 here**, +752 for the reader, the per-read timeout
+/// and the `Upload`'s own scratch. `#[inline(never)]` was tried and is
+/// **worse**: at 3,808 bytes, because an `async fn` the caller cannot see
+/// through has to be materialised as a value in the caller's `poll` frame
+/// instead of merged into its state machine. Inlined is the cheaper of the
+/// two, so inlined it stays, and the 752 bytes are the honest price of the
+/// route. Everything *below* this - the scanner, the erase, the write, the
+/// SHA-256 - is in `#[inline(never)]` synchronous functions and adds at most
+/// ~600 bytes on top, only while an upload is running.
+async fn post_firmware<R: picoserve::io::Read>(
+    body: &mut RequestBodyConnection<'_, R>,
+) -> Reply {
+    let declared = u32::try_from(body.content_length()).ok();
+    // Decided once at boot, against the MMU (`store::read_partitions`). No
+    // slot means no safe place to write, and the honest answer to that is
+    // `unavailable` - the route exists and this device cannot serve it.
+    let Some(slot) = store::inactive_slot().await else {
+        return Reply::detail(
+            ErrorCode::Unavailable,
+            "this device has no inactive app slot",
+        );
+    };
+    let mut up = match crate::ota::Upload::start(slot, declared).await {
+        Ok(u) => u,
+        // No claim was taken and no sector was erased for any of these.
+        Err(e) => return firmware_failed(0, e),
+    };
+
+    let mut reader = body
+        .body()
+        .reader()
+        .with_different_timeout(Duration::from_secs(UPLOAD_TOTAL_S));
+
+    loop {
+        // Straight into the staging buffer: see `Upload::spare`.
+        // `picoserve::io::Read` is `embedded_io_async::Read`; the trait has to
+        // be in scope for the one call this module makes to it.
+        use embedded_io_async::Read as _;
+        let read = embassy_time::with_timeout(UPLOAD_STALL, reader.read(up.spare())).await;
+        let n = match read {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => {
+                // The body stopped early - the socket died, or the 180 s
+                // outer bound fired. The scanner will call it a truncated
+                // image, which is what it is.
+                let written = up.written();
+                up.failed(FirmwareError::BadSha256).await;
+                return firmware_failed(written, FirmwareError::BadSha256);
+            }
+            Err(embassy_time::TimeoutError) => {
+                warn!("ota: the uploader went quiet for {} s", UPLOAD_STALL.as_secs());
+                let written = up.written();
+                up.failed(FirmwareError::BadSha256).await;
+                return firmware_failed(written, FirmwareError::BadSha256);
+            }
+        };
+        if let Err(e) = up.took(n).await {
+            let written = up.written();
+            up.failed(e).await;
+            return firmware_failed(written, e);
+        }
+    }
+
+    let written = up.written();
+    match up.finish().await {
+        Ok(a) => {
+            info!(
+                "ota: staged image accepted - {} bytes, {} segments, version {:?}",
+                a.image_len, a.segments, a.version
+            );
+            Reply::ok(ApiBody::Firmware(FirmwareReply::ok(a.written)))
+        }
+        Err(e) => firmware_failed(written, e),
+    }
+}
+
 /// A route that exists in the API but not yet on this device.
 ///
 /// `screeny-device-api` has no `not_implemented` code and should not grow one
 /// for this: `unavailable` (503) is exactly "understood, and the device cannot
 /// serve it in this state", and a caller retrying later is the right
-/// behaviour for both of these. `GET /api/v1/networks` needs the scan card 223
-/// brings; `POST /api/v1/firmware` is card 240.
+/// behaviour for it. `GET /api/v1/networks` needs the scan card 229 was going
+/// to bring and device-web decision 10 dropped, so it is the only route left
+/// that answers this: `POST /api/v1/firmware` landed with card 240.
 fn not_yet() -> Reply {
     Reply::detail(
         ErrorCode::Unavailable,
@@ -1477,8 +1647,10 @@ async fn route_request<R: picoserve::io::Read>(
             Ok(req) => post_reboot(req),
             Err(e) => Reply::error(e),
         },
-        // Card 240.
-        (route::Method::Post, route::FIRMWARE) => not_yet(),
+        // Card 240. The one route whose body is never buffered: `Body::Stream`
+        // above means no `max_request_len` check and no `read_all`, and the
+        // handler reads the socket itself.
+        (route::Method::Post, route::FIRMWARE) => post_firmware(body).await,
         // Unreachable while this match covers `ROUTES`; a new row that nobody
         // wired up answers 404 rather than failing to compile, because a
         // firmware that panics on an unhandled path is worse than one that
@@ -1602,19 +1774,34 @@ async fn serve_on(
 
 /// How long the close waits for the client to acknowledge the response.
 ///
-/// 500 ms is far longer than it takes and far shorter than what it replaces.
-/// On this LAN the acknowledgement is one round trip - single-digit
-/// milliseconds - and BSD and Linux both set `TF_ACKNOW` on a FIN, so it is not
-/// subject to the delayed-ACK timer that makes everything else about a Mac's
-/// TCP adaptive. What the half-second is actually for is smoltcp's first
-/// retransmit of the FIN, so that one lost segment on a noisy channel still
-/// ends in a clean close rather than in the timeout arm.
+/// **1,500 ms since the bench measured what 500 was costing.** Card 236 chose
+/// 500 on the reasoning that on this LAN the acknowledgement is one round trip
+/// - single-digit milliseconds - and that BSD and Linux both set `TF_ACKNOW` on
+/// a FIN, so it is not subject to the delayed-ACK timer that makes everything
+/// else about a Mac's TCP adaptive; the half-second was for smoltcp's first
+/// retransmit of the FIN, so that one lost segment still ends in a clean close.
 ///
-/// It is also the new worst case: after this, the longest a client can hold a
-/// worker is `start_read_request` + `read_request` + `write` + this = 13.5 s of
-/// stalling *before* the reply, and 0.5 s after it. It used to be 10 s after
-/// it, and that 10 s was reachable by a client doing nothing wrong.
-const CLOSE_ACK_MS: u64 = 500;
+/// That reasoning was about the *wire* and left out the radio. On the device,
+/// under the Studio's 10 s status poll over WiFi, firmware 0.5.3 logged
+/// "the peer never acknowledged the close; dropping it" **three times in
+/// ~20 minutes** - about 120 polls, at an RSSI of roughly -57 dBm. So the
+/// FIN's acknowledgement took longer than 500 ms about 2.5% of the time, on a
+/// quiet link with a well-behaved client. That is WiFi latency: a station that
+/// has gone to sleep between beacons, or an access point holding a frame for
+/// one DTIM period, both of which are hundreds of milliseconds and neither of
+/// which is anything to do with the client's TCP.
+///
+/// 1,500 ms covers that with room, and it is still an eighth of what it
+/// replaced: picoserve's own close could take the whole 5 s `read_request`
+/// timeout *and* waited for the client's application to close. The worst case
+/// a client can hold a worker is now `start_read_request` + `read_request` +
+/// `write` + this = 13.5 s of stalling before the reply and 1.5 s after it -
+/// and with two workers the other one is in `accept` throughout, which is the
+/// property card 236 was really buying.
+///
+/// The `warn!` in [`BoundedSocket::settle`] stays as it is: after 1.5 s of
+/// silence it really is a peer that is not coming back, and it should be said.
+const CLOSE_ACK_MS: u64 = 1500;
 
 /// An `embassy-net` TCP socket whose close is bounded by **this** device.
 ///
@@ -1755,7 +1942,7 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
     // request that has started, 5 s for the reply to be accepted, and - card
     // 236, in [`BoundedSocket`] rather than here, because picoserve's `Config`
     // has no knob for it - [`CLOSE_ACK_MS`] for the close. The worst a client
-    // can hold the server for is therefore ~8.5 s, and that needs it to have
+    // can hold the server for is therefore ~9.5 s, and that needs it to have
     // connected and then gone quiet mid-header. **The close is no longer part
     // of that sum in any interesting way**: it used to be able to add 10 s of
     // its own, and it was the *ordinary* case, not the stalled one, that paid.

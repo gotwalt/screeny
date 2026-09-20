@@ -35,10 +35,13 @@
 //! `pending_verify` slot changes nothing and a `brownout` reason reboots
 //! nothing. The single exception is the one a device has too - a simulated
 //! `REBOOT`, over UDP or `POST /api/v1/reboot`, sets the reset reason to
-//! `software` from then on. `POST /api/v1/firmware` accepts the
-//! stream, discards it, and runs the two of research 006's five checks that
-//! need no image parser - the `0xE9` magic and the slot's length - and says so
-//! in the README rather than pretending the other three passed.
+//! `software` from then on. `POST /api/v1/firmware` accepts the stream,
+//! discards it, and runs **every one of research 006 section 5's checks**
+//! through `screeny-fwimage` - the same scanner the firmware runs, on the
+//! same bytes, in the same order (card 240). What it cannot do is keep the
+//! image: it has no flash, so an accepted upload changes nothing and a restart
+//! brings back the same simulator. Refusing, though, it does exactly as the
+//! device does.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -650,42 +653,80 @@ fn post_identify(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
     }
 }
 
+/// `POST /api/v1/firmware`: read the upload, run every check, discard it.
+///
+/// Card 240 replaced the simulator's two-check stand-in with the real thing.
+/// [`screeny_fwimage::Scan`] is the firmware's own validator, fed the same
+/// bytes in the same order, so the two cannot disagree about whether an image
+/// is acceptable - which is what "develop against the simulator" is worth.
+///
+/// What the simulator still cannot do is *keep* it: there is no flash here, so
+/// `ok: true` means "this image would have been staged", the slot is imaginary
+/// and a restart brings back the same simulator. The README says so.
+///
+/// `written` is deliberately "bytes that reached the sink", the same as the
+/// device's, so a truncated upload reports where it stopped.
 fn post_firmware(body: Body<'_>) -> Response {
     let Body::Stream { reader, len } = body else {
         return bare(ErrorCode::Internal);
     };
+    // Before a byte is read, exactly as research 006 section 5 asks and as the
+    // device does: an upload that cannot fit the slot is refused for free.
     if len.is_some_and(|n| n > SLOT_LEN) {
         return ok_json(&FirmwareReply::failed(0, FirmwareError::TooLarge));
     }
-    // Read and discard. Nothing is installed, and nothing pretends to be:
-    // the simulator has no flash and says so in its README.
-    let mut buf = [0u8; 8 * 1024];
+    let slot = u32::try_from(SLOT_LEN).unwrap_or(u32::MAX);
+    let mut scan = screeny_fwimage::Scan::new(slot);
+    // One sector at a time, because that is what the device stages in: a
+    // scanner that only worked on the host's convenient buffer size would be a
+    // scanner the device does not run.
+    let mut buf = [0u8; screeny_fwimage::SECTOR];
     let mut written: u64 = 0;
-    let mut first: Option<u8> = None;
+    // The first refusal, and how far the upload had got when it happened -
+    // which is what `written` means on this route.
+    let mut failed: Option<(u32, FirmwareError)> = None;
     loop {
-        match reader.read(&mut buf) {
+        let n = match reader.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => {
-                if first.is_none() {
-                    first = Some(buf[0]);
-                }
-                written += n as u64;
-                if written > SLOT_LEN {
-                    return ok_json(&FirmwareReply::failed(
-                        u32::try_from(written).unwrap_or(u32::MAX),
-                        FirmwareError::TooLarge,
-                    ));
-                }
-            }
+            Ok(n) => n,
             Err(_) => break,
+        };
+        if failed.is_some() {
+            // **Keep reading after a refusal.** The bytes are thrown away, but
+            // they have to leave the socket: a server that stops reading and
+            // then closes leaves unread data in the kernel's receive buffer,
+            // and both Darwin and Linux answer that close with a RST, which
+            // takes the reply with it. picoserve does the same thing on the
+            // device (`RequestBodyConnection::finalize`), so the simulator
+            // doing it is the two agreeing rather than the simulator being
+            // polite.
+            continue;
+        }
+        // `written` counts bytes that reached the sink, so it is bumped only
+        // once this piece has passed the checks the device runs before it
+        // erases anything. An image refused on its header reports `written: 0`
+        // here and on the device, which is the truth in both: nothing was
+        // staged.
+        let w = u32::try_from(written).unwrap_or(u32::MAX);
+        if let Err(e) = scan.push(&buf[..n]) {
+            failed = Some((w, e));
+            continue;
+        }
+        written += n as u64;
+        // The device asks this after each sector it has buffered and before it
+        // erases anything; here it costs nothing, and keeping the order the
+        // same is how the two stay one implementation.
+        if let Err(e) = scan.check_front() {
+            failed = Some((w, e));
         }
     }
+    if let Some((w, e)) = failed {
+        return ok_json(&FirmwareReply::failed(w, e));
+    }
     let written32 = u32::try_from(written).unwrap_or(u32::MAX);
-    // Research 006's first check, and the only one that needs no image
-    // parser: an ESP32 image begins `0xE9`.
-    match first {
-        Some(0xE9) => ok_json(&FirmwareReply::ok(written32)),
-        _ => ok_json(&FirmwareReply::failed(written32, FirmwareError::BadMagic)),
+    match scan.finish() {
+        Ok(_) => ok_json(&FirmwareReply::ok(written32)),
+        Err(e) => ok_json(&FirmwareReply::failed(written32, e)),
     }
 }
 

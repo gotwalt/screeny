@@ -29,6 +29,12 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "After ClockClock 24: 24 small dials whose hands draw the time in digits, and dance to the next minute. For a clock you read from across the room.",
     params: PARAMS,
     make,
+    // The seed only shifts which choreography a given minute is danced to
+    // (`Rng::new(self.seed ^ minute * K ^ asked * K)`); the picture is the
+    // time, and it is the same time. "Play it again" and "Compose another" are
+    // this patch's own words for what a person means, and they act at once
+    // without restarting the clock.
+    seeded: false,
 };
 
 const PARAMS: &[ParamSpec] = &[

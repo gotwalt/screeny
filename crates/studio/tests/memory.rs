@@ -142,7 +142,7 @@ async fn the_memory_survives_a_restart_including_a_patch_that_is_not_showing() {
     // What is on disk, before anything reads it back.
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 4, "schema v4");
+    assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION, "the schema this build writes");
     assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "in state.json and nowhere else:\n{text}");
     assert_eq!(file["patches"]["plasma"]["seed"], 111);
 
@@ -363,11 +363,12 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     assert_eq!(back["seed"], 4242, "what v1 was playing became that patch's first memory");
     assert_eq!(param(&back, "scale"), 2.5);
 
-    // The file it rewrites is v3, and the v1 file was not condemned.
+    // The file it rewrites is this build's schema, and the v1 file was not
+    // condemned. (v1 -> v3 -> v5 in one start, since card 151.)
     studio.stop().await;
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     assert!(!dir.0.join("state.bad.json").exists());
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
-    assert_eq!(file["version"], 4);
+    assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION);
     assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "{text}");
 }

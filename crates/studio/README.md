@@ -146,23 +146,32 @@ why switching patches and switching back gives you what you had, before and afte
 `docker restart`.
 
 ```jsonc
-"version": 4,
+"version": 5,
 "devices": [ { "id": "4a00a4", "name": "Desk", ... } ],
 "players": [ { "device": "4a00a4", "patch": "plasma", "on": true,
                "paused": false, "speed": 1.0, ... } ],
 "focus": "4a00a4",                          // which panel the page is a window onto
 "patches": {                                // and how each patch is set, once
-  "plasma":    { "seed": 111, "params": { "scale": 2.5 } },
+  "plasma": {
+    "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4,   // the working copy
+    "setting": "Lava",                                       // loaded from this
+    "settings": {                                            // card 151
+      "Lava":     { "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4 },
+      "Slow ink": { "seed": 222, "params": {},               "speed": 0.2 }
+    }
+  },
   "metaballs": { "seed": 222, "params": { "count": 8 } }
 }
 ```
 
-Schema **v4**. Card 150 renamed three keys - `pieces` -> `patches`, a player's
-`piece` -> `patch` and its `settings` -> `output` - and nothing else; every old key is
-still read, and a file older than v4 is copied to `state.vN.json` before it is
-migrated, so an older build can be put back on the same volume.
+Schema **v5**. Card 151 added a patch's named settings and the `speed` that is part of
+them; card 150 renamed three keys - `pieces` -> `patches`, a player's `piece` -> `patch`
+and its `settings` -> `output` - and nothing else. Every old key is still read, and a file
+older than v5 is copied to `state.vN.json` before it is migrated, so an older build can be
+put back on the same volume.
 
-v1, v2 and v3 files are migrated in place, never thrown away.
+v1, v2, v3 and v4 files are migrated in place, never thrown away, and a v1 file comes all
+the way up in one start.
 v2's `preview` block - the design view's own patch, back when it had one - is merged
 into `patches` where the memory knows nothing about that patch, and dropped otherwise,
 because a player's tuning must not be overwritten by a context that no longer exists.
@@ -181,8 +190,10 @@ fact.
 
 **Only what differs from the patch's defaults is stored**, so a later release's better
 default still reaches everybody who never moved that slider, and the file stays small.
-The seed is remembered with the parameters; the pipeline `output` (panel model, dither,
-limiter) are not - those are about the panel, not about the patch.
+The seed is remembered with the parameters, and since card 151 so is the **speed**,
+because a setting carries it; the pipeline `output` (panel model, dither, limiter) is not,
+and neither are `fps` and `paused` - those are about the panel and about playback, not
+about the patch.
 
 **A remembered value can never break a patch.** Patches gain, lose and re-range
 parameters between releases, so every value is checked against this build's own spec on
@@ -199,7 +210,78 @@ not a fault and never a 503.
 
 "Reset" (`POST /reset_params`, or `player/set {reset_params: true}`) means *back to the
 defaults and stay there*: it forgets that patch's parameters rather than handing them
-back on the next switch. It leaves the seed alone, which is what Reset is about.
+back on the next switch. It leaves the seed alone, which is what Reset is about. On the
+page it is not a button any more: it is loading **Default**, which does the same and more
+(see below).
+
+## A patch has named settings (card 151)
+
+The model, in four words the rest of this section uses:
+
+| | |
+|---|---|
+| **patch** | metaballs. What plays. |
+| **working copy** | what it is set to *now*: its parameters, its seed and its speed. There is one per patch, it is what the page's sliders move, and it survives a restart - which it did before this card, as the per-patch memory. |
+| **setting** | a working copy saved under a name. A patch can have up to 64. They belong to the **patch**, not to a panel: attach a second panel and the same settings are there. |
+| **Default** | the setting every patch has and nobody can change: its declared parameter defaults, speed 1.00x and a fixed seed. Not stored - synthesised - so a release that improves a default improves Default for everybody. |
+
+**"Modified" is computed, never stored.** It is the working copy compared with the
+setting it says it came from (or with Default when it came from nowhere), so it cannot be
+left behind by a change that forgot to clear a flag. The comparison is made against the
+setting *as this build can use it*, which matters the day a patch gains or loses a
+parameter: otherwise a setting that had to be repaired would read as modified for ever.
+
+**A setting outlives the patch it was saved from.** A parameter the patch has since lost
+is dropped on load, one it has gained is simply absent and therefore at its default, and
+one that is now out of range is clamped - each said once in the same `repaired` voice as
+the rest of the state file, and never an error. What is on disk is left as it was, so a
+build that has the parameter back gets the value back.
+
+The **seed** is in a setting, and in the state file, and on the API, and nowhere on the
+page: the number is opaque and says nothing about what is on the panel (the owner, 2026-09-20).
+What a person wants from it is "show me another one like this", which is the one quiet
+**Another** button beside the settings control - shown only for a patch whose picture
+really depends on its seed (`PatchDef::seeded`, set per patch by reading its code), with
+`N` as its shortcut. A patch that composes as it goes has better words of its own - the
+clocks' "Compose another", the dials' "Move on" - and offers those under *Now playing*
+instead. The number is still in `/api/v1/status` and in that button's tooltip.
+
+Names are trimmed, 1 to 40 characters, unique within a patch however they are spelled
+(`Lava` and `lava` are one setting), and `Default` is reserved in any case. A refusal is a
+**400 with a sentence**, which the page puts on the line beside the control.
+
+| route | body | answer |
+|---|---|---|
+| `POST /settings/load` | `{name}` - `Default`, or empty for the one it is on ("Revert") | the new state |
+| `POST /settings/save` | `{name?}` - a name is "Save as...", no name overwrites the one it is on | the new state |
+| `POST /settings/rename` | `{from?, to}` - no `from` is the one it is on | the new state |
+| `POST /settings/delete` | `{name?}` | the new state |
+| `POST /player/set` | `{device, setting}` | the same load, on a panel other than the page's |
+
+```sh
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"name":"Lava"}' localhost:8787/api/v1/settings/save
+#  -> {"patch":"metaballs","setting":"Lava","settings":["Lava"],"modified":false,...}
+```
+
+The **list**, the **current name** and **`modified`** travel in `StudioState`, so every
+answer and every broadcast carries them and no browser needs a second read: a save, a
+load, a rename or a delete in one browser shows in another at once. **Loading is one
+change** - the parameters, the seed and the speed move together, one broadcast and one
+write - so the panel follows in one step rather than through a burst of half-loaded
+pictures.
+
+Deleting a setting **does not change what is playing**: the values stay, the name goes,
+so the patch is on Default and honestly marked modified.
+
+> The panel's own firmware serves a `POST /api/v1/settings` of its own
+> ([`docs/design/device-web.md`](../../docs/design/device-web.md)) for its WiFi and its
+> name. That one is on the device, on port 80, and has nothing to do with these: nothing
+> is shared but the word.
+
+Putting a good setting into the repo as a factory setting was offered to the owner and not
+chosen, so it is not built. A setting is plain data in `state.json`, so nothing stops it
+later.
 
 A **v1** state file - what a service deployed before this card has - is migrated: what
 the design view and each panel were playing is merged into the one map, so nobody loses
@@ -323,7 +405,7 @@ it changes the panel, which is the point of card 170.
 
 | route | body | answer |
 |---|---|---|
-| `GET /bootstrap` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`), the payload budget, the current state, and the adapter outcome (`gpu`) |
+| `GET /bootstrap` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`), which are worth asking "another one like this" of (`seeded`, card 151), the payload budget, the current state, and the adapter outcome (`gpu`) |
 | `GET /frame` | | one frame packet: 52-byte header + 64x32 sRGB = 6196 bytes |
 | `GET /patch_playing` | | what a composing patch is performing, or `null` |
 | `GET /panel_status` | | the preview's panel link, or `null` |
@@ -336,6 +418,7 @@ it changes the panel, which is the point of card 170.
 | `POST /patch_act` | `{action, device?}` | what it is performing; `device` names a panel other than the page's (card 140) |
 | `POST /restart` | `{}` | the new state |
 | `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |
+| `POST /settings/load\|save\|rename\|delete` | | the patch's named settings; see above |
 | `GET /ws` | | the frame socket |
 
 **The old names still work on the way in** (card 150). `POST /set_piece`,
@@ -378,7 +461,7 @@ once whether or not the panel is there. Every change is persisted.
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |
 | `POST /devices/forget` | `{device}` | the player goes with it |
 | `POST /devices/refresh` | `{}` | ask every unresolved panel who it is, now |
-| `POST /player/set` | `{device, on?, patch?, seed?, param?, reset_params?, fps?, paused?, speed?, output?, brightness?, restart?}` | the player |
+| `POST /player/set` | `{device, on?, patch?, seed?, param?, reset_params?, setting?, fps?, paused?, speed?, output?, brightness?, restart?}` | the player |
 | `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the policy |
 | `POST /device/identify` | `{device, ms?}` | |
 | `POST /device/name` | `{device, name}` | renames it here, and on the device when it can be reached |
@@ -494,6 +577,17 @@ player-lifetime count that survives the link being rebuilt (171); a patch that n
 a graphics adapter there is none for is struck through with the reason rather than
 offered and then black (145); and the brightness slider says out loud that it is the
 panel's own brightness, which is why the picture on screen does not change with it.
+Card 151 took the **seed's number** off both screens for the same reason: it was a
+readout that told a person nothing they could act on. What is left is a button that says
+what it does - *Another* - on the patches where it does anything.
+
+**The settings control** heads the Parameters section, above what it holds: the name, a
+mark when it has been moved since, the list to load from with Default first, and Save /
+Save as... / Rename / Delete / Revert. On Default, `Save` *is* `Save as...` and Rename and
+Delete are disabled, so the read-only one says so by shape rather than by refusing
+afterwards. Naming and confirming are **inline** - no `prompt()`, no `confirm()`: those
+cannot be driven by the browser tooling, cannot be styled and stop the page - and a
+refusal appears beside the control rather than on the page's shared notice line.
 
 No framework, no bundler, no CDN: the box this runs on has no promise of internet, and a
 test asserts that no file of either screen reaches outside it.
@@ -517,4 +611,5 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
+| `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

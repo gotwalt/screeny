@@ -14,6 +14,9 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "Continuous colour, supersampled in linear light. More than 32 colours, so it shows codec damage.",
     params: PARAMS,
     make,
+    // Every body's radius, path amplitude, frequency and phase is drawn from
+    // the seed: a new seed is a different dance of the same blobs.
+    seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[

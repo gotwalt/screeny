@@ -80,6 +80,15 @@ const LABEL: &str = "screeny";
 /// card 243: see [`read_partitions`].
 const OTADATA_LABEL: &str = "otadata";
 
+/// The two app slots in `firmware/partitions.csv`, by label.
+///
+/// By label and not by `partition_type()` for [`LABEL`]'s reason, and not by
+/// hard-coded offset because the table is the source of truth for where they
+/// are - `firmware/src/http.rs` maps an offset to a `FwSlot` *word* from the
+/// CSV, which is a different job: a wrong guess there is a wrong label in a
+/// status reply, a wrong guess here is an erase in the wrong place.
+const APP_LABELS: [&str; 2] = ["ota_0", "ota_1"];
+
 // ---------------------------------------------------------------------------
 // Counters — what a status page (card 222) reads
 // ---------------------------------------------------------------------------
@@ -397,6 +406,54 @@ pub struct Parts {
     /// the MMU. That is the *booted* slot and not otadata's selection, and the
     /// two differ exactly when a rollback has happened.
     pub booted_offset: Option<u32>,
+    /// The app slot this image is **not** running from: the one and only place
+    /// card 240's upload is allowed to write.
+    ///
+    /// Worked out once, here, from the two app entries in the table and the
+    /// MMU's answer to "which one am I": whichever `ota_N` is not
+    /// [`Parts::booted_offset`]. `None` when the table has fewer than two app
+    /// partitions or when the MMU could not be read - and `None` means the
+    /// device answers `unavailable` to an upload rather than guessing, because
+    /// the one guess available would be "erase the slot I am running from".
+    pub inactive: Option<InactiveSlot>,
+}
+
+/// A partition entry that is known not to be the running one.
+///
+/// A newtype and not a bare [`PartitionEntry`] on purpose. Everything in the
+/// firmware that erases flash outside the settings partition takes one of
+/// these, [`read_partitions`] is the only thing that can make one, and it
+/// makes one only after comparing the entry's offset with the booted
+/// partition's. "The writer cannot address the running slot" is then a
+/// property of the type rather than of every call site remembering to check.
+#[derive(Clone, Copy)]
+pub struct InactiveSlot(PartitionEntry);
+
+impl InactiveSlot {
+    /// The entry, for the code that erases and writes it.
+    ///
+    /// Every write goes through `entry.as_flash_region(flash)`, whose
+    /// `read`/`write`/`erase` are partition-relative and bounds-checked by
+    /// `esp-bootloader-esp-idf` (`partitions.rs` line 793), so an offset that
+    /// ran past the end of this slot is refused by the crate before the ROM
+    /// sees it. There is no way from here to reach the running slot, the
+    /// bootloader, the partition table or `screeny`.
+    #[must_use]
+    pub fn entry(&self) -> PartitionEntry {
+        self.0
+    }
+
+    /// Where it is in flash. For the log line, and for nothing else.
+    #[must_use]
+    pub fn offset(&self) -> u32 {
+        self.0.offset()
+    }
+
+    /// How big it is: the longest image it can hold.
+    #[must_use]
+    pub fn len(&self) -> u32 {
+        self.0.len()
+    }
 }
 
 /// Read the partition table **once for the whole boot**, and keep only the
@@ -433,13 +490,36 @@ fn read_partitions(flash: &mut FlashStorage<'static>) -> (Option<PartitionEntry>
         }
     };
     let settings = table.iter().find(|e| e.label_as_str() == LABEL);
+    // `Err` here is "the MMU said something this crate could not map to a
+    // partition", which is not a reason to fail a boot: `fw_slot` falls back
+    // to otadata's selection and says `unknown` if that fails too.
+    let booted_offset = table.booted_partition().ok().flatten().map(|p| p.offset());
+    // Card 240. The slot an upload may write is the app slot this image is not
+    // running from, and it is decided here, once, against the MMU's answer -
+    // not against otadata, which after a rollback names the *other* one, and
+    // not against a compiled-in offset, which a re-partitioned device would
+    // make a lie. With no booted offset there is no safe answer and the OTA
+    // route says `unavailable`.
+    let inactive = booted_offset.and_then(|booted| {
+        table
+            .iter()
+            .find(|e| APP_LABELS.contains(&e.label_as_str()) && e.offset() != booted)
+            .map(InactiveSlot)
+    });
     let parts = Parts {
         otadata: table.iter().find(|e| e.label_as_str() == OTADATA_LABEL),
-        // `Err` here is "the MMU said something this crate could not map to a
-        // partition", which is not a reason to fail a boot: `fw_slot` falls
-        // back to otadata's selection and says `unknown` if that fails too.
-        booted_offset: table.booted_partition().ok().flatten().map(|p| p.offset()),
+        booted_offset,
+        inactive,
     };
+    match (booted_offset, inactive.as_ref()) {
+        (Some(b), Some(i)) => info!(
+            "store: running from {:#x}; an upload would stage into {:#x} ({} KB)",
+            b,
+            i.offset(),
+            i.len() / 1024
+        ),
+        _ => warn!("store: no inactive app slot - firmware upload is unavailable"),
+    }
     (settings, parts)
 }
 
@@ -591,6 +671,15 @@ pub async fn seed_wifi(wifi: &Wifi) {
 // ---------------------------------------------------------------------------
 // Immediate writes, for the opcodes that can answer ERR_STORAGE
 // ---------------------------------------------------------------------------
+
+/// The app slot an upload may write, if this device has one.
+///
+/// Takes the `STORE` lock for one field read and gives it straight back: the
+/// answer was settled at boot by [`read_partitions`] and cannot change while
+/// the device runs, so nothing here touches flash.
+pub async fn inactive_slot() -> Option<InactiveSlot> {
+    STORE.lock().await.as_ref().and_then(|f| f.parts().inactive)
+}
 
 /// A write a control handler asked for **before** its reply goes out.
 ///

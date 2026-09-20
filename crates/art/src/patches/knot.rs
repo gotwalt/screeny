@@ -18,6 +18,9 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "GPU, rasterized mesh with a depth buffer, then mapped onto a 31-colour designed palette so it is sent exactly.",
     params: PARAMS,
     make,
+    // The seed picks which of five (p, q) torus knots is tied and the tilt it
+    // is seen from: a new seed is a different knot.
+    seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[

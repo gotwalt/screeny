@@ -1110,7 +1110,7 @@ The device serves one HTTP API and two HTML pages. The routes, the request and
 reply bodies, the error shape and every bound are **one crate**,
 `crates/device-api` (`screeny-device-api`), which the firmware, `crates/sim`
 and the Studio all link; `crates/device-api/tests/golden/` holds a checked-in
-example of every body, and `screeny-probe http` holds a device to the 38 rules
+example of every body, and `screeny-probe http` holds a device to the 43 rules
 of `crates/probe/src/http/rules.rs`. Rule numbers are cited below where one
 pins a sentence.
 
@@ -1140,6 +1140,8 @@ The request line, the headers and the body of a buffered route MUST fit the
 server's request buffer together (1,536 bytes in firmware 0.5.1, against a
 desktop browser's ~700 bytes of headers and §8.8's 384-byte body bound). A
 request that overruns it is **answered** `payload_too_large`, not dropped.
+`POST /api/v1/firmware` is the one route that is *not* buffered: its body is
+streamed to flash as it arrives and only its head has to fit.
 
 ### 8.6 The HTTP API: routes
 
@@ -1155,7 +1157,7 @@ request that overruns it is **answered** `payload_too_large`, not dropped.
 | GET | `/api/v1/wifi` | - | `WifiReply` | - |
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
 | POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
-| POST | `/api/v1/firmware` | **reserved**, see below | - | - |
+| POST | `/api/v1/firmware` | a raw `application/octet-stream` image, streamed | `FirmwareReply` | the slot |
 | POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
 | POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |
 
@@ -1223,9 +1225,61 @@ shape here bumps it and moves the prefix, a new optional field does not.
   before the restart.
 - **`identify`** mirrors `IDENTIFY`, whose wire field is a `u16` of
   milliseconds, so a `duration_ms` above 65535 is `out_of_range` (rule 22).
-- **`firmware`** is **reserved for cards 240/241** and is not specified here.
-  Until it lands, a device MUST answer it `unavailable` rather than accepting
-  an upload it cannot vouch for (§8.8).
+- **`firmware`** takes one ESP32 application image as the whole request body
+  and writes it into the app slot the device is **not** running from. It is
+  the one route whose body is streamed: it has no `max_request_len`, its bound
+  is the slot (2 MiB in `firmware/partitions.csv`), and a device MUST NOT
+  buffer the image. `Content-Length` is required - there is no chunked
+  encoding here - and an upload that declares more than the slot holds is
+  refused **before a single flash sector is erased**.
+
+  The reply is `FirmwareReply`, `{"ok", "written", "error"?}`, with **HTTP 200
+  whether or not the image was accepted**: `ok` and `error` are the answer and
+  `written` - how many bytes reached flash before it stopped - is only in the
+  body. The generic error shape of §8.7 is still what a request that never
+  reached the validator gets: `unavailable` when this build or this device
+  cannot stage at all (no inactive slot), `bad_request` when the body did not
+  arrive.
+
+  `ok: true` means **every check below ran and passed**, never "some of them".
+  A build that cannot run them all answers `unavailable` and says in `detail`
+  what it is missing; accepting an image it cannot vouch for is not an option
+  the API offers. The checks are research 006 section 5's, in this order,
+  cheapest first, and each has its own `error` code:
+
+  | # | check | `error` |
+  |---|---|---|
+  | 1 | byte 0 is the ESP image magic `0xE9` | `bad_magic` |
+  | 2 | the header's chip id is the device's | `wrong_chip` |
+  | 3 | the header says a SHA-256 is appended (byte 23) | `bad_sha256` |
+  | 4 | `esp_app_desc.project_name` is `screeny-fw` | `wrong_project` |
+  | 5 | the segment table walks and the one-byte XOR checksum is right | `bad_checksum` |
+  | 6 | the appended SHA-256 matches the bytes it covers | `bad_sha256` |
+
+  Plus `too_large` for an image or a `Content-Length` past the slot, `busy`
+  when another upload is in flight, and `flash` when the write itself failed.
+  The first four are answerable from the first 4,096 bytes, and a device
+  SHOULD refuse on them before it erases anything - which is what makes a
+  wrong-chip or wrong-project upload free to send at a device (probe rules 40
+  and 41). An upload that stops early is `bad_sha256`: the digest is what a
+  truncated image fails.
+
+  **This route does not change which image boots.** Staging writes the
+  inactive slot and nothing else - not `otadata`, not the running slot, not
+  the partition table, not the settings partition - so a device that is
+  power-cycled at any point during or after an upload comes back running what
+  it was running before. Making a staged image the one that runs is a separate
+  step and is not specified here (card 241). One implementation of the checks
+  is `crates/fwimage`, which the firmware and `crates/sim` both link, so the
+  simulator refuses exactly what the device refuses.
+
+  Two consequences a caller should expect. The reply arrives only when the
+  whole image has been written and verified, which on the reference device is
+  tens of seconds - a client's read timeout has to allow for it. And the
+  device MAY take the panel over with an "updating" screen for the duration:
+  §8.4's rule that the frame path is never interrupted has this one exception,
+  and a sender streaming meanwhile is not disconnected and loses no frames it
+  will notice - only the panel stops showing them.
 
 `settings` and `identify` are carried out by building the control request of
 §6.3 and handing it to the same code the control port calls, with `req_id` 0 -
@@ -1299,8 +1353,13 @@ has the same name here: §6.5's `ERR_BAD_LENGTH` and `ERR_VERSION` are
   characters, which is why a real status reply is about 385 bytes.
 - **A route this build cannot serve answers `unavailable` (503)**, not 404 and
   not a qualified success: the route exists and the device cannot serve it in
-  this state, and retrying later is the right behaviour. Firmware 0.5.1 answers
-  it for `GET /api/v1/networks` and `POST /api/v1/firmware`.
+  this state, and retrying later is the right behaviour. Firmware 0.5.1
+  answered it for `GET /api/v1/networks` and `POST /api/v1/firmware`; since
+  0.6.0 the firmware route is served, and `networks` is the only one left (its
+  scan was dropped by device-web decision 10). A device with no inactive app
+  slot - an unpartitioned one, or one whose running slot cannot be identified
+  - answers `unavailable` for `firmware` too, which is the honest answer:
+  there is nowhere safe to write.
 - **A known path with a method it does not have is 405; an unknown path is
   404** (rules 25, 27), and a verb this API has no method for at all - `PUT`,
   `DELETE`, `HEAD` - is 405 **in the error shape above**, not a server's
