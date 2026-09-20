@@ -1,8 +1,19 @@
-//! Supplies the WiFi credentials to the firmware at build time, from outside git.
+//! Supplies the **bench override** WiFi credentials to the firmware, from outside git.
 //!
-//! The credentials are compiled into the image (there is no runtime provisioning
-//! yet; the plan is a captive portal), but they must never be committed. Lookup
-//! order, first hit wins, and both values must come from the same place:
+//! Owner's decision, 2026-09-20: compiled-in credentials are gone from the shipping
+//! firmware. The device joins from the settings store (`crates/settings` on the
+//! `screeny` partition), and a compiled-in pair survives only behind the cargo
+//! feature `bench-wifi`, which is **off by default**.
+//!
+//! With `bench-wifi` off this script looks at nothing: not the environment, not
+//! `firmware/wifi.env`, not `~/.config/screeny/wifi.env`. It emits no
+//! `rustc-env`, so `src/main.rs`'s `SSID` and `PASSWORD` constants - which are
+//! `#[cfg(feature = "bench-wifi")]` - do not exist either, and any use of them
+//! would fail to compile. That is the check: a default build cannot contain a
+//! credential, because there is no name to reach one by.
+//!
+//! With `bench-wifi` on, lookup order, first hit wins, and both values must come
+//! from the same place:
 //!
 //!   1. environment: `SCREENY_WIFI_SSID` and `SCREENY_WIFI_PASSWORD`
 //!   2. `firmware/wifi.env`                  (gitignored; see `wifi.env.example`)
@@ -11,6 +22,9 @@
 //!
 //! File format: `KEY=value` lines, `#` comments, no quoting, no `export`.
 //! `src/main.rs` reads the result with `env!`.
+//!
+//! Nothing here ever prints a credential. The one line it does print says which
+//! *source* the SSID came from, never what it is.
 
 use std::{env, fs, path::PathBuf};
 
@@ -36,6 +50,17 @@ fn parse(text: &str) -> (Option<String>, Option<String>) {
 }
 
 fn main() {
+    // Cargo sets this for every enabled feature. Checking it here, rather than
+    // in the code below, is what makes "off means the files are never read"
+    // true rather than merely intended.
+    if env::var_os("CARGO_FEATURE_BENCH_WIFI").is_none() {
+        println!(
+            "cargo:warning=No WiFi credentials compiled in (feature `bench-wifi` is off). \
+             The device joins from its settings store."
+        );
+        return;
+    }
+
     println!("cargo:rerun-if-env-changed={SSID}");
     println!("cargo:rerun-if-env-changed={PASSWORD}");
 
@@ -65,10 +90,11 @@ fn main() {
 
     let Some((ssid, password, source)) = found else {
         panic!(
-            "\n\nNo WiFi credentials for the firmware.\n\
+            "\n\nFeature `bench-wifi` is on but there are no WiFi credentials.\n\
              Copy firmware/wifi.env.example to firmware/wifi.env (gitignored) or to\n\
              ~/.config/screeny/wifi.env and fill in {SSID} and {PASSWORD},\n\
-             or set both as environment variables.\n\n"
+             or set both as environment variables - or build without `bench-wifi`\n\
+             and let the device join from its settings store.\n\n"
         );
     };
     // 802.11: SSID 1..=32 bytes; WPA2 passphrase 8..=63 characters.
@@ -81,7 +107,7 @@ fn main() {
         "{PASSWORD} from {source} must be 8-63 characters"
     );
 
-    println!("cargo:warning=WiFi credentials: SSID from {source}");
+    println!("cargo:warning=WiFi credentials: SSID from {source} (bench-wifi build)");
     println!("cargo:rustc-env={SSID}={ssid}");
     println!("cargo:rustc-env={PASSWORD}={password}");
 }

@@ -22,16 +22,33 @@ default = []
 # way card 007 shipped it, so the cost of the core split can be measured
 # against the identical decode path. Never ship this.
 display-on-core0 = []
-# Card 200 research spike. Compile-only evidence that the OTA + settings-store
-# APIs link on this pinned stack, and what they cost in flash and RAM. Off by
-# default; never flashed. See docs/research/006-flash-store-ota.md.
-spike-ota = [
-  "dep:esp-storage",
-  "dep:sequential-storage",
-  "dep:embedded-storage",
-  "dep:embassy-embedded-hal",
-  "esp-bootloader-esp-idf/embedded-storage",
-]
+# Card 200 research spike, minus the settings half that card 212 replaced with
+# the real thing in `src/store.rs`. What is left is the OTA evidence: the
+# partition table, otadata, pre-activation validation and the staging loop.
+# Off by default; never flashed. See docs/research/006-flash-store-ota.md.
+spike-ota = []
+
+# **Bench override for the WiFi credentials** (owner's decision, 2026-09-20).
+# OFF by default, and off means off: with the feature clear `build.rs` does not
+# read the environment, `firmware/wifi.env` or `~/.config/screeny/wifi.env` at
+# all, and `crate::SSID` / `crate::PASSWORD` do not exist, so anything that
+# tried to use a compiled-in credential would fail to compile rather than
+# silently ship one. A default build joins from the store and nothing else.
+#
+# With the feature on, the pair is embedded and does exactly two things: it
+# seeds an *empty* store at boot through the ordinary save path, and it is spec
+# section 8.3 step 2 - the fallback after stored credentials have failed three
+# times. The bench flow is to flash a `bench-wifi` build once to seed the store,
+# then flash the default build and watch it join from flash alone.
+bench-wifi = []
+
+# Card 212's bench self-test. A worker cannot reach the device over the LAN, so
+# this exercises the store on the device by itself at boot + 20 s: it saves a
+# name, a brightness and an idle mode through the same code path the control
+# handlers use, times each write and counts its sector erases, prints the
+# `render` maximum over each write, then reboots **once** (guarded by a marker
+# value, so it cannot loop) and reports what it loaded. Off by default.
+store-selftest = []
 # Card 220's measurement build. Brings up `Config::AccessPointStation` with an
 # open soft-AP and a second embassy-net stack that nothing listens on, so the
 # serial log can answer "what does APSTA cost in heap" with a number. Off by
@@ -83,7 +100,10 @@ required-features = ["gpio-probe"]
 esp-hal = { version = "=1.2.2", features = ["esp32", "unstable", "log-04"] }
 esp-rtos = { version = "=0.4.0", features = ["esp32", "embassy", "esp-radio", "log-04"] }
 esp-alloc = { version = "=0.11.0", features = ["esp32"] }
-esp-bootloader-esp-idf = { version = "=0.6.0", features = ["esp32"] }
+# `embedded-storage` is what gives `FlashRegion::as_nor_flash()`, which is how
+# the settings store reaches the `screeny` partition (card 212). It used to ride
+# on the `spike-ota` feature; it is unconditional now that the store ships.
+esp-bootloader-esp-idf = { version = "=0.6.0", features = ["esp32", "embedded-storage"] }
 esp-backtrace = { version = "=0.20.0", features = ["esp32", "panic-handler", "println"] }
 esp-println = { version = "=0.18.0", features = ["esp32", "log-04", "auto"] }
 
@@ -131,21 +151,31 @@ screeny-proto = { path = "../crates/proto" }
 # apart in behaviour the way they could while each kept its own copy.
 screeny-receiver = { path = "../crates/receiver" }
 
-# --- card 200 spike: flash store + OTA (feature `spike-ota` only) ---------
+# --- the settings store (card 212) ----------------------------------------
+# Card 211's crate: the key set, the value encoding, the schema version, the
+# load/save policy and the debounce timer, all `no_std` and host-tested. The
+# device half - the partition, the multi-core discipline, the task - is
+# `src/store.rs`.
+screeny-settings = { path = "../crates/settings" }
+
 # esp-storage is already in the tree as an esp-bootloader-esp-idf dependency,
 # but pulled with default-features = false there, so `critical-section` (which
 # runs each ROM flash call with this core's interrupts masked) is off unless we
-# ask for it here.
-esp-storage = { version = "=0.10.0", optional = true, default-features = false, features = [
+# ask for it here. It must be on: the ESP32 cache cannot serve reads while SPI1
+# is erasing, so an interrupt handler whose code lives in flash, firing
+# mid-erase, is a crash (research 006 section 4).
+esp-storage = { version = "=0.10.0", default-features = false, features = [
   "esp32",
   "critical-section",
   "embedded-storage",
 ] }
-# Async-only, hence embassy-embedded-hal's BlockingAsync around the blocking
-# NorFlash that esp-bootloader-esp-idf hands us.
-sequential-storage = { version = "=8.0.1", optional = true }
-embedded-storage = { version = "=0.3.1", optional = true }
-embassy-embedded-hal = { version = "=0.6.0", optional = true }
+# `sequential-storage` is async-only, hence embassy-embedded-hal's BlockingAsync
+# around the blocking NorFlash that esp-bootloader-esp-idf hands us. It arrives
+# through `screeny-settings`; the direct dependency here is for the version pin
+# to be visible in one place.
+sequential-storage = { version = "=8.0.1" }
+embedded-storage = { version = "=0.3.1" }
+embassy-embedded-hal = { version = "=0.6.0" }
 
 # --- card 201's spike (feature `device-web-spike` only) -------------------
 # All optional, all pinned, all chosen because they already agree with the

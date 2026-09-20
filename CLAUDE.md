@@ -42,13 +42,18 @@ next: current state, what is next, and the lessons already paid for. `docs/desig
 - The device: `192.168.7.221`, mDNS host `screeny-4a00a4.local`, instance
   `screeny-4a00a4`, frames UDP 49374, control UDP 49375. This unit's HUB75 colour
   lines are rotated relative to Tidbyt's published pin map (fixed in `firmware/`).
-- WiFi credentials are **not in git**. `firmware/build.rs` compiles them in from
-  the environment, `firmware/wifi.env` (gitignored) or `~/.config/screeny/wifi.env`
-  (outside the repo, so every worktree finds it). Never write the real SSID or
-  password into a tracked file, a card log, a commit message, a test fixture or a
-  worker prompt; tests use the dummies `Example-Wifi1` / `password9`. The plan for
-  provisioning is a captive-portal setup with an HTTP settings page; do not build
-  other schemes.
+- WiFi credentials are **not in git and not in the firmware**. The device keeps them
+  in its settings partition (`crates/settings`, `firmware/src/store.rs`) and a default
+  build contains none: `build.rs` does not even look. The one override is the cargo
+  feature `bench-wifi` (off by default, for testing): it embeds the pair from the
+  environment, `firmware/wifi.env` (gitignored) or `~/.config/screeny/wifi.env`, and
+  seeds an empty store with it. The settings partition survives a reflash, so one
+  `bench-wifi` flash seeds the bench device. Never write the real SSID or password
+  into a tracked file, a card log, a commit message, a test fixture or a worker
+  prompt (serial logs in `captures/` contain the SSID: never quote those lines);
+  tests use the dummies `Example-Wifi1` / `password9`. Provisioning is a
+  captive-portal setup with an HTTP settings page (`docs/design/device-web.md`); do
+  not build other schemes.
 - **The camera is disconnected (owner, 2026-09-19): do not capture or verify with it.**
   The owner judges the picture by eye; `screeny stats` is the device-side evidence.
   When it is back, camera captures are for "is it showing the right thing", not colour measurement:

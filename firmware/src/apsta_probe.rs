@@ -45,6 +45,8 @@ use esp_radio::wifi::{
 };
 use log::{info, warn};
 
+use screeny_settings::Wifi;
+
 use crate::{mk_static, stack_probe, station_config, station_loop};
 
 /// The soft-AP's own address. 192.168.4.1/24 is what every ESP soft-AP uses,
@@ -134,6 +136,7 @@ pub async fn probe_task(
     mut controller: WifiController<'static>,
     ap_ssid: &'static str,
     mut ap_runner: Runner<'static, Interface>,
+    stored: Option<Wifi>,
 ) {
     info!(
         "apsta-probe: stage 1, station only, {} s before the AP goes up",
@@ -143,7 +146,7 @@ pub async fn probe_task(
     // the loop is sitting in its 2 s RSSI poll, which is a safe place to drop.
     let _ = with_timeout(
         Duration::from_secs(STAGE1_S),
-        station_loop(&mut controller),
+        station_loop(&mut controller, stored.clone()),
     )
     .await;
     heap_line("stage 1 done: station-only baseline");
@@ -156,8 +159,20 @@ pub async fn probe_task(
         // station associates and announces it with a CSA.
         .with_channel(1);
 
+    // Card 212: credentials come from the store now, so the station half of the
+    // APSTA config is built from whatever the station is actually using rather
+    // than from a compiled-in constant. With nothing stored (and no `bench-wifi`
+    // pair) the probe still measures the heap, which is its whole job; it just
+    // will not associate.
+    let builtin = crate::builtin_wifi();
+    let sta = stored
+        .as_ref()
+        .or(builtin.as_ref())
+        .and_then(station_config)
+        .unwrap_or_default();
+
     info!("apsta-probe: stage 2, raising open AP {:?}", ap_ssid);
-    match controller.set_config(&WifiConfig::AccessPointStation(station_config(), ap)) {
+    match controller.set_config(&WifiConfig::AccessPointStation(sta, ap)) {
         Ok(()) => {
             APSTA_UP.store(true, Ordering::Relaxed);
             // The mode change stopped and restarted the radio, which resets
@@ -189,7 +204,7 @@ pub async fn probe_task(
     };
 
     select(
-        select(station_loop(&mut controller), ap_runner.run()),
+        select(station_loop(&mut controller, stored), ap_runner.run()),
         stack_line,
     )
     .await;

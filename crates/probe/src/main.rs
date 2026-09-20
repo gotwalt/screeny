@@ -26,6 +26,7 @@
 //!   name NAME                SET_NAME
 //!   release                  RELEASE
 //!   wifi                     GET_WIFI
+//!   set-wifi SSID PSK [--persist]   SET_WIFI (takes the device off its network; bench only)
 //!   reboot                   REBOOT (guarded)
 //!   bench CMD ARG            private opcode 0x80: G/D/W/O/P
 //!   stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final]
@@ -42,7 +43,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use screeny_proto::control::{ErrorCode, IdleMode, Request, Telemetry};
+use screeny_proto::control::{ErrorCode, IdleMode, Request, SetWifi, Telemetry};
 use screeny_proto::txt;
 
 use screeny_probe::link::{Control, FrameLink, OwnedReply, Pacer};
@@ -50,7 +51,8 @@ use screeny_probe::{state_name, suite, vectors};
 
 const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT] | --name NAME] [--ctrl PORT] [--vectors DIR] <command>\n\
                      commands: info | ping N | stats | reset-stats | brightness N | identify MS |\n\
-                               idle MODE | name NAME | release | wifi | reboot | bench CMD ARG |\n\
+                               idle MODE | name NAME | release | wifi | set-wifi SSID PSK [--persist] |\n\
+                               reboot | bench CMD ARG |\n\
                                stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final] |\n\
                                conformance [--only SECTION] [--slow] [--cap-probe]\n\
                                            [--restore-idle N] [--list] |\n\
@@ -182,6 +184,16 @@ fn run() -> Result<bool, String> {
             simple(ctrl_addr, Request::SetName(n))
         }
         "reboot" => simple(ctrl_addr, Request::Reboot),
+        // Spec 8.2. Deliberately not part of `conformance`: it takes the device
+        // off its network. The PSK is an argument, so it lands in shell history;
+        // this is a bench tool. Without `--persist` nothing is stored and a
+        // reboot returns the device to its stored credentials.
+        "set-wifi" => {
+            let ssid = rest.first().ok_or("set-wifi needs SSID PSK [--persist]")?;
+            let psk = rest.get(1).ok_or("set-wifi needs SSID PSK [--persist]")?;
+            let persist = rest.iter().any(|a| a == "--persist");
+            simple(ctrl_addr, Request::SetWifi(SetWifi { ssid, psk, persist }))
+        }
         "bench" => cmd_bench(ctrl_addr, rest),
         "stream" => cmd_stream(&args, frame_addr, ctrl_addr, rest),
         "conformance" => cmd_conformance(frame_addr, ctrl_addr, rest, None),

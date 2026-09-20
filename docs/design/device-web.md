@@ -38,8 +38,12 @@ shared: either session tells the other before changing them. After any flash the
 regression check is `cargo run --release -p screeny-probe -- --addr 192.168.7.221
 conformance --slow` (firmware 0.2.0: 60 pass, 0 fail, 4 skip). Once the Studio runs
 on workbench it holds the source lock around the clock; release it with
-`POST http://workbench.local:8787/api/v1/set_panel {"on":false}` before bench work
-and give it back with `{"on":true,"to":"screeny-4a00a4"}`.
+`POST http://workbench.local:8787/api/v1/player/set {"device":"4a00a4","on":false}`
+before bench work and give it back with `"on":true`. (Since the Studio's card 106 the
+older `set_panel` switch answers 200 and does **not** stop the stream: a conformance run
+against a still-streaming Studio reads as ~35 failures, all "LIVE -> LIVE". Check
+`screeny stats` says HOLD or IDLE before starting.) The choice survives a Studio
+restart, so always put it back.
 
 ## How to think about storage and RAM on this device
 
@@ -195,6 +199,13 @@ Failures are one shape: `{"error":"<code>", "detail"?:"..."}`, the HTTP status b
 property of the code. Every mutating request carries an optional `pin`/`counter`, parsed
 and ignored today (decision 3); `check_auth` is the single hook for parked card 041.
 
+Requested by the software session (2026-09-20), to land with card 222: `StatusReply`
+gains **`boot_id`**, a random `u32` drawn once at boot, so the Studio can tell "the device
+rebooted" from "the link flapped" without inferring it from uptime going backwards. A
+random id rather than a persistent counter on purpose: it costs no flash write per boot.
+(Add it to `crates/device-api` and its golden files after card 224 merges, so the
+simulator picks it up in the same change.)
+
 What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
@@ -226,7 +237,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 211 | `crates/settings`, host-tested against the real map - **done** (42 tests) | no |
 | 220 | framebuffers off core 0's stack; APSTA heap measured - **done**: stack high-water 26.5 KB -> ~6 KB of 37.5 KB; APSTA costs 3.3 KB of heap (44 KB free at the worst instant); keep the 64 + 32 KB heap; the full track leaves ~20 KB of stack against ~6 KB of demand (`docs/research/009-ram-headroom.md`) | yes |
 | 203 | bench: GPIO15 confirmed with the probe, owner pressing - **done** | yes (orchestrator + owner) |
-| 212 | (in flight) firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 212 | **done, on the device (fw 0.3.0)** - firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
