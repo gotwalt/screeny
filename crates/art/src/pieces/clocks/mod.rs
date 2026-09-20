@@ -327,8 +327,8 @@ impl Clocks {
 
     /// Ease the picture towards "the time is being held" and back, so that the
     /// resting dials recede once the hands land and are at full strength for
-    /// every dance. Half a second: long enough not to blink, short enough that
-    /// the digits are clean by the time anyone looks up.
+    /// every dance. Six tenths of a second: slow enough not to read as a blink,
+    /// quick enough that the digits are clean by the time anyone looks up.
     fn settle(&mut self, dt: f32) {
         const SETTLING: f32 = 0.6;
         let holding = self.minute.is_some() && self.plan.is_none() && self.ambient.is_none();
