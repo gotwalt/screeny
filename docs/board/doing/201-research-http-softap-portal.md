@@ -165,3 +165,23 @@ claim about a crate's behaviour cites the source line that shows it.
   - `AccessPointConfig::default()` is SSID `iot-device`, channel 1, open,
     `max_connections: 255`, `dtim_period: 2`, `beacon_timeout: 300`
     (`src/wifi/ap.rs:87`). Soft-AP rejects WEP and an empty password (`ap.rs:64`).
+- Crate survey (read the crates.io index directly, then the actual sources, unpacked
+  into the scratchpad):
+  - `picoserve 0.20.0` depends on `embassy-net ^0.9.1`, `embassy-time ^0.5.1`,
+    `heapless 0.9.3`, `embedded-io-async 0.7` - **our exact pins**. MSRV 1.93;
+    the `esp` toolchain here is `rustc 1.97.0-nightly (8ea53bcd7 2026-07-08)`, so
+    that is fine.
+  - `edge-http 0.8.0` / `edge-captive 0.8.0` / `edge-dhcp 0.8.0` all want
+    `edge-nal ^0.7`, which is what `edge-nal-embassy 0.9.0` (already in the tree)
+    provides, and `domain ^0.12.1`, which `edge-mdns 0.8.0` already pulls in.
+  - **`edge-dhcp 0.8.0`'s server needs only a plain UDP socket**, not a raw one
+    (`src/io.rs:30-47` says so in as many words). Older versions needed `edge-raw`.
+    `edge-nal-embassy` has no raw socket, so this is what makes the DHCP server
+    possible at all.
+  - `edge-dhcp` already implements DHCP option 114 (RFC 8910):
+    `ServerOptions::captive_url` (`src/server.rs:29`), `CAPTIVE_URL: u8 = 114`
+    (`src/lib.rs:822`).
+  - **`edge-nal-embassy 0.9.0`'s default feature set is `all`**, which includes
+    `tcp = ["embassy-net/tcp"]` (its `Cargo.toml`). `firmware/Cargo.toml:66` takes
+    it with default features, so smoltcp's TCP is *already compiled into the
+    current image*. The flash cost of "adding TCP" is therefore mostly already paid.
