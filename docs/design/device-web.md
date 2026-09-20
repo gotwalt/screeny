@@ -37,10 +37,66 @@ on workbench it holds the source lock around the clock; release it with
 `POST http://workbench.local:8787/api/v1/set_panel {"on":false}` before bench work
 and give it back with `{"on":true,"to":"screeny-4a00a4"}`.
 
-## Design (pending)
+## What the research settled
 
-- Flash layout, settings store, OTA and rollback - from card 200.
-- HTTP server, routes and JSON shapes, soft-AP, DHCP/DNS, the join/portal state
-  machine, the portal screen layout, RAM budget - from card 201.
-- The button's GPIO, the gestures, the power-cycle fallback - from card 202.
-- Build order and cards - written by the orchestrator once the three are in.
+### Flash, store, OTA (card 200, `docs/research/006-flash-store-ota.md`)
+
+- Partition table: `nvs` 0x9000+0x5000, `otadata` 0xE000+0x2000, `ota_0`
+  0x10000+2 MB, `ota_1` 0x210000+2 MB, `screeny` (settings) 0x410000+64 KB. No
+  `factory`, no coredump. Today's image is 743 KB, 35% of a slot.
+- **`espflash` never touches `otadata`.** With no `factory` partition a serial flash
+  writes `ota_0` while a stale `otadata` may still select `ota_1`. `tools/fw-run.sh`
+  must always pass `--partition-table firmware/partitions.csv --erase-data-parts ota`.
+- **Every flash write must park core 1**: `esp-storage`'s default returns
+  `OtherCoreRunning` while the display owns core 1. Use `multicore_auto_park()` and
+  the `critical-section` feature; never `multicore_ignore()`; only core 0 touches
+  flash. The park is per 4 KB sector (~50 ms): the circular DMA keeps the panel lit,
+  only the dither phase freezes. Small config writes need no special handling; an OTA
+  shows a static "updating" screen with dither off.
+- **Open risk, bench only**: core 0 has interrupts masked for the same ~50 ms per
+  sector erase. Whether esp-radio's WiFi survives that during an upload is the first
+  thing to measure on hardware.
+- **Rollback**: espflash's bundled bootloader has `APP_ROLLBACK_ENABLE` off. App-side
+  revert (mark the running slot `Invalid`, reboot) covers every image that boots but
+  never becomes healthy. Only a rebuilt ESP-IDF v6.1 bootloader covers an image that
+  crashes before the confirm code runs. **Owner decision pending**: build that
+  bootloader (ESP-IDF is not installed here; a docker image would do) and commit the
+  26 KB blob.
+- Health criterion (proposed): WiFi + DHCP, and one HTTP request or 120 s uptime, and
+  at least one display swap; never before 60 s; revert at 180 s.
+- Buffers held across an `await` in a task land in `.bss` and come out of core 0's
+  stack (the spike's 11 KB did). Scratch buffers are heap-allocated for the duration
+  of the operation, never in a future.
+- Settings: `sequential-storage 8.0.1` map over the `screeny` partition through
+  `BlockingAsync`; record logic in `crates/settings` (card 211).
+
+### The button (card 202, `docs/research/008-button.md`)
+
+- **GPIO15, active low, internal pull-up**, read out of the stock image's
+  `gpio_config_t` and confirmed by a stock boot log on Tidbyt's forum. Not `EN`, not
+  GPIO0: holding it at boot cannot strand the device in the ROM bootloader. GPIO15 is
+  also the MTDO strap (a held button silences the ROM boot log - harmless) and one of
+  the two board-ID ADC straps.
+- `BUTTON_GPIO` stays `None` until the bench confirms it: `cargo build --release
+  --features gpio-probe --bin gpio_probe` in `firmware/`, flash, the owner presses.
+  Phase B of the probe (pull-down) says whether anything external holds the pin up.
+- Gestures (proposed): short press = identify/status screen for 10 s; held past 1 s
+  starts an on-panel countdown, release cancels; 5 s wipes WiFi and reboots into the
+  portal; 15 s factory-resets all settings. Held at boot runs the same ladder. One
+  embassy task on core 0 in `wait_for_any_edge`, 30 ms debounce.
+- Fallback (three quick power cycles) is parked unless the probe says the button is
+  unusable.
+
+### HTTP, soft-AP, portal (card 201) - pending
+
+## Build order
+
+| card | what | hardware |
+|---|---|---|
+| 210 | partition table + `tools/fw-run.sh` flags; first flash of the new layout | yes (orchestrator) |
+| 211 | `crates/settings`, host-tested against the real map (in flight) | no |
+| 212 | firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 203 | bench: confirm GPIO15 with the probe, owner pressing; set `BUTTON_GPIO` | yes (orchestrator + owner) |
+| 22x | HTTP status + settings, soft-AP + portal + QR screen, sim support (081) - from card 201 | mixed |
+| 23x | button task, hold ladder + countdown, wipe -> portal | yes |
+| 24x | OTA: stage + validate, activate/confirm/revert, "updating" screen, the interrupt-window measurement, rollback bootloader | yes |
