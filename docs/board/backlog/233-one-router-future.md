@@ -57,6 +57,29 @@ Already established:
   sentence), since a single dispatch makes that a table lookup. It flips the probe's
   rule 29 from a known-223 skip to a pass; do not flip the probe's constant yourself.
 
+What the first device run of `screeny-probe http` found on fw 0.4.2 (26 passed, 3
+failed, 9 skipped) - **fix these here, they fall out of owning the dispatch**:
+
+- Rules 26 and 37: a verb the API has no method for (`DELETE /api/v1/status`) is answered
+  by picoserve's own plain-text `405 Method DELETE not allowed for ...`. Every refusal
+  must be the API's error shape: `405 {"error":"method_not_allowed", ...}` for a known
+  path (any verb, including ones picoserve's `MethodRouter` has no slot for), `404` for an
+  unknown one.
+- Rule 34: `POST /api/v1/reboot` without the magic word must answer `400 out_of_range`
+  (today `bad_request`), the same mapping UDP `REBOOT`'s bad magic gets and what the
+  simulator answers.
+
+Card 227's correction to this card's premise: the frames listed in the Goal do **not**
+all coexist (the outer `Either` contains the inner by value and its poll is inlined), and
+under 2,378 real connections core 0 only reached 13.3 KB - the boot path sets the mark
+(13,056). fw 0.4.2 has `stack_free` ~17-19 KB. So the prize here is smaller than first
+thought and must be **measured, not assumed**: the 5,680-byte router frame is still 43%
+of the high-water, the http task's pool entry is 7,504 bytes per worker (x2), and card
+223 lands ~1.2 KB under the `fw-size.sh` floor without another lever. If the single
+dispatch does not shrink the measured high-water or the pool entry by at least ~2 KB in
+total, say so plainly, keep the correctness fixes above, and recommend cards 234/235
+(frame-socket tx buffer, mDNS buffers) as 223's lever instead.
+
 ## Deliverables
 
 1. **The dispatch.** One future, one `match` (or table walk over `route::ROUTES`) from
@@ -71,8 +94,9 @@ Already established:
    after for every symbol on the request path, in a table in the card Log.
 2. **Numbers.** `tools/fw-size.sh` before/after; the 60 s `stack:` line; the selftest's
    per-route times (they should not get worse); and, from the orchestrator's load run,
-   `stack_free` under HTTP load. **Target: `stack_free` >= 16 KB under load on the
-   default build with two HTTP workers**, and the http task's pool entry smaller than
+   `stack_free` under HTTP load. **Target: measured high-water down and/or the http pool entry down, >= 2 KB in total,
+   on the default build with two HTTP workers** (fw 0.4.2 baseline: `.stack` 33,072,
+   `stack_free` ~17-19 KB under load), and the http task's pool entry smaller than
    today's 7,504 bytes per worker if the restructure allows (report it either way).
 3. Wire behaviour identical: same status codes, same bodies, same headers that matter
    (`Content-Type`, `Content-Length`, `Connection: close`), 405 vs 404 via

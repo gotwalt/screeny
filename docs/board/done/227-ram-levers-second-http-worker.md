@@ -404,3 +404,23 @@ its store, streaming at 30 fps with zero drops. `wifi_state` reads `failed` as
 the sticky residue of run C's deliberate wrong-credentials POST (spec 8.2 step
 4 - it is meant to be sticky, and it clears on reboot); the device is on the
 real network and `state live` throughout.
+
+### Orchestrator, after the merge (2026-09-20)
+
+- `main` builds to the worker's numbers: `.data` 58,388, `.bss` 105,136, `.stack` 33,072
+  (floor 24,576), image 956,813. fw 0.4.2 on the device.
+- Bench rule honoured: after run C's wrong-credentials POST, `POST /api/v1/reboot` ->
+  the device rejoined from its store (`wifi_state connected`, `state live`).
+- UDP conformance: 60 passed, 0 failed, 4 skipped. `stack_free` 17,376 after both
+  suites, a reboot and three minutes of streaming (was 4,312 on fw 0.4.0).
+- **First device run of `screeny-probe http` (card 228): 26 passed, 3 failed, 9
+  skipped.** The skips are the expected ones (no scan, no upload, the opt-in flags, rule
+  29 behind `CARD_223_LANDED`). The three failures are real, small and the firmware's:
+  - #26 / #37: a verb the API has no method for (`DELETE /api/v1/status`) gets
+    picoserve's own plain-text `405 Method DELETE not allowed for ...`, not the API's
+    `{"error":"method_not_allowed"}` shape.
+  - #34: `POST /api/v1/reboot` without the magic word answers `400 bad_request`; the
+    simulator (which routes it through the UDP control path, the one implementation of
+    that rule) answers `400 out_of_range`. `out_of_range` wins: same mapping as UDP
+    `REBOOT`'s bad magic.
+  Both go to card 233, which rewrites the dispatch anyway.
