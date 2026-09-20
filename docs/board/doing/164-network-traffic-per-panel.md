@@ -354,3 +354,27 @@ Sent      1.4 MB out · 5.2 KB in since the studio started
 
 ...and `Sent` was watched climbing 1.4 MB -> 2.0 MB -> 2.7 MB across the three probes,
 which is "totals only grow" with a person's eye on it rather than an assertion.
+
+### The suite, and card 155
+
+`cargo test --release --no-fail-fast` at the root, on the branch as it stood after card
+151: **831 passed, 0 failed, exit 0**, first run and no re-runs needed. Card 156's
+load-sensitive ones all passed first time despite three other workers building -
+`screeny` `pacing` (18.94 s), `loopback`, `embed`, and the studio's `moved` and `soak`.
+
+`main` then moved again (card 155, `6fad8b3` - vesta). Merged that too (`c0b1f97`):
+**no conflicts**, 155 being confined to `crates/art` and touching nothing this card does.
+Re-ran the three crates that could possibly care -
+`cargo test --release -p screeny-studio -p screeny-art -p screeny` - **32 suites, all ok,
+0 failed, exit 0**, and `cargo clippy --workspace --all-targets` silent. The diff against
+`main` is now exactly this card's 18 files and nothing else.
+
+### Follow-ups
+
+None worth a card. Two things deliberately left alone and written here instead:
+
+- **No chart.** The card said a number, not a chart, and if a chart is wanted later that is
+  a card of its own - it would need a ring buffer per device, which is the first thing in
+  this design that would not be bounded by a handful of `u64`.
+- **The `kbs` decimal** is the one judgement call in the whole card (see above); it is one
+  line if the owner meant the literal reading of "one decimal under 10".
