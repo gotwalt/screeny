@@ -1874,6 +1874,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "screeny-otastate"
+version = "0.1.0"
+dependencies = [
+ "screeny-device-api",
+]
+
+[[package]]
 name = "screeny-panel"
 version = "0.1.0"
 dependencies = [

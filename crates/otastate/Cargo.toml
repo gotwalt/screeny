@@ -1,0 +1,24 @@
+[package]
+name = "screeny-otastate"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The OTA activate / confirm / revert state machine: what a boot is, when an image on trial has proved itself, and - for the tests - a model of the ESP-IDF v6.1 bootloader's otadata arithmetic, so every way an update can be interrupted has an answer a plain `cargo test` can check."
+
+# `no_std`, no alloc, no clock, no I/O: the firmware (card 241) compiles it for
+# xtensa-esp32-none-elf and these tests compile it for the host, so the two
+# cannot disagree about when an image counts as healthy. The precedent is
+# `crates/settings`, `crates/provision` and `crates/fwimage`.
+[features]
+# **On by default, and off in the firmware** (`default-features = false`).
+# `model` is the paper bootloader: `otadata`'s two entries, the sequence
+# arithmetic `esp-bootloader-esp-idf` performs, and the selection rules of
+# ESP-IDF v6.1. A device has a real bootloader and needs none of it; the tests
+# need all of it, because "what boots if the power goes here" is a question no
+# amount of reasoning settles as well as running it.
+default = ["model"]
+model = []
+
+[dependencies]
+# `FwSlot` and `FwState` are the wire's, and there is one spelling of each.
+screeny-device-api = { path = "../device-api" }
