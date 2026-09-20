@@ -335,3 +335,28 @@ I did **not** write a card for `screeny-art play|snapshot --setting NAME`, which
 left to my judgement: it would make the CLI read the Studio's private state file, and the
 Studio track is going server-first (card 105 onward). If somebody wants a setting on the
 command line later, the honest way is the Studio's own API, not its file.
+
+### Handing over (worker)
+
+```
+cargo clippy --workspace --all-targets      # silent
+cargo test --release --no-fail-fast         # every crate: 0 failed, 1 ignored
+```
+
+The whole root workspace in release: nothing failed, including the load-sensitive ones
+card 156 names (`moved`, `soak`, `pacing`, `loopback`, `embed`). In an earlier **debug**
+run, while a release build was compiling on the same machine, `moved::the_status_poll_
+follows_a_panel_that_moved` failed once; re-run alone it passed, and it passed again in
+the release run. Both results are reported and nothing was changed for it.
+
+Studio unit tests 75 (was 62), `tests/ui.rs` 26 (was 20), `crates/art` 65.
+
+Outside `crates/studio`, this card touched only: `crates/art/src/patch.rs` (the `seeded`
+field), each patch's `DEF` literal, `crates/art/src/patches/mod.rs` (two tests) and
+`crates/art/README.md`. **Card 155's `vesta` will need `seeded:` in its literal** - it is a
+kinetic clock face, so the orchestrator should read what it does with its seed and whether
+it offers actions of its own before deciding; on what the card says of it, `false` looks
+right. Nothing in `firmware/`, `crates/proto`, `crates/receiver`, `crates/sim`,
+`crates/device-api`, `crates/settings` or the spec was touched.
+
+No processes left: the simulator and the studio were both stopped and `ps` is clear.
