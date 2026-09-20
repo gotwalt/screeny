@@ -1652,6 +1652,7 @@ dependencies = [
 name = "screeny-probe"
 version = "0.1.0"
 dependencies = [
+ "ctrlc",
  "screeny-proto",
 ]
 
@@ -1675,6 +1676,7 @@ dependencies = [
  "minifb",
  "png 0.18.1",
  "screeny-panel",
+ "screeny-probe",
  "screeny-proto",
  "screeny-receiver",
 ]

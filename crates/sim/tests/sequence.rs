@@ -1,4 +1,12 @@
-//! Spec section 3.2 (sequence numbers) and 3.3 (newest wins).
+//! Spec section 3.2 (sequence numbers) and 3.3 (newest wins), in process.
+//!
+//! The counter arithmetic - the wrap, `frames_dropped_stale`, `seq_gaps`,
+//! and that a new source resets `last_seq` - is now
+//! `screeny_probe::suite::sequence` and runs from `tests/conformance.rs`.
+//! What is left is what the wire cannot show: which *pixels* ended up on the
+//! panel after each of those decisions, which frame `shown` refers to, the
+//! `Dropped { cause: Stale }` events, and the injected slow decode that makes
+//! frames supersede each other in the first place.
 
 mod common;
 
@@ -85,48 +93,6 @@ fn duplicates_and_reordered_frames_are_stale() {
     assert_eq!(s.telemetry.frames_shown, 1);
     assert_eq!(s.telemetry.frames_rx, 1, "a stale frame is not accepted");
     assert_eq!(s.telemetry.seq_gaps, 0, "a stale frame cannot open a gap");
-}
-
-#[test]
-fn skipped_sequence_numbers_are_counted_as_gaps() {
-    let dev = device();
-    let sim = dev.handle();
-    let tx = Sender::new(dev.frame_addr());
-    let (p, _) = marker(1);
-
-    tx.send_seq(codec::SOLID, F_KEY, 10, &p);
-    sim.wait_for_frames(1, T).unwrap();
-    assert_eq!(sim.telemetry().seq_gaps, 0, "the first frame skips nothing");
-
-    tx.send_seq(codec::SOLID, F_KEY, 11, &p);
-    sim.wait_for_frames(2, T).unwrap();
-    assert_eq!(
-        sim.telemetry().seq_gaps,
-        0,
-        "consecutive frames leave no gap"
-    );
-
-    tx.send_seq(codec::SOLID, F_KEY, 20, &p);
-    sim.wait_for_frames(3, T).unwrap();
-    assert_eq!(sim.telemetry().seq_gaps, 8, "12..=19 were never seen");
-
-    // And across the wrap. RFC 1982 only calls a jump of less than half the
-    // space "newer", so walk up to 0xFFFF in quarters first.
-    let mut shown = 3u32;
-    for seq in [0x4000u16, 0x8000, 0xC000, 0xFFFF] {
-        tx.send_seq(codec::SOLID, F_KEY, seq, &p);
-        shown += 1;
-        sim.wait_for_frames(shown, T)
-            .unwrap_or_else(|| panic!("seq {seq:#06x}"));
-    }
-    let before = sim.telemetry().seq_gaps;
-    tx.send_seq(codec::SOLID, F_KEY, 2, &p);
-    sim.wait_for_frames(shown + 1, T).unwrap();
-    assert_eq!(
-        sim.telemetry().seq_gaps - before,
-        2,
-        "0 and 1 were skipped across the wrap"
-    );
 }
 
 #[test]
@@ -220,30 +186,3 @@ fn a_new_source_resets_the_sequence_but_not_the_counters() {
     assert_eq!(s.active_source, Some(b.addr()));
 }
 
-#[test]
-fn interarrival_and_jitter_track_a_paced_stream() {
-    // Section 6.8, on the device's own clock. 20 ms pacing on loopback is
-    // steady enough that the EWMA should land near it.
-    let dev = device();
-    let sim = dev.handle();
-    let mut tx = Sender::new(dev.frame_addr());
-    let (p, _) = marker(4);
-
-    for _ in 0..40 {
-        tx.send(codec::SOLID, F_KEY, &p);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let t = sim.telemetry();
-    assert!(
-        (12_000..32_000).contains(&t.interarrival_us),
-        "expected roughly 20 ms, got {} us",
-        t.interarrival_us
-    );
-    assert!(
-        t.jitter_us < t.interarrival_us,
-        "jitter {} should be well under the interval {}",
-        t.jitter_us,
-        t.interarrival_us
-    );
-    assert!(t.interarrival_max_us >= t.interarrival_us);
-}

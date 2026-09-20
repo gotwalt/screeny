@@ -7,15 +7,30 @@
 //! that would otherwise show one still image for ten minutes.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use screeny_proto::dec::codec;
 
-/// One pre-encoded frame payload.
+/// One pre-encoded frame payload and the pixels the frozen card-002 lab
+/// decoder produced from it.
 pub struct Vector {
     pub name: String,
     pub codec: u8,
     pub payload: Vec<u8>,
+    pub expect: Vec<u8>,
+}
+
+/// Where the checked-in vectors live, relative to this crate.
+pub fn default_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../proto/tests/vectors")
+}
+
+/// Every checked-in vector. Panics if the directory has moved: a silently
+/// empty list would turn the bit-exactness tests into no-ops.
+pub fn all() -> Vec<Vector> {
+    let v = load(&default_dir()).expect("crates/proto/tests/vectors");
+    assert!(v.len() >= 27, "expected the card-005 vector set");
+    v
 }
 
 /// Read `manifest.tsv` and every payload it names.
@@ -42,10 +57,20 @@ pub fn load(dir: &Path) -> Result<Vec<Vector>, String> {
                 payload.len()
             ));
         }
+        let rgb = dir.join(format!("{name}.rgb"));
+        let expect = fs::read(&rgb).map_err(|e| format!("{}: {e}", rgb.display()))?;
+        if expect.len() != screeny_proto::NBYTES {
+            return Err(format!(
+                "{name}: expected frame is {} bytes, not {}",
+                expect.len(),
+                screeny_proto::NBYTES
+            ));
+        }
         out.push(Vector {
             name: name.to_string(),
             codec,
             payload,
+            expect,
         });
     }
     if out.is_empty() {

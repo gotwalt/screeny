@@ -1,10 +1,17 @@
-//! Spec section 7: source identity, the lock, takeover, and the idle state
-//! machine.
+//! Spec section 7 in process: which source owns the panel, and what is
+//! actually lit while it does.
 //!
-//! Most of these run with the timing constants compressed, because waiting
-//! out a real `HOLD_MS` is ten seconds a test. One test at the end runs the
-//! spec's own numbers, so "we compressed them correctly" is not something the
-//! rest of the file has to be trusted about.
+//! These run with the timing constants compressed, because waiting out a real
+//! `HOLD_MS` is ten seconds a test. What used to justify that - one test at
+//! the end running the spec's own numbers - is now done better by
+//! `tests/conformance.rs`, which drives the whole of section 7 at `LOCK_MS`
+//! 500 and `STREAM_TIMEOUT_MS` 1000 through `screeny_probe::suite`, the same
+//! rules the orchestrator points at the firmware.
+//!
+//! So what is left here is the half a conformance run cannot see:
+//! `active_source`, the `LockReleased` events and their reasons, the decoded
+//! frame, and `render_display()` - whether the *panel* is showing the frame,
+//! the status screen or an `IDENTIFY` overlay.
 
 mod common;
 
@@ -352,61 +359,3 @@ fn identify_is_an_overlay_and_not_a_state() {
     assert_frames_eq(&s.decoded[..], &eb, "the frame underneath survived");
 }
 
-#[test]
-fn identify_zero_stops_one_in_progress() {
-    let dev = SimDevice::start(quick()).unwrap();
-    let sim = dev.handle();
-    let ctrl = Ctrl::new(dev.control_addr());
-
-    ctrl.call(&Request::Identify { duration_ms: 5_000 }, 1)
-        .unwrap();
-    sim.wait_until(T, |s| {
-        s.state_byte == screeny_proto::control::state::IDENTIFY
-    })
-    .expect("the overlay");
-    ctrl.call(&Request::Identify { duration_ms: 0 }, 2).unwrap();
-    sim.wait_until(T, |s| {
-        s.state_byte != screeny_proto::control::state::IDENTIFY
-    })
-    .expect("0 stops it");
-}
-
-#[test]
-fn the_spec_s_own_constants_behave_the_same_way() {
-    // Everything above compresses the timings. This one uses LOCK_MS = 500
-    // and STREAM_TIMEOUT_MS = 1000 as written, so the compression is not
-    // load-bearing. HOLD_MS is ten seconds and is not exercised here.
-    let dev = SimDevice::start(Config::for_test()).unwrap();
-    let sim = dev.handle();
-    assert_eq!(dev.handle().snapshot().state, State::Idle);
-
-    let mut a = Sender::new(dev.frame_addr());
-    let mut b = Sender::new(dev.frame_addr());
-    let (pa, ea) = marker(1);
-    let (pb, eb) = marker(2);
-
-    a.send(codec::SOLID, F_KEY, &pa);
-    sim.wait_for_frames(1, T).unwrap();
-
-    // 300 ms in, still well inside LOCK_MS.
-    std::thread::sleep(Duration::from_millis(300));
-    b.send(codec::SOLID, F_KEY, &pb);
-    std::thread::sleep(Duration::from_millis(50));
-    assert_frames_eq(&sim.snapshot().decoded[..], &ea, "A keeps the panel");
-    assert_eq!(sim.telemetry().frames_rejected, 1);
-
-    // 300 ms more is past LOCK_MS but inside STREAM_TIMEOUT_MS.
-    std::thread::sleep(Duration::from_millis(300));
-    b.send(codec::SOLID, F_KEY, &pb);
-    let s = sim
-        .wait_until(T, |s| s.active_source == Some(b.addr()))
-        .expect("takeover at LOCK_MS");
-    assert_frames_eq(&s.decoded[..], &eb, "B has it now");
-    assert_eq!(s.state, State::Live);
-
-    // And a second of silence drops to HOLD.
-    let s = sim
-        .wait_until(Duration::from_secs(5), |s| s.state == State::Hold)
-        .expect("STREAM_TIMEOUT_MS");
-    assert_eq!(s.active_source, None);
-}
