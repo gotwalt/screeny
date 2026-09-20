@@ -69,3 +69,26 @@ The owner reads `21:12` as 21:12 on the real panel from across the room, and `11
 11:11. Indexed frames stay exact (<= 32 colours, `fallback 0`).
 
 ## Log
+
+### 2026-09-19, worker-160: the rest pose became a switchable treatment
+
+Read the piece first. `pose()` is the only place the digits formation is built, and
+`dance.rs` gets it as `Formation::Digits`, so the rest angles are a single decision that
+every dance and the servo model inherit for free. `clocks-dials` shares only `draw.rs`.
+
+What I built, in `crates/art/src/pieces/clocks/`:
+
+- `Rest`: a small record (hand angles, a per-row mirror flag, ink and hand-length scale)
+  and a table `RESTS` of treatments, selected live by a new integer piece parameter
+  `rest`. `0` is exactly what the piece did before, so the owner can A/B it on the panel.
+  `Piece::playing` now carries a note naming the treatment in force, because `playing`
+  cannot see parameters and the owner needs to know which one he is looking at.
+- `draw::Dials` gained one field, `rest: &[[f32; 2]]`: a per-dial `[ink, length]` scale,
+  empty for every caller that does not want it (so `clocks-dials` is untouched).
+  **Dimming costs no palette entries**: a hand's ink scaled in linear light is exactly
+  what its own anti-aliasing ramp already is, so a dim hand lands on a step of that ramp.
+  The palette stays 31 colours in every treatment; there is a test.
+- The resting dials only recede *while the time is being held* (`Clocks::settle`, a 0.6 s
+  ease). During a dance every hand is a dancer and the grid is at full strength; the
+  picture settles onto the time as the hands land. The dances are otherwise untouched.
+

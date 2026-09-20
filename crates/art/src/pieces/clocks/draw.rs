@@ -33,6 +33,14 @@ pub struct Dials<'a> {
     pub half: f32,
     /// Hour hand, minute hand.
     pub tints: [Tint; 2],
+    /// Per-dial `[ink, length]` scale, for dials drawn as being at rest rather
+    /// than part of the picture: `[1.0, 1.0]` draws a dial in full. An empty
+    /// slice (the usual case) draws every dial in full.
+    ///
+    /// Dimming costs no palette entries: a hand's ink scaled in linear light is
+    /// exactly what its anti-aliasing ramp already is, so a dimmed hand lands
+    /// on a step of its own ramp.
+    pub rest: &'a [[f32; 2]],
     /// Brightness of a ring round each dial, 0 for none.
     pub ring: f32,
     /// Brightness of a mark at 12 o'clock on each dial, in the hour hand's
@@ -67,9 +75,10 @@ impl Dials<'_> {
             }
             let i = (cy as usize).min(self.rows - 1) * self.cols + (cx as usize).min(self.cols - 1);
             let (px, py) = ((cx.fract() - 0.5) * self.cell, (cy.fract() - 0.5) * self.cell);
+            let [ink, reach] = self.rest.get(i).copied().unwrap_or([1.0, 1.0]);
             for h in 0..2 {
-                if hand_distance(px, py, self.angles[i][h], self.lens[h]) <= self.half {
-                    return inks[h];
+                if hand_distance(px, py, self.angles[i][h], self.lens[h] * reach) <= self.half {
+                    return inks[h].scale(ink);
                 }
             }
             if self.mark > 0.0 {
@@ -112,7 +121,7 @@ mod tests {
         for hue in [255.0, 20.0, 140.0, 320.0] {
             let tints = [Tint { hue, chroma: 0.15, light: 0.82 }, Tint { hue: 35.0, chroma: 0.01, light: 0.97 }];
             let angles = vec![[90.0, 270.0]; 8];
-            let dials = Dials { angles: &angles, cols: 4, rows: 2, cell: 16.0, lens: [7.0; 2], half: 0.8, tints, ring: 0.0, mark: 1.0 };
+            let dials = Dials { angles: &angles, cols: 4, rows: 2, cell: 16.0, lens: [7.0; 2], half: 0.8, tints, rest: &[], ring: 0.0, mark: 1.0 };
             let Frame::Indexed { indices, .. } = dials.draw() else { panic!("not indexed") };
             // The hour hand points right and the mark is above it: everything in
             // the right half of each dial, and its top rows, is the hour ramp
