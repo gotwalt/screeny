@@ -295,3 +295,25 @@ firmware's phase cycle and is expected (brief 2.1).
   disagree is what card 016 set out to stop. Not touched here: it is another crate
   and it changes that window's pixels. `Snapshot::decoded` is bit-exact and
   unaffected, which is why `crates/art/tests/sender.rs` is still a valid check.
+
+### Green, and handed over
+
+```
+cargo test --release --no-fail-fast     79 suites, 729 passed, 0 failed  (exit 0)
+cargo clippy --workspace --all-targets  silent
+```
+
+`crates/panel` 17 tests (4 new), `crates/art` lib 58 (was 51: 5 new panel tests, 2 new
+test-card tests, 1 new palette test, minus the one that asserted sRGB 21 was black -
+kept and inverted), `crates/art/tests/sender.rs` 3 (both preview comparisons now go
+through the panel model), `crates/studio` lib 53 (1 new).
+
+Files touched outside `crates/art` and the studio's settings/controls: `crates/panel`
+(`model.rs`, `lib.rs` - the model itself, which is the point of the card) and one line
+of `crates/screeny/src/panel.rs`, which re-exports `screeny_panel::model`'s public
+names and would otherwise not carry `DEVICE`. Nothing in `crates/studio/src/ws.rs`,
+`lib.rs`, `api.rs`, `devices.rs`, `fleet.rs` or `crates/screeny/src/discover.rs` (cards
+196 and 141). Nothing in `firmware/`, `crates/proto`, `crates/receiver` or
+`docs/design/protocol-v1.md`. No hardware, no serial port, no camera, no LAN: the only
+thing started was `screeny-sim` on loopback with ephemeral ports, inside
+`tests/sender.rs`, which bounds all its own waits. No processes left running.
