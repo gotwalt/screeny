@@ -5,6 +5,21 @@
 //! Studio all read the same JSON; nothing about the wire format is spelled
 //! twice.
 //!
+//! ## One dispatch (card 233)
+//!
+//! There is no route table of nested `Router::route(..)` layers any more.
+//! [`Dispatch`] is a single [`picoserve::routing::PathRouterService`]:
+//! [`route_request`] turns `(method, path)` into one [`Reply`] through
+//! [`route::find`], and [`Reply`]'s one [`IntoResponse`] writes it. picoserve
+//! still does every byte of the protocol - accept, timeouts, request parsing,
+//! body buffering, `Content-Length`, streaming, `Connection: close` - it just
+//! no longer decides *which* handler runs. Three things fall out of owning
+//! that decision, and all three were bugs the conformance suite found:
+//! a verb this API has no method for is `405` in [`ErrorReply`]'s shape rather
+//! than picoserve's plain text; a reboot without the magic word is
+//! `out_of_range` rather than `bad_request`; and each route's own
+//! `max_request_len` is enforced, because it is now a table lookup.
+//!
 //! ## What this file is careful about
 //!
 //! * **The frame path is the product** (`docs/design/device-web.md`, decision
@@ -50,10 +65,9 @@ use embassy_sync::once_lock::OnceLock;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use log::{info, warn};
-use picoserve::extract::FromRequest;
-use picoserve::request::{RequestBody, RequestParts};
-use picoserve::response::{Connection, IntoResponse, Response, ResponseWriter, StatusCode};
-use picoserve::routing::{get, Router};
+use picoserve::request::{Path, Request, RequestBody, RequestBodyConnection};
+use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWriter, StatusCode};
+use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
     AcceptedReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
@@ -365,114 +379,154 @@ fn reset_reason() -> ResetReason {
 // One error shape for every failure
 // ---------------------------------------------------------------------------
 
-/// [`ErrorReply`] as a picoserve response, with the status
-/// [`ErrorCode::status`] names. Every refusal on this server is one of these,
-/// including the 404 for an unknown path and the 400 for malformed JSON, so a
-/// caller never has to parse two kinds of error body.
-pub struct ApiError(ErrorReply);
+/// Every JSON body this server can send, as one type.
+///
+/// Card 233. It is one type rather than six because picoserve's response
+/// writer is generic over the body: six body types meant six monomorphised
+/// copies of "measure it, write the headers, stream it", and the future that
+/// held whichever one was in flight was as big as all of them put together in
+/// the request path's frame. The `Serialize` impl below is untagged - each
+/// variant serialises exactly as the reply type it holds - so **nothing
+/// changes on the wire**; the shapes are still `screeny-device-api`'s and
+/// still spelt once.
+enum ApiBody {
+    Status(StatusReply),
+    Telemetry(TelemetryReply),
+    Wifi(WifiReply),
+    Settings(SettingsReply),
+    /// The three routes that answer `{"result":...}`.
+    Accepted(AcceptedReply),
+    /// Every refusal on this server, including the 404 for an unknown path and
+    /// the 400 for malformed JSON, so a caller never has to parse two kinds of
+    /// error body.
+    Error(ErrorReply),
+}
 
-impl ApiError {
-    fn new(code: ErrorCode) -> Self {
-        Self(ErrorReply::new(code))
-    }
-
-    fn detail(code: ErrorCode, detail: &str) -> Self {
-        Self(ErrorReply::with_detail(code, detail))
+impl serde::Serialize for ApiBody {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ApiBody::Status(v) => v.serialize(s),
+            ApiBody::Telemetry(v) => v.serialize(s),
+            ApiBody::Wifi(v) => v.serialize(s),
+            ApiBody::Settings(v) => v.serialize(s),
+            ApiBody::Accepted(v) => v.serialize(s),
+            ApiBody::Error(v) => v.serialize(s),
+        }
     }
 }
 
-impl IntoResponse for ApiError {
+// ---------------------------------------------------------------------------
+// One reply value, one response path
+// ---------------------------------------------------------------------------
+
+/// Everything this server can answer with: the page, or a JSON body and the
+/// status it goes out with.
+///
+/// Before card 233 each handler returned its own `Result<Json<T>, ErrorReply>`
+/// and picoserve generated a separate generic response-writing layer per
+/// handler, nested inside a separate generic routing layer per route. The
+/// dispatch computes **one** of these and writes it through **one**
+/// [`IntoResponse`] implementation with **two** arms, so a request is the http
+/// task's frame, the dispatch's frame and the writer's frame - rather than a
+/// chain whose depth is the length of the route table.
+enum Reply {
+    /// `GET /`, the status page: HTML, streamed.
+    Page(Page),
+    /// Everything else.
+    Api(u16, ApiBody),
+}
+
+impl Reply {
+    /// A 200 with a JSON body.
+    fn ok(body: ApiBody) -> Self {
+        Reply::Api(200, body)
+    }
+
+    /// A refusal, with the status [`ErrorCode::status`] names for it.
+    fn err(code: ErrorCode) -> Self {
+        Reply::error(ErrorReply::new(code))
+    }
+
+    /// A refusal with a sentence saying what was wrong.
+    fn detail(code: ErrorCode, detail: &str) -> Self {
+        Reply::error(ErrorReply::with_detail(code, detail))
+    }
+
+    fn error(reply: ErrorReply) -> Self {
+        Reply::Api(reply.status(), ApiBody::Error(reply))
+    }
+}
+
+impl IntoResponse for Reply {
     async fn write_to<R: picoserve::io::Read, W: ResponseWriter<Error = R::Error>>(
         self,
         connection: Connection<'_, R>,
         response_writer: W,
     ) -> Result<ResponseSent, W::Error> {
-        let status = StatusCode::new(self.0.status());
-        picoserve::response::Json(self.0)
-            .into_response()
-            .with_status_code(status)
-            .write_to(connection, response_writer)
-            .await
+        // Two arms, one frame. picoserve still does all of the writing: the
+        // counting pass that sets `Content-Length`, the header block, the
+        // streaming of the body and `Connection: close`.
+        match self {
+            Reply::Page(p) => Response::ok(p).write_to(connection, response_writer).await,
+            Reply::Api(status, body) => {
+                Json(body)
+                    .into_response()
+                    .with_status_code(StatusCode::new(status))
+                    .write_to(connection, response_writer)
+                    .await
+            }
+        }
     }
 }
 
-/// `Ok` in a JSON reply.
-type Json<T> = picoserve::response::Json<T>;
-/// What every JSON handler returns.
-type Api<T> = Result<Json<T>, ApiError>;
-
 // ---------------------------------------------------------------------------
-// Extractors
+// Request bodies
 // ---------------------------------------------------------------------------
 
 /// A JSON request body, parsed with [`ErrorReply`]'s failures rather than
 /// picoserve's.
 ///
-/// picoserve's own `Json` extractor would do the parsing, but its rejection is
-/// a plain-text body with picoserve's status code, and this API answers one
-/// shape everywhere. It is also the place `MIN_UNESCAPE_BUFFER` belongs:
-/// `serde_json_core::from_slice` **silently does not unescape strings**, so a
-/// name posted as `café` would be stored with those six characters in it.
-/// `from_slice_escaped` with a buffer as long as the longest string any
-/// request holds is the fix, and naming the constant means raising
-/// `MAX_NAME_LEN` raises the buffer.
-struct ApiJson<T>(T);
-
-impl<'r, State, T: serde::Deserialize<'r>> FromRequest<'r, State, ApiJson<T>> for ApiJson<T> {
-    type Rejection = ApiError;
-
-    async fn from_request<R: picoserve::io::Read>(
-        _state: &'r State,
-        _parts: RequestParts<'r>,
-        body: RequestBody<'r, R>,
-    ) -> Result<Self, ApiError> {
-        let fits = body.entire_body_fits_into_buffer();
-        let bytes = body.read_all().await.map_err(|_| {
-            if fits {
-                ApiError::detail(ErrorCode::BadRequest, "the body did not arrive")
-            } else {
-                ApiError::detail(ErrorCode::PayloadTooLarge, "the body is too long")
-            }
-        })?;
-        serde_json_core::from_slice_escaped(bytes, &mut [0; MIN_UNESCAPE_BUFFER])
-            .map(|(value, _)| ApiJson(value))
-            .map_err(|_| ApiError::detail(ErrorCode::BadJson, "the body is not the expected JSON"))
-    }
+/// This was an extractor (`impl FromRequest`) until card 233; it is a plain
+/// async function now because the dispatch calls it directly and no longer
+/// needs picoserve's higher-ranked handler bound. The parsing is unchanged,
+/// including the part that matters: `serde_json_core::from_slice` **silently
+/// does not unescape strings**, so a name posted as `café` would be stored
+/// with those six characters in it. `from_slice_escaped` with a buffer as long
+/// as the longest string any request holds is the fix, and naming the constant
+/// means raising `MAX_NAME_LEN` raises the buffer.
+async fn json_body<'a, R: picoserve::io::Read, T: serde::Deserialize<'a>>(
+    body: RequestBody<'a, R>,
+) -> Result<T, ErrorReply> {
+    let fits = body.entire_body_fits_into_buffer();
+    let bytes: &'a [u8] = body.read_all().await.map_err(|_| {
+        if fits {
+            ErrorReply::with_detail(ErrorCode::BadRequest, "the body did not arrive")
+        } else {
+            ErrorReply::with_detail(ErrorCode::PayloadTooLarge, "the body is too long")
+        }
+    })?;
+    serde_json_core::from_slice_escaped(bytes, &mut [0; MIN_UNESCAPE_BUFFER])
+        .map(|(value, _)| value)
+        .map_err(|_| ErrorReply::with_detail(ErrorCode::BadJson, "the body is not the expected JSON"))
 }
 
-/// A raw request body, copied into an owned buffer.
+/// The raw bytes of a request body.
 ///
 /// `POST /api/v1/wifi` cannot use picoserve's `Form` extractor: it rejects a
 /// body that is not UTF-8, and an 802.11 SSID is a byte string.
-/// [`form::parse_wifi_form`] takes the bytes. Owned rather than borrowed
-/// because a handler *function* may not borrow from the request (picoserve's
-/// higher-ranked bound); [`form::MAX_FORM_LEN`] is 384 bytes.
-struct RawForm(heapless::Vec<u8, { form::MAX_FORM_LEN }>);
-
-impl<'r, State> FromRequest<'r, State, RawForm> for RawForm {
-    type Rejection = ApiError;
-
-    async fn from_request<R: picoserve::io::Read>(
-        _state: &'r State,
-        _parts: RequestParts<'r>,
-        body: RequestBody<'r, R>,
-    ) -> Result<Self, ApiError> {
-        if body.content_length() > form::MAX_FORM_LEN {
-            return Err(ApiError::detail(
-                ErrorCode::PayloadTooLarge,
-                form::FormError::TooLong.detail(),
-            ));
-        }
-        let bytes = body
-            .read_all()
-            .await
-            .map_err(|_| ApiError::detail(ErrorCode::BadRequest, "the body did not arrive"))?;
-        let mut out = heapless::Vec::new();
-        out.extend_from_slice(bytes).map_err(|_| {
-            ApiError::detail(ErrorCode::PayloadTooLarge, form::FormError::TooLong.detail())
-        })?;
-        Ok(RawForm(out))
-    }
+/// [`form::parse_wifi_form`] takes the bytes.
+///
+/// Card 233 removed the 384-byte `heapless::Vec` this used to copy into. That
+/// copy existed only because a handler *function* may not borrow from the
+/// request under picoserve's higher-ranked bound; the dispatch calls the
+/// handler inline, so the parse reads picoserve's own buffer in place.
+async fn raw_body<'a, R: picoserve::io::Read>(
+    body: RequestBody<'a, R>,
+) -> Result<&'a [u8], ErrorReply> {
+    body.read_all()
+        .await
+        .map(|b| &*b)
+        .map_err(|_| ErrorReply::with_detail(ErrorCode::BadRequest, "the body did not arrive"))
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +630,7 @@ const CTL_MAX: usize = 48;
 ///
 /// Order matters and is card 212's: take `CORE`, do the work, **drop it**,
 /// then take `STORE`. Never both.
-async fn apply_control(reqs: &[ControlRequest<'_>]) -> Result<(), ApiError> {
+async fn apply_control(reqs: &[ControlRequest<'_>]) -> Result<(), ErrorReply> {
     let mut imm: Option<store::Immediate> = None;
     let info_changed = {
         let mut buf = [0u8; CTL_MAX];
@@ -587,7 +641,7 @@ async fn apply_control(reqs: &[ControlRequest<'_>]) -> Result<(), ApiError> {
             // `req_id` 0 is section 6.1's "no reply wanted": the core carries
             // the request out and writes nothing back.
             let Ok(n) = req.write(0, &mut buf) else {
-                return Err(ApiError::detail(
+                return Err(ErrorReply::with_detail(
                     ErrorCode::Internal,
                     "could not encode the request",
                 ));
@@ -601,7 +655,7 @@ async fn apply_control(reqs: &[ControlRequest<'_>]) -> Result<(), ApiError> {
         && let Err(e) = store::commit_immediate(&what).await
     {
         warn!("http: storing the setting failed: {:?}", e);
-        return Err(ApiError::detail(ErrorCode::Storage, "the write to flash failed"));
+        return Err(ErrorReply::with_detail(ErrorCode::Storage, "the write to flash failed"));
     }
     if info_changed {
         INFO_CHANGED.signal(());
@@ -655,22 +709,18 @@ pub async fn deferred_task() {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn get_status() -> Api<StatusReply> {
-    Ok(picoserve::response::Json(status().await))
-}
-
-async fn get_telemetry() -> Api<TelemetryReply> {
+async fn get_telemetry() -> Reply {
     let t = {
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core exists");
         core.telemetry(now_us())
     };
-    Ok(picoserve::response::Json(TelemetryReply::from(&t)))
+    Reply::ok(ApiBody::Telemetry(TelemetryReply::from(&t)))
 }
 
-async fn get_wifi() -> Api<WifiReply> {
+fn get_wifi() -> Reply {
     let state = wifi_state();
-    Ok(picoserve::response::Json(WifiReply {
+    Reply::ok(ApiBody::Wifi(WifiReply {
         state,
         ssid: ssid(),
         ip: ip(),
@@ -681,9 +731,14 @@ async fn get_wifi() -> Api<WifiReply> {
 }
 
 /// `POST /api/v1/wifi`: urlencoded, and the reply leaves before the radio work.
-async fn post_wifi(RawForm(body): RawForm) -> Api<AcceptedReply> {
-    let form = form::parse_wifi_form(&body).map_err(|e| ApiError(e.reply()))?;
-    screeny_device_api::request::check_auth(form.auth()).map_err(ApiError::new)?;
+fn post_wifi(body: &[u8]) -> Reply {
+    let form = match form::parse_wifi_form(body) {
+        Ok(f) => f,
+        Err(e) => return Reply::error(e.reply()),
+    };
+    if let Err(c) = screeny_device_api::request::check_auth(form.auth()) {
+        return Reply::err(c);
+    }
     // The one line in this module that mentions the secret, and it says how
     // long it is (spec section 8.4).
     info!(
@@ -691,21 +746,26 @@ async fn post_wifi(RawForm(body): RawForm) -> Api<AcceptedReply> {
         form.ssid().len(),
         form.psk_len()
     );
-    let wifi = Wifi::new(form.ssid(), form.psk()).map_err(|e| {
-        warn!("http: set-wifi refused: {:?}", e);
-        ApiError::detail(ErrorCode::OutOfRange, "those credentials do not fit")
-    })?;
+    let wifi = match Wifi::new(form.ssid(), form.psk()) {
+        Ok(w) => w,
+        Err(e) => {
+            warn!("http: set-wifi refused: {:?}", e);
+            return Reply::detail(ErrorCode::OutOfRange, "those credentials do not fit");
+        }
+    };
 
     // Nothing is written here. The WiFi task stores the pair only after it has
     // joined (`crate::NewWifi`); firmware 0.4.0 wrote first, and one mistyped
     // password replaced the working credentials in flash.
     WIFI_PENDING.signal(crate::NewWifi { wifi, persist: true });
-    Ok(picoserve::response::Json(AcceptedReply::TRYING))
+    Reply::ok(ApiBody::Accepted(AcceptedReply::TRYING))
 }
 
 /// `POST /api/v1/settings`: the same three opcodes the control port takes.
-async fn post_settings(ApiJson(req): ApiJson<SettingsRequest>) -> Api<SettingsReply> {
-    req.check_auth().map_err(ApiError::new)?;
+async fn post_settings(req: SettingsRequest) -> Reply {
+    if let Err(c) = req.check_auth() {
+        return Reply::err(c);
+    }
 
     // `name: ""` means "go back to `screeny-<id>`" (the crate documents it, and
     // the page's field says so). The UDP `SET_NAME` has no such rule - it takes
@@ -728,7 +788,9 @@ async fn post_settings(ApiJson(req): ApiJson<SettingsRequest>) -> Api<SettingsRe
     if let Some(m) = req.idle_mode {
         let _ = reqs.push(ControlRequest::SetIdle(m.into()));
     }
-    apply_control(&reqs).await?;
+    if let Err(e) = apply_control(&reqs).await {
+        return Reply::error(e);
+    }
 
     // The reply is the whole settings state, not an echo: a caller that set
     // only the brightness still learns the name, and one whose brightness was
@@ -741,32 +803,44 @@ async fn post_settings(ApiJson(req): ApiJson<SettingsRequest>) -> Api<SettingsRe
             IdleMode::from(core.idle_mode()),
         )
     };
-    Ok(picoserve::response::Json(SettingsReply {
+    Reply::ok(ApiBody::Settings(SettingsReply {
         name,
         brightness: crate::BRIGHTNESS.load(Ordering::Relaxed),
         idle_mode,
     }))
 }
 
-async fn post_identify(ApiJson(req): ApiJson<IdentifyRequest>) -> Api<AcceptedReply> {
-    req.check_auth().map_err(ApiError::new)?;
-    let duration_ms = req.duration_u16().map_err(|c| {
-        ApiError::detail(c, "duration_ms is longer than the protocol can carry")
-    })?;
-    apply_control(&[ControlRequest::Identify { duration_ms }]).await?;
-    Ok(picoserve::response::Json(AcceptedReply::IDENTIFYING))
+async fn post_identify(req: IdentifyRequest) -> Reply {
+    if let Err(c) = req.check_auth() {
+        return Reply::err(c);
+    }
+    let duration_ms = match req.duration_u16() {
+        Ok(d) => d,
+        Err(c) => {
+            return Reply::detail(c, "duration_ms is longer than the protocol can carry");
+        }
+    };
+    if let Err(e) = apply_control(&[ControlRequest::Identify { duration_ms }]).await {
+        return Reply::error(e);
+    }
+    Reply::ok(ApiBody::Accepted(AcceptedReply::IDENTIFYING))
 }
 
-async fn post_reboot(ApiJson(req): ApiJson<RebootRequest>) -> Api<AcceptedReply> {
-    req.check_auth().map_err(ApiError::new)?;
+fn post_reboot(req: RebootRequest) -> Reply {
+    if let Err(c) = req.check_auth() {
+        return Reply::err(c);
+    }
     if !req.confirmed() {
-        return Err(ApiError::detail(
-            ErrorCode::BadRequest,
-            "confirm must be \"RBOO\"",
-        ));
+        // **`out_of_range`, not `bad_request`** (card 233, probe rule 34). The
+        // body parsed and `confirm` was there: what is wrong is its *value*,
+        // which is the same judgement UDP `REBOOT`'s bad magic gets
+        // (`ProtoError::BadArg` -> `ErrorCode::OutOfRange`) and what the
+        // simulator answers. Both are 400, so only the machine-readable code
+        // moves.
+        return Reply::detail(ErrorCode::OutOfRange, "confirm must be \"RBOO\"");
     }
     REBOOT_PENDING.signal(());
-    Ok(picoserve::response::Json(AcceptedReply::REBOOTING))
+    Reply::ok(ApiBody::Accepted(AcceptedReply::REBOOTING))
 }
 
 /// A route that exists in the API but not yet on this device.
@@ -776,19 +850,11 @@ async fn post_reboot(ApiJson(req): ApiJson<RebootRequest>) -> Api<AcceptedReply>
 /// serve it in this state", and a caller retrying later is the right
 /// behaviour for both of these. `GET /api/v1/networks` needs the scan card 223
 /// brings; `POST /api/v1/firmware` is card 240.
-async fn not_yet() -> Api<()> {
-    Err(ApiError::detail(
+fn not_yet() -> Reply {
+    Reply::detail(
         ErrorCode::Unavailable,
         "this firmware does not serve that route yet",
-    ))
-}
-
-/// The answer to `GET` on a `POST`-only route and vice versa.
-///
-/// picoserve's built-in `MethodNotAllowed` writes a plain-text body; this
-/// keeps every failure on the API one shape.
-async fn wrong_method() -> Api<()> {
-    Err(ApiError::new(ErrorCode::MethodNotAllowed))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -883,10 +949,6 @@ impl picoserve::response::Content for Page {
     }
 }
 
-async fn get_page() -> impl IntoResponse {
-    Response::ok(Page::new(status().await))
-}
-
 // The enums serialise through serde, which is not reachable from a `Display`
 // impl without a writer; these are the same strings, and the page is the only
 // caller.
@@ -954,32 +1016,176 @@ const fn reset_word(r: ResetReason) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Unknown paths
+// The dispatch: one future from (method, path) to a reply
 // ---------------------------------------------------------------------------
 
-/// The router's fallback: a 404 in the same shape as every other failure.
+/// The whole router (card 233).
 ///
-/// Card 223 replaces this with the captive-portal redirect **for the AP stack
-/// only**; on the LAN a 404 stays a 404.
-struct NotFoundJson;
+/// ## Why it is a [`PathRouterService`] and not a chain of `.route()` calls
+///
+/// `Router::new().route(..).route(..)` builds a left-nested
+/// `Route<PD, MethodRouter<..>, Route<PD, .., ..>>` type. Every layer's future
+/// holds the whole remaining chain by value and its `poll` calls the next
+/// layer's, so the depth of a request was the length of the route table:
+/// research 010 section 2 measured 2,416 and 2,192 bytes of frame for two of
+/// those layers, on top of the http task's own, and section 3 concluded that
+/// the only cheap win left in the request path was to stop doing that.
+///
+/// `Router::from_service` takes a single [`PathRouterService`] and forwards
+/// every request to it, which is what this is. One `match` on
+/// `route::find(path, method)` replaces nine nested `Either`s.
+///
+/// ## What picoserve still does
+///
+/// Everything except choosing the handler: the listener and accept loop, the
+/// per-phase timeouts, parsing the request line and headers, buffering the
+/// body, measuring each reply with a counting writer, writing
+/// `Content-Type` / `Content-Length` / `Connection: close`, and streaming the
+/// body. Nothing here parses or formats HTTP.
+struct Dispatch;
 
-impl<State, PathParameters> picoserve::routing::PathRouterService<State, PathParameters>
-    for NotFoundJson
-{
+impl PathRouterService for Dispatch {
     async fn call_path_router_service<
         R: picoserve::io::Read,
         W: ResponseWriter<Error = R::Error>,
     >(
         &self,
-        _state: &State,
-        _path_parameters: PathParameters,
-        _path: picoserve::request::Path<'_>,
-        request: picoserve::request::Request<'_, R>,
+        _state: &(),
+        (): (),
+        _path: Path<'_>,
+        mut request: Request<'_, R>,
         response_writer: W,
     ) -> Result<ResponseSent, W::Error> {
-        ApiError::new(ErrorCode::NotFound)
+        // `parts` is `Copy` and both of these borrow the request buffer, not
+        // the `Request`, so the body connection can still be borrowed mutably.
+        let method = request.parts.method();
+        let path = request.parts.path();
+
+        let reply = route_request(method, path, &mut request.body_connection).await;
+
+        // The handler future is finished and dropped *before* the reply is
+        // written: at no point is a lock, a body borrow or a handler's state
+        // alive while the socket is being written to.
+        reply
             .write_to(request.body_connection.finalize().await?, response_writer)
             .await
+    }
+}
+
+/// The request path as one of the server's own constants, or `None` for a path
+/// this server does not have.
+///
+/// It exists so that the dispatch compares paths the way picoserve's `Route`
+/// did, rather than the way `&str == &str` does: `PartialEq<&str> for Path`
+/// decodes as it goes, so `/api/v1/%73tatus` is still `/api/v1/status` and
+/// `/api/v1/status/` is still not. Card 233 changes the routing; it does not
+/// change which requests match.
+fn known_path(path: Path<'_>) -> Option<&'static str> {
+    if path == "/" {
+        return Some("/");
+    }
+    route::ROUTES.iter().map(|r| r.path).find(|p| path == *p)
+}
+
+/// `(method, path)` -> one [`Reply`].
+///
+/// The order is deliberate and is the API's whole error contract:
+///
+/// 1. **Card 223's captive-portal hook goes at the top of this function**, in
+///    front of the route table: on the soft-AP interface an unknown path
+///    becomes a redirect to the portal, and it has to be decided before a 404
+///    is.
+/// 2. `GET /` is the page, and it is the one path that is not in
+///    [`route::ROUTES`].
+/// 3. A verb this API has no [`route::Method`] for - `PUT`, `DELETE`, `HEAD`,
+///    anything - falls through to the same test as a wrong method, so
+///    `DELETE /api/v1/status` is `405 method_not_allowed` **in the API's error
+///    shape** and not picoserve's plain-text `MethodNotAllowed`. That was
+///    probe rules 26 and 37 on firmware 0.4.2, and it is what owning the
+///    dispatch fixes.
+/// 4. A known path with a method it does not have is `405`; an unknown path is
+///    `404`; both through [`route::find`] and [`route::path_is_known`], which
+///    are the simulator's and the probe's own answer to the same question.
+/// 5. Each route's own `max_request_len` is a table lookup, so an oversize
+///    body is `413 payload_too_large` on the route that declares the bound
+///    rather than only at the global `MAX_REQUEST_LEN` (probe rule 29, the
+///    decision recorded for card 223).
+async fn route_request<R: picoserve::io::Read>(
+    method: &str,
+    path: Path<'_>,
+    body: &mut RequestBodyConnection<'_, R>,
+) -> Reply {
+    // --- card 223's catch-all hook goes here, before any routing -----------
+    // if portal::is_ap_client() && known_path(path).is_none() { return redirect; }
+
+    // A request path is URL-encoded, and picoserve's `Route` matched it
+    // decoded, so the dispatch does too: `known_path` is the one place that
+    // turns whatever the client wrote into one of `route::ROUTES`'s own
+    // `&'static str`s. Everything after it is a known path, which is the
+    // `route::path_is_known` half of the 404/405 question; `route::find` is
+    // the other half.
+    let Some(path) = known_path(path) else {
+        return Reply::err(ErrorCode::NotFound);
+    };
+
+    if path == "/" {
+        return match method {
+            "GET" => Reply::Page(Page::new(status().await)),
+            _ => Reply::err(ErrorCode::MethodNotAllowed),
+        };
+    }
+
+    // `route::Method` is Get and Post and nothing else, on purpose: those are
+    // the only verbs this API defines. Every other verb is "a method this path
+    // does not have", which is a 405 and not a 404 - `route::path_is_known`'s
+    // own doc example says so.
+    let wanted = match method {
+        "GET" => Some(route::Method::Get),
+        "POST" => Some(route::Method::Post),
+        _ => None,
+    };
+    let Some(row) = wanted.and_then(|m| route::find(path, m)) else {
+        return Reply::err(ErrorCode::MethodNotAllowed);
+    };
+
+    // The per-route body bound, from the shared table. `Body::Stream` is the
+    // firmware upload, which is never buffered and declares no bound.
+    if row.body != route::Body::Stream && body.content_length() > row.max_request_len {
+        return Reply::detail(
+            ErrorCode::PayloadTooLarge,
+            "the body is longer than this route accepts",
+        );
+    }
+
+    match (row.method, row.path) {
+        (route::Method::Get, route::STATUS) => Reply::ok(ApiBody::Status(status().await)),
+        (route::Method::Get, route::TELEMETRY) => get_telemetry().await,
+        (route::Method::Get, route::WIFI) => get_wifi(),
+        // Needs the scan card 223 brings.
+        (route::Method::Get, route::NETWORKS) => not_yet(),
+        (route::Method::Post, route::WIFI) => match raw_body(body.body()).await {
+            Ok(bytes) => post_wifi(bytes),
+            Err(e) => Reply::error(e),
+        },
+        (route::Method::Post, route::SETTINGS) => match json_body(body.body()).await {
+            Ok(req) => post_settings(req).await,
+            Err(e) => Reply::error(e),
+        },
+        (route::Method::Post, route::IDENTIFY) => match json_body(body.body()).await {
+            Ok(req) => post_identify(req).await,
+            Err(e) => Reply::error(e),
+        },
+        (route::Method::Post, route::REBOOT) => match json_body(body.body()).await {
+            Ok(req) => post_reboot(req),
+            Err(e) => Reply::error(e),
+        },
+        // Card 240.
+        (route::Method::Post, route::FIRMWARE) => not_yet(),
+        // Unreachable while this match covers `ROUTES`; a new row that nobody
+        // wired up answers 404 rather than failing to compile, because a
+        // firmware that panics on an unhandled path is worse than one that
+        // says it has none.
+        _ => Reply::err(ErrorCode::NotFound),
     }
 }
 
@@ -994,29 +1200,15 @@ pub fn init(ctx: Ctx) {
     }
 }
 
-/// One connection worker. [`HTTP_TASKS`] of them share the port.
-/// The route table, in one place.
+/// The whole router: one service, no nesting.
 ///
-/// Returned rather than declared in a `static`: naming this type needs
-/// `#![feature(impl_trait_in_assoc_type)]` (that is what picoserve's
-/// `AppBuilder` is for, and its own docs say it "requires the nightly Rust
-/// toolchain"), and this firmware does not gate on nightly for a router. A
-/// function keeps the table from being written twice - the `http-selftest`
-/// build runs the same one over an in-memory socket.
-///
-/// Every path that exists answers the JSON error shape for the method it does
-/// not take, rather than picoserve's plain-text `MethodNotAllowed`.
-fn router() -> Router<impl picoserve::routing::PathRouter> {
-    Router::from_service(NotFoundJson)
-        .route("/", get(get_page))
-        .route(route::STATUS, get(get_status).post(wrong_method))
-        .route(route::TELEMETRY, get(get_telemetry).post(wrong_method))
-        .route(route::NETWORKS, get(not_yet).post(wrong_method))
-        .route(route::WIFI, get(get_wifi).post(post_wifi))
-        .route(route::SETTINGS, get(wrong_method).post(post_settings))
-        .route(route::FIRMWARE, get(wrong_method).post(not_yet))
-        .route(route::REBOOT, get(wrong_method).post(post_reboot))
-        .route(route::IDENTIFY, get(wrong_method).post(post_identify))
+/// A `fn` rather than a `static` because `ServicePathRouter`'s field is
+/// private, so [`Router::from_service`] is the only way to build one - but the
+/// type is now nameable and both values are zero-sized, so this compiles to
+/// nothing. The `http-selftest` build calls the same function, which is what
+/// keeps the self-test honest: it exercises the router the device serves.
+fn router() -> Router<ServicePathRouter<Dispatch>> {
+    Router::from_service(Dispatch)
 }
 
 #[embassy_executor::task(pool_size = HTTP_TASKS)]
@@ -1255,10 +1447,14 @@ async fn selftest_one(request: &str, out: &mut [u8]) -> (u16, usize, u32) {
     let mut overflow = 0usize;
     let t0 = Instant::now();
     {
-        // Not `HTTP_BUF`: the canned requests below are ~150 bytes of request
-        // line, headers and body, and this buffer is `.bss` in a build that
-        // already carries a second copy of the whole serve machinery.
-        let mut http_buf = [0u8; 512];
+        // Not `HTTP_BUF`: the canned requests below are request line, headers
+        // and body, and this buffer is `.bss` in a build that already carries
+        // a second copy of the whole serve machinery. 768 rather than card
+        // 222's 512 because card 233 added the two oversize-body cases, and
+        // the longest of them is ~515 bytes on the wire. The `413` is decided
+        // from `Content-Length` before the body is read, so this only has to
+        // hold what picoserve buffers while parsing the head.
+        let mut http_buf = [0u8; 768];
         let socket = mem_socket::MemSocket {
             r: mem_socket::Reader {
                 data: request.as_bytes(),
@@ -1478,6 +1674,25 @@ pub async fn selftest_task(stack: Stack<'static>) {
 /// values that change nothing observable: the brightness and idle mode that
 /// are already in force cannot be known here, so `identify` asks for 1 ms and
 /// `settings` sets the brightness the device is already at.
+///
+/// **Card 222's twelve cases are below unchanged**, which is the point: they
+/// are the before/after evidence for card 233's dispatch. Eight more follow
+/// them, and every one is a question only the new dispatch can be asked:
+///
+/// * `DELETE /api/v1/status` and `PUT /api/v1/settings` - a verb this API has
+///   no [`route::Method`] for, which used to be picoserve's plain-text 405
+///   (probe rules 26 and 37).
+/// * `HEAD /` and `POST /` - the two methods `/` does not take. `HEAD` is a
+///   405 *by decision*; see the module docs.
+/// * `/api/v1/status/` and `/api/v1/%73tatus` - the two ways a path can nearly
+///   be a route. The first must be a 404 and the second must be `status`,
+///   because `known_path` compares the way picoserve's `Route` did.
+/// * `POST /api/v1/identify` with 153 bytes and `POST /api/v1/wifi` with 385 -
+///   one byte over the route's own `max_request_len` (152) and one over the
+///   global `MAX_REQUEST_LEN` (384). The identify one is the interesting half:
+///   153 is comfortably inside the global bound, so a server that knew only
+///   that number would parse it and answer `400`, and `413` is the proof that
+///   the per-route bound is being read from the table (probe rules 28 and 29).
 #[cfg(feature = "http-selftest")]
 static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
     (
@@ -1521,7 +1736,7 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
         400,
     ),
     (
-        "POST /api/v1/reboot unconf",
+        "POST reboot unconf (out_of_range)",
         "POST /api/v1/reboot HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"confirm\":\"NO\"}",
         400,
     ),
@@ -1539,5 +1754,46 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
         "GET /nope (404)",
         "GET /nope HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
         404,
+    ),
+    // --- card 233 -------------------------------------------------------
+    (
+        "DELETE /api/v1/status (405)",
+        "DELETE /api/v1/status HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "PUT /api/v1/settings (405)",
+        "PUT /api/v1/settings HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "HEAD / (405, card 233)",
+        "HEAD / HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "POST / (405)",
+        "POST / HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        405,
+    ),
+    (
+        "GET /api/v1/status/ (404)",
+        "GET /api/v1/status/ HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        404,
+    ),
+    (
+        "GET /api/v1/%73tatus (200)",
+        "GET /api/v1/%73tatus HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "POST identify 153 > 152 (413)",
+        "POST /api/v1/identify HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 153\r\n\r\n{\"nothing\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        413,
+    ),
+    (
+        "POST wifi 385 > 384 (413)",
+        "POST /api/v1/wifi HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 385\r\n\r\nnothing=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        413,
     ),
 ];
