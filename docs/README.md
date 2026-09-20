@@ -50,6 +50,21 @@ the worker appends to.
 
 The orchestrator reviews, merges to `main`, and moves the card to `done/`.
 
+## Clippy
+
+`cargo clippy --workspace --all-targets` is expected to say **nothing** for
+every host crate but `screeny-probe`, which card 125 left alone because
+another session held it. There is no CI gate - there is no CI - so it is on
+whoever is changing a crate to run it before handing the card over. An
+`#[allow]` that survives carries a one-line reason beside it saying why the
+lint is wrong for that code; a blanket `#![allow]` at the top of a file is not
+how this is kept quiet.
+
+Some crates are pixel-exact on the wire and have golden tests to prove it. A
+clippy "simplification" that reassociates a float sum changes pixels, so in
+`crates/art` and `crates/demos` a suggestion that touches arithmetic is only
+applied when the rendered output is shown to be byte-identical.
+
 ## Hardware access
 
 One Tidbyt, one serial port, one camera. Parallel flashing or capture corrupts

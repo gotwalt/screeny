@@ -62,3 +62,77 @@ whoever holds those. Best done alone, in one pass, on a quiet board.
   readable as "the same code, said better".
 
 ## Log
+
+### Done, 2026-09-20 (worker-176)
+
+**Re-counted first.** The card's table is from `main` at dc61607 and a lot has
+merged since. `cargo clippy --workspace --all-targets` on `main` at 695e484,
+before touching anything:
+
+| crate | warnings | in scope for this card |
+|---|---|---|
+| `screeny-art` | 15 (10 lib, 4 more in lib tests, 1 in `tests/sender.rs`) | yes, except `src/piece.rs` (clean anyway) |
+| `screeny-demos` | 5 | yes |
+| `screeny-probe` | 2 | **no** - another session holds it |
+| `screeny`, `screeny-proto`, `screeny-encode`, `screeny-panel`, `screeny-receiver` | 0 | - |
+| `screeny-studio`, `screeny-sim`, `screeny-settings`, `screeny-provision`, `screeny-device-api` | 0 | out of scope, and already silent |
+
+So the pre-existing noise is narrower than the card expected: only three crates,
+and only two of them mine. All thirteen workspace members were linted (checked
+against `cargo metadata`); `firmware/` is a separate cargo project on the Xtensa
+toolchain and belongs to the firmware session.
+
+By lint, across the 20 in the three crates: seven needs_range_loop, four
+`% n == 0` that wanted `is_multiple_of`, two `chunks_exact` with a constant
+size, and one each of `let_and_return`, `useless_vec`,
+`field_reassign_with_default`, `map_or` -> `is_none_or`, manual
+`RangeInclusive::contains`, `should_implement_trait` and `type_complexity`.
+
+**What was left behind, for their owners.** `screeny-probe`, 2 warnings, both
+`cargo clippy --fix`-able and both the same lint:
+
+| file:line | lint |
+|---|---|
+| `crates/probe/src/main.rs:521` | manual implementation of `.is_multiple_of()` - `n.is_multiple_of(30)` |
+| `crates/probe/src/vectors.rs:161` | manual implementation of `.is_multiple_of()` - `p.is_multiple_of(2)` |
+
+Nothing is owed by `crates/studio`, `crates/sim`, `crates/settings`,
+`crates/provision` or `crates/device-api`: they are already silent.
+
+**Pixel-exactness, checked rather than trusted.** The card's warning about
+renderers was the real risk, so before touching `crates/art` I hashed the raw
+f32 bits of all 2048 pixels of 40 frames from every piece in `pieces::ALL` at
+three seeds - 24 piece/seed pairs, the three GPU pieces included - with a
+throwaway example, confirmed the hashes were stable across repeat runs, and
+diffed them again afterwards. **Identical.** The harness was deleted; it is four
+lines of `Ctx` and a FNV loop and is trivial to write again if another pass
+needs it.
+
+`crates/demos` has no golden frames, but its five fixes are all plainly
+order-preserving; its 8 tests (including the pixel-count and no-flash ones) stay
+green. The blur's inner sum kept its `lo..=hi` order deliberately, with a
+comment saying why: it is a float sum and reassociating it would move pixels.
+
+**Judgement calls**, the two the card predicted plus one:
+
+- `Rgb::add` (`crates/art/src/color.rs`) keeps its name and gets
+  `#[allow(clippy::should_implement_trait)]` with a reason. It sums light,
+  which only means anything because `Rgb` is linear, and `acc.add(..)` says so
+  at the call site where `a + b` on a colour would not. (The card guessed
+  `Palette::add`; it is `Rgb::add`.)
+- `tests/sender.rs`'s `run` returned five parallel vectors. It now returns a
+  `Run` struct - the card's own suggestion, and the three call sites read
+  better for it - rather than a `type` alias hiding the same tuple.
+- New in card 176's code, not pre-existing: `#[allow(clippy::large_enum_variant)]`
+  on `discover.rs`'s private `Step`, with a reason.
+
+No workspace lint table entry was needed: every allow is local and local is
+right for all three.
+
+**No CI gate** - there is no CI. Instead `docs/README.md` gained a "Clippy"
+section: what is expected to be silent, that `screeny-probe` is the exception,
+that an `#[allow]` carries a reason, and the float/golden-frame rule.
+
+**Evidence.** `cargo clippy --workspace --all-targets` now prints four lines,
+all of them `screeny-probe`. `cargo test --release --workspace --no-fail-fast`
+green.
