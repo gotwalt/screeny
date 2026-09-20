@@ -1,0 +1,20 @@
+{
+  "uptime_ms": 3600000,
+  "frames_rx": 108000,
+  "frames_shown": 107912,
+  "frames_dropped_stale": 41,
+  "frames_dropped_superseded": 39,
+  "frames_dropped_decode": 8,
+  "frames_rejected": 0,
+  "seq_gaps": 12,
+  "interarrival_us": 33341,
+  "jitter_us": 412,
+  "interarrival_max_us": 61200,
+  "decode_us": 1870,
+  "decode_us_max": 4120,
+  "render_us_max": 980,
+  "rssi_dbm": -54,
+  "brightness": 96,
+  "state": 1,
+  "last_codec": 3
+}

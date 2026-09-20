@@ -1,0 +1,22 @@
+{
+  "api": 1,
+  "id": "4a00a4",
+  "name": "Studio panel",
+  "fw": "0.2.0",
+  "uptime_ms": 3600000,
+  "heap_used": 46112,
+  "heap_size": 98304,
+  "stack_free": 14016,
+  "rssi_dbm": -54,
+  "brightness": 96,
+  "idle_mode": "status",
+  "wifi_state": "connected",
+  "ssid": "Example-Wifi1",
+  "ip": "192.168.7.221",
+  "state": "live",
+  "portal": false,
+  "fw_slot": "ota_0",
+  "fw_state": "valid",
+  "reset_reason": "power_on",
+  "store_errors": 0
+}

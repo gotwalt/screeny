@@ -1,0 +1,19 @@
+{
+  "networks": [
+    {
+      "ssid": "Example-Wifi1",
+      "rssi": -54,
+      "secure": true
+    },
+    {
+      "ssid": "guest",
+      "rssi": -66,
+      "secure": false
+    },
+    {
+      "ssid": "Café du coin",
+      "rssi": -71,
+      "secure": true
+    }
+  ]
+}

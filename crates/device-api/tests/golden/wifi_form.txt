@@ -1,0 +1,1 @@
+ssid=Example-Wifi1&psk=password9
