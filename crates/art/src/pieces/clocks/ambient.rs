@@ -339,8 +339,8 @@ impl Ambient {
                     self.held[i][h] = from + shortest(from, pose[i][h]);
                 }
             }
-            for h in 0..2 {
-                target[h] += (self.held[i][h] - target[h]) * grip;
+            for (h, angle) in target.iter_mut().enumerate() {
+                *angle += (self.held[i][h] - *angle) * grip;
             }
             let before = self.told[i].replace(target).unwrap_or(target);
             for h in 0..2 {
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn a_held_pose_is_reached_exactly() {
         let motor = Motor { speed: 70.0, acc: 77.0 };
-        let pose = vec![[305.0, 252.0]; 18];
+        let pose = [[305.0, 252.0]; 18];
         for which in 0..MOODS {
             let mut rng = Rng::new(which as u64 + 40);
             let mut ambient = Ambient::new(&mut rng, which, 6, 3, 64.0 / 6.0);

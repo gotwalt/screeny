@@ -198,6 +198,29 @@ pub enum TrialOutcome {
     Failed(FailReason),
 }
 
+/// Where a trial join was posted from.
+///
+/// Spec section 8.2 says `SET_WIFI` works from any state, and card 223's LAN
+/// settings page posts credentials to a device that is already on the network.
+/// Those two arrivals want different behaviour on failure, a different panel
+/// and a different telemetry overlay, and the only thing that tells them apart
+/// is where the post came from - so the machine remembers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrialOrigin {
+    /// Posted to the captive portal, with the soft-AP up and, in all
+    /// likelihood, a phone standing on it waiting to be told how it went. The
+    /// AP stays up through the trial; a failure goes back to [`State::Portal`]
+    /// so the same page can say why.
+    Portal,
+    /// Posted while the device was already [`State::Online`] or
+    /// [`State::Joining`] - the LAN settings page, or a `SET_WIFI` datagram.
+    /// **No AP is raised**: the device has one station, so it must drop the
+    /// association it has to try the new network, and there is nobody on a
+    /// setup network to keep informed. A failure goes back to the *previous*
+    /// network rather than to the portal.
+    Online,
+}
+
 /// The last trial, for the portal page's full-page reload to read.
 ///
 /// No password field, by construction: see the module docs.
@@ -209,6 +232,9 @@ pub struct Trial {
     pub outcome: TrialOutcome,
     /// The address acquired, once it succeeded.
     pub ip: Option<[u8; 4]>,
+    /// Where the credentials were posted from, which decides what a failure
+    /// falls back to. See [`TrialOrigin`].
+    pub origin: TrialOrigin,
 }
 
 /// Something that happened to the device.
@@ -347,6 +373,11 @@ pub struct Provisioner {
     link_down_since: Option<u32>,
 
     trial: Option<Trial>,
+    /// A [`TrialOrigin::Online`] trial failed and we went back to the previous
+    /// network. Sticky until the next post or a reboot, because otherwise the
+    /// old network reconnecting a few seconds later reads as "your new network
+    /// worked". Firmware 0.3.0's `SET_WIFI` does the same.
+    trial_failed_sticky: bool,
     ip: Option<[u8; 4]>,
     /// When a successful *trial* put the address on the panel.
     connected_since: Option<u32>,
@@ -376,6 +407,7 @@ impl Provisioner {
             portal_after_failure: false,
             link_down_since: None,
             trial: None,
+            trial_failed_sticky: false,
             ip: None,
             connected_since: None,
         }
@@ -396,17 +428,31 @@ impl Provisioner {
     /// It is an *overlay*: frame handling continues underneath, so a sender
     /// on the LAN that is still streaming keeps streaming while the device is
     /// in portal mode on the AP side.
+    /// A [`TrialOrigin::Online`] trial is not provisioning: no AP was raised,
+    /// frames may still be arriving around the rejoin and nothing about the
+    /// panel is "in setup", so it gets no overlay.
     #[must_use]
     pub fn overlay_state(&self) -> Option<u8> {
         match self.state {
-            State::Portal | State::Trial => Some(tstate::PROVISIONING),
+            State::Portal => Some(tstate::PROVISIONING),
+            State::Trial if self.trial_origin() == Some(TrialOrigin::Portal) => {
+                Some(tstate::PROVISIONING)
+            }
             _ => None,
         }
     }
 
     /// The trailing byte of a `GET_WIFI` reply, research 007 section 5.2.
+    ///
+    /// A [`TrialOrigin::Online`] trial that failed reads `FAILED` until the
+    /// next post or a reboot, *even once the previous network is back*: the
+    /// question the byte answers is "did the credentials you just gave me
+    /// work", and the old association coming back is not an answer to it.
     #[must_use]
     pub fn wifi_state(&self) -> u8 {
+        if self.trial_failed_sticky {
+            return wifi_state::FAILED;
+        }
         match self.state {
             State::Boot => wifi_state::DISCONNECTED,
             State::Joining | State::Trial => wifi_state::CONNECTING,
@@ -458,6 +504,26 @@ impl Provisioner {
         self.trial.as_ref()
     }
 
+    /// Where the last trial was posted from, if there was one.
+    #[must_use]
+    pub fn trial_origin(&self) -> Option<TrialOrigin> {
+        self.trial.as_ref().map(|t| t.origin)
+    }
+
+    /// Whether [`trial`](Self::trial) is still what `GET /api/v1/wifi` should
+    /// report, rather than the station's own state.
+    ///
+    /// True while a trial is running or the portal is showing its result, and
+    /// true for a failed [`TrialOrigin::Online`] trial for as long as
+    /// [`wifi_state`](Self::wifi_state) reads `FAILED` - so the page that
+    /// posted the credentials keeps being told they did not work, whatever the
+    /// station reconnected to in the meantime.
+    #[must_use]
+    pub fn trial_is_current(&self) -> bool {
+        self.trial.is_some()
+            && (matches!(self.state, State::Trial | State::Portal) || self.trial_failed_sticky)
+    }
+
     /// What the panel should show, or `None` when the panel belongs to the
     /// normal idle/stream path.
     ///
@@ -469,6 +535,9 @@ impl Provisioner {
     #[must_use]
     pub fn screen(&self, now_ms: u32) -> Option<Screen<'_>> {
         match self.state {
+            // A `TrialOrigin::Online` trial never raised an AP, so there is no
+            // portal to point anybody at: the panel stays the stream's.
+            State::Trial if self.trial_origin() == Some(TrialOrigin::Online) => None,
             State::Portal | State::Trial => {
                 let alternate = (now_ms / self.timing.screen_alternate_ms) % 2 == 1;
                 let layout = if alternate || !uri::fits(self.form, &self.ap_ssid) {
@@ -526,6 +595,7 @@ impl Provisioner {
                 push(&mut out, Action::ClearCredentials);
                 self.has_stored = false;
                 self.trial = None;
+                self.trial_failed_sticky = false;
                 self.ip = None;
                 self.connected_since = None;
                 self.link_down_since = None;
@@ -537,6 +607,13 @@ impl Provisioner {
 
         match self.state {
             State::Boot => {
+                // `Event::CredentialsPosted` cannot reach `Boot`: nothing is
+                // serving yet - no portal, no LAN server, no control socket -
+                // until `Event::Boot` has been processed and the machine has
+                // left this state. If one arrives anyway it is a caller bug,
+                // and dropping it is the right answer: there is no radio to
+                // give it to and nothing committed that a trial could fall
+                // back to.
                 if matches!(ev, Event::Boot) {
                     self.begin(now_ms, &mut out);
                 }
@@ -548,6 +625,13 @@ impl Provisioner {
                 Event::Tick if self.attempt_expired(now_ms) => {
                     self.attempt_failed(now_ms, FailReason::Other, &mut out);
                 }
+                // Spec 8.2: `SET_WIFI` works from any state. The attempt in
+                // flight is abandoned - there is one station - and the new
+                // credentials are tried instead, without raising the AP.
+                Event::CredentialsPosted { ssid } => {
+                    push(&mut out, Action::StopJoin);
+                    self.begin_trial(now_ms, ssid, TrialOrigin::Online, &mut out);
+                }
                 _ => {}
             },
 
@@ -558,16 +642,21 @@ impl Provisioner {
                     self.attempt_failed(now_ms, FailReason::Other, &mut out);
                 }
                 // A second POST while the first is still being tried: the
-                // user corrected a typo. Start over with the new one.
+                // user corrected a typo. Start over with the new one, from
+                // wherever the trial it replaces came from - the second post
+                // arrived down the same channel as the first.
                 Event::CredentialsPosted { ssid } => {
+                    let origin = self.trial_origin().unwrap_or(TrialOrigin::Portal);
                     push(&mut out, Action::StopJoin);
-                    self.begin_trial(now_ms, ssid, &mut out);
+                    self.begin_trial(now_ms, ssid, origin, &mut out);
                 }
                 _ => {}
             },
 
             State::Portal => match ev {
-                Event::CredentialsPosted { ssid } => self.begin_trial(now_ms, ssid, &mut out),
+                Event::CredentialsPosted { ssid } => {
+                    self.begin_trial(now_ms, ssid, TrialOrigin::Portal, &mut out);
+                }
                 // The 3 a.m. router reboot heals itself - but only while
                 // nobody is standing on the portal, because a retry costs
                 // them a ~45 s outage.
@@ -583,6 +672,11 @@ impl Provisioner {
             },
 
             State::Online => match ev {
+                // Spec 8.2 again, and card 223's LAN settings page. The AP is
+                // *not* raised: see [`TrialOrigin::Online`].
+                Event::CredentialsPosted { ssid } => {
+                    self.begin_trial(now_ms, ssid, TrialOrigin::Online, &mut out);
+                }
                 Event::LinkDown => {
                     if self.link_down_since.is_none() {
                         self.link_down_since = Some(now_ms);
@@ -647,20 +741,31 @@ impl Provisioner {
         );
     }
 
-    fn begin_trial(&mut self, now_ms: u32, ssid: &str, out: &mut Actions) {
+    fn begin_trial(&mut self, now_ms: u32, ssid: &str, origin: TrialOrigin, out: &mut Actions) {
         let mut name: String<SSID_MAX> = String::new();
         let _ = name.push_str(crate::screen::cut(ssid, SSID_MAX));
         self.trial = Some(Trial {
             ssid: name,
             outcome: TrialOutcome::Trying,
             ip: None,
+            origin,
         });
+        // A new post is a new question, so the last one's sticky answer goes.
+        self.trial_failed_sticky = false;
         self.state = State::Trial;
         self.target = JoinTarget::Trial;
         self.attempt = 1;
         self.attempt_since = now_ms;
-        // The AP is *not* dropped: that is the whole point of APSTA here, and
-        // it is what lets the page report the result.
+        if origin == TrialOrigin::Online {
+            // The station is being taken away from whatever it was on, so the
+            // address we were reporting is no longer ours. Nothing is raised
+            // in its place: there is no AP and no portal on this path.
+            self.ip = None;
+            self.connected_since = None;
+            self.link_down_since = None;
+        }
+        // On the portal path the AP is *not* dropped: that is the whole point
+        // of APSTA here, and it is what lets the page report the result.
         push(
             out,
             Action::StartJoin {
@@ -694,12 +799,37 @@ impl Provisioner {
                 );
                 return;
             }
-            // **Nothing is written to the store**, and the AP never went down.
+            // **Nothing is written to the store** on either path.
+            let origin = self.trial_origin().unwrap_or(TrialOrigin::Portal);
             if let Some(t) = self.trial.as_mut() {
                 t.outcome = TrialOutcome::Failed(reason);
                 t.ip = None;
             }
-            self.enter_portal(now_ms, true, out);
+            match origin {
+                // The AP never went down, so the page that posted is still
+                // there to be told why.
+                TrialOrigin::Portal => self.enter_portal(now_ms, true, out),
+                // Nobody is on a setup network and the store still holds the
+                // network that was working a moment ago: go back to it rather
+                // than stranding the panel on an AP nobody is looking for.
+                // The failure stays readable until the next post or a reboot.
+                TrialOrigin::Online => {
+                    self.trial_failed_sticky = true;
+                    if self.has_stored {
+                        self.start_join(JoinTarget::Stored, now_ms, out);
+                    } else if self.has_builtin {
+                        // Reachable only from `Joining` on a build with
+                        // compile-time credentials and an empty store: there
+                        // is no previous network to go back to, so step 2 of
+                        // spec 8.3 is the next best thing.
+                        self.start_join(JoinTarget::Builtin, now_ms, out);
+                    } else {
+                        // Nothing to fall back to at all. The portal is the
+                        // only way back in.
+                        self.enter_portal(now_ms, true, out);
+                    }
+                }
+            }
             return;
         }
 
@@ -750,15 +880,23 @@ impl Provisioner {
             }
             JoinTarget::Stored => {}
         }
+        let origin = self.trial_origin();
         if from_trial {
             if let Some(t) = self.trial.as_mut() {
                 t.outcome = TrialOutcome::Connected;
                 t.ip = Some(ip);
             }
-            self.connected_since = Some(now_ms);
-        } else {
-            self.connected_since = None;
         }
+        // The address goes on the panel only for a portal trial, where the
+        // panel is the one channel that survives the radio changing channel
+        // and the phone is about to lose the AP. A `TrialOrigin::Online` post
+        // came from a browser on the LAN that is being told the address in
+        // its own reply, so the panel stays the stream's.
+        self.connected_since = if from_trial && origin == Some(TrialOrigin::Portal) {
+            Some(now_ms)
+        } else {
+            None
+        };
         self.state = State::Online;
         self.ip = Some(ip);
         self.link_down_since = None;

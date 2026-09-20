@@ -644,7 +644,7 @@ fn sketch(rng: &mut Rng) -> Composition {
     let mut tags = vec![format!("theme:{}", theme.name())];
 
     // One in five goes straight to the time, with a full turn on the way.
-    if rng.u64() % 5 == 0 {
+    if rng.u64().is_multiple_of(5) {
         let (turn, turn_name) = pick(
             rng,
             &[(way, "together"), (Turn::Counter, "counter"), (Turn::Mirror, "mirror"), (Turn::CounterMirror, "bloom"), (Turn::Checker, "checker")],
@@ -670,7 +670,7 @@ fn sketch(rng: &mut Rng) -> Composition {
         to: gather,
         with: None,
         timing: theme.timing(gap, false),
-        turn: if rng.u64() % 5 == 0 { way } else { Turn::Shortest },
+        turn: if rng.u64().is_multiple_of(5) { way } else { Turn::Shortest },
         extra: 0,
         rest: if hold { rng.range(0.4, 1.0) } else { overlap(rng) },
     }];
@@ -688,7 +688,7 @@ fn sketch(rng: &mut Rng) -> Composition {
         }
         // A change of theme, at most once, and only out of stillness: hold the
         // formation, then carry on from somewhere else.
-        if tags.iter().all(|t| !t.starts_with("theme2:")) && rng.u64() % 4 == 0 {
+        if tags.iter().all(|t| !t.starts_with("theme2:")) && rng.u64().is_multiple_of(4) {
             if let Some(last) = phases.last_mut() {
                 last.rest = rng.range(0.5, 0.9);
             }
@@ -753,7 +753,7 @@ fn sketch(rng: &mut Rng) -> Composition {
         to: Formation::Digits,
         with: None,
         timing: theme.timing(gap, true),
-        turn: if rng.u64() % 4 == 0 { way } else { Turn::Shortest },
+        turn: if rng.u64().is_multiple_of(4) { way } else { Turn::Shortest },
         extra: 0,
         rest: 0.0,
     });
@@ -870,7 +870,7 @@ mod tests {
             for k in 1..=200 {
                 let p = MOTOR.position(distance, total * k as f32 / 200.0);
                 let v = (p - prev) / (total / 200.0);
-                assert!(v >= -1e-3 && v <= MOTOR.speed * 1.01, "distance {distance}: speed {v}");
+                assert!((-1e-3..=MOTOR.speed * 1.01).contains(&v), "distance {distance}: speed {v}");
                 prev = p;
             }
         }

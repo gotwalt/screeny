@@ -38,15 +38,71 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 /// error is the caller's business, because `screeny discover` wants to print
 /// "nothing found" and a streaming command wants to fail.
 ///
+/// To look for one instance by name, use [`browse_for_name`]: it stops the
+/// moment that instance answers instead of counting.
+///
 /// # Errors
 ///
 /// [`Error::Mdns`] if the daemon could not be started or the browse rejected.
 pub fn browse(timeout: Duration, want: Option<usize>) -> Result<Vec<Device>> {
-    let daemon = ServiceDaemon::new().map_err(|e| Error::Mdns(e.to_string()))?;
-    let rx = daemon
-        .browse(SERVICE_TYPE)
-        .map_err(|e| Error::Mdns(e.to_string()))?;
+    browse_until(timeout, |found| {
+        want.is_some_and(|n| found.len() >= n)
+    })
+}
 
+/// Browse for one instance by name, stopping as soon as **that** instance has
+/// resolved (card 176).
+///
+/// The returned vector is everything that had resolved by the time the browse
+/// stopped, in instance-name order; [`Target::browse_for`] hands it to
+/// [`pick`], which applies the same rule again and, when nothing matched, can
+/// name every instance that did answer.
+///
+/// # When it can stop early, and when it cannot
+///
+/// A DNS-SD instance name is unique on a link - that is what conflict
+/// resolution in RFC 6762 §9 is for - so once the instance called `want` has
+/// resolved, no later answer can change which device was meant. That case
+/// returns immediately.
+///
+/// The two looser matches cannot: whether `want` is a *unique* prefix, and
+/// whether one panel or two are calling themselves `want` in their TXT
+/// records, are questions only the closed window can answer. Those keep
+/// browsing, which also keeps [`Error::NoSuchDevice`] able to list everything
+/// that answered.
+///
+/// # Errors
+///
+/// As [`browse`].
+pub fn browse_for_name(timeout: Duration, want: &str) -> Result<Vec<Device>> {
+    browse_until(timeout, |found| found.contains_key(want))
+}
+
+/// One turn of a browse loop: what arrived, or that nothing more will.
+// One of these exists at a time, as a return value that is matched and
+// dropped immediately, so boxing the device would buy an allocation per
+// resolve and save nothing.
+#[allow(clippy::large_enum_variant)]
+enum Step {
+    /// A service resolved into a device this sender can talk to.
+    Resolved(Device),
+    /// Something else happened (a service was added, removed, or ignored).
+    Other,
+    /// The window closed, or the event source went away.
+    Done,
+}
+
+/// The browse loop itself, over any source of [`Step`]s.
+///
+/// Split out from [`browse`] so the stop condition - the whole of card 176 -
+/// can be tested against a scripted stream of resolves with no daemon, no
+/// multicast and no device on the bench. `next` is given the time left in the
+/// window and must not outlast it; `stop` is asked after every resolve.
+fn collect_until(
+    timeout: Duration,
+    mut next: impl FnMut(Duration) -> Step,
+    mut stop: impl FnMut(&BTreeMap<String, Device>) -> bool,
+) -> Vec<Device> {
     let deadline = Instant::now() + timeout;
     let mut found: BTreeMap<String, Device> = BTreeMap::new();
     loop {
@@ -54,21 +110,110 @@ pub fn browse(timeout: Duration, want: Option<usize>) -> Result<Vec<Device>> {
         if left.is_zero() {
             break;
         }
-        match rx.recv_timeout(left) {
-            Ok(ServiceEvent::ServiceResolved(svc)) => {
-                if let Some(d) = device_from_service(&svc) {
-                    found.insert(d.instance.clone(), d);
-                    if want.is_some_and(|n| found.len() >= n) {
-                        break;
-                    }
+        match next(left) {
+            Step::Resolved(d) => {
+                found.insert(d.instance.clone(), d);
+                if stop(&found) {
+                    break;
                 }
             }
-            Ok(_) => {}
-            Err(_) => break,
+            Step::Other => {}
+            Step::Done => break,
         }
     }
+    found.into_values().collect()
+}
+
+/// [`collect_until`] driven by a real mDNS daemon.
+fn browse_until(
+    timeout: Duration,
+    stop: impl FnMut(&BTreeMap<String, Device>) -> bool,
+) -> Result<Vec<Device>> {
+    let daemon = ServiceDaemon::new().map_err(|e| Error::Mdns(e.to_string()))?;
+    let rx = daemon
+        .browse(SERVICE_TYPE)
+        .map_err(|e| Error::Mdns(e.to_string()))?;
+
+    let found = collect_until(
+        timeout,
+        |left| match rx.recv_timeout(left) {
+            Ok(ServiceEvent::ServiceResolved(svc)) => match device_from_service(&svc) {
+                Some(d) => Step::Resolved(d),
+                None => Step::Other,
+            },
+            Ok(_) => Step::Other,
+            Err(_) => Step::Done,
+        },
+        stop,
+    );
     let _ = daemon.shutdown();
-    Ok(found.into_values().collect())
+    Ok(found)
+}
+
+/// How a device answers to a name, strongest first.
+///
+/// The order is the precedence [`pick`] applies: a device whose instance name
+/// *is* the name asked for beats one that merely starts with it, however the
+/// two sort alphabetically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Match {
+    /// `want` is this device's DNS-SD instance name. Unique on a link.
+    Instance,
+    /// `want` is the friendly `name=` in its TXT record. Not unique: two
+    /// panels can be given the same one.
+    Friendly,
+    /// `want` is a prefix of its instance name. Unique only if no other
+    /// instance starts with it, which is knowable only once browsing stops.
+    Prefix,
+}
+
+/// Which way, if any, `d` answers to `want`.
+fn match_kind(d: &Device, want: &str) -> Option<Match> {
+    if d.instance == want {
+        Some(Match::Instance)
+    } else if d.info.as_ref().is_some_and(|i| i.name == want) {
+        Some(Match::Friendly)
+    } else if d.instance.starts_with(want) {
+        Some(Match::Prefix)
+    } else {
+        None
+    }
+}
+
+/// Pick the one device called `want` out of everything that answered.
+///
+/// Strongest match wins outright ([`Match`]); within one kind of match, two
+/// candidates mean the name named neither, so it is
+/// [`Error::AmbiguousName`] rather than an arbitrary pick. An exact instance
+/// name can never be ambiguous, so naming a panel in full always works.
+fn pick(found: Vec<Device>, want: &str) -> Result<Device> {
+    let Some(best) = found.iter().filter_map(|d| match_kind(d, want)).min() else {
+        return Err(Error::NoSuchDevice {
+            wanted: want.to_string(),
+            found: names_of(&found),
+        });
+    };
+    let mut hits: Vec<Device> = found
+        .into_iter()
+        .filter(|d| match_kind(d, want) == Some(best))
+        .collect();
+    if hits.len() > 1 {
+        return Err(Error::AmbiguousName {
+            wanted: want.to_string(),
+            found: names_of(&hits),
+        });
+    }
+    Ok(hits.remove(0))
+}
+
+/// Instance names, in the order given, for an error that has to say what did
+/// answer.
+fn names_of(devices: &[Device]) -> String {
+    devices
+        .iter()
+        .map(|d| d.instance.clone())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Instance name of a DNS-SD full name: everything before the service type.
@@ -125,7 +270,13 @@ pub struct Target {
     /// The frame port to use with [`Target::host`]. `None` is
     /// [`screeny_proto::DEFAULT_FRAME_PORT`].
     pub port: Option<u16>,
-    /// A DNS-SD instance name (or a unique prefix of one) to pick out.
+    /// A DNS-SD instance name to pick out, or the panel's friendly `name=`,
+    /// or a prefix of an instance name that is unique among the devices that
+    /// answer.
+    ///
+    /// Card 176: only the first of those three can end a browse early, and
+    /// only the first is guaranteed unique. A prefix or a friendly name that
+    /// matches two panels is [`Error::AmbiguousName`].
     pub name: Option<String>,
     /// Browse window.
     pub timeout: Option<Duration>,
@@ -286,12 +437,17 @@ impl Target {
     }
 
     /// Browse (or broadcast-probe) and pick the one instance asked for.
+    ///
+    /// Card 176: a named browse stops the moment that instance answers, so
+    /// naming a panel - the preferred way, because it follows a DHCP lease -
+    /// costs what an unnamed browse costs and not the whole window. See
+    /// [`browse_for_name`] for which matches can stop early and which cannot.
     fn browse_for(&self, want: Option<&str>) -> Result<Device> {
         let timeout = self.timeout.unwrap_or(DEFAULT_TIMEOUT);
-        let mut found = if self.broadcast {
-            broadcast_probe(timeout, DEFAULT_CONTROL_PORT)?
-        } else {
-            browse(timeout, if want.is_none() { Some(1) } else { None })?
+        let mut found = match (self.broadcast, want) {
+            (true, _) => broadcast_probe(timeout, DEFAULT_CONTROL_PORT)?,
+            (false, Some(want)) => browse_for_name(timeout, want)?,
+            (false, None) => browse(timeout, Some(1))?,
         };
         if found.is_empty() {
             return Err(Error::NotFound {
@@ -301,20 +457,7 @@ impl Target {
         }
         match want {
             None => Ok(found.remove(0)),
-            Some(want) => {
-                let names: Vec<String> = found.iter().map(|d| d.instance.clone()).collect();
-                found
-                    .into_iter()
-                    .find(|d| {
-                        d.instance == want
-                            || d.instance.starts_with(want)
-                            || d.info.as_ref().is_some_and(|i| i.name == want)
-                    })
-                    .ok_or_else(|| Error::NoSuchDevice {
-                        wanted: want.to_string(),
-                        found: names.join(", "),
-                    })
-            }
+            Some(want) => pick(found, want),
         }
     }
 
@@ -581,5 +724,149 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    // ---- Card 176: when a browse may stop -------------------------------
+    //
+    // These drive [`collect_until`] - the same loop a real browse runs - from
+    // a scripted stream of resolves. No daemon, no multicast, nothing that
+    // could see or be seen by the panel on this bench, and the timings are
+    // the loop's own rather than the network's.
+
+    /// A device that answers to `instance`, and optionally to `friendly`.
+    fn dev(instance: &str, friendly: &str) -> Device {
+        let mut d = Device::from_addr("10.0.0.5:49374".parse().unwrap());
+        d.instance = instance.to_string();
+        d.info = Some(DeviceInfo {
+            name: friendly.to_string(),
+            ..DeviceInfo::default()
+        });
+        d
+    }
+
+    /// An event source that hands over `events` at the offsets given, then
+    /// sleeps out whatever is left of the window - which is what a real
+    /// browse that hears nothing more does.
+    fn scripted(events: Vec<(Duration, Device)>) -> impl FnMut(Duration) -> Step {
+        let started = Instant::now();
+        let mut queue = events.into_iter();
+        move |left| {
+            let Some((at, d)) = queue.next() else {
+                std::thread::sleep(left);
+                return Step::Done;
+            };
+            let wait = at.saturating_sub(started.elapsed());
+            if wait >= left {
+                std::thread::sleep(left);
+                return Step::Done;
+            }
+            std::thread::sleep(wait);
+            Step::Resolved(d)
+        }
+    }
+
+    /// The card itself: the instance asked for answers early in a three
+    /// second window, and the browse returns then instead of at the end.
+    /// Collecting every device still costs the whole window, because
+    /// "everything" is only known when nothing more is coming.
+    #[test]
+    fn a_named_browse_returns_when_that_instance_answers() {
+        let script = || {
+            vec![
+                (Duration::from_millis(20), dev("screeny-aaaa", "kitchen")),
+                (Duration::from_millis(60), dev("screeny-bbbb", "desk")),
+                (Duration::from_millis(100), dev("screeny-cccc", "shelf")),
+            ]
+        };
+
+        // Named: stops at the wanted instance, ~60 ms into a 3 s window.
+        let started = Instant::now();
+        let found = collect_until(DEFAULT_TIMEOUT, scripted(script()), |f| {
+            f.contains_key("screeny-bbbb")
+        });
+        let named = started.elapsed();
+        assert!(
+            named < Duration::from_millis(600),
+            "a named browse waited {named:?} of a {DEFAULT_TIMEOUT:?} window"
+        );
+        assert_eq!(pick(found, "screeny-bbbb").unwrap().instance, "screeny-bbbb");
+
+        // Unnamed, wanting every device: the whole window, as before.
+        let started = Instant::now();
+        let found = collect_until(DEFAULT_TIMEOUT, scripted(script()), |_| false);
+        let all = started.elapsed();
+        assert!(
+            all >= DEFAULT_TIMEOUT,
+            "an unnamed browse returned after {all:?}, short of the window"
+        );
+        assert_eq!(found.len(), 3, "an unnamed browse still returns every device");
+        println!("card 176: named browse {named:?}, collect-everything browse {all:?}");
+    }
+
+    /// The other half: a name nothing answers to still waits the window out,
+    /// so the error can list what did answer.
+    #[test]
+    fn a_name_nothing_answers_to_still_costs_the_window() {
+        let window = Duration::from_millis(400);
+        let started = Instant::now();
+        let found = collect_until(
+            window,
+            scripted(vec![
+                (Duration::from_millis(20), dev("screeny-aaaa", "kitchen")),
+                (Duration::from_millis(60), dev("screeny-bbbb", "desk")),
+            ]),
+            |f| f.contains_key("screeny-zzzz"),
+        );
+        assert!(started.elapsed() >= window, "{:?}", started.elapsed());
+        let e = pick(found, "screeny-zzzz").expect_err("no such device");
+        let msg = e.to_string();
+        assert!(matches!(e, Error::NoSuchDevice { .. }), "{e:?}");
+        assert!(msg.contains("screeny-aaaa") && msg.contains("screeny-bbbb"), "{msg}");
+    }
+
+    /// The prefix rule, stated: an exact instance name wins over a longer
+    /// instance it is a prefix of and over a friendly name, a unique prefix
+    /// or friendly name picks its device, and an ambiguous one is an error
+    /// rather than whichever sorted first.
+    #[test]
+    fn a_prefix_must_be_unique_but_a_full_instance_name_never_is_ambiguous() {
+        let all = || {
+            vec![
+                dev("screeny-4a00a4", "desk"),
+                dev("screeny-4a00b7", "desk"),
+                dev("screeny-7f", "screeny-4a00a4"),
+                dev("screeny-9c", "shelf"),
+            ]
+        };
+
+        // Exact instance name: unambiguous even though `screeny-4a00a4` is
+        // also the friendly name of another device, and even though it sorts
+        // first among devices it is a prefix of.
+        assert_eq!(pick(all(), "screeny-4a00a4").unwrap().instance, "screeny-4a00a4");
+        // A unique prefix still resolves, after the full window.
+        assert_eq!(pick(all(), "screeny-4a00b").unwrap().instance, "screeny-4a00b7");
+        assert_eq!(pick(all(), "screeny-7").unwrap().instance, "screeny-7f");
+        // A friendly name resolves when only one panel wears it, and is
+        // ambiguous when two do - the same rule as a prefix.
+        assert_eq!(pick(all(), "shelf").unwrap().instance, "screeny-9c");
+        assert!(matches!(
+            pick(all(), "desk"),
+            Err(Error::AmbiguousName { .. })
+        ));
+        assert_eq!(
+            pick(
+                vec![dev("screeny-aaaa", "kitchen"), dev("screeny-bbbb", "desk")],
+                "kitchen"
+            )
+            .unwrap()
+            .instance,
+            "screeny-aaaa"
+        );
+        // A prefix of two instances names neither.
+        let e = pick(all(), "screeny-4a00").expect_err("ambiguous");
+        assert!(matches!(e, Error::AmbiguousName { .. }), "{e:?}");
+        let msg = e.to_string();
+        assert!(msg.contains("screeny-4a00a4") && msg.contains("screeny-4a00b7"), "{msg}");
+        assert!(!msg.contains("screeny-7f"), "only the ones it matched: {msg}");
     }
 }

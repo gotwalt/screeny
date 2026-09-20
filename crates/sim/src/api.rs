@@ -33,8 +33,7 @@
 //! in the README rather than pretending the other three passed.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use screeny_device_api::error::{ErrorCode, ErrorReply};
@@ -52,11 +51,13 @@ use crate::event::Event;
 use crate::http::{Body, Handler, Head, Response, WantsStream};
 use crate::wifi::Posted;
 
-/// How often `GET /api/v1/networks` will really scan. The route's docs say
-/// "one per 10 s" in prose; `crates/device-api` exposes no constant for it, so
-/// this is the simulator's copy of that number. Card 224's log proposes the
-/// shared constant.
-pub const SCAN_MIN_INTERVAL_MS: u64 = 10_000;
+/// How often `GET /api/v1/networks` will really scan.
+///
+/// Card 224 kept the simulator's own copy of the number and proposed moving it
+/// into the shared crate; card 232 did. This is now
+/// [`route::SCAN_MIN_INTERVAL_MS`] under the name the simulator's callers
+/// already use, so the firmware and the simulator cannot drift.
+pub const SCAN_MIN_INTERVAL_MS: u64 = route::SCAN_MIN_INTERVAL_MS as u64;
 
 /// The inactive app slot's size: research 006's `ota_0` at 0x10000 and `ota_1`
 /// at 0x210000, so 2 MiB each. An upload longer than this is
@@ -174,32 +175,51 @@ pub fn host_is_ours(host: Option<&str>, instance: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// State the API keeps that the device does not: when the last scan was.
+///
+/// The window itself is [`route::RateLimit`], so the simulator and the
+/// firmware enforce the same rule with the same code rather than two
+/// hand-rolled comparisons that agree today. It takes `now_ms`, which is what
+/// lets `crates/device-api` test the 49.7-day wrap in microseconds; here the
+/// clock is `Instant::now()` since the process started.
 #[derive(Debug)]
 pub struct ApiState {
     boot: Instant,
-    last_scan_ms: AtomicU64,
+    scan: Mutex<route::RateLimit>,
 }
 
 impl ApiState {
-    /// A fresh one. `last_scan_ms` starts far enough back that the first
-    /// request always scans.
+    /// A fresh one. Nothing has scanned yet, so the first request always does.
     #[must_use]
     pub fn new() -> Self {
         ApiState {
             boot: Instant::now(),
-            last_scan_ms: AtomicU64::new(0),
+            scan: Mutex::new(route::RateLimit::new(route::SCAN_MIN_INTERVAL_MS)),
         }
     }
 
-    /// True if a scan is allowed now, and records it if so.
+    /// Milliseconds since this state was built, as the `u32` the limiter takes.
+    fn now_ms(&self) -> u32 {
+        self.boot.elapsed().as_millis() as u32
+    }
+
+    /// True if a scan is allowed now, and records it if so. A refused request
+    /// does **not** push the window out - see [`route::RateLimit`].
     fn allow_scan(&self) -> bool {
-        let now = self.boot.elapsed().as_millis() as u64;
-        let last = self.last_scan_ms.load(Ordering::SeqCst);
-        if last != 0 && now.saturating_sub(last) < SCAN_MIN_INTERVAL_MS {
-            return false;
-        }
-        self.last_scan_ms.store(now.max(1), Ordering::SeqCst);
-        true
+        let now = self.now_ms();
+        self.scan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .allow(now)
+    }
+
+    /// How long until the next scan would be allowed, for the refusal's
+    /// `detail`.
+    fn scan_retry_after_ms(&self) -> u32 {
+        let now = self.now_ms();
+        self.scan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retry_after_ms(now)
     }
 }
 
@@ -258,12 +278,16 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         };
     }
 
+    // The table is walked by `crates/device-api`, not here: `route::find` and
+    // `route::path_is_known` are the crate's own lookup (card 232), so the
+    // 405-vs-404 rule is one implementation the firmware shares rather than
+    // two that happen to agree.
     let method = match head.method.as_str() {
         "GET" => route::Method::Get,
         "POST" => route::Method::Post,
         // Any other verb: the route may exist, but not like this.
         _ => {
-            return if route::ROUTES.iter().any(|r| r.path == head.path) {
+            return if route::path_is_known(&head.path) {
                 bare(ErrorCode::MethodNotAllowed)
             } else {
                 bare(ErrorCode::NotFound)
@@ -271,15 +295,12 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         }
     };
 
-    let known_path = route::ROUTES.iter().any(|r| r.path == head.path);
-    if !known_path {
-        return bare(ErrorCode::NotFound);
-    }
-    if !route::ROUTES
-        .iter()
-        .any(|r| r.path == head.path && r.method == method)
-    {
-        return bare(ErrorCode::MethodNotAllowed);
+    if route::find(&head.path, method).is_none() {
+        return if route::path_is_known(&head.path) {
+            bare(ErrorCode::MethodNotAllowed)
+        } else {
+            bare(ErrorCode::NotFound)
+        };
     }
 
     match (method, head.path.as_str()) {
@@ -344,7 +365,14 @@ fn telemetry(shared: &Shared) -> Response {
 
 fn networks(shared: &Shared, state: &ApiState) -> Response {
     if !state.allow_scan() {
-        return error_response(ErrorCode::RateLimited, "one scan per 10 seconds");
+        return error_response(
+            ErrorCode::RateLimited,
+            &format!(
+                "one scan per {} s; try again in {} ms",
+                route::SCAN_MIN_INTERVAL_MS / 1_000,
+                state.scan_retry_after_ms()
+            ),
+        );
     }
     let mut reply = NetworksReply::new();
     {
@@ -389,10 +417,7 @@ fn buffered(body: Body<'_>) -> Result<Vec<u8>, Response> {
 /// is the number card 222 sizes picoserve's buffer from, so the simulator
 /// enforces it rather than accepting what a host happens to be able to hold.
 fn within_bound(path: &str, method: route::Method, len: usize) -> Result<(), Response> {
-    let bound = route::ROUTES
-        .iter()
-        .find(|r| r.path == path && r.method == method)
-        .map_or(0, |r| r.max_request_len);
+    let bound = route::find(path, method).map_or(0, |r| r.max_request_len);
     if bound > 0 && len > bound {
         return Err(error_response(
             ErrorCode::PayloadTooLarge,
@@ -443,8 +468,16 @@ fn post_wifi(shared: &Shared, _head: &Head, body: Body<'_>) -> Response {
     shared.publish(&events);
     match posted {
         // Spec section 8.2: the reply goes out before the radio work, which
-        // here means before any tick can deliver the scripted outcome.
+        // here means before any tick can deliver the scripted outcome. Since
+        // card 232 this is the answer from `Portal`, `Trial`, `Joining` **and**
+        // `Online` - the 503 card 224 raised for a post while online is gone,
+        // because the machine now has the transition it was flagging.
         Posted::Trial => ok_json(&AcceptedReply::TRYING),
+        // Only `Boot` is left, which the simulator never serves from: the
+        // machine is booted inside `WifiModel::new`. Kept because a reply that
+        // says `trying` when nothing is being tried would be a lie, and card
+        // 224's "do not answer `trying` when the machine did not start a
+        // trial" is the rule whatever the remaining state turns out to be.
         Posted::Ignored(phase) => error_response(
             ErrorCode::Unavailable,
             &format!("no trial join from {}", phase.name()),

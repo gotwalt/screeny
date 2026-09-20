@@ -173,7 +173,9 @@ fn usable_indexed(palette: &[[u8; 3]], indices: &[u8]) -> bool {
 #[must_use]
 pub fn distinct_colours(rgb: &[u8]) -> usize {
     let mut keys: Vec<u32> = rgb
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
         .collect();
     keys.sort_unstable();

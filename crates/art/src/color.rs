@@ -35,6 +35,10 @@ impl Rgb {
         Rgb::new(self.r * k, self.g * k, self.b * k)
     }
 
+    // Deliberately inherent and not `std::ops::Add`: this is summing light,
+    // which is only meaningful because `Rgb` is linear, and `acc.add(..)` at
+    // the call site says that where `a + b` on a colour would not.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, o: Rgb) -> Self {
         Rgb::new(self.r + o.r, self.g + o.g, self.b + o.b)
     }

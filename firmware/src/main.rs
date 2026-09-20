@@ -111,7 +111,7 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 ///
 /// 0.3.0 was card 212: settings live in flash. 0.4.0 is card 222: the device
 /// answers HTTP on the LAN.
-pub const FW_VERSION: &str = "0.4.0";
+pub const FW_VERSION: &str = "0.4.1";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -389,7 +389,35 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// exactly what a `Signal` keeps. It carries a [`Wifi`], whose `Debug` is safe
 /// because `Psk`'s prints a byte count and nothing else (spec section 8.4) -
 /// and nothing formats it anyway.
-pub static NEW_WIFI: Signal<CriticalSectionRawMutex, Wifi> = Signal::new();
+pub static NEW_WIFI: Signal<CriticalSectionRawMutex, NewWifi> = Signal::new();
+
+/// Credentials somebody asked the station to try, and whether to keep them.
+///
+/// **They are written to flash only after they have joined**, by the WiFi task,
+/// never by the handler that received them. Firmware 0.4.0 wrote them first
+/// (spec 8.2 then said "store, then try"), and one mistyped password posted
+/// over HTTP replaced a working pair in flash: the device stayed up on its
+/// in-RAM fallback until the next reboot and then could not join anything.
+#[derive(Clone)]
+pub struct NewWifi {
+    /// The network to try.
+    pub wifi: Wifi,
+    /// Commit to the store once (and only if) the join succeeds.
+    pub persist: bool,
+}
+
+/// Store credentials that have just proved themselves. A failure is logged and
+/// counted (`store_errors` on the status page); the join stands either way.
+async fn persist_joined(w: &Wifi) {
+    let what = store::Immediate::Wifi { wifi: w.clone(), persist: true };
+    match store::commit_immediate(&what).await {
+        Ok(()) => info!("wifi: the new credentials joined and are now stored"),
+        Err(e) => {
+            store::FAILURES.fetch_add(1, Ordering::Relaxed);
+            warn!("wifi: joined, but storing the credentials failed: {:?}", e);
+        }
+    }
+}
 
 /// Set when a `SET_WIFI` could not join and the station fell back to what it
 /// had (spec section 8.2 step 4).
@@ -596,7 +624,7 @@ enum Held {
     /// The access point went away.
     Disconnected,
     /// `SET_WIFI` asked for a different network.
-    NewCredentials(Wifi),
+    NewCredentials(NewWifi),
 }
 
 /// Hold the association: poll the beacon RSSI for telemetry byte 44 and the
@@ -617,7 +645,7 @@ async fn hold(controller: &mut WifiController<'static>) -> Held {
             }
             // The 2 s poll expired: go round, re-read the RSSI.
             Either::First(Err(_)) => continue,
-            Either::Second(w) => return Held::NewCredentials(w),
+            Either::Second(n) => return Held::NewCredentials(n),
         }
     }
 }
@@ -645,16 +673,24 @@ pub async fn station_loop(controller: &mut WifiController<'static>, stored: Opti
     // What the station is using now. `SET_WIFI` replaces it, and a `SET_WIFI`
     // that cannot join puts the previous value back.
     let mut active = stored.or_else(|| builtin.clone());
+    // Set while `active` holds credentials that asked to be kept and have not
+    // joined yet; the first successful join of them is what stores them.
+    let mut persist_on_join = false;
 
     loop {
         let Some(w) = active.clone() else {
             WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
             warn!("wifi: no credentials stored and none compiled in - waiting for SET_WIFI (the setup portal is card 223)");
-            active = Some(NEW_WIFI.wait().await);
+            let n = NEW_WIFI.wait().await;
+            persist_on_join = n.persist;
+            active = Some(n.wifi);
             continue;
         };
 
         if try_join(controller, &w, JOIN_ATTEMPTS).await {
+            if core::mem::take(&mut persist_on_join) {
+                persist_joined(&w).await;
+            }
             match hold(controller).await {
                 Held::Disconnected => {
                     WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
@@ -668,8 +704,12 @@ pub async fn station_loop(controller: &mut WifiController<'static>, stored: Opti
                     // link had already gone.
                     let _ = controller.disconnect_async().await;
                     RSSI_DBM.store(0, Ordering::Relaxed);
+                    let NewWifi { wifi: next, persist } = next;
                     if try_join(controller, &next, JOIN_ATTEMPTS).await {
                         WIFI_SET_FAILED.store(false, Ordering::Relaxed);
+                        if persist {
+                            persist_joined(&next).await;
+                        }
                         active = Some(next);
                         // The TXT record does not carry the SSID, but the
                         // address may well have changed; re-announce.
@@ -698,7 +738,17 @@ pub async fn station_loop(controller: &mut WifiController<'static>, stored: Opti
                             WIFI_STATE.store(wifi_state::DISCONNECTED, Ordering::Relaxed);
                             RSSI_DBM.store(0, Ordering::Relaxed);
                         }
-                        Held::NewCredentials(next) => active = Some(next),
+                        Held::NewCredentials(next) => {
+                            // Drop the bench association first, exactly as the
+                            // stored-credentials path above does. Without this
+                            // `connect_async` was called while still associated
+                            // and never returned: found on the bench, recovering
+                            // a device whose stored pair had gone bad.
+                            let _ = controller.disconnect_async().await;
+                            RSSI_DBM.store(0, Ordering::Relaxed);
+                            persist_on_join = next.persist;
+                            active = Some(next.wifi);
+                        }
                     }
                     continue;
                 }
@@ -713,7 +763,8 @@ pub async fn station_loop(controller: &mut WifiController<'static>, stored: Opti
         if let Either::Second(next) =
             select(Timer::after(RETRY_AFTER), NEW_WIFI.wait()).await
         {
-            active = Some(next);
+            persist_on_join = next.persist;
+            active = Some(next.wifi);
         }
     }
 }

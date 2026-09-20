@@ -70,6 +70,20 @@ pub enum Error {
         found: String,
     },
 
+    /// The name given was a prefix of - or a friendly name shared by - more
+    /// than one device that answered, so it named none of them.
+    ///
+    /// Card 176: an instance name is unique on a link, so naming a panel in
+    /// full can never land here. The looser matches can, and an arbitrary pick
+    /// between two panels is worse than saying so.
+    #[error("{wanted:?} matches more than one device ({found}); name one of them in full")]
+    AmbiguousName {
+        /// The name asked for.
+        wanted: String,
+        /// The instance names it matched.
+        found: String,
+    },
+
     /// The mDNS daemon itself failed.
     #[error("mDNS: {0}")]
     Mdns(String),

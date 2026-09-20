@@ -574,11 +574,32 @@ impl SimDevice {
         // loopback and a test cannot accidentally serve the LAN.
         let http = if cfg.http {
             let bind = SocketAddr::new(cfg.bind, cfg.http_port);
-            let server = crate::http::Server::start(
-                bind,
-                crate::api::handler(Arc::clone(&shared)),
-                crate::api::wants_stream(),
-            )?;
+            let handler = crate::api::handler(Arc::clone(&shared));
+            let wants_stream = crate::api::wants_stream();
+            let server = match crate::http::Server::start(bind, handler, wants_stream) {
+                Ok(s) => s,
+                // The default port is a *preference*: several sessions run two
+                // or three simulators at once and never asked for HTTP at all,
+                // and a hard failure on a port they did not choose is a
+                // regression for them. A port somebody named is different -
+                // they are going to connect to it - so that one still fails.
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && !cfg.http_port_explicit
+                        && cfg.http_port != 0 =>
+                {
+                    eprintln!(
+                        "screeny-sim: HTTP port {} is busy; using an ephemeral one instead",
+                        cfg.http_port
+                    );
+                    crate::http::Server::start(
+                        SocketAddr::new(cfg.bind, 0),
+                        crate::api::handler(Arc::clone(&shared)),
+                        crate::api::wants_stream(),
+                    )?
+                }
+                Err(e) => return Err(e),
+            };
             *shared.http_addr.lock().unwrap() = Some(server.addr());
             Some(server)
         } else {

@@ -26,6 +26,18 @@ Sizes are bytes of JSON, and the size columns come from the constants in the cod
 | POST | `/api/v1/reboot` | `RebootRequest` (`{"confirm":"RBOO"}`) | `AcceptedReply` (`"rebooting"`) | 188 | 24 |
 | POST | `/api/v1/identify` | `IdentifyRequest` | `AcceptedReply` (`"identifying"`) | 152 | 24 |
 
+`route::find(path, method)` looks a row up, and `route::path_is_known(path)` is the
+difference between `405` and `404` - every server was about to write the same
+`ROUTES.iter().find(..)` for itself. `GET /api/v1/networks` really scans at most once per
+`route::SCAN_MIN_INTERVAL_MS` (10 s), enforced with `route::RateLimit`, which takes
+`now_ms` rather than reading a clock and in which a *refused* request does not push the
+window out.
+
+`POST /api/v1/firmware` answers `ok: true` only when every check that build runs at all
+ran and passed. A build that cannot run all five of research 006's checks answers
+`unavailable` with the missing ones in `detail` instead of a qualified success; there is
+deliberately no `checks_run` field.
+
 Anything that fails answers `ErrorReply`: `{"error":"<code>"}` with an optional
 `"detail"`, and the HTTP status is `ErrorCode::status()` - one function, so the browser's
 status and the Studio's code cannot disagree. `ErrorCode::ALL` is the closed set:
@@ -124,7 +136,7 @@ flats really does find forty.
 
 ## Testing
 
-`cargo test -p screeny-device-api`: 64 tests plus the crate-doc example, in well
+`cargo test -p screeny-device-api`: 71 tests plus three doc examples, in well
 under a second, with no hardware and no network.
 `cargo check -p screeny-device-api --target thumbv7em-none-eabi` is the `no_std` gate.
 `UPDATE_GOLDEN=1 cargo test -p screeny-device-api --test golden` rewrites the examples

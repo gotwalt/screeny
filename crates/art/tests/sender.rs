@@ -70,6 +70,17 @@ fn start_sim() -> (SimDevice, Device, Receiver<Shown>) {
     (dev, device, rx)
 }
 
+/// What one [`run`] recorded: five parallel lists, one entry per frame -
+/// except `shown`, which holds whatever the device managed before the
+/// deadline, and is lined up with the rest by sequence number.
+struct Run {
+    wires: Vec<WireFrame>,
+    previews: Vec<Vec<u8>>,
+    measured: Vec<Measured>,
+    sents: Vec<Sent>,
+    shown: Vec<Shown>,
+}
+
 /// Render `frames` frames of `id` through the pipeline and send every one of
 /// them to a simulator, then collect what the device displayed.
 ///
@@ -79,7 +90,7 @@ fn start_sim() -> (SimDevice, Device, Receiver<Shown>) {
 /// chooser's hysteresis means two encoders only agree if they are shown the
 /// same frames. One in, one out is what makes "the preview is what the panel
 /// shows" a checkable statement rather than a usually-true one.
-fn run(id: &str) -> (Vec<WireFrame>, Vec<Vec<u8>>, Vec<Measured>, Vec<Sent>, Vec<Shown>) {
+fn run(id: &str) -> Run {
     let (_dev, device, rx) = start_sim();
     let def = piece::find(id).unwrap_or_else(|| panic!("no piece called `{id}`"));
     let params = Params::defaults(def.params);
@@ -129,7 +140,7 @@ fn run(id: &str) -> (Vec<WireFrame>, Vec<Vec<u8>>, Vec<Measured>, Vec<Sent>, Vec
         }
     }
     out.close();
-    (wires, previews, measured, sents, shown)
+    Run { wires, previews, measured, sents, shown }
 }
 
 /// Line the device's frames up with ours by sequence number, so a frame lost
@@ -176,7 +187,7 @@ fn report(label: &str, sents: &[Sent], shown: &[Shown]) {
 #[test]
 fn an_indexed_piece_arrives_pixel_exact() {
     for id in ["clocks-numerals", "plasma"] {
-        let (wires, previews, measured, sents, shown) = run(id);
+        let Run { wires, previews, measured, sents, shown } = run(id);
         report(id, &sents, &shown);
         let pairs = aligned(&sents, &shown);
         assert!(pairs.len() >= FRAMES - 2, "{id}: only {} of {FRAMES} frames arrived", pairs.len());
@@ -201,7 +212,7 @@ fn an_indexed_piece_arrives_pixel_exact() {
 #[test]
 fn a_continuous_piece_matches_the_preview() {
     let id = "metaballs";
-    let (wires, previews, measured, sents, shown) = run(id);
+    let Run { wires, previews, measured, sents, shown } = run(id);
     report(id, &sents, &shown);
     let pairs = aligned(&sents, &shown);
     assert!(pairs.len() >= FRAMES - 2, "{id}: only {} of {FRAMES} frames arrived", pairs.len());
@@ -229,7 +240,7 @@ fn a_continuous_piece_matches_the_preview() {
 #[test]
 fn the_meter_agrees_with_the_link() {
     for id in ["clocks-numerals", "metaballs"] {
-        let (_wires, _previews, measured, sents, _shown) = run(id);
+        let Run { measured, sents, .. } = run(id);
         for (i, (m, s)) in measured.iter().zip(&sents).enumerate() {
             let Sent::Frame { codec, bytes, exact, .. } = *s else { panic!("{id}: frame {i} did not reach the wire") };
             assert_eq!(m.codec, codec, "{id}: frame {i} codec");

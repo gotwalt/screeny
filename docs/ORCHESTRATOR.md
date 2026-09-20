@@ -144,10 +144,13 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   things against `screeny-sim` on localhost only. Anything on the real panel, WiFi
   streaming included, is the orchestrator's step after the merge. The owner's bar for a
   workstream is that it runs on the real panel, not only the sim: plan that step.
-- **Several simulators on one machine**: since firmware card 224 the `screeny-sim` binary
-  also serves HTTP, by default on a fixed port 8080, so a second sim fails to start. Until
-  card 232 lands (busy 8080 -> ephemeral fallback), tell workers to pass `--no-http` or
-  `--http-port 0` to every sim they start by hand. `Config::for_test()` is already ephemeral.
+- **Several simulators on one machine**: the `screeny-sim` binary also serves HTTP (default
+  port 8080, falling back to an ephemeral port when 8080 is busy since firmware card 232).
+  `--no-http` / `--http-port 0` remain the tidy choice for hand-run sims.
+- **macOS: a socket from `accept()` inherits O_NONBLOCK from a non-blocking listener** (Linux
+  does not). A hand-rolled acceptor then reads WouldBlock as "client said nothing" - a flake
+  that shows only under load, only on macOS (firmware card 232 found it in `crates/sim`). Call
+  `stream.set_nonblocking(false)` after `accept()`. The Studio uses tokio/axum and is unaffected.
 - **Check the instructions you give other sessions against the running system.** After card
   106 the orchestrator kept telling the firmware session that `set_panel {"on":false}`
   releases the panel; it had become a silent no-op (200, body `null`) and cost that session a
