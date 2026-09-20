@@ -262,3 +262,21 @@ below is listed rather than decided.
    itself is unchanged and could be read the other way.
 
 Nothing in this card changes a byte on the wire, and no code was touched.
+
+**Orchestrator, after the merge (2026-09-20):** merged to `main` as a4ba5cf. 8.5-8.9 rather
+than a new top-level section is right: renumbering would break ~20 citations in code.
+Dispositions of the nine disagreements, under decision 10 (good enough, not bomb-proof):
+- 1, 2 (PSK/SSID "UTF-8" in 8.2 vs bytes in code): **leave**. A non-UTF-8 PSK is refused
+  at the radio with "could not join"; nobody here has one.
+- 3 (`GET_WIFI` reads `FAILED` while connected): **spec is now right in 8.3**; 6.3's gloss
+  gets a pointer the next time that section is open.
+- 4 (`GET /api/v1/networks`): **stays a route answering `unavailable`**; 229 is dropped, the
+  route and the simulator's implementation cost nothing to keep.
+- 5 (simulator gates the catch-all on `Host`, the device on the listener): **accepted
+  difference**, it is the simulator's model of "on the setup network" (card 235).
+- 6 (`maxlength=63` vs a 64-byte PSK), 7, 8 (stale section citations in comments), and
+  `http.rs:53`'s "also 223": **trivial, ride along with the next firmware card** (243).
+- 9 (7.3 says frame handling continues underneath the overlay; frames are counted but not
+  shown while the setup screen is up): **8.1 says it; 7.3 gets one clause** with the same
+  next firmware card, since that behaviour is two hours old.
+Card 132's paragraph landed with this merge (commit 0ab10f5); 132 closed.

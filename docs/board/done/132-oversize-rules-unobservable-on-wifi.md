@@ -55,3 +55,5 @@ The spec says it, and `docs/research/` is not the only place the reasoning
 exists.
 
 ## Log
+
+**Closed 2026-09-20:** the paragraph landed in `docs/design/protocol-v1.md` sections 1 and 2.3 with card 225 (commit 0ab10f5, merge a4ba5cf), by the firmware session at the software session's offer.
