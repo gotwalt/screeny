@@ -4,8 +4,8 @@ title: Server-first Studio - axum + embedded UI, Tauri removed
 type: build
 hardware: no
 depends: [017, 101]
-owner:
-branch:
+owner: worker-105
+branch: card/105-studio-server-first
 ---
 
 ## Goal
