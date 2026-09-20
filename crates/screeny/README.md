@@ -230,6 +230,7 @@ struct Target { addr: Option<SocketAddr>, host: Option<String>, port: Option<u16
     fn resolve(&self) -> Result<Device>      // blocking; call it off your loop
     fn label(&self) -> String                // what was asked for, as asked
 fn discover::browse(Duration, want: Option<usize>) -> Result<Vec<Device>>
+fn discover::browse_for_name(Duration, &str) -> Result<Vec<Device>>   // stops at that instance
 fn discover::broadcast_probe(Duration, port) -> Result<Vec<Device>>   // spec 5.5
 
 struct Device { instance, host, frame: SocketAddr, control: SocketAddr,
@@ -343,8 +344,8 @@ discovery does not:
 | option | |
 |---|---|
 | `--addr IP\|HOST[:PORT]` | talk to this address, or to a host name the system resolver knows, skipping discovery entirely |
-| `--name NAME` | pick a discovered device by instance or friendly name |
-| `--timeout SECS` | how long to browse for (default 3) |
+| `--name NAME` | pick a discovered device by instance name, friendly name, or a prefix of an instance name |
+| `--timeout SECS` | how long to browse for (default 3); a full instance name returns as soon as it answers, so the window is only ever paid when it does not |
 | `--broadcast` | use the broadcast `GET_INFO` probe instead of mDNS (spec 5.5) |
 | `-v`, `--verbose` | more detail |
 
@@ -522,6 +523,15 @@ median period, drift, how late the host woke it - whether it passed or not.
   container on the default bridge, which carries no LAN multicast;
   `Error::hint` says whichever of those applies to the machine it is printed
   on (card 147). `--addr` always works.
+- **Naming a panel in full is the cheap way to name it** (card 176). A DNS-SD
+  instance name is unique on a link, so a browse for `screeny-4a00a4` stops the
+  moment that instance answers - tens of milliseconds, the same as an unnamed
+  browse - and only pays the whole window when the panel is not there, where
+  waiting buys the list of what *did* answer. A friendly `name=` or a prefix of
+  an instance name cannot stop early: "is this the only one?" is answerable
+  only when nothing more is coming, and if two panels match, it is
+  `Error::AmbiguousName` rather than an arbitrary pick. This is paid on every
+  reconnect, not once, because a link re-resolves its target each time.
 - **Local Network permission.** A CLI run from Terminal or over SSH is exempt;
   a bundled, re-signed or launchd-started binary is not, and closing the
   Terminal window that started a running sender can revoke the exemption

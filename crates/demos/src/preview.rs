@@ -165,8 +165,8 @@ impl LinImg {
         };
         let mut line = vec![[0f32; 3]; n];
         for j in 0..m {
-            for i in 0..n {
-                line[i] = if horiz {
+            for (i, slot) in line.iter_mut().enumerate() {
+                *slot = if horiz {
                     self.px[j * self.w + i]
                 } else {
                     self.px[i * self.w + j]
@@ -176,10 +176,12 @@ impl LinImg {
                 let lo = i.saturating_sub(r);
                 let hi = (i + r).min(n - 1);
                 let mut acc = [0f32; 3];
-                for k in lo..=hi {
-                    acc[0] += line[k][0];
-                    acc[1] += line[k][1];
-                    acc[2] += line[k][2];
+                // In order, one sample at a time: the sum is a float and
+                // reassociating it would move pixels.
+                for s in &line[lo..=hi] {
+                    acc[0] += s[0];
+                    acc[1] += s[1];
+                    acc[2] += s[2];
                 }
                 let c = (hi - lo + 1) as f32;
                 let v = [acc[0] / c, acc[1] / c, acc[2] / c];

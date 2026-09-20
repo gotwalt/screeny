@@ -174,7 +174,7 @@ impl Offscreen {
                 let mut acc = [0.0_f32; 3];
                 for sy in 0..ss {
                     let row = (y * ss + sy) * stride + x * ss * 4;
-                    for t in texels[row..row + ss * 4].chunks_exact(4) {
+                    for t in texels[row..row + ss * 4].as_chunks::<4>().0 {
                         acc[0] += lut[t[0] as usize];
                         acc[1] += lut[t[1] as usize];
                         acc[2] += lut[t[2] as usize];

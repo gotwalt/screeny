@@ -223,8 +223,7 @@ mod tests {
     #[test]
     fn the_codec_preview_can_be_turned_off() {
         let f = linear_frame(|x, y| Rgb::new(x as f32 / 63.0, y as f32 / 31.0, 0.5));
-        let mut settings = Settings::default();
-        settings.codec_preview = false;
+        let settings = Settings { codec_preview: false, ..Settings::default() };
         let out = Pipeline::new(settings).process(f, 1.0 / 30.0);
         assert_eq!(out.preview, out.wire.rgb);
         assert!(!out.stats.exact, "the statistics are still the real ones");

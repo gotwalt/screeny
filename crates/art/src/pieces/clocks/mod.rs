@@ -395,7 +395,7 @@ impl Clocks {
         let (_, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
         // Engine seconds until the dance has to begin.
         let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
-        let ready = self.ambient.as_ref().map_or(true, |a| a.at_rest());
+        let ready = self.ambient.as_ref().is_none_or(|a| a.at_rest());
         if self.minute.is_none() || (slack <= 0.0 && ready) {
             self.perform(ctx, composition, to, next, motor);
             return;

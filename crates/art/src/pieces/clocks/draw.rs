@@ -76,9 +76,9 @@ impl Dials<'_> {
             let i = (cy as usize).min(self.rows - 1) * self.cols + (cx as usize).min(self.cols - 1);
             let (px, py) = ((cx.fract() - 0.5) * self.cell, (cy.fract() - 0.5) * self.cell);
             let [ink, reach] = self.rest.get(i).copied().unwrap_or([1.0, 1.0]);
-            for h in 0..2 {
+            for (h, tint) in inks.iter().enumerate() {
                 if hand_distance(px, py, self.angles[i][h], self.lens[h] * reach) <= self.half {
-                    return inks[h].scale(ink);
+                    return tint.scale(ink);
                 }
             }
             if self.mark > 0.0 {
@@ -110,7 +110,6 @@ fn hand_distance(px: f32, py: f32, angle: f32, len: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::N;
 
     /// A hand's soft edge must stay the hand's colour. Blue cannot hold much
     /// chroma when light, so its ink is pale, and a ramp built at constant
@@ -126,10 +125,10 @@ mod tests {
             // The hour hand points right and the mark is above it: everything in
             // the right half of each dial, and its top rows, is the hour ramp
             // (entries 1..=15) or black.
-            for i in 0..N {
+            for (i, &index) in indices.iter().enumerate() {
                 let (x, y) = (i % 64, i / 64);
                 if x % 16 >= 9 || y % 16 < 3 {
-                    assert!(indices[i] <= STEPS as u8, "hue {hue}: pixel ({x},{y}) took the minute hand's colour");
+                    assert!(index <= STEPS as u8, "hue {hue}: pixel ({x},{y}) took the minute hand's colour");
                 }
             }
             assert!(indices.iter().any(|i| (1..STEPS as u8).contains(i)), "no soft edges were drawn");
