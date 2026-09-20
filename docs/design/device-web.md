@@ -207,6 +207,16 @@ random id rather than a persistent counter on purpose: it costs no flash write p
 (Add it to `crates/device-api` and its golden files after card 224 merges, so the
 simulator picks it up in the same change.)
 
+Decided after the Studio first read the live API (2026-09-20), to land with card 223:
+in `GET /api/v1/status`, **`wifi_state` means the link** (`connected` / `connecting` /
+`disconnected`) and never the sticky result of the last credentials attempt. That result
+(`failed` + `reason`, sticky until the next post or a reboot, which is how spec 8.2's
+`ERR_WIFI` is reported over `GET_WIFI`) belongs to `GET /api/v1/wifi` only. Firmware
+0.4.0 reports the sticky value in both places, so a device that fell back successfully
+reads `wifi_state: failed` while plainly connected - it looks like a fault and is not.
+Also for 223: `GET /api/v1/wifi`'s `reason` is `null` after a failed attempt in 0.4.0;
+it must carry `auth` / `not_found` / `other` from the state machine.
+
 What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
