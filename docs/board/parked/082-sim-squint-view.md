@@ -47,3 +47,7 @@ Someone writing a piece for the panel can judge it in `screeny-sim` without
 having to build their own preview, which is what the brief asks for.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+Superseded: the Studio page is the faithful preview now (panel model, meters, colours, frame size, average level, luminance change). The sim window is a protocol tool, not where pieces are judged.

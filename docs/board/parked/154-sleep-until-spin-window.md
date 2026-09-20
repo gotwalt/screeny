@@ -86,3 +86,7 @@ Either the median lateness in `tests/pacing.rs`'s report drops below a
 millisecond, or the card says in one paragraph why 4 ms is the right price.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+A constant 4 ms phase offset in the pacer; the rate is right and nobody can see a phase. Not worth buying back.

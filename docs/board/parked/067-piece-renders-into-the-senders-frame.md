@@ -63,3 +63,7 @@ Card 092 took most of this card's prize from the other end: a piece's own buffer
 the encoder (`IndexedSource` returns a borrowed `Pixels`), so the streaming path no longer copies
 and the literal acceptance grep passes. What remains (`Piece::render` into a borrowed frame) only
 helps the demos' preview and tests. Low value; do not pick up without a reason.
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+A 6 KB copy per frame on a server that renders at 60 fps with time to spare. No effect on anything the owner sees.

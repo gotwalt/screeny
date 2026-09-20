@@ -44,3 +44,7 @@ to its own subnet and nowhere near the panel.
 something else probes the named address and nothing else, and says so once at startup.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+The Config field exists; the deployed container finds the panel by mDNS and by name. Add the flag the day a deployment has no broadcast route.

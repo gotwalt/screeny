@@ -42,3 +42,7 @@ on a headless box cannot reach it.
 
 A headless run can produce a PNG that shows what the panel would look like, and
 the existing `--dump-dir` bytes are unchanged.
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+Superseded for art work by screeny-art snapshot, which goes through the panel model (card 102). Reopen only if a firmware-side idle screen needs judging headlessly.

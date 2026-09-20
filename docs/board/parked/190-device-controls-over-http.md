@@ -61,3 +61,7 @@ connections to a panel at once (`crates/studio/tests/device_status.rs` has the t
 measures this).
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+Decided: no, for now. UDP control and the HTTP status poll cannot collide today because one is UDP and one is TCP, and the panel has one connection worker and no listen backlog; moving controls to HTTP gives that up to gain an error shape for five controls that already work, and the UDP path would have to stay anyway for firmware with no HTTP API. Revisit when OTA (cards 240-243) gives the Studio a reason to make HTTP requests that change the device.

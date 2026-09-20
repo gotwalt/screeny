@@ -43,3 +43,7 @@ Two simulators on one host, each with its own `--http-port`, both advertising: t
 Studio reads the right status from each, with no `--device-http-port` given.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+An assumption (HTTP on port 80) that is true for every panel there is, written down in one place. The card itself says: worth doing when discovery is being touched anyway, not before.

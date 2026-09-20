@@ -125,14 +125,26 @@ before/after renders of the clock pieces are not comparable) and the edit-to-pan
 quick looks run `screeny-art play` from the Mac after `set_panel {"on":false}` on
 workbench, and turn it back on after).
 
+**In flight since 2026-09-20 ~11:30 (three Opus workers, worktrees):** 162
+(`card/162-snapshot-pins-a-time`: `screeny-art snapshot` can pin the time of day, so clock
+renders are comparable), **198** (`card/198-studio-two-screens`: the owner's UI refresh - the
+picture on `/`, everything about the panel and its status on `/panel`, one status chip and
+brightness left on the picture screen; folds in 197), and 118 + 117 on one branch
+(`card/118-117-poll-backoff-and-flakes`). The owner said the edit-to-panel loop is low
+priority: for local designing he will run the Studio locally (card 110, macOS Local Network
+permission for `screeny-studio`/`screeny-art`, is the one to check the first time he does).
+Pruned to `parked/` the same day, each with its reason: 065, 067, 082, 113, 133, 135, 142,
+154, 190 (decided no, for now), 191. Left in backlog: 110, 114, 121 (after 198), 132 (offered
+to the firmware session to fold into its spec card 225), and the firmware session's 062,
+068, 130, 131, 136.
+
 **Waiting on the owner (asked 2026-09-20 morning, not yet answered):** which `rest` treatment he likes on the panel (default `hatched,
 quiet`); keep or delete the Reconnects row; should the unasked-for reboot count age out or
 notify (default no); is 30 fps right for the browser preview (default yes); a glance at the
 page in a *visible* tab after card 120 (nobody has seen the drawn picture since); the
 workbench reboot for card 107 (his to run); from card 102: should `overland` still cut
 colours below L 0.3 to black (now style, not necessity), and does he want a dim-room
-brightness control on the preview; from 197: a mark at 1.00x on the Speed slider, and a
-double-click back to it? Check that the firmware session handed the panel
+brightness control on the preview Check that the firmware session handed the panel
 back after borrowing it (`player.on` true in `/api/v1/status`) - `on:false` now survives a
 restart.
 

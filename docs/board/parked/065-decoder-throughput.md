@@ -65,3 +65,7 @@ The card says why `SOLID` costs 224 us, with evidence, and either improves it or
 explains why it cannot be improved.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+The device decodes a frame in about 0.5 ms against a 33 ms budget. Nothing is waiting on this.

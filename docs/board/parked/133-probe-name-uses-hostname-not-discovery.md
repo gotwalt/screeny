@@ -52,3 +52,7 @@ Options: (a) leave it, and document `--name` as "the mDNS *host* name";
 find the same device, or the probe's help says plainly that they do not.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+A bench-tool nicety: the two mechanisms agree for every device that exists. Reopen if a renamed device or a second simulator makes them disagree in practice.

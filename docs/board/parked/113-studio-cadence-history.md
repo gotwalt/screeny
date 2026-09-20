@@ -57,3 +57,7 @@ then says it stepped back up, and a person can tell that from the slider
 having been moved. No new per-frame logging.
 
 ## Log
+
+### Parked 2026-09-20 (owner: "let's prune what doesn't need to be done"; focus is aesthetic work)
+
+Link diagnostics on the page. The owner is moving panel status off the picture screen (card 198), not adding to it; reopen if a step down under loss is ever actually suspected.
