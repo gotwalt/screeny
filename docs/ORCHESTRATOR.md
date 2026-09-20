@@ -125,12 +125,21 @@ before/after renders of the clock pieces are not comparable) and the edit-to-pan
 quick looks run `screeny-art play` from the Mac after `set_panel {"on":false}` on
 workbench, and turn it back on after).
 
-**In flight since 2026-09-20 ~11:30 (three Opus workers, worktrees):** 162
-(`card/162-snapshot-pins-a-time`: `screeny-art snapshot` can pin the time of day, so clock
-renders are comparable), **198** (`card/198-studio-two-screens`: the owner's UI refresh - the
-picture on `/`, everything about the panel and its status on `/panel`, one status chip and
-brightness left on the picture screen; folds in 197), and 118 + 117 on one branch
-(`card/118-117-poll-backoff-and-flakes`). The owner said the edit-to-panel loop is low
+**Done 2026-09-20 afternoon:** 162 (`screeny-art --time HH:MM[:SS]` pins the time of day on
+a fixed day: `snapshot clocks-numerals --time 21:12` is one PNG for ever - use it for every
+before/after of the clock pieces), **198 - the owner's UI refresh, deployed**: two screens
+over one state stream, `/` the Picture (canvas, pieces, params, brightness, time, panel
+model, limiter, view, meters, and one status chip that links to the other screen and goes
+red with a reason) and `/panel` (which panel, discovery, output switch, brightness,
+identify/rename/reboot, link + Device facts, the Studio's own health); `ui/main.js` is now
+`common.js` + `picture.js` + `panel.js`, plain ES modules, still no build step; folds in
+197. Merged, **not yet deployed**: 118 (a panel that has answered HTTP climbs the ordinary
+backoff, and a reboot seen in telemetry clears it: ~130 s -> 10-20 s) and 117 (the soak,
+`embed.rs` and `tests/fleet.rs` wait on what they assert, retry fixed-port re-binds, and
+print numbers). New backlog: 119 (the Studio cannot be shown a pinned time), 143 (a
+`crates/sim` telemetry test asserts an exact count under load - the firmware session's
+crate), 144 (`frames_sent` restarts when the link is rebuilt; needs a decision). Nothing of
+this session's is in flight. The owner said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
 permission for `screeny-studio`/`screeny-art`, is the one to check the first time he does).
 Pruned to `parked/` the same day, each with its reason: 065, 067, 082, 113, 133, 135, 142,

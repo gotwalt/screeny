@@ -210,3 +210,7 @@ in `sim_pair` ("sim starts"). Those tests stop a simulator and start another on 
 port pair; a parallel run of the same suite in another worktree can take the port in
 between. 19/19 three times when run alone. Worth the same treatment here: a retry with a
 bounded wait on the re-bind, and a message on the `expect` that says which port.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed and merged `--no-ff`. Root `cargo test --release --no-fail-fast` on merged `main`: 756 passed, 0 failed; clippy silent. Note the soak failure seen while merging 198 (`soak.rs:138`, the re-bind of the same port) is the one `sim_again()` now retries. Follow-ups 143 (a sim test, offered to the firmware session) and 144 (`frames_sent` restarts when the link is rebuilt - needs a decision) are in backlog.

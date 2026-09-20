@@ -117,3 +117,7 @@ panel rebooting. No hardware was touched here (this card is `hardware: no`), so 
 proved is the simulator's version of it. The firmware session reflashing the panel is the
 next chance to watch the Device block follow a real reboot; at the product's 10 s poll it
 should be one or two polls behind the picture coming back, not twelve.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed and merged `--no-ff`. Root `cargo test --release --no-fail-fast` on merged `main`: 756 passed, 0 failed; clippy silent. Deploys with the next batch; the real-panel acceptance (the Device block fresh within ~20 s of a reboot) is to be watched at the firmware session's next reflash, fw 0.5.2.
