@@ -277,3 +277,41 @@ settings store in the telemetry list, and `devices/forget`, whose row now says "
 player goes with it" because that is what it does.
 
 `cargo test -p screeny-studio`: all green (62 lib + 14 api + the rest). Clippy silent.
+
+### Area 6 - the design docs, the root README and `docs/README.md` (2026-09-20)
+
+45 hits across the four files, all read.
+
+- `README.md`: one line, `crates/art`'s row.
+- `docs/design/generative-art-brief.md` (13), `studio-vision.md` (16),
+  `deployment.md` (15): the noun throughout, plus `screeny-art play <patch>` and
+  `screeny-art: <patch>: no GPU adapter: ...` where the doc quotes the CLI.
+  `deployment.md`'s "each piece's tuned settings" bullet is "how each patch was left
+  tuned", so the word "settings" is not spent on the card-165 memory.
+- `studio-vision.md`'s "What exists today" bullet lists the **Tauri** app's eleven
+  command names. Those are the names that existed then, so they are back verbatim -
+  `set_piece`, `set_settings`, `piece_playing`, `piece_act` - with a clause saying card
+  150 renamed them. Renaming a quotation of a thing that is gone would be a lie about
+  history.
+- `CLAUDE.md`: **nothing to do.** `git grep -i piece -- CLAUDE.md` is empty; it never
+  used the word for the art system, and no rule in it was touched.
+- `docs/README.md`: the one line the card asks for, saying that cards before 150 say
+  "piece" (and "settings"), and naming what was deliberately left as written.
+
+Left alone, and why:
+
+- `docs/board/done/`, `docs/board/parked/`, `docs/research/` - history, as the card
+  says. Not opened.
+- `docs/ORCHESTRATOR.md` (12 hits) and `docs/board/ROADMAP.md` (4): the orchestrator's
+  own running records, mostly dated narrative ("card 101 is done (2026-09-19):
+  `screeny-art play <piece> ...`"). They belong to the session that writes them, and
+  the `docs/README.md` line covers a reader who meets the old word there.
+- `docs/board/backlog/068` and `110` - other people's cards, and neither misleads:
+  068's is "one piece of code" (English) and 110's is the CLI placeholder in an example.
+  `119` got the one allowed line, because it names `piece::Clock` and
+  `StoredPlayer::piece` - Rust paths that do not exist any more, which would send its
+  worker looking for them.
+- `docs/design/architecture.md`'s one hit - "so demos/ can measure what a piece costs
+  on the wire" - is about `crates/demos`, which keeps its words.
+- `docs/design/protocol-v1.md` and `device-web.md`: out of scope, and neither says
+  "piece".
