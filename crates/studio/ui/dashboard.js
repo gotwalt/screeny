@@ -57,11 +57,12 @@ function say(message, tone) {
   if (message) { noticeTimer = setTimeout(() => { el.hidden = true; }, 6000); }
 }
 
-/** Run something that talks to a panel, and put whatever it says on the line. */
+/** Run something that talks to a panel, and put whatever it says on the line.
+ *  A handler that returns a string says that instead of the default. */
 async function attempt(what, fn) {
   try {
     const out = await fn();
-    say(what, null);
+    say(typeof out === 'string' ? out : what, null);
     return out;
   } catch (e) {
     say(what + ': ' + e.message, 'bad');
@@ -162,10 +163,9 @@ function build(id) {
     const level = snapBrightness(Number(bright.value));
     attempt('Brightness ' + level, async () => {
       const out = await api('device/brightness', { device: id, level });
-      if (out && out.applied !== out.asked) {
-        say('This panel caps brightness at ' + out.applied + '.', null);
-      }
-      return out;
+      return out && out.applied !== out.asked
+        ? 'This panel caps brightness at ' + out.applied + '.'
+        : 'Brightness ' + out.applied;
     });
   });
 

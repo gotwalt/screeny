@@ -485,10 +485,19 @@ impl Player {
     /// asked for: the firmware caps brightness and says so, and that is the
     /// only way there is of learning where its ceiling is.
     pub fn brightness_applied(&self, asked: u8, applied: u8) {
-        let mut h = self.health_mut();
-        h.brightness_applied = Some(applied);
-        if applied < asked {
-            h.brightness_cap = Some(applied);
+        {
+            let mut h = self.health_mut();
+            h.brightness_applied = Some(applied);
+            if applied < asked {
+                h.brightness_cap = Some(applied);
+            }
+        }
+        // Do not keep asking for something this panel will not give: the
+        // policy becomes what it actually does, so the state file and the
+        // dashboard both say the true number.
+        let mut cfg = self.cfg();
+        if cfg.brightness == Some(asked) && applied < asked {
+            cfg.brightness = Some(applied);
         }
     }
 

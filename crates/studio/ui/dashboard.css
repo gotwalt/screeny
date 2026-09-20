@@ -48,7 +48,7 @@ html:has(body.dash) { height: auto; overflow: auto; }
 .dash__empty code { font-family: var(--data); color: var(--paper); }
 
 /* One column on a phone, as many as fit on a bench. */
-.cards { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.cards { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(320px, 400px)); }
 
 .card {
   padding: 18px 20px 20px;
@@ -94,7 +94,7 @@ html:has(body.dash) { height: auto; overflow: auto; }
 .field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .field label {
   flex: none;
-  width: 92px;
+  width: 84px;
   font: 400 13px/1 var(--label);
   letter-spacing: 0.09em;
   text-transform: uppercase;
