@@ -113,7 +113,7 @@ async fn apply_brightness(st: &AppState, job: &BrightnessJob) {
     match done {
         Ok(Ok(applied)) => {
             if let Some(p) = st.players.get(&job.device) {
-                p.brightness_applied(applied);
+                p.brightness_applied(level, applied);
             }
             if applied != level {
                 eprintln!("studio: {}: asked for brightness {level}, the device applied {applied}", job.device);

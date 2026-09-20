@@ -459,7 +459,7 @@ async fn device_brightness(State(st): State<AppState>, Json(req): Json<SetBright
     if let Some(p) = st.players.get(&req.device) {
         p.configure(&crate::player::PlayerChange { brightness: Some(Some(level)), ..crate::player::PlayerChange::default() })
             .map_err(ApiError::bad_request)?;
-        p.brightness_applied(applied);
+        p.brightness_applied(level, applied);
     }
     st.persist();
     Ok(Json(serde_json::json!({ "asked": level, "applied": applied })))

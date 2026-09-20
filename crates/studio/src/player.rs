@@ -156,6 +156,10 @@ pub struct PlayerHealth {
     /// The brightness policy as actually applied by the device (its own cap
     /// may be lower than what was asked for).
     pub brightness_applied: Option<u8>,
+    /// The device's own ceiling, learned the only way there is: ask for more
+    /// than it will give and see what comes back. The dashboard's slider never
+    /// goes above this.
+    pub brightness_cap: Option<u8>,
     /// The last thing that went wrong here, if anything has.
     pub last_error: Option<String>,
 }
@@ -478,9 +482,14 @@ impl Player {
     }
 
     /// Record what the device actually applied, which may be below what was
-    /// asked for: the firmware caps brightness and says so.
-    pub fn brightness_applied(&self, applied: u8) {
-        self.health_mut().brightness_applied = Some(applied);
+    /// asked for: the firmware caps brightness and says so, and that is the
+    /// only way there is of learning where its ceiling is.
+    pub fn brightness_applied(&self, asked: u8, applied: u8) {
+        let mut h = self.health_mut();
+        h.brightness_applied = Some(applied);
+        if applied < asked {
+            h.brightness_cap = Some(applied);
+        }
     }
 
     /// The brightness policy, and what the device last said it applied.
