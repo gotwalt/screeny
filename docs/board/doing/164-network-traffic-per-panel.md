@@ -237,3 +237,27 @@ Nothing learned that is not written above. The one thing to carry in your head i
 else picks this up: **the counters are payload, the overhead is added when the figure is
 reported**, and the two places that add it are `TrafficMeter::wire` (for the rate) and
 `TrafficMeter::reported` (for `total`). Adding it anywhere else double-counts.
+
+### Resumed: merged card 151 (`7559c69`)
+
+`git merge main` (`04455c0`, card 151's merge). **No conflicts** - 151 and this card turn
+out to touch disjoint parts of the four shared files, and git seated both without help:
+
+- `player.rs` - 151 worked on the player's configuration; my one accessor sits above
+  `brightness_policy`, untouched.
+- `api.rs` - 151 worked on the change routes; my two edits are in `devices_refresh` and
+  `on_device`, neither of which 151 went near.
+- `ui/panel.js` - 151 reworked the head of the file and the settings control; my
+  `networkRows()` call is one line inside `showLink`, which it left alone.
+- `tests/ui.rs`, `ui/common.js`, `ui/style.css` - additive on both sides; `style.css` is
+  still untouched by this card.
+
+Checked rather than assumed: the diff against merged `main` is exactly the edits this card
+made and nothing else, and everything builds and passes on top of 151 -
+`screeny --test traffic` 4/4, `studio --test traffic` 4/4, `studio --test ui` **27**/27
+(151 added six of those), `studio --lib devices::` 19/19,
+`cargo clippy --workspace --all-targets` silent.
+
+One thing worth noting: `tests/ui.rs`'s `!PICTURE_JS.contains("traffic")` still holds after
+151 rewrote the Picture screen, so "nothing about network traffic on the Picture screen" is
+still a fact about the file rather than a stale assertion.
