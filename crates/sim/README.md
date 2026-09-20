@@ -14,7 +14,7 @@ It is also the **second** implementation of the receiver. The firmware
 spec that this crate hit is written up in spec section 11, items 14-30.
 
 ```
-cargo test -p screeny-sim          # 97 tests, all loopback, no mDNS, no window
+cargo test -p screeny-sim          # 140 tests, all loopback, no mDNS, no window
 cargo run  -p screeny-sim          # the window, on 49374/49375, advertising
 cargo run  -p screeny-sim -- --help
 ```
@@ -134,8 +134,9 @@ Three things the simulator does **not** pretend about:
   can tell a restart by; `uptime_ms` keeps climbing, because resetting it would
   change what the simulator does on UDP.
 - `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `heap_used`,
-  `heap_size` and `store_errors` are constants. There is no flash here and no
-  stack worth measuring.
+  `heap_size` and `store_errors` are made up. There is no flash here and no
+  stack worth measuring - but since card 192 they are made up *on purpose*:
+  see **A device that is not well** below.
 
 ### The captive-portal catch-all
 
@@ -154,6 +155,61 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' \
 
 The soft-AP side proper - DHCP, the DNS catch-all - cannot be simulated
 honestly on a host and is not attempted.
+
+## A device that is not well (card 192)
+
+Four rows of a status page are the ones nobody ever sees: a reset reason that
+is not a power-on, `store_errors` above zero, an `fw_state` that is not
+`valid`, and memory running out. They are exactly the rows that will be wrong
+when they finally appear, so the simulator can produce them on demand.
+
+```
+cargo run -p screeny-sim -- --headless --no-mdns --http-port 8099 \
+    --reset-reason brownout --store-errors 3 --stack-free 900
+curl -s localhost:8099/api/v1/status
+```
+
+| flag | default | what it sets |
+|---|---|---|
+| `--reset-reason NAME` | `power_on` | `power_on`, `external`, `software`, `panic`, `int_wdt`, `task_wdt`, `wdt`, `deep_sleep`, `brownout`, `sdio`, `unknown` |
+| `--fw-slot NAME` | `ota_0` | `ota_0`, `ota_1`, `unknown` |
+| `--fw-state NAME` | `valid` | `new`, `pending_verify`, `valid`, `invalid`, `aborted`, `undefined` |
+| `--store-errors N` | `0` | settings-store errors since boot |
+| `--heap-used N` | `65536` | heap in use, bytes |
+| `--heap-size N` | `98304` | heap total, bytes |
+| `--stack-free N` | `20480` | stack never touched, bytes |
+
+The names are **the API's own**: each one is parsed through the
+`screeny_device_api` enum itself, so the simulator cannot accept a name the
+firmware could not send, and a misspelling is refused with the whole list.
+`--heap-used` greater than `--heap-size` is refused rather than clamped -
+`screeny-probe`'s HTTP rule 5 is a rule this should pass honestly, and quietly
+fixing up the numbers would hide the typo.
+
+**They are reports and nothing else.** A `pending_verify` slot changes no
+behaviour, a `brownout` reason reboots nothing, `--store-errors 3` breaks no
+store, and `--stack-free 900` makes nothing run out of stack. The simulator
+has no flash and no stack to measure; what it has is a status route, and this
+is how the unhappy version of it is made to appear.
+
+One exception, because the device has it too: a simulated `REBOOT` - UDP or
+`POST /api/v1/reboot` - sets the reset reason to `software` from then on, in
+the same place it draws the new `boot_id`. A test that wants a different
+reason after a reboot calls `set_health` again afterwards.
+
+A run that is claiming to be unwell says so on its banner, after the address
+lines, and says that it is only claiming.
+
+From a test, on a device that is already running:
+
+```rust
+use screeny_sim::Health;
+use screeny_device_api::ResetReason;
+
+sim.set_health(Health { reset_reason: ResetReason::Brownout, store_errors: 3,
+                        stack_free: 900, ..Health::default() });
+assert_eq!(sim.health().store_errors, 3);
+```
 
 ## WiFi, scripted (cards 081 and 224)
 
@@ -249,6 +305,7 @@ assert_eq!(shot.telemetry.frames_dropped_decode, 0);
 | `SimHandle::{wait_for_frames, wait_until}` | block on a snapshot predicate |
 | `SimHandle::{event_cursor, events, wait_for}` | the `Event` stream, for things no counter records |
 | `SimHandle::{set_faults, faults}` | change the injected faults while it runs |
+| `SimHandle::{set_health, health}` | change what `GET /api/v1/status` claims about the device's health while it runs (card 192) |
 
 `Snapshot::decoded` is the frame **exactly as the sender sent it**. Assert on
 that. `Snapshot::panel` is the same frame through the panel model, and
@@ -256,7 +313,7 @@ that. `Snapshot::panel` is the same frame through the panel model, and
 design.
 
 `Config` carries the ports, the identity, the brightness cap, the panel model,
-the faults, and `Timing`. `Timing::SPEC` is the spec's own section 7.2
+the faults, the `Health` the status route reports, and `Timing`. `Timing::SPEC` is the spec's own section 7.2
 constants and is the default; a test that does not want to wait out a ten
 second `HOLD_MS` overrides them.
 
@@ -290,7 +347,10 @@ join/portal life through `screeny_provision` - see the two sections above.
 **Does not:** ghosting, refresh banding, temporal dithering (card 030), the
 panel's real primaries, a radio, a soft-AP (DHCP and the DNS catch-all cannot
 be simulated honestly on a host), flash, or a real restart. `REBOOT` is
-accepted, logged and deliberately not acted on beyond a new `boot_id`. The PSK
+accepted, logged and deliberately not acted on beyond a new `boot_id` and a
+`software` reset reason. The health flags of card 192 change what the status
+route *says* and nothing else: a `pending_verify` slot and a `brownout` reason
+are reports, not a firmware image and not a power supply. The PSK
 is never stored and never logged - spec section 8.4's invariant holds here too,
 and the `SetWifi` event has no field to put one in.
 
@@ -299,7 +359,7 @@ lines by, which is what the generative-art brief asks a preview for.
 
 ## Tests
 
-112 of them, all on loopback and ephemeral ports, none needing mDNS, a
+140 of them, all on loopback and ephemeral ports, none needing mDNS, a
 display or a network. Every HTTP request in the suites has a five-second
 timeout and every wait is bounded.
 
@@ -316,6 +376,7 @@ timeout and every wait is bounded.
 | `tests/cli.rs` | the built binary, headless: the stats line, the PNGs, the flags, the refusal to claim `screeny` |
 | `tests/http_routes.rs` | every row of `screeny_device_api::route::ROUTES` served and parsed back **as the API's own types**; the error shape and status per code; the route's request bound; the scan rate limit; the captive-portal catch-all against all five OS probes; `boot_id` across a reboot; the listener released by `shutdown()` |
 | `tests/http_wifi.rs` | a failed trial over HTTP and over UDP `SET_WIFI` reaching the same state with the store untouched; a successful trial committing once; a radio that never answers; `--wifi-result` changed between attempts; the button wipe; link down -> `HOLD` -> the `NO NETWORK` idle screen; the portal screen compared byte for byte with `screeny_provision`'s own render; the PSK in no reply, event or log line |
+| `tests/health.rs` | card 192: the seven defaults, as numbers and as bytes on the wire; all seven flags reaching the status reply through the built binary; every variant of `ResetReason`, `FwSlot` and `FwState` round-tripping through its flag; the two CLI refusals; `set_health` on a running device; a `REBOOT` - HTTP and UDP - meaning `software` from then on, and a refused one meaning nothing; an unhealthy status changing nothing else |
 | unit tests | the panel model's LUT, the two fonts (rendered as ASCII art so a human can read them), the idle screens and cross-fade, the LED dot profile, PNG round-tripping |
 
 The bit-exactness tests lean on `crates/proto/tests/vectors`, whose expected

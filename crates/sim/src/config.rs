@@ -2,6 +2,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use screeny_device_api::{FwSlot, FwState, ResetReason};
 use screeny_proto::control::IdleMode;
 
 /// The spec section 7.2 constants, overridable so a test does not have to wait
@@ -54,6 +55,245 @@ pub struct PanelModel {
 impl Default for PanelModel {
     fn default() -> Self {
         PanelModel { levels: 64 }
+    }
+}
+
+/// The half of `GET /api/v1/status` a host cannot measure, chosen rather
+/// than discovered (card 192).
+///
+/// There is no flash here, no `otadata`, no reset to have a reason and no
+/// stack worth measuring, so these seven were constants. They are still not
+/// measurements - **nothing else in the simulator acts on them**: a
+/// `pending_verify` slot changes no behaviour and a `brownout` reset reason
+/// reboots nothing. They exist so the unhappy rows of the Studio's device
+/// page, which nobody sees in the ordinary course of things, can be seen at
+/// all.
+///
+/// [`Health::default()`] is what the simulator has always reported.
+///
+/// The one thing that does move on its own is [`reset_reason`](Self::reset_reason):
+/// a simulated `REBOOT` - UDP or `POST /api/v1/reboot` - sets it to
+/// [`ResetReason::Software`] from then on, exactly as the device's own does.
+/// A test that wants a different reason after a reboot sets it again with
+/// [`SimHandle::set_health`](crate::SimHandle::set_health).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Health {
+    /// Why the chip last restarted.
+    pub reset_reason: ResetReason,
+    /// Which app slot is running.
+    pub fw_slot: FwSlot,
+    /// The running slot's `otadata` state.
+    pub fw_state: FwState,
+    /// Settings-store errors since boot. Non-zero means the `screeny`
+    /// partition is unhappy and the status page should say so.
+    pub store_errors: u32,
+    /// Heap in use, bytes.
+    pub heap_used: u32,
+    /// Heap total, bytes. The firmware's 64 + 32 KB (card 220).
+    pub heap_size: u32,
+    /// Stack never touched, bytes.
+    pub stack_free: u32,
+}
+
+impl Default for Health {
+    fn default() -> Self {
+        Health {
+            reset_reason: ResetReason::PowerOn,
+            fw_slot: FwSlot::Ota0,
+            fw_state: FwState::Valid,
+            store_errors: 0,
+            heap_used: 64 * 1024,
+            heap_size: 96 * 1024,
+            stack_free: 20 * 1024,
+        }
+    }
+}
+
+/// Every [`ResetReason`] the API defines.
+///
+/// A list the *error message* needs; the parse itself goes through the type.
+/// [`reset_reason_is_listed`] is why it cannot fall behind the enum.
+const RESET_REASONS: &[ResetReason] = &[
+    ResetReason::PowerOn,
+    ResetReason::External,
+    ResetReason::Software,
+    ResetReason::Panic,
+    ResetReason::IntWdt,
+    ResetReason::TaskWdt,
+    ResetReason::Wdt,
+    ResetReason::DeepSleep,
+    ResetReason::Brownout,
+    ResetReason::Sdio,
+    ResetReason::Unknown,
+];
+
+/// Every [`FwSlot`] the API defines.
+const FW_SLOTS: &[FwSlot] = &[FwSlot::Ota0, FwSlot::Ota1, FwSlot::Unknown];
+
+/// Every [`FwState`] the API defines.
+const FW_STATES: &[FwState] = &[
+    FwState::New,
+    FwState::PendingVerify,
+    FwState::Valid,
+    FwState::Invalid,
+    FwState::Aborted,
+    FwState::Undefined,
+];
+
+// The three lists above are the only place in this crate that enumerates the
+// API's variants, and these three matches are exhaustive: a variant added to
+// `screeny-device-api` stops this file compiling, which is the reminder to add
+// it to the list. Nothing here spells a *name*; those come from serde.
+const fn reset_reason_is_listed(r: ResetReason) -> bool {
+    match r {
+        ResetReason::PowerOn
+        | ResetReason::External
+        | ResetReason::Software
+        | ResetReason::Panic
+        | ResetReason::IntWdt
+        | ResetReason::TaskWdt
+        | ResetReason::Wdt
+        | ResetReason::DeepSleep
+        | ResetReason::Brownout
+        | ResetReason::Sdio
+        | ResetReason::Unknown => true,
+    }
+}
+
+const fn fw_slot_is_listed(s: FwSlot) -> bool {
+    match s {
+        FwSlot::Ota0 | FwSlot::Ota1 | FwSlot::Unknown => true,
+    }
+}
+
+const fn fw_state_is_listed(s: FwState) -> bool {
+    match s {
+        FwState::New
+        | FwState::PendingVerify
+        | FwState::Valid
+        | FwState::Invalid
+        | FwState::Aborted
+        | FwState::Undefined => true,
+    }
+}
+
+/// The serde name of one value, which is the name the flag takes and the name
+/// the JSON carries. Asked of the type rather than written down here.
+fn api_name<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(s)) => s,
+        // Unreachable for these three enums, which are unit-variant enums with
+        // `rename_all`. Not a panic: a CLI error message is not worth one.
+        _ => String::new(),
+    }
+}
+
+/// Parse one of the API's enum names **through the API's own type**, so the
+/// simulator cannot accept a name the API does not have.
+fn parse_api_name<T>(s: &str, flag: &str, all: &[T]) -> Result<T, String>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let name = s.trim();
+    serde_json::from_value::<T>(serde_json::Value::String(name.to_string())).map_err(|_| {
+        format!(
+            "{flag}: unknown value {name:?}; valid values are {}",
+            names(all).join(", ")
+        )
+    })
+}
+
+/// The serde names of a list of values, in the order the enum declares them.
+fn names<T: serde::Serialize>(all: &[T]) -> Vec<String> {
+    all.iter().map(api_name).collect()
+}
+
+impl Health {
+    /// The names `--reset-reason` accepts, for help text and error messages.
+    #[must_use]
+    pub fn reset_reason_names() -> Vec<String> {
+        debug_assert!(RESET_REASONS.iter().copied().all(reset_reason_is_listed));
+        names(RESET_REASONS)
+    }
+
+    /// The names `--fw-slot` accepts.
+    #[must_use]
+    pub fn fw_slot_names() -> Vec<String> {
+        debug_assert!(FW_SLOTS.iter().copied().all(fw_slot_is_listed));
+        names(FW_SLOTS)
+    }
+
+    /// The names `--fw-state` accepts.
+    #[must_use]
+    pub fn fw_state_names() -> Vec<String> {
+        debug_assert!(FW_STATES.iter().copied().all(fw_state_is_listed));
+        names(FW_STATES)
+    }
+
+    /// `--reset-reason NAME`.
+    ///
+    /// # Errors
+    ///
+    /// A name [`ResetReason`] does not have, with every name it does have.
+    pub fn parse_reset_reason(s: &str) -> Result<ResetReason, String> {
+        parse_api_name(s, "--reset-reason", RESET_REASONS)
+    }
+
+    /// `--fw-slot NAME`.
+    ///
+    /// # Errors
+    ///
+    /// A name [`FwSlot`] does not have, with every name it does have.
+    pub fn parse_fw_slot(s: &str) -> Result<FwSlot, String> {
+        parse_api_name(s, "--fw-slot", FW_SLOTS)
+    }
+
+    /// `--fw-state NAME`.
+    ///
+    /// # Errors
+    ///
+    /// A name [`FwState`] does not have, with every name it does have.
+    pub fn parse_fw_state(s: &str) -> Result<FwState, String> {
+        parse_api_name(s, "--fw-state", FW_STATES)
+    }
+
+    /// One line naming all seven, in the API's own names, for the binary's
+    /// banner. What is printed is what `GET /api/v1/status` will say.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "reset {} slot {} state {} store_errors {} heap {}/{} B stack_free {} B",
+            api_name(&self.reset_reason),
+            api_name(&self.fw_slot),
+            api_name(&self.fw_state),
+            self.store_errors,
+            self.heap_used,
+            self.heap_size,
+            self.stack_free,
+        )
+    }
+
+    /// Refuse a combination the device could not report.
+    ///
+    /// Only one of those exists: more heap in use than there is heap. It is a
+    /// CLI error rather than a clamp because `screeny-probe`'s HTTP rule 5
+    /// (`heap_used <= heap_size`) is a rule the simulator should be able to
+    /// *pass*, and silently fixing the numbers up would hide the typo that
+    /// produced them.
+    ///
+    /// # Errors
+    ///
+    /// If [`heap_used`](Self::heap_used) is greater than
+    /// [`heap_size`](Self::heap_size).
+    pub fn check(&self) -> Result<(), String> {
+        if self.heap_used > self.heap_size {
+            return Err(format!(
+                "--heap-used {} is more than --heap-size {}: \
+                 a device cannot use more heap than it has",
+                self.heap_used, self.heap_size
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -136,6 +376,11 @@ pub struct Config {
     /// Boot straight into the captive portal: an empty store and no
     /// compile-time credentials, which is what a factory-fresh device is.
     pub start_in_portal: bool,
+
+    // --- card 192: the half of the status a host cannot measure -------------
+    /// What `GET /api/v1/status` reports about the device's health.
+    /// [`Health::default()`] is what it has always reported.
+    pub health: Health,
 }
 
 /// The port the `screeny-sim` binary serves HTTP on by default.
@@ -173,6 +418,7 @@ impl Default for Config {
             wifi_join_ms: 200,
             wifi_timing: WifiTiming::SPEC,
             start_in_portal: false,
+            health: Health::default(),
         }
     }
 }

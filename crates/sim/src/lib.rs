@@ -76,7 +76,7 @@ pub mod window;
 pub mod api;
 pub mod http;
 
-pub use config::{Config, Faults, PanelModel, Timing, DEFAULT_HTTP_PORT};
+pub use config::{Config, Faults, Health, PanelModel, Timing, DEFAULT_HTTP_PORT};
 pub use core::{Core, FrameMeta, Outbox};
 pub use device::{FrameSink, SimDevice, SimHandle, Snapshot};
 pub use event::{DropCause, Event, ReleaseReason, State, WifiAction, WifiPhase};

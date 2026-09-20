@@ -5,6 +5,8 @@
 //! screeny-sim --headless --exit-after 30
 //! screeny-sim --drop 5 --decode-ms 20          # a bad day, on purpose
 //! screeny-sim --headless --dump-dir /tmp/f --dump-every 30
+//! screeny-sim --headless --no-mdns --http-port 8099 \
+//!     --reset-reason brownout --store-errors 3 --stack-free 900
 //! screeny-sim --help
 //! ```
 
@@ -18,7 +20,7 @@ use screeny_proto::control::IdleMode;
 use screeny_sim::config::{PanelModel, Timing};
 use screeny_sim::dump::Dumper;
 use screeny_sim::event::{DropCause, Event};
-use screeny_sim::{Config, SimDevice, SimHandle, WifiOutcome};
+use screeny_sim::{Config, Health, SimDevice, SimHandle, WifiOutcome};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -84,6 +86,24 @@ DISPLAY
     --brightness-cap N     the cap SET_BRIGHTNESS clamps to [255]
     --idle MODE            status | hold | dim | black [status]
     --rssi DBM             signal strength to report [-55]
+
+DEVICE HEALTH (what GET /api/v1/status reports about itself; there is no
+flash here and no stack to measure, so these are chosen. Nothing else in
+the simulator pretends they are real: a pending_verify slot changes no
+behaviour and a brownout reason reboots nothing)
+    --reset-reason NAME    why the chip last restarted [power_on]
+                           power_on | external | software | panic | int_wdt |
+                           task_wdt | wdt | deep_sleep | brownout | sdio |
+                           unknown   (a REBOOT sets it to software)
+    --fw-slot NAME         the running app slot [ota_0]
+                           ota_0 | ota_1 | unknown
+    --fw-state NAME        the slot's otadata state [valid]
+                           new | pending_verify | valid | invalid | aborted |
+                           undefined
+    --store-errors N       settings-store errors since boot [0]
+    --heap-used N          heap in use, bytes [65536]
+    --heap-size N          heap total, bytes [98304]
+    --stack-free N         stack never touched, bytes [20480]
 
 FAULT INJECTION
     --drop PCT             discard this percentage of arriving frames
@@ -188,6 +208,18 @@ impl Opts {
                         other => return Err(format!("--idle: unknown mode {other:?}")),
                     }
                 }
+                // Card 192. Every name goes through the `screeny-device-api`
+                // enum itself, so a name the API does not have cannot be
+                // accepted here, and the refusal lists the ones it does.
+                "--reset-reason" => {
+                    o.cfg.health.reset_reason = Health::parse_reset_reason(&value()?)?;
+                }
+                "--fw-slot" => o.cfg.health.fw_slot = Health::parse_fw_slot(&value()?)?,
+                "--fw-state" => o.cfg.health.fw_state = Health::parse_fw_state(&value()?)?,
+                "--store-errors" => o.cfg.health.store_errors = num(&value()?, "--store-errors")?,
+                "--heap-used" => o.cfg.health.heap_used = num(&value()?, "--heap-used")?,
+                "--heap-size" => o.cfg.health.heap_size = num(&value()?, "--heap-size")?,
+                "--stack-free" => o.cfg.health.stack_free = num(&value()?, "--stack-free")?,
                 "--drop" => o.cfg.faults.drop_pct = num(&value()?, "--drop")?,
                 "--delay-ms" => o.cfg.faults.delay_ms = num(&value()?, "--delay-ms")?,
                 "--decode-ms" => o.cfg.faults.decode_ms = num(&value()?, "--decode-ms")?,
@@ -205,6 +237,8 @@ impl Opts {
         if o.cfg.panel.levels < 2 {
             return Err("--levels must be at least 2".into());
         }
+        // The one combination a device could not report (card 192).
+        o.cfg.health.check()?;
         if screeny_sim::instance_is_reserved(&o.cfg.instance) {
             return Err(format!(
                 "--instance {:?} is reserved for the real device on this bench; \
@@ -249,6 +283,7 @@ fn run(opts: Opts) -> Result<(), String> {
     let scale = opts.scale;
     let exit_after = opts.exit_after.map(Duration::from_secs_f64);
     let faults = opts.cfg.faults;
+    let health = opts.cfg.health;
     let mdns = opts.cfg.mdns;
     let instance = opts.cfg.instance.clone();
 
@@ -283,6 +318,15 @@ fn run(opts: Opts) -> Result<(), String> {
                 } else {
                     ""
                 }
+            );
+        }
+        // Card 192: a run that is claiming to be unwell says so on startup,
+        // and says it is only claiming. A default one says nothing, so the
+        // banner `tests/cli.rs` reads is unchanged for everybody else.
+        if health != Health::default() {
+            println!(
+                "screeny-sim: health: {} (reported, not simulated)",
+                health.describe()
             );
         }
         if !faults.is_clean() {
@@ -604,4 +648,117 @@ fn describe(e: &Event) -> Option<String> {
         Event::Reboot => "REBOOT (accepted, not acted on)".into(),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// The message a refused command line produces. `Opts` is not `Debug`,
+    /// and giving it one for a test would be the tail wagging the dog.
+    fn refusal(args: &[&str]) -> String {
+        match Opts::parse(&owned(args)) {
+            Err(e) => e,
+            Ok(_) => panic!("{args:?} should have been refused"),
+        }
+    }
+
+    /// The help text spells the health names out, and the API owns them, so
+    /// this is the thing that keeps the two together: a variant added to
+    /// `screeny-device-api` fails here by name instead of quietly missing
+    /// from `--help`.
+    #[test]
+    fn the_help_lists_every_name_the_health_flags_take() {
+        for (flag, names) in [
+            ("--reset-reason", Health::reset_reason_names()),
+            ("--fw-slot", Health::fw_slot_names()),
+            ("--fw-state", Health::fw_state_names()),
+        ] {
+            assert!(USAGE.contains(flag), "{flag} is not in --help");
+            for n in names {
+                assert!(
+                    USAGE.contains(&n),
+                    "{flag}: {n:?} is a value the API has and --help does not mention"
+                );
+            }
+        }
+        for flag in [
+            "--store-errors",
+            "--heap-used",
+            "--heap-size",
+            "--stack-free",
+        ] {
+            assert!(USAGE.contains(flag), "{flag} is not in --help");
+        }
+    }
+
+    /// The defaults printed in the help are the defaults the code has.
+    #[test]
+    fn the_help_prints_the_real_defaults() {
+        let h = Health::default();
+        for want in [
+            format!("[{}]", h.heap_used),
+            format!("[{}]", h.heap_size),
+            format!("[{}]", h.stack_free),
+        ] {
+            assert!(USAGE.contains(&want), "--help does not say {want}");
+        }
+    }
+
+    #[test]
+    fn the_health_flags_land_in_the_config() {
+        let args = owned(&[
+            "--reset-reason",
+            "brownout",
+            "--fw-slot",
+            "ota_1",
+            "--fw-state",
+            "pending_verify",
+            "--store-errors",
+            "3",
+            "--heap-used",
+            "90000",
+            "--heap-size",
+            "98304",
+            "--stack-free",
+            "900",
+        ]);
+        let o = Opts::parse(&args).expect("parse").expect("not --help");
+        assert_eq!(
+            o.cfg.health,
+            Health {
+                reset_reason: screeny_device_api::ResetReason::Brownout,
+                fw_slot: screeny_device_api::FwSlot::Ota1,
+                fw_state: screeny_device_api::FwState::PendingVerify,
+                store_errors: 3,
+                heap_used: 90_000,
+                heap_size: 98_304,
+                stack_free: 900,
+            }
+        );
+        // Nothing else moved.
+        assert_eq!(Opts::parse(&[]).unwrap().unwrap().cfg.health, Health::default());
+    }
+
+    #[test]
+    fn a_name_the_api_does_not_have_is_refused_with_the_ones_it_does() {
+        let e = refusal(&["--reset-reason", "brownedout"]);
+        assert!(e.contains("brownedout"), "{e}");
+        assert!(e.contains("brownout"), "the valid names are missing: {e}");
+        assert!(e.contains("power_on"), "the valid names are missing: {e}");
+        // And the other two enums, whose names are equally not ours.
+        assert!(refusal(&["--fw-slot", "ota_2"]).contains("ota_1"));
+        assert!(refusal(&["--fw-state", "fine"]).contains("pending_verify"));
+    }
+
+    #[test]
+    fn more_heap_in_use_than_there_is_heap_is_refused() {
+        let e = refusal(&["--heap-used", "200000", "--heap-size", "98304"]);
+        assert!(e.contains("--heap-used"), "{e}");
+        assert!(e.contains("--heap-size"), "{e}");
+    }
 }
