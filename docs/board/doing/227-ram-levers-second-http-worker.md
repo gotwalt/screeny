@@ -4,8 +4,8 @@ title: Firmware RAM levers - find where core 0's 18 KB of stack goes, measure co
 type: build
 hardware: yes
 depends: [222]
-owner:
-branch:
+owner: worker-227
+branch: card/227-ram-levers-second-http-worker
 ---
 
 ## Goal
