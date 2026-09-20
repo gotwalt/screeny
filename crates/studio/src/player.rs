@@ -416,20 +416,50 @@ struct LinkSlot {
     /// here is what makes "how many times has this panel's stream come up" a
     /// *player* lifetime number rather than a per-link one.
     closed_ups: u64,
-    /// Of those, the ones the **studio** caused rather than the panel: output
-    /// switched off and then on again. Subtracted from the reconnect count,
-    /// because "the panel dropped" and "you turned it off" are not the same
-    /// thing and only the first is worth a person's attention.
+    /// Of those, the ones the **studio** caused rather than the panel.
+    /// Subtracted from the reconnect count, because "the panel dropped" and
+    /// "the studio re-aimed" are not the same thing and only the first is
+    /// worth a person's attention. There are exactly two:
     ///
-    /// A link rebuilt because the panel moved or was re-resolved after a
-    /// stale period is **not** counted here: the panel really was away and
-    /// really did come back.
+    /// - output was switched off and then on again;
+    /// - the studio **learned where the device really is** - a panel typed in
+    ///   as an address is re-aimed at the resolved device within seconds of
+    ///   being added, and that rebuild must not read as the panel having gone
+    ///   away and come back, or every freshly attached panel would say 1.
+    ///
+    /// A link rebuilt from one *resolved* device to another - a panel that
+    /// moved, or that was re-resolved after a stale period - is **not**
+    /// counted here: the panel really was away.
     studio_ups: u64,
+    /// Whether the current link was built from a resolved device, for the
+    /// second case above.
+    from_resolved: bool,
+
     /// Ask the device for the brightness policy again on the next pass, even
     /// though no new session has opened - because the policy itself changed.
     reapply_brightness: bool,
     /// When a frame last reached the wire.
     last_frame_unix: Option<u64>,
+}
+
+impl LinkSlot {
+    /// Drop the current link and bank what it reached (card 171).
+    ///
+    /// `studio_will_reopen` says the *studio* is why the stream will come up
+    /// again. It only discounts a link that had actually come up: replacing a
+    /// link that never connected costs no extra session, so discounting one
+    /// there would hide a real reconnect - which is exactly what it did in the
+    /// first cut of this, on a panel whose typed address was resolved before
+    /// the first link had finished connecting.
+    fn close_link(&mut self, studio_will_reopen: bool) {
+        let reached = u64::from(self.sessions);
+        self.closed_ups += reached;
+        if studio_will_reopen && reached > 0 {
+            self.studio_ups += 1;
+        }
+        self.out = None;
+        self.sessions = 0;
+    }
 }
 
 impl Player {
@@ -644,6 +674,12 @@ impl Player {
 
     /// Point the link at a device, or at nothing. Rebuilds it only when what
     /// it is aimed at has actually changed.
+    ///
+    /// Card 171: this is also where the reconnect count is kept honest. A
+    /// link the studio throws away takes its own session counter with it, so
+    /// what it reached is banked in `closed_ups` - and when the *studio* is
+    /// the reason the stream will come up again, that one is booked to
+    /// `studio_ups` so it does not read as the panel having dropped.
     pub fn aim(self: &Arc<Self>, reach: &Reach) {
         let on = self.cfg().on;
         let key = reach_key(reach);
@@ -653,33 +689,34 @@ impl Player {
                 // FINAL: the panel is released now rather than after its
                 // stream timeout, and goes back to its own idle screen.
                 out.close();
-                let banked = u64::from(slot.sessions);
-                slot.closed_ups += banked;
                 // Output switched off is the *studio* letting the panel go, so
                 // the connect that follows switching it back on is not the
-                // panel coming back and must not read as a reconnect. Losing
-                // the device's address (`Reach::Unknown`) is the opposite: the
-                // panel really is away.
-                if !on {
-                    slot.studio_ups += 1;
-                }
+                // panel coming back. Losing the device's address
+                // (`Reach::Unknown`) is the opposite: the panel really is away.
+                slot.close_link(!on);
             }
-            slot.out = None;
             slot.key = String::new();
-            slot.sessions = 0;
+            slot.from_resolved = false;
             return;
         }
         if slot.out.is_some() && slot.key == key {
             return;
         }
-        if let Some(out) = slot.out.as_mut() {
-            out.close();
-            let banked = u64::from(slot.sessions);
-            slot.closed_ups += banked;
+        let resolved = matches!(reach, Reach::Resolved(_));
+        if slot.out.is_some() {
+            // The studio finding out where the device really is. A panel
+            // typed in as an address is re-aimed at the resolved device
+            // within seconds of being added, and the panel has not moved an
+            // inch; without this every freshly attached panel would read
+            // "Reconnects 1" before anyone had touched it. One resolved
+            // device to *another* is not this: that panel was away.
+            let learned_where_it_is = resolved && !slot.from_resolved;
+            slot.close_link(learned_where_it_is);
         }
         slot.out = Some(open_link(reach));
         slot.key = key;
         slot.sessions = 0;
+        slot.from_resolved = resolved;
     }
 
     /// Start the render loop if it should be running and is not.

@@ -88,3 +88,19 @@ was needed for this card** - only the page reading what was already there.
   `status_says_whether_discovery_is_on` (`test_config` is `--no-discover`, so
   `discovery.enabled` is false, `browses` 0, `last_error` null, and `ok` is
   still true).
+
+### Rendered
+
+A studio with `--no-discover` and no state, in Chrome against a loopback
+simulator (the card's acceptance, exactly):
+
+- `docs/research/img/18x-173-not-looking.png` - **"NO PANEL YET"** and, under
+  it, "Not looking for panels: this studio was started with --no-discover.
+  Type an address under “Change which panel”." The chooser below it is already
+  open, because nothing is attached.
+- With the simulator then attached, the same line becomes the quiet form -
+  "Not looking for other panels: this studio was started with --no-discover."
+  - and is visible in `18x-171-reconnects.png` and `18x-w900.png`.
+
+Both are in the dim `.hint` tone; `/healthz` stayed 200 and `status.ok` true
+throughout. Console clean.

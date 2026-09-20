@@ -75,12 +75,14 @@ Two numbers, because one cannot carry both facts honestly:
   restarts. The raw, unarguable count.
 - `reconnects` - `link_ups` less the first connect and less the ones the
   **studio** caused, which is the card's "worth telling apart, if it is cheap".
-  It was cheap: the only case is output being switched off and on, which `aim()`
-  already knows it is doing (`!on`), so it is one `studio_ups += 1` there.
+  It was cheap: `aim()` already knows when it is the reason, so it is one
+  `studio_ups += 1` in the two places where that is true (see "What the
+  browser caught" below for the second of them, which I did not see coming).
 
-A link rebuilt because the panel *moved* or was re-resolved after a stale
-period is deliberately **not** discounted: the panel really was away and really
-did come back, which is what the reader wants to know.
+A link rebuilt from one *resolved* device to another - a panel that moved, or
+one re-resolved after a stale period - is deliberately **not** discounted: the
+panel really was away and really did come back, which is what the reader wants
+to know.
 
 `health.sessions` stays, unchanged, as the per-link number it always was, with
 a doc comment that now says so - it is still the right thing for "is this one
@@ -102,8 +104,41 @@ link flapping".
 
 `tests/panel.rs::a_panel_that_comes_back_twice_says_two` (12 s): a simulator on
 a known port pair is dropped and a fresh one started in its place, twice; the
-page says 2 and `link_ups` 3. Then `set_panel {"on":false}` / `{"on":true}` -
-which **rebuilds the link**, the exact thing that used to wipe the count to 0 -
-and it still says 2, while `link_ups` goes to 4 so nothing is hidden. Every
-wait is `until_json` with a 30 s deadline and every assertion is made on the
-one read that satisfied its wait.
+page says 2, and `link_ups` is one higher per round. Then
+`set_panel {"on":false}` / `{"on":true}` - which **rebuilds the link**, the
+exact thing that used to wipe the count to 0 - and it still says 2, while
+`link_ups` goes up again so nothing is hidden. The baseline is taken once the
+device is **resolved**, every wait is `until_json` with a 30 s deadline, and
+every assertion is made on the one read that satisfied its wait.
+
+### What the browser caught that the test did not
+
+Rendering it against a loopback simulator, a **freshly attached panel read
+"Reconnects 1"** before anybody had touched it. Adding a panel by address
+aims the link at the address; seconds later the telemetry poll finds out which
+device is there, the reach becomes `Resolved`, and `aim()` rebuilds the link.
+The panel had not moved an inch, and my first rule counted it.
+
+So `studio_ups` has a second case: **the studio learning where the device
+really is**, one non-resolved reach to a resolved one. A rebuild from one
+*resolved* device to another is still a genuine reconnect - that panel was
+away.
+
+And a second bug under it, which the first fix made visible: discounting a
+rebuild is only right when the link being replaced had **actually come up**.
+Replacing a link that never connected costs no extra session, so discounting
+there hid a real reconnect - which is exactly what happened when the address
+resolved before the first link had finished connecting. `LinkSlot::close_link`
+now banks and discounts in one place, and only discounts `if reached > 0`.
+
+The integration test was rewritten to take its baseline once the device is
+**resolved** and to count in deltas from there, so it does not depend on how
+many link-ups the attach itself took.
+
+### Rendered
+
+- `docs/research/img/18x-171-reconnects.png` - the panel section after the
+  simulator was stopped and started again once: **"Reconnects  1 since the
+  studio started"**, beside `Link up · 30 fps` and `Heard 2 s ago`.
+- Before that, freshly attached and resolved, `/api/v1/status` read
+  `reconnects: 0, link_ups: 2` and the page said `0 since the studio started`.

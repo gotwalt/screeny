@@ -371,19 +371,26 @@ async function start() {
   /** A black picture never passes silently: if the piece that is *already*
    *  loaded needs an adapter there is none for - which is how a state file
    *  from a machine with a GPU arrives in a container without one - the stage
-   *  says so until another piece is picked. */
-  let gpuNoticeUp = false;
+   *  says so until another piece is picked.
+   *
+   *  It is re-asserted rather than said once, because the notice line is
+   *  shared: the socket clears it when it (re)connects, and a transient
+   *  message may be sitting on it. So this writes only when the line is free
+   *  or already carries this message, and never pushes aside something
+   *  somebody is reading. */
+  let blackNotice = '';
   function sayIfBlack() {
     const piece = pieceById[state.piece];
-    if (unplayable(piece)) {
-      notice(`${piece.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another piece.`);
-      $('#gpu-note').dataset.tone = 'bad';
-      gpuNoticeUp = true;
-    } else if (gpuNoticeUp) {
-      notice('');
+    const el = $('#notice');
+    if (!unplayable(piece)) {
+      if (el.textContent === blackNotice) notice('');
       delete $('#gpu-note').dataset.tone;
-      gpuNoticeUp = false;
+      blackNotice = '';
+      return;
     }
+    $('#gpu-note').dataset.tone = 'bad';
+    blackNotice = `${piece.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another piece.`;
+    if (el.hidden || el.textContent === blackNotice) notice(blackNotice);
   }
 
   /** One parameter's control (card 163).
@@ -728,6 +735,9 @@ async function start() {
     const looking = discoveryLine(Boolean(attachedId()));
     $('#discovery-note').textContent = looking;
     $('#discovery-note').hidden = !looking;
+    // Card 145, on the half-second heartbeat: the notice line is shared, so
+    // a black GPU piece says so again as soon as the line is free.
+    sayIfBlack();
 
     // Card 167: remembered settings this build could not use as written. Not a
     // fault - it is what the memory is for - so it is said plainly, once.

@@ -127,3 +127,29 @@ filled in) and `the_page_says_why_a_gpu_piece_is_not_available`.
 `docs/design/deployment.md` verification (b) rewritten: it no longer has to
 tell the operator to select a piece and grep `docker logs`, because the line is
 at startup and the fact is on `/api/v1/status` and on the page.
+
+### Rendered
+
+A studio started with `WGPU_BACKEND=vulkan` (no Vulkan backend is compiled in
+on this Mac, so there is genuinely no adapter), a loopback simulator, Chrome:
+
+- `docs/research/img/18x-145-no-gpu.png` - the piece list. **Overland, Lattice
+  and Torus knot are struck through, tagged "NO GPU" and `disabled`**, and the
+  line under the list gives wgpu's own reason.
+- `docs/research/img/18x-145-black-piece.png` - the same studio with
+  `overland` already loaded (`POST /set_piece`, as a state file from a machine
+  with a GPU would do): the stage carries "Overland needs a graphics adapter,
+  so the panel is black - ... Pick another piece." over the black panel.
+  Picking `plasma` clears it; the dim line under the list stays.
+
+**A bug the browser caught.** The notice line is shared, and the WebSocket
+clears it every time it (re)connects (`notice('')` in the `open` handler), so
+the black-panel warning appeared for a few hundred milliseconds and then went
+away - leaving exactly the silent black panel this card is about.
+`sayIfBlack()` is re-asserted from `showPanel()` on the half-second heartbeat
+now, and writes **only when the notice line is free or already carries this
+message**, so it comes straight back without ever pushing aside something
+somebody is reading.
+
+Console: clean on both studios, no errors and no warnings (checked with a
+`console.log` probe first, to be sure the capture was working).

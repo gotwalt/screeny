@@ -139,3 +139,45 @@ $ screeny-art list
   - an ordinary number - an empty `choices`. Then `set_param rest=4` is 4.0 and
   `rest=9` clamps to 4.0, because a choice is still a number.
 - `cargo test -p screeny-art --lib piece::` - five tests, green.
+
+### Rendered
+
+In Chrome, against a loopback simulator, every changed control exercised and
+checked against `/api/v1/bootstrap` afterwards:
+
+| control | shape | did |
+|---|---|---|
+| `clocks-numerals` **Resting dials** | select, 5 stops | picked "zigzag, quiet" -> server `rest: 4`, and the piece's own "now playing" note read `resting dials: zigzag, quiet` |
+| `clocks-numerals` **Choreography** | select, 14 stops | picked "magnet" -> server `dance: 5` |
+| `clocks-numerals` **24-hour** | switch | clicked off -> `hours24: 0`; clicked on -> `1` |
+| `clocks-dials` **Dials** | segmented, 3 stops | clicked "8 x 4" -> server `grid: 2` |
+| `clocks-dials` **Mood** | select, 9 stops | picked "streamlines" -> server `mood: 8`, and "Now playing" read **streamlines** |
+
+The last two rows are the card's point in one line: the person picked a thing
+by name and the piece said the same name back.
+
+- `docs/research/img/18x-163-dials-choices.png` - the segmented "DIALS
+  4 x 2 | 6 x 3 | 8 x 4" and the "MOOD [wander]" select.
+- `docs/research/img/18x-w390-choices.png` - the same two at 390 px, where the
+  three-stop rule earns itself.
+- `docs/research/img/18x-w1400.png` - both selects and the switch in the
+  340 px bench sidebar.
+
+Console clean, no errors or warnings.
+
+### The four widths
+
+Measured in the browser at real viewport widths (the window would not resize in
+this environment, so the page was loaded in a same-origin iframe of each exact
+width - the media queries see the iframe's width, so the layout is the real
+one):
+
+| width | layout | horizontal overflow | anything wider than the viewport |
+|---|---|---|---|
+| 390 | scrolling column | no | none |
+| 600 | scrolling column | no | none |
+| 900 | scrolling column | no | none |
+| 1400 | two-column bench | no | none |
+
+Screenshots: `18x-w390-choices.png`, `18x-w600.png`, `18x-w900.png`,
+`18x-w1400.png`.

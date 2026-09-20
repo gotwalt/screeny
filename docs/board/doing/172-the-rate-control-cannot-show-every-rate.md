@@ -103,3 +103,24 @@ that a rate it used to silently drop now lands.
   says the same rate. An infinite rate leaves it where it was.
 - `tests/api.rs::the_api_round_trips`: 45 and 10 land; 9000 clamps to 60; 0
   clamps to 1.
+
+### Rendered
+
+Against a loopback simulator, the card's acceptance run:
+
+```
+$ curl -XPOST -d '{"device":"515151","fps":10}' .../api/v1/player/set   -> fps 10.0
+```
+
+The open page picked it up on the state push without a reload and read
+**"FRAMES PER SECOND   10 fps"**, thumb at 10; reloading said the same. It was
+not changed by the page.
+
+- Dragging and arrow-keying the slider landed on **36 fps** - a rate the two
+  buttons could never have expressed - and `/api/v1/status` agreed.
+- `player/set {fps: 10.5}` reads **"10.5 fps"** while the thumb sits at 11:
+  the number is the rate the player is really on, the thumb is the nearest
+  whole stop. This is why the control is bound by hand.
+- `docs/research/img/18x-172-rate-slider.png` - the Time section at 30 fps.
+
+Console clean; no horizontal overflow at 390, 600, 900 or 1400.

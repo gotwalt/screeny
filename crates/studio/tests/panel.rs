@@ -342,14 +342,24 @@ async fn a_panel_that_comes_back_twice_says_two() {
     // satisfied the wait: the link is read straight from the link object and
     // the counts are written by the supervisor's own tick, so a snapshot taken
     // afterwards would be a different moment (card 170's two flakes).
+    //
+    // The baseline is taken once the device is **resolved**, because a panel
+    // typed in as an address is aimed at twice - once at the address, once at
+    // the device the telemetry poll finds there - and the second of those is
+    // the studio learning something, not the panel moving. How many link-ups
+    // that took is not the point; that it is not a *reconnect* is.
     let patience = Duration::from_secs(30);
     let ups = |v: &serde_json::Value| v["devices"][0]["player"]["health"]["link_ups"].as_u64().unwrap_or(0);
     let up = until_json(at, patience, "the first connection", "/api/v1/status", |v| {
-        v["preview"]["panel"]["connected"] == true && ups(v) >= 1
+        v["preview"]["panel"]["connected"] == true && v["devices"][0]["resolved"] == true && ups(v) >= 1
     })
     .await;
-    assert_eq!(up["devices"][0]["player"]["health"]["reconnects"], 0, "the first connect is not a reconnect");
-    assert_eq!(up["devices"][0]["player"]["health"]["link_ups"], 1);
+    assert_eq!(
+        up["devices"][0]["player"]["health"]["reconnects"], 0,
+        "nothing here is a reconnect yet: {}",
+        up["devices"][0]["player"]["health"]
+    );
+    let base = ups(&up);
 
     let mut panel = first;
     for round in 1..=2u64 {
@@ -371,7 +381,7 @@ async fn a_panel_that_comes_back_twice_says_two() {
         .await;
         let health = &back["devices"][0]["player"]["health"];
         assert_eq!(health["reconnects"], round, "after {round} round(s) away: {health}");
-        assert_eq!(health["link_ups"], round + 1, "one connect and {round} reconnect(s): {health}");
+        assert_eq!(health["link_ups"], base + round, "each round away is one more link-up: {health}");
     }
 
     // And the studio letting the panel go is not the panel dropping: output
@@ -379,12 +389,12 @@ async fn a_panel_that_comes_back_twice_says_two() {
     assert_eq!(post(at, "/api/v1/set_panel", r#"{"on":false}"#).await.status, 200);
     assert_eq!(post(at, "/api/v1/set_panel", r#"{"on":true}"#).await.status, 200);
     let after = until_json(at, patience, "output back on", "/api/v1/status", |v| {
-        v["preview"]["panel"]["connected"] == true && ups(v) >= 4
+        v["preview"]["panel"]["connected"] == true && ups(v) >= base + 3
     })
     .await;
     let health = &after["devices"][0]["player"]["health"];
     assert_eq!(health["reconnects"], 2, "switching the output off and on is not the panel reconnecting: {health}");
-    assert_eq!(health["link_ups"], 4, "the stream did come up a fourth time, and the readout says so: {health}");
+    assert_eq!(health["link_ups"], base + 3, "the stream did come up again, and `link_ups` says so: {health}");
     drop(panel);
     studio.stop().await;
 }
