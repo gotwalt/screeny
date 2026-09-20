@@ -172,9 +172,11 @@ far too slow to build inside Portainer, and Portainer's editor is not where a
 tools/deploy-workbench.sh --down                       # stop and remove the container
 tools/deploy-workbench.sh --down --volumes             # ... and forget the saved state
 
-# roll back to an older commit: check it out on the host, rebuild, restart
+# roll back to an older commit: check it out on the host and rebuild there.
+# Note that the next plain `tools/deploy-workbench.sh` moves it back to
+# origin/main, which is usually what you want and is never a surprise.
 ssh workbench.local -- "cd ~/src/screeny && git checkout <sha>"
-tools/deploy-workbench.sh --no-build --branch <sha>    # or re-run with --build
+ssh workbench.local -- "cd ~/src/screeny && SCREENY_PORT=8787 SCREENY_RENDER_GID=993 TZ=America/Los_Angeles docker compose -p screeny -f docker-compose.yml up -d --build"
 
 # remove everything this ever created on the host
 ssh workbench.local -- docker compose -p screeny -f ~/src/screeny/docker-compose.yml down --volumes
