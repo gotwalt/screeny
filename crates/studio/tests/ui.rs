@@ -281,6 +281,61 @@ async fn a_rate_set_through_the_api_is_what_the_page_reports() {
     studio.stop().await;
 }
 
+/// Card 163: a parameter whose values are a list of named stops says so in
+/// `bootstrap`, and setting it is still setting a number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let piece = boot["pieces"]
+        .as_array()
+        .expect("pieces")
+        .iter()
+        .find(|p| p["id"] == "clocks-numerals")
+        .expect("clocks-numerals")
+        .clone();
+    let param = |id: &str| {
+        piece["params"]
+            .as_array()
+            .expect("params")
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .clone()
+    };
+
+    // The owner's example: five named treatments, not a slider with the list
+    // in its label.
+    let rest = param("rest");
+    assert_eq!(rest["label"], "Resting dials", "the label is a label again");
+    assert_eq!(
+        rest["choices"],
+        serde_json::json!(["as it was", "quiet", "hatched, quiet", "hatched, faint", "zigzag, quiet"])
+    );
+    assert_eq!(rest["switch"], false);
+    assert_eq!((rest["min"].as_f64(), rest["max"].as_f64(), rest["default"].as_f64()), (Some(0.0), Some(4.0), Some(2.0)));
+
+    // The fourteen choreographies the label could not even try to name.
+    assert_eq!(param("dance")["choices"].as_array().expect("choices").len(), 14);
+    // A switch, not a two-stop slider.
+    assert_eq!(param("hours24")["switch"], true);
+    // And an ordinary number is untouched.
+    let pace = param("pace");
+    assert_eq!(pace["choices"], serde_json::json!([]));
+    assert_eq!(pace["switch"], false);
+
+    // The value is still an `f32` on the wire and in the state: nothing about
+    // a choice changes how it is set or stored.
+    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await.status, 200);
+    let set = post(at, "/api/v1/set_param", r#"{"id":"rest","value":4.0}"#).await.json();
+    assert_eq!(set["params"]["rest"], 4.0);
+    let clamped = post(at, "/api/v1/set_param", r#"{"id":"rest","value":9.0}"#).await.json();
+    assert_eq!(clamped["params"]["rest"], 4.0, "out of range is clamped by the spec, as it always was");
+    studio.stop().await;
+}
+
 /// Card 170's layout requirement, as far as a text file can carry it: the
 /// two-column bench is behind a breakpoint, so at every narrower width the
 /// page is an ordinary scrolling column and the picture cannot overlap the

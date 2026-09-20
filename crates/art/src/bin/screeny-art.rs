@@ -64,6 +64,14 @@ fn run(argv: Vec<String>) -> Result<(), String> {
                 println!("{:<16} {}", d.id, d.blurb);
                 for p in d.params {
                     println!("    {:<10} {:>7} .. {:<7} default {:<7} {}", p.id, p.min, p.max, p.default, p.label);
+                    // Card 163: a parameter whose values are a list of named
+                    // stops names them, rather than hiding the key in a label.
+                    if p.switch {
+                        println!("    {:<10} {:>7}    {:<7}         {:<7} off / on", "", "", "", "");
+                    }
+                    for (v, name) in p.choices.iter().enumerate() {
+                        println!("    {:<10} {:>7}    {:<7}         {:<7} {v} = {name}", "", "", "", "");
+                    }
                 }
             }
             Ok(())

@@ -27,6 +27,10 @@
   /* One gutter, widened with the window, so nothing is ever flush to a phone's
      edge and nothing is lost in the middle of a bench. */
   --gutter: 16px;
+
+  /* So the one native thing on the page - a <select>'s own popup list, card
+     163 - comes up dark like everything else. */
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -311,6 +315,34 @@ input[type="range"]:hover::-webkit-slider-thumb { background: var(--amber); }
 .seg label:hover span { color: var(--paper); }
 .seg input:checked + span { position: relative; border-color: var(--amber); color: var(--amber); }
 .seg input:focus-visible + span { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+/* Card 163: a parameter whose values are a list of named stops. Up to three
+   are a segmented control (`.seg`, above); more are a select, which says the
+   chosen name and holds fourteen of them at any width. The parameters section
+   can hold any mixture of the four shapes, so it spaces its own children
+   rather than relying on the pair rules above. */
+#params > * + * { margin-top: 14px; }
+.row--choice { gap: 12px; }
+.row--choice label { flex: none; }
+
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 26px 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--dim) 50%) calc(100% - 15px) 13px / 5px 5px no-repeat,
+    linear-gradient(-45deg, transparent 50%, var(--dim) 50%) calc(100% - 10px) 13px / 5px 5px no-repeat,
+    var(--bench);
+  color: var(--paper);
+  font: 500 12.5px/1 var(--body);
+  cursor: pointer;
+}
+select:hover { border-color: var(--dim); }
 
 .switch { display: flex; align-items: center; gap: 10px; }
 .switch input {

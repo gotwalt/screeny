@@ -118,6 +118,14 @@ pub struct ParamInfo {
     pub max: f32,
     pub step: f32,
     pub default: f32,
+    /// Card 163: the name of each stop, for a parameter whose values are a
+    /// list rather than a range. Empty for an ordinary number, and then the
+    /// page draws the slider it always did. **The value is still an `f32`**
+    /// on the wire, in the state file and in the per-piece memory; this only
+    /// changes which control is drawn and what it says.
+    pub choices: &'static [&'static str],
+    /// This one is off or on. Drawn as a switch.
+    pub switch: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -184,7 +192,16 @@ pub fn pieces(faults: bool) -> Vec<PieceInfo> {
             params: d
                 .params
                 .iter()
-                .map(|p| ParamInfo { id: p.id, label: p.label, min: p.min, max: p.max, step: p.step, default: p.default })
+                .map(|p| ParamInfo {
+                    id: p.id,
+                    label: p.label,
+                    min: p.min,
+                    max: p.max,
+                    step: p.step,
+                    default: p.default,
+                    choices: p.choices,
+                    switch: p.switch,
+                })
                 .collect(),
         })
         .collect()

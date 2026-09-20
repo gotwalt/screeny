@@ -76,6 +76,17 @@ pub struct Action {
 }
 
 /// A tunable number. The studio builds a slider from this.
+///
+/// Some parameters are not really numbers, though: their values are a list of
+/// named things, and before card 163 the names lived in the label -
+/// `"Resting dials (0: as it was, 1: quiet, 2: hatched quiet, ...)"` - so the
+/// person moving the slider was reading a legend and counting stops. A spec
+/// can now **declare** those names ([`choice`]) or say that it is a plain
+/// switch ([`toggle`]), and the studio draws a list or a switch instead.
+///
+/// The value stays an `f32` throughout: on the wire, in the state file and in
+/// the per-piece memory (card 165). Nothing downstream of a piece knows the
+/// difference, and no piece's ids, ranges or defaults changed.
 #[derive(Clone, Copy, Debug)]
 pub struct ParamSpec {
     pub id: &'static str,
@@ -84,10 +95,44 @@ pub struct ParamSpec {
     pub max: f32,
     pub step: f32,
     pub default: f32,
+    /// The name of each stop, `choices[v as usize]`, for a parameter whose
+    /// values are a list. Empty for an ordinary number.
+    pub choices: &'static [&'static str],
+    /// This is off or on, not a range of one. Drawn as a switch.
+    pub switch: bool,
 }
 
 pub const fn param(id: &'static str, label: &'static str, min: f32, max: f32, step: f32, default: f32) -> ParamSpec {
-    ParamSpec { id, label, min, max, step, default }
+    ParamSpec { id, label, min, max, step, default, choices: &[], switch: false }
+}
+
+/// A parameter whose values are a list of named stops: `0..=choices.len()-1`,
+/// step 1, and the label goes back to being a label.
+///
+/// The names are the piece's own words - `RESTS[i].name`, a mood's `name` -
+/// so the page shows what the piece would call the thing, not an index.
+///
+/// # Panics
+///
+/// At compile time, if `choices` is empty: a choice of nothing is a mistake,
+/// not a parameter.
+pub const fn choice(id: &'static str, label: &'static str, choices: &'static [&'static str], default: f32) -> ParamSpec {
+    assert!(!choices.is_empty(), "a choice parameter needs at least one named stop");
+    ParamSpec { id, label, min: 0.0, max: (choices.len() - 1) as f32, step: 1.0, default, choices, switch: false }
+}
+
+/// A parameter that is off or on: `0.0` or `1.0`, drawn as a switch.
+pub const fn toggle(id: &'static str, label: &'static str, default: bool) -> ParamSpec {
+    ParamSpec {
+        id,
+        label,
+        min: 0.0,
+        max: 1.0,
+        step: 1.0,
+        default: if default { 1.0 } else { 0.0 },
+        choices: &[],
+        switch: true,
+    }
 }
 
 impl ParamSpec {
@@ -104,6 +149,16 @@ impl ParamSpec {
         } else {
             self.default
         }
+    }
+
+    /// What this value is called, for a parameter with named stops. `None`
+    /// for an ordinary number, and for a value with no stop of its own.
+    #[must_use]
+    pub fn name_of(&self, value: f32) -> Option<&'static str> {
+        if self.choices.is_empty() || !value.is_finite() {
+            return None;
+        }
+        self.choices.get(self.sanitise(value).round() as usize).copied()
     }
 }
 
@@ -179,5 +234,89 @@ mod tests {
         assert!(p.set(SPECS, "scale", 100.0));
         assert_eq!(p.get("scale"), 4.0);
         assert!(!p.set(SPECS, "nonesuch", 1.0), "an unknown id is still refused");
+    }
+
+    // ---------------- card 163: parameters that are lists ----------------
+
+    /// A choice is an ordinary `f32` parameter that happens to have names: the
+    /// range, the step and `sanitise` all behave exactly as before, so nothing
+    /// downstream of a piece - the wire, the state file, the per-piece memory
+    /// (card 165) - knows the difference.
+    #[test]
+    fn a_choice_is_still_a_number() {
+        const C: ParamSpec = choice("mood", "Mood", &["wander", "drift", "sway"], 0.0);
+        assert_eq!((C.min, C.max, C.step, C.default), (0.0, 2.0, 1.0, 0.0));
+        assert_eq!(C.sanitise(9.0), 2.0);
+        assert_eq!(C.sanitise(f32::NAN), 0.0);
+        assert_eq!(C.name_of(1.0), Some("drift"));
+        assert_eq!(C.name_of(9.0), Some("sway"), "a value out of range is the stop it clamps to");
+        assert_eq!(C.name_of(f32::NAN), None);
+
+        const T: ParamSpec = toggle("hours24", "24-hour", true);
+        assert_eq!((T.min, T.max, T.step, T.default), (0.0, 1.0, 1.0, 1.0));
+        assert!(T.switch && T.choices.is_empty());
+        assert_eq!(SPECS[0].name_of(1.0), None, "an ordinary number has no names");
+    }
+
+    /// The names on a choice are the **piece's own** names, not a second copy
+    /// that can drift. `RESTS` is read directly; the dances and the moods are
+    /// generated with an rng, so their lists are written out and checked here.
+    #[test]
+    fn the_named_stops_are_the_pieces_own_names() {
+        use crate::pieces::clocks::{ambient, dance, dials, DANCE_CHOICES, RESTS};
+
+        let by_id = |def: &'static PieceDef, id: &str| *def.params.iter().find(|p| p.id == id).expect(id);
+
+        // rest: five treatments, named as the piece names them.
+        let rest = by_id(&crate::pieces::clocks::DEF, "rest");
+        assert_eq!(rest.choices.len(), RESTS.len());
+        for (i, treatment) in RESTS.iter().enumerate() {
+            assert_eq!(rest.choices[i], treatment.name);
+            assert_eq!(rest.name_of(i as f32), Some(treatment.name));
+        }
+
+        // dance: "vary", then the repertoire in order, then "composed".
+        let d = by_id(&crate::pieces::clocks::DEF, "dance");
+        assert_eq!(d.choices.len(), dance::DANCES + 2, "vary, every dance, and composed");
+        assert_eq!(d.max, 13.0, "the range card 160 shipped");
+        for which in 0..dance::DANCES {
+            let (name, _) = dance::dance(which, &mut crate::rng::Rng::new(which as u64));
+            assert_eq!(DANCE_CHOICES[which + 1], name, "dance {which}");
+        }
+        assert_eq!(*DANCE_CHOICES.first().expect("vary"), "vary");
+        assert_eq!(*DANCE_CHOICES.last().expect("composed"), "composed");
+
+        // mood: "wander", then the eight moods in `Mood::new` order.
+        let mood = by_id(&crate::pieces::clocks::dials::DEF, "mood");
+        assert_eq!(mood.choices.len(), ambient::MOODS + 1);
+        assert_eq!(mood.max, ambient::MOODS as f32, "the range the piece shipped");
+        for which in 0..ambient::MOODS {
+            let named = ambient::Mood::new(which, &mut crate::rng::Rng::new(which as u64)).name;
+            assert_eq!(dials::MOOD_CHOICES[which + 1], named, "mood {which}");
+        }
+
+        // grid: the three grids, written the way a person says them.
+        let grid = by_id(&crate::pieces::clocks::dials::DEF, "grid");
+        assert_eq!(grid.choices, ["4 x 2", "6 x 3", "8 x 4"]);
+        assert_eq!((grid.min, grid.max, grid.default), (0.0, 2.0, 1.0), "the range and default are card 100's");
+    }
+
+    /// Nothing card 163 touched changed a piece's behaviour: every id, range,
+    /// step and default is what it was.
+    #[test]
+    fn no_pieces_ids_ranges_or_defaults_moved() {
+        let want: &[(&str, &str, f32, f32, f32, f32)] = &[
+            ("clocks-numerals", "dance", 0.0, 13.0, 1.0, 0.0),
+            ("clocks-numerals", "rest", 0.0, 4.0, 1.0, 2.0),
+            ("clocks-numerals", "hours24", 0.0, 1.0, 1.0, 1.0),
+            ("clocks-dials", "grid", 0.0, 2.0, 1.0, 1.0),
+            ("clocks-dials", "mood", 0.0, 8.0, 1.0, 0.0),
+        ];
+        for (piece, id, min, max, step, default) in want {
+            let def = find(piece).unwrap_or_else(|| panic!("{piece}"));
+            let spec = def.params.iter().find(|p| p.id == *id).unwrap_or_else(|| panic!("{piece}.{id}"));
+            assert_eq!((spec.min, spec.max, spec.step, spec.default), (*min, *max, *step, *default), "{piece}.{id}");
+            assert!(!spec.label.contains('('), "{piece}.{id}: the label is a label again, not a legend");
+        }
     }
 }

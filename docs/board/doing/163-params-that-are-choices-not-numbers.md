@@ -44,3 +44,98 @@ settled (card 106), and it would pay for itself in the clock pieces alone.
 
 `screeny-art list` names every stop of `rest`, `dance`, `grid` and `mood`; the studio
 shows names rather than numbers; no piece's behaviour changes.
+
+## Log
+
+### The card against today's tree
+
+Unchanged, and the four labels the card quotes were word for word still there.
+Card 170 changed which player the sliders act on, not how they are built.
+
+### The design
+
+Additive to `ParamSpec`, and **the value stays an `f32`** everywhere - wire,
+state file, per-piece memory (card 165), `Params`, `sanitise`. Nothing
+downstream of a piece knows the difference; what changed is which control the
+page draws and what it says.
+
+```rust
+pub struct ParamSpec {
+    // id, label, min, max, step, default: untouched
+    pub choices: &'static [&'static str],  // named stops; empty for a number
+    pub switch: bool,                      // off or on
+}
+
+pub const fn param(..)                            // a number -> slider (signature unchanged)
+pub const fn choice(id, label, choices, default)  // a list   -> segmented control / select
+pub const fn toggle(id, label, default: bool)     // 0 or 1   -> switch
+```
+
+`choice` derives `min: 0.0`, `max: choices.len() - 1`, `step: 1.0`, so a spec
+cannot declare five names over a range of three. `param`'s signature did not
+change, so the fifty-odd ordinary parameters were not touched at all.
+`ParamSpec::name_of(value)` gives a stop's name, for anything that wants one.
+
+**Which control, and why.** Three stops or fewer is a segmented control - the
+design language already has `.seg`, and three fit across the inspector at
+390 px. More than three is a `<select>`: fourteen choreographies in a flex row
+would either wrap into a muddle or scroll sideways, and a select says the
+chosen name at any width. `:root` gained `color-scheme: dark` so the select's
+own native popup comes up dark like the rest of the page. A `switch` reuses
+`.switch`, which the panel-model section already uses.
+
+### The five declarations
+
+| piece | param | was | is |
+|---|---|---|---|
+| `clocks-numerals` | `rest` | `"Resting dials (0: as it was, 1: quiet, 2: hatched quiet, 3: hatched faint, 4: zigzag quiet)"`, 0..4 | `choice("rest", "Resting dials", REST_CHOICES, 2.0)` - **the owner's example**: five named treatments |
+| `clocks-numerals` | `dance` | `"Choreography (0 = vary, 13 = always composed)"`, 0..13 | `choice(.., DANCE_CHOICES, 0.0)` - "vary", the twelve dances by name, "composed" |
+| `clocks-numerals` | `hours24` | `param(.., 0.0, 1.0, 1.0, 1.0)` | `toggle("hours24", "24-hour", true)` |
+| `clocks-dials` | `grid` | `"Dials (0: 4x2, 1: 6x3, 2: 8x4)"`, 0..2 | `choice(.., GRID_CHOICES, 1.0)` - a segmented control |
+| `clocks-dials` | `mood` | `"Mood (0 = wander)"`, 0..8, eight moods it could not name | `choice(.., MOOD_CHOICES, 0.0)` - "wander" and the eight by name |
+
+`REST_CHOICES` is built **from `RESTS` itself** (`RESTS[0].name, ...`), so the
+page and the piece cannot disagree about what a treatment is called. The dances
+and the moods are generated with an rng, so their names cannot be read in a
+const; those two lists are written out and checked against the pieces' own in
+`piece::tests::the_named_stops_are_the_pieces_own_names`, which calls
+`dance::dance(i, ..)` and `Mood::new(i, ..)` and compares every one.
+
+Every id, range, step and default is exactly what it was, guarded by
+`piece::tests::no_pieces_ids_ranges_or_defaults_moved` - which also asserts
+that none of the five labels contains a `(` any more.
+
+### What else
+
+- `screeny-art list` prints every stop under its parameter (`0 = vary`,
+  `1 = formation`, ...) and `off / on` for a switch. The card's acceptance.
+- `bootstrap` carries `choices` and `switch` per parameter. Additive; a script
+  reading `min`/`max`/`step`/`default` is unaffected.
+- `crates/art/README.md`, "Adding a piece": use `choice`/`toggle` when a
+  parameter's values have names, and take the names from the piece's own words.
+
+### Evidence
+
+```
+$ screeny-art list
+    dance            0 .. 13      default 0       Choreography
+                                                  0 = vary
+                                                  1 = formation
+                                                  ...
+                                                  13 = composed
+    rest             0 .. 4       default 2       Resting dials
+                                                  0 = as it was
+                                                  1 = quiet
+                                                  2 = hatched, quiet
+                                                  3 = hatched, faint
+                                                  4 = zigzag, quiet
+    hours24          0 .. 1       default 1       24-hour
+                                                  off / on
+```
+
+- `tests/ui.rs::a_parameter_that_is_a_list_of_choices_carries_its_names`:
+  `bootstrap` gives `rest` the label "Resting dials" and exactly the five
+  treatment names, `dance` fourteen stops, `hours24` `switch: true`, and `pace`
+  - an ordinary number - an empty `choices`. Then `set_param rest=4` is 4.0 and
+  `rest=9` clamps to 4.0, because a choice is still a number.
+- `cargo test -p screeny-art --lib piece::` - five tests, green.

@@ -386,6 +386,82 @@ async function start() {
     }
   }
 
+  /** One parameter's control (card 163).
+   *
+   *  A parameter is still an `f32` from end to end - wire, state file,
+   *  per-piece memory - and every one of these sets it with `set_param`. What
+   *  the spec now *declares* is what shape the thing is: an ordinary number is
+   *  a slider, a list of named stops is a list, and off-or-on is a switch. A
+   *  parameter whose values are a list used to be a slider with the key
+   *  crammed into its label ("Resting dials (0: as it was, 1: quiet, ...)"),
+   *  so the person moving it was reading a legend and counting stops.
+   *
+   *  Three or fewer stops are a segmented control, which fits across the
+   *  inspector at 390 px. More than three - fourteen choreographies, nine
+   *  moods - is a select: a segmented control would either wrap into a muddle
+   *  or scroll sideways. */
+  function paramControl(spec) {
+    const id = `param-${spec.id}`;
+    const set = (v) => { state.params[spec.id] = v; call('set_param', { id: spec.id, value: v }); };
+    const value = () => state.params[spec.id];
+
+    if (spec.switch) {
+      const root = document.createElement('label');
+      root.className = 'switch';
+      const input = Object.assign(document.createElement('input'), { id, type: 'checkbox' });
+      root.append(input, Object.assign(document.createElement('span'), { textContent: spec.label }));
+      paramControls.push(bindSwitch(input, { get: () => value() >= 0.5, set: (on) => set(on ? 1 : 0) }));
+      return root;
+    }
+
+    if (spec.choices && spec.choices.length) {
+      return spec.choices.length <= 3 ? segmented(spec, id, value, set) : dropdown(spec, id, value, set);
+    }
+
+    const root = document.createElement('div');
+    root.className = 'slider';
+    const label = Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label });
+    const input = Object.assign(document.createElement('input'), {
+      id, type: 'range', min: spec.min, max: spec.max, step: spec.step,
+    });
+    root.append(label, document.createElement('output'), input);
+    paramControls.push(bindSlider(root, { get: value, set, format: (v) => trim(v, spec.step) }));
+    return root;
+  }
+
+  /** A short list: one button per stop, like the panel-model controls. */
+  function segmented(spec, id, value, set) {
+    const root = document.createElement('fieldset');
+    root.className = 'seg';
+    root.id = id;
+    root.append(Object.assign(document.createElement('legend'), { textContent: spec.label }));
+    spec.choices.forEach((name, i) => {
+      const label = document.createElement('label');
+      const input = Object.assign(document.createElement('input'), { type: 'radio', name: id, value: String(i) });
+      label.append(input, Object.assign(document.createElement('span'), { textContent: name }));
+      root.append(label);
+    });
+    paramControls.push(bindRadios(root, { get: () => Math.round(value()), set: (v) => set(Number(v)) }));
+    return root;
+  }
+
+  /** A long list: a select, which says the chosen name and can hold fourteen
+   *  of them at any width. */
+  function dropdown(spec, id, value, set) {
+    const root = document.createElement('div');
+    root.className = 'row row--choice';
+    const select = Object.assign(document.createElement('select'), { id });
+    select.append(...spec.choices.map((name, i) =>
+      Object.assign(document.createElement('option'), { value: String(i), textContent: name })));
+    root.append(Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label }), select);
+    select.addEventListener('change', () => set(Number(select.value)));
+    paramControls.push({
+      refresh() { if (!busy(select)) select.value = String(Math.round(value())); },
+    });
+    select.value = String(Math.round(value()));
+    return root;
+  }
+
   function adopt(next) {
     if (!next) return;
     state = next;
@@ -397,22 +473,7 @@ async function start() {
     document.querySelectorAll('#pieces input').forEach((i) => { i.checked = i.value === state.piece; });
 
     paramControls = [];
-    $('#params').replaceChildren(...(piece ? piece.params : []).map((spec) => {
-      const root = document.createElement('div');
-      root.className = 'slider';
-      const id = `param-${spec.id}`;
-      const label = Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label });
-      const input = Object.assign(document.createElement('input'), {
-        id, type: 'range', min: spec.min, max: spec.max, step: spec.step,
-      });
-      root.append(label, document.createElement('output'), input);
-      paramControls.push(bindSlider(root, {
-        get: () => state.params[spec.id],
-        set: (v) => { state.params[spec.id] = v; call('set_param', { id: spec.id, value: v }); },
-        format: (v) => trim(v, spec.step),
-      }));
-      return root;
-    }));
+    $('#params').replaceChildren(...(piece ? piece.params : []).map((spec) => paramControl(spec)));
     $('#reset-params').hidden = !piece || piece.params.length === 0;
     sayIfBlack();
     // Empty until the controls below are bound, which is the first call.
