@@ -208,12 +208,20 @@ pub async fn frames_task(
         // --- steps 2 and 3: decode the survivor, then swap --------------
         let survivor = have_keep.then(|| &keep[..keep_len]);
         let published = core.flush_frames(now_us(), survivor, &mut producer.back().px, &mut out);
+        // Card 223's screens (see "compose" below). Asked for here because the
+        // setup screen is an overlay in the full sense: while it is up a
+        // decoded frame is counted and kept for the cross-fade but does **not**
+        // reach the panel.
+        let portal = crate::provision::screen((now_us() / 1_000) as u32);
+        let setup_screen_up = matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
         if published {
             // The cross-fade needs the frame a sender last put up, and this is
             // the only moment it is reachable: after `publish` the slot
             // belongs to the consumer. 6 KB at 30 fps is 0.05% of a core.
             last.copy_from(producer.back());
-            producer.publish();
+            if !setup_screen_up {
+                producer.publish();
+            }
         }
 
         // --- timers -----------------------------------------------------
@@ -237,7 +245,17 @@ pub async fn frames_task(
         // which of the two portal layouts this instant wants, is the machine's
         // answer (`Provisioner::screen`); this task supplies the clock and the
         // frame, exactly as it does for every other screen.
-        let portal = crate::provision::screen(now_ms as u32);
+        //
+        // **The `connected` screen yields to a stream.** It is up for a minute
+        // after a join from the portal, and the Studio finds the panel within
+        // seconds of that join: both used to publish, and the panel showed the
+        // address every few frames of the art (the owner's phone test,
+        // 2026-09-20). The phone's page has the address too, and a panel that
+        // is being sent a picture shows the picture.
+        let portal = portal.filter(|s| {
+            !(matches!(s, crate::provision::PanelScreen::Connected { .. })
+                && intent == Intent::Stream)
+        });
         let portal_due = portal.is_some() && now_ms.wrapping_sub(portal_at_ms) >= PORTAL_MS;
         let due = animating
             || portal_due

@@ -383,6 +383,16 @@ pub async fn ap_net_task(mut runner: Runner<'static, Interface>) -> ! {
     }
 }
 
+/// First `n` bytes of `s`, backed off to a character boundary. For log lines.
+#[must_use]
+pub fn cut_str(s: &str, n: usize) -> &str {
+    let mut end = s.len().min(n);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Block until the AP is (or is not) up. See [`AP_POLL`].
 async fn wait_ap(want: bool) {
     while AP_UP.load(Ordering::Relaxed) != want {
@@ -395,8 +405,8 @@ pub async fn wait_ap_pub(want: bool) {
     wait_ap(want).await
 }
 
-/// DHCP on the AP interface: a small pool, and RFC 8910's option 114 so the
-/// OSes that read it find the portal without a DNS round trip.
+/// DHCP on the AP interface: a small pool, the portal as router and DNS
+/// server, and deliberately **no** RFC 8910 option 114 (see below).
 #[embassy_executor::task]
 pub async fn dhcp_task(stack: Stack<'static>) {
     let buffers = mk_static!(UdpBuffers<1, DHCP_BUF, DHCP_BUF, 2>, UdpBuffers::new());
@@ -425,9 +435,16 @@ pub async fn dhcp_task(stack: Stack<'static>) {
         let mut options = edge_dhcp::server::ServerOptions::new(AP_IP, Some(&mut gw));
         let dns = [AP_IP];
         options.dns = &dns;
-        // RFC 8910. The path is the portal's own, so an OS that follows it
-        // lands on the setup form rather than on the status page.
-        options.captive_url = Some("http://192.168.4.1/");
+        // **No RFC 8910 option 114.** Card 223 shipped it as
+        // `http://192.168.4.1/` on research 007's "ship it, never rely on it".
+        // But 8910/8908 want an HTTPS API endpoint on a hostname that answers
+        // `application/captive+json`, Apple prefers the option to its own probe
+        // since iOS 14, and this device can offer neither. On the owner's
+        // iPhone the sheet opened and then said "error opening page" on two
+        // runs in three; an option that can only be wrong is not worth that.
+        // The DNS catch-all and the HTTP catch-all carry the whole weight, as
+        // 007 said they would have to.
+        options.captive_url = None;
         options.lease_duration_secs = LEASE_SECS;
 
         info!(

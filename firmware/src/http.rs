@@ -410,10 +410,6 @@ enum Reply {
     Page(Page),
     /// The setup page (card 223): HTML, streamed, no JavaScript in it.
     Portal(PortalPage),
-    /// The captive-portal catch-all: a 302 to the portal **with a non-empty
-    /// body** (research 007 section 4.3: Android treats `Content-Length <= 4`
-    /// as a failed probe and iOS wants something to show).
-    Redirect,
     /// Everything else.
     Api(u16, ApiBody),
 }
@@ -450,13 +446,11 @@ impl IntoResponse for Reply {
         // streaming of the body and `Connection: close`.
         match self {
             Reply::Page(p) => Response::ok(p).write_to(connection, response_writer).await,
-            Reply::Portal(p) => Response::ok(p).write_to(connection, response_writer).await,
-            Reply::Redirect => {
-                Response::new(StatusCode::new(302), REDIRECT_BODY)
-                    .with_content_type("text/html; charset=utf-8")
-                    .with_header("Location", PORTAL_URL)
+            Reply::Portal(p) => {
+                Response::ok(p)
                     // A captive probe that is cached is a captive sheet that
-                    // never opens again.
+                    // never opens again - and since the owner's phone test
+                    // this page *is* the answer to the probe.
                     .with_header("Cache-Control", "no-store")
                     .write_to(connection, response_writer)
                     .await
@@ -1021,17 +1015,6 @@ const fn reset_word(r: ResetReason) -> &'static str {
 // The setup page (card 223)
 // ---------------------------------------------------------------------------
 
-/// Where the portal lives, for the catch-all's `Location` and for
-/// `edge-dhcp`'s RFC 8910 option 114. The same number the panel draws
-/// ([`screeny_provision::PORTAL_IP`]) and the DNS catch-all answers.
-const PORTAL_URL: &str = "http://192.168.4.1/";
-
-/// The catch-all's body. Short, but **not empty**: research 007 section 4.3.
-const REDIRECT_BODY: &str = concat!(
-    "<!doctype html><meta charset=utf-8><title>screeny setup</title>",
-    "<p>Continue to <a href=\"http://192.168.4.1/\">screeny setup</a>.</p>"
-);
-
 /// The setup form's own path, on both interfaces.
 ///
 /// A path of its own rather than `POST /api/v1/wifi`, for one reason: this one
@@ -1243,6 +1226,27 @@ impl PathRouterService for Dispatch {
         let method = request.parts.method();
         let path = request.parts.path();
 
+        // One line per request **on the setup network only**: it exists for
+        // minutes, a phone's captive probing is what goes wrong on it, and the
+        // serial log is the only witness (the owner's phone test, 2026-09-20).
+        // Never on the LAN, where the Studio polls for months.
+        if self.ap {
+            let headers = request.parts.headers();
+            let header = |name: &str| {
+                headers
+                    .get(name)
+                    .and_then(|v| v.as_str().ok())
+                    .map_or("-", |s| crate::provision::cut_str(s, 40))
+            };
+            info!(
+                "http: setup network {} {} | host {} | ua {}",
+                method,
+                crate::provision::cut_str(path.encoded(), 48),
+                header("host"),
+                header("user-agent")
+            );
+        }
+
         let reply = route_request(self.ap, method, path, &mut request.body_connection).await;
 
         // The handler future is finished and dropped *before* the reply is
@@ -1275,8 +1279,8 @@ fn known_path(path: Path<'_>) -> Option<&'static str> {
 ///
 /// 1. **Card 223's captive-portal hook goes at the top of this function**, in
 ///    front of the route table: on the soft-AP interface an unknown path
-///    becomes a redirect to the portal, and it has to be decided before a 404
-///    is.
+///    is answered with the setup page itself, and it has to be decided before
+///    a 404 is.
 /// 2. `GET /` is the page, and it is the one path that is not in
 ///    [`route::ROUTES`].
 /// 3. A verb this API has no [`route::Method`] for - `PUT`, `DELETE`, `HEAD`,
@@ -1301,14 +1305,27 @@ async fn route_request<R: picoserve::io::Read>(
     // --- 1: card 223's captive-portal catch-all, before any routing --------
     //
     // On the soft-AP, and only while it is actually up, a path this server
-    // does not have is a **302 with a body** rather than a 404. That is what
+    // does not have is **the setup page** rather than a 404. That is what
     // `captive.apple.com/hotspot-detect.html`, `connectivitycheck.gstatic.com`
     // and `msftconnecttest.com` are asking, and answering it is what makes the
     // captive sheet open by itself. `/setup` is exempt for the obvious reason;
     // so is every route in the table, so a phone can still read the API.
     let setup = path == SETUP_PATH;
+    //
+    // **The answer is the setup page itself, `200`, not a `302` to it** (the
+    // owner's phone test, 2026-09-20, iOS 18.7). The captive sheet fetches
+    // `hotspot-detect.html` with one connection and opens a second it never
+    // uses, which holds one worker for `start_read_request`. A redirect made
+    // it open a *third* to 192.168.4.1 within milliseconds, while the worker
+    // that had just answered was still between `close` and `accept`; smoltcp
+    // has no backlog, the SYN was refused, and iOS - which does not retry a
+    // refused connection, where macOS does after a second - said "Hotspot
+    // login cannot open the page because it could not connect to the server".
+    // Any reply that is not Apple's `Success` page, not a 204 and not
+    // Microsoft's text marks the network captive, so the form does that job
+    // too, from the connection the sheet already has.
     if ap && crate::provision::ap_up() && !setup && known_path(path).is_none() {
-        return Reply::Redirect;
+        return get_setup();
     }
 
     // --- 2: the setup form, on both interfaces -----------------------------
@@ -1344,7 +1361,7 @@ async fn route_request<R: picoserve::io::Read>(
     if path == "/" {
         return match method {
             // On the setup network `/` **is** the setup form: a phone that was
-            // dragged here by the catch-all, by option 114 or by the QR code
+            // dragged here by the catch-all or by the QR code
             // is here to type a network name, not to read a status table.
             "GET" if ap => get_setup(),
             "GET" => Reply::Page(Page::new(status().await)),
@@ -1958,7 +1975,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // A worker cannot reach the soft-AP (there is no phone and no route to
     // 192.168.4.x from this bench), so the same in-memory socket is pointed at
     // the **AP** dispatch instead. What it proves is exactly what the card
-    // asks: a captive probe gets the 302-with-a-body while `ap_up()` and a 404
+    // asks: a captive probe gets the setup page while `ap_up()` and a 404
     // when the AP is down, `GET /` is the setup form on that side and the
     // status page on the other, and the form's GET and POST answer HTML.
     //
@@ -1972,9 +1989,10 @@ pub async fn selftest_task(stack: Stack<'static>) {
         // The catch-all only fires while the AP is actually up, so the
         // expected code for those two rows depends on the device's state and
         // not on the table.
-        let want = match (*expect, *ap, ap_now) {
-            (302, true, false) => 404,
-            (w, _, _) => w,
+        let want = match (*expect, ap_now) {
+            (CAPTIVE, true) => 200,
+            (CAPTIVE, false) => 404,
+            (w, _) => w,
         };
         let head = core::str::from_utf8(&out[..bytes.min(out.len())]).unwrap_or("<binary>");
         info!(
@@ -2144,34 +2162,37 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
 
 /// Card 223's portal pass: `(label, on the AP side, request, expected status)`.
 ///
-/// Each row is a question only the AP/LAN split can be asked. The `302` rows
-/// are conditional on the soft-AP actually being up when the self-test runs -
-/// see the loop - because that, and not the table, is what the catch-all is
-/// gated on.
+/// Each row is a question only the AP/LAN split can be asked. The
+/// [`CAPTIVE`] rows are conditional on the soft-AP actually being up when the
+/// self-test runs - see the loop - because that, and not the table, is what
+/// the catch-all is gated on.
+#[cfg(feature = "http-selftest")]
+const CAPTIVE: u16 = 0;
+
 #[cfg(feature = "http-selftest")]
 static SELFTEST_PORTAL: &[(&str, bool, &str, u16)] = &[
-    // The three captive probes, on the setup network. A non-empty body and a
-    // `Location` are both required: research 007 section 4.3.
+    // The three captive probes, on the setup network: the setup page, `200`,
+    // and **not** a redirect to it (see `route_request`, step 1).
     (
-        "AP  captive.apple.com (302)",
+        "AP  captive.apple.com (form)",
         true,
         "GET /hotspot-detect.html HTTP/1.1\r\nHost: captive.apple.com\r\nConnection: close\r\n\r\n",
-        302,
+        CAPTIVE,
     ),
     (
-        "AP  android generate_204 (302)",
+        "AP  android generate_204 (form)",
         true,
         "GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n",
-        302,
+        CAPTIVE,
     ),
     (
-        "AP  windows ncsi (302)",
+        "AP  windows ncsi (form)",
         true,
         "GET /connecttest.txt HTTP/1.1\r\nHost: www.msftconnecttest.com\r\nConnection: close\r\n\r\n",
-        302,
+        CAPTIVE,
     ),
     // The same probe on the LAN is an ordinary unknown path. This row is the
-    // one that says the redirect is a property of the listener and not of the
+    // one that says the catch-all is a property of the listener and not of the
     // `Host:` header.
     (
         "LAN captive.apple.com (404)",
