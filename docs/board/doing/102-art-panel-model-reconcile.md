@@ -288,3 +288,10 @@ firmware's phase cycle and is expected (brief 2.1).
   cadence ladder moving. Written out of the frame-rate note above: the rate is on the
   page but its *history* is not, so a step down under loss looks exactly like somebody
   moving the frame-rate slider. Nothing about the sender was changed by this card.
+- **114** `docs/board/backlog/114-sim-window-temporal-dither.md` - `crates/sim`'s
+  *window* still draws the panel at 64 levels (`Panel::levels(64)` =
+  `screeny_panel::NOMINAL`), so it is now pessimistic about the darks by about 30
+  sRGB codes while the studio's preview is right. Two pictures of one panel that
+  disagree is what card 016 set out to stop. Not touched here: it is another crate
+  and it changes that window's pixels. `Snapshot::decoded` is bit-exact and
+  unaffected, which is why `crates/art/tests/sender.rs` is still a valid check.
