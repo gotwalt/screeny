@@ -555,3 +555,83 @@ ran fine on the device twice, high-water 13,056 of 22,600, but it is worth a
 follow-up card: either the self-test shares the workers' buffers instead of
 declaring its own, or the script learns that the floor is a rule about builds
 that get flashed as the product.
+
+### What `crates/provision` and `crates/device-api` were missing, from this side
+
+Neither crate was touched (the card said not to). Both held up: every rule
+about joining, retrying, the trial, the sticky failure, the AP grace and the
+two portal layouts came out of the machine and none of them had to be
+re-decided here. Five things were awkward, all small, all news:
+
+1. **There is no `link_state()` on the `Provisioner`.** `status.wifi_state`
+   means the link, and the derivation from `p.state()` is a four-arm match that
+   now exists **twice** - in `crates/sim/src/wifi.rs` and in
+   `firmware/src/provision.rs` - written to be identical on purpose. That is
+   exactly the drift card 228's rule 8 caught the first time. It belongs in the
+   machine.
+2. **`Screen<'a>` borrows the machine.** A caller that cannot hold the lock
+   while rendering has to copy the name out by hand, which is what
+   `PanelScreen` in `firmware/src/provision.rs` is. Here the lock is a critical
+   section and a QR encode inside one would mask core 1's HUB75 DMA interrupt,
+   so this was not optional. An owned form in the crate would delete that type.
+3. **`FailReason` has `as_str()` (the API's words) but no sentence for a
+   person.** "wrong password", "network not found", "could not join" are in
+   the firmware's HTML, where the simulator cannot test them.
+4. **`Timing` has no DHCP phase.** `join_attempt_ms` models a *radio* attempt;
+   on this bench association takes ~3 s and DHCP another 10-12, so the firmware
+   had to put a second window on top. The machine's "attempt" is in practice
+   association-only, and the doc comment does not say so.
+5. **`device-api`'s `route::ROUTES` has no portal path**, so `/setup` is
+   handled in front of the table. Fine while only the firmware serves it; the
+   moment the simulator should serve the same page, the path wants to be in the
+   shared table with its own `max_request_len`.
+
+### Proposed follow-up cards
+
+* **The boot path's two 3 KB partition-table buffers** (the orchestrator asked
+  for this at the top). `read_fw_health` and `store::init` each put a
+  `PARTITION_TABLE_MAX_LEN` buffer on `main`'s stack; sharing one, or moving it
+  to the heap for the duration, is the next lever and it is worth ~3 KB of the
+  transient the region has to be big enough for.
+* **`http-selftest` costs 5,328 bytes of `.bss` and now fails the floor.** A
+  second monomorphised copy of picoserve's `serve`. Either it shares the
+  workers' buffers and router, or `fw-size.sh` learns which builds the floor is
+  a rule about.
+* **The AP client count is blind during a join attempt.** `esp-radio` offers AP
+  associate/leave only through a `&self` future, and a join needs `&mut self`.
+  Restructuring the driver around `controller.subscribe()`, or asking upstream
+  for a `&self` join, would close the one approximation in this card.
+* **Move the two duplicated derivations into `crates/provision`** - items 1 and
+  2 above - and delete the firmware's and the simulator's copies.
+* **The simulator should serve the setup page.** The portal HTML has no test at
+  all today; the sim already drives the same machine and could serve the same
+  bytes, so the page could be opened in a browser and the wording reviewed
+  without a device.
+* **Re-announce mDNS when the station's address changes**, not only on
+  `Action::Announce`. After the soft-AP goes down the radio restarts and the
+  station re-associates; if DHCP hands out a different address, nothing tells
+  mDNS.
+* **A sender-visible reason for `PROVISIONING`.** The telemetry overlay says
+  the device is in setup but not why; a sender that has lost its panel to the
+  portal has to guess between "it never joined" and "somebody posted
+  credentials".
+
+### Summary
+
+* Exit `.stack` **27,928** on the default build (floor 24,576 untouched, card's
+  exit 26 KB). Levers: the frame socket's tx buffer 2,944 -> 512 (+2,432, its
+  own commit), `MDNS_BUF` 1500 -> 1024 (+1,904), `AP_SOCKETS` 5 -> 4 (+408).
+* Core 0 high-water **13,056** - unmoved from cards 227 and 233, and unmoved by
+  all 31 routes of the self-test. `stack_free` 13,848 idle, 12,488 under load,
+  8,520 with the soft-AP and its three services up.
+* Heap 45,540 of 90,112 station-only, 47,932 with the AP up: **the whole AP
+  side is ~2.5 KB of heap.**
+* Self-tests on the device: 20/20 LAN routes, 11/11 portal routes, run twice
+  (AP down and AP up).
+* `screeny-probe http` 30/0/8, identical to fw 0.4.3. 1,136-request loop, no
+  failures once up. 30 fps rx / 30 fps shown / zero drops throughout.
+* Four flashes: the first found a DHCP window that was under the measurement,
+  the second was green, the third was the portal, the fourth put the default
+  build back.
+* **The store's credentials were never read, erased or overwritten**, and no
+  SSID, BSSID or credential appears anywhere in this branch.
