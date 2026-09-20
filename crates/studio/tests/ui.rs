@@ -636,6 +636,221 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
     studio.stop().await;
 }
 
+/// Card 151: **the seed is not a control for humans.** The number is gone from
+/// both screens - the readout in the title block and the numeric input - and
+/// what is left of it is one quiet button for a patch whose picture actually
+/// depends on it.
+#[test]
+fn the_seeds_number_is_not_on_the_page_any_more() {
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML)] {
+        for gone in [r#"id="seed""#, r#"id="ro-seed""#, r#"id="new-seed""#] {
+            assert!(!html.contains(gone), "{what} still has {gone}: the seed is not a control for humans");
+        }
+        assert!(!html.contains("<dt>Seed</dt>"), "{what} still reads the seed out in its title block");
+    }
+    // What replaced it on each screen: the Another button here, the setting's
+    // name there.
+    assert!(INDEX_HTML.contains(r#"id="another""#), "the Picture screen keeps one quiet Another button");
+    assert!(PANEL_HTML.contains(r#"id="ro-setting""#), "the Panel screen says which setting it is on instead");
+    assert!(PICTURE_JS.contains("patch.seeded"), "and the button is shown from the patch's own flag");
+    // The number itself is still reachable for somebody reproducing a frame.
+    assert!(PICTURE_JS.contains("Seed ${state.seed}"), "the tooltip still carries the number");
+}
+
+/// Card 151: the settings control heads the Parameters section, has everything
+/// the card asks for, and asks nothing of the browser that cannot be driven or
+/// styled - no `prompt()`, no `confirm()`.
+#[test]
+fn the_settings_control_heads_the_parameters_it_holds() {
+    for id in [
+        "setting", "setting-list", "setting-mark", "setting-save", "setting-saveas", "setting-rename",
+        "setting-delete", "setting-revert", "setting-name", "setting-name-input", "setting-confirm",
+        "setting-confirm-yes", "setting-error",
+    ] {
+        assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "the settings control needs #{id}");
+    }
+    // At the head of the parameters, inside their section.
+    let section = INDEX_HTML.find(r#"id="sec-params""#).expect("the parameters section");
+    let control = INDEX_HTML.find(r#"id="setting""#).expect("the settings control");
+    let params = INDEX_HTML.find(r#"id="params""#).expect("the parameters themselves");
+    assert!(section < control && control < params, "the control belongs between the heading and the parameters");
+
+    // Inline, both of them: these two dialogs cannot be driven by the browser
+    // tooling, cannot be styled, and stop the page. (The Panel screen still
+    // uses `window.confirm` for rename / reboot / forget - card 198's code,
+    // and card 159's to fix. This is the rule for the Picture screen, where
+    // card 151 put the control it is about.)
+    for bad in ["prompt(", "confirm("] {
+        for (what, js) in [("common.js", COMMON_JS), ("picture.js", PICTURE_JS)] {
+            assert!(!js.contains(bad), "{what} must not use {bad}): the card asks for it inline");
+        }
+    }
+    // "Reset" became "load Default", so the button is gone and the list has it.
+    assert!(!INDEX_HTML.contains(r#"id="reset-params""#), "Reset is loading Default now");
+    assert!(STYLE_CSS.contains(".setting__actions"), "the control has to look like part of the page");
+}
+
+/// And the page's one hard-coded name is the server's own: `Default` is
+/// synthesised rather than stored, so the two have to agree on how it is
+/// spelled. Same for how long a name may be.
+#[test]
+fn the_page_and_the_server_agree_about_default_and_about_names() {
+    assert!(
+        PICTURE_JS.contains(&format!("const DEFAULT_SETTING = '{}'", screeny_studio::state::DEFAULT_SETTING)),
+        "the page's name for the patch's own setting must be the server's"
+    );
+    assert!(
+        INDEX_HTML.contains(&format!(r#"maxlength="{}""#, screeny_studio::state::MAX_NAME_CHARS)),
+        "the name box must stop where the server does"
+    );
+}
+
+/// The whole of it over the API: save, load, modified, rename, delete - and the
+/// list, the name and the mark travelling with the state, so no browser needs a
+/// second read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_setting_is_saved_loaded_and_marked_over_the_api() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.status, 200);
+    let state = post(at, "/api/v1/set_param", r#"{"id":"count","value":8}"#).await.json();
+    assert_eq!(state["setting"], "Default", "everything starts on the patch's own setting");
+    assert_eq!(state["settings"], serde_json::json!([]));
+    assert_eq!(state["modified"], true, "and a tuned patch is not it any more");
+
+    let saved = post(at, "/api/v1/settings/save", r#"{"name":"  Lava  "}"#).await.json();
+    assert_eq!(saved["setting"], "Lava", "trimmed");
+    assert_eq!(saved["settings"], serde_json::json!(["Lava"]), "the list comes with the state");
+    assert_eq!(saved["modified"], false);
+
+    // A second setting, then back to the first: one change, and the whole
+    // working copy moves with it.
+    assert_eq!(post(at, "/api/v1/set_param", r#"{"id":"count","value":3}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":0.25,"fps":30}"#).await.status, 200);
+    let ink = post(at, "/api/v1/settings/save", r#"{"name":"Slow ink"}"#).await.json();
+    assert_eq!(ink["settings"], serde_json::json!(["Lava", "Slow ink"]));
+
+    let back = post(at, "/api/v1/settings/load", r#"{"name":"Lava"}"#).await.json();
+    assert_eq!(back["params"]["count"], 8.0, "the parameters came back");
+    assert_eq!(back["speed"], 1.0, "and so did the speed, which is part of a setting");
+    assert_eq!(back["setting"], "Lava");
+    assert_eq!(back["modified"], false);
+
+    // Move one thing: the mark, and nothing else, changes.
+    let moved = post(at, "/api/v1/set_param", r#"{"id":"count","value":5}"#).await.json();
+    assert_eq!(moved["setting"], "Lava");
+    assert_eq!(moved["modified"], true);
+    // Revert is loading the same name again.
+    let reverted = post(at, "/api/v1/settings/load", r#"{"name":"Lava"}"#).await.json();
+    assert_eq!(reverted["params"]["count"], 8.0);
+    assert_eq!(reverted["modified"], false);
+
+    // Rename follows the working copy; delete leaves it playing.
+    let renamed = post(at, "/api/v1/settings/rename", r#"{"to":"Lava lamp"}"#).await.json();
+    assert_eq!(renamed["setting"], "Lava lamp");
+    assert_eq!(renamed["settings"], serde_json::json!(["Lava lamp", "Slow ink"]));
+    assert_eq!(renamed["modified"], false);
+
+    let deleted = post(at, "/api/v1/settings/delete", r#"{}"#).await.json();
+    assert_eq!(deleted["setting"], "Default", "the name it came from is gone");
+    assert_eq!(deleted["params"]["count"], 8.0, "what is playing did not change");
+    assert_eq!(deleted["modified"], true, "which is honestly not Default");
+    assert_eq!(deleted["settings"], serde_json::json!(["Slow ink"]));
+
+    // Loading Default is what "Reset" became.
+    let default = post(at, "/api/v1/settings/load", r#"{"name":"Default"}"#).await.json();
+    assert_eq!(default["modified"], false);
+    assert_eq!(default["speed"], 1.0);
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let count = boot["patches"]
+        .as_array()
+        .expect("patches")
+        .iter()
+        .find(|p| p["id"] == "metaballs")
+        .and_then(|p| p["params"].as_array().cloned())
+        .expect("metaballs")
+        .into_iter()
+        .find(|p| p["id"] == "count")
+        .expect("count");
+    assert_eq!(default["params"]["count"], count["default"], "Default is the patch's own defaults");
+
+    // Settings belong to the patch, not to the panel: another patch has its own
+    // (none), and coming back finds them again.
+    let other = post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.json();
+    assert_eq!(other["settings"], serde_json::json!([]), "a setting belongs to its patch");
+    let again = post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.json();
+    assert_eq!(again["settings"], serde_json::json!(["Slow ink"]));
+    studio.stop().await;
+}
+
+/// Every refusal is a 400 with a sentence a person can read, because the page
+/// puts it straight on the line beside the control.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_setting_that_cannot_be_saved_says_why_in_words() {
+    let studio = studio().await;
+    let at = studio.addr;
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
+    post(at, "/api/v1/settings/save", r#"{"name":"Lava"}"#).await;
+
+    let long = "x".repeat(screeny_studio::state::MAX_NAME_CHARS + 1);
+    for (body, expect) in [
+        (r#"{"name":""}"#, "cannot be written over"),      // Save on Default
+        (r#"{"name":"   "}"#, "cannot be written over"),   // ...and a name of spaces is no name
+        (r#"{"name":"Default"}"#, "patch's own setting"),
+        (r#"{"name":"lava"}"#, "already a setting called `Lava`"),
+        (&format!(r#"{{"name":"{long}"}}"#), "at most 40 characters"),
+    ] {
+        // Every one of these is asked while the working copy is on `Lava`...
+        post(at, "/api/v1/settings/load", r#"{"name":"Lava"}"#).await;
+        // ...except the two that are about Save-on-Default, which need Default.
+        if expect == "cannot be written over" {
+            post(at, "/api/v1/settings/load", r#"{"name":"Default"}"#).await;
+        }
+        let r = post(at, "/api/v1/settings/save", body).await;
+        assert_eq!(r.status, 400, "{body} should be refused, not accepted");
+        let said = r.json()["error"].as_str().unwrap_or_default().to_string();
+        assert!(said.contains(expect), "{body} said `{said}`, which does not mention {expect}");
+        assert!(said.ends_with('.'), "a refusal is a sentence: `{said}`");
+    }
+
+    // And the ones that are about a setting that is not there.
+    for (route, body) in [
+        ("settings/load", r#"{"name":"Nope"}"#),
+        ("settings/rename", r#"{"from":"Nope","to":"Fine"}"#),
+        ("settings/delete", r#"{"name":"Nope"}"#),
+    ] {
+        let r = post(at, &format!("/api/v1/{route}"), body).await;
+        assert_eq!(r.status, 400, "{route}");
+        assert!(r.json()["error"].as_str().unwrap_or_default().contains("Nope"), "{route}: {}", r.json());
+    }
+    // Default is nobody's to rename or delete, whatever it is called.
+    for body in [r#"{"from":"default","to":"Mine"}"#] {
+        assert_eq!(post(at, "/api/v1/settings/rename", body).await.status, 400);
+    }
+    studio.stop().await;
+}
+
+/// Card 151: `bootstrap` says, per patch, whether "another one like this" means
+/// anything - and it is the patch's own answer, not a list the page keeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_says_which_patches_are_seeded() {
+    let studio = studio().await;
+    let boot = get(studio.addr, "/api/v1/bootstrap").await.json();
+    let patches = boot["patches"].as_array().expect("a list of patches");
+    assert!(patches.iter().all(|p| p["seeded"].is_boolean()), "every patch answers: {boot}");
+    for p in patches {
+        let id = p["id"].as_str().expect("an id");
+        let def = screeny_art::patch::find(id).expect("a patch this build has");
+        assert_eq!(p["seeded"], def.seeded, "{id}");
+    }
+    // The two the card names, so that a change of heart has to be deliberate.
+    let seeded = |id: &str| patches.iter().find(|p| p["id"] == id).unwrap_or_else(|| panic!("{id}"))["seeded"].clone();
+    assert_eq!(seeded("plasma"), true, "a new seed is a different plasma");
+    assert_eq!(seeded("testcard"), false, "the test card ignores its seed");
+    assert_eq!(seeded("clocks-numerals"), false, "the clocks offer better words of their own");
+}
+
 /// Card 170's layout requirement, as far as a text file can carry it: the
 /// two-column bench is behind a breakpoint, so at every narrower width the
 /// page is an ordinary scrolling column and the picture cannot overlap the

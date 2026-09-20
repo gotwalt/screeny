@@ -195,3 +195,57 @@ realistic v4 file (dummy device names) -> v5 with the speed carried and the back
 for byte, a v5 file that does **not** run the migration again, v1 all the way up in one
 start, a hand-edited `settings` block where every way of being wrong costs that value
 alone, and a file with more than 64 settings cut to the bound.
+
+### The page (worker)
+
+`index.html`, `picture.js`, `style.css` - and two small things on the Panel screen.
+
+**The seed's number is off both screens.** The `Seed` readout in the Picture screen's
+title block and the `#seed` number box are gone; so is the Panel screen's `Seed` readout,
+which was the same opaque number in the same place and would have looked like an
+oversight. In its place the Panel screen says **which setting** the panel is on
+(`Setting: Lava, modified`), which is something a person can act on. The number is still
+in `/api/v1/status`, in `state.json`, on the API, and in the Another button's tooltip.
+
+**Another** is one quiet button in the Parameters section head, shown only when
+`patch.seeded`. The `N` key is its shortcut and goes where it goes - on a patch that is
+not seeded there is no button, and the key would rebuild the patch for nothing anybody
+could see. (The card says "the N key still works"; this is it still working, on the
+patches where it does anything.)
+
+**The settings control** heads the Parameters section, above the sliders it holds:
+
+```
+ [ Default            v ]  MODIFIED
+ [ Save ][ Save as… ][ Rename ][ Delete ][ Revert ]
+ Save as  [ Lava            ] [ Keep ] Cancel        <- inline, only while naming
+ Delete "Lava"?  [ Delete ] Keep it                  <- inline, only while confirming
+ There is already a setting called `Lava`.           <- inline, beside the control
+```
+
+- The list is `Default` and then the patch's own settings; **picking one loads it**, which
+  is what the old "Reset" button became (Default is a load like any other).
+- On Default, `Save` *is* `Save as…` (there is nothing to write over), and Rename and
+  Delete are disabled - said by shape rather than by refusing after the fact. `Revert` is
+  disabled when there is nothing to revert.
+- No `prompt()` and no `confirm()`: a name is typed inline (Escape or Cancel closes it), a
+  delete is confirmed inline. `tests/ui.rs` holds the Picture screen to that. The Panel
+  screen still uses `window.confirm` for rename / reboot / forget - card 198's code, left
+  alone here and written up as card 159.
+- Refusals land on a line **beside the control**, not on the shared notice line at the
+  other end of the page: they are about the name just typed.
+- Every action is one POST whose answer is the whole state, which is also broadcast, so a
+  second browser sees a save, a load, a rename or a delete at once with no extra read.
+
+`tests/ui.rs`: the seed's number is gone from both screens, the control's ids all exist
+and sit between the heading and `#params`, no `prompt`/`confirm` on the Picture screen,
+the page's `'Default'` and its `maxlength` are the server's `DEFAULT_SETTING` and
+`MAX_NAME_CHARS` (one spelling, one bound), the whole save/load/modified/rename/delete
+sequence over the API, every refusal a 400 whose sentence ends in a full stop, and
+`bootstrap` carrying each patch's own `seeded`.
+
+One existing test had to move: `the_routes_a_piece_had_still_answer` (card 150) asserted a
+reply has no `settings` key at all. Card 150 freed that word *for this card*, so the claim
+is now "`settings` is the patch's named settings, a list of names" - still never the
+output block under its old name. Two in `tests/memory.rs` hard-coded `version == 4`; they
+read `state::SCHEMA_VERSION` now.

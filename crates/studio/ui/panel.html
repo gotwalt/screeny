@@ -18,7 +18,11 @@
            playing is said in words, because "which patch is this panel on" is
            part of knowing which panel it is. -->
       <div><dt>Showing</dt><dd id="ro-playing">–</dd></div>
-      <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
+      <!-- Card 151 put the setting's name here, where the seed's number used
+           to be. "Lava, modified" says which of the patch's settings this panel
+           is on, which is something a person can act on; the seed said a
+           five-digit number that meant nothing to anybody. -->
+      <div><dt>Setting</dt><dd id="ro-setting">–</dd></div>
       <div class="readouts__panel"><dt>State</dt><dd><span class="pill" id="panel-pill">–</span></dd></div>
     </dl>
   </header>
@@ -56,7 +60,7 @@
         <summary>Change which panel</summary>
         <div class="setup__body">
           <div class="found" id="found"></div>
-          <div class="row row--seed">
+          <div class="row row--fill">
             <label for="add-to">Panel</label>
             <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-4a00a4, panel.local or 192.168.7.221">
           </div>

@@ -366,7 +366,11 @@ async fn the_routes_a_piece_had_still_answer() {
     let state = r.json();
     assert_eq!(state["patch"], "plasma");
     assert!(state.get("piece").is_none(), "the reply says `patch` and only `patch`: {state}");
-    assert!(state.get("output").is_some() && state.get("settings").is_none(), "and `output`: {state}");
+    assert!(state.get("output").is_some(), "and `output`: {state}");
+    // Card 150 freed the word `settings` for card 151, which took it: in a
+    // reply it is now a patch's **named settings**, a list of names, and never
+    // the output block under its old name.
+    assert!(state["settings"].is_array(), "`settings` is the patch's named settings now: {state}");
 
     // The card's own acceptance line: the body may name the patch `piece`.
     let r = post(at, "/api/v1/set_piece", r#"{"piece":"metaballs"}"#).await;
