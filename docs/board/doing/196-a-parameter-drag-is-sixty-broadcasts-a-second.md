@@ -56,3 +56,39 @@ number of messages a second; a single change still reaches it immediately; the
 existing "two browsers see each other's changes" test is untouched.
 
 ## Log
+
+### The measurement, before anything was changed (worker-196)
+
+`crates/studio/tests/pacing.rs`: a studio on an ephemeral loopback port, no
+panel and no discovery, two WebSocket clients (`dragger` and `watcher`) both
+asking `fps=0` so that what is weighed is state and the half-second heartbeat
+and nothing else. `dragger` then posts `set_param hue` at 60 Hz for three
+seconds with its own `X-Studio-Client` id, exactly as a slider under a mouse
+does.
+
+| | to the second browser |
+|---|---|
+| state messages | **180 in 3 s = 60.0/s** |
+| bytes | **24 949 B/s** (416 B a message) |
+| heartbeats | 6 (unaffected) |
+| to the *dragging* browser | 0 state messages |
+
+So the card's guess is exactly right: one change in, one full `StudioState`
+out, per browser, sixty times a second, and 25 KB/s of JSON for one slider
+moving. (A real page also has frames: at card 120's default 30 fps that is
+another 186 KB/s, so the state is about an eighth of a dragging tab's traffic -
+but it is an eighth that is pure waste, and on a hidden tab, which asks for no
+frames at all, it is **all** of it: a hidden phone costs 0.5 KB/s at rest and
+25 KB/s while somebody else drags a slider, a fiftyfold jump for something
+nobody is looking at.)
+
+**`sockets.bytes_sent` does count state messages**, not only frames: it is
+incremented wherever a socket writes, so card 120's instrument serves this card
+too. Cross-checked in the same run - the server counted 75 805 B written to all
+sockets over the window against the 74 847 B the one browser received, the
+difference being the other socket's heartbeats. The numbers above are
+nevertheless measured **at the socket in the test client**, which is the
+narrower instrument: it separates state from heartbeat, which the server's
+counter does not.
+
+Verdict: worth doing, and by the card's preferred shape.
