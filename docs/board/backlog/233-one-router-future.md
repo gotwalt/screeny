@@ -1,6 +1,6 @@
 ---
 id: 233
-title: Firmware - one HTTP dispatch instead of nine nested router futures (about 7.8 KB of stack depth back)
+title: Firmware - one HTTP dispatch instead of nine nested router futures; every refusal in the API's error shape
 type: build
 hardware: yes
 depends: [227, 228]
@@ -10,15 +10,17 @@ branch:
 
 ## Goal
 
-Card 227 found where core 0's stack goes under HTTP load, and it is not a buffer: it is
-the shape of picoserve's router. `Router::new().route(..).route(..)` builds a left-nested
-`Either<..>` type, and each layer's `poll` frame holds the rest of the chain by value.
-Measured frames on the request path: 5,968 (the http task) + 800 + 5,680 + 2,192 + 1,104
-= 15.7 KB, of which **7,872 bytes are dispatch before any handler runs**. With interrupts
-landing on the same stack, that is why `stack_free` was 4-8 KB on firmware 0.4.x, and why
-the portal (card 223, ~9 KB more `.bss`) does not comfortably fit. Replace the nested
-router with a single dispatch so the depth of a request is the http task plus one handler.
-No behaviour change on the wire.
+Two things, one piece of code. (1) **Correctness**: the first device run of the HTTP
+conformance suite found refusals that bypass the API's error shape (picoserve's own
+plain-text 405) and one wrong error code; owning the dispatch fixes both and makes
+per-route body limits a table lookup. (2) **RAM**: picoserve's `Router::new().route(..)`
+builds a left-nested `Either<..>` type whose `poll` frame is 5,680 bytes - 43% of core
+0's measured high-water - and each HTTP worker's pool entry is 7,504 bytes, twice. A
+single dispatch should shrink one or both; card 223 (the portal) lands ~1.2 KB under the
+`fw-size.sh` floor without another lever, and this is the first candidate. How much it
+buys is to be **measured** (see "Card 227's correction" below - an earlier estimate of
+7.8 KB was an upper bound from summing frames that do not coexist). No other behaviour
+change on the wire.
 
 ## Context
 
