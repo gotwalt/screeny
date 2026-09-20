@@ -245,9 +245,7 @@ impl Core {
     /// a unit test has the same WiFi life a running device has.
     #[must_use]
     pub fn new(cfg: &Config) -> Self {
-        let mut boot_events = Vec::new();
-        let core = Self::new_with(cfg, &mut boot_events);
-        core
+        Self::new_with(cfg, &mut Vec::new())
     }
 
     /// As [`Core::new`], collecting the events the boot produced.

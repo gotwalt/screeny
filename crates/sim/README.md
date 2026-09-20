@@ -65,6 +65,131 @@ ways, and it is the main reason this crate has fault injection at all.
 
 `--fault-seed N` makes a lossy run repeat exactly.
 
+## The HTTP API (card 224)
+
+The simulator serves **the device's own HTTP API** - every route in
+`screeny_device_api::route::ROUTES`, with that crate's types, its error shape
+and its status codes. The firmware (card 222/223) serves the same definition
+from the same crate, so the Studio's device page and the `screeny-probe`
+conformance subcommand can be built against this with no hardware.
+
+```
+cargo run -p screeny-sim -- --headless                  # API on :8080
+cargo run -p screeny-sim -- --headless --http-port 9000
+cargo run -p screeny-sim -- --headless --no-http        # UDP only
+```
+
+Port **8080**, never 80: binding 80 needs root and nothing on this bench runs
+as root. `--http-port 0` binds an ephemeral one and the banner prints it;
+that is what `Config::for_test()` does, so tests never collide.
+
+`GET /` is a one-line placeholder that says the real page is card 222's and
+links the routes. The HTML page will be shared with the firmware rather than
+written twice.
+
+### A curl per route
+
+```
+curl -s localhost:8080/api/v1/status
+curl -s localhost:8080/api/v1/telemetry
+curl -s localhost:8080/api/v1/networks
+curl -s localhost:8080/api/v1/wifi
+
+curl -s -X POST localhost:8080/api/v1/wifi \
+     --data-urlencode 'ssid=Example-Wifi1' --data-urlencode 'psk=password9'
+
+curl -s -X POST localhost:8080/api/v1/settings \
+     -H 'content-type: application/json' \
+     -d '{"brightness":96,"idle_mode":"status","name":"Desk panel"}'
+
+curl -s -X POST localhost:8080/api/v1/firmware \
+     -H 'content-type: application/octet-stream' --data-binary @app.bin
+
+curl -s -X POST localhost:8080/api/v1/reboot \
+     -H 'content-type: application/json' -d '{"confirm":"RBOO"}'
+
+curl -s -X POST localhost:8080/api/v1/identify \
+     -H 'content-type: application/json' -d '{"duration_ms":10000}'
+```
+
+Failures are one shape, `{"error":"<code>","detail"?:"..."}`, and the HTTP
+status is a property of the code (`screeny_device_api::ErrorCode::status`).
+
+Three things the simulator does **not** pretend about:
+
+- `POST /api/v1/firmware` accepts the stream, discards it and reports
+  `written`. It runs the two of research 006's five image checks that need no
+  image parser - the `0xE9` magic and the 2 MiB slot length - and **installs
+  nothing**. The other three (chip, project name, checksum, SHA-256) are not
+  claimed.
+- `POST /api/v1/reboot` does exactly what UDP `REBOOT` does: accepted, logged,
+  not acted on. It does draw a new `boot_id`, which is the one thing a client
+  can tell a restart by; `uptime_ms` keeps climbing, because resetting it would
+  change what the simulator does on UDP.
+- `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `heap_used`,
+  `heap_size` and `store_errors` are constants. There is no flash here and no
+  stack worth measuring.
+
+### The captive-portal catch-all
+
+A request whose `Host` is not the device's own gets research 007 section 4.3's
+answer: while the portal is up, `302` to `http://192.168.4.1/` **with a
+non-empty body** (iOS needs content to pop the sheet; Android calls a
+`Content-Length <= 4` answer a failure rather than a portal); otherwise `404`.
+The rule is about the shape of the `Host` - the portal IP, any bare IP
+literal, `localhost`, `<instance>.local` - and no probe domain is named
+anywhere in the code.
+
+```
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+     -H 'Host: captive.apple.com' localhost:8080/hotspot-detect.html
+```
+
+The soft-AP side proper - DHCP, the DNS catch-all - cannot be simulated
+honestly on a host and is not attempted.
+
+## WiFi, scripted (cards 081 and 224)
+
+There is no radio, so the join outcome is chosen rather than discovered. The
+join/portal state machine itself is **`screeny_provision`'s**, the same one
+the firmware drives, so the two cannot drift.
+
+```
+cargo run -p screeny-sim -- --headless --start-in-portal
+cargo run -p screeny-sim -- --headless --wifi-result fail
+cargo run -p screeny-sim -- --headless --wifi-result slow --wifi-join-ms 500
+cargo run -p screeny-sim -- --headless --link-down
+```
+
+| flag | what it does |
+|---|---|
+| `--wifi-result ok` | every join attempt succeeds (the default) |
+| `--wifi-result fail` | every attempt fails with a wrong password: `failed` / `auth` |
+| `--wifi-result slow` | the radio never answers, so the attempt runs into the machine's own timeout: `failed` / `other` |
+| `--wifi-join-ms MS` | how long a scripted attempt takes (default 200) |
+| `--start-in-portal` | boot with an empty store, which is what a factory-fresh device is |
+| `--wifi-ssid` / `--ap-ssid` | the stored SSID, and the soft-AP's name on the portal screen and in its QR |
+| `--link-down` | start with the link down (spec section 7.3) |
+
+The boot join with `ok` completes at time zero, so the default simulator is
+`CONNECTED` from its first instant exactly as it always has been; every later
+join takes `--wifi-join-ms`.
+
+In `Portal` and `Trial` the panel shows **`screeny_provision::screen::render`'s
+own pixels**, so the window and the `--dump-dir` PNGs are what the device will
+show, down to the QR's polarity and its three-pixel lit quiet zone. With the
+link down, the idle screen says `NO NETWORK` rather than printing an address
+the device can no longer be reached at.
+
+`GET_WIFI`, the telemetry `state` byte's `PROVISIONING` overlay and
+`GET /api/v1/wifi` all read that one machine, so they cannot disagree. Both
+`SET_WIFI` over UDP and `POST /api/v1/wifi` feed it, and both reply **before**
+the radio work, as spec section 8.2 requires.
+
+**No PSK, anywhere.** Nothing in this crate stores one, no event has a field
+for one, and `tests/http_wifi.rs` greps every reply, every event's `Debug` and
+the snapshot for the posted secret.
+
 ## Discovery
 
 It advertises `_screeny._udp` as **`screeny-sim`**, never `screeny`. The real
@@ -152,19 +277,24 @@ machine; the counters and both EWMAs, in the same integer arithmetic the
 firmware will use; brightness and its cap; the panel's sRGB -> linear -> 64
 duty levels -> sRGB quantisation; round dots with a gap and a little bloom.
 
+Since card 224 it also serves the device's HTTP API and models the whole WiFi
+join/portal life through `screeny_provision` - see the two sections above.
+
 **Does not:** ghosting, refresh banding, temporal dithering (card 030), the
-panel's real primaries, or Wi-Fi. `GET_WIFI` answers a fixed SSID and
-`CONNECTED`; `SET_WIFI` and `REBOOT` are accepted, logged and deliberately not
-acted on. The PSK is never logged - spec section 8.4's invariant holds here
-too, and the `SetWifi` event has no field to put one in.
+panel's real primaries, a radio, a soft-AP (DHCP and the DNS catch-all cannot
+be simulated honestly on a host), flash, or a real restart. `REBOOT` is
+accepted, logged and deliberately not acted on beyond a new `boot_id`. The PSK
+is never stored and never logged - spec section 8.4's invariant holds here too,
+and the `SetWifi` event has no field to put one in.
 
 The window is not a photograph. It is close enough to judge dithering and thin
 lines by, which is what the generative-art brief asks a preview for.
 
 ## Tests
 
-97 of them, all on loopback and ephemeral ports, none needing mDNS or a
-display.
+129 of them, all on loopback and ephemeral ports, none needing mDNS, a
+display or a network. Every HTTP request in the suites has a five-second
+timeout and every wait is bounded.
 
 | file | what it pins |
 |---|---|
@@ -177,6 +307,8 @@ display.
 | `tests/malformed.rs` | every `Reject` variant, 4000 random datagrams on both ports, corrupt payloads at every codec's exact length |
 | `tests/faults.rs` | drop, delay and decode injection, the seed, and the frame sink |
 | `tests/cli.rs` | the built binary, headless: the stats line, the PNGs, the flags, the refusal to claim `screeny` |
+| `tests/http_routes.rs` | every row of `screeny_device_api::route::ROUTES` served and parsed back **as the API's own types**; the error shape and status per code; the route's request bound; the scan rate limit; the captive-portal catch-all against all five OS probes; `boot_id` across a reboot; the listener released by `shutdown()` |
+| `tests/http_wifi.rs` | a failed trial over HTTP and over UDP `SET_WIFI` reaching the same state with the store untouched; a successful trial committing once; a radio that never answers; `--wifi-result` changed between attempts; the button wipe; link down -> `HOLD` -> the `NO NETWORK` idle screen; the portal screen compared byte for byte with `screeny_provision`'s own render; the PSK in no reply, event or log line |
 | unit tests | the panel model's LUT, the two fonts (rendered as ASCII art so a human can read them), the idle screens and cross-fade, the LED dot profile, PNG round-tripping |
 
 The bit-exactness tests lean on `crates/proto/tests/vectors`, whose expected
@@ -190,4 +322,9 @@ independent readings of section 4 against each other.
 
 `window` is on by default and pulls in `minifb`. Without it the library is
 unchanged, the binary needs `--headless`, and the dependency tree is
-`screeny-proto`, `mdns-sd` and `png`.
+`screeny-proto`, `screeny-panel`, `screeny-receiver`, `screeny-device-api`,
+`screeny-provision`, `serde`/`serde_json`, `mdns-sd` and `png`.
+
+There is deliberately **no HTTP crate and no async runtime**: the server is
+~350 lines over `TcpListener` in `src/http.rs`. This crate is
+`crates/studio`'s dev-dependency, so whatever it links, everybody links.
