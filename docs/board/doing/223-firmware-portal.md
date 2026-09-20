@@ -4,8 +4,8 @@ title: Firmware - the setup portal: soft-AP, DHCP, DNS catch-all, the state mach
 type: build
 hardware: yes
 depends: [212, 221, 222, 226, 232, 233]
-owner:
-branch:
+owner: worker-223
+branch: card/223-firmware-portal
 ---
 
 ## Goal
