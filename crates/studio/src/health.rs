@@ -22,7 +22,7 @@
 //!    [`crate::START_GRACE`] - a render thread that died and was not replaced.
 //!
 //! A **missing graphics adapter is not one of them** (card 145). A studio with
-//! no GPU plays every CPU piece perfectly well, no restart conjures an adapter,
+//! no GPU plays every CPU patch perfectly well, no restart conjures an adapter,
 //! and the answer a person needs is a sentence on the page rather than a 503 at
 //! three in the morning. It is reported on `/api/v1/status` as `gpu` and
 //! nowhere else.
@@ -61,7 +61,7 @@ pub struct Status {
     pub state: StoreHealth,
     pub discovery: DiscoveryHealth,
     /// Card 145: the graphics adapter, or why there is none. **Never a
-    /// problem**: a studio with no GPU plays the CPU pieces perfectly well,
+    /// problem**: a studio with no GPU plays the CPU patches perfectly well,
     /// and a restart does not conjure an adapter. It is here so that a black
     /// `overland` has a reason a person can read.
     pub gpu: screeny_art::GpuStatus,
@@ -80,13 +80,13 @@ pub struct Status {
 /// The player the page is a window onto.
 ///
 /// Card 106 called this the preview engine and read it from a cached view,
-/// because a wedged piece held the engine's lock and this route had to answer
+/// because a wedged patch held the engine's lock and this route had to answer
 /// anyway. It is read straight from the player now: a player's core is owned
 /// by its own render thread and is behind no shared lock, so there is nothing
-/// left that a wedged piece could hold.
+/// left that a wedged patch could hold.
 #[derive(Serialize)]
 pub struct PreviewStatus {
-    pub piece: String,
+    pub patch: String,
     pub seed: u32,
     pub fps: f64,
     pub paused: bool,
@@ -168,7 +168,7 @@ pub fn problems(st: &AppState) -> Vec<String> {
         if let Some(why) = &s.health.gave_up {
             out.push(format!("{who} has given up: {why}"));
         } else if !s.running && !young {
-            out.push(format!("{who} should be playing `{}` and is not running", s.piece));
+            out.push(format!("{who} should be playing `{}` and is not running", s.patch));
         } else if s.health.last_tick_ago.is_some_and(|a| a > WATCHDOG.as_secs_f64() * 2.0) && !young {
             out.push(format!("{who} has not produced a frame for {:.0} s", s.health.last_tick_ago.unwrap_or(0.0)));
         }
@@ -214,7 +214,7 @@ pub fn collect(st: &AppState) -> Status {
         .unwrap_or_default();
 
     let preview = PreviewStatus {
-        piece: page.piece.clone(),
+        patch: page.patch.clone(),
         seed: page.seed,
         fps: page.fps,
         paused: page.paused,

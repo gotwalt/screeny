@@ -3,25 +3,25 @@
 //! Card 106 built one player per panel and left the design view its own
 //! engine. Card 170 deleted that engine: there is one picture, the panel shows
 //! it, and the page is a window onto it. So a player now does everything the
-//! design view used to do as well - pause, speed, restart, a piece's own
+//! design view used to do as well - pause, speed, restart, a patch's own
 //! actions - and the frames the browser draws are the same decoded datagrams
 //! the panel is being sent.
 //!
 //! A player is the thing that is meant to be forgotten. It renders on its own
 //! OS thread, sends through [`screeny::Link`] (which reconnects by itself), and
-//! survives its own piece:
+//! survives its own patch:
 //!
-//! - **a piece that panics** is caught by `catch_unwind`, logged once, and the
-//!   player restarts on a safe fallback piece;
-//! - **a piece that stalls** - a frame that never comes back - is noticed by a
+//! - **a patch that panics** is caught by `catch_unwind`, logged once, and the
+//!   player restarts on a safe fallback patch;
+//! - **a patch that stalls** - a frame that never comes back - is noticed by a
 //!   watchdog. The wedged thread is told to stop and **abandoned**, because no
 //!   thread can be killed in Rust, and a *new* core is started on the fallback.
 //!   The panel link is deliberately owned by the player rather than by the
-//!   core, so abandoning a core leaks a piece's render state and one thread and
+//!   core, so abandoning a core leaks a patch's render state and one thread and
 //!   never a socket, a link thread or the device itself. The core is behind no
-//!   shared lock at all, which is why a wedged piece cannot take `/healthz` or
+//!   shared lock at all, which is why a wedged patch cannot take `/healthz` or
 //!   `/api/v1/status` with it (card 143, closed by construction);
-//! - **a piece that does either repeatedly** is refused: after
+//! - **a patch that does either repeatedly** is refused: after
 //!   [`MAX_FAULTS`] the player stops trying, says so once, and `/healthz` goes
 //!   503. A restart loop is worse than a stopped player.
 //!
@@ -38,9 +38,11 @@
 //! watching, and at [`IDLE_FPS`] otherwise: a panel that is unplugged for a
 //! month, with nobody looking, should not cost a core for a month.
 
-use screeny_art::output::{Output, PanelStatus, SenderOutput};
-use screeny_art::piece::{local_now, Ctx, Params, Piece, PieceDef, Playing};
-use screeny_art::{Pipeline, Settings};
+// The frame-sink trait, in scope only so `SenderOutput::send` resolves. It is
+// renamed here because card 150 gave `Output` to the settings block below.
+use screeny_art::output::{Output as FrameSink, PanelStatus, SenderOutput};
+use screeny_art::patch::{local_now, Ctx, Params, Patch, PatchDef, Playing};
+use screeny_art::{Output, Pipeline};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -51,20 +53,20 @@ use crate::devices::Reach;
 use crate::page::{self, Screen, StudioState};
 use crate::state::{unix_now, StoredPlayer, UNBOUND};
 
-/// Write down what this player's current piece is set to, in the studio's one
-/// settings memory. An unknown piece has no specs to compare against, so its
-/// entry is left exactly as the file had it (card 165: "unknown piece id ->
+/// Write down what this player's current patch is set to, in the studio's one
+/// patch memory. An unknown patch has no specs to compare against, so its
+/// entry is left exactly as the file had it (card 165: "unknown patch id ->
 /// entry ignored, kept in the file").
 fn remember_current(cfg: &StoredPlayer, memory: &crate::state::SharedMemory, faults: bool) {
-    if let Some(def) = find_piece(&cfg.piece, faults) {
+    if let Some(def) = find_patch(&cfg.patch, faults) {
         memory.remember(def, &cfg.params, cfg.seed);
     }
 }
 
-/// Put `cfg` on `def`, restoring whatever that piece was last left set to -
+/// Put `cfg` on `def`, restoring whatever that patch was last left set to -
 /// here, or on another panel. One memory, one answer.
-fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, memory: &crate::state::SharedMemory, device: &str) {
-    cfg.piece = def.id.to_string();
+fn recall_into(cfg: &mut StoredPlayer, def: &'static PatchDef, memory: &crate::state::SharedMemory, device: &str) {
+    cfg.patch = def.id.to_string();
     let (params, seed) = memory.recall(def, &format!("panel {}", label(device)));
     cfg.params = params;
     if let Some(seed) = seed {
@@ -73,7 +75,7 @@ fn recall_into(cfg: &mut StoredPlayer, def: &'static PieceDef, memory: &crate::s
 }
 
 /// How long one frame may take before the player is treated as wedged.
-/// Generous: a cold GPU piece's first frame is not a fault.
+/// Generous: a cold GPU patch's first frame is not a fault.
 pub const WATCHDOG: Duration = Duration::from_secs(5);
 /// Faults - panics or stalls - before a player gives up rather than looping.
 pub const MAX_FAULTS: u32 = 3;
@@ -84,35 +86,35 @@ pub const IDLE_FPS: f64 = 5.0;
 /// Frames per second a player may be asked for.
 pub const MIN_FPS: f64 = 1.0;
 pub const MAX_FPS: f64 = 60.0;
-/// How fast a piece may be played. Card 105's clamp, unchanged.
+/// How fast a patch may be played. Card 105's clamp, unchanged.
 pub const MAX_SPEED: f64 = 8.0;
 
-// ------------------------------------------------------------ the pieces ---
+// ------------------------------------------------------------ the patches ---
 
 /// How long `fault-stall` stops returning for. Comfortably past the watchdog
 /// and past `/healthz`'s patience, and then over.
 pub const STALL_FOR: Duration = Duration::from_secs(30);
 
-/// Pieces that misbehave on purpose, for the containment tests.
+/// Patches that misbehave on purpose, for the containment tests.
 ///
-/// **Not in `screeny_art::pieces::ALL`** and not offered by `/api/v1/bootstrap`
-/// unless the studio was started with fault pieces enabled, which only a test
-/// and `SCREENY_STUDIO_FAULTS=1` do. They exist so that "a piece that panics is
+/// **Not in `screeny_art::patches::ALL`** and not offered by `/api/v1/bootstrap`
+/// unless the studio was started with fault patches enabled, which only a test
+/// and `SCREENY_STUDIO_FAULTS=1` do. They exist so that "a patch that panics is
 /// contained" can be a test rather than a claim.
-pub static FAULT_PIECES: &[PieceDef] = &[
-    PieceDef {
+pub static FAULT_PATCHES: &[PatchDef] = &[
+    PatchDef {
         id: "fault-panic",
         name: "Fault: panic",
         blurb: "Panics on its fourth frame. For the containment tests only.",
         params: &[],
-        make: |_| Box::new(FaultPiece { frames: 0, kind: Fault::Panic }),
+        make: |_| Box::new(FaultPatch { frames: 0, kind: Fault::Panic }),
     },
-    PieceDef {
+    PatchDef {
         id: "fault-stall",
         name: "Fault: stall",
         blurb: "Stops returning frames on its fourth. For the containment tests only.",
         params: &[],
-        make: |_| Box::new(FaultPiece { frames: 0, kind: Fault::Stall }),
+        make: |_| Box::new(FaultPatch { frames: 0, kind: Fault::Stall }),
     },
 ];
 
@@ -121,17 +123,17 @@ enum Fault {
     Stall,
 }
 
-struct FaultPiece {
+struct FaultPatch {
     frames: u32,
     kind: Fault,
 }
 
-impl Piece for FaultPiece {
+impl Patch for FaultPatch {
     fn render(&mut self, _ctx: &Ctx) -> screeny_art::Frame {
         self.frames += 1;
         if self.frames >= 4 {
             match self.kind {
-                Fault::Panic => panic!("fault-panic: this piece panics on purpose"),
+                Fault::Panic => panic!("fault-panic: this patch panics on purpose"),
                 // Long enough to be a stall by any measure (the watchdog is
                 // 5 s), short enough that an abandoned thread eventually goes
                 // away even in a test that is itself stuck.
@@ -142,26 +144,26 @@ impl Piece for FaultPiece {
     }
 }
 
-/// Find a piece by id, including the fault pieces when they are enabled.
+/// Find a patch by id, including the fault patches when they are enabled.
 #[must_use]
-pub fn find_piece(id: &str, faults: bool) -> Option<&'static PieceDef> {
-    screeny_art::piece::find(id).or_else(|| faults.then(|| FAULT_PIECES.iter().find(|d| d.id == id)).flatten())
+pub fn find_patch(id: &str, faults: bool) -> Option<&'static PatchDef> {
+    screeny_art::patch::find(id).or_else(|| faults.then(|| FAULT_PATCHES.iter().find(|d| d.id == id)).flatten())
 }
 
-/// A piece to fall back to when the chosen one cannot be run.
+/// A patch to fall back to when the chosen one cannot be run.
 ///
 /// CPU only and gentle on the panel, in a fixed order so the choice is
-/// predictable in a log. `avoid` is the piece that just failed.
+/// predictable in a log. `avoid` is the patch that just failed.
 #[must_use]
-pub fn fallback_piece(avoid: &str) -> &'static PieceDef {
+pub fn fallback_patch(avoid: &str) -> &'static PatchDef {
     for id in ["plasma", "metaballs", "clocks-numerals"] {
         if id != avoid {
-            if let Some(d) = screeny_art::piece::find(id) {
+            if let Some(d) = screeny_art::patch::find(id) {
                 return d;
             }
         }
     }
-    screeny_art::pieces::ALL.iter().find(|d| d.id != avoid).unwrap_or(&screeny_art::pieces::ALL[0])
+    screeny_art::patches::ALL.iter().find(|d| d.id != avoid).unwrap_or(&screeny_art::patches::ALL[0])
 }
 
 /// A device id for a log line. The unbound player has none.
@@ -180,19 +182,19 @@ fn label(device: &str) -> &str {
 pub struct PlayerHealth {
     /// Frames rendered since the process started, across cores.
     pub ticks: u64,
-    /// Pieces that panicked mid-render.
+    /// Patches that panicked mid-render.
     pub panics: u64,
     /// Frames that never came back, caught by the watchdog.
     pub stalls: u64,
     /// Core threads started after the first: the count of recoveries. Since
-    /// card 170 a piece change does *not* start one, so this counts faults.
+    /// card 170 a patch change does *not* start one, so this counts faults.
     pub restarts: u64,
     /// Wedged threads still out there. They go away when (if) their frame
-    /// returns; each one is a piece's render state, never a socket or a link.
+    /// returns; each one is a patch's render state, never a socket or a link.
     pub abandoned: u64,
-    /// The piece the player was asked for but cannot run, if it fell back.
+    /// The patch the player was asked for but cannot run, if it fell back.
     pub fell_back_from: Option<String>,
-    /// Pieces this player refuses to load again until a human says otherwise.
+    /// Patches this player refuses to load again until a human says otherwise.
     pub refused: Vec<String>,
     /// Set when the player has given up: [`MAX_FAULTS`] faults in a row. The
     /// one player condition that makes the server unhealthy.
@@ -238,23 +240,23 @@ pub struct PlayerStatus {
     /// Panel output: false means the link is released and the panel is on its
     /// own idle screen. The player keeps rendering either way.
     pub on: bool,
-    pub piece: String,
-    pub piece_name: String,
+    pub patch: String,
+    pub patch_name: String,
     pub seed: u32,
-    /// Only what has been set away from the piece's defaults.
+    /// Only what has been set away from the patch's defaults.
     pub params: BTreeMap<String, f32>,
     pub fps: f64,
     pub paused: bool,
     pub speed: f64,
     pub brightness: Option<u8>,
-    pub settings: Settings,
+    pub output: Output,
     /// True when a core thread is alive and ticking.
     pub running: bool,
     /// True when this is the player the page is a window onto.
     pub focused: bool,
     /// The rate the render loop is actually achieving.
     pub fps_measured: f32,
-    /// What a composing piece says it is performing.
+    /// What a composing patch says it is performing.
     pub playing: Option<Playing>,
     pub health: PlayerHealth,
     /// The link, or `None` when panel output is off.
@@ -263,10 +265,10 @@ pub struct PlayerStatus {
 
 // ----------------------------------------------------------------- a core ---
 
-/// The render state of one piece. Thrown away whole when it misbehaves.
+/// The render state of one patch. Thrown away whole when it misbehaves.
 struct Core {
-    def: &'static PieceDef,
-    piece: Box<dyn Piece>,
+    def: &'static PatchDef,
+    patch: Box<dyn Patch>,
     params: Params,
     pipeline: Pipeline,
     seed: u32,
@@ -276,25 +278,25 @@ struct Core {
 }
 
 impl Core {
-    /// One frame: the piece, the pipeline, and what the page is shown.
+    /// One frame: the patch, the pipeline, and what the page is shown.
     ///
     /// `paused` and `speed` are card 105's, moved here with the rest of the
-    /// design view: the piece's clock is scaled, the pipeline's is not,
+    /// design view: the patch's clock is scaled, the pipeline's is not,
     /// because the limiter measures wall-clock rise.
-    fn tick(&mut self, paused: bool, speed: f64) -> screeny_art::pipeline::Output {
+    fn tick(&mut self, paused: bool, speed: f64) -> screeny_art::pipeline::Processed {
         let now = Instant::now();
         let wall = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         let dt = if paused { 0.0 } else { wall * speed };
         self.t += dt;
-        let frame = self.piece.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
+        let frame = self.patch.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
         if wall > 0.0 {
             self.fps += (1.0 / wall as f32 - self.fps) * 0.1;
         }
         self.pipeline.process(frame, wall)
     }
 
-    /// The piece's parameters, as the configuration now says.
+    /// The patch's parameters, as the configuration now says.
     fn reload_params(&mut self, cfg: &StoredPlayer) {
         self.params = Params::defaults(self.def.params);
         for (id, v) in &cfg.params {
@@ -302,9 +304,9 @@ impl Core {
         }
     }
 
-    /// Build the piece again from its seed and start its clock over.
+    /// Build the patch again from its seed and start its clock over.
     fn restart(&mut self) {
-        self.piece = (self.def.make)(u64::from(self.seed));
+        self.patch = (self.def.make)(u64::from(self.seed));
         self.pipeline.reset();
         self.t = 0.0;
     }
@@ -324,17 +326,17 @@ struct CoreHandle {
     /// like a render loop that had stopped.
     ticks: Arc<AtomicU64>,
     fps: Mutex<f32>,
-    /// What is being performed, **and by which piece**.
+    /// What is being performed, **and by which patch**.
     ///
     /// The pair matters: a change is applied by the render loop before its
     /// *next* frame, so for up to one frame period the configuration says one
-    /// piece and the core is still running another. "What is it performing"
-    /// is only true of the piece performing it, and answering with the old
-    /// piece's answer would put the wrong thing on the page.
+    /// patch and the core is still running another. "What is it performing"
+    /// is only true of the patch performing it, and answering with the old
+    /// patch's answer would put the wrong thing on the page.
     playing: Mutex<(&'static str, Option<Playing>)>,
 }
 
-/// What a core is performing, if it is running the piece that was asked for.
+/// What a core is performing, if it is running the patch that was asked for.
 fn performing(handle: &CoreHandle, want: &str) -> Option<Playing> {
     let slot = handle.playing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     (slot.0 == want).then(|| slot.1.clone()).flatten()
@@ -353,21 +355,21 @@ pub struct BrightnessJob {
 /// the parameter map per frame rather than sixty thread restarts.
 #[derive(Default)]
 struct Pending {
-    /// The piece or the seed changed: a fresh core.
+    /// The patch or the seed changed: a fresh core.
     rebuild: bool,
     /// Re-read the parameters into the running core.
     params: bool,
-    /// Re-read the pipeline settings.
-    settings: bool,
-    /// Rebuild the piece from its seed, keeping everything else.
+    /// Re-read the pipeline output.
+    output: bool,
+    /// Rebuild the patch from its seed, keeping everything else.
     restart: bool,
-    /// One action a composing piece offered (card 140).
+    /// One action a composing patch offered (card 140).
     action: Option<String>,
 }
 
 impl Pending {
     fn anything(&self) -> bool {
-        self.rebuild || self.params || self.settings || self.restart || self.action.is_some()
+        self.rebuild || self.params || self.output || self.restart || self.action.is_some()
     }
 }
 
@@ -394,7 +396,7 @@ pub struct Player {
     focused: AtomicBool,
     /// The page's one frame cell, and how many browsers are reading it.
     screen: Arc<Screen>,
-    /// The studio's one settings memory (card 165), shared with every other
+    /// The studio's one patch memory (card 165), shared with every other
     /// player.
     memory: crate::state::SharedMemory,
     /// Faults since the last good run: the brake on a restart loop.
@@ -534,13 +536,13 @@ impl Player {
         self.cfg().clone()
     }
 
-    /// What the page draws itself from: the piece, the seed, **every**
-    /// parameter at its effective value, the pipeline settings and the
+    /// What the page draws itself from: the patch, the seed, **every**
+    /// parameter at its effective value, the pipeline output and the
     /// playback state.
     #[must_use]
     pub fn state(&self) -> StudioState {
         let cfg = self.cfg().clone();
-        let params = match find_piece(&cfg.piece, self.faults) {
+        let params = match find_patch(&cfg.patch, self.faults) {
             Some(def) => {
                 let mut p = Params::defaults(def.params);
                 for (id, v) in &cfg.params {
@@ -548,15 +550,15 @@ impl Player {
                 }
                 p.iter().map(|(k, v)| (k.to_string(), v)).collect()
             }
-            // A piece this build has not got: the page shows no sliders for
+            // A patch this build has not got: the page shows no sliders for
             // it rather than inventing some.
             None => BTreeMap::new(),
         };
         StudioState {
-            piece: cfg.piece,
+            patch: cfg.patch,
             seed: cfg.seed,
             params,
-            settings: cfg.settings,
+            output: cfg.output,
             paused: cfg.paused,
             speed: cfg.speed,
             fps: cfg.fps,
@@ -574,15 +576,15 @@ impl Player {
     ///
     /// # Errors
     ///
-    /// If no piece has that id, or the current piece has no such parameter.
+    /// If no patch has that id, or the current patch has no such parameter.
     pub fn configure(self: &Arc<Self>, change: &PlayerChange) -> Result<(), String> {
         let mut want = Pending::default();
         {
             let mut cfg = self.cfg();
-            if let Some(id) = &change.piece {
-                let def = find_piece(id, self.faults).ok_or_else(|| format!("no piece called `{id}`"))?;
-                if cfg.piece != def.id {
-                    // Arrive at the new piece set up the way it was left, by
+            if let Some(id) = &change.patch {
+                let def = find_patch(id, self.faults).ok_or_else(|| format!("no patch called `{id}`"))?;
+                if cfg.patch != def.id {
+                    // Arrive at the new patch set up the way it was left, by
                     // whoever last touched it (card 165). Nothing to write down
                     // on the way out: every change went into the memory when it
                     // was made.
@@ -590,7 +592,7 @@ impl Player {
                     recall_into(&mut cfg, def, &self.memory, &device);
                     want.rebuild = true;
                 }
-                // Asking for a piece again clears its refusal: a human saying
+                // Asking for a patch again clears its refusal: a human saying
                 // "try it" outranks the brake.
                 let mut h = self.health_mut();
                 h.refused.retain(|r| r != def.id);
@@ -604,9 +606,9 @@ impl Player {
                 want.rebuild = true;
             }
             if let Some((id, value)) = &change.param {
-                let def = find_piece(&cfg.piece, self.faults);
+                let def = find_patch(&cfg.patch, self.faults);
                 let Some(spec) = def.and_then(|d| d.params.iter().find(|p| p.id == id)) else {
-                    return Err(format!("{} has no parameter `{id}`", cfg.piece));
+                    return Err(format!("{} has no parameter `{id}`", cfg.patch));
                 };
                 cfg.params.insert(id.clone(), spec.sanitise(*value));
                 remember_current(&cfg, &self.memory, self.faults);
@@ -617,7 +619,7 @@ impl Player {
             // old values straight over again.
             if change.reset_params {
                 cfg.params.clear();
-                self.memory.forget_params(&cfg.piece);
+                self.memory.forget_params(&cfg.patch);
                 want.params = true;
             }
             if let Some(fps) = change.fps {
@@ -636,9 +638,9 @@ impl Player {
             if let Some(speed) = change.speed {
                 cfg.speed = speed.clamp(0.0, MAX_SPEED);
             }
-            if let Some(s) = change.settings {
-                cfg.settings = s;
-                want.settings = true;
+            if let Some(s) = change.output {
+                cfg.output = s;
+                want.output = true;
             }
             if let Some(b) = change.brightness {
                 cfg.brightness = b;
@@ -662,7 +664,7 @@ impl Player {
             let mut p = self.pending_mut();
             p.rebuild |= want.rebuild;
             p.params |= want.params;
-            p.settings |= want.settings;
+            p.output |= want.output;
             p.restart |= want.restart;
             if want.action.is_some() {
                 // One slot: a burst of button presses is the newest one.
@@ -774,14 +776,14 @@ impl Player {
             })
         };
         if let Some(h) = wedged {
-            let piece = self.cfg().piece.clone();
+            let patch = self.cfg().patch.clone();
             h.stop.store(true, Ordering::Relaxed);
             {
                 let mut hl = self.health_mut();
                 hl.stalls += 1;
                 hl.abandoned += 1;
             }
-            self.fault(&piece, &format!("`{piece}` has not produced a frame for {WATCHDOG:?}"));
+            self.fault(&patch, &format!("`{patch}` has not produced a frame for {WATCHDOG:?}"));
             // The wedged thread is on its own now; a fresh core takes over.
             *self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         }
@@ -868,7 +870,7 @@ impl Player {
                     h.alive.load(Ordering::Relaxed),
                     h.ticks.load(Ordering::Relaxed),
                     *h.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
-                    performing(h, &cfg.piece),
+                    performing(h, &cfg.patch),
                 ),
                 None => (false, 0, 0.0, None),
             }
@@ -884,19 +886,19 @@ impl Player {
             health.last_frame_ago = slot.last_frame_unix.map(|t| unix_now().saturating_sub(t) as f64);
             slot.out.as_ref().map(SenderOutput::status)
         };
-        let name = find_piece(&cfg.piece, self.faults).map_or("", |d| d.name).to_string();
+        let name = find_patch(&cfg.patch, self.faults).map_or("", |d| d.name).to_string();
         PlayerStatus {
             device: cfg.device,
             on: cfg.on,
-            piece: cfg.piece,
-            piece_name: name,
+            patch: cfg.patch,
+            patch_name: name,
             seed: cfg.seed,
             params: cfg.params,
             fps: cfg.fps,
             paused: cfg.paused,
             speed: cfg.speed,
             brightness: cfg.brightness,
-            settings: cfg.settings,
+            output: cfg.output,
             running,
             focused: self.is_focused(),
             fps_measured,
@@ -906,13 +908,13 @@ impl Player {
         }
     }
 
-    /// What a composing piece says it is performing, from the last frame.
+    /// What a composing patch says it is performing, from the last frame.
     ///
-    /// `None` while the render loop has yet to pick up a piece change: what
-    /// the *previous* piece was performing is not an answer to this question.
+    /// `None` while the render loop has yet to pick up a patch change: what
+    /// the *previous* patch was performing is not an answer to this question.
     #[must_use]
     pub fn playing(&self) -> Option<Playing> {
-        let want = self.cfg().piece.clone();
+        let want = self.cfg().patch.clone();
         let core = self.core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         core.as_ref().and_then(|h| performing(h, &want))
     }
@@ -938,9 +940,9 @@ impl Player {
     }
 
     /// One fault: log it once, count it, and either fall back or give up.
-    fn fault(self: &Arc<Self>, piece: &str, what: &str) {
+    fn fault(self: &Arc<Self>, patch: &str, what: &str) {
         let n = self.consecutive.fetch_add(1, Ordering::Relaxed) + 1;
-        let fallback = fallback_piece(piece);
+        let fallback = fallback_patch(patch);
         let mut cfg = self.cfg();
         let mut h = self.health_mut();
         h.last_error = Some(what.to_string());
@@ -948,8 +950,8 @@ impl Player {
             let msg = format!("{what}; giving up after {n} faults");
             eprintln!("studio: player {}: {msg}", label(&cfg.device));
             h.gave_up = Some(msg);
-            if !h.refused.iter().any(|r| r == piece) {
-                h.refused.push(piece.to_string());
+            if !h.refused.iter().any(|r| r == patch) {
+                h.refused.push(patch.to_string());
             }
             // `on` is left alone: the player stays configured, just silent, so
             // that a human can see what it was meant to be playing.
@@ -957,12 +959,12 @@ impl Player {
             return;
         }
         eprintln!("studio: player {}: {what}; falling back to `{}`", label(&cfg.device), fallback.id);
-        if !h.refused.iter().any(|r| r == piece) {
-            h.refused.push(piece.to_string());
+        if !h.refused.iter().any(|r| r == patch) {
+            h.refused.push(patch.to_string());
         }
-        h.fell_back_from = Some(piece.to_string());
+        h.fell_back_from = Some(patch.to_string());
         // The fallback arrives set up the way it was last left, like any other
-        // piece change. The failing piece's memory is untouched: a fault is not
+        // patch change. The failing patch's memory is untouched: a fault is not
         // a reason to forget how somebody had it set.
         let device = cfg.device.clone();
         recall_into(&mut cfg, fallback, &self.memory, &device);
@@ -971,21 +973,21 @@ impl Player {
     /// A core on whatever the configuration says, or on the fallback when that
     /// cannot be run. Never fails: a player always has something to show.
     fn make_core(&self) -> Core {
-        let (def, seed, params_map, settings, device) = {
+        let (def, seed, params_map, output, device) = {
             let cfg = self.cfg();
-            (cfg.piece.clone(), cfg.seed, cfg.params.clone(), cfg.settings, cfg.device.clone())
+            (cfg.patch.clone(), cfg.seed, cfg.params.clone(), cfg.output, cfg.device.clone())
         };
-        // A piece that is unknown, or one this player has refused, becomes the
+        // A patch that is unknown, or one this player has refused, becomes the
         // fallback rather than a reason not to run.
         let refused = self.health_mut().refused.clone();
-        let chosen = match find_piece(&def, self.faults) {
+        let chosen = match find_patch(&def, self.faults) {
             Some(d) if !refused.contains(&def) => d,
             _ => {
-                let f = fallback_piece(&def);
-                if find_piece(&def, self.faults).is_none() {
+                let f = fallback_patch(&def);
+                if find_patch(&def, self.faults).is_none() {
                     let mut h = self.health_mut();
                     if h.fell_back_from.as_deref() != Some(def.as_str()) {
-                        eprintln!("studio: player {}: no piece called `{def}`; playing `{}`", label(&device), f.id);
+                        eprintln!("studio: player {}: no patch called `{def}`; playing `{}`", label(&device), f.id);
                     }
                     h.fell_back_from = Some(def.clone());
                 }
@@ -999,9 +1001,9 @@ impl Player {
         }
         Core {
             def: chosen,
-            piece: (chosen.make)(u64::from(seed)),
+            patch: (chosen.make)(u64::from(seed)),
             params,
-            pipeline: Pipeline::new(settings),
+            pipeline: Pipeline::new(output),
             seed,
             t: 0.0,
             last: Instant::now(),
@@ -1048,21 +1050,21 @@ impl Player {
 pub struct PlayerChange {
     /// Panel output. False releases the link; the picture carries on.
     pub on: Option<bool>,
-    pub piece: Option<String>,
+    pub patch: Option<String>,
     pub seed: Option<u32>,
     pub param: Option<(String, f32)>,
-    /// "Reset": back to the piece's defaults, and forget what was remembered
+    /// "Reset": back to the patch's defaults, and forget what was remembered
     /// for it (card 165).
     pub reset_params: bool,
     pub fps: Option<f64>,
     pub paused: Option<bool>,
     pub speed: Option<f64>,
-    pub settings: Option<Settings>,
+    pub output: Option<Output>,
     /// `Some(None)` clears the brightness policy; `Some(Some(n))` sets it.
     pub brightness: Option<Option<u8>>,
-    /// Start the piece again from its seed.
+    /// Start the patch again from its seed.
     pub restart: bool,
-    /// An action a composing piece offered (card 140).
+    /// An action a composing patch offered (card 140).
     pub act: Option<String>,
 }
 
@@ -1073,7 +1075,7 @@ pub struct PlayerChange {
 /// nothing a browser does costs a thread.
 fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
     let mut core = core;
-    let mut piece_id = core.def.id.to_string();
+    let mut patch_id = core.def.id.to_string();
     let mut next = Instant::now();
     let mut limits_at = Instant::now() - Duration::from_secs(10);
     let mut panicked = false;
@@ -1087,25 +1089,25 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         };
 
         // Apply whatever has been asked for since the last frame, then render.
-        // The piece is the only code in here that can panic - `act` as much as
+        // The patch is the only code in here that can panic - `act` as much as
         // `render` - so both are inside the same `catch_unwind`, which is what
-        // keeps one bad piece from taking the process, and the panel, with it.
+        // keeps one bad patch from taking the process, and the panel, with it.
         let want = player.take_pending();
         if want.rebuild {
             core = player.make_core();
-            piece_id = core.def.id.to_string();
+            patch_id = core.def.id.to_string();
         }
         // Read the configuration once, and only when something needs it: this
         // runs sixty times a second.
-        let reconf = (want.params || want.settings).then(|| player.stored());
+        let reconf = (want.params || want.output).then(|| player.stored());
         let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if !want.rebuild {
                 if let Some(cfg) = &reconf {
                     if want.params {
                         core.reload_params(cfg);
                     }
-                    if want.settings {
-                        core.pipeline.settings = cfg.settings;
+                    if want.output {
+                        core.pipeline.output = cfg.output;
                     }
                 }
                 if want.restart {
@@ -1113,7 +1115,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
                 }
             }
             if let Some(action) = &want.action {
-                core.piece.act(action);
+                core.patch.act(action);
             }
             core.tick(paused, speed)
         }));
@@ -1124,7 +1126,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         handle.ticks.fetch_add(1, Ordering::Relaxed);
         *handle.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = core.fps;
         if let Ok(mut p) = handle.playing.lock() {
-            *p = (core.def.id, core.piece.playing());
+            *p = (core.def.id, core.patch.playing());
         }
 
         // The page, if this is the player it is a window onto. One slot,
@@ -1200,7 +1202,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
 
     if panicked {
         player.health_mut().panics += 1;
-        player.fault(&piece_id, &format!("`{piece_id}` panicked while rendering"));
+        player.fault(&patch_id, &format!("`{patch_id}` panicked while rendering"));
         // Only the generation that panicked may start the replacement: a core
         // that was stopped on purpose must not resurrect itself.
         let mine = {
@@ -1260,7 +1262,7 @@ pub struct Players {
     inner: Mutex<BTreeMap<String, Arc<Player>>>,
     /// Which player the page is a window onto.
     focus: Mutex<String>,
-    /// The studio's one settings memory, handed to every player made here.
+    /// The studio's one patch memory, handed to every player made here.
     memory: crate::state::SharedMemory,
     /// The page's one frame cell, likewise.
     screen: Arc<Screen>,
@@ -1272,7 +1274,7 @@ impl Players {
         Players { inner: Mutex::new(BTreeMap::new()), focus: Mutex::new(UNBOUND.to_string()), memory, screen }
     }
 
-    /// The studio's one settings memory, as handed to every player here.
+    /// The studio's one patch memory, as handed to every player here.
     #[must_use]
     pub fn memory(&self) -> crate::state::SharedMemory {
         self.memory.clone()
@@ -1389,7 +1391,7 @@ impl Players {
     /// A player moves onto a device: a panel was found and adopted, or a
     /// device told us its real id.
     ///
-    /// **Renamed in place**, not replaced. The thread, the core and the piece
+    /// **Renamed in place**, not replaced. The thread, the core and the patch
     /// carry on, which is what "a panel is adopted without the picture
     /// restarting" means. The link is left to [`Player::aim`], which rebuilds
     /// it only if what it is pointed at has actually changed.
@@ -1439,37 +1441,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_fault_pieces_are_not_in_the_normal_list() {
-        assert!(screeny_art::piece::find("fault-panic").is_none());
-        assert!(screeny_art::piece::find("fault-stall").is_none());
-        assert!(find_piece("fault-panic", false).is_none());
-        assert!(find_piece("fault-panic", true).is_some());
-        assert!(find_piece("plasma", false).is_some());
+    fn the_fault_patches_are_not_in_the_normal_list() {
+        assert!(screeny_art::patch::find("fault-panic").is_none());
+        assert!(screeny_art::patch::find("fault-stall").is_none());
+        assert!(find_patch("fault-panic", false).is_none());
+        assert!(find_patch("fault-panic", true).is_some());
+        assert!(find_patch("plasma", false).is_some());
     }
 
     #[test]
-    fn the_fallback_is_never_the_piece_that_just_failed() {
-        assert_ne!(fallback_piece("plasma").id, "plasma");
-        assert_ne!(fallback_piece("metaballs").id, "metaballs");
-        assert_ne!(fallback_piece("clocks-numerals").id, "clocks-numerals");
-        assert_ne!(fallback_piece("fault-panic").id, "fault-panic");
+    fn the_fallback_is_never_the_patch_that_just_failed() {
+        assert_ne!(fallback_patch("plasma").id, "plasma");
+        assert_ne!(fallback_patch("metaballs").id, "metaballs");
+        assert_ne!(fallback_patch("clocks-numerals").id, "clocks-numerals");
+        assert_ne!(fallback_patch("fault-panic").id, "fault-panic");
     }
 
     #[test]
     fn a_player_keeps_what_it_was_configured_with() {
         let p = idle_player();
-        p.configure(&PlayerChange { piece: Some("plasma".into()), seed: Some(9), ..PlayerChange::default() })
-            .expect("a real piece");
+        p.configure(&PlayerChange { patch: Some("plasma".into()), seed: Some(9), ..PlayerChange::default() })
+            .expect("a real patch");
         let s = p.stored();
-        assert_eq!(s.piece, "plasma");
+        assert_eq!(s.patch, "plasma");
         assert_eq!(s.seed, 9);
         assert!(!s.on, "configuring must not turn panel output on");
 
-        assert!(p.configure(&PlayerChange { piece: Some("nope".into()), ..PlayerChange::default() }).is_err());
+        assert!(p.configure(&PlayerChange { patch: Some("nope".into()), ..PlayerChange::default() }).is_err());
         assert!(p
             .configure(&PlayerChange { param: Some(("nope".into(), 1.0)), ..PlayerChange::default() })
             .is_err());
-        assert_eq!(p.stored().piece, "plasma", "a rejected change must change nothing");
+        assert_eq!(p.stored().patch, "plasma", "a rejected change must change nothing");
     }
 
     #[test]
@@ -1489,11 +1491,11 @@ mod tests {
     #[test]
     fn the_page_state_carries_every_parameter() {
         let p = idle_player();
-        p.configure(&PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
         p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
-        let def = find_piece("plasma", false).expect("plasma");
+        let def = find_patch("plasma", false).expect("plasma");
         let state = p.state();
-        assert_eq!(state.params.len(), def.params.len(), "one entry per parameter of the piece");
+        assert_eq!(state.params.len(), def.params.len(), "one entry per parameter of the patch");
         assert_eq!(state.params["scale"], 2.5, "the one that was moved");
         for spec in def.params {
             if spec.id != "scale" {
@@ -1503,20 +1505,20 @@ mod tests {
         assert_eq!(p.stored().params.len(), 1, "and the file still keeps only what was moved");
     }
 
-    /// Changing a parameter must not rebuild the piece: the page's sliders are
+    /// Changing a parameter must not rebuild the patch: the page's sliders are
     /// sixty changes a second, and a rebuild would restart the animation on
     /// every one of them.
     #[test]
-    fn a_parameter_change_does_not_rebuild_the_piece() {
+    fn a_parameter_change_does_not_rebuild_the_patch() {
         let p = idle_player();
-        p.configure(&PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
         p.take_pending();
         p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
         let want = p.take_pending();
         assert!(want.params, "the running core re-reads its parameters");
-        assert!(!want.rebuild, "and the piece is not built again");
+        assert!(!want.rebuild, "and the patch is not built again");
 
-        // A seed or a piece is a different matter: those are what a piece is
+        // A seed or a patch is a different matter: those are what a patch is
         // made from, so they do rebuild it.
         p.configure(&PlayerChange { seed: Some(3), ..PlayerChange::default() }).expect("a seed");
         assert!(p.take_pending().rebuild);
@@ -1538,8 +1540,8 @@ mod tests {
         p.shutdown();
     }
 
-    /// An action a composing piece offers goes into a one-slot mailbox rather
-    /// than reaching into a running piece from another thread (card 140).
+    /// An action a composing patch offers goes into a one-slot mailbox rather
+    /// than reaching into a running patch from another thread (card 140).
     #[test]
     fn an_action_is_a_one_slot_mailbox() {
         let p = idle_player();
@@ -1550,9 +1552,9 @@ mod tests {
         assert!(p.take_pending().action.is_none(), "and it is taken, not repeated");
     }
 
-    // ------------------------- the per-piece memory (card 165) -------------------------
+    // ------------------------- the per-patch memory (card 165) -------------------------
 
-    /// A settings memory of this test's own.
+    /// A patch memory of this test's own.
     fn mem() -> crate::state::SharedMemory {
         crate::state::SharedMemory::default()
     }
@@ -1581,27 +1583,27 @@ mod tests {
         c
     }
 
-    /// The card, for a panel: tune one piece, go and tune another, come back.
+    /// The card, for a panel: tune one patch, go and tune another, come back.
     #[test]
-    fn a_panel_comes_back_to_a_piece_as_it_left_it() {
+    fn a_panel_comes_back_to_a_patch_as_it_left_it() {
         let p = idle_player();
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         p.configure(&change(PlayerChange { seed: Some(11), ..PlayerChange::default() })).expect("a seed");
         p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
 
-        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
         p.configure(&change(PlayerChange { seed: Some(22), ..PlayerChange::default() })).expect("a seed");
         p.configure(&change(PlayerChange { param: Some(("count".into(), 8.0)), ..PlayerChange::default() })).expect("count");
-        assert_eq!(p.stored().params.get("scale"), None, "the other piece's parameters do not follow it over");
+        assert_eq!(p.stored().params.get("scale"), None, "the other patch's parameters do not follow it over");
 
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
         let s = p.stored();
-        assert_eq!(s.piece, "plasma");
+        assert_eq!(s.patch, "plasma");
         assert_eq!(s.seed, 11, "and on the seed it was left on");
         assert_eq!(s.params["scale"], 2.5);
 
         // And the other one is still where it was left, too.
-        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("and back");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("and back");
         let s = p.stored();
         assert_eq!(s.seed, 22);
         assert_eq!(s.params["count"], 8.0);
@@ -1609,15 +1611,15 @@ mod tests {
 
     /// Reset means "back to the defaults and stay there".
     #[test]
-    fn reset_makes_a_panel_forget_that_piece() {
+    fn reset_makes_a_panel_forget_that_patch() {
         let p = idle_player();
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
         p.configure(&change(PlayerChange { reset_params: true, ..PlayerChange::default() })).expect("reset");
         assert!(p.stored().params.is_empty());
 
-        p.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
         assert!(p.stored().params.is_empty(), "Reset means the old value does not come back on the next switch");
     }
 
@@ -1630,14 +1632,14 @@ mod tests {
         let a = player_on("a", memory.clone());
         let b = player_on("b", memory);
         for p in [&a, &b] {
-            p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+            p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         }
         a.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
 
         // b is already on plasma, so it does not move until it is asked for a
-        // piece again - but when it is, it gets what a set.
-        b.configure(&change(PlayerChange { piece: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-        b.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        // patch again - but when it is, it gets what a set.
+        b.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
+        b.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
         assert_eq!(b.stored().params["scale"], 2.5, "one memory, one answer");
     }
 
@@ -1646,10 +1648,10 @@ mod tests {
     /// `clocks-numerals` is the live version of the middle row.
     #[test]
     fn a_remembered_value_this_build_cannot_use_is_corrected() {
-        let cfg = StoredPlayer { device: "abc".into(), on: false, piece: "metaballs".into(), ..StoredPlayer::default() };
+        let cfg = StoredPlayer { device: "abc".into(), on: false, patch: "metaballs".into(), ..StoredPlayer::default() };
         let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
             "plasma".to_string(),
-            crate::state::PieceMemory {
+            crate::state::PatchMemory {
                 seed: Some(5),
                 params: BTreeMap::from([
                     ("scale".to_string(), 2.5),   // fine
@@ -1659,7 +1661,7 @@ mod tests {
             },
         )]));
         let p = Player::new(cfg, false, memory, Screen::new());
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         let s = p.stored();
         assert_eq!(s.seed, 5);
         assert_eq!(s.params["scale"], 2.5, "the good value survived the bad ones");
@@ -1667,17 +1669,17 @@ mod tests {
         assert_eq!(s.params["drift"], 2.0, "clamped to this build's range, as the slider would");
     }
 
-    /// An entry for a piece this build has never heard of is kept, not thrown
-    /// away: a piece that comes back in a later release gets its settings back.
+    /// An entry for a patch this build has never heard of is kept, not thrown
+    /// away: a patch that comes back in a later release gets its memory back.
     #[test]
-    fn a_memory_for_a_piece_that_is_not_here_is_kept() {
+    fn a_memory_for_a_patch_that_is_not_here_is_kept() {
         let cfg = StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() };
         let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
             "from-the-future".to_string(),
-            crate::state::PieceMemory { seed: Some(3), params: BTreeMap::new() },
+            crate::state::PatchMemory { seed: Some(3), params: BTreeMap::new() },
         )]));
         let p = Player::new(cfg, false, memory.clone(), Screen::new());
-        p.configure(&change(PlayerChange { piece: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
         assert!(memory.knows("from-the-future"));
     }
 
@@ -1691,7 +1693,7 @@ mod tests {
     fn a_fleet_is_a_collection_and_a_rekey_carries_the_player_over() {
         let players = fleet();
         players.load(
-            StoredPlayer { device: "pending:192.0.2.7".into(), piece: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() },
+            StoredPlayer { device: "pending:192.0.2.7".into(), patch: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() },
             false,
         );
         assert_eq!(players.ids(), vec!["pending:192.0.2.7".to_string()]);
@@ -1700,7 +1702,7 @@ mod tests {
         assert_eq!(players.ids(), vec!["abc123".to_string()]);
         let p = players.get("abc123").expect("moved");
         assert!(Arc::ptr_eq(&before, &p), "the same player, renamed - not a replacement, or the picture would restart");
-        assert_eq!(p.stored().piece, "plasma");
+        assert_eq!(p.stored().patch, "plasma");
         assert_eq!(p.stored().seed, 5);
         assert_eq!(p.stored().device, "abc123");
         players.remove("abc123");
@@ -1726,14 +1728,14 @@ mod tests {
     fn adopting_a_panel_keeps_the_same_player_and_the_focus() {
         let players = fleet();
         let page = players.ensure_page(false);
-        page.configure(&change(PlayerChange { piece: Some("plasma".into()), seed: Some(42), ..PlayerChange::default() }))
+        page.configure(&change(PlayerChange { patch: Some("plasma".into()), seed: Some(42), ..PlayerChange::default() }))
             .expect("plasma");
 
         players.rekey(UNBOUND, "4a00a4");
         let now = players.page().expect("still a page");
         assert!(Arc::ptr_eq(&page, &now));
         assert_eq!(now.device(), "4a00a4");
-        assert_eq!(now.stored().piece, "plasma", "the picture did not restart");
+        assert_eq!(now.stored().patch, "plasma", "the picture did not restart");
         assert_eq!(now.stored().seed, 42);
         assert!(now.is_focused());
         assert_eq!(players.focus(), "4a00a4");

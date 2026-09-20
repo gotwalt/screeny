@@ -10,7 +10,7 @@
 //! window onto what that panel is doing - for when the panel is not within
 //! eyesight. So there is exactly one thing that renders, the player for the
 //! attached panel, and the frames the browser draws are the same decoded
-//! datagrams the panel is being sent. Changing a piece, a slider or a seed in
+//! datagrams the panel is being sent. Changing a patch, a slider or a seed in
 //! the browser changes the panel, at once.
 //!
 //! ```text
@@ -123,10 +123,10 @@ pub struct Config {
     /// panel rebooting is not a panel that has moved, and re-resolving means
     /// a new link and a lost session.
     pub stale_after: Duration,
-    /// Offer the deliberately broken pieces (`fault-panic`, `fault-stall`).
+    /// Offer the deliberately broken patches (`fault-panic`, `fault-stall`).
     /// The containment tests, and `SCREENY_STUDIO_FAULTS=1` for a human who
-    /// wants to watch it happen. Never in the normal piece list.
-    pub fault_pieces: bool,
+    /// wants to watch it happen. Never in the normal patch list.
+    pub fault_patches: bool,
 }
 
 impl Default for Config {
@@ -144,7 +144,7 @@ impl Default for Config {
             device_http_port: devhttp::DEFAULT_PORT,
             supervise_every: Duration::from_secs(1),
             stale_after: Duration::from_secs(120),
-            fault_pieces: false,
+            fault_patches: false,
         }
     }
 }
@@ -171,7 +171,7 @@ pub struct AppState {
     pub players: Arc<Players>,
     /// The state file.
     pub store: Arc<Store>,
-    /// The studio's one per-piece settings memory (card 165): what each piece
+    /// The studio's one per-patch memory (card 165): what each patch
     /// was last left set to, wherever it was left. Every panel shares it, and
     /// it is written to `state.json` and nowhere else.
     pub memory: SharedMemory,
@@ -212,7 +212,7 @@ impl AppState {
     /// The player the page is a window onto, made if the studio has none yet.
     #[must_use]
     pub fn page(&self) -> Arc<Player> {
-        self.players.ensure_page(self.cfg.fault_pieces)
+        self.players.ensure_page(self.cfg.fault_patches)
     }
 
     /// What the page is showing, which is what the panel is showing.
@@ -235,7 +235,7 @@ impl AppState {
             // Card 165. It lives here and nowhere else: the state file in
             // `SCREENY_STATE_DIR` is the volume the container keeps across a
             // rebuild, so this is what makes the memory survive a deploy.
-            pieces: self.memory.snapshot(),
+            patches: self.memory.snapshot(),
         });
     }
 
@@ -303,18 +303,18 @@ impl Studio {
         let devices = Arc::new(Registry::new());
         devices.load(saved.devices);
         devices.set_discovery_enabled(cfg.discover);
-        // One settings memory for the whole studio: every panel reads and
+        // One memory for the whole studio: every panel reads and
         // writes the same map (card 165).
-        let memory = SharedMemory::new(saved.pieces);
+        let memory = SharedMemory::new(saved.patches);
         let players = Arc::new(Players::new(memory.clone(), Screen::new()));
         for p in saved.players {
-            players.load(p, cfg.fault_pieces);
+            players.load(p, cfg.fault_patches);
         }
         if !saved.focus.is_empty() {
             players.set_focus(&saved.focus);
         }
         // There is always a picture, even before there is a panel.
-        players.ensure_page(cfg.fault_pieces);
+        players.ensure_page(cfg.fault_patches);
 
         let (stop, _) = watch::channel(false);
         let cfg = Arc::new(cfg);
@@ -438,7 +438,7 @@ async fn signalled() {
 
 /// The heartbeat: read once here however many browsers are watching.
 ///
-/// Since card 170 this cannot be held up by a wedged piece. A player's core is
+/// Since card 170 this cannot be held up by a wedged patch. A player's core is
 /// owned by its own render thread and is behind no shared lock, so "what is it
 /// performing and what is the link doing" is always answerable - which is what
 /// card 106's `try_lock` dance around the design view's engine was for, and

@@ -1,12 +1,12 @@
 //! The JSON API: everything the page can ask the studio to do.
 //!
 //! One route per command, the names unchanged since the desktop app's IPC, so
-//! `invoke('set_piece', {id})` became `POST /api/v1/set_piece {"id": ...}` and
+//! `invoke('set_patch', {id})` became `POST /api/v1/set_patch {"id": ...}` and
 //! nothing else had to move. Reads are `GET`, changes are `POST`.
 //!
 //! **Card 170 changed what these act on, not what they are.** There is no
-//! design-view engine any more: `set_piece`, `set_param`, `set_seed`,
-//! `set_settings`, `set_playback`, `piece_act` and `restart` act on the player
+//! design-view engine any more: `set_patch`, `set_param`, `set_seed`,
+//! `set_output`, `set_playback`, `patch_act` and `restart` act on the player
 //! for the attached panel, which is what the page is a window onto. So a
 //! script that spoke to the design view still works, and now it changes the
 //! panel - which is the whole point of the card.
@@ -21,8 +21,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use screeny_art::output::PanelStatus;
-use screeny_art::piece::Playing;
-use screeny_art::Settings;
+use screeny_art::patch::Playing;
+use screeny_art::Output;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ pub struct StateEvent {
     pub state: StudioState,
 }
 
-/// The half-second heartbeat: what the piece is performing and what the panel
+/// The half-second heartbeat: what the patch is performing and what the panel
 /// link is doing. Pushed rather than polled, so N browsers cost one read.
 #[derive(Clone, Serialize)]
 pub struct StatusEvent {
@@ -91,17 +91,22 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/bootstrap", get(bootstrap))
         .route("/frame", get(frame))
-        .route("/piece_playing", get(piece_playing))
+        .route("/patch_playing", get(patch_playing))
         .route("/panel_status", get(panel_status))
-        .route("/set_piece", post(set_piece))
+        .route("/set_patch", post(set_patch))
         .route("/set_param", post(set_param))
         .route("/reset_params", post(reset_params))
         .route("/set_seed", post(set_seed))
-        .route("/set_settings", post(set_settings))
+        .route("/set_output", post(set_output))
         .route("/set_playback", post(set_playback))
-        .route("/piece_act", post(piece_act))
+        .route("/patch_act", post(patch_act))
         .route("/restart", post(restart))
         .route("/set_panel", post(set_panel))
+        // ---- card 150: the names a piece went by, still answering ----
+        .route("/piece_playing", get(patch_playing))
+        .route("/set_piece", post(set_patch))
+        .route("/set_settings", post(set_output))
+        .route("/piece_act", post(patch_act))
         // ---- card 106: devices, players and health ----
         .route("/status", get(crate::health::status))
         .route("/devices", get(devices_list))
@@ -139,7 +144,7 @@ fn publish(st: &AppState, headers: &HeaderMap, player: &Arc<Player>) -> StudioSt
 
 async fn bootstrap(State(st): State<AppState>) -> Json<Bootstrap> {
     Json(Bootstrap {
-        pieces: page::pieces(st.cfg.fault_pieces),
+        patches: page::patches(st.cfg.fault_patches),
         payload_bytes: screeny_art::meter::PAYLOAD_BYTES,
         state: st.page_state(),
         gpu: screeny_art::gpu_status(),
@@ -153,7 +158,7 @@ async fn frame(State(st): State<AppState>) -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], packet.to_vec())
 }
 
-async fn piece_playing(State(st): State<AppState>) -> Json<Option<Playing>> {
+async fn patch_playing(State(st): State<AppState>) -> Json<Option<Playing>> {
     Json(st.page().playing())
 }
 
@@ -164,12 +169,16 @@ async fn panel_status(State(st): State<AppState>) -> Json<Option<PanelStatus>> {
 // ---------------- changes ----------------
 
 #[derive(Deserialize)]
-struct SetPiece {
+struct SetPatch {
+    /// The patch id. `patch` and `piece` are taken as well, because
+    /// `POST /set_piece {"piece": ...}` is what scripts written before card
+    /// 150 send.
+    #[serde(alias = "patch", alias = "piece")]
     id: String,
 }
 
-async fn set_piece(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPiece>) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { piece: Some(req.id), ..PlayerChange::default() })
+async fn set_patch(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<StudioState>> {
+    on_page(&st, &headers, &PlayerChange { patch: Some(req.id), ..PlayerChange::default() })
 }
 
 #[derive(Deserialize)]
@@ -202,12 +211,14 @@ async fn set_seed(State(st): State<AppState>, headers: HeaderMap, Json(req): Jso
 }
 
 #[derive(Deserialize)]
-struct SetSettings {
-    settings: Settings,
+struct SetOutput {
+    /// `settings` up to card 150.
+    #[serde(alias = "settings")]
+    output: Output,
 }
 
-async fn set_settings(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetSettings>) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { settings: Some(req.settings), ..PlayerChange::default() })
+async fn set_output(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
+    on_page(&st, &headers, &PlayerChange { output: Some(req.output), ..PlayerChange::default() })
 }
 
 #[derive(Deserialize)]
@@ -240,17 +251,17 @@ async fn set_playback(State(st): State<AppState>, headers: HeaderMap, Json(req):
 }
 
 #[derive(Deserialize)]
-struct PieceAct {
+struct PatchAct {
     action: String,
-    /// Which panel's piece to act on. Absent means the one on the page, which
-    /// is what a browser sends. (Card 140: a panel's composing piece can be
+    /// Which panel's patch to act on. Absent means the one on the page, which
+    /// is what a browser sends. (Card 140: a panel's composing patch can be
     /// acted on, through a one-slot mailbox its render loop drains - never by
-    /// reaching into a running piece from another thread.)
+    /// reaching into a running patch from another thread.)
     #[serde(default)]
     device: String,
 }
 
-async fn piece_act(State(st): State<AppState>, Json(req): Json<PieceAct>) -> ApiResult<Json<Option<Playing>>> {
+async fn patch_act(State(st): State<AppState>, Json(req): Json<PatchAct>) -> ApiResult<Json<Option<Playing>>> {
     let player = if req.device.is_empty() {
         st.page()
     } else {
@@ -259,7 +270,7 @@ async fn piece_act(State(st): State<AppState>, Json(req): Json<PieceAct>) -> Api
     player
         .configure(&PlayerChange { act: Some(req.action), ..PlayerChange::default() })
         .map_err(ApiError::bad_request)?;
-    // A piece's own action changes the piece, not the studio's state, so there
+    // A patch's own action changes the patch, not the studio's state, so there
     // is nothing to publish: the half-second status push carries it. What is
     // returned is what it was performing *before* the action is drained - the
     // page redraws from the next heartbeat.
@@ -309,7 +320,7 @@ struct PanelOutcome {
 ///
 /// - `{"on":false}` - the link is released with `FINAL`, the panel goes back to
 ///   its own idle screen and **stops receiving frames**, and the page carries
-///   on showing the piece.
+///   on showing the patch.
 /// - `{"on":true,"to":"screeny-4a00a4"}` - attach to that panel and drive it.
 ///   `to` may be a device id from the registry, an mDNS instance name or an
 ///   address; one that is not known yet is added, exactly as
@@ -461,13 +472,14 @@ struct SetPlayer {
     device: String,
     #[serde(default)]
     on: Option<bool>,
-    #[serde(default)]
-    piece: Option<String>,
+    /// `piece` before card 150; both are taken.
+    #[serde(default, alias = "piece")]
+    patch: Option<String>,
     #[serde(default)]
     seed: Option<u32>,
     #[serde(default)]
     param: Option<ParamChange>,
-    /// "Reset": this piece back to its defaults on this panel, and forget what
+    /// "Reset": this patch back to its defaults on this panel, and forget what
     /// was remembered for it (card 165). The page's equivalent is
     /// `POST /reset_params`.
     #[serde(default)]
@@ -478,12 +490,13 @@ struct SetPlayer {
     paused: Option<bool>,
     #[serde(default)]
     speed: Option<f64>,
-    #[serde(default)]
-    settings: Option<Settings>,
+    /// `settings` before card 150; both are taken.
+    #[serde(default, alias = "settings")]
+    output: Option<Output>,
     /// Absent leaves the policy alone; `null` clears it; a number sets it.
     #[serde(default, deserialize_with = "double_option")]
     brightness: Option<Option<u8>>,
-    /// Start the piece again from its seed.
+    /// Start the patch again from its seed.
     #[serde(default)]
     restart: bool,
 }
@@ -510,14 +523,14 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
     player
         .configure(&PlayerChange {
             on: req.on,
-            piece: req.piece,
+            patch: req.patch,
             seed: req.seed,
             param: req.param.map(|p| (p.id, p.value)),
             reset_params: req.reset_params,
             fps: req.fps,
             paused: req.paused,
             speed: req.speed,
-            settings: req.settings,
+            output: req.output,
             brightness: req.brightness,
             restart: req.restart,
             act: None,

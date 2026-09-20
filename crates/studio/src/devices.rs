@@ -906,7 +906,7 @@ impl Registry {
     ///
     /// * *same id, new address* - the same panel, somewhere else. Its address
     ///   is updated by [`Registry::set_address`], so it keeps its id, its
-    ///   player, its piece and its seed, and the next telemetry poll confirms
+    ///   player, its patch and its seed, and the next telemetry poll confirms
     ///   the new address with a `GET_INFO` of its own.
     /// * *an id nobody here knows* - not this studio's business. Discovery and
     ///   a human adding a device are how panels arrive; a probe only follows

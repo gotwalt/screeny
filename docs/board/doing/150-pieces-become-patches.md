@@ -130,3 +130,74 @@ the code.
 Left as it was, beyond the one word: line 11 still calls `crates/studio` a "Tauri v2
 desktop app for designing patches". That has been wrong since card 105 made the studio a
 server, and putting it right is not this card's business.
+
+### Area 3 - `crates/studio/src`: the server, the API and the v3 -> v4 migration (2026-09-20)
+
+About 420 "piece" hits and 120 "settings" hits across the nine source files, all read.
+Nothing here was replaced blind: a JSON key inside a string literal was masked before
+the pass and put back afterwards, because the fixtures in `state.rs` **are** old files
+and had to stay spelled the old way.
+
+**Names.** `PieceMemory` -> `PatchMemory`, `PieceInfo` -> `PatchInfo`, `SetPiece` ->
+`SetPatch`, `PieceAct` -> `PatchAct`, `FaultPiece` -> `FaultPatch`, `FAULT_PIECES` ->
+`FAULT_PATCHES`, `MAX_UNKNOWN_PIECES` -> `MAX_UNKNOWN_PATCHES`, `find_piece`/
+`fallback_piece`/`default_piece` -> `..._patch`, `Config::fault_pieces` ->
+`fault_patches`, `page::pieces()` -> `page::patches()`. Replies: `StudioState.piece`
+-> `patch` and `.settings` -> `output`, `Bootstrap.pieces` -> `patches`,
+`PlayerStatus.piece`/`piece_name`/`settings` -> `patch`/`patch_name`/`output`,
+`PreviewStatus.piece` -> `patch` on `/api/v1/status`. **Replies carry the new names
+only**, as the card asks.
+
+**State file, v3 -> v4.** `SCHEMA_VERSION` is 4. `pieces` -> `patches`, a player's
+`piece` -> `patch` and `settings` -> `output`. Every old key is still read:
+`#[serde(alias)]` on `StoredPlayer::patch`/`output`, on `LegacyPreview` and on
+`Persisted::patches`, plus `load`'s own `raw.get("patches").or(raw.get("pieces"))` -
+the memory is lifted out of the raw JSON by hand, so it needs the lookup as well as
+the alias. `note_retired_levels` now looks in `output` **or** `settings`, since either
+shape may still name card 102's retired `levels`; the sentence still quotes
+`settings.levels` (that is what the file being read calls it) and points at
+`output.panel`.
+
+Migrating **copies the file aside first** (`back_up`): `state.v3.json`, the same fixed
+name-per-version the from-the-future path already used, by `fs::copy` so the state file
+itself stays put. Best effort - a directory that cannot be written to is a line on the
+dashboard, never a refusal to start - and the `recovered` sentence says where the copy
+went.
+
+**A bug the version bump uncovered.** `migrate_to_v3` used to run for any file older
+than `SCHEMA_VERSION`. With that now 4, a **v3** file would have gone through it with an
+absent `preview` block - i.e. `LegacyPreview::default()`, which is the default patch
+with seed 0 - and its `else` branch would have written a memory entry for
+`clocks-numerals` that nobody had ever asked for. There is a `migrate` wrapper now that
+runs the v1/v2 work only for `was < 3`, and a test
+(`migrating_a_v3_file_invents_no_memory`) that fails without it.
+
+**Tests** (in `state.rs`, five new): `a_real_v3_file_migrates_to_v4_without_losing_anything`
+loads a realistic v3 fixture - a device, a player with tuned params, `focus`,
+brightness 96, `paused`/`speed`, a four-entry memory including one for a patch this
+build has never heard of - and checks every field arrives, dummy names only
+(`aa11bb` / "the shelf"); `migrating_keeps_a_copy_of_the_file_as_it_was` checks
+`state.v3.json` is byte-identical and that `recovered` names it;
+`what_is_written_after_the_migration_says_patch_and_output` checks the next save
+contains `patches`/`patch`/`output` and none of `piece`/`pieces`/`settings`, and
+reloads without migrating again; `the_old_names_are_still_read_at_v4` is the alias
+path on its own; and the migration-guard test above. Two existing assertions moved
+with the schema: `a_real_v2_file_migrates_to_v3` now expects `SCHEMA_VERSION`, and the
+round-trip test looks for `"patches"` in the written file.
+
+**API aliases.** Canonical: `POST /set_patch`, `POST /set_output`, `GET /patch_playing`,
+`POST /patch_act`. Still routed to the same handlers: `/set_piece`, `/set_settings`,
+`/piece_playing`, `/piece_act`. Bodies: `SetPatch.id` takes `patch` and `piece` as
+aliases (so the card's `curl -d '{"piece":"metaballs"}' .../set_piece` works, which it
+did not before - that route only ever read `id`), `SetOutput.output` takes `settings`,
+and `POST /player/set` takes `piece` for `patch` and `settings` for `output`.
+`set_panel` is untouched.
+
+**One more collision.** `player.rs` imports the frame-sink trait `output::Output` and
+now also needs the settings type `screeny_art::Output`; the trait is imported
+`as FrameSink` with a comment, since it is only in scope for method resolution.
+`pipeline::Output` (the per-frame result) became `pipeline::Processed` in area 1, and
+`tick` returns that.
+
+`cargo test -p screeny-studio --lib`: 62 pass. Clippy silent on the lib and the binary.
+The integration tests in `tests/` are the next area and do not build yet.

@@ -14,8 +14,8 @@ path = "src/main.rs"
 
 [features]
 default = ["gpu"]
-# The GPU pieces, through wgpu. `--no-default-features` builds a studio with
-# no graphics driver in the tree at all - the CPU pieces only - which is what
+# The GPU patches, through wgpu. `--no-default-features` builds a studio with
+# no graphics driver in the tree at all - the CPU patches only - which is what
 # to reach for on a box with no usable adapter.
 gpu = ["screeny-art/gpu"]
 

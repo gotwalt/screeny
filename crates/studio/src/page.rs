@@ -1,4 +1,4 @@
-//! What the page is told: the frame packet, the studio's state, and the piece
+//! What the page is told: the frame packet, the studio's state, and the patch
 //! list a browser draws itself from.
 //!
 //! This was `engine.rs` until card 170. There is no design-view engine any
@@ -12,7 +12,7 @@
 //! actually put up, not a copy of the framebuffer.
 
 use screeny_art::pipeline::Stats;
-use screeny_art::{pieces, Settings, N};
+use screeny_art::{patches, Output, N};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -226,7 +226,7 @@ pub struct ParamInfo {
     /// Card 163: the name of each stop, for a parameter whose values are a
     /// list rather than a range. Empty for an ordinary number, and then the
     /// page draws the slider it always did. **The value is still an `f32`**
-    /// on the wire, in the state file and in the per-piece memory; this only
+    /// on the wire, in the state file and in the per-patch memory; this only
     /// changes which control is drawn and what it says.
     pub choices: &'static [&'static str],
     /// This one is off or on. Drawn as a switch.
@@ -234,12 +234,12 @@ pub struct ParamInfo {
 }
 
 #[derive(Clone, Serialize)]
-pub struct PieceInfo {
+pub struct PatchInfo {
     pub id: &'static str,
     pub name: &'static str,
     pub blurb: &'static str,
     pub params: Vec<ParamInfo>,
-    /// Card 145: this piece cannot draw without a graphics adapter. With
+    /// Card 145: this patch cannot draw without a graphics adapter. With
     /// [`Bootstrap::gpu`] saying there is none, the page marks it unavailable
     /// rather than letting it be picked and render black.
     pub needs_gpu: bool,
@@ -249,23 +249,23 @@ pub struct PieceInfo {
 ///
 /// Unchanged in shape from card 105 apart from two additive fields, so the
 /// browser's `sync()` and every script that reads `/api/v1/bootstrap` keep
-/// working: `piece`, `seed`, `params`, `settings`, `paused`, `speed`, `fps`.
+/// working: `patch`, `seed`, `params`, `output`, `paused`, `speed`, `fps`.
 ///
-/// `params` holds **every** parameter of the piece at its effective value -
-/// the piece's defaults with whatever has been set over the top - because the
+/// `params` holds **every** parameter of the patch at its effective value -
+/// the patch's defaults with whatever has been set over the top - because the
 /// page draws one slider per parameter and reads its position from here.
 #[derive(Clone, Debug, Serialize)]
 pub struct StudioState {
-    pub piece: String,
+    pub patch: String,
     pub seed: u32,
     pub params: std::collections::BTreeMap<String, f32>,
-    pub settings: Settings,
+    pub output: Output,
     pub paused: bool,
     pub speed: f64,
     pub fps: f64,
     /// Card 170: whether the panel is being driven. False means the link is
     /// released and the panel is on its own idle screen; the page carries on
-    /// showing the piece.
+    /// showing the patch.
     pub on: bool,
     /// Which panel this is, or empty while no panel is attached.
     pub device: String,
@@ -274,26 +274,26 @@ pub struct StudioState {
 /// Everything the UI needs to draw itself once.
 #[derive(Serialize)]
 pub struct Bootstrap {
-    pub pieces: Vec<PieceInfo>,
+    pub patches: Vec<PatchInfo>,
     pub payload_bytes: u32,
     pub state: StudioState,
     /// Card 145: whether this process has a graphics adapter, so the page can
-    /// say why the GPU pieces are not available instead of showing black.
+    /// say why the GPU patches are not available instead of showing black.
     pub gpu: screeny_art::GpuStatus,
 }
 
-/// Every piece this build offers, with its parameters.
+/// Every patch this build offers, with its parameters.
 #[must_use]
-pub fn pieces(faults: bool) -> Vec<PieceInfo> {
-    let extra = if faults { crate::player::FAULT_PIECES } else { &[] };
-    pieces::ALL
+pub fn patches(faults: bool) -> Vec<PatchInfo> {
+    let extra = if faults { crate::player::FAULT_PATCHES } else { &[] };
+    patches::ALL
         .iter()
         .chain(extra.iter())
-        .map(|d| PieceInfo {
+        .map(|d| PatchInfo {
             id: d.id,
             name: d.name,
             blurb: d.blurb,
-            needs_gpu: pieces::needs_gpu(d.id),
+            needs_gpu: patches::needs_gpu(d.id),
             params: d
                 .params
                 .iter()

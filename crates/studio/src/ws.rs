@@ -6,7 +6,7 @@
 //! - binary: one frame packet, the same 52-byte header + 64x32 sRGB the
 //!   desktop app used to hand over (`engine::HEADER`);
 //! - `{"type":"state",...}`: somebody changed something;
-//! - `{"type":"status",...}`: twice a second, what the piece is performing and
+//! - `{"type":"status",...}`: twice a second, what the patch is performing and
 //!   what the panel link is doing.
 //!
 //! Nothing is queued for a browser. Frames and status live in
@@ -70,7 +70,7 @@
 //! is, so [`Gate`] does for state what [`Pace`] does for frames - with one
 //! difference that matters. A frame that is not due is **dropped**; a state
 //! change that is not due is **held**, because a state message is also how a
-//! deliberate change (a piece picked, a switch flipped) reaches the other
+//! deliberate change (a patch picked, a switch flipped) reaches the other
 //! browser and the last one must never be lost. So:
 //!
 //! - **leading edge**: a change after a quiet moment goes out at once. A single
