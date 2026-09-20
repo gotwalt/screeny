@@ -40,7 +40,7 @@
         <h2>Frame size</h2>
         <p class="meter__value"><output></output><span class="meter__of"></span></p>
         <div class="meter__bar"><i class="fill"></i><i class="tick" style="left:100%"></i></div>
-        <p class="meter__note">Estimate. The codec is not final.</p>
+        <p class="meter__note"></p>
       </div>
       <div class="meter" id="m-apl">
         <h2>Average level</h2>
@@ -117,7 +117,17 @@
         <label><input type="radio" name="dither" value="blue_noise"><span>Blue noise</span></label>
       </fieldset>
       <label class="switch"><input type="checkbox" id="panel-model"><span>Quantise to panel levels</span></label>
-      <label class="switch"><input type="checkbox" id="lossy-sim"><span>Show lossy encode above 32 colours</span></label>
+      <label class="switch"><input type="checkbox" id="codec-preview"><span>Show the frame after the real codec</span></label>
+    </section>
+
+    <section>
+      <h2>Panel</h2>
+      <label class="switch"><input type="checkbox" id="panel-send"><span>Send to panel</span></label>
+      <div class="slider">
+        <label for="panel-to">Name or address</label>
+      </div>
+      <input id="panel-to" type="text" spellcheck="false" placeholder="screeny-4a00a4 or 192.168.1.20">
+      <p class="meter__note" id="panel-note">Off. Nothing is being sent.</p>
     </section>
 
     <section>

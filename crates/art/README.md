@@ -10,8 +10,10 @@ Two crates in the repo's single workspace (`crates/`; host toolchain, not the `e
 | `crates/art` (`screeny-art`) | Library + headless binary. Pieces, panel model, dither, limiter, statistics, outputs. No GUI dependencies; this is what will run on a server. |
 | `crates/studio` (`screeny-studio`) | Tauri v2 desktop app for designing pieces. A window onto the same pipeline, drawn as LEDs. |
 
-Nothing here talks to the device, opens the serial port, or implements the wire
-protocol. Frames leave through the `Output` trait (`crates/art/src/output.rs`).
+Nothing here opens the serial port or implements the wire protocol - that is
+`crates/proto` and `crates/screeny`, and this crate calls them. Frames leave
+through the `Output` trait (`crates/art/src/output/`), of which
+[`SenderOutput`](src/output/sender.rs) is the real one.
 
 ## Run
 
@@ -22,7 +24,40 @@ cargo run -p screeny-art -- list                 # pieces and their parameters
 cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
 cargo test -p screeny-art
+
+# to a panel (needs the `sender` feature; use --release, the encoder is ~10x
+# slower in a debug build)
+cargo run --release -p screeny-art --features sender -- play plasma --to screeny-4a00a4
+cargo test --release -p screeny-art --features sender    # includes the end-to-end tests
 ```
+
+## Sending to a panel
+
+`play <piece> --to NAME|ADDR` streams a piece over UDP through
+[`screeny`](../screeny)'s `Link`. `--to` takes an mDNS instance name - preferred,
+because the link re-resolves it on every reconnect and so follows the device
+across a DHCP lease - or an `IP[:PORT]`. `--wait` starts without a panel and
+picks one up when it appears; `--seconds` bounds the run; ctrl-c sends `FINAL`
+so the panel is released at once.
+
+Three things are worth knowing before building on it:
+
+- **Indexed frames go on the wire exactly.** Up to 32 colours whatever the
+  indices, up to 256 when they compress. Pixel-exactness is checked end to end
+  against `screeny-sim` in [`tests/sender.rs`](tests/sender.rs).
+- **Render at whatever suits the piece.** The link never sleeps and never
+  bursts: it applies the device's cadence ceiling itself, so a 60 fps piece into
+  a 30 fps panel puts 30 on the wire and the device supersedes nothing. Half the
+  frames come back `Coalesced`, which is the system working.
+- **The network cannot fail a send.** A panel that reboots, moves or is off is a
+  run of counters in `PanelStatus`, not an error in the render loop.
+
+`SenderOutput` is behind the `sender` feature, so the core - pieces, pipeline,
+meter, preview - builds with no network stack at all
+(`cargo build -p screeny-art --no-default-features`). The **meter** is not
+behind a feature: `screeny-encode` and `screeny-proto` open no sockets, so the
+studio's frame statistics and preview are the real encoder's answers whether or
+not a panel is anywhere nearby.
 
 The studio needs no Node toolchain and no `tauri-cli`: the front end is three
 static files in `crates/studio/ui/`, embedded at build time. Edit them and re-run.
@@ -33,7 +68,8 @@ Studio keys: `Space` pause, `R` restart, `N` new seed, `1` `2` `3` LEDs / squint
 
 ```text
 piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> outputs
-                                                             \-> lossy sim -> preview
+                                                             \-> meter: real encode
+                                                                      -> real decode -> preview
 ```
 
 - A **piece** turns (wall-clock `t`, seed, parameters) into a `Frame`: either
@@ -41,6 +77,10 @@ piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> ou
   pass through exactly; prefer them.
 - The **limiter** caps average picture level and the rate at which mean
   luminance (and mean red) may rise, so no piece can strobe the panel.
+- The **meter** (`meter.rs`) runs the sender's own chooser and the firmware's
+  own decoder over every frame, so the codec, the byte count, the exactness
+  decision and the preview picture are measured rather than estimated. The
+  preview is literally the decoded datagram.
 - The studio's four meters are the four numbers from brief section 5.
 
 Pieces that tell the time read `ctx.now` (local time of day), not the system
@@ -244,18 +284,24 @@ Things to know:
 
 ## Provisional assumptions
 
-The firmware, protocol and sender are still being built. Everything this code
-assumes about them is confined to these places, so reconciling is a small edit:
+Fewer than there were. The encoding ones are gone: the sender exists, this crate
+links it, and `budget.rs` - which estimated payload sizes from the brief and
+faked a lossy encode with median cut and an ordered dither - was deleted by card
+101. What remains:
 
 | Assumption | Where |
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
 | 64 linear levels per channel (fewer when dimmed) | `panel.rs`: `NATIVE_LEVELS`; a runtime setting everywhere else |
-| <= 16 colours = 1072 bytes exact, <= 32 = 1376 exact, more = lossy; 1464-byte budget | `budget.rs` |
-| What a lossy encode looks like (median cut + ordered dither; a stand-in, not the sender's algorithm) | `budget.rs`: `simulate_lossy` |
 | The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). The studio engine and `pipe` default to 60, with 30 selectable | `crates/studio/src/main.rs`: `RATES`; `screeny-art pipe --fps` |
-| Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output.rs` |
+| Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 
-When the sender library exists, it becomes an `Output` impl and replaces
-`budget.rs`'s estimates with real encoded sizes.
+One thing to know about the meter rather than assume: it and the sender each
+hold their own `Encoder`, and the chooser gives the previous frame's codec a
+small advantage. Fed the same frames they answer identically (there is a test);
+under the link's default cadence ceiling a 60 fps piece sends every other frame,
+so the two histories differ and a *marginal* frame can take a different codec.
+Never a different exactness. Point the meter at the connected device with
+`pipeline.meter().set_limits(lim.budget, lim.codecs)` so it is at least
+measuring against the right budget.

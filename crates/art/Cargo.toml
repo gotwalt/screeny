@@ -11,8 +11,28 @@ wgpu = { version = "30.0.1", optional = true }
 pollster = { version = "1.0.1", optional = true }
 bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
 libc = "0.2.189"
+# The real codec chooser and the real decoder, so `meter.rs` reports what the
+# frame actually costs instead of estimating it (card 101). Neither crate opens
+# a socket or resolves a name: `screeny-proto` has no dependencies at all and is
+# what the firmware runs, and `screeny-encode` is the chooser split out of the
+# sender by card 016. The network stack is `screeny`, below, and is optional.
+screeny-proto = { path = "../proto" }
+screeny-encode = { path = "../encode" }
+screeny = { path = "../screeny", optional = true }
+# So `screeny-art play` can send FINAL on ctrl-c and let the panel go at once
+# instead of holding the last frame for the stream timeout. `Drop` does not run
+# on a signal; see `crates/screeny/README.md`, "Two sharp edges that are left".
+ctrlc = { version = "3", optional = true }
+
+[dev-dependencies]
+# The reference receiver, for the end-to-end tests. `window` off: they are
+# headless and have no business pulling minifb in.
+screeny-sim = { path = "../sim", default-features = false }
 
 [features]
 default = ["gpu"]
 # GPU pieces, through wgpu. Build with --no-default-features for a CPU-only runner.
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+# `output::SenderOutput`: frames to a real panel over UDP, through `screeny`'s
+# `Link`. Off by default so the art core builds with no network stack at all.
+sender = ["dep:screeny", "dep:ctrlc"]

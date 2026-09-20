@@ -6,7 +6,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use screeny_art::budget::{Encoding, PAYLOAD_BYTES};
+use screeny_art::meter::PAYLOAD_BYTES;
+use screeny_art::output::{target_for, Output, PanelStatus, SenderOutput};
 use screeny_art::piece::{local_now, Ctx, Params, PieceDef};
 use screeny_art::{pieces, Piece, Pipeline, Settings, N};
 use serde::Serialize;
@@ -18,7 +19,7 @@ use tauri::State;
 /// 30 is there to see what a piece looks like at the measured rate.
 const RATES: [f64; 2] = [30.0, 60.0];
 /// Frame packet header size; see `Engine::tick` and `ui/main.js`.
-const HEADER: usize = 48;
+const HEADER: usize = 52;
 
 struct Engine {
     def: &'static PieceDef,
@@ -34,6 +35,11 @@ struct Engine {
     seq: u32,
     fps: f32,
     packet: Vec<u8>,
+    /// Set when the "send to panel" switch is on. All of the behaviour is in
+    /// `screeny_art::output`; this is a field and four lines in `tick`.
+    panel: Option<SenderOutput>,
+    /// When the meter last took the connected device's budget and codec set.
+    limits_at: Instant,
 }
 
 impl Engine {
@@ -55,6 +61,8 @@ impl Engine {
             seq: 0,
             fps: 0.0,
             packet: vec![0; HEADER + N * 3],
+            panel: None,
+            limits_at: Instant::now(),
         }
     }
 
@@ -76,22 +84,37 @@ impl Engine {
         let frame = self.piece.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
         let out = self.pipeline.process(frame, wall);
 
+        // The panel, if the switch is on. The link owns the cadence, so the
+        // engine's rate stays the engine's business; a frame it has no slot
+        // for is folded away and counted, not sent.
+        if let Some(panel) = self.panel.as_mut() {
+            // Measure against the device actually connected, once a second.
+            if self.limits_at.elapsed() >= Duration::from_secs(1) {
+                self.limits_at = Instant::now();
+                let lim = panel.limits();
+                if lim.connected {
+                    self.pipeline.meter().set_limits(lim.budget, lim.codecs.clone());
+                }
+            }
+            // The only errors are a malformed frame, which the pipeline
+            // cannot produce; the network cannot fail a send.
+            if let Err(e) = panel.send(&out.wire) {
+                eprintln!("studio: sending to the panel: {e}");
+            }
+        }
+
         if wall > 0.0 {
             self.fps += (1.0 / wall as f32 - self.fps) * 0.1;
         }
         self.seq = self.seq.wrapping_add(1);
         let s = out.stats;
-        let encoding: u32 = match s.encoding {
-            Encoding::Index4 => 0,
-            Encoding::Index5 => 1,
-            Encoding::Lossy => 2,
-        };
         let mut p = Vec::with_capacity(HEADER + N * 3);
         p.extend_from_slice(&self.seq.to_le_bytes());
         p.extend_from_slice(&(self.t as f32).to_le_bytes());
         p.extend_from_slice(&s.distinct_colours.to_le_bytes());
         p.extend_from_slice(&s.encoded_bytes.to_le_bytes());
-        p.extend_from_slice(&encoding.to_le_bytes());
+        p.extend_from_slice(&u32::from(s.codec).to_le_bytes());
+        p.extend_from_slice(&u32::from(s.exact).to_le_bytes());
         for v in [s.apl, s.apl_in, s.luma, s.dluma, s.dluma_peak, s.limiter_gain, self.fps] {
             p.extend_from_slice(&v.to_le_bytes());
         }
@@ -256,6 +279,33 @@ fn restart(engine: State<Shared>) {
     lock(&engine).rebuild();
 }
 
+/// Turn "send to panel" on or off.
+///
+/// `to` is an mDNS instance name or an `IP[:PORT]`; empty means "the first
+/// panel found". Deliberately deferred rather than blocking: the studio should
+/// not freeze for three seconds while a browse runs, and a panel that is off
+/// right now is not a different case from one unplugged later. Turning it off
+/// drops the link, which sends `FINAL` and releases the panel at once.
+#[tauri::command]
+fn set_panel(engine: State<Shared>, on: bool, to: String) -> Option<PanelStatus> {
+    let mut e = lock(&engine);
+    e.panel = on.then(|| SenderOutput::deferred(target_for(&to)));
+    e.limits_at = Instant::now() - Duration::from_secs(10);
+    e.panel.as_ref().map(SenderOutput::status)
+}
+
+/// Link state, device, frame counters and the indexed exact/fallback split,
+/// for the status strip. `None` when the switch is off.
+#[tauri::command]
+fn panel_status(engine: State<Shared>) -> Option<PanelStatus> {
+    let mut e = lock(&engine);
+    // Drive reconnection even while the engine is paused and no frames flow.
+    if let Some(p) = e.panel.as_mut() {
+        p.poll();
+    }
+    e.panel.as_ref().map(SenderOutput::status)
+}
+
 fn main() {
     let engine: Shared = Arc::new(Mutex::new(Engine::new()));
 
@@ -291,7 +341,9 @@ fn main() {
             set_playback,
             piece_playing,
             piece_act,
-            restart
+            restart,
+            set_panel,
+            panel_status
         ])
         .run(tauri::generate_context!())
         .expect("run Screeny Studio");

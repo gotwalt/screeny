@@ -25,3 +25,12 @@ debug = 1
 # samples per pixel, so the studio would be unusable in a debug build.
 [profile.dev.package.screeny-art]
 opt-level = 2
+
+# The art pipeline now runs the real encoder on every frame and decodes the
+# result for the preview (card 101). A debug-built encoder is about ten times
+# slower - see `crates/screeny/README.md` - which would cost more than the whole
+# frame period on its own, so these two come along.
+[profile.dev.package.screeny-encode]
+opt-level = 2
+[profile.dev.package.screeny-proto]
+opt-level = 2

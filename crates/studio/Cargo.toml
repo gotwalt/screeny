@@ -9,7 +9,8 @@ build = "build.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-screeny-art = { path = "../art" }
+# `sender` on: the studio can stream what it is showing to a real panel.
+screeny-art = { path = "../art", features = ["sender"] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

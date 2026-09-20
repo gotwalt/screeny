@@ -15,9 +15,14 @@
 //! ```
 //!
 //! Both are restated here as stand-ins so this file compiles on its own; the
-//! real ones live in `crates/art/src/output.rs` and `frame.rs` and are
+//! real ones live in `crates/art/src/output/` and `frame.rs` and are
 //! not touched by this crate. `SenderOutput` below is the whole of the work
 //! that merge will need. **It is 15 lines.**
+//!
+//! Card 101 did that merge: the real impl is
+//! `crates/art/src/output/sender.rs`, behind `screeny-art`'s `sender`
+//! feature, and `screeny-art play <piece> --to NAME|ADDR` runs it. This file
+//! stays as the smallest readable version of the same thing.
 //!
 //! Three things it relies on, all of them this crate's job rather than
 //! theirs:

@@ -2,14 +2,19 @@
 //!
 //! ```text
 //! piece -> limiter -> quantise to panel levels (ordered dither) -> WireFrame -> outputs
-//!                                                              \-> lossy sim -> preview
+//!                                                              \-> meter -> encode
+//!                                                                        -> decode -> preview
 //! ```
+//!
+//! The preview is not a model of the codec any more: the frame is put through
+//! the sender's own encoder and the firmware's own decoder, and what comes
+//! back out is what the panel shows. See [`crate::meter`].
 
-use crate::budget::{self, Encoding};
 use crate::color::Rgb;
 use crate::dither::Dither;
 use crate::frame::{Frame, WireFrame, MAX_PALETTE, N, W};
 use crate::limiter::{Limiter, LimiterSettings};
+use crate::meter::{Measured, Meter};
 use crate::panel::{Panel, NATIVE_LEVELS};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -25,9 +30,12 @@ pub struct Settings {
     /// Preview only: show the frame as the panel would (quantised). Off shows
     /// the unquantised framebuffer, for comparison.
     pub panel_model: bool,
-    /// Preview only: when a frame has more than 32 colours, show what a lossy
-    /// adaptive-palette encode might do to it.
-    pub lossy_sim: bool,
+    /// Preview only: show the frame after the real encoder and the real
+    /// decoder have been round it, so codec damage is visible. Off shows the
+    /// frame as it was handed over, which is the same picture whenever
+    /// [`Stats::exact`].
+    #[serde(alias = "lossy_sim")]
+    pub codec_preview: bool,
 }
 
 impl Default for Settings {
@@ -37,7 +45,7 @@ impl Default for Settings {
             dither: Dither::default(),
             limiter: LimiterSettings::default(),
             panel_model: true,
-            lossy_sim: true,
+            codec_preview: true,
         }
     }
 }
@@ -46,8 +54,12 @@ impl Default for Settings {
 #[derive(Clone, Copy, Debug)]
 pub struct Stats {
     pub distinct_colours: u32,
-    pub encoding: Encoding,
+    /// Wire codec id the encoder chose for this frame.
+    pub codec: u8,
+    /// Real payload bytes, against [`crate::meter::PAYLOAD_BYTES`].
     pub encoded_bytes: u32,
+    /// True when the panel will show these pixels and not an approximation.
+    pub exact: bool,
     /// Average picture level (mean channel duty) after limiting, 0..1.
     pub apl: f32,
     /// The same, as the piece made it.
@@ -67,12 +79,15 @@ pub struct Output {
     /// `N * 3` sRGB bytes: what the panel is expected to show.
     pub preview: Vec<u8>,
     pub stats: Stats,
+    /// The encoder's verdict on this frame, in full.
+    pub measured: Measured,
 }
 
 #[derive(Default)]
 pub struct Pipeline {
     pub settings: Settings,
     limiter: Limiter,
+    meter: Meter,
     prev_luma: Option<f32>,
     dluma_window: VecDeque<(f64, f32)>,
     clock: f64,
@@ -86,6 +101,12 @@ impl Pipeline {
     /// Forget limiter and statistics history, e.g. when the piece changes.
     pub fn reset(&mut self) {
         *self = Pipeline::new(self.settings);
+    }
+
+    /// The meter, for pointing at a connected device's real budget and codec
+    /// set (`link.limits()`), or for reading the last frame's decode.
+    pub fn meter(&mut self) -> &mut Meter {
+        &mut self.meter
     }
 
     /// `dt` is wall-clock seconds since the previous frame.
@@ -117,17 +138,17 @@ impl Pipeline {
             }
         };
 
-        let distinct = budget::distinct_colours(&wire.rgb);
-        let encoding = Encoding::for_colours(distinct);
+        // Ask the encoder rather than estimating: this is the codec that will
+        // carry the frame, its real size, and - once decoded - the exact
+        // picture the panel will put up.
+        let measured = self.meter.measure(&wire);
 
-        let preview = if s.panel_model {
-            let mut p = wire.rgb.clone();
-            if s.lossy_sim && encoding == Encoding::Lossy {
-                budget::simulate_lossy(&mut p, panel, s.dither);
-            }
-            p
-        } else {
+        let preview = if !s.panel_model {
             (0..N).flat_map(|i| frame.pixel(i).to_srgb8()).collect()
+        } else if s.codec_preview {
+            self.meter.decoded().to_vec()
+        } else {
+            wire.rgb.clone()
         };
 
         self.clock += dt;
@@ -143,10 +164,12 @@ impl Pipeline {
         Output {
             wire,
             preview,
+            measured,
             stats: Stats {
-                distinct_colours: distinct as u32,
-                encoding,
-                encoded_bytes: encoding.bytes(),
+                distinct_colours: measured.colours,
+                codec: measured.codec,
+                encoded_bytes: measured.bytes,
+                exact: measured.exact,
                 apl: limited.output.duty,
                 apl_in: limited.input.duty,
                 luma,
@@ -167,6 +190,9 @@ pub fn linear_frame(mut f: impl FnMut(usize, usize) -> Rgb) -> Frame {
 mod tests {
     use super::*;
 
+    /// An indexed frame reaches the panel as the piece drew it, and the
+    /// preview - which is now the decoded datagram, not a copy of the
+    /// framebuffer - says so.
     #[test]
     fn indexed_frames_survive_exactly() {
         let palette: Vec<Rgb> = (0..8).map(|k| Rgb::splat(k as f32 / 63.0 * 4.0)).collect();
@@ -175,15 +201,32 @@ mod tests {
         settings.limiter.enabled = false;
         let out = Pipeline::new(settings).process(Frame::Indexed { palette, indices }, 1.0 / 30.0);
         assert_eq!(out.stats.distinct_colours, 8);
-        assert_eq!(out.stats.encoding, Encoding::Index4);
+        assert!(out.stats.exact);
+        assert_eq!(out.stats.codec, screeny_proto::dec::codec::PAL4_LZ);
+        assert!(out.stats.encoded_bytes < 1464);
         assert_eq!(out.preview, out.wire.rgb);
     }
 
+    /// A gradient cannot be sent exactly, and the preview shows the damage
+    /// the real codec does rather than a model of it.
     #[test]
     fn gradients_go_lossy() {
         let f = linear_frame(|x, y| Rgb::new(x as f32 / 63.0, y as f32 / 31.0, 0.5));
         let out = Pipeline::default().process(f, 1.0 / 30.0);
-        assert_eq!(out.stats.encoding, Encoding::Lossy);
-        assert!(budget::distinct_colours(&out.preview) <= MAX_PALETTE);
+        assert!(!out.stats.exact);
+        assert!(out.stats.encoded_bytes <= crate::meter::PAYLOAD_BYTES);
+        assert_ne!(out.preview, out.wire.rgb);
+    }
+
+    /// `codec_preview` off shows the handed-over frame instead. For an exact
+    /// frame the two are the same picture, which is the point.
+    #[test]
+    fn the_codec_preview_can_be_turned_off() {
+        let f = linear_frame(|x, y| Rgb::new(x as f32 / 63.0, y as f32 / 31.0, 0.5));
+        let mut settings = Settings::default();
+        settings.codec_preview = false;
+        let out = Pipeline::new(settings).process(f, 1.0 / 30.0);
+        assert_eq!(out.preview, out.wire.rgb);
+        assert!(!out.stats.exact, "the statistics are still the real ones");
     }
 }

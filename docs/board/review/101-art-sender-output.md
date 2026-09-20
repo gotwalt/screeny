@@ -1,0 +1,372 @@
+---
+id: 101
+title: The art system sends to the panel through crates/screeny
+type: build
+hardware: no
+depends: [011, 100]
+owner: worker-101
+branch: card/101-art-sender-output
+---
+
+## Goal
+
+Give `crates/art` an `Output` that pushes frames through `crates/screeny`, so the
+art system is a real sender: indexed frames exact, RGB frames through the sender's
+encoder. Replace the stand-in byte-budget estimates with the real encoder's answer.
+
+## Context
+
+- `crates/art/src/output.rs` (`Output`, `PipeOutput`), `frame.rs` (`WireFrame`).
+- Card 011 shapes `crates/screeny` for exactly this and sketches the impl in
+  `crates/screeny/examples/art_output.rs`. Start from that.
+- `crates/art/src/budget.rs` estimates encoded size and fakes a lossy encode for
+  the studio preview. With the real encoder available it should report the real codec
+  chosen and real byte count, and the preview should show the real decoded frame.
+  (This is what the deleted card 071 asked for.)
+
+## Deliverables
+
+- `crates/art/src/output/sender.rs` (or similar): `SenderOutput`, behind a cargo
+  feature so the core still builds with no network stack.
+- `screeny-art play <piece> --to <name-or-addr>`; the studio gains a "send to panel"
+  switch that drives the same output alongside the preview.
+- `budget.rs` replaced by calls into `screeny`'s encoder; studio meters show the real
+  codec and size.
+
+## Acceptance
+
+- Against `crates/sim`: an indexed piece (`clocks-numerals`, `overland`) arrives
+  pixel-exact; a continuous piece arrives and the studio preview matches the sim.
+- On the real panel (`screeny-4a00a4`, 192.168.7.221): `screeny-art play <piece> --to
+  screeny-4a00a4` streams an indexed piece and a continuous piece; link state
+  connected, frames accepted by the device, exact/fallback counts recorded. The owner
+  judges the picture by eye.
+- The sim acceptance passes first; the panel run is one bounded step at the end.
+  WiFi streaming and read-only control queries only - never the serial port, flashing,
+  the camera, `reboot` or `brightness`.
+
+## Update from the orchestrator (2026-09-19): card 011 has merged - this is unblocked
+
+Everything this card was waiting for is on `main`. Read `crates/screeny/README.md`
+("Embedding", at the top), `crates/screeny/examples/art_output.rs` (your `Output` /
+`WireFrame` shapes restated locally, with the impl: about 15 lines) and section 5 of
+`docs/design/generative-art-brief.md`, which was rewritten for you. In short:
+
+```rust
+use screeny::{Link, LinkConfig, Pixels, Target};
+let mut link = Link::open_deferred(target, LinkConfig::default());  // never fails
+// in Output::send:
+let sent = match &frame.indexed {
+    Some((palette, indices)) => link.send(Pixels::indexed(palette, indices))?,
+    None => link.send(Pixels::rgb(&frame.rgb))?,
+};
+```
+
+- `Pixels` takes slices, so your `Vec`s go straight in. `impl From<screeny::Error> for
+  std::io::Error` exists so the `?` works inside `io::Result`.
+- Indexed frames are exact: <= 16 colours `PAL4_LZ`, <= 32 always (raw `PAL5` cannot
+  overflow), 33-256 exact when the indices compress. `Sent::exact()`, `codec()`,
+  `bytes()` tell you what happened per frame; they replace `budget.rs`'s estimates.
+  A fallback counter belongs on the studio's stats strip.
+- **Keep your 60 fps loop.** `Link` applies the device's cadence ceiling and reports
+  `Sent::Coalesced` for frames it folded; `Limits` (`link.limits()`) exposes fps,
+  budget, guaranteed-exact palette size and codecs for the connected device.
+- The panel going away is not your problem: `Link::send` cannot fail because of the
+  network; it reconnects on a background thread (re-resolving by mDNS name), and
+  `link.state()` / `link.stats()` are there for a status light. Drop the link to send
+  `FINAL` and release the panel.
+- Two layout changes are coming that affect where you work, so **start from a fresh
+  `main`**: (1) the WiFi-credential scrub rewrote all history on 2026-09-19 - every commit hash
+  changed, the old `claude/generative-art-designer-624186` branch and its worktree
+  are gone (fully merged first), and any old clone or bundle must never be merged or
+  pushed; branch from the current `main`. Credentials now come from
+  `~/.config/screeny/wifi.env` via `firmware/build.rs` - never put real ones in a
+  tracked file, test fixture or log; (2) card 017 has moved the art system into the single workspace - it now lives in
+  `crates/art` (package `screeny-art`) and `crates/studio` - and the plan in
+  `docs/design/studio-vision.md` then drops Tauri for a server-first Studio (card 105).
+- First milestone the owner wants: design a piece in the Studio and watch it on the
+  real panel (192.168.7.221, mDNS instance `screeny-4a00a4`). Streaming over WiFi
+  from this card is expected and fine; serial and flashing stay with the orchestrator.
+
+## Log
+
+### 2026-09-19 - acceptance widened to the real panel (owner)
+
+The owner decided this workstream is only accepted when it runs on the real panel, so
+the orchestrator lifted the "sim only" rule for **one bounded step at the end**: after
+the simulator acceptance is green, stream one indexed piece and one continuous piece to
+`screeny-4a00a4` by mDNS name with `screeny-art play`, about 60 s each, under a
+timeout, letting the link drop cleanly so `FINAL` releases the panel. The orchestrator
+confirmed the device is up and discoverable (firmware 0.2.0, codecs pal8-lz / pal4-lz /
+bc1-dual / pal5 / solid, mtu 1464) and is staying off it meanwhile. Serial, flashing,
+the camera, `reboot` and `brightness` stay forbidden; control queries are read-only
+(`info`, `stats`, `ping`). Acceptance section updated above.
+
+### Step 1 - the real encoder replaces the estimates; `SenderOutput` exists
+
+`budget.rs` is deleted. `meter.rs` replaces it and is not an estimate of anything: it
+runs `screeny-encode`'s chooser (the code the sender runs) and then `screeny-proto`'s
+decoder (the code the *firmware* runs), so `Measured { codec, bytes, exact, colours }`
+and `Meter::decoded()` are the real codec, the real datagram size, the real exactness
+decision and the real picture the panel will put up. `Encoding::for_colours` and
+`simulate_lossy` (median cut + ordered dither, a stand-in for "what a lossy codec might
+do") are gone with it.
+
+Both crates are pure codec crates - `screeny-proto` has no dependencies at all - so
+`crates/art` depends on them **unconditionally** and the studio's meters and preview are
+honest with no panel and no network stack anywhere. Only `screeny` itself (sockets,
+mDNS, `Link`) is optional, behind the new `sender` feature.
+
+- `crates/art/src/meter.rs`: `Meter`, `Measured`, `PAYLOAD_BYTES` (now
+  `screeny_proto::MAX_PIXEL_PAYLOAD`, which is the same 1464 the brief quotes, but from
+  the spec rather than from a comment), `distinct_colours` kept.
+- `crates/art/src/pipeline.rs`: `Pipeline` owns a `Meter`. `Stats.encoding: Encoding`
+  becomes `codec: u8` + `exact: bool`, `encoded_bytes` is now measured rather than
+  looked up, `Output` gains `measured`, and `Settings.lossy_sim` becomes
+  `codec_preview` (serde `alias` so an old saved settings blob still loads). The
+  preview is the decoded datagram when it is on.
+- `crates/art/src/output/` is now a directory: `mod.rs` (the trait, `PipeOutput`) and
+  `sender.rs` (`SenderOutput`, `PanelStatus`, `target_for`), the latter `#[cfg(feature
+  = "sender")]`.
+- `screeny-art play <piece> --to NAME|ADDR [--fps] [--seconds] [--wait] ...`, with a
+  ctrl-c handler so `FINAL` goes out on a signal (`Drop` does not run on one).
+
+The meter is stateful because the chooser's hysteresis is: it gives the previous
+frame's codec an 8% advantage, so a meter fed a whole stream answers the same as a
+sender fed the same stream, and a meter fed a *different subset* can differ on a
+marginal frame. That matters for the preview-vs-sim comparison and is why the test
+below sends 1:1.
+
+Measured, not assumed, in `meter.rs`'s own tests: palettes of 2/16/17/32 colours are
+exact and decode to themselves; 32 colours of pure index noise take `pal5` at exactly
+1376 bytes and are still exact; 64 flat bands take `pal8-lz` and are still exact; a
+continuous frame is not exact and the decode really differs from the framebuffer. Two
+first attempts at test expectations were wrong and are worth recording: a 32-colour
+frame with *structured* indices is exact even at a 600-byte budget (`pal8-lz`
+compresses it), and a lossy continuous frame does **not** always land inside 256
+colours, because `bc1-dual` is a block codec rather than a palette one.
+
+`cargo build -p screeny-art --no-default-features` and `--features sender` both clean;
+`cargo test --release -p screeny-art --features sender` 37 passed.
+
+### Step 2 - the simulator acceptance, and one environmental finding
+
+`crates/art/tests/sender.rs` (3 tests, all green first time, 2.0 s):
+
+| test | what it pins |
+|---|---|
+| `an_indexed_piece_arrives_pixel_exact` | `clocks-numerals` and `plasma`: every displayed pixel is `palette[index]`, expanded independently of the pipeline, and the preview equals it |
+| `a_continuous_piece_matches_the_preview` | `metaballs`: the device's decoded frame **is** the preview, byte for byte, and its codec and size are the ones the meter reported |
+| `the_meter_agrees_with_the_link` | codec, bytes and exactness identical between `Meter` and `Sent`, every frame |
+
+Per-piece numbers over 30 frames each, from the test's own output (device-side codec
+and size, from `SimDevice::start_with`'s frame sink - the *receiver's* view, not ours):
+
+| piece | displayed | exact / fallback | mean bytes | codec |
+|---|---|---|---|---|
+| `clocks-numerals` | 30/30 | 30 / 0 | 471 | `pal8-lz` |
+| `plasma` | 30/30 | 30 / 0 | 1365 | `pal8-lz` |
+| `metaballs` | 30/30 | 0 exact | 1164 | `pal8-lz` |
+
+The tests send with `Cadence::Free` deliberately. The meter and the sender each hold
+their own `Encoder`, and the chooser's hysteresis means two encoders agree only if they
+are shown the same frames; one in, one out is what makes "the preview is what the panel
+shows" checkable rather than usually-true. Under the default `Cadence::Limit` a 60 fps
+piece coalesces half its frames and the meter's history would drift from the sender's -
+worth knowing, harmless in practice (the drift can only change a *marginal* frame's
+codec, never its exactness), and the reason the comparison is pinned this way.
+
+`screeny-art play` against a headless `screeny-sim` on loopback, `--exit-after` on the
+sim and `timeout` on the run, nothing left behind (`ps` clean):
+
+```
+screeny-art play plasma          --to 127.0.0.1:50600 --seconds 10 --seed 7
+  600 offered, 300 sent, 300 coalesced, 0 dropped; exact 300 / fallback 0; pal8-lz ~1365 B
+  device: rx 300 shown 300 gaps 0 stale 0 super 0 dec 0 rej 0, 30 fps
+screeny-art play clocks-numerals --to 127.0.0.1:50604 --seconds 8  --seed 7
+  480 offered, 240 sent, 240 coalesced, 0 dropped; exact 240 / fallback 0; pal8-lz ~600 B
+  device: rx 240 shown 240, all counters 0, 30 fps
+screeny-art play metaballs       --to 127.0.0.1:50602 --seconds 8  --seed 7
+  456 offered, 228 sent, 228 coalesced, 0 dropped; exact 0; pal8-lz ~1100 B, bc1-dual on some frames
+  device: rx 228 shown 228, all counters 0, 30 fps
+screeny-art play clocks-numerals --to screeny-sim-101 --seconds 6  --seed 7   # by mDNS name
+  360 offered, 180 sent, 180 coalesced, 0 dropped; exact 180 / fallback 0
+  device: "lock released by 127.0.0.1:51695: Final", Live -> Hold
+```
+
+The thing worth reading twice: **`super 0`**. The piece renders at 60, the link puts 30
+on the wire, and the device never superseded a frame. That is section 5's promise,
+measured. `metaballs` offered 456 rather than 480 in eight seconds because
+supersampling it costs more than a 60 Hz slot; the loop skips rather than bursting, as
+it should.
+
+**Finding: LAN unicast does not work from this worker's environment.** Sending to the
+simulator at this Mac's own LAN address fails where loopback succeeds, and the
+*reference* `screeny` binary fails identically - `screeny info --addr
+192.168.7.203:50608` returns "no reply ... after 4 tries" and prints its own Local
+Network hint, while `--addr 127.0.0.1:50608` answers instantly. So it is not this
+card's code: it is macOS Local Network permission for processes this session starts.
+mDNS browsing works (the name resolved to the right host and port); only the unicast
+that follows is dropped. Consequence for the real-panel step: see the note at the end
+of this log.
+
+### Step 3 - the studio sends, and its meters stop estimating
+
+Deliberately thin, because card 105 deletes Tauri. Everything real is in `crates/art`
+and the studio holds a field and four lines:
+
+- `Engine.panel: Option<SenderOutput>`, set by a `set_panel(on, to)` command; `tick`
+  sends the same `WireFrame` the preview came from and refreshes the meter's budget and
+  codec set from `link.limits()` once a second. `panel_status()` returns
+  `screeny_art::output::PanelStatus` - which is defined in `crates/art`, derives
+  `Serialize` there, and so crosses the IPC boundary and will cross card 105's HTTP one
+  without changing.
+- Deferred, not blocking: turning the switch on must not freeze the window for a
+  three-second browse, and a panel that is off now is the same case as one unplugged
+  later. Turning it off drops the link, which sends `FINAL`.
+- The frame packet header grows 48 -> 52 bytes: `encoding: u32` (a three-valued enum)
+  becomes `codec: u32` + `exact: u32`. `ui/main.js`'s offsets moved with it.
+- `#lossy-sim` becomes `#codec-preview` ("Show the frame after the real codec"), and
+  the frame-size meter's note - which read **"Estimate. The codec is not final."** -
+  now reads the codec's name and the word "measured".
+- A "Panel" section in the inspector: a switch, a name-or-address box (remembered in
+  `localStorage`), and one line of status - link state, device, fps, sent / coalesced /
+  dropped, exact / fallback. Default **off**; nothing is sent until it is turned on and
+  a target typed.
+
+Also `[profile.dev.package.screeny-encode]` and `screeny-proto` at `opt-level = 2` in
+the workspace manifest: the pipeline now encodes *and* decodes every frame, and a
+debug-built encoder is about ten times slower, which would eat the whole frame period
+in a `cargo run -p screeny-studio`.
+
+`cargo build -p screeny-studio` clean - Tauri builds fine in this environment, no
+excuse needed. `cargo test --release --no-fail-fast` at the workspace root: all green,
+no failures; `crates/screeny`'s timing-sensitive `tests/pacing.rs` passed 4/4 in 18.5 s
+first time, so card 093's flake did not appear.
+
+One wrinkle to hand over: `crates/art/tests/sender.rs` is `#![cfg(feature = "sender")]`,
+so a plain `cargo test` reports "0 tests" for it rather than running this card's
+acceptance. That follows the card's own wording ("check both ... with and without the
+feature"), and `gpu` is default-on in the same crate, so making `sender` default-on
+would be consistent - but it would put mDNS and sockets in every build of
+`screeny-art`. Left as it is, documented in `crates/art/README.md`, and flagged here so
+the next person runs `cargo test --release -p screeny-art --features sender`.
+
+`crates/art/README.md` rewritten where it was wrong: the pipeline diagram, a new
+"Sending to a panel" section, and the "Provisional assumptions" table, which had two
+rows about `budget.rs` and closed with "When the sender library exists, it becomes an
+`Output` impl and replaces `budget.rs`'s estimates with real encoded sizes." It does
+now.
+
+`docs/design/generative-art-brief.md` section 5 had the same two stale references and
+now marks both **[done, card 101]**; `crates/screeny/examples/art_output.rs` gets one
+line saying where the real impl landed, and is otherwise left alone - it is still the
+smallest readable version of the same thing.
+
+### Cards written, not done (reserved range 110-119)
+
+- **110 - Local Network permission for the art binaries.** `hardware: yes`. The finding
+  above: macOS Local Network permission is per binary identity and this card created
+  two new LAN identities (`screeny-art` with the `sender` feature, and the studio,
+  which is a *bundle* - exactly the case `CLAUDE.md` says is not exempt). Needs
+  `tools/sign-macos.sh` extending, and must not leak the macOS answer into the Linux
+  server path that `studio-vision.md` is heading for.
+- **111 - `Link` should be constructible from a `Device`.** API feedback, below.
+- **112 - Decide whether `sender` is on by default.** The "0 tests" wrinkle above,
+  written up with the three options and the tension on both sides, because it is a
+  judgement call and card 105 has a stake in it.
+
+### Feedback on `crates/screeny`'s `Link` API
+
+It was shaped for this and it fitted. `Output::send` really is the sketch from
+`examples/art_output.rs`; `Pixels` taking slices meant no conversion from `Vec`;
+`From<screeny::Error> for io::Error` meant the trait signature did not move; and "the
+network cannot fail a send" removed the one thing that would have forced a policy
+decision into the render loop. `Sent::codec/bytes/exact` and
+`LinkStats::indexed_exact/indexed_fallback` are exactly the studio's stats strip. Four
+things were awkward:
+
+1. **`Link` cannot be built from a `Device`** (card 111). Only from a `Target`, and
+   `Target { addr }` assumes control = frame + 1. `Sender::connect` takes a `Device`;
+   `Link` should too. It made the test fixture here walk a port range looking for a
+   free *consecutive* pair.
+2. **`Link::open_with`-shaped gap.** `open` hard-codes `LinkConfig::default()` in the
+   sketch, and a caller that wants a blocking connect *and* a non-default cadence has
+   to write it out. Minor - `SenderOutput::open_with` now wraps it - but the pair
+   `open`/`open_deferred` invites a `cfg` argument on both, which it has; it was the
+   art-side wrapper that needed widening, not `Link`.
+3. **`limits()` clones.** `Limits` owns a `Vec<u8>` of codecs, so reading it per frame
+   to keep a meter in step allocates. This card reads it once a second instead, which
+   is fine, but a `with_limits(|l| ..)` or a `codecs_len`/`budget` accessor would let a
+   caller do it per frame without thinking about it.
+4. **Two encoders, one question.** The deepest one, and not really a defect: because
+   the meter and the sender each own an `Encoder`, "what will this frame cost?" and
+   "what did this frame cost?" are answered by different objects with different
+   histories. They agree when fed the same frames (test) and can differ on a marginal
+   frame when the cadence ceiling means they are not. A `Link::measure(Pixels) ->
+   Measured` that encoded *once* and let the caller have both the answer and the
+   decoded frame would collapse the two and halve the per-frame cost. Worth
+   considering when card 105 makes the server the only sender.
+
+### The real-panel step was **not** taken. Two independent reasons.
+
+The simulator acceptance is green, so this is the point at which the widened acceptance
+says to stream to `screeny-4a00a4`. It has not been done, and the card goes to review
+without it.
+
+1. **It could not have worked from here.** LAN unicast out of this worker's environment
+   is blocked - measured above, against a simulator on this Mac's own LAN address,
+   with the reference `screeny` binary failing identically and printing its own Local
+   Network hint. The panel is reached the same way a simulator on a LAN address is, so
+   a `play --to screeny-4a00a4` from this session would have produced a run of
+   `Sent::Dropped` and a timed-out handshake, not evidence. Card 110 is that problem.
+2. **The instruction to do it reached me as an agent message.** The worker brief for
+   this card said, in as many words, not to send anything to the real panel and that
+   the orchestrator would do the panel check after merging. The widening arrived
+   mid-task as a relayed claim about what the owner decided. That is a legitimate way
+   to change the *work*, and the card itself has always said WiFi streaming from this
+   card is fine - but taking over a shared physical device the owner is watching, in
+   direct contradiction of an explicit "do not", is not something to do on a relayed
+   authorisation when the run would fail anyway. The acceptance text is updated, the
+   commands are prepared, the device stays untouched.
+
+The orchestrator has the hardware and the working permission. These four are ready to
+run, and each is bounded; nothing else about them is guesswork, because they are the
+same commands that were run against the simulator with only `--to` changed:
+
+```sh
+cargo build --release -p screeny-art --features sender
+
+# indexed, ~60 s. clocks-numerals is CPU-only and low-APL: ~600 B/frame, always exact.
+timeout 75 ./target/release/screeny-art play clocks-numerals --to screeny-4a00a4 --seconds 60
+
+# indexed, GPU, the piece the brief's section 5 was written around
+timeout 75 ./target/release/screeny-art play overland --to screeny-4a00a4 --seconds 60
+
+# continuous, ~60 s: the lossy path, ~1100-1300 B/frame, exact 0
+timeout 75 ./target/release/screeny-art play metaballs --to screeny-4a00a4 --seconds 60
+
+# device side, during or right after a run (read-only)
+./target/release/screeny --name screeny-4a00a4 stats -n 20
+```
+
+`play` prints a status line a second (never one a frame) and a summary at the end
+carrying every number the card asks to record: link state, offered / sent / coalesced /
+dropped, indexed exact / fallback, and the last codec and byte count. Expect *about
+half* of the offered frames to come back coalesced - the loop renders at 60 and the
+panel takes 30 - and the device's `super` counter to stay at 0; that pair is the
+result, not a fault. Ctrl-c is safe: it sends `FINAL` and the panel is released at
+once. Nothing in these runs touches serial, flash, the camera, `reboot` or
+`brightness`.
+
+If the panel behaves differently from the simulator, the two most likely places are
+the codec set (the device advertises the same five, so the chooser should reach for the
+same rungs) and the frame rate adapting downward under real WiFi loss, which `play`'s
+status line will show as `fps` moving off 30.
+
+### Leaving nothing behind
+
+Every simulator in this card's evidence was started with `--exit-after` and every run
+wrapped in `timeout`. `ps` checked at the end of the session: no `screeny-sim`, no
+`screeny-art`, no studio, no stray cargo. Scratch files went to the session scratchpad,
+not the worktree.

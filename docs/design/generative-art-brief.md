@@ -243,7 +243,9 @@ is a CLI, and you link it: `Output` becomes fifteen lines and there is no pipe,
 no subprocess and no framing to agree on. `crates/screeny/README.md`'s
 **Embedding** section is the reference; `crates/screeny/examples/art_output.rs`
 is a working sketch of the impl written against your `Output` and `WireFrame` as
-they stand.
+they stand. **[built, card 101]** It is now `crates/art/src/output/sender.rs`
+(`SenderOutput`, behind the `sender` feature) and `screeny-art play <piece> --to
+NAME|ADDR`.
 
 ```rust
 use screeny::{Link, LinkConfig, Pixels, Target};
@@ -275,13 +277,16 @@ Seven things about it that should change how you build the output stage.
 3. **When nothing exact fits you are told, not fooled.** Too many colours and too
    little structure means the frame is expanded and run through the lossy chooser -
    a requantised frame beats a dropped one - and `Sent::exact()` comes back false
-   with `LinkStats::indexed_fallback` rising. Put it on the studio's stats strip
-   next to your own four numbers: it is the real answer to the one
-   `budget.rs::simulate_lossy` was estimating.
-4. **Replace `budget.rs`'s estimates with real numbers.** `Sent::bytes()` is the
-   actual payload size and `Sent::codec()` the codec that carried it. You no longer
-   have to model our encoder; ask it. (`screeny::encode::Encoder` will also encode
-   with no network anywhere, if the studio wants sizes without a panel.)
+   with `LinkStats::indexed_fallback` rising. It is on the studio's stats strip next
+   to the four numbers, which is where the stand-in `budget.rs::simulate_lossy`
+   used to be. **[done, card 101]**
+4. **Estimates are gone; the numbers are measured.** `Sent::bytes()` is the actual
+   payload size and `Sent::codec()` the codec that carried it. Nobody models our
+   encoder any more; they ask it. `crates/art/src/meter.rs` does exactly this -
+   `screeny::encode::Encoder` with no network anywhere, then `screeny_proto`'s
+   decoder - so the studio's frame size, codec and **preview picture** are what the
+   panel will really do, with or without a panel present. `budget.rs` is deleted.
+   **[done, card 101]**
 5. **Keep your 60 fps loop.** Pacing is yours - the link never sleeps - and by
    default it drops frames that arrive before the panel's next slot rather than
    sending them, on an absolute schedule. A 60 fps producer into a 30 fps panel puts
