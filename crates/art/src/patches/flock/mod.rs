@@ -323,6 +323,13 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// for a minute resumes flying, it does not fast-forward for a second.
 const CATCHUP: i64 = 240;
 
+/// How much a bird at the far side of the flock still stands out from the sky,
+/// per scheme. A dim *light* bird on a near-black sky reads at a fifth of full
+/// contrast; a silhouette on a lit sky needs three times that or it is a
+/// smudge, because it is only a little darker than what is behind it.
+const HAZE_LIGHT: f32 = 0.20;
+const HAZE_DUSK: f32 = 0.62;
+
 impl Flock {
     fn tuning(ctx: &Ctx) -> Tuning {
         Tuning {
@@ -377,12 +384,10 @@ impl Patch for Flock {
         let ss = (ctx.get("samples") as usize).clamp(1, 6);
         let mut cover = Coverage::new(ss);
         let dusk = ctx.get("scheme") as usize == 1;
-        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { 0.62 } else { 0.20 });
+        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { HAZE_DUSK } else { HAZE_LIGHT });
 
-        // Sky and birds are quantised separately through the same blue-noise
-        // mask: the band is smooth and needs the dither to not stair-step, the
-        // ink is a few levels and needs it to keep a wing's edge.
-        // Two masks, because the two axes are not the same problem. The sky
+        // Sky and ink are quantised separately, each through its own mask,
+        // because the two axes are not the same problem. The sky
         // is a smooth gradient across the whole frame, so its dither is most
         // of the index plane and what it costs on the wire matters: an
         // ordered pattern tiles and compresses where a random one does not,
