@@ -242,7 +242,7 @@ it changes the panel, which is the point of card 170.
 | `POST /reset_params` | `{}` | the new state |
 | `POST /set_seed` | `{seed}` (`null` = a new one) | the new state |
 | `POST /set_settings` | `{settings}` | the new state |
-| `POST /set_playback` | `{paused, speed, fps}` | the new state |
+| `POST /set_playback` | `{paused, speed, fps}` | the new state. `fps` is any rate in `MIN_FPS..=MAX_FPS` (1..60), clamped there; card 172 replaced card 105's "30 or 60, anything else ignored" |
 | `POST /piece_act` | `{action, device?}` | what it is performing; `device` names a panel other than the page's (card 140) |
 | `POST /restart` | `{}` | the new state |
 | `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |

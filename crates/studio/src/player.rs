@@ -578,7 +578,14 @@ impl Player {
                 want.params = true;
             }
             if let Some(fps) = change.fps {
-                cfg.fps = fps.clamp(MIN_FPS, MAX_FPS);
+                // A rate that is not a number at all is refused rather than
+                // clamped: `f64::clamp` hands a NaN straight back, and
+                // `Duration::from_secs_f64(NaN)` in the render loop panics.
+                // Card 172 made this reachable - `set_playback` used to drop
+                // anything that was not 30 or 60, NaN included.
+                if fps.is_finite() {
+                    cfg.fps = fps.clamp(MIN_FPS, MAX_FPS);
+                }
             }
             if let Some(paused) = change.paused {
                 cfg.paused = paused;

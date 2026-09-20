@@ -452,7 +452,25 @@ async function start() {
   $('#restart').addEventListener('click', restart);
   showPaused();
   bind({ refresh: showPaused });
-  bind(bindRadios($('#fps'), { get: () => state.fps, set: (v) => { state.fps = Number(v); pushPlayback(); } }));
+  // Card 172: any rate the player may be on, including one a script set. The
+  // slider both shows it and changes it, and `set_playback` now clamps rather
+  // than ignoring, so the two can no longer disagree.
+  //
+  // Not `bindSlider`: its output reads the input, and an input with whole
+  // stops rounds a rate that has not got one. The readout says the rate the
+  // player is really on; only the thumb is rounded, and never by more than
+  // half a frame.
+  const fpsInput = $('#fps');
+  const fpsOut = $('#fps-slider').querySelector('output');
+  const showFps = () => {
+    const dragging = busy(fpsInput);
+    if (!dragging) fpsInput.value = String(state.fps);
+    const shown = dragging ? Number(fpsInput.value) : state.fps;
+    fpsOut.textContent = `${Number.isInteger(shown) ? shown : shown.toFixed(1)} fps`;
+  };
+  fpsInput.addEventListener('input', () => { state.fps = Number(fpsInput.value); showFps(); pushPlayback(); });
+  showFps();
+  bind({ refresh: showFps });
   bind(bindSlider($('#speed-slider'), {
     get: () => state.speed,
     set: (v) => { state.speed = v; pushPlayback(); },

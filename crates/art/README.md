@@ -339,7 +339,7 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
 | 64 linear levels per channel (fewer when dimmed) | `panel.rs`: `NATIVE_LEVELS`; a runtime setting everywhere else |
-| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). The studio engine and `pipe` default to 60, with 30 selectable | `crates/studio/src/main.rs`: `RATES`; `screeny-art pipe --fps` |
+| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). Players and `pipe` default to 60; the studio's page offers the whole 1..60 range (card 172) | `crates/studio/src/player.rs`: `MIN_FPS`/`MAX_FPS`; `screeny-art pipe --fps` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 

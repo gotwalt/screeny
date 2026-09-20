@@ -232,6 +232,55 @@ async fn status_says_whether_discovery_is_on() {
     assert_eq!(status["ok"], true, "not looking for panels is never unhealthy");
 }
 
+/// Card 172: the rate control can show any rate a player may be on, and its
+/// range is the player's range rather than a second opinion about it.
+#[test]
+fn the_rate_control_spans_the_players_whole_range() {
+    let span = format!(
+        r#"id="fps" type="range" min="{}" max="{}" step="1""#,
+        screeny_studio::player::MIN_FPS as u32,
+        screeny_studio::player::MAX_FPS as u32
+    );
+    assert!(INDEX_HTML.contains(&span), "the rate slider must span MIN_FPS..=MAX_FPS; looked for {span}");
+    assert!(!INDEX_HTML.contains(r#"name="fps""#), "the two-stop radio group is gone");
+}
+
+/// And the rate a script set is the rate the page reports - it is not quietly
+/// changed by a control that could not express it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rate_set_through_the_api_is_what_the_page_reports() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    // A panel to aim a player at. Nothing is sent: it is never switched on.
+    let add = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50999","name":"paper panel"}"#).await;
+    assert_eq!(add.status, 200, "{}", String::from_utf8_lossy(&add.body));
+    let device = add.json()["id"].as_str().expect("an id").to_string();
+
+    // The page is a window onto this player, so `player/set` and the page's
+    // own state are the same fps.
+    let set = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"{device}"}}"#)).await;
+    assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
+
+    for rate in [10.0, 15.0, 24.0, 45.0] {
+        let body = format!(r#"{{"device":"{device}","fps":{rate}}}"#);
+        let player = post(at, "/api/v1/player/set", &body).await;
+        assert_eq!(player.status, 200, "{}", String::from_utf8_lossy(&player.body));
+        assert_eq!(player.json()["fps"], rate);
+        // What a browser reloading would draw its control from.
+        let boot = get(at, "/api/v1/bootstrap").await.json();
+        assert_eq!(boot["state"]["fps"], rate, "the page has to be able to show {rate} fps");
+    }
+
+    // And a rate that is not a number does not reach the render loop, where
+    // `Duration::from_secs_f64(NaN)` would panic.
+    let body = format!(r#"{{"device":"{device}","fps":1e400}}"#);
+    let player = post(at, "/api/v1/player/set", &body).await;
+    let still = get(at, "/api/v1/bootstrap").await.json();
+    assert_eq!(still["state"]["fps"], 45.0, "an infinite rate left it where it was: {}", player.status);
+    studio.stop().await;
+}
+
 /// Card 170's layout requirement, as far as a text file can carry it: the
 /// two-column bench is behind a breakpoint, so at every narrower width the
 /// page is an ordinary scrolling column and the picture cannot overlap the

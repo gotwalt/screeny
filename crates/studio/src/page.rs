@@ -17,11 +17,13 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::watch;
 
-/// Frames per second the page's rate control offers. The panel is assumed to
-/// take 60; 30 is there to see what a piece looks like at the measured rate.
-/// (A player may be set to any rate in `player::MIN_FPS..=player::MAX_FPS`
-/// through `POST /api/v1/player/set`; these are the two on the page.)
-pub const RATES: [f64; 2] = [30.0, 60.0];
+// Card 172 removed `RATES`, the two rates the page used to offer. A player may
+// be at any rate in `player::MIN_FPS..=player::MAX_FPS` - the soak uses 10, 15
+// and 24 - and a control that can only say 30 or 60 cannot show where a panel
+// actually is. The page's control is now a slider over the player's whole
+// range, with detents at the rates worth reaching for, and `set_playback`
+// clamps instead of ignoring.
+
 /// Frame packet header size; see [`pack`] and `ui/main.js`.
 pub const HEADER: usize = 52;
 /// Bytes in one frame packet: the header and then `N` sRGB triples.
