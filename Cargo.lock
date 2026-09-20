@@ -1685,6 +1685,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "screeny-art",
+ "screeny-proto",
  "screeny-sim",
  "serde",
  "serde_json",

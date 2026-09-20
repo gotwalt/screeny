@@ -28,5 +28,7 @@ serde_json = "1"
 # The reference receiver: "send to panel" is proved against it on loopback,
 # never against the bench device. `window` off - the tests are headless.
 screeny-sim = { path = "../sim", default-features = false }
+# Only for the type in the simulator's frame sink; no dependencies, no sockets.
+screeny-proto = { path = "../proto" }
 # So a test can give itself a tiny receive buffer and stall on purpose.
 socket2 = "0.6"

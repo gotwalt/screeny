@@ -126,3 +126,56 @@ Smoke test (`--listen 127.0.0.1:18787`, under `timeout`, nothing left running):
 `/` 200 (7658 B), `/main.js` 200 (19701 B), `/../Cargo.toml` **404**, `/api/v1/frame`
 200 with exactly 6196 bytes, `set_piece plasma` 200 with the new state,
 `set_piece nope` **400** `{"error":"no piece called `nope`"}`.
+
+### Step 2 - the tests, and what they measured
+
+`crates/studio/tests/`, 11 tests, no network, no device, every server on an ephemeral
+loopback port and stopped when the test ends (`Running` is a guard: dropping it stops
+the engine thread, sends `FINAL` and stops the server).
+
+`tests/common/mod.rs` is a browser in about 200 lines: enough HTTP/1.1 to call the API
+(one connection per request, `Connection: close`, so there is no framing to get wrong)
+and enough of RFC 6455 to read what the server pushes. Hand-written rather than
+borrowing a client crate - or the server's own library, which would hide exactly the
+bug worth catching.
+
+`tests/api.rs` (8):
+
+| test | what it pins |
+|---|---|
+| `the_api_round_trips` | all thirteen routes: every read, every change, the state each change returns, and the two 400s (`no piece called ...`, `plasma has no parameter ...`). Speed clamps at 8x; an fps that is not offered is ignored; `set_seed {"seed":null}` picks a new one; `restart` keeps the seed |
+| `the_engine_runs_with_nobody_watching` | the frame's sequence number advances with no browser connected |
+| `the_ui_is_served_from_the_binary` | `/`, `/main.js`, `/style.css` are 200; `/nope.js`, `/../Cargo.toml` and `/sub/dir.js` are 404 |
+| `the_socket_delivers_frames` | the hello state, then frames, sequence numbers advancing, > 30 in a second |
+| `two_browsers_see_each_others_changes` | Alice's change reaches Bob tagged `from: "alice"`, Bob's reaches Alice - and Alice is **not** sent her own, checked by waiting 600 ms for the server to be wrong |
+| `a_late_browser_starts_in_step` | a browser connecting after two changes is handed the current state, `from: null` |
+| `the_socket_carries_the_heartbeat` | `{"type":"status"}` carries "now playing" and the panel link: the two polling timers the UI used to run |
+| `a_frame_packet_is_a_header_and_a_picture` | 52 + 64*32*3 = 6196 bytes, colours and encoded size inside their real bounds |
+
+`tests/panel.rs` (3), against `screeny-sim` on loopback - the same receiver card 101's
+acceptance used, on a consecutive port pair in 50700..50780, mDNS off:
+
+- **`send_to_panel_streams_the_preview_to_the_device`**. `POST /api/v1/set_panel
+  {"on":true,"to":"127.0.0.1:<port>"}` and the studio streams; `GET panel_status` is
+  the UI's status line. With the piece paused and the limiter off, every frame is the
+  same frame, so "the device shows what the browser draws" is a statement about bytes:
+  the device's decoded frame **equals** the preview out of the WebSocket, and the ten
+  frames it showed are identical to each other. Measured:
+  `20 offered, 10 sent, 9 coalesced, 1 dropped before the link was up; codec 0x10
+  (pal8-lz), 1379 B/frame, exact 10, fallback 0`. Turning the switch off returns
+  `null` and drops the link, which sends `FINAL`.
+  The one dropped frame is the engine offering a frame while the deferred link was
+  still finding the device - by design, and the test pins that nothing is dropped
+  after the link is up.
+- **`a_stalled_browser_does_not_hold_up_the_engine_or_the_panel`**. A browser whose
+  receive buffer is 2 KB - smaller than one 6196-byte frame - connects and stops
+  reading. With it wedged and still connected, over two seconds: **engine 120 ticks,
+  panel link 60 frames, a healthy browser 120 frames**. That is 60 fps and 30 fps on
+  the nose, which is what the numbers would be with no stalled browser at all.
+- **`a_stalled_browser_is_eventually_dropped`**. The same wedged socket is closed by
+  the server after `ws::STALL` (3 s), rather than being kept for ever: `studio: a
+  browser stopped reading for 3s; closing its preview socket`.
+
+`socket2` is a dev-dependency for that 2 KB receive buffer - it is how the stall is
+made to happen in a second rather than after a megabyte of kernel buffer fills - and
+`screeny-proto` for the type in the simulator's frame sink.
