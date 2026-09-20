@@ -134,3 +134,10 @@ build adds `screeny`, ctrlc, wgpu and friends.
 - After that same plain root `cargo test --release`, `target/release/screeny-art play
   --help` prints the usage block **with** the `play` line in it: the thing that went
   wrong in card 101 cannot happen again.
+
+### 2026-09-19 - one new card
+
+`cargo clippy --workspace --all-targets` is not silent: 22 warnings in
+`screeny-art`, `screeny-demos` and `screeny-probe`, all pre-existing and mostly
+`clippy --fix`-able. Out of scope here and a merge conflict with three running
+workers, so it is card 125 in the backlog rather than a diff in this branch.

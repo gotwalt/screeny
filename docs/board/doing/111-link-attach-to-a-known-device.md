@@ -150,3 +150,20 @@ the studio (card 105), so nothing existing moved.
 
 `cargo test --release -p screeny-art --features sender --test sender`: 3 passed,
 0 failed, 2.06 s.
+
+### 2026-09-19 - acceptance and what was left alone
+
+- A `Link` test reaches `SimDevice::start(Config::for_test())` on ephemeral ports
+  with no port arithmetic anywhere: `an_attached_link_reaches_a_device_on_ephemeral_ports`
+  (and two more beside it).
+- `crates/art/tests/sender.rs` has no `50600..50680` walk and no port arithmetic at all.
+- `cargo test -p screeny` and `cargo test --release -p screeny-art --features sender`:
+  green, as part of a green root `cargo test --release --no-fail-fast`.
+- `cargo check -p screeny-studio` (card 105's crate, untouched): clean, 53.8 s - the
+  additive `SenderOutput::attach` did not disturb the existing constructors.
+- No `crates/sim` change was needed: the fixture only had to ask for port 0 twice,
+  which `Config::for_test()` already does.
+- Not done, deliberately: nothing was migrated to `attach` beyond the test.
+  `screeny-art play --to` and the studio both take a name or an address from a human
+  and should keep resolving it, because that is what follows a DHCP lease. The
+  natural next caller is card 106's device list, which will hold `Device`s.
