@@ -46,6 +46,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::device::Device;
 use crate::discover::Target;
 use crate::encode::MIN_BUDGET;
 use crate::error::{Error, Result};
@@ -240,9 +241,16 @@ pub struct Limits {
 ///
 /// See the [module documentation](self) for what it does and why. Construct
 /// with [`Link::open`] (blocking, fails if the panel is not there) or
-/// [`Link::open_deferred`] (never fails; connects in the background).
+/// [`Link::open_deferred`] (never fails; connects in the background). A
+/// caller that has already resolved its device - a service that keeps its own
+/// list, or a test talking to a simulator on ephemeral ports - uses
+/// [`Link::attach`] or [`Link::attach_deferred`] instead and skips discovery
+/// altogether.
 pub struct Link {
     target: Target,
+    /// Set by [`Link::attach`]: the device to reconnect to verbatim, instead
+    /// of resolving `target` again. Cleared by [`Link::retarget`].
+    attached: Option<Device>,
     cfg: LinkConfig,
     sender: Option<Sender>,
     pending: Option<Receiver<Result<Sender>>>,
@@ -258,6 +266,29 @@ pub struct Link {
     last_tx: Option<Instant>,
     /// Kept so [`Link::limits`] can answer while the link is down.
     last_limits: Limits,
+}
+
+/// What one connection attempt has to work with.
+///
+/// The two doors into a `Link` differ in exactly this and nothing else: a
+/// target is re-resolved on every attempt (and so follows a name), a device is
+/// reused verbatim (and so keeps both of its ports).
+// A `Device` is much bigger than a `Target`, and boxing it would buy an
+// allocation on a value that is built once per connection attempt, moved onto
+// the connect thread and consumed there.
+#[allow(clippy::large_enum_variant)]
+enum Aim {
+    Find(Target),
+    Known(Device),
+}
+
+impl Aim {
+    fn resolve(self) -> Result<Device> {
+        match self {
+            Aim::Find(t) => t.resolve(),
+            Aim::Known(d) => Ok(d),
+        }
+    }
 }
 
 impl Link {
@@ -288,6 +319,55 @@ impl Link {
     /// the caller.
     #[must_use]
     pub fn open_deferred(target: Target, cfg: LinkConfig) -> Self {
+        Self::build(target, None, cfg)
+    }
+
+    /// Connect to a device that is already resolved.
+    ///
+    /// [`Link::open`] goes through [`Target::resolve`], which for a bare
+    /// address builds the device with [`Device::from_addr`] - and that takes
+    /// the control port to be frame + 1. True of the spec's defaults
+    /// (49374/49375), never true of an ephemeral pair. A caller that knows
+    /// both ports - a service that browsed once and kept its `Device`s, or a
+    /// test pointing at a simulator - hands the device over instead of
+    /// describing how to find it again. This is [`Sender::connect`]'s door,
+    /// with reconnection above it.
+    ///
+    /// **Reconnection keeps these exact sockets.** An attached link never
+    /// browses: every retry reuses the address and both ports it was given,
+    /// so it comes back after a reboot at the same address and does *not*
+    /// follow the device across a DHCP lease. Following a lease is what an
+    /// instance name is for, and the way to get it is [`Link::open`] with
+    /// `Target { name: Some(..), .. }`, or [`Link::retarget`] with one later.
+    /// (A `Device`'s `instance` is not enough: it can be synthesised from an
+    /// address, so re-browsing on it would silently turn an address the
+    /// caller chose into a name it did not.)
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Sender::connect`] returns.
+    pub fn attach(device: Device, cfg: LinkConfig) -> Result<Self> {
+        let mut link = Self::attach_deferred(device, cfg);
+        let sender = link.connect_now()?;
+        link.adopt(sender);
+        Ok(link)
+    }
+
+    /// [`Link::attach`] without the handshake up front: never fails, connects
+    /// in the background, and reconnects to the same sockets forever.
+    #[must_use]
+    pub fn attach_deferred(device: Device, cfg: LinkConfig) -> Self {
+        // `target()` must still answer something honest for an attached link.
+        // The frame address is that: it is where the frames go, and it is what
+        // `Target { addr }` would have meant.
+        let target = Target {
+            addr: Some(device.frame),
+            ..Target::default()
+        };
+        Self::build(target, Some(device), cfg)
+    }
+
+    fn build(target: Target, attached: Option<Device>, cfg: LinkConfig) -> Self {
         let last_limits = Limits {
             connected: false,
             fps: cfg.sender.fps,
@@ -300,6 +380,7 @@ impl Link {
         };
         Link {
             target,
+            attached,
             cfg,
             sender: None,
             pending: None,
@@ -473,6 +554,17 @@ impl Link {
         }
     }
 
+    /// Which device to connect to on the next attempt: the one that was
+    /// attached, verbatim, or whatever resolving the target finds now.
+    ///
+    /// Taken by value so it can cross onto the connect thread.
+    fn aim(&self) -> Aim {
+        match &self.attached {
+            Some(d) => Aim::Known(d.clone()),
+            None => Aim::Find(self.target.clone()),
+        }
+    }
+
     /// Resolve and connect on a background thread.
     ///
     /// On a thread because both halves block: an mDNS browse for up to
@@ -480,14 +572,14 @@ impl Link {
     /// round trips. A render loop must not stop for either.
     fn spawn_attempt(&mut self) {
         let (tx, rx) = mpsc::sync_channel(1);
-        let target = self.target.clone();
+        let aim = self.aim();
         let cfg = self.cfg.sender.clone();
         let spawned = std::thread::Builder::new()
             .name("screeny-link-connect".into())
             .spawn(move || {
                 // The receiver is gone if the link was dropped meanwhile,
                 // which is fine: the Sender goes with it, unused.
-                let _ = tx.send(target.resolve().and_then(|d| Sender::connect(d, cfg)));
+                let _ = tx.send(aim.resolve().and_then(|d| Sender::connect(d, cfg)));
             });
         match spawned {
             Ok(_) => self.pending = Some(rx),
@@ -500,10 +592,10 @@ impl Link {
         }
     }
 
-    /// Connect synchronously, for [`Link::open`].
+    /// Connect synchronously, for [`Link::open`] and [`Link::attach`].
     fn connect_now(&mut self) -> Result<Sender> {
         match self
-            .target
+            .aim()
             .resolve()
             .and_then(|d| Sender::connect(d, self.cfg.sender.clone()))
         {
@@ -555,13 +647,40 @@ impl Link {
     /// and picks up whatever address DHCP has handed out since. This is for
     /// the other case: an address-pinned target that has moved, or a
     /// deployment that switches panels.
+    ///
+    /// This also **detaches** a link built with [`Link::attach`]: the device
+    /// it was pinned to is forgotten and every attempt from here resolves the
+    /// new target. Point it at another known device with
+    /// [`Link::reattach`].
     pub fn retarget(&mut self, target: Target) {
+        self.reaim(Aim::Find(target));
+    }
+
+    /// [`Link::retarget`] for a device that is already resolved: the same
+    /// hand-over, and the same pinned reconnection [`Link::attach`] describes.
+    pub fn reattach(&mut self, device: Device) {
+        self.reaim(Aim::Known(device));
+    }
+
+    fn reaim(&mut self, aim: Aim) {
         if let Some(mut s) = self.sender.take() {
             let _ = s.finish();
             s.poll_feedback();
         }
         self.pending = None;
-        self.target = target;
+        match aim {
+            Aim::Find(t) => {
+                self.target = t;
+                self.attached = None;
+            }
+            Aim::Known(d) => {
+                self.target = Target {
+                    addr: Some(d.frame),
+                    ..Target::default()
+                };
+                self.attached = Some(d);
+            }
+        }
         self.next_due = None;
         self.last_tx = None;
         self.last_limits.connected = false;
@@ -573,10 +692,20 @@ impl Link {
         self.stats.down_since = Some(Instant::now());
     }
 
-    /// Where the link is pointed.
+    /// Where the link is pointed. For an attached link this is the device's
+    /// frame address; [`Link::attached`] has the whole device, including the
+    /// control port a `Target` cannot express.
     #[must_use]
     pub fn target(&self) -> &Target {
         &self.target
+    }
+
+    /// The device this link is pinned to, if it was built with
+    /// [`Link::attach`]. `None` for a link that resolves its target - use
+    /// [`Link::device`] for the device a live session settled on.
+    #[must_use]
+    pub fn attached(&self) -> Option<&Device> {
+        self.attached.as_ref()
     }
 
     /// Send `FINAL` and stop. The link does not reconnect afterwards.

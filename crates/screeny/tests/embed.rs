@@ -489,6 +489,116 @@ fn a_bad_index_does_not_break_the_accounting() {
     drop(dev);
 }
 
+// ---------------------------------------------------------------------------
+// Attaching to a device that is already resolved (card 111)
+// ---------------------------------------------------------------------------
+
+/// `Link::attach` takes a device the caller already has, ports and all.
+///
+/// The simulator here is on a pair of **ephemeral** ports, which is the case
+/// `Target { addr }` cannot express: it resolves through `Device::from_addr`,
+/// which takes the control port to be frame + 1. Nothing in this test does any
+/// port arithmetic, and nothing in it chooses a port at all.
+#[test]
+fn an_attached_link_reaches_a_device_on_ephemeral_ports() {
+    let dev = SimDevice::start(sim_config(0, 0)).expect("sim starts");
+    let sim = dev.handle();
+    let device = device_for(dev.frame_addr(), dev.control_addr());
+    assert_ne!(
+        device.control.port(),
+        device.frame.port() + 1,
+        "an ephemeral pair is the whole point of this test"
+    );
+
+    let mut link = Link::attach(device.clone(), brisk()).expect("attaches");
+    assert_eq!(link.state(), LinkState::Up);
+    assert_eq!(link.device().map(|d| d.frame), Some(dev.frame_addr()));
+    assert_eq!(link.device().map(|d| d.control), Some(dev.control_addr()));
+    // The pinned device is still there to be read back, control port and all.
+    assert_eq!(link.attached(), Some(&device));
+    assert_eq!(link.target().addr, Some(dev.frame_addr()));
+
+    let sent = push(&mut link, 0);
+    assert!(sent.is_sent() && sent.exact(), "{sent:?}");
+    let shot = sim.wait_for_frames(1, PATIENCE).expect("displayed");
+    assert!(PAL.contains(&[shot.decoded[0], shot.decoded[1], shot.decoded[2]]));
+
+    drop(link);
+    drop(dev);
+}
+
+/// An attached link reconnects to **the same two ports**, not to frame + 1.
+///
+/// The device goes away and comes back on the pair it had - which is what a
+/// reboot looks like - and the link must find it again with no help and no
+/// discovery. This is the reconnect behaviour `Link::attach`'s doc comment
+/// promises: pinned sockets, no browse, and therefore no following a lease.
+#[test]
+fn an_attached_link_reconnects_to_the_same_two_ports() {
+    let dev = SimDevice::start(sim_config(0, 0)).expect("sim starts");
+    let (frame, control) = (dev.frame_addr(), dev.control_addr());
+    let mut link = Link::attach(device_for(frame, control), brisk()).expect("attaches");
+    assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent >= 5));
+
+    drop(dev);
+    assert!(
+        push_until(&mut link, PATIENCE, |l| !l.state().is_up()),
+        "the link never noticed the device had gone"
+    );
+
+    // Back on exactly the ports it had, which is a reboot.
+    let dev2 = SimDevice::start(sim_config(frame.port(), control.port()))
+        .expect("the ports the sim just released are free again");
+    let sim2 = dev2.handle();
+    assert!(
+        push_until(&mut link, PATIENCE, |l| l.stats().sessions >= 2),
+        "never reconnected: {:?}",
+        link.stats().last_error
+    );
+    sim2.wait_for_frames(1, PATIENCE).expect("the sim draws again");
+    assert_eq!(link.device().map(|d| d.control), Some(control));
+    assert_eq!(
+        link.stats().frames_offered,
+        link.stats().frames_sent + link.stats().frames_coalesced + link.stats().frames_dropped
+    );
+    drop(link);
+    drop(dev2);
+}
+
+/// `retarget` detaches; `reattach` moves the pin. Both keep the lifetime
+/// statistics and neither can make a send fail.
+#[test]
+fn reattach_moves_a_pinned_link_to_another_known_device() {
+    let dev = SimDevice::start(sim_config(0, 0)).expect("sim starts");
+    let mut link = Link::attach(device_for(dev.frame_addr(), dev.control_addr()), brisk())
+        .expect("attaches");
+    assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent >= 3));
+    let sent_before = link.stats().frames_sent;
+
+    let dev2 = SimDevice::start(sim_config(0, 0)).expect("a second sim starts");
+    let sim2 = dev2.handle();
+    let second = device_for(dev2.frame_addr(), dev2.control_addr());
+    link.reattach(second.clone());
+    assert_eq!(link.attached(), Some(&second));
+
+    assert!(
+        push_until(&mut link, PATIENCE, |l| l.stats().sessions >= 2),
+        "never connected to the second device: {:?}",
+        link.stats().last_error
+    );
+    sim2.wait_for_frames(1, PATIENCE).expect("the second sim draws");
+    assert_eq!(link.device().map(|d| d.frame), Some(dev2.frame_addr()));
+    assert!(link.stats().frames_sent > sent_before, "totals carried over");
+
+    // And a target puts it back on the discovery path.
+    link.retarget(target_at(dev.frame_addr()));
+    assert!(link.attached().is_none());
+
+    drop(link);
+    drop(dev);
+    drop(dev2);
+}
+
 /// The fixture's own promise: the `Device` a test builds points at the
 /// simulator's real ephemeral ports, so nothing here can accidentally reach
 /// the bench panel on 49374/49375.

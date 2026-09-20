@@ -30,9 +30,18 @@ ctrlc = { version = "3", optional = true }
 screeny-sim = { path = "../sim", default-features = false }
 
 [features]
-default = ["gpu"]
+default = ["gpu", "sender"]
 # GPU pieces, through wgpu. Build with --no-default-features for a CPU-only runner.
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
-# `output::SenderOutput`: frames to a real panel over UDP, through `screeny`'s
-# `Link`. Off by default so the art core builds with no network stack at all.
+# `output::SenderOutput` and `screeny-art play`: frames to a real panel over
+# UDP, through `screeny`'s `Link`.
+#
+# On by default (card 112), because the art system is the project's primary
+# sender and `tests/sender.rs` - the only place the pixel-exactness claim is
+# checked on the wire - is `#![cfg(feature = "sender")]`. Off by default, a
+# plain `cargo test` ran none of it and a regression in the link, the chooser or
+# the pipeline would have passed silently.
+#
+# `--no-default-features` (optionally `--features gpu`) is the network-free
+# build: no sockets, no mdns-sd, no ctrlc, and `play` gone from the binary.
 sender = ["dep:screeny", "dep:ctrlc"]

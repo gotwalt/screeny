@@ -13,7 +13,8 @@ const PLAY_USAGE: &str = "\
 ";
 #[cfg(not(feature = "sender"))]
 const PLAY_USAGE: &str = "\
-  (`play` needs the `sender` feature: cargo run --release -p screeny-art --features sender)
+  (this binary was built with --no-default-features, so `play` is not in it;
+   the `sender` feature is on by default)
 ";
 
 const USAGE_HEAD: &str = "\
@@ -72,7 +73,7 @@ fn run(argv: Vec<String>) -> Result<(), String> {
         #[cfg(feature = "sender")]
         Some("play") => play(parse(it)?),
         #[cfg(not(feature = "sender"))]
-        Some("play") => Err("built without the `sender` feature, so there is no network stack in this binary".into()),
+        Some("play") => Err("built with --no-default-features, so the `sender` feature is off and there is no network stack in this binary".into()),
         Some(other) => Err(format!("unknown command `{other}`")),
         None => Err("no command".into()),
     }

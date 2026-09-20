@@ -9,12 +9,15 @@
 //! or is simply off is a counter here rather than an `io::Error` a render loop
 //! has to decide what to do about.
 //!
-//! Behind the `sender` feature: without it `screeny-art` has no network stack
-//! at all, which is what the headless runner and the tests want.
+//! Behind the `sender` feature, which is **on by default** (card 112): the
+//! wire acceptance in `tests/sender.rs` is the only check that indexed frames
+//! reach a panel pixel-exact, and it must run in a plain `cargo test`.
+//! `--no-default-features` builds `screeny-art` with no network stack at all,
+//! for a runner that only pipes or snapshots.
 
 use crate::frame::WireFrame;
 use crate::output::Output;
-use screeny::{Limits, Link, LinkConfig, LinkState, Pixels, Sent, Target};
+use screeny::{Device, Limits, Link, LinkConfig, LinkState, Pixels, Sent, Target};
 use serde::Serialize;
 use std::io;
 
@@ -115,6 +118,22 @@ impl SenderOutput {
     pub fn open_with(target: Target, cfg: LinkConfig) -> io::Result<Self> {
         let label = label_of(&target);
         Ok(SenderOutput { link: Link::open(target, cfg)?, label, last: None })
+    }
+
+    /// Connect to a panel that is already resolved, ports and all.
+    ///
+    /// For a caller holding a [`Device`] rather than a way of finding one: the
+    /// studio's device list (card 106), or a test pointing at a simulator on
+    /// ephemeral ports. The link is **pinned** to that device - it reconnects
+    /// to the same two ports and never browses, so it does not follow a DHCP
+    /// lease; see `Link::attach`.
+    ///
+    /// # Errors
+    ///
+    /// If the panel does not answer the handshake.
+    pub fn attach(device: Device, cfg: LinkConfig) -> io::Result<Self> {
+        let label = device.label();
+        Ok(SenderOutput { link: Link::attach(device, cfg)?, label, last: None })
     }
 
     /// Start without a panel and pick one up whenever it appears.

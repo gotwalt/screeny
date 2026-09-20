@@ -23,12 +23,14 @@ cargo run -p screeny-studio                      # the designer
 cargo run -p screeny-art -- list                 # pieces and their parameters
 cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
-cargo test -p screeny-art
+cargo test -p screeny-art                        # includes the end-to-end wire tests
 
-# to a panel (needs the `sender` feature; use --release, the encoder is ~10x
-# slower in a debug build)
-cargo run --release -p screeny-art --features sender -- play plasma --to screeny-4a00a4
-cargo test --release -p screeny-art --features sender    # includes the end-to-end tests
+# to a panel (use --release, the encoder is ~10x slower in a debug build)
+cargo run --release -p screeny-art -- play plasma --to screeny-4a00a4
+
+# the network-free build: no sockets, no mdns-sd, no `play`
+cargo build -p screeny-art --no-default-features            # also no GPU pieces
+cargo build -p screeny-art --no-default-features --features gpu
 ```
 
 ## Sending to a panel
@@ -52,12 +54,33 @@ Three things are worth knowing before building on it:
 - **The network cannot fail a send.** A panel that reboots, moves or is off is a
   run of counters in `PanelStatus`, not an error in the render loop.
 
-`SenderOutput` is behind the `sender` feature, so the core - pieces, pipeline,
-meter, preview - builds with no network stack at all
-(`cargo build -p screeny-art --no-default-features`). The **meter** is not
-behind a feature: `screeny-encode` and `screeny-proto` open no sockets, so the
-studio's frame statistics and preview are the real encoder's answers whether or
-not a panel is anywhere nearby.
+### The `sender` feature is on by default
+
+Decided by the orchestrator on 2026-09-19 (card 112). `SenderOutput` and `play`
+live behind the `sender` feature, and that feature is **default-on**, alongside
+`gpu`:
+
+- The art system is the project's primary sender, so a build of it that cannot
+  send is the special case, not the other way round.
+- [`tests/sender.rs`](tests/sender.rs) is `#![cfg(feature = "sender")]`. It is
+  the only place the pixel-exactness claim is checked *on the wire*, against
+  `screeny-sim`; off by default it ran zero tests in a plain `cargo test` and a
+  regression in the link, the chooser or the pipeline would have passed CI.
+- `gpu` is already default-on with `--no-default-features` as the escape, so a
+  second feature behaving differently was a trap. It had already caught someone:
+  a plain `cargo test --release` at the root rebuilt `target/release/screeny-art`
+  without `play`.
+
+**The network-free build is `cargo build -p screeny-art --no-default-features`**
+(add `--features gpu` to keep the GPU pieces). It has no sockets, no mdns-sd and
+no ctrlc, the core - pieces, pipeline, meter, preview - is all there, and
+`screeny-art play` is gone from the binary with a usage line that says why.
+`cargo test -p screeny-art --no-default-features` is green; `tests/sender.rs`
+compiles to nothing there, which is the point of the `cfg`.
+
+The **meter** is not behind a feature: `screeny-encode` and `screeny-proto` open
+no sockets, so the studio's frame statistics and preview are the real encoder's
+answers whether or not a panel is anywhere nearby.
 
 The studio needs no Node toolchain and no `tauri-cli`: the front end is three
 static files in `crates/studio/ui/`, embedded at build time. Edit them and re-run.
@@ -280,7 +303,8 @@ Things to know:
   needs a working Vulkan or EGL/GLES 3 driver and access to `/dev/dri/renderD*`;
   no X or Wayland session.
 - `cargo build -p screeny-art --no-default-features` leaves wgpu and the GPU
-  pieces out.
+  pieces out (and the network stack with them; `--features gpu` keeps the GPU
+  pieces and drops only the network).
 
 ## Provisional assumptions
 
