@@ -55,6 +55,9 @@ fn main() -> ExitCode {
         if let Some(dir) = &cfg.ui_dir {
             println!("studio: serving the UI from {} (reload to see an edit)", dir.display());
         }
+        // Ctrl-C and SIGTERM stop cleanly, which releases the panel at once
+        // instead of leaving it on the last frame until its stream timeout.
+        studio.stop_on_signal();
         match studio.serve().await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

@@ -46,7 +46,13 @@ async fn request(addr: SocketAddr, head: String, body: &[u8]) -> Response {
     stream.write_all(head.as_bytes()).await.expect("write the request");
     stream.write_all(body).await.expect("write the body");
     let mut raw = Vec::new();
-    tokio::time::timeout(PATIENCE, stream.read_to_end(&mut raw)).await.expect("the studio answered").expect("read");
+    // A reset is only a failure if it cost us the answer: a server that closes
+    // a connection with anything still unread on it resets rather than closes,
+    // and the response may already be here.
+    let read = tokio::time::timeout(PATIENCE, stream.read_to_end(&mut raw)).await.expect("the studio answered");
+    if let Err(e) = read {
+        assert!(!raw.is_empty(), "no answer from the studio: {e}");
+    }
 
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a complete response");
     let head = String::from_utf8_lossy(&raw[..split]).to_string();

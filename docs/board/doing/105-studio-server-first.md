@@ -229,3 +229,44 @@ Mesa) has a build that cannot want one. The CPU pieces are all still there.
 (283 before this card, plus the studio's 11 and 8 that the feature unification above
 now runs). `crates/screeny`'s timing-sensitive pacing tests passed first time; card
 093's flake did not appear.
+
+### Step 4 - stopping cleanly, which is what releases the panel
+
+Found while thinking about what card 107 will do to this process: `docker stop` sends
+`SIGTERM`, and `Drop` does not run on a signal - the same edge card 101 hit in
+`screeny-art play`, where it needed a ctrl-c handler to send `FINAL`. Without one here
+the panel would be left holding the last frame until its stream timeout on every
+container restart.
+
+So `Studio::stop_on_signal()` (Ctrl-C or `SIGTERM`) sets the stop flag; graceful
+shutdown then unwinds the whole process in order. Two things had to change for that
+to be true rather than hopeful:
+
+- every open preview socket watches the stop flag as well. Otherwise axum's graceful
+  shutdown waits for connections to end, and a browser that is perfectly happy never
+  ends one. New test: `a_connected_browser_does_not_hold_the_shutdown_open`.
+- `close_panel()` on the way out of both the engine thread and `serve()`.
+
+Measured, with a `screeny-sim` on loopback:
+
+```
+POST /api/v1/set_panel {"on":true,"to":"127.0.0.1:50790"}
+  state up, connected, 30.0 fps, 91 sent / 90 coalesced, indexed exact 91, pal8-lz, 400 B
+  sim: 29.6-30.4 fps LIVE, rx 128 shown 128, gaps 0 stale 0 super 0 dec 0 rej 0
+kill -TERM <studio>
+  studio: stopping; releasing the panel        <- and the process exits
+  sim:  lock released by 127.0.0.1:50177: Final
+        state Live -> Hold
+```
+
+The engine ran at 60 and the link put 30 on the wire, with the device superseding
+nothing - the same result card 101 measured, now driven by an HTTP request.
+
+**A bug this shook out**, worth recording because it would have been intermittent and
+maddening: `reset_params` and `restart` take no arguments, so their handlers had no
+body extractor - but the UI `POST`s `{}` to them, and a server that closes a
+connection with a request body still unread gets a **TCP reset** rather than a clean
+close. The test client saw `ECONNRESET` once in about ten runs; a browser would have
+seen a failed `fetch` just as rarely. Both handlers now read and discard the body.
+Three consecutive full runs of the studio's 15 tests after the fix: green, green,
+green.

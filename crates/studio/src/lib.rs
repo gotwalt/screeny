@@ -68,11 +68,16 @@ pub struct AppState {
     /// The half-second heartbeat, in one slot for the same reason as frames.
     pub status: watch::Sender<Arc<StatusEvent>>,
     pub ui: Arc<ui::Ui>,
+    /// True once the studio has been asked to stop. Everything that would
+    /// otherwise run for ever - the engine thread, the status task, every
+    /// open preview socket - watches this, so a shutdown is not held up by a
+    /// browser that is perfectly happy.
+    pub stop: watch::Receiver<bool>,
     rev: Arc<AtomicU64>,
 }
 
 impl AppState {
-    fn new(engine: Shared, ui: ui::Ui) -> Self {
+    fn new(engine: Shared, ui: ui::Ui, stop: watch::Receiver<bool>) -> Self {
         let packet = lock(&engine).packet();
         AppState {
             frames: watch::Sender::new(packet),
@@ -80,6 +85,7 @@ impl AppState {
             status: watch::Sender::new(Arc::new(StatusEvent { kind: "status", playing: None, panel: None })),
             engine,
             ui: Arc::new(ui),
+            stop,
             rev: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -129,15 +135,30 @@ impl Studio {
     /// If the listen address cannot be bound.
     pub async fn bind(cfg: Config) -> std::io::Result<Self> {
         let engine: Shared = Arc::new(Mutex::new(Engine::new()));
-        let state = AppState::new(engine, ui::Ui { dir: cfg.ui_dir.clone() });
         let (stop, _) = watch::channel(false);
+        let state = AppState::new(engine, ui::Ui { dir: cfg.ui_dir.clone() }, stop.subscribe());
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
 
-        spawn_engine(state.clone(), stop.subscribe());
-        spawn_status(state.clone(), stop.subscribe());
+        spawn_engine(state.clone());
+        spawn_status(state.clone());
 
         Ok(Studio { addr, listener, state, stop })
+    }
+
+    /// Stop on Ctrl-C and on `SIGTERM` - which is what `docker stop` sends.
+    ///
+    /// Worth the twenty lines: `Drop` does not run on a signal (the same edge
+    /// card 101 hit in `screeny-art play`), so without this the panel would be
+    /// left holding the last frame until its stream timeout every time the
+    /// container was restarted.
+    pub fn stop_on_signal(&self) {
+        let stop = self.stop.clone();
+        tokio::spawn(async move {
+            signalled().await;
+            eprintln!("studio: stopping; releasing the panel");
+            let _ = stop.send(true);
+        });
     }
 
     /// The router, for a test that would rather call it in process.
@@ -186,9 +207,26 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Ctrl-C, or `SIGTERM`.
+async fn signalled() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 /// The clock. A plain OS thread, not a tokio task: a frame is several
 /// milliseconds of arithmetic and has no business on a runtime worker.
-fn spawn_engine(st: AppState, stop: watch::Receiver<bool>) {
+fn spawn_engine(st: AppState) {
+    let stop = st.stop.clone();
     std::thread::Builder::new()
         .name("engine".into())
         .spawn(move || {
@@ -214,7 +252,8 @@ fn spawn_engine(st: AppState, stop: watch::Receiver<bool>) {
 }
 
 /// The heartbeat: polled once here however many browsers are watching.
-fn spawn_status(st: AppState, mut stop: watch::Receiver<bool>) {
+fn spawn_status(st: AppState) {
+    let mut stop = st.stop.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(STATUS_EVERY);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

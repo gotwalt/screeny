@@ -225,6 +225,30 @@ async fn the_socket_carries_the_heartbeat() {
     assert_eq!(status["panel"], serde_json::Value::Null, "nothing is being sent");
 }
 
+/// Stopping the studio is not held up by a browser that is perfectly happy.
+/// It matters because stopping is what releases the panel: `docker stop` sends
+/// `SIGTERM`, and a shutdown that waited for every open preview socket to go
+/// away by itself would wait for ever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connected_browser_does_not_hold_the_shutdown_open() {
+    let studio = studio().await;
+    let mut ws = Ws::connect(studio.addr, None).await;
+    ws.frame().await; // it is really connected and really being fed
+
+    drop(studio); // as a signal would
+
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match ws.next().await {
+                Some(Msg::Close) | None => return true,
+                Some(_) => {}
+            }
+        }
+    })
+    .await;
+    assert_eq!(ended, Ok(true), "the socket was still open after the studio stopped");
+}
+
 /// The preview a browser is shown is the frame the engine measured: header
 /// first, then exactly one 64x32 picture.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

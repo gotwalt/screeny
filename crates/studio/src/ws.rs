@@ -47,6 +47,7 @@ async fn run(mut socket: WebSocket, st: AppState, me: Option<String>) {
     let mut frames = st.frames.subscribe();
     let mut states = st.states.subscribe();
     let mut status = st.status.subscribe();
+    let mut stop = st.stop.clone();
 
     // What the browser would otherwise have to ask for on connecting.
     let hello = st.state_event(None, crate::engine::lock(&st.engine).snapshot());
@@ -81,6 +82,11 @@ async fn run(mut socket: WebSocket, st: AppState, me: Option<String>) {
                 let msg = status.borrow_and_update().clone();
                 if !send_json(&mut socket, &*msg).await { break }
             }
+            // The studio is stopping. A browser that is keeping up perfectly
+            // must not be what holds the shutdown open.
+            // The borrow `wait_for` hands back is not `Send`, and this future
+            // has to be: discard it inside the block rather than in the arm.
+            () = async { drop(stop.wait_for(|s| *s).await) } => break,
         }
     }
     let _ = socket.send(Message::Close(None)).await;

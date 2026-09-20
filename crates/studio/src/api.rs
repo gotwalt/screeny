@@ -137,7 +137,10 @@ async fn set_param(State(st): State<AppState>, headers: HeaderMap, Json(req): Js
     Ok(Json(publish(&st, &headers)))
 }
 
-async fn reset_params(State(st): State<AppState>, headers: HeaderMap) -> Json<StudioState> {
+/// Takes no arguments - but reads the body anyway, because the UI sends `{}`
+/// and a server that closes a connection with a request body still unread
+/// gets a TCP reset rather than a clean close.
+async fn reset_params(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> Json<StudioState> {
     lock(&st.engine).reset_params();
     Json(publish(&st, &headers))
 }
@@ -187,7 +190,8 @@ async fn piece_act(State(st): State<AppState>, Json(req): Json<PieceAct>) -> Jso
     Json(lock(&st.engine).act(&req.action))
 }
 
-async fn restart(State(st): State<AppState>, headers: HeaderMap) -> Json<StudioState> {
+/// Takes no arguments; reads the body for the reason `reset_params` does.
+async fn restart(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> Json<StudioState> {
     lock(&st.engine).restart();
     Json(publish(&st, &headers))
 }
