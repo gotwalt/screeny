@@ -261,3 +261,58 @@ made and nothing else, and everything builds and passes on top of 151 -
 One thing worth noting: `tests/ui.rs`'s `!PICTURE_JS.contains("traffic")` still holds after
 151 rewrote the Picture screen, so "nothing about network traffic on the Picture screen" is
 still a fact about the file rather than a stale assertion.
+
+### A real `traffic` block, from my own loopback pair
+
+`screeny-sim --headless --no-mdns --bind 127.0.0.1 --frame-port 50900 --control-port 50901
+--http-port 50902`, and `screeny-studio --listen 127.0.0.1:58787 --no-discover
+--device-http-port 50902 --state-dir <scratch>`, both under `timeout`. Attached with
+`set_panel`, set to `testcard`, left for ~35 s. **This is my own simulator's output**, not
+the bench device's - a real panel's status payload carries the SSID and is never pasted.
+
+```jsonc
+"traffic": {
+  "frames":  { "out": { "bytes": 1345728, "packets": 1032 },
+               "in":  { "bytes": 1960,    "packets": 35 } },
+  "control": { "out": { "bytes": 72,      "packets": 9 },
+               "in":  { "bytes": 690,     "packets": 9 } },
+  "http":    { "out": { "bytes": 399,     "packets": 3 },
+               "in":  { "bytes": 1485,    "packets": 3 } },
+  "total":   { "out": { "bytes": 1375347, "packets": 1044 },
+               "in":  { "bytes": 5367,    "packets": 47 } },
+  "rate": { "out": 39916.65, "in": 146.12,
+            "frames_out": 39896.09, "frames_in": 83.87,
+            "control_out": 10.33,   "control_in": 24.17,
+            "http_out": 10.23,      "http_in": 38.08 },
+  "window_s": 5.0
+}
+```
+
+Everything in it checks out by hand:
+
+- **the rate against the arithmetic**: 1345728 / 1032 = **1304 B** a datagram; at 30 fps
+  that is 30 x (1304 + 28) = **39 960 B/s**, and the page says **39 896** - **0.16% out**;
+- **the overhead rule**: 1345728 + 28x1032 + 72 + 28x9 + 399 = **1375347**, which is
+  `total.out.bytes` exactly. Inbound: 1960 + 28x35 + 690 + 28x9 + 1485 = **5367**, exact.
+  HTTP contributes its bytes and no overhead, as it must;
+- **HTTP both ways, per poll**: 3 reads, 3 packets each way, 399/3 = **133 B** of request
+  and 1485/3 = **495 B** of reply - the reply is the bigger half, which is the shape a
+  status read should have;
+- **in is tiny**: 146 B/s against 39.9 KB/s out, a ratio of 1:273. The panel really does
+  talk back very little, which is the thing the owner's question was about.
+
+One detail worth having written down. The link's own `frames_sent` read **906** while
+`traffic.frames.out.packets` read **1032**. That is not a miscount: the studio built a
+link at the typed address, and then rebuilt it against the resolved device seconds later
+(the same re-aim card 171 had to teach "Reconnects" about). The new `Link` counts from
+zero; the registry had already banked the first one's 126 datagrams. **This is exactly
+the case the difference-not-copy design exists for**, and it happens on every panel within
+seconds of it being added - so it is the common case, not an edge.
+
+On the page those numbers read:
+
+```
+Network   39.9 KB/s out · 0.1 KB/s in
+By path   frames 39.9 · control 0.0 · http 0.0 KB/s out, averaged over 5 s
+Sent      1.4 MB out · 5.4 KB in since the studio started
+```
