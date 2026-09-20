@@ -1602,19 +1602,34 @@ async fn serve_on(
 
 /// How long the close waits for the client to acknowledge the response.
 ///
-/// 500 ms is far longer than it takes and far shorter than what it replaces.
-/// On this LAN the acknowledgement is one round trip - single-digit
-/// milliseconds - and BSD and Linux both set `TF_ACKNOW` on a FIN, so it is not
-/// subject to the delayed-ACK timer that makes everything else about a Mac's
-/// TCP adaptive. What the half-second is actually for is smoltcp's first
-/// retransmit of the FIN, so that one lost segment on a noisy channel still
-/// ends in a clean close rather than in the timeout arm.
+/// **1,500 ms since the bench measured what 500 was costing.** Card 236 chose
+/// 500 on the reasoning that on this LAN the acknowledgement is one round trip
+/// - single-digit milliseconds - and that BSD and Linux both set `TF_ACKNOW` on
+/// a FIN, so it is not subject to the delayed-ACK timer that makes everything
+/// else about a Mac's TCP adaptive; the half-second was for smoltcp's first
+/// retransmit of the FIN, so that one lost segment still ends in a clean close.
 ///
-/// It is also the new worst case: after this, the longest a client can hold a
-/// worker is `start_read_request` + `read_request` + `write` + this = 13.5 s of
-/// stalling *before* the reply, and 0.5 s after it. It used to be 10 s after
-/// it, and that 10 s was reachable by a client doing nothing wrong.
-const CLOSE_ACK_MS: u64 = 500;
+/// That reasoning was about the *wire* and left out the radio. On the device,
+/// under the Studio's 10 s status poll over WiFi, firmware 0.5.3 logged
+/// "the peer never acknowledged the close; dropping it" **three times in
+/// ~20 minutes** - about 120 polls, at an RSSI of roughly -57 dBm. So the
+/// FIN's acknowledgement took longer than 500 ms about 2.5% of the time, on a
+/// quiet link with a well-behaved client. That is WiFi latency: a station that
+/// has gone to sleep between beacons, or an access point holding a frame for
+/// one DTIM period, both of which are hundreds of milliseconds and neither of
+/// which is anything to do with the client's TCP.
+///
+/// 1,500 ms covers that with room, and it is still an eighth of what it
+/// replaced: picoserve's own close could take the whole 5 s `read_request`
+/// timeout *and* waited for the client's application to close. The worst case
+/// a client can hold a worker is now `start_read_request` + `read_request` +
+/// `write` + this = 13.5 s of stalling before the reply and 1.5 s after it -
+/// and with two workers the other one is in `accept` throughout, which is the
+/// property card 236 was really buying.
+///
+/// The `warn!` in [`BoundedSocket::settle`] stays as it is: after 1.5 s of
+/// silence it really is a peer that is not coming back, and it should be said.
+const CLOSE_ACK_MS: u64 = 1500;
 
 /// An `embassy-net` TCP socket whose close is bounded by **this** device.
 ///
@@ -1755,7 +1770,7 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
     // request that has started, 5 s for the reply to be accepted, and - card
     // 236, in [`BoundedSocket`] rather than here, because picoserve's `Config`
     // has no knob for it - [`CLOSE_ACK_MS`] for the close. The worst a client
-    // can hold the server for is therefore ~8.5 s, and that needs it to have
+    // can hold the server for is therefore ~9.5 s, and that needs it to have
     // connected and then gone quiet mid-header. **The close is no longer part
     // of that sum in any interesting way**: it used to be able to add 10 s of
     // its own, and it was the *ordinary* case, not the stalled one, that paid.
