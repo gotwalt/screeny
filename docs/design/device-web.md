@@ -8,7 +8,7 @@ rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5
 as a `200` and not a `302`, no option 114, the connected screen yields to a stream). The one silent
 stall of 0.5.1 never reproduced; card 234 fixed an unbounded UDP send and card 243 makes a
 panic reboot and say so (`GET /api/v1/panic`). Card 236 bounded the HTTP close (refused connects 9-17 per probe run -> 0). Next, in the order the owner chose on 2026-09-20 (decision 10): 234 (the stall), 243 + the
-boot-path stack lever, a one-hour soak, 240/241 (OTA, the full plan), 230 (the button), with
+boot-path stack lever, 240/241 (OTA, the full plan), 230 (the button), with
 225 (spec sections 8.1/8.3) and the simulator's captive answer on the side.**
 This file is the source of truth for the device-web track (cards 200-249, coordinated by
 the `firmware` Claude session): decisions, what the research settled, and the build
@@ -37,6 +37,7 @@ order at the end.
 | 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the owner pressing (card 203). | owner, 2026-09-20 |
 | 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | owner, 2026-09-20 |
 | 10 | **Scope, after the phone test: "this is not a commercial product, we don't need to overly bomb-proof it. As long as it's not running out of memory and is pretty crash proof I'm happy."** WiFi setup is good enough as it stands. **Dropped**: 229 (network scan list), a faster wrong-password verdict (45 s today), identical-credentials-is-a-no-op, the Android refresh-chain check, mDNS re-announce on an address change (the Studio's card 141 follows a panel that moved), the simulator serving the setup page and the `crates/provision` tidy. **Kept**: 234 (the silent stall), 243 (panic breadcrumb) with the boot-path stack lever, a one-hour soak as the acceptance check, **OTA 240/241 on the full plan of research 006**, and the button as **one card: short press = status for 10 s, hold 5 s (countdown, release cancels) = wipe WiFi -> portal** - no 15 s factory reset, no held-at-boot (this narrows decision 8). Order: stability first, then OTA, then the button; host-only work (spec 225, the simulator's captive `200`) in parallel on Opus workers. | owner, 2026-09-20 |
+| 11 | **No long soak runs as acceptance.** "These soak tests are so freaking long - can we defer them? I think things look pretty stable. We can re-evaluate if they turn out not to be." The evidence that stands in for them: the device runs under the Studio all day anyway, a panic now reboots and reports itself (`GET /api/v1/panic`: `boot_count` / `panic_count` say whether anything happened overnight), and the two probe suites after each flash. fw 0.5.2 did run a clean hour and 0.5.3 a clean partial one before this was decided. | owner, 2026-09-20 |
 
 ## Working agreement with the software session
 
