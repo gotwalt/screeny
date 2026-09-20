@@ -59,8 +59,8 @@ engine time zero and run on with engine time). One method, `now(t)`. `Clock::par
 takes `HH:MM` or `HH:MM:SS`, seconds may be fractional. The studio can hold one later
 without anything here changing.
 
-**The day is day zero, not today.** The first version anchored the pinned time to
-today's midnight, which is wrong for the promise in the goal: the numerals piece seeds
+**The day is day zero, not today.** The obvious reading of "pretend it is 21:12" is
+today's midnight plus 21:12, and it would have been wrong: the numerals piece seeds
 each minute's choreography from the *absolute* minute number
 (`self.seed ^ (next as u64).wrapping_mul(0x51ed_270b)`, and `dance_for(next, ..)`), so
 "21:12 today" would choose a different dance tomorrow. Pinning to day zero costs
@@ -103,6 +103,14 @@ pieces; two different pinned times differ, so the flag really reaches the piece;
 acceptance command's shot is one picture over four seeds and all thirteen dances; and a
 piece that never reads `Ctx::now` does not notice `--time`. Plus three unit tests for
 `Clock::parse` in `piece.rs`, including that a pinned time is a number under 86400.
+
+**Handover checks.** `cargo clippy --workspace --all-targets` says nothing.
+`cargo test --release --no-fail-fast` at the root: 81 test targets `ok`, one FAILED -
+`screeny-studio --test soak`, one of the two card-117 flakes, and another worktree was
+running its own soak in a five-run loop at the time. Re-run alone once that loop had
+finished: `test result: ok. 1 passed; 0 failed; ... finished in 60.95s`. Not touched;
+card 117 owns it. `crates/screeny/tests/embed.rs`, the other known flake, passed in the
+full run.
 
 **Out of scope, left alone.** The pieces' `offset` parameter is untouched. Nothing
 outside `crates/art` was changed: `crates/studio/src/player.rs` still builds its own
