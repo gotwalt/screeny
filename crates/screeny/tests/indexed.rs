@@ -14,12 +14,15 @@
 
 mod simfix;
 
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use screeny::encode::MIN_BUDGET;
-use screeny::{SenderConfig, Sent};
+use screeny::{FrameTime, IndexedSource, Pixels, SenderConfig, Sent};
 use simfix::{connect, expand, PATIENCE};
 
+use screeny_demos::clock::WordClock;
+use screeny_demos::{Indexed, Piece};
 use screeny_proto::dec::codec;
 use screeny_proto::NPIX;
 
@@ -361,6 +364,162 @@ fn an_rgb_frame_of_few_colours_is_exact_too() {
     assert_eq!(&shot.decoded[..], f.as_bytes().as_slice());
     // An RGB frame is not an indexed one, whatever the chooser did with it.
     assert_eq!(sender.stats().indexed_exact, 0);
+    drop(sender);
+    drop(dev);
+}
+
+// ---------------------------------------------------------------------------
+// The word clock, through the indexed pull path (card 092)
+// ---------------------------------------------------------------------------
+
+/// The clock as the CLI streams it: a `screeny::IndexedSource` over a
+/// `screeny_demos::Piece`, the same handful of lines `main.rs`'s `PieceSource`
+/// is.
+///
+/// It keeps every frame it handed over, so the simulator's decoded pixels can
+/// be compared against the producer's own `palette[index]`, and it counts
+/// every use of the **RGB** door. That counter is the card's real assertion:
+/// zero means the encoder never saw an expanded frame, so the palette on the
+/// wire is the one the clock built rather than one rediscovered from 6144
+/// bytes of pixels.
+struct ClockSource {
+    clock: WordClock,
+    buf: Indexed,
+    /// `palette[index]`, per frame, in the order they went out.
+    produced: Vec<Vec<u8>>,
+    /// How many frames used `Piece::render`, which expands to RGB. Must be 0.
+    expanded: usize,
+    /// Frames to render before ending the stream.
+    limit: usize,
+    /// A frame held back for the RGB fallback, which the clock never takes.
+    rgb: screeny_demos::Frame,
+}
+
+impl ClockSource {
+    fn at(hhmmss: &str, limit: usize) -> Self {
+        let t = chrono::NaiveTime::parse_from_str(hhmmss, "%H:%M:%S").expect("a time");
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 9, 19)
+            .expect("a date")
+            .and_time(t);
+        ClockSource {
+            clock: WordClock::at(base),
+            buf: Indexed::default(),
+            produced: Vec::new(),
+            expanded: 0,
+            limit,
+            rgb: screeny_demos::Frame::black(),
+        }
+    }
+}
+
+impl IndexedSource for ClockSource {
+    fn name(&self) -> &str {
+        "clock"
+    }
+
+    fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>> {
+        if self.produced.len() >= self.limit {
+            return None;
+        }
+        if self.clock.render_indexed(t.elapsed, &mut self.buf) {
+            self.produced
+                .push(expand(&self.buf.palette, &self.buf.indices[..]));
+            Some(Pixels::indexed(&self.buf.palette, &self.buf.indices[..]))
+        } else {
+            // The fallback the CLI keeps for the fractal. The word clock is
+            // palette-authored, so reaching this at all is the regression.
+            self.expanded += 1;
+            self.clock.render(t.elapsed, &mut self.rgb);
+            self.produced.push(self.rgb.as_bytes().to_vec());
+            Some(Pixels::rgb(self.rgb.as_bytes()))
+        }
+    }
+}
+
+/// One clock frame at a chosen moment reaches the simulator bit for bit.
+///
+/// Six moments, each awkward in its own way: a settled phrase, the boundary
+/// where the words turn over, one mid-roll with sub-pixel offsets, and the two
+/// times the phrasing special-cases.
+#[test]
+fn the_word_clock_arrives_exactly_at_every_kind_of_moment() {
+    for at in [
+        "11:42:00", "11:43:00", "11:43:30", "12:00:00", "00:00:00", "06:15:00",
+    ] {
+        let mut src = ClockSource::at(at, 1);
+        let (dev, sim, mut sender) = connect(SenderConfig::default());
+        sender
+            .run_indexed(&mut src, &AtomicBool::new(false))
+            .expect("streams");
+
+        let shot = sim
+            .wait_for_frames(1, PATIENCE)
+            .unwrap_or_else(|| panic!("{at}: the simulator never displayed a frame"));
+
+        assert_eq!(src.expanded, 0, "{at}: the clock went through the RGB door");
+        assert_eq!(
+            &shot.decoded[..],
+            src.produced[0].as_slice(),
+            "{at}: the panel would show something other than palette[index]"
+        );
+        assert_eq!(
+            shot.shown.expect("a frame was shown").codec,
+            codec::PAL4_LZ,
+            "{at}: an 11-colour frame should be PAL4_LZ"
+        );
+        assert_eq!(sender.stats().indexed_exact, 1, "{at}");
+        assert_eq!(sender.stats().indexed_fallback, 0, "{at}");
+        drop(sender);
+        drop(dev);
+    }
+}
+
+/// `screeny clock`'s whole path: twenty paced frames through
+/// [`screeny::Sender::run_indexed`], arriving exactly, as `PAL4_LZ`, with the
+/// encoder never once handed an expanded frame.
+#[test]
+fn streaming_the_word_clock_is_exact_for_every_frame() {
+    const N: usize = 20;
+    let mut src = ClockSource::at("11:42:50", N);
+    let (dev, sim, mut sender) = connect(SenderConfig::default());
+    sender
+        .run_indexed(&mut src, &AtomicBool::new(false))
+        .expect("streams");
+
+    let s = sender.stats().clone();
+    assert_eq!(src.expanded, 0, "the encoder saw an expanded frame");
+    assert_eq!(src.produced.len(), N);
+    // Every frame but the `FINAL` retransmission went through the indexed
+    // door, and every one of them fitted exactly.
+    assert_eq!(s.frames_sent, N as u64 + 1, "N frames plus FINAL");
+    assert_eq!(s.indexed_exact, N as u64);
+    assert_eq!(s.indexed_fallback, 0);
+    assert_eq!(
+        s.by_codec.get(&codec::PAL4_LZ).copied(),
+        Some(N as u64 + 1),
+        "the clock's eleven colours should be PAL4_LZ throughout: {:?}",
+        s.by_codec
+    );
+    // A few hundred bytes a frame; the README claims about 280.
+    assert!(
+        s.mean_bytes() < 600.0,
+        "{:.0} B/frame mean, expected a few hundred",
+        s.mean_bytes()
+    );
+
+    let shot = sim
+        .wait_for_frames(1, PATIENCE)
+        .expect("the simulator displayed something");
+    // Sequence numbers start at zero and count transmissions, so the frame the
+    // simulator is showing says which of ours it is. The `FINAL` frame is a
+    // retransmission of the last one, hence the clamp.
+    let i = (shot.shown.expect("a frame was shown").seq as usize).min(src.produced.len() - 1);
+    assert_eq!(
+        &shot.decoded[..],
+        src.produced[i].as_slice(),
+        "frame {i} is not palette[index]"
+    );
+    assert_eq!(shot.telemetry.frames_dropped_decode, 0);
     drop(sender);
     drop(dev);
 }

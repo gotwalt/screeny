@@ -30,7 +30,7 @@ use screeny_proto::{
 use crate::device::Device;
 use crate::encode::{EncodeConfig, Encoder, Profile, MIN_BUDGET};
 use crate::error::{Error, Result};
-use crate::frame::{Frame, FrameSource, FrameTime, Pixels};
+use crate::frame::{Frame, FrameSource, FrameTime, IndexedSource, Pixels};
 use crate::net;
 
 /// What became of a frame handed to [`Sender::send`] or [`crate::Link::send`].
@@ -790,7 +790,58 @@ impl Sender {
         stop: &AtomicBool,
         tick: &mut dyn FnMut(&SendStats),
     ) -> Result<()> {
-        let mut frame = Frame::black();
+        self.drive(
+            &mut RgbDriver {
+                src,
+                frame: Frame::black(),
+            },
+            stop,
+            tick,
+        )
+    }
+
+    /// [`Sender::run`] for a source that owns its palette.
+    ///
+    /// Every frame goes through [`Sender::send_indexed`], so a palette of 32
+    /// colours or fewer reaches the panel exactly: no expansion to RGB, no
+    /// histogram, no requantisation. [`SendStats::indexed_exact`] counts the
+    /// frames that made it and [`SendStats::indexed_fallback`] the ones that
+    /// could not (see [`Sender::send_indexed`] for when that happens).
+    ///
+    /// The pacing, telemetry and adaptation are the same loop as
+    /// [`Sender::run`] - only the door the frame comes through differs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Frame`] or [`Error::BadIndex`] if the source hands over a
+    /// malformed frame, and [`Error::Io`] if a datagram could not be sent.
+    pub fn run_indexed(&mut self, src: &mut dyn IndexedSource, stop: &AtomicBool) -> Result<()> {
+        self.run_indexed_with(src, stop, &mut |_| {})
+    }
+
+    /// [`Sender::run_indexed`], calling `tick` once per telemetry interval.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Frame`], [`Error::BadIndex`] or [`Error::Io`], as
+    /// [`Sender::run_indexed`].
+    pub fn run_indexed_with(
+        &mut self,
+        src: &mut dyn IndexedSource,
+        stop: &AtomicBool,
+        tick: &mut dyn FnMut(&SendStats),
+    ) -> Result<()> {
+        self.drive(&mut IndexedDriver { src }, stop, tick)
+    }
+
+    /// The pacing loop, shared by both pull APIs. `src` produces and sends one
+    /// frame per slot; everything else here is spec 9.1's schedule.
+    fn drive(
+        &mut self,
+        src: &mut dyn Driver,
+        stop: &AtomicBool,
+        tick: &mut dyn FnMut(&SendStats),
+    ) -> Result<()> {
         let stream_start = Instant::now();
         self.stats.started = Some(stream_start);
 
@@ -813,10 +864,9 @@ impl Sender {
                 elapsed: stream_start.elapsed(),
                 fps,
             };
-            if !src.render(t, &mut frame) {
+            if !src.produce(t, self)? {
                 break;
             }
-            self.send_frame(&frame, false)?;
             self.poll_feedback();
 
             n += 1;
@@ -859,6 +909,49 @@ impl Sender {
         self.poll_feedback();
         tick(&self.stats);
         Ok(())
+    }
+}
+
+/// How [`Sender::drive`] gets one frame out of whichever kind of source it was
+/// given. Private: [`FrameSource`] and [`IndexedSource`] are the two public
+/// seams, and this exists only so there is **one** pacing loop rather than one
+/// per seam.
+trait Driver {
+    /// Render the frame for `t` and send it. `false` ends the stream.
+    fn produce(&mut self, t: FrameTime, tx: &mut Sender) -> Result<bool>;
+}
+
+/// A [`FrameSource`] and the 6144-byte buffer it renders into.
+struct RgbDriver<'a> {
+    src: &'a mut dyn FrameSource,
+    frame: Frame,
+}
+
+impl Driver for RgbDriver<'_> {
+    fn produce(&mut self, t: FrameTime, tx: &mut Sender) -> Result<bool> {
+        if !self.src.render(t, &mut self.frame) {
+            return Ok(false);
+        }
+        tx.send_frame(&self.frame, false)?;
+        Ok(true)
+    }
+}
+
+/// An [`IndexedSource`], whose frames need no buffer here: the source lends
+/// its own palette and index plane and they go straight to
+/// [`Sender::send`], which routes an indexed frame to
+/// [`Sender::send_indexed`].
+struct IndexedDriver<'a> {
+    src: &'a mut dyn IndexedSource,
+}
+
+impl Driver for IndexedDriver<'_> {
+    fn produce(&mut self, t: FrameTime, tx: &mut Sender) -> Result<bool> {
+        let Some(px) = self.src.render_indexed(t) else {
+            return Ok(false);
+        };
+        tx.send(px)?;
+        Ok(true)
     }
 }
 

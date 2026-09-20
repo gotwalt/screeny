@@ -82,7 +82,7 @@ pub use discover::Target;
 pub use embed::{Backoff, Cadence, Limits, Link, LinkConfig, LinkState, LinkStats, Pace};
 pub use encode::{EncodeConfig, Encoded, Encoder, Profile};
 pub use error::{Error, Result};
-pub use frame::{FnSource, Frame, FrameSource, FrameTime, Pixels, RawReader};
+pub use frame::{FnSource, Frame, FrameSource, FrameTime, IndexedSource, Pixels, RawReader};
 pub use panel::Panel;
 pub use patterns::Pattern;
 pub use sender::{SendStats, Sender, SenderConfig, Sent};

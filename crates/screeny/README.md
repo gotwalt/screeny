@@ -192,6 +192,10 @@ trait FrameSource {                            // the seam demos plug into
     fn render(&mut self, t: FrameTime, out: &mut Frame) -> bool;   // false = end
     fn name(&self) -> &str;
 }
+trait IndexedSource {                          // ...for a source with a palette
+    fn render_indexed(&mut self, t: FrameTime) -> Option<Pixels<'_>>;  // None = end
+    fn name(&self) -> &str;
+}
 struct FnSource<F>;                            // a closure as a FrameSource
 struct RawReader<R>;                           // 6144-byte RGB888 frames from a reader
 enum Pattern { Bars, Grey, Gradient, F, Checker, Sweep }   // also a FrameSource
@@ -245,6 +249,8 @@ struct Sender;
     Sender::connect(Device, SenderConfig) -> Result<Sender>    // GET_INFO handshake
     fn run(&mut self, &mut dyn FrameSource, &AtomicBool) -> Result<()>   // pull
     fn run_with(.., &mut dyn FnMut(&SendStats))                // live stats
+    fn run_indexed(&mut self, &mut dyn IndexedSource, &AtomicBool) -> Result<()>
+    fn run_indexed_with(.., &mut dyn FnMut(&SendStats))        // exact, pull
     fn send(&mut self, Pixels) -> Result<Sent>                 // push
     fn send_indexed(&mut self, &[[u8;3]], &[u8]) -> Result<Sent>   // exact
     fn send_frame(&mut self, &Rgb888Frame, final_frame: bool) -> Result<u8>
@@ -301,6 +307,13 @@ let mut src = FnSource::new("sweep", |t: FrameTime, f: &mut Frame| {
     true                                                 // false ends the stream
 });
 ```
+
+If your renderer owns a palette, be an `IndexedSource` instead and
+`Sender::run_indexed` it: `render_indexed(t)` hands back a borrow of your own
+palette and index plane, they go to the panel exactly (see point 1 above), and
+nothing is ever expanded to 6144 bytes on the way. It is the pull-model
+equivalent of `Link::send(Pixels::indexed(..))`, and it is how `screeny clock`
+streams.
 
 Encoding on its own, with no network anywhere:
 
@@ -472,7 +485,7 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 | `tests/pacing.rs` | 30.0 fps within 1% over ten seconds, no drift, no burst; a 300 ms stall skipped rather than caught up; 10/24/60 fps |
 | `tests/cli.rs` | the binary end to end: `pattern` at 30 fps, `pipe`, `encode-stats`, the control subcommands, and the failure messages |
 | `tests/color.rs` | the fast cube root against libm, and the panel model against card 001's measurements |
-| `tests/indexed.rs` | indexed frames are bit-exact end to end through `screeny-sim`: palettes of 2, 16, 17 and 32 colours, structured and incompressible, over a stream; the over-budget fallback and both malformed-frame errors |
+| `tests/indexed.rs` | indexed frames are bit-exact end to end through `screeny-sim`: palettes of 2, 16, 17 and 32 colours, structured and incompressible, over a stream; the over-budget fallback and both malformed-frame errors; and the word clock through `run_indexed`, whose frames arrive as the palette it built with the RGB path never used |
 | `tests/embed.rs` | `Link`: the device rebooting on the same ports and moving to new ones mid-stream, the silence watchdog, reconnection off, a deferred link, `FINAL` on drop, a 60 fps producer decimated to 30 with nothing superseded, and `attach` reaching a device on an ephemeral, non-consecutive port pair and reconnecting to exactly those ports |
 
 `SCREENY_PACING_SECS` shortens the ten-second run while iterating.
@@ -506,6 +519,26 @@ from the frame port per spec 6.4, the control opcodes, and a loss injector.
 `screeny fractal [--seed N]` streams the endless fractal zoom tour and `screeny clock
 [--at HH:MM[:SS]]` streams the word clock, both from `crates/demos`. They take the same
 streaming flags as `pattern` (`--addr`, `--name`, `--fps`, `--duration`, `--fast`).
-Measured against the simulator on loopback: clock ~280 B/frame, always `PAL4_LZ`
-(exact), 0.05 ms encode; fractal ~1300 B/frame, `PAL8_LZ`, 0.9 ms encode; both a
-steady 30 fps.
+Since card 092 both stream through `IndexedSource`: the colours a piece
+authors are the colours on the wire, rather than colours the encoder
+rediscovered from an expanded frame. Measured against the simulator on
+loopback, ten and four seconds, release, on a busy laptop:
+
+| | bytes/frame | encode mean | codec | exact |
+|---|---|---|---|---|
+| clock | 271 | 0.07 ms | `PAL4_LZ`, 100% | 301 of 301 |
+| fractal | 753 | 0.16 ms | `PAL8_LZ`, 100% | 122 of 122 |
+
+Both hold a steady 30 fps with nothing dropped, stale or superseded. The old
+RGB path reached the same *pixels* - the ladder rediscovered the same palette
+and carried it losslessly - but through a 6144-byte expansion and a histogram,
+at about 1300 B/frame and 0.9 ms for the fractal. The stream summary now says
+the claim out loud:
+
+```
+sent 302 frames in 10.0 s (30.19 fps), 0 skipped, 271 B mean, ...
+301 indexed frames exact on the wire
+```
+
+If a piece ever hands over more colours than fit, that line says how many
+frames were requantised and how big the palette was, instead of going quiet.
