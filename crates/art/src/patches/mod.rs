@@ -3,6 +3,7 @@
 use crate::patch::PatchDef;
 
 pub(crate) mod clocks;
+pub(crate) mod flock;
 #[cfg(feature = "gpu")]
 mod knot;
 #[cfg(feature = "gpu")]
@@ -18,6 +19,7 @@ pub static ALL: &[PatchDef] = &[
     clocks::dials::DEF,
     plasma::DEF,
     metaballs::DEF,
+    flock::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
     #[cfg(feature = "gpu")]
