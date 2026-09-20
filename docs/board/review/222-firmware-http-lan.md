@@ -324,3 +324,104 @@ no font, no framework. The status table is rendered by the firmware, so it is
 readable with JavaScript disabled; the script replaces the same cells every
 4 s. Settings, identify and reboot need JavaScript. The Wi-Fi form and the
 firmware upload are marked-out sections naming cards 223 and 240.
+
+**Step 4 - what the orchestrator should run over the wire.**
+
+A worker cannot reach 192.168.7.x, so none of this was run here. In rough order
+of "most likely to find something":
+
+```sh
+D=192.168.7.221
+
+# the shapes, against crates/device-api/tests/golden/
+curl -s  http://$D/api/v1/status    | python3 -m json.tool
+curl -s  http://$D/api/v1/telemetry | python3 -m json.tool
+curl -s  http://$D/api/v1/wifi      | python3 -m json.tool
+
+# the refusals: 503, 503, 405, 404, 400, 413
+curl -si http://$D/api/v1/networks            | head -1
+curl -si -X POST http://$D/api/v1/firmware --data-binary @/dev/null | head -1
+curl -si -X POST http://$D/api/v1/status      | head -1
+curl -si http://$D/nope                       | head -1
+curl -si -X POST http://$D/api/v1/settings -H 'content-type: application/json' -d '{nope}' | head -1
+curl -si -X POST http://$D/api/v1/wifi -d "ssid=x&psk=$(python3 -c 'print("y"*400)')" | head -1
+
+# the page, in a browser and with JavaScript off
+open http://$D/
+
+# settings, and that they survive a reboot
+curl -s -X POST http://$D/api/v1/settings -H 'content-type: application/json' \
+  -d '{"name":"bench","brightness":64,"idle_mode":"dim"}'
+curl -s -X POST http://$D/api/v1/reboot -H 'content-type: application/json' -d '{"confirm":"RBOO"}'
+sleep 25 && curl -s http://$D/api/v1/status | python3 -m json.tool   # name/brightness/idle back
+curl -s -X POST http://$D/api/v1/settings -H 'content-type: application/json' \
+  -d '{"name":"","brightness":96,"idle_mode":"status"}'              # and put them back
+
+# identify: the overlay should come up for ten seconds
+curl -s -X POST http://$D/api/v1/identify -H 'content-type: application/json' -d '{"duration_ms":10000}'
+
+# wrong credentials fall back, and GET says why (`reason` is auth/not_found/other)
+curl -s -X POST http://$D/api/v1/wifi -d 'ssid=NoSuchNetwork&psk=whatever'
+sleep 60 && curl -s http://$D/api/v1/wifi
+#   ...then put the real network back over UDP (`screeny set-wifi`) or over HTTP.
+
+# THE one that matters: does HTTP cost a frame? Sixty seconds, Studio streaming.
+( end=$((SECONDS+60)); while [ $SECONDS -lt $end ]; do
+    curl -s -o /dev/null http://$D/api/v1/status
+    curl -s -o /dev/null http://$D/
+  done )
+#   watch the serial telemetry line throughout: 30 fps rx, 30 fps shown,
+#   `drops ... decode 0`, and `render` max unchanged (~3200 us).
+
+# discovery
+dns-sd -B _http._tcp
+dns-sd -L screeny-4a00a4 _http._tcp
+
+# the regression check
+cargo run --release -p screeny-probe -- --addr $D conformance --slow   # expect 60/0/4
+```
+
+Two things to look at specifically, because they are the parts a worker could
+not exercise:
+
+1. **Real browser headers.** `HTTP_BUF` is 1536 and a desktop Chrome `GET /`
+   is ~700 bytes of headers. If a browser ever gets `413 payload_too_large` on
+   a plain `GET /`, that constant is the thing to raise.
+2. **One worker, two connections.** smoltcp has no listen backlog, so a second
+   connection arriving mid-response waits for a retransmit. A browser loading
+   the page and immediately polling `/api/v1/status` is the case to watch; if
+   it feels slow, that is the argument for card 227 rather than a bug.
+
+**Proposed follow-up cards** (numbers only, no card files written):
+
+* **227 - a second HTTP connection worker.** 7504 bytes of `.bss`, which needs
+  one of the two levers this card did not pull. Do 232 first.
+* **232 - paint core 1's `APP_CORE_STACK` and report its high-water.** 16 KB
+  that has never been measured, and the cheapest RAM in the device if it is
+  mostly untouched. The card names it as a lever and it is still unmeasured.
+* **233 - `as_str()` on `crates/device-api`'s enums.** The firmware's
+  server-rendered status table re-spells `IdleMode`, `WifiState`,
+  `StreamState`, `FwSlot`, `FwState` and `ResetReason` as six `const fn`s,
+  because the only way out of those enums today is serde and a `Display` impl
+  has no writer to serialise into. `ErrorCode` already has `as_str`; the other
+  six should, and ~60 lines of `firmware/src/http.rs` would go.
+* **234 - what does "not implemented" mean in the API?** `GET /api/v1/networks`
+  and `POST /api/v1/firmware` answer `unavailable` (503) because no code fits
+  better. Either add one or write the decision down in the README so 223 and
+  240 do not each pick differently.
+* **235 - an ETag for `GET /`.** The page is 6.2 KB and a refresh re-sends all
+  of it. `picoserve::response::File` hashes a static page at compile time; this
+  one is dynamic, so it needs a hash of the static half plus a weak validator.
+* **236 - the server has no telemetry.** Nothing counts requests served,
+  errors answered or worst service time, so "is the web server busy" has no
+  answer from the device. A handful of atomics and three more status fields.
+* **237 - the settings form without JavaScript.** The status table already
+  works with it off; the form does not, because `POST /api/v1/settings` is
+  JSON. An urlencoded variant would make the whole page work in a captive
+  mini-browser, which card 223 will want anyway.
+* **238 - `reset_reason` cannot say `panic`.** Card 243's RTC breadcrumb is the
+  fix: the panic handler writes a word to RTC memory and the status reply
+  reports `panic` when it is set.
+* **239 - `WifiForm` is not `Mutating`.** Every JSON request type implements
+  it and gets `check_auth()`; the one form type does not, so the firmware calls
+  `request::check_auth(form.auth())` by hand. One impl in `crates/device-api`.
