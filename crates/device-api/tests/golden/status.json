@@ -3,6 +3,7 @@
   "id": "4a00a4",
   "name": "Studio panel",
   "fw": "0.2.0",
+  "boot_id": 3054198966,
   "uptime_ms": 3600000,
   "heap_used": 46112,
   "heap_size": 98304,

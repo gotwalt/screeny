@@ -28,6 +28,7 @@ fn status() -> StatusReply {
         id: text("4a00a4").unwrap(),
         name: text("Studio panel").unwrap(),
         fw: text("0.2.0").unwrap(),
+        boot_id: 3_054_198_966,
         uptime_ms: 3_600_000,
         heap_used: 46_112,
         heap_size: 98_304,
@@ -58,6 +59,7 @@ fn status_in_the_portal() {
     // image that is running has not been confirmed healthy yet.
     let s = StatusReply {
         name: text("").unwrap(),
+        boot_id: 1_194_684,
         uptime_ms: 41_500,
         rssi_dbm: 0,
         wifi_state: WifiState::Disconnected,

@@ -161,6 +161,7 @@ pub fn worst_status() -> StatusReply {
         id: worst_text(),
         name: worst_text(),
         fw: worst_text(),
+        boot_id: u32::MAX,
         uptime_ms: u32::MAX,
         heap_used: u32::MAX,
         heap_size: u32::MAX,

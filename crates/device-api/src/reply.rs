@@ -56,6 +56,10 @@ pub struct StatusReply {
     pub name: NameText,
     /// The firmware version.
     pub fw: FwText,
+    /// A random number drawn once at boot. Same id as last time: the link
+    /// flapped. Different id: the device rebooted. Random rather than a
+    /// persisted counter so that booting costs no flash write.
+    pub boot_id: u32,
     /// Milliseconds since boot. Wraps at 49.7 days, like telemetry's.
     pub uptime_ms: u32,
     /// Heap bytes in use.
@@ -101,6 +105,7 @@ impl StatusReply {
         + field("id", 2 + MAX_ID_LEN * ESCAPE_MAX)
         + field("name", 2 + MAX_NAME_LEN * ESCAPE_MAX)
         + field("fw", 2 + MAX_FW_LEN * ESCAPE_MAX)
+        + field("boot_id", MAX_U32_LEN)
         + field("uptime_ms", MAX_U32_LEN)
         + field("heap_used", MAX_U32_LEN)
         + field("heap_size", MAX_U32_LEN)

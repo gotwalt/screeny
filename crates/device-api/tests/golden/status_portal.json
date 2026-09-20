@@ -3,6 +3,7 @@
   "id": "4a00a4",
   "name": "",
   "fw": "0.2.0",
+  "boot_id": 1194684,
   "uptime_ms": 41500,
   "heap_used": 46112,
   "heap_size": 98304,
