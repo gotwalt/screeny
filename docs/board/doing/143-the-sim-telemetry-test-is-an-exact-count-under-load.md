@@ -56,3 +56,42 @@ The test passes 10 times in a row alone and once beside a `cargo build --release
 scratch target directory, and a failure names both counts.
 
 ## Log
+
+### Reading the code before reproducing
+
+`crates/sim/src/device.rs` `frame_loop` is the whole mechanism: drain the frame
+socket until it would block (cap `MAX_DRAIN` 256), hand each datagram to
+`Core::offer_frame` **under the core lock**, `flush_frames`, then - outside the
+lock - `thread::sleep(decode_ms)`. `frames_rx` is bumped inside `offer_frame`
+(`crates/receiver/src/lib.rs:907`), so it is the *frame thread* that increments
+it, during the drain, before the injected decode sleep. The 200 ms settle
+therefore has to cover at most one decode sleep plus one drain, not sixty of
+them - so hypothesis two, as the card words it ("whether 200 ms is long enough
+depends on which thread increments `frames_rx`"), resolves in the test's favour
+on an idle machine and only bites if the frame thread is starved for >200 ms.
+
+Hypothesis one, the kernel receive buffer, is out on this bench by arithmetic:
+`sysctl net.inet.udp.recvspace` is **786896** bytes and the stream is 60 `SOLID`
+datagrams of ~11 bytes each. Even at BSD's per-datagram mbuf charge the whole
+backlog is a few tens of kilobytes against a 768 KB buffer. `crates/sim`
+already asserts exact counts on loopback elsewhere and does not flake there
+(`tests/faults.rs`: "a clean link loses nothing on loopback", 20 of 20;
+`frames_rx + frames_dropped_stale == 60` in the delayed-link test), which is the
+same claim.
+
+### Reproducing
+
+Recipe (all bounded, all cleaned up afterwards):
+`scratchpad/loadrun2.sh` - 12 spinning CPU burners plus a loop of
+`cargo test -p screeny-sim -- --test-threads=16` in a second process, while the
+test binary is run N times in a row by name.
+
+- 20 of 20 pass with burners alone (load average reached **105** on a 10-core
+  machine; the test's own wall time stayed 1.10-1.13 s).
+- 30 of 30 pass with burners + the suite looping beside it (1.05-1.10 s).
+
+So the failure is rarer than a loop of thirty at load 105, and hammering is not
+going to find it in a reasonable time. Switched to measuring the *margins*
+instead: a throwaway `crates/sim/tests/probe143.rs` that runs the same two
+streams, reads the counters at the 200 ms mark exactly as the test does, then
+keeps polling until they have been still for 300 ms and prints both.
