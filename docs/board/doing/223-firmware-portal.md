@@ -489,3 +489,69 @@ What the owner should do and see, step by step:
 The owner was not at the keyboard (early morning), so on the orchestrator's
 instruction the portal build came off at once rather than leaving an open AP on
 the air in the house, and the phone test moves to after the merge.
+
+### The default build, left running (`c223-default`), and the bench window
+
+```
+provision: boot -> joining
+provision: action StartJoin { which: Stored, attempt: 1 }
+mdns: screeny-4a00a4.local -> 192.168.7.221 ...
+provision: joining -> online
+provision: action Announce
+lock: taken by 192.168.7.6:48745
+state: IDLE -> LIVE
+telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops stale 0 superseded 0
+  decode 0 rejected 0 gaps 1 | ... | state 1 codec 0x10 rssi -54 bright 96 |
+  heap 45540/90112
+```
+
+Joined from the store on the first attempt, announced, the Studio took the
+lock, and it held 30 fps with **zero decode drops and zero rejects** through the
+orchestrator's whole window. The one `gaps 1` is the stream's own reconnect.
+
+The 60 s line: `stack: core 0 main high-water 13056 of 27928 bytes, 13848
+free`; core 1 `1872 of 6144`. Under the probe's HTTP load the mark moved once,
+to 14,416 (`12488 free`) - which is exactly the `stack_free` the orchestrator
+read out of `/api/v1/status` a moment later.
+
+Orchestrator's window, fw 0.5.0: 120 s alternating loop **1,136 requests, 1,043
+answered 200**, no failures once up; `screeny-probe http` **30 pass, 0 fail, 8
+skip - identical to 0.4.3**, the eight being the expected ones; connects
+0.0104/0.0357, 0.0126/0.0903, 0.0107/0.0382 s; `/api/v1/status` at 110 s uptime
+`fw 0.5.0, stack_free 12488, heap_used 45540/90112, wifi_state connected,
+portal false, state live, store_errors 0`; `GET /api/v1/wifi` `state connected,
+reason null`; and a `Host: captive.apple.com` probe **on the LAN side answered
+404**, over the wire, which is the self-test's row confirmed by a real client.
+
+The one blip the orchestrator saw (an empty body on a `GET /api/v1/wifi` fired
+immediately after another request, not reproducible in three retries): **there
+is nothing in the serial log at that time.** No `WARN`, no reset, no refused
+connection, no drop - the only lines around that uptime are the probe's own
+`SET_NAME` re-announcing mDNS as `probe-228` and back. Both workers were on the
+LAN (the soft-AP is down on this build, so the AP-following worker is an
+ordinary second LAN worker), so it is not the stack switch. Left as an
+unexplained one-off; if it recurs it wants its own card with a packet capture.
+
+### `.stack` versus the painted region: the plain answer
+
+The orchestrator read `22,600` off a `stack:` line and reasonably feared a
+floor failure. The two numbers **are** the same quantity - `stack_probe`
+paints `_stack_end_cpu0.._stack_start_cpu0`, which is the `.stack` section -
+but they came from two different **builds**:
+
+| build | `.bss` | `.stack` |
+|---|---|---|
+| default (what is on the device) | 109,688 | **27,928** |
+| `--features http-selftest` | 114,968 | 22,600 |
+| `--features http-selftest,start-in-portal` | 114,976 | 22,600 |
+
+The card's exit is the default build's, and it is 27,928: 3,352 over the 24,576
+floor, 1,304 over the card's 26 KB. **But note the second row.** The
+`http-selftest` feature carries a second, separately monomorphised copy of
+picoserve's whole `serve` machinery, and that is 5,328 bytes of `.bss` - which
+now puts a *bench* build under the floor for the first time (on 0.4.3 the same
+feature landed at ~29 KB). `tools/fw-size.sh` exits non-zero on it. That build
+ran fine on the device twice, high-water 13,056 of 22,600, but it is worth a
+follow-up card: either the self-test shares the workers' buffers instead of
+declaring its own, or the script learns that the floor is a rule about builds
+that get flashed as the product.
