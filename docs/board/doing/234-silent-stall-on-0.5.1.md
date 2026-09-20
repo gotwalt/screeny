@@ -120,3 +120,62 @@ tell the orchestrator before touching `crates/proto`, `crates/receiver` behaviou
 `docs/design/protocol-v1.md`.
 
 ## Log
+
+### 2026-09-20, worker-234, step 1: what was read, and the lock map
+
+Read, in full: `firmware/src/{main,net,http,provision,store,receiver,mdns,fb,stack_probe}.rs`,
+`crates/receiver/src/lib.rs`, `crates/provision/src/machine.rs` (the `Online`/`Portal`
+arms), `crates/probe/src/suite/{mod,control}.rs`, `crates/sim/src/device.rs`. Also the
+vendored dependencies where the answer was not in our code: `picoserve-0.20.0/src/lib.rs`,
+`smoltcp-0.13.1/src/socket/udp.rs` and `src/iface/interface/mod.rs`,
+`embassy-sync-0.7.2/src/mutex.rs` and `src/waitqueue/waker_registration.rs`.
+
+**Correction to the card's premise, and it matters.** The "HTTP first, UDP ~20 s later"
+gap is softer than it reads. The Studio's `seen_unix` is bumped by UDP telemetry
+(`crates/studio/src/devices.rs:714`), by an mDNS resolve, and by each
+`GET /api/v1/status` (`devices.rs:750`) - but the panel had been *released* at ~80 s, so
+no STATS_REQ telemetry was flowing and the only thing still touching it was the 10 s HTTP
+poll. So "last contact 85 s" means "the poll at 85 s worked and the poll at ~95 s did
+not": HTTP died somewhere in (85, 95]. On the other side, `screeny-probe conformance`'s
+19 control rules are the whole of `control::rules()` (19 rules, `secs` summing to
+**12.4 s**), and rule 20 is the first *framing* rule - so on the estimate alone rules 1-19
+finish at 80 + ~13..20 = **93-100 s**, not 105. The two windows overlap. **A single event
+at ~93-95 s that killed HTTP and UDP together fits the evidence as well as a progressive
+one does.** The serial silence is the card's own weakest datum (the failed
+`espflash monitor` attach may have held the chip in reset) and telemetry would in any case
+have gone quiet within 5 s of `CORE` or the executor going. I have ranked accordingly:
+mechanisms that kill both at once are not excluded.
+
+**The lock map (card step 1).** There are three shared things on core 0 and one of them
+is not a lock:
+
+| what | kind | taken by | held across an `await`? |
+|---|---|---|---|
+| `net::CORE` (`net.rs:38`) | `embassy_sync::Mutex<CriticalSectionRawMutex, Option<Core>>` | `frames_task` (`net.rs:177`), `control_task` (`net.rs:376`), `telemetry_task` (`main.rs:608`), `mdns_task` (`mdns.rs:147`), `http::status` (`http.rs:572`), `http::get_telemetry` (`http.rs:708`), `http::apply_control` (`http.rs:632`), `http::post_settings` (`http.rs:795`), `store::commit` (`store.rs:618`) | **no.** Every region between a `lock().await` and its `drop` is synchronous. I checked all nine. |
+| `store::STORE` (`store.rs:187`) | same | `store::commit` (`store.rs:629`), `commit_immediate` (`store.rs:549`), `seed_wifi` (`store.rs:503`), `read_fw_health` (`http.rs:231`) | **yes, deliberately**: across `f.save_*().await`, which is `BlockingAsync` over the ROM flash routine - core 1 parked, core 0's interrupts masked ~50 ms per sector (`docs/design/device-web.md:100`). |
+| `provision::MACHINE` (`provision.rs:149`) | *blocking* `BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Provisioner>>>` | `with()` (`provision.rs:176`), `step()` (`provision.rs:639`), `init()` | cannot be - it is not async. |
+
+**Lock order is uniform: `CORE` then `STORE`, never the reverse.** `store::commit` copies
+the name and idle mode out of `CORE`, drops it, *then* takes `STORE`
+(`store.rs:617-629`); `control_task` (`net.rs:387` then `net.rs:407`) and
+`http::apply_control` (`http.rs:646` then `http.rs:649`) do the same. `MACHINE` is taken
+*inside* the `CORE` region once (`net.rs:215`, `provision::screen` on every 20 ms frame
+tick) and outside it everywhere else, but since `MACHINE` is a synchronous critical
+section that can never be held by a suspended task, that is not an inversion that can
+deadlock. **So there is no lock-order deadlock in this firmware.** That kills the card's
+own leading hypothesis.
+
+Two things the map does turn up:
+
+1. `provision::step()` calls `info!("provision: {} -> {}", ...)` **inside** the `MACHINE`
+   critical section (`provision.rs:648`), which the module's own docs forbid ("nothing is
+   rendered, awaited or formatted while it is held, because a critical section masks the
+   interrupts core 1's HUB75 DMA runs on", `provision.rs:31-35`). It only fires on a state
+   change, so it is a latency bug and not a stall, but it is the file contradicting itself.
+2. `CORE` has **five to nine** contenders and `embassy_sync::Mutex` stores exactly **one**
+   waker (`embassy-sync-0.7.2/src/mutex.rs:78` -> `WakerRegistration::register`,
+   `waker_registration.rs:29-40`, whose own comment says two waiters "wake each other in a
+   loop fighting over this WakerRegistration. This wastes CPU but things will still
+   work"). It is not a deadlock - `wake()` takes the waker and every displaced waiter is
+   re-woken - but it does mean that whenever two tasks want `CORE` at once, core 0 burns
+   CPU ping-ponging until the holder lets go. Worth knowing when reading a latency number.
