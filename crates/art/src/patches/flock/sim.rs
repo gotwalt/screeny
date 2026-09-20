@@ -64,6 +64,14 @@ const CLIMB: f32 = 0.42;
 /// this frame, so turning it up and down does not re-roll the world.
 pub const BLOBS: usize = 5;
 
+/// How far from its middle a flock is allowed to stray before it is gathered
+/// back. Nothing at all happens inside it.
+const FLOCK_RADIUS: f32 = 14.0;
+
+/// How much of its cruise turn rate a bird may add while avoiding something,
+/// at full urgency.
+pub const DODGE_TURN: f32 = 2.2;
+
 // --------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -194,7 +202,7 @@ pub struct Tuning {
 
 impl Default for Tuning {
     fn default() -> Self {
-        Tuning::of(0.85, 6.0, 0.8, 2.4)
+        Tuning::of(0.90, 6.0, 0.8, 2.4)
     }
 }
 
@@ -204,8 +212,12 @@ impl Tuning {
         let calm = calm.clamp(0.0, 1.0);
         Tuning {
             separation: 3.6,
-            alignment: 8.0,
-            cohesion: 14.0,
+            alignment: 12.0,
+            // Wide enough that the whole flock is always in one another's
+            // cohesion range. At 14 m - a plausible-looking number, and the
+            // first one tried - a flock that is ever pulled apart further than
+            // that cannot see itself any more and never comes back together.
+            cohesion: 26.0,
             // A calm flock also flies a little slower, which is most of what
             // "gentle" looks like from inside it.
             speed: (4.6 - 1.4 * calm, 7.4 - 1.8 * calm),
@@ -325,13 +337,16 @@ impl World {
                     // Periods of 50 to 210 s, drawn independently, so the three
                     // axes of one blob and the blobs among themselves have no
                     // period in common.
+                    // Long periods: a blob that drifts faster than about a
+                    // metre a second stops being scenery and starts chasing
+                    // birds, which no turn rate can answer.
                     rate: v3(
-                        TAU / rng.range(50.0, 210.0),
-                        TAU / rng.range(50.0, 210.0),
-                        TAU / rng.range(50.0, 210.0),
+                        TAU / rng.range(90.0, 260.0),
+                        TAU / rng.range(90.0, 260.0),
+                        TAU / rng.range(90.0, 260.0),
                     ),
                     phase: v3(rng.range(0.0, TAU), rng.range(0.0, TAU), rng.range(0.0, TAU)),
-                    radius: rng.range(12.0, 24.0),
+                    radius: rng.range(10.0, 18.0),
                 }
             })
             .collect();
@@ -384,7 +399,7 @@ pub struct Sim {
     /// Which flank the camera is riding, drifting between them over minutes.
     seat_phase: f32,
     rng: Rng,
-    acc: Vec<V3>,
+    acc: Vec<(V3, f32)>,
     /// Flock centroid, mean heading and rms spread, without the camera.
     pub centre: V3,
     pub course: V3,
@@ -507,7 +522,7 @@ impl Sim {
         let off = (self.birds[0].pos.y - (self.centre.y - tune.near * 0.45)).abs();
         let slack = 1.15 + 1.6 * (off / 4.0).clamp(0.0, 1.0);
         for i in 0..n {
-            self.fly(i, acc[i], tune, dt, slack);
+            self.fly(i, acc[i].0, tune, dt, slack, acc[i].1);
         }
         self.acc = acc;
 
@@ -516,7 +531,7 @@ impl Sim {
 
     /// Reynolds, plus the invisible geometry, plus - for `birds[0]` only - a
     /// seat in the flock.
-    fn steer(&self, i: usize, tune: &Tuning, blobs: &[(V3, f32)], reach: f32) -> V3 {
+    fn steer(&self, i: usize, tune: &Tuning, blobs: &[(V3, f32)], reach: f32) -> (V3, f32) {
         let me = self.birds[i];
         let camera = i == 0;
         let fwd = me.heading();
@@ -560,10 +575,11 @@ impl Sim {
         // The camera holds its distance harder than a bird does: a bird in a
         // flock is happy at arm's length, a lens is not.
         let keep = if camera { 7.0 } else { 3.4 };
-        let mut a = sep.scale(keep).add(align.scale(1.1 * herd)).add(coh.scale(0.13 * herd));
+        let mut a = sep.scale(keep).add(align.scale(1.1 * herd)).add(coh.scale(0.28 * herd));
 
         // Invisible geometry. The push is *across* the flight path, not back
         // along it: a bird goes round a thing, it does not stop in front of it.
+        let mut dodge = 0.0_f32;
         for (centre, radius) in blobs {
             let away = me.pos.sub(*centre);
             let dist = away.len().max(0.01);
@@ -571,12 +587,34 @@ impl Sim {
             if clear > reach {
                 continue;
             }
-            let urgency = (1.0 - clear / reach).clamp(0.0, 2.0);
+            dodge = dodge.max(urgency_of(clear, reach));
+            // Linear in how close it is, not squared. A stiff repulsion is
+            // fifteen times cohesion at the surface, and it does not push the
+            // flock round the blob - it shoves the near birds one way and the
+            // far ones another and takes the flock apart. Softer, and
+            // starting much further out, curves the whole flock as one body.
+            let urgency = urgency_of(clear, reach);
             let out = away.scale(1.0 / dist);
             // Head on, `across` is nothing; lean on the bird's own up so the
             // choice is made rather than left to rounding.
             let side = out.across(fwd).unit_or(fwd.cross(UP).unit_or(UP));
-            a = a.add(side.scale(20.0 * urgency * urgency)).add(out.scale(8.0 * urgency * urgency));
+            a = a.add(side.scale(9.0 * urgency)).add(out.scale(3.5 * urgency));
+        }
+
+        // Come home. Local cohesion only reaches `tune.cohesion` metres, so a
+        // flock that is ever pulled apart further than that stops being able
+        // to see itself and never comes back: over ten minutes it splits, and
+        // the camera spends the rest of the run chasing one half of it. This
+        // does nothing at all to a flock that is together - it starts outside
+        // the cohesion radius - and it is what makes the flight hold up over
+        // three seeds rather than the one it was first tuned on.
+        // ...but getting round the thing in front of you comes first. Pulling
+        // a bird home *while* it is dodging is how the flock gets squeezed
+        // into a blob: the two forces cancel and the avoidance loses.
+        let home = self.centre.sub(me.pos);
+        let stray = home.len() - FLOCK_RADIUS;
+        if stray > 0.0 && dodge < 0.05 {
+            a = a.add(home.unit_or(V3::ZERO).scale((stray * 0.25).min(4.0)));
         }
 
         // Floor, ceiling and the soft edge of the world, all the same shape:
@@ -608,7 +646,7 @@ impl Sim {
             let seat = self
                 .centre
                 .sub(track.scale(self.spread * 1.5 + tune.near))
-                .add(side.scale(self.spread * 0.55 * self.seat_phase.sin()))
+                .add(side.scale(self.spread * 0.40 * self.seat_phase.sin()))
                 // *Below* the flock, so the view rides a little nose-up and
                 // the horizon sits in the lower third with the birds against
                 // the sky. Seated level or above, the view spends its whole
@@ -616,12 +654,20 @@ impl Sim {
                 // in the top quarter and two thirds of the panel is dark
                 // ground - which is the picture upside down.
                 .sub(UP.scale(tune.near * 0.45));
-            a = a.add(seat.sub(me.pos).clamp_len(30.0).scale(0.8));
+            // The camera keeps its seat force even while dodging: its reach
+            // is nearly thirty metres, so "near a blob" is most of the time,
+            // and dropping the seat there costs it the flock.
+            a = a.add(seat.sub(me.pos).clamp_len(30.0).scale(0.55));
             // Fly the flock's course, not just the neighbours it happens to
             // have. Without this the camera cuts the corner when the flock
             // turns, overshoots, and spends the next half minute coming back -
             // which is where every empty frame came from.
-            a = a.add(self.course.scale(me.speed()).sub(me.vel).scale(0.9));
+            // Matching the flock's course, gently. Pushed hard - it was 0.9 -
+            // the camera darts about correcting itself, and since it sits only
+            // twelve metres away, its own darting swings the bearing to the
+            // flock faster than the flock ever wheels. The view then pans at
+            // the camera's fidgeting rather than at the flight.
+            a = a.add(self.course.scale(me.speed()).sub(me.vel).scale(0.65));
         } else {
             // Something over there, once in a while.
             let d = self.world.interest.at.sub(me.pos);
@@ -629,11 +675,11 @@ impl Sim {
                 a = a.add(d.unit_or(V3::ZERO).scale(0.9 * self.world.interest.pull));
             }
         }
-        a
+        (a, dodge)
     }
 
     /// Integrate one bird: speed band, turn-rate limit, bank, wingbeat.
-    fn fly(&mut self, i: usize, a: V3, tune: &Tuning, dt: f32, slack: f32) {
+    fn fly(&mut self, i: usize, a: V3, tune: &Tuning, dt: f32, slack: f32, dodge: f32) {
         let camera = i == 0;
         let me = &mut self.birds[i];
         let fwd = me.heading();
@@ -648,7 +694,12 @@ impl Sim {
         // time. Every empty and every lurching frame in the long run came from
         // making this smaller, not larger. Smoothness belongs in where it
         // *looks* - `aim`, and the ceilings above - never in how it flies.
-        let turn = if camera { tune.turn * slack } else { tune.turn };
+        // A bird avoiding a collision turns harder than it cruises, as a real
+        // one does. Without this the avoidance force is simply thrown away:
+        // whatever it asks for, the cruise limit clips it to about two metres
+        // a second squared, and a turn-rate-limited bird at five metres a
+        // second physically cannot get round anything inside thirteen metres.
+        let turn = if camera { tune.turn * slack } else { tune.turn * (1.0 + DODGE_TURN * dodge) };
         let along = a.dot(fwd).clamp(-3.5, 3.5);
         let across = a.across(fwd).clamp_len(turn * speed);
         let a = fwd.scale(along).add(across);
@@ -804,11 +855,12 @@ impl Sim {
 
     /// Clearance between the nearest bird and the nearest blob's surface,
     /// metres. Negative would mean a bird inside the invisible geometry.
-    pub fn clearance(&self, live: usize) -> f32 {
+    pub fn clearance(&self, live: usize, camera: bool) -> f32 {
         let mut worst = f32::INFINITY;
+        let who = if camera { &self.birds[..1] } else { &self.birds[1..] };
         for blob in &self.world.blobs[..live.min(self.world.blobs.len())] {
             let centre = blob.at(self.t);
-            for b in &self.birds {
+            for b in who {
                 worst = worst.min(b.pos.sub(centre).len() - blob.radius);
             }
         }
@@ -843,4 +895,10 @@ fn level(d: V3) -> V3 {
     let lift = d.y.clamp(-0.20, 0.20);
     let flat = v3(d.x, 0.0, d.z).unit_or(v3(0.0, 0.0, 1.0));
     flat.scale((1.0 - lift * lift).sqrt()).add(UP.scale(lift))
+}
+
+/// How hard something at `clear` metres of clearance is being avoided, given
+/// that avoidance begins at `reach`.
+fn urgency_of(clear: f32, reach: f32) -> f32 {
+    (1.0 - clear / reach).clamp(0.0, 1.6)
 }

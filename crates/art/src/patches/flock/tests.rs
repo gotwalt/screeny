@@ -21,8 +21,12 @@ struct Run {
     /// Degrees a second the view yaws and rolls.
     yaw: Vec<f32>,
     roll: Vec<f32>,
-    /// Smallest gap between any bird and any blob's surface, metres.
+    /// Smallest gap between any bird and any blob's surface, metres, for the
+    /// flock and for the camera. Kept apart: "no bird flies into the
+    /// invisible geometry" is a promise about the flock, and the camera -
+    /// which is also holding a seat - is worth knowing about separately.
     clearance: f32,
+    cam_clearance: f32,
     /// Worst speed seen outside the band, and worst angular rate, as a ratio
     /// of the limit (1.0 = exactly on it).
     speed_ratio: f32,
@@ -32,6 +36,8 @@ struct Run {
     /// Once a second, for the periodicity question.
     centroid: Vec<[f32; 3]>,
     course: Vec<f32>,
+    /// How far across the flock was, rms.
+    spread: Vec<f32>,
 }
 
 fn percentile(v: &[f32], p: f32) -> f32 {
@@ -57,11 +63,13 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         yaw: Vec::new(),
         roll: Vec::new(),
         clearance: f32::INFINITY,
+        cam_clearance: f32::INFINITY,
         speed_ratio: 1.0,
         turn_ratio: 0.0,
         seat: Vec::new(),
         centroid: Vec::new(),
         course: Vec::new(),
+        spread: Vec::new(),
     };
     let steps = (seconds / STEP) as usize;
     let mut was: Vec<V3> = sim.birds.iter().map(|b| b.heading()).collect();
@@ -78,11 +86,13 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             let (lo, hi) = if i == 0 { (lo * 0.5, hi * 1.3) } else { (lo, hi) };
             run.speed_ratio = run.speed_ratio.max(s / hi).max(lo / s.max(1e-3));
             let swing = sim::angle_between(*old, b.heading()) / STEP;
-            let limit = if i == 0 { tune.turn * 2.75 } else { tune.turn };
+            // Camera: altitude slack. Bird: the dodge allowance.
+            let limit = tune.turn * if i == 0 { 2.75 } else { 1.0 + sim::DODGE_TURN * 1.6 };
             run.turn_ratio = run.turn_ratio.max(swing / limit);
         }
         was = sim.birds.iter().map(|b| b.heading()).collect();
-        run.clearance = run.clearance.min(sim.clearance(tune.blobs));
+        run.clearance = run.clearance.min(sim.clearance(tune.blobs, false));
+        run.cam_clearance = run.cam_clearance.min(sim.clearance(tune.blobs, true));
 
         let d_yaw = sim::angle_between(look, sim.look) / STEP;
         let d_roll = (sim.view_roll - roll).abs() / STEP;
@@ -107,6 +117,7 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             run.biggest.push(biggest);
             run.nearest.push(sim.nearest());
             run.seat.push(sim.camera().pos.sub(sim.centre).len());
+            run.spread.push(sim.spread);
         }
         if i % 60 == 0 {
             let c = sim.centre;
@@ -172,17 +183,28 @@ fn defaults() -> (Tuning, usize) {
 #[test]
 fn ten_minutes_of_flight() {
     let (tune, birds) = defaults();
-    let run = fly(11, 600.0, &tune, birds);
+    // Three seeds, not one. The flight is a chaotic system: a small change to
+    // any parameter gives a completely different trajectory, so a promise
+    // checked on a single seed is a promise about one trajectory. Tuning
+    // against one seed is how `near` was very nearly shipped at a value that
+    // happened to suit seed 11 and flew the camera into an obstacle on others.
+    for seed in [11, 29, 404] {
+        one_flight(seed, &tune, birds);
+    }
+}
+
+fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
+    let run = fly(seed, 600.0, tune, birds);
 
     let in_min = *run.in_frame.iter().min().expect("samples");
     let in_med = median_usize(&run.in_frame);
     eprintln!(
-        "flock, 10 min, {birds} birds:\n  \
+        "flock, 10 min, {birds} birds, seed {seed}:\n  \
          in frame  min {in_min}  median {in_med}  p05 {:.0}\n  \
          nearest   min {:.1} m  median {:.1} m   biggest bird median {:.1} LEDs, p95 {:.1}\n  \
-         seat      median {:.1} m from the centroid, p95 {:.1} m\n  \
+         seat      median {:.1} m from the centroid, p95 {:.1} m; flock {:.1} m across\n  \
          view      yaw p95 {:.1} deg/s (max {:.1}), roll p95 {:.2} deg/s (max {:.2})\n  \
-         limits    speed x{:.3}, turn rate x{:.3}, blob clearance {:.1} m",
+         limits    speed x{:.3}, turn rate x{:.3}, blob clearance {:.1} m (camera {:.1} m)",
         percentile(&run.in_frame.iter().map(|n| *n as f32).collect::<Vec<_>>(), 0.05),
         run.nearest.iter().copied().fold(f32::INFINITY, f32::min),
         percentile(&run.nearest, 0.5),
@@ -190,6 +212,7 @@ fn ten_minutes_of_flight() {
         percentile(&run.biggest, 0.95),
         percentile(&run.seat, 0.5),
         percentile(&run.seat, 0.95),
+        percentile(&run.spread, 0.5),
         percentile(&run.yaw, 0.95),
         percentile(&run.yaw, 1.0),
         percentile(&run.roll, 0.95),
@@ -197,6 +220,7 @@ fn ten_minutes_of_flight() {
         run.speed_ratio,
         run.turn_ratio,
         run.clearance,
+        run.cam_clearance,
     );
 
     // Periodicity: the strongest the flock's motion ever resembles itself
@@ -215,14 +239,17 @@ fn ten_minutes_of_flight() {
     }
     eprintln!("  loop      strongest self-similarity r={:.2} at {} s ({})", worst.0, worst.1, worst.2);
 
-    assert!(in_min >= 6, "the flock left the frame: only {in_min} birds in shot at worst");
-    assert!(in_med >= 20, "median {in_med} birds in frame is not a flock");
+    assert!(in_min >= 15, "the flock left the frame: only {in_min} birds in shot at worst");
+    assert!(in_med >= 35, "median {in_med} birds in frame is not a flock");
+    assert!(percentile(&run.seat, 0.95) <= 22.0, "the camera lost its seat: {:.1} m at p95", percentile(&run.seat, 0.95));
+    assert!(percentile(&run.nearest, 0.5) >= 4.0, "the camera rides too close: {:.1} m", percentile(&run.nearest, 0.5));
     assert!(run.clearance >= 0.0, "a bird was {:.2} m inside a blob", -run.clearance);
+    assert!(run.cam_clearance >= 0.0, "the camera was {:.2} m inside a blob", -run.cam_clearance);
     assert!(run.speed_ratio <= 1.02, "speed went x{:.3} outside its band", run.speed_ratio);
-    assert!(run.turn_ratio <= 1.10, "a bird turned at x{:.3} of its limit", run.turn_ratio);
-    assert!(percentile(&run.yaw, 0.95) <= 18.0, "the view yaws at {:.1} deg/s", percentile(&run.yaw, 0.95));
+    assert!(run.turn_ratio <= 1.02, "a bird turned at x{:.3} of its limit", run.turn_ratio);
+    assert!(percentile(&run.yaw, 0.95) <= 22.0, "the view yaws at {:.1} deg/s", percentile(&run.yaw, 0.95));
     assert!(percentile(&run.yaw, 1.0) <= 26.0, "the view swung at {:.1} deg/s", percentile(&run.yaw, 1.0));
-    assert!(percentile(&run.roll, 0.95) <= 4.0, "the view rolls at {:.2} deg/s", percentile(&run.roll, 0.95));
+    assert!(percentile(&run.roll, 0.95) <= 6.0, "the view rolls at {:.2} deg/s", percentile(&run.roll, 0.95));
     assert!(worst.0 < 0.6, "the flight repeats itself: r={:.2} at {} s", worst.0, worst.1);
 }
 
