@@ -292,7 +292,7 @@ lines by, which is what the generative-art brief asks a preview for.
 
 ## Tests
 
-129 of them, all on loopback and ephemeral ports, none needing mDNS, a
+112 of them, all on loopback and ephemeral ports, none needing mDNS, a
 display or a network. Every HTTP request in the suites has a five-second
 timeout and every wait is bounded.
 

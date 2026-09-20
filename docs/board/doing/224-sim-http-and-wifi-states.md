@@ -312,3 +312,31 @@ deliberate and is the loudest way I could flag this. **Proposed card 232** below
 - **236 - `screeny-sim` serves the card-222 HTML page.** When the page exists it should
   be one file both the firmware and the simulator serve, so the portal can be styled and
   clicked through with no hardware. Depends on 222.
+- **237 - `crates/studio/tests/fleet.rs` is flaky, and it is not card 224's doing.**
+  `a_typed_address_becomes_a_device_and_starts_playing` fails about two runs in three
+  with `telemetry should be arriving: ... "telemetry":null` while `frames_sent` is 6 and
+  the panel is `up`. Measured on **`main` at 628d819's parent as well as on this
+  branch**, three runs each, same assertion and same rate: it is a pre-existing race
+  between the first piggybacked `TELEMETRY` and the dashboard's first `/api/v1/status`,
+  not a regression. Belongs to the software session; `crates/studio` is out of scope
+  here.
+
+### Results
+
+- `cargo test -p screeny-sim`: **112 tests, all green**, up from **75** on `main`
+  (measured both ways, same command) - 37 added: 18 in `tests/http_routes.rs`, 14 in
+  `tests/http_wifi.rs`, 5 unit tests in `src/api.rs` and `src/http.rs`. That includes
+  `tests/conformance.rs`'s single wire-level suite - the 64 rules - still green in 36 s.
+  Every pre-existing suite is unchanged in meaning; the only edit to an existing test
+  file is the `--http-port 0` in `tests/cli.rs`'s spawn arguments, explained above.
+  (The README's old "97 of them" was already stale; it now says 112.)
+- Root `cargo test`: 55 suites green; the one failure is card 237's flake above, which
+  reproduces identically on `main`.
+- `cargo clippy -p screeny-sim --all-targets`: **before 0, after 0** warnings from
+  `crates/sim`. (The workspace run reports one warning throughout, from
+  `crates/probe/src/vectors.rs`, on `main` and on this branch alike.)
+- Acceptance: `screeny-sim --headless --http-port 8080 --start-in-portal` answered
+  `curl localhost:8080/api/v1/status` with `"portal":true`, `"state":"provisioning"`,
+  `"ssid":null`; `-H 'Host: captive.apple.com'` got `302 http://192.168.4.1/`; and
+  `POST /api/v1/wifi` got `{"result":"trying"}`. Run under `timeout` with
+  `--exit-after 8`; `pgrep -fl screeny-sim` afterwards found nothing.
