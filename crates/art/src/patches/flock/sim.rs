@@ -12,7 +12,7 @@
 //! a good seat - see [`Sim::steer`]'s camera arm and [`Sim::aim`].
 
 use crate::rng::Rng;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
 /// The simulation's fixed timestep. Everything in here is integrated at this
 /// rate however often frames are asked for.
@@ -521,8 +521,8 @@ impl Sim {
         // Every zero-birds-in-frame sample in the long run was this.
         let off = (self.birds[0].pos.y - (self.centre.y - tune.near * 0.45)).abs();
         let slack = 1.15 + 1.6 * (off / 4.0).clamp(0.0, 1.0);
-        for i in 0..n {
-            self.fly(i, acc[i].0, tune, dt, slack, acc[i].1);
+        for (i, &(a, dodge)) in acc.iter().enumerate() {
+            self.fly(i, a, tune, dt, slack, dodge);
         }
         self.acc = acc;
 
@@ -855,6 +855,7 @@ impl Sim {
 
     /// Clearance between the nearest bird and the nearest blob's surface,
     /// metres. Negative would mean a bird inside the invisible geometry.
+    #[cfg(test)]
     pub fn clearance(&self, live: usize, camera: bool) -> f32 {
         let mut worst = f32::INFINITY;
         let who = if camera { &self.birds[..1] } else { &self.birds[1..] };
@@ -874,19 +875,16 @@ pub fn angle_between(a: V3, b: V3) -> f32 {
     a.dot(b).clamp(-1.0, 1.0).acos()
 }
 
-/// Elevation of a direction above the horizon, radians.
-pub fn elevation(d: V3) -> f32 {
-    d.y.clamp(-1.0, 1.0).asin()
-}
-
 /// Bearing of a direction, radians, for measuring yaw rate.
+#[cfg(test)]
 pub fn bearing(d: V3) -> f32 {
     d.x.atan2(d.z)
 }
 
 /// The smaller of the two ways round, radians.
+#[cfg(test)]
 pub fn wrap(a: f32) -> f32 {
-    (a + PI).rem_euclid(TAU) - PI
+    (a + std::f32::consts::PI).rem_euclid(TAU) - std::f32::consts::PI
 }
 
 /// A direction with its elevation held inside the band the panel can show the

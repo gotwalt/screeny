@@ -271,3 +271,73 @@ overlapping windows, run over the **stationary** series (how fast the flock drif
 how fast it turns) rather than over where it happens to be.
 
 Frames are exact: `colours=43 bytes=1218/1464 (pal8-lz, exact) apl=8%`, limiter idle.
+
+### 2026-09-20 - the picture
+
+Contact strips, read at 8-10x. What was found by looking, in order:
+
+- **The sky came out upside down** - horizon in the top quarter, two thirds of the
+  panel dark ground. Diagnosed by printing the palette index down the centre column
+  rather than squinting: `level()` (hold the horizon inside a band) was being applied
+  *before* the leash, which then undid it. Applied last, and with the camera seated a
+  little **below** the flock so the view rides nose-up, the horizon sits in the lower
+  middle with the birds against the sky.
+- **Eighty birds was fog**, exactly as the brief warns. 55, a looser flock
+  (separation 3.6 m) and a much stronger haze. At 64x32 **depth reads as contrast far
+  more than as size**: 16 m of air halving a bird's contrast is what separates the
+  near birds from the far ones, where making them smaller does almost nothing.
+- **The dusk scheme was muddy.** The bird had its own hue (the complement), so every
+  half-covered pixel between a pale sky and a dark bird landed on a near-grey
+  in-between - the one thing brief 2.2 says this panel cannot show. A silhouette is
+  the sky *darkened*: same hue, much lower lightness. Its sky also needed a far wider
+  lightness range (all one bright lavender has nowhere for a silhouette to sit, and
+  lights every LED: APL 39% -> 20%), and its haze needs a much higher floor, because a
+  hazed silhouette on a lit sky is a smudge where a dim white bird on black still reads.
+- **Sky dither**: tried blue noise, Bayer 4x4, Bayer 8x8 and none, in both schemes and
+  on a rolling horizon. They are very hard to tell apart - twelve bands over the
+  vertical field is already fine enough that undithered does not obviously band - and
+  they cost 1197 / 993 / 1006 / 846 bytes. Bayer 4x4, because the brief is right that
+  an ordered pattern compresses where a random one does not, and because the headroom
+  measurement (worst 1194 of 1464) says the 150 bytes are affordable. Blue noise is
+  kept for the ink, where the areas are small.
+- `near` **0.35 s** of the panel: at 2.5 m the birds are 8-10 LEDs and unmistakable;
+  at 14 m they are a distant shoal. The default stays at 6.0 for a reason that is not
+  taste - see "Open with the owner".
+
+Rejected along the way: a bright zenith falling to a dark horizon (cannot also carry
+the ground without a second ramp, and doubles the palette); a high sun (the glow
+blends the band coordinate from sky to sun, and from a *dark* band that sweep passes
+through every intermediate colour and draws a rainbow ring - low, where the sky is
+already at the top of the ramp, the sweep is two bands long and reads as a halo); a
+firm repulsive "wall" at a blob's surface (entirely wasted - the cruise turn-rate
+limit clips it to about 2 m/s^2 - which is what led to giving a dodging bird more turn
+rate instead); blending the view only 55% towards the flock (leaves half the panel
+empty sky; 68% with a gentler flank offset is better).
+
+### 2026-09-20 - wingbeat and pace
+
+`pace` scales simulation time only, and the wingbeat rides on simulation time, so at
+`pace` 0.3 the birds flap in slow motion - which is a real look, and not the only one
+wanted. `beat` is therefore its own control in Hz: at `pace 0.3, beat 2.4` the wings
+move dreamily, and at `pace 0.3, beat 5.0` the flock drifts slowly while the wings
+work at a believable rate. The second is more convincingly *birds*; the first is more
+convincingly a dream. Both strips are in the scratchpad; this is the owner's call.
+
+### 2026-09-20 - the numbers, tests and clippy
+
+`cargo clippy --workspace --all-targets`: **silent**. Four fixes were needed in this
+patch's own code (a dead `elevation`, three test-only helpers now `#[cfg(test)]`, and a
+`needless_range_loop`); no `#[allow]` was added anywhere.
+
+Four tests, all in `patches/flock/tests.rs`:
+
+- `ten_minutes_of_flight` - one ten-minute run per seed over **three seeds**, asked
+  every question at once: birds in frame, the camera's seat and the nearest bird,
+  speed and turn-rate limits, clearance from the invisible geometry (flock and camera
+  separately), the view's yaw and roll rates, and non-periodicity.
+- `every_frame_goes_out_exactly` - 1800 frames of each scheme through the real encoder
+  and decoder.
+- `the_flight_does_not_depend_on_the_frame_rate` - a minute at 30 and at 60 fps.
+- `the_same_seed_at_the_same_moment_is_the_same_frame`.
+
+Follow-up written as card 169.
