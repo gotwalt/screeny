@@ -4,8 +4,8 @@ title: Studio remembers each piece's settings - switch away and back, and they a
 type: build
 hardware: no
 depends: [106]
-owner:
-branch:
+owner: worker-165
+branch: card/165-per-piece-settings-memory
 ---
 
 ## Goal
@@ -72,3 +72,43 @@ still after `docker restart`. A hand-edited state file with garbage values start
 server with defaults for exactly the garbage values.
 
 ## Log
+
+### Decisions taken as given (orchestrator, recorded here as ordered)
+
+- **What is remembered, per piece id**: the param values and the seed. Not the pipeline
+  `settings` (levels, dither, limiter) - those are about the panel, not the piece - and not
+  playback state.
+- **Scope**: one memory per *context*. The design view (preview) has one; each device player
+  has its own. "Play my preview on panel X" copies the preview's current values into that
+  player's memory for that piece.
+- **Only what differs from the defaults is stored**, keyed by param id, so a piece whose
+  defaults improve in a later release improves for everyone who never touched that param.
+- **Error handling to defaults, per value, silently correct and logged once**: unknown piece
+  id -> entry ignored but kept in the file; unknown param id -> ignored; non-finite -> default;
+  out of range -> clamped to the param's range; wrong JSON type -> default. One bad value never
+  discards the rest of a piece's memory, and never the rest of the file.
+- **Reset** clears that piece's memory in that context: "back to defaults and stay there".
+- **Schema**: bump to v2 with a tested v1 -> v2 migration that reads a v1 file's current
+  `params` into the new memory. Human-readable. Bounded: per known piece id, and at most 64
+  unknown-piece entries.
+
+### Step 0 - claimed
+
+Branch `card/165-per-piece-settings-memory` off `main` (5525f10). Card to `doing/`.
+Read first, as instructed: `CLAUDE.md`, `docs/README.md`, card 106's Log (the state store's
+guarantees, the `Store::flush` bug, the keep-the-bad-file rule), `crates/studio/src/{state,
+engine,player,api,lib}.rs` and `crates/art/src/piece.rs`.
+
+What the reading settled before any code was written:
+
+- `Engine::set_piece` does `self.params = Params::defaults(def.params)` and
+  `Player::configure` does `cfg.params.clear()` on a piece change. Those two lines are the
+  bug the owner reported.
+- `Params::set` already clamps to `[min, max]` (`crates/art/src/piece.rs`), but it accepts a
+  NaN (`f32::clamp` with a NaN operand returns the NaN) and `Params::get` panics on an
+  unknown id. So the *validation* has to happen before a value reaches `Params`.
+- `StoredPlayer.params` and `StoredPreview.params` are `BTreeMap<String, f32>` with
+  `#[serde(default)]` on the struct, so a `null`/string/object in the map fails the whole
+  struct's deserialise - which under card 106's rules moves the entire file to
+  `state.bad.json`. A per-value error must not do that, which is why the new memory
+  deserialises through `serde_json::Value` rather than through `f32`.
