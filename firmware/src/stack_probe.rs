@@ -37,13 +37,22 @@ const PAINT: u32 = 0x5741_5445; // "WATE"
 /// panic message that quotes it, exactly as it was.
 const GUARD_RESERVE: usize = 1024;
 
-/// How far below [`paint`]'s own frame to stop painting.
+/// How far below the stack pointer to stop painting.
 ///
-/// The address of a local is at or above the stack pointer, so subtracting a
-/// generous margin from it lands strictly below this function's frame. It
-/// costs nothing: it only means the top half-kilobyte of the region is left
-/// unpainted, and a scan that runs all the way up to it reports "never went
-/// below here", which is the honest answer.
+/// Slack for the register-window spill area and for anything the compiler put
+/// just under `a1`. It costs nothing: it only leaves the top half-kilobyte of
+/// the region unpainted, and a scan that runs all the way up to it reports
+/// "never went below here", which is the honest answer.
+///
+/// **The bound has to be below the frame it is measured from, and the only way
+/// to know that is to measure it in a frame you own.** The first version of
+/// this file took the address of a local in `paint` itself. `paint` was
+/// inlined into `main`, whose poll frame in the `fb-on-stack` build is the
+/// 24 KB of framebuffer temporaries this card exists to remove; the local sat
+/// near the *top* of that frame, and the paint went straight through the live
+/// frame and its saved return addresses. The device panic-looped on the first
+/// poll of `main` with `esp_sync: lock is not reentrant`. Hence
+/// [`frame_mark`].
 const FRAME_MARGIN: usize = 512;
 
 unsafe extern "C" {
@@ -68,16 +77,31 @@ pub fn size() -> usize {
     top() - bottom()
 }
 
+/// An address inside the frame of a function that holds nothing.
+///
+/// Reading `a1` directly would be exact, but inline assembly on Xtensa still
+/// needs `#![feature(asm_experimental_arch)]` and the firmware does not gate
+/// on nightly features for one probe. This is the next best thing and it is
+/// provable rather than hopeful: `#[inline(never)]` means this frame is its
+/// own, it holds one word, and it is a *callee* of [`paint`], so its stack
+/// pointer is strictly below `paint`'s. Subtracting [`FRAME_MARGIN`] from a
+/// local inside it therefore lands below every frame that is live — and below
+/// the 16-byte Xtensa register-window spill area, which is the only thing the
+/// hardware writes under a stack pointer.
+#[inline(never)]
+fn frame_mark() -> usize {
+    let probe = 0u32;
+    core::hint::black_box((&raw const probe) as usize)
+}
+
 /// Fill the unused part of the region with [`PAINT`].
 ///
 /// Call this as the first statement of `main`, before `esp_hal::init` and
 /// before `esp_rtos::start`: everything after it is then measurable.
+#[inline(never)]
 pub fn paint() {
-    let probe = 0u32;
-    let here = (&raw const probe) as usize;
-
     let lo = bottom() + GUARD_RESERVE;
-    let hi = (here - FRAME_MARGIN) & !3;
+    let hi = (frame_mark() - FRAME_MARGIN) & !3;
     if hi <= lo {
         return;
     }

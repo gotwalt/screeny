@@ -182,3 +182,47 @@ All six feature configurations build clean: default, `fb-on-stack`,
 
 Was told by the orchestrator to hold off the serial port for ~10 minutes while
 the owner was at the panel; did host-side work only until released.
+
+### Flash 1 - the probe painted over its own caller's frame
+
+Flashed the `fb-on-stack` build to get the "before" number and got a panic loop
+instead: `esp_sync: lock is not reentrant`, on the first poll of `main`, every
+boot. Mine, and a good lesson.
+
+`stack_probe::paint()` bounded the paint at "the address of a local in this
+function, minus 512". `paint` was inlined into `main`'s poll function, and in
+*this particular build* that frame is the 24 KB of framebuffer temporaries the
+card exists to remove. The local landed near the top of that 24 KB frame, so
+`local - 512` was still thousands of bytes **above** the stack pointer and the
+paint went through the live frame and its saved return addresses.
+
+Fixed by taking the bound from a frame we own: `#[inline(never)] fn frame_mark()`
+returns the address of its only local. It is a callee of `paint`, so its stack
+pointer is strictly below `paint`'s, and `xtensa-esp32-elf-objdump` confirms
+`entry a1, 32` with the local at `a1+4` - so the bound is SP-508, below
+everything live and below the 16-byte Xtensa register-window spill area, which
+is the only thing the hardware writes beneath a stack pointer. Reading `a1`
+directly would be exact but inline asm on Xtensa still wants
+`#![feature(asm_experimental_arch)]`, and one probe is not worth putting the
+firmware on a nightly feature gate.
+
+### Flash 2 - "before": the fear in the research doc was justified
+
+`fb-on-stack`, 115 s, clean boot, no panic.
+
+```
+WARN - display: BENCH BUILD - framebuffers built on core 0's stack
+INFO - display: core 1, 6 planes, 154 Hz refresh (driver), 12312 bytes/buffer, OE slots 0..=55 (cap 25), OE start 8
+INFO - stack: core 0 main high-water 26508 of 37512 bytes, 9980 free (painted at boot)
+INFO - telemetry: 30 fps rx, 30 fps shown, 154 swaps/s | drops stale 0 superseded 9 decode 0 rejected 0 gaps 0 | ia 33136 us jit 1875 us | decode 532 us (max 2346) | render 3081 us (max 3212 window, 4038 boot) | state 1 codec 0x10 rssi -71 bright 96 | heap 45612/98304
+```
+
+**26,508 bytes of 37,512 used, 11,004 left.** Two 12,312-byte buffers is 24,624
+of it, so the rest of the firmware's deepest path is under 2 KB. Card 201's
+"everything" build would have left `.stack` at 13,688 - less than half what this
+build actually touches. It would not have booted, exactly as the research doc
+suspected but could not prove.
+
+Station-only heap steady state: **45,488-45,612 used of 98,304**, matching the
+~45 KB card 007 measured. Stream healthy: 30 fps rx, 30 fps shown, 154-155
+swaps/s, zero stale/decode/rejected drops, render 3,081-3,147 us.
