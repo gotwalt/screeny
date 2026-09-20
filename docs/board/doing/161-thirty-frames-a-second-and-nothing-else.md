@@ -158,3 +158,45 @@ rendering at 30" and is now reversed, saying so, with "step by `ctx.dt`" in its 
 `docs/design/studio-vision.md`.
 
 `cargo clippy --workspace --all-targets`: silent.
+
+### Every patch, time or frames
+
+**Nothing stepped per frame. No patch needed fixing**, so no patch's look changed by this
+card at all.
+
+`crates/art/tests/rate.rs` is the evidence, and it covers `patches::ALL` rather than a
+list written here, so a patch added later (flock, card 168) is covered the day it lands.
+Per patch it renders to the same engine time `T = 6 s` twice - 60 steps a second and 30 -
+and compares the last frame with a third run that takes the **same number of steps as the
+30 fps one but only reaches `T/2`**, which is exactly what a frame-counting patch would
+draw at 30. The clock is pinned so the time-telling patches see the same seconds in every
+run, and is placed so the minute rolls over at `0.75 T`: between the half-time run's end
+and the full run's, or the clock patches would sit still through both and the comparison
+would prove nothing (asserted, per patch, with `half_time > 0.002`).
+
+Measured, mean absolute difference per channel in linear light:
+
+| patch | 60 vs 30, same `T` | 60 vs half the time | reading the code |
+| --- | --- | --- | --- |
+| clocks-numerals | 0.00023 | 0.06900 | `ctx.t` for the plan (`began`, `tau = ctx.t - began`) and `ctx.dt` for the ambient field and `settle()`. The servo integrates `velocity * dt` and clamps acceleration by `motor.acc * dt`; the mood eases by `1 - exp(-dt/7)`. Time, throughout. The residual is Euler integration landing a hair apart, not a speed difference. |
+| clocks-dials | 0.00004 | 0.06149 | the same field, through `step_holding(..., ctx.dt, ...)`. |
+| vesta | 0.00000 | 0.00369 | pure `ctx.t`: `born = ctx.now - ctx.t`, each module's `began: ctx.t`, `pose(ctx.t, fall)`. The only rate-dependence left is *which frame* notices a minute has rolled over, which is at most one frame either way and is inherent. |
+| plasma | 0.00000 | 0.37438 | `let t = ctx.t as f32` and nothing else; no state. |
+| metaballs | 0.00000 | 0.10576 | `ctx.t * ctx.get("speed")`; no state. |
+| overland | 0.00000 | 0.09341 | `ShaderPatch`: `u.t = ctx.t`. `u.dt` is uploaded but **no `.wgsl` in the crate reads it**; the day cycle is `ctx.t` in `scene()`. |
+| lattice | 0.00000 | 0.07340 | the same `ShaderPatch`, all of it in `lattice.wgsl` off `u.t`. |
+| knot | 0.00000 | 0.08723 | `spin = ctx.t * speed`; the rest is `u.t`. |
+| testcard | 0.00000 | 0.00334 | `line_x = (ctx.t * speed).rem_euclid(W)`; no state. (Its half-time figure is small because one moving column sits on a static card - still six times the threshold.) |
+
+The six with no state at all are asserted **exactly equal** at the two rates, not merely
+close (`PURELY_A_FUNCTION_OF_T` in the test): a patch that starts accumulating state
+shows up there first. The three stateful ones are asserted to be at least four times
+closer to the same-`T` run than to the half-time one; they measure 300x, 1500x and
+exactly equal.
+
+The pipeline and the limiter are time-based too, and were already: `Pipeline::process`
+takes the wall `dt`, and `Limiter::apply` eases by `1 - exp(-dt/0.5)` and rises by
+`max_rise_per_s * dt`. So the limiter behaves the same at 30 as at 60.
+
+Also added: `there_is_one_rate`, which pins `screeny_art::FPS` at 30 and checks
+`snapshot::FPS` is the same constant rather than a second copy of it.
