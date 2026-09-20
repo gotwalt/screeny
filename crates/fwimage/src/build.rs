@@ -1,7 +1,17 @@
 //! An ESP32 app image, built byte by byte, so a test can break exactly one
 //! thing about it.
 //!
-//! The layout is esptool's and is the one `espflash save-image` produces:
+//! Feature `build`, on by default and **off in the firmware**
+//! (`default-features = false`): it is the only thing here that needs `alloc`,
+//! and a device has no reason to be able to make an image.
+//!
+//! It exists so that there is one builder rather than three. `crates/fwimage`'s
+//! own tests use it to prove each check fires; `screeny-probe` uses it to send
+//! the device a wrong-chip and a wrong-project image that are correct in every
+//! other respect, which is what makes those probe rules mean anything; and a
+//! developer can use it to make a deliberately broken image by hand.
+//!
+//! The layout is esptool's, and is what `espflash save-image` produces:
 //!
 //! ```text
 //! 0      24-byte image header, byte 23 = "a SHA-256 is appended"
@@ -13,43 +23,61 @@
 //! N+p+1  32 bytes of SHA-256 over 0..N+p+1
 //! ```
 //!
-//! The one thing these images are not is loadable: the segment data is
-//! recognisable filler rather than Xtensa code. Nothing in `screeny-fwimage`
-//! looks at it, and nothing in the firmware's staging path does either - the
-//! bootloader is what loads an image, and that is card 241's problem and the
-//! bootloader's.
+//! The one thing these images are not is *loadable*: the segment data is
+//! recognisable filler, not Xtensa code. Nothing in this crate looks at it and
+//! nothing in the firmware's staging path does either - loading an image is
+//! the bootloader's job, and making one bootable is card 241's.
+
+use alloc::vec;
+use alloc::vec::Vec;
 
 use sha2::{Digest, Sha256};
 
-pub const CHIP_ESP32: u16 = 0x0000;
-pub const CHIP_ESP32C3: u16 = 0x0005;
+use crate::{APP_DESC_MAGIC, CHIP_ID_ESP32, IMAGE_MAGIC, PROJECT_NAME};
+
+/// `chip_id` for the ESP32-C3: a real chip, a real image, and one this device
+/// must never run.
+pub const CHIP_ID_ESP32C3: u16 = 0x0005;
 
 /// One segment's worth of made-up content.
 pub struct Segment {
+    /// Where the ROM loader would put it. Never used by anything here.
     pub load_addr: u32,
+    /// The bytes.
     pub data: Vec<u8>,
 }
 
-/// Everything a test might want to vary.
+/// Everything a caller might want to vary about an image.
 pub struct Builder {
+    /// Header byte 0. [`IMAGE_MAGIC`] unless you are breaking check 1.
     pub magic: u8,
+    /// Header bytes 12..14.
     pub chip_id: u16,
+    /// Header byte 23.
     pub hash_appended: bool,
+    /// `esp_app_desc.project_name`.
     pub project: &'static str,
+    /// `esp_app_desc.version`.
     pub version: &'static str,
+    /// `esp_app_desc.magic_word`.
     pub desc_magic: u32,
+    /// The segments, in order. Segment 0 must be at least 256 bytes: the app
+    /// descriptor is written over its front.
     pub segments: Vec<Segment>,
 }
 
 impl Default for Builder {
+    /// A good image of this device's own shape: two segments, the first
+    /// carrying the descriptor, and the whole thing a little over three
+    /// sectors so that "the first sector" means something.
     fn default() -> Self {
         Builder {
-            magic: screeny_fwimage::IMAGE_MAGIC,
-            chip_id: CHIP_ESP32,
+            magic: IMAGE_MAGIC,
+            chip_id: CHIP_ID_ESP32,
             hash_appended: true,
-            project: screeny_fwimage::PROJECT_NAME,
+            project: PROJECT_NAME,
             version: "0.6.0",
-            desc_magic: screeny_fwimage::APP_DESC_MAGIC,
+            desc_magic: APP_DESC_MAGIC,
             segments: vec![
                 Segment {
                     load_addr: 0x3F40_0020,
@@ -57,8 +85,6 @@ impl Default for Builder {
                     // a real DROM segment.
                     data: vec![0; 1024],
                 },
-                // Over two sectors, so the good image spans three of them and
-                // a test can talk about "the first sector" meaningfully.
                 Segment {
                     load_addr: 0x4008_0000,
                     data: (0..8192u32).map(|i| (i % 251) as u8).collect(),
@@ -77,13 +103,43 @@ fn field32(s: &str) -> [u8; 32] {
 
 impl Builder {
     /// A good image of this device's own shape.
+    #[must_use]
     pub fn good() -> Self {
         Self::default()
     }
 
-    /// The whole image, ready to be handed to [`screeny_fwimage::Scan`].
+    /// A good image, but built for an ESP32-C3. Correct in every other
+    /// respect, including its checksum and its appended hash - which is the
+    /// point: only check 2 can tell it apart from one we should run.
+    #[must_use]
+    pub fn wrong_chip() -> Self {
+        Builder {
+            chip_id: CHIP_ID_ESP32C3,
+            ..Self::default()
+        }
+    }
+
+    /// A good ESP32 image of somebody else's project. Also correct in every
+    /// other respect.
+    #[must_use]
+    pub fn wrong_project() -> Self {
+        Builder {
+            project: "esp-idf-blink",
+            ..Self::default()
+        }
+    }
+
+    /// The whole image, ready for [`crate::Scan`].
+    ///
+    /// # Panics
+    ///
+    /// If segment 0 is shorter than the 256-byte app descriptor, or if there
+    /// are more than 255 segments - both of which are the caller asking for an
+    /// image that could not exist rather than for a broken one.
+    #[must_use]
     pub fn build(mut self) -> Vec<u8> {
-        // The app descriptor goes at the start of segment 0.
+        // The app descriptor goes at the start of segment 0, which is where
+        // the linker script puts it in a real build.
         if let Some(seg) = self.segments.first_mut() {
             assert!(seg.data.len() >= 256, "segment 0 must hold esp_app_desc");
             let mut desc = [0u8; 256];
@@ -115,7 +171,8 @@ impl Builder {
             }
         }
 
-        // esptool pads so the checksum is the last byte of a 16-byte block.
+        // esptool seeks so that the checksum is the last byte of a 16-byte
+        // block, and the bytes it skips read as zero.
         let end = (out.len() + 1 + 15) & !15;
         out.resize(end - 1, 0);
         out.push(checksum);
@@ -128,23 +185,3 @@ impl Builder {
         out
     }
 }
-
-/// Feed an image to a scan in `chunk` byte pieces, the way the staging loop
-/// does, and return what the scan made of it.
-pub fn scan_in_chunks(
-    image: &[u8],
-    slot_len: u32,
-    chunk: usize,
-) -> Result<screeny_fwimage::Image, screeny_device_api::FirmwareError> {
-    let mut scan = screeny_fwimage::Scan::new(slot_len);
-    for piece in image.chunks(chunk.max(1)) {
-        // The staging loop pushes and *then* asks whether the front is good
-        // enough to start erasing; mirroring that here keeps the two honest.
-        scan.push(piece)?;
-        scan.check_front()?;
-    }
-    scan.finish()
-}
-
-/// Two megabytes: `ota_0` and `ota_1` in `firmware/partitions.csv`.
-pub const SLOT: u32 = 0x20_0000;

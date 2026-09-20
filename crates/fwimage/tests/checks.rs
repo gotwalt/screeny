@@ -5,11 +5,24 @@
 //! image". The good image is built by the same code with nothing broken, which
 //! is what makes that claim true.
 
-mod common;
-
-use common::{scan_in_chunks, Builder, Segment, CHIP_ESP32C3, SLOT};
 use screeny_device_api::FirmwareError;
-use screeny_fwimage::{plan_write, Scan, HEADER_LEN, SECTOR};
+use screeny_fwimage::build::{Builder, Segment, CHIP_ID_ESP32C3};
+use screeny_fwimage::{plan_write, Image, Scan, HEADER_LEN, SECTOR};
+
+/// Two megabytes: `ota_0` and `ota_1` in `firmware/partitions.csv`.
+const SLOT: u32 = 0x20_0000;
+
+/// Feed an image to a scan in `chunk`-byte pieces, exactly the way the
+/// firmware's staging loop does - push, then ask whether the front is good
+/// enough to start erasing - and return what the scan made of it.
+fn scan_in_chunks(image: &[u8], slot_len: u32, chunk: usize) -> Result<Image, FirmwareError> {
+    let mut scan = Scan::new(slot_len);
+    for piece in image.chunks(chunk.max(1)) {
+        scan.push(piece)?;
+        scan.check_front()?;
+    }
+    scan.finish()
+}
 
 // ---------------------------------------------------------------------------
 // The image that passes
@@ -96,7 +109,7 @@ fn an_empty_body_is_bad_magic() {
 #[test]
 fn an_image_for_another_chip_is_wrong_chip() {
     let mut b = Builder::good();
-    b.chip_id = CHIP_ESP32C3;
+    b.chip_id = CHIP_ID_ESP32C3;
     assert_eq!(
         scan_in_chunks(&b.build(), SLOT, SECTOR),
         Err(FirmwareError::WrongChip)
@@ -106,7 +119,7 @@ fn an_image_for_another_chip_is_wrong_chip() {
 #[test]
 fn the_chip_is_decided_from_the_first_twenty_four_bytes() {
     let mut b = Builder::good();
-    b.chip_id = CHIP_ESP32C3;
+    b.chip_id = CHIP_ID_ESP32C3;
     let image = b.build();
     let mut scan = Scan::new(SLOT);
     assert_eq!(

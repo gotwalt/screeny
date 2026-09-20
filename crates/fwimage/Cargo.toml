@@ -9,6 +9,16 @@ description = "What makes an ESP32 app image one this device will run: research 
 # xtensa-esp32-none-elf by the firmware (card 240) and for the host by the
 # simulator and by these tests, so anything it pulls in, they both pull in.
 # The precedent is `crates/provision` and `crates/device-api`.
+[features]
+# **On by default, and off in the firmware** (`default-features = false`).
+# `build` is the image *builder* - the only thing in this crate that needs
+# `alloc`, and the only thing a device has no reason to be able to do. It is a
+# default feature so that `cargo test -p screeny-fwimage` and the probe both
+# get it without saying anything, and the one caller that must not have it is
+# the one that already spells out every dependency.
+default = ["build"]
+build = []
+
 [dependencies]
 # `FirmwareError` is the wire's, and there is one spelling of it.
 screeny-device-api = { path = "../device-api" }

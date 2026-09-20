@@ -43,6 +43,14 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "build")]
+extern crate alloc;
+
+/// Making an image, for the tests and for `screeny-probe`. Feature `build`,
+/// on by default and off in the firmware.
+#[cfg(feature = "build")]
+pub mod build;
+
 use screeny_device_api::FirmwareError;
 use sha2::{Digest, Sha256};
 

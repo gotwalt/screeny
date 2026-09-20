@@ -125,10 +125,15 @@ status is a property of the code (`screeny_device_api::ErrorCode::status`).
 Three things the simulator does **not** pretend about:
 
 - `POST /api/v1/firmware` accepts the stream, discards it and reports
-  `written`. It runs the two of research 006's five image checks that need no
-  image parser - the `0xE9` magic and the 2 MiB slot length - and **installs
-  nothing**. The other three (chip, project name, checksum, SHA-256) are not
-  claimed.
+  `written`. Since card 240 it runs **every** one of research 006 section 5's
+  checks - the `0xE9` magic, the chip id, the appended-hash flag, the
+  `screeny-fw` project name, the segment table and its checksum byte, the
+  appended SHA-256, and the 2 MiB slot length - through `screeny-fwimage`,
+  which is the firmware's own validator fed the same bytes in the same order.
+  So an image the simulator refuses is one the device refuses, and with the
+  same `error` code. What it **installs is nothing**: there is no flash here,
+  `ok: true` means "this would have been staged", and a restart brings back
+  the same simulator. It does not stage, activate, confirm or revert.
 - `POST /api/v1/reboot` does exactly what UDP `REBOOT` does: accepted, logged,
   not acted on. It does draw a new `boot_id`, which is the one thing a client
   can tell a restart by; `uptime_ms` keeps climbing, because resetting it would
