@@ -77,10 +77,13 @@ panel's player (verified against the real device: LIVE -> HOLD -> LIVE) - this i
 firmware session uses to borrow the panel. State backups from before each migration are in
 `~/screeny-backups/` on workbench.
 
-In flight: a Studio polish worker (cards 173, 145, 171, 172, 163; range 181-185) and a
-sender/cleanup worker (176 named-browse early return, 125 clippy; range 186-189). Parked
-until the firmware session says its card 222 is on the device: **180** (the Studio reads the
-device's HTTP status via `crates/device-api`; the sim half exists since their card 224).
+Also done and deployed by the morning of 2026-09-20: the page-polish cards 173, 145, 171,
+172, 163 (discovery state, missing GPU, honest reconnects, any frame rate, named choices),
+176 (named browse 3.0 s -> 0.07 s), 125 + 186 (the whole workspace is clippy-silent).
+**In flight: 180** (the Studio reads the device's HTTP status via `crates/device-api`, plus
+card 181; range 190-194) - firmware 0.4.x serves that API on the panel's port 80; the device
+has one connection worker, so poll gently (the card has the rules). The real SSID is in that
+payload: keep it out of every tracked file, log and screenshot.
 Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
 "Reconnects" worth a row; a sandbox control ("try pieces without the panel flickering through
 them") - he has said no sandbox, ask only if he raises it. The workbench reboot for card 107
