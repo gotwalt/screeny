@@ -324,9 +324,12 @@ Things to know:
 - Shaders are WGSL. wgpu can also take GLSL (its `glsl` feature and
   `ShaderSource::Glsl`) if porting existing GLSL matters more than one language.
 - Smoothly shaded 3D makes hundreds of colours per frame, which would take the
-  lossy path. `palette::Palette` fixes that: build up to 32 colours in OKLCH
+  lossy path. `palette::Palette` fixes that: build a palette in OKLCH
   (`Palette::ramps`), then `map` the downsampled frame onto them (nearest in
   OKLab, fixed ordered dither). The result is an indexed frame, sent exactly.
+  A *shader* palette is capped at `gpu::fragment::SCENE_PALETTE` (32) by the
+  uniform's array; a CPU-mapped one may go to 256 and is exact when the index
+  image compresses.
   `knot` does this; set its Palette steps to 0 to compare with the raw render.
   Map after the downsample, never in the shader: averaging samples creates new
   colours.
