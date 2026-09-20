@@ -109,7 +109,9 @@ async function start() {
 
     const patch = patchById[state.patch];
     $('#ro-playing').textContent = patch ? patch.name : state.patch;
-    $('#ro-seed').textContent = state.seed;
+    // Card 151: which of the patch's settings this panel is on, and whether it
+    // has been moved since. The Picture screen is where they are changed.
+    $('#ro-setting').textContent = state.modified ? `${state.setting}, modified` : state.setting;
   }
 
   function showPanel() {

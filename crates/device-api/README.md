@@ -36,7 +36,12 @@ window out.
 `POST /api/v1/firmware` answers `ok: true` only when every check that build runs at all
 ran and passed. A build that cannot run all five of research 006's checks answers
 `unavailable` with the missing ones in `detail` instead of a qualified success; there is
-deliberately no `checks_run` field.
+deliberately no `checks_run` field. Since card 240 the checks are one implementation,
+`crates/fwimage`, which the firmware, `crates/sim` and `screeny-probe` all link - so a
+build that *can* run them all runs the same ones, and this reply means the same thing
+wherever it comes from. Unlike every other route it is **HTTP 200 whether or not the
+image was accepted**: `error` and `written` are fields of this reply, and `written` -
+how far the upload got - has nowhere else to go (spec 8.6).
 
 Anything that fails answers `ErrorReply`: `{"error":"<code>"}` with an optional
 `"detail"`, and the HTTP status is `ErrorCode::status()` - one function, so the browser's

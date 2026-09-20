@@ -25,6 +25,11 @@ screeny-receiver = { path = "../receiver" }
 # and nothing structural.
 screeny-device-api = { path = "../device-api", features = ["std"] }
 screeny-provision = { path = "../provision" }
+# Card 240: research 006 section 5's checks. The simulator runs the *same*
+# scanner the firmware does, over the bytes it reads and discards, so an image
+# the simulator refuses is one the device refuses - which is the point of
+# developing against `screeny-sim` at all.
+screeny-fwimage = { path = "../fwimage" }
 # The JSON writer. `crates/device-api`'s golden tests prove serde_json and the
 # firmware's serde-json-core produce the same bytes for every shape here, and
 # it is already in the workspace (crates/studio). No HTTP crate: the server is

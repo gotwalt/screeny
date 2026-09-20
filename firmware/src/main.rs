@@ -35,6 +35,12 @@
 #![no_std]
 #![no_main]
 
+/// Card 240's staging buffer is the one thing in this firmware that asks the
+/// allocator for memory by name. Everything else that uses the heap does so
+/// through a library (esp-radio's driver buffers are almost all of it), so
+/// this is the first `extern crate alloc` the crate has needed.
+extern crate alloc;
+
 /// Card 220's `apsta-probe` build: what APSTA costs in heap. Off by default.
 #[cfg(feature = "apsta-probe")]
 mod apsta_probe;
@@ -44,6 +50,8 @@ mod gamma;
 mod http;
 mod mdns;
 mod net;
+/// Card 240: staging a firmware image into the inactive app slot.
+mod ota;
 mod panel_init;
 /// Card 243: the `#[panic_handler]`, the RTC breadcrumb and the crash-loop
 /// guard. It is this crate's panic handler, so it is not optional and not
@@ -99,7 +107,28 @@ use screeny_settings::Wifi;
 
 use display::Mode;
 
-esp_bootloader_esp_idf::esp_app_desc!();
+// The app descriptor every image carries, and the thing card 240's validator
+// reads out of an upload before it will stage it (`crates/fwimage`, check 4).
+//
+// **Spelled out rather than the no-argument form** since 0.6.0. The short form
+// takes `CARGO_PKG_VERSION`, which is `firmware/Cargo.toml`'s `0.1.0` and has
+// never moved - so every image ever built said `0.1.0` and an uploaded one was
+// indistinguishable from the running one. `FW_VERSION` is the number this
+// project actually versions by: it is the `fw=` mDNS TXT key, the `GET_INFO`
+// field and `status.fw`, and now it is what `POST /api/v1/firmware` reports
+// back about the image it just staged. Everything else is the macro's own
+// default, copied from its definition.
+esp_bootloader_esp_idf::esp_app_desc!(
+    FW_VERSION,
+    env!("CARGO_PKG_NAME"),
+    esp_bootloader_esp_idf::BUILD_TIME,
+    esp_bootloader_esp_idf::BUILD_DATE,
+    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    esp_bootloader_esp_idf::MMU_PAGE_SIZE,
+    0,
+    u16::MAX,
+    esp_bootloader_esp_idf::SECURE_VERSION
+);
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -139,7 +168,14 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// in a time this device sets** - the graceful close no longer waits for the
 /// client's own `close()`, only for the acknowledgement that proves the reply
 /// arrived - which is what was refusing 9-17 of ~35 sequential requests.
-pub const FW_VERSION: &str = "0.5.3";
+/// **0.6.0 is card 240: `POST /api/v1/firmware` stages an image into the
+/// inactive slot** - streamed straight from the socket into flash a sector at
+/// a time, validated by research 006 section 5's checks, with an "updating"
+/// screen on the panel and dither off while it runs. It does not switch the
+/// boot slot: `otadata` is untouched and card 241 is what makes a staged image
+/// bootable. From this version the string is also `esp_app_desc.version`
+/// inside the image, so an upload can say which build it just staged.
+pub const FW_VERSION: &str = "0.6.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

@@ -228,6 +228,7 @@ pub async fn frames_task(
     let mut phase = 0u32;
     let mut link_was_up = true;
     let mut stuck_sends = 0u32;
+    let mut ota_was = false;
 
     loop {
         let mut keep_len = 0usize;
@@ -279,7 +280,16 @@ pub async fn frames_task(
         // decoded frame is counted and kept for the cross-fade but does **not**
         // reach the panel.
         let portal = crate::provision::screen((now_us() / 1_000) as u32);
-        let setup_screen_up = matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
+        // Card 240. A firmware update outranks everything, including a live
+        // stream: `docs/design/device-web.md` decision 7 says the frame path
+        // is the product and nothing may take the panel from a sender -
+        // "except a firmware update, which is allowed to take the panel over
+        // with an 'updating' screen". So it is tested *before* the portal's
+        // own screen and before `intent`, and it is the only thing in this
+        // task that can be up while a sender is streaming.
+        let ota = crate::ota::updating().then(crate::ota::percent);
+        let setup_screen_up =
+            ota.is_some() || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
         if published {
             // The cross-fade needs the frame a sender last put up, and this is
             // the only moment it is reachable: after `publish` the slot
@@ -322,9 +332,16 @@ pub async fn frames_task(
             !(matches!(s, crate::provision::PanelScreen::Connected { .. })
                 && intent == Intent::Stream)
         });
-        let portal_due = portal.is_some() && now_ms.wrapping_sub(portal_at_ms) >= PORTAL_MS;
+        let portal_due = (portal.is_some() || ota.is_some())
+            && now_ms.wrapping_sub(portal_at_ms) >= PORTAL_MS;
+        // An update ending has to redraw once even if nothing else is due:
+        // until it does, the panel is still showing the progress bar of an
+        // upload that finished.
+        let ota_edge = ota.is_some() != ota_was;
+        ota_was = ota.is_some();
         let due = animating
             || portal_due
+            || ota_edge
             || core.redraw() != redraw_seen
             || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
 
@@ -334,7 +351,15 @@ pub async fn frames_task(
             phase = phase.wrapping_add(1);
             let hold = crate::PATTERN_HOLD.load(Ordering::Relaxed);
             let mut drew = true;
-            if let Some(s) = portal.as_ref() {
+            if let Some(percent) = ota {
+                // Drawn by `crates/provision`, like the portal screens, so
+                // the simulator and the device draw the same thing. Dither is
+                // already off - `crate::ota::Upload` turned it off when it
+                // took the claim - so core 1 sleeps between refreshes and the
+                // 50 ms stalls around each sector erase cost nothing.
+                portal_at_ms = now_ms;
+                crate::provision::render_updating(percent, &mut producer.back().px);
+            } else if let Some(s) = portal.as_ref() {
                 // Drawn with nothing locked: `provision::screen` copied the
                 // name out of the machine and released it, because a QR encode
                 // inside a critical section would mask core 1's HUB75 DMA

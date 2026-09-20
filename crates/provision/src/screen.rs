@@ -94,6 +94,28 @@ pub enum Screen<'a> {
         /// The address DHCP handed us, as four octets.
         ip: [u8; 4],
     },
+    /// A firmware image is being written to the inactive slot (card 240).
+    ///
+    /// **The one screen that outranks a stream.** `docs/design/device-web.md`
+    /// decision 7 is that the frame path is the product and nothing may take
+    /// the panel from a sender - "except a firmware update, which is allowed
+    /// to take the panel over with an 'updating' screen", and this is it.
+    ///
+    /// It lives in this crate rather than in `firmware/src/screens.rs` for
+    /// the reason every other screen here does: the simulator draws it too,
+    /// and a screen with two implementations is a screen that looks different
+    /// on the two devices somebody is comparing. It is static apart from the
+    /// bar, and it is drawn with **dither off** (research 006 section 4), so
+    /// core 1 sleeps and the circular DMA loops: a 50 ms flash stall then
+    /// costs nothing at all.
+    Updating {
+        /// How far through, 0..=100, or `None` before the length is known.
+        ///
+        /// An upload's length comes from `Content-Length`, which a sender may
+        /// not have sent; `None` draws the bar's outline and no fill rather
+        /// than inventing a figure.
+        percent: Option<u8>,
+    },
 }
 
 /// Why a screen could not be drawn.
@@ -162,8 +184,48 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             );
             text(&mut t, &line, 1, 22, value);
         }
+        Screen::Updating { percent } => {
+            let title = MonoTextStyle::new(&FONT_5X7, TITLE);
+            let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+            text(&mut t, "updating", 1, 2, title);
+            text(&mut t, "do not unplug", 1, 12, label);
+            progress_bar(&mut t, percent);
+        }
     }
     Ok(())
+}
+
+/// The one moving thing on the updating screen: a 62x7 outline that fills
+/// left to right.
+///
+/// An outline and not a bare fill, because `None` and 0% have to look
+/// different: an upload whose length nobody declared shows an empty bar, and
+/// an empty bar with no outline is a blank panel, which is what a *hung*
+/// device looks like. Deliberately dim - it may be up for half a minute on a
+/// USB-powered panel, and the brightness setting is applied to this frame like
+/// any other.
+fn progress_bar(t: &mut FrameTarget<'_>, percent: Option<u8>) {
+    const X0: i32 = 1;
+    const X1: i32 = W as i32 - 2;
+    const Y0: i32 = 22;
+    const Y1: i32 = 28;
+    let edge = [0x40, 0x40, 0x40];
+    for x in X0..=X1 {
+        t.put(x, Y0, edge);
+        t.put(x, Y1, edge);
+    }
+    for y in Y0..=Y1 {
+        t.put(X0, y, edge);
+        t.put(X1, y, edge);
+    }
+    let Some(p) = percent else { return };
+    let inner = X1 - X0 - 1; // columns between the two edges
+    let filled = (inner * i32::from(p.min(100))) / 100;
+    for x in 0..filled {
+        for y in Y0 + 2..=Y1 - 2 {
+            t.put(X0 + 1 + x, y, [0x5a, 0x9e, 0xff]);
+        }
+    }
 }
 
 /// One LED per module, standard polarity, lit quiet zone. Do not change.
@@ -349,6 +411,8 @@ mod tests {
                 form: UriForm::NoPass,
             },
             Screen::Connected { ip: [192, 168, 7, 221] },
+            Screen::Updating { percent: Some(100) },
+            Screen::Updating { percent: None },
         ] {
             let mut f = [0u8; NBYTES];
             render(&s, &mut f).unwrap();
@@ -358,6 +422,43 @@ mod tests {
                 "more than half the panel is full white"
             );
         }
+    }
+
+    /// Card 240. The bar has to say three things apart: "nothing yet"
+    /// (outline only), "part way" and "done". A screen that looked the same at
+    /// 0% and at 100% would be no use to somebody watching the panel to decide
+    /// whether to unplug it.
+    #[test]
+    fn the_updating_bar_fills_from_nothing_to_the_full_width() {
+        let filled = |percent| {
+            let mut f = [0u8; NBYTES];
+            render(&Screen::Updating { percent }, &mut f).unwrap();
+            // Row 24 is inside the bar, between its two edges.
+            (2..W - 2).filter(|x| lit(&f, *x, 24)).count()
+        };
+        let none = filled(None);
+        let zero = filled(Some(0));
+        let half = filled(Some(50));
+        let all = filled(Some(100));
+        assert_eq!(none, 0, "an unknown length draws the outline and no fill");
+        assert_eq!(zero, 0);
+        assert!(half > 25 && half < 35, "half way is about half the bar ({half})");
+        assert!(all >= 58, "a finished upload fills the bar ({all})");
+        // Out of range is clamped, not wrapped.
+        assert_eq!(filled(Some(200)), all);
+    }
+
+    /// The outline is there even when there is nothing to fill it with, so
+    /// "no Content-Length" and "the panel has died" do not look the same.
+    #[test]
+    fn the_updating_screen_is_never_blank() {
+        let mut f = [0u8; NBYTES];
+        render(&Screen::Updating { percent: None }, &mut f).unwrap();
+        let n = (0..W).flat_map(|x| (0..H).map(move |y| (x, y)))
+            .filter(|&(x, y)| lit(&f, x, y))
+            .count();
+        assert!(n > 100, "the updating screen drew almost nothing ({n} pixels)");
+        assert!(n < 700, "the updating screen is suspiciously bright ({n} pixels)");
     }
 
     #[test]

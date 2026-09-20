@@ -14,7 +14,9 @@ use screeny_device_api::reply::{
     WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::MAX_IDENTIFY_MS;
-use screeny_device_api::{route, Accepted, ErrorCode, ErrorReply, IdleMode, WifiState};
+use screeny_device_api::{
+    route, Accepted, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState,
+};
 
 use super::{
     idle_name, verdict, Ctx, Outcome, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE, KNOWN_223,
@@ -445,6 +447,62 @@ pub fn all() -> Vec<Rule> {
             secs: 0.3,
             flags: 0,
             run: panic_breadcrumb,
+        },
+        // --- POST /api/v1/firmware, the rest of it (card 240) ------------
+        //
+        // Numbered after 39 for the same reason 39 comes after 38: the numbers
+        // above are cited by name in `firmware/src/http.rs` and in spec 8.7,
+        // and renumbering to make room in the middle would break every one of
+        // those references. Rules 23 and 24 stay where they are.
+        //
+        // **Every one of these is refused before the device erases a sector.**
+        // That is not luck, it is the design: research 006 section 5's first
+        // four checks are answerable from the first 4,096 bytes and the
+        // staging loop runs them before it touches flash, and the length check
+        // runs on `Content-Length` before the body is read at all. So this
+        // whole section can be run against the bench device, repeatedly, and
+        // it leaves the *inactive* slot exactly as it found it - let alone the
+        // running one. Nothing here can make a wrong image bootable, and
+        // nothing here writes `otadata`, which this firmware never does.
+        Rule {
+            n: 40,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "an image for another chip is refused as wrong_chip",
+            cite: "research 006 section 5 check 2; enums::FirmwareError",
+            secs: 0.6,
+            flags: 0,
+            run: firmware_wrong_chip,
+        },
+        Rule {
+            n: 41,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "somebody else's app is refused as wrong_project",
+            cite: "research 006 section 5 check 4; fwimage::PROJECT_NAME",
+            secs: 0.6,
+            flags: 0,
+            run: firmware_wrong_project,
+        },
+        Rule {
+            n: 42,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "a body longer than the slot is refused on Content-Length alone",
+            cite: "research 006 section 5, 'before a single sector is erased'",
+            secs: 6.0,
+            flags: 0,
+            run: firmware_too_large,
+        },
+        Rule {
+            n: 43,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "a truncated good-looking image is refused, and never ok",
+            cite: "research 006 section 5's interruption table; check 6",
+            secs: 1.0,
+            flags: 0,
+            run: firmware_truncated,
         },
     ]
 }
@@ -1097,6 +1155,129 @@ fn firmware_not_an_image(cx: &mut Ctx) -> Result<Outcome, String> {
     // 64 bytes of zeroes: no `0xE9` magic, so the first check fails before
     // anything could be written anywhere.
     firmware_refuses(cx, &[0u8; 64], "64 bytes of zeroes")
+}
+
+/// The same, but insisting on *which* refusal (card 240).
+///
+/// Rules 23 and 24 accept any refusal, because they were written when no
+/// firmware served the route at all. The four below know what the answer
+/// should be, and a device that refuses an ESP32-C3 image as `bad_magic` has a
+/// bug worth finding even though it refused it.
+fn firmware_refuses_with(
+    cx: &mut Ctx,
+    body: &[u8],
+    want: FirmwareError,
+    what: &str,
+) -> Result<Outcome, String> {
+    let res = cx.post_bytes(route::FIRMWARE, body)?;
+    if is_unavailable(&res) {
+        return Ok(Outcome::Skip(format!(
+            "this build does not take uploads: {}",
+            unavailable_detail(&res)
+        )));
+    }
+    if res.status != 200 {
+        return match res.error() {
+            Ok(r) => verdict(
+                false,
+                format!(
+                    "HTTP {} {} - this route answers 200 with ok:false",
+                    res.status, r.error
+                ),
+            ),
+            Err(e) => verdict(false, format!("HTTP {}: {e}", res.status)),
+        };
+    }
+    let f: FirmwareReply = res.parse()?;
+    verdict(
+        !f.ok && f.error == Some(want),
+        format!(
+            "{what}: ok {} written {} error {:?} (wanted {:?})",
+            f.ok, f.written, f.error, want
+        ),
+    )
+}
+
+/// Rule 40. A perfectly well-formed image, with a correct checksum and a
+/// correct appended SHA-256, built for an ESP32-C3.
+///
+/// This is the upload that would brick the panel if the chip check were not
+/// there, and it is **safe to send**: research 006 section 5 puts the chip
+/// check second, on the header's own bytes, and the firmware runs it before it
+/// erases anything.
+fn firmware_wrong_chip(cx: &mut Ctx) -> Result<Outcome, String> {
+    let image = screeny_fwimage::build::Builder::wrong_chip().build();
+    firmware_refuses_with(cx, &image, FirmwareError::WrongChip, "an ESP32-C3 image")
+}
+
+/// Rule 41. A correct ESP32 image of a different project.
+fn firmware_wrong_project(cx: &mut Ctx) -> Result<Outcome, String> {
+    let image = screeny_fwimage::build::Builder::wrong_project().build();
+    firmware_refuses_with(cx, &image, FirmwareError::WrongProject, "somebody else's app")
+}
+
+/// Rule 42. `Content-Length` bigger than the slot, and almost no body.
+///
+/// Research 006 section 5 asks for this refusal "before a single sector is
+/// erased", and this proves it the only way that is cheap: *declare* a body
+/// larger than a 2 MiB slot, send a few bytes, half-close. A device that reads
+/// `Content-Length` first answers straight away; one that had started erasing
+/// would have had to read the body to know how long it was.
+///
+/// The half-close matters. A server that refuses without reading still has to
+/// account for the rest of the body before it replies, and the end-of-stream
+/// is what lets it stop at once instead of waiting out its read timeout. The
+/// 6 s budget is for a server that ignores it.
+fn firmware_too_large(cx: &mut Ctx) -> Result<Outcome, String> {
+    // One byte past the slot in `firmware/partitions.csv`.
+    const DECLARED: usize = 0x20_0000 + 1;
+    let image = screeny_fwimage::build::Builder::good().build();
+    let res = cx.post_bytes_declaring(route::FIRMWARE, DECLARED, &image[..64])?;
+    if is_unavailable(&res) {
+        return Ok(Outcome::Skip(format!(
+            "this build does not take uploads: {}",
+            unavailable_detail(&res)
+        )));
+    }
+    if res.status != 200 {
+        return match res.error() {
+            // `payload_too_large` in the generic shape is a defensible answer
+            // too - it is what a server that bounds the route before routing
+            // would say. Accept it, and say which one it was.
+            Ok(r) if r.error == ErrorCode::PayloadTooLarge => {
+                Ok(Outcome::Pass("HTTP 413 payload_too_large".into()))
+            }
+            Ok(r) => verdict(false, format!("HTTP {} {}", res.status, r.error)),
+            Err(e) => verdict(false, format!("HTTP {}: {e}", res.status)),
+        };
+    }
+    let f: FirmwareReply = res.parse()?;
+    verdict(
+        !f.ok && f.error == Some(FirmwareError::TooLarge) && f.written == 0,
+        format!(
+            "declared {DECLARED} bytes: ok {} written {} error {:?} (wanted written 0, too_large)",
+            f.ok, f.written, f.error
+        ),
+    )
+}
+
+/// Rule 43. A good image with its last 200 bytes missing.
+///
+/// Research 006 section 5's interruption table, as a test: the connection that
+/// dies mid-upload. **This one does reach flash** - the header is ours, so the
+/// device stages what arrives - and it is still safe, because the slot it
+/// stages into is the one nothing boots and this firmware never writes
+/// `otadata`. What it must not be is `ok`.
+fn firmware_truncated(cx: &mut Ctx) -> Result<Outcome, String> {
+    let image = screeny_fwimage::build::Builder::good().build();
+    // Everything but the tail of the appended digest.
+    let cut = image.len() - 200;
+    firmware_refuses_with(
+        cx,
+        &image[..cut],
+        FirmwareError::BadSha256,
+        "a good image with 200 bytes missing",
+    )
 }
 
 // ---------------------------------------------------------------------------

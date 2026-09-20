@@ -248,6 +248,27 @@ impl Ctx {
         self.record("POST", path, self.http.post_bytes(path, body))
     }
 
+    /// `POST path` with an octet-stream body that declares `declared` bytes
+    /// and sends `body`, then half-closes, recorded.
+    ///
+    /// See [`Client::post_bytes_declaring`]: it is how rule 42 asks whether an
+    /// oversize upload is refused on `Content-Length` alone.
+    ///
+    /// # Errors
+    /// Anything that stops a response coming back.
+    pub fn post_bytes_declaring(
+        &mut self,
+        path: &str,
+        declared: usize,
+        body: &[u8],
+    ) -> Result<Res, String> {
+        self.record(
+            "POST",
+            path,
+            self.http.post_bytes_declaring(path, declared, body),
+        )
+    }
+
     /// Any method at all, recorded. For the verbs this API has no
     /// [`Method`](screeny_device_api::Method) for.
     ///

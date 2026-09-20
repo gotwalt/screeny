@@ -57,7 +57,7 @@
 
 use core::cell::RefCell;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use edge_nal::UdpBind;
 use edge_nal_embassy::{Udp, UdpBuffers};
@@ -156,6 +156,16 @@ static MACHINE: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Provisione
 /// dispatch's captive-portal hook, which is on the request path and must not
 /// take a lock to decide a 404.
 static AP_UP: AtomicBool = AtomicBool::new(false);
+
+/// Station link-down edges since boot.
+///
+/// Card 240 reads it either side of a firmware upload. Research 006 section 4
+/// leaves one question open on hardware - whether esp-radio's WiFi survives
+/// core 0 having interrupts masked for the ~50 ms of each ROM sector erase -
+/// and "did the association drop while 183 of those went past" is the shortest
+/// answer to it. Counted here because this is the one place that decides the
+/// link went down, from `is_connected()` and an address, on a 1 s tick.
+pub static LINK_DOWNS: AtomicU32 = AtomicU32::new(0);
 
 /// How often a service task asks whether the AP has come up or gone down.
 ///
@@ -320,6 +330,19 @@ pub fn screen(now_ms: u32) -> Option<PanelScreen> {
         })
     })
     .flatten()
+}
+
+/// Card 240's "updating" screen, through the same renderer.
+///
+/// It is not a [`PanelScreen`] because it is not the machine's: the
+/// provisioning state machine knows nothing about firmware uploads and should
+/// not learn. What it shares with the portal screens is the *renderer*, so
+/// that the two things the panel can be taken over by are drawn by one crate
+/// with host tests rather than by two.
+pub fn render_updating(percent: Option<u8>, frame: &mut Rgb888Frame) {
+    if let Err(e) = screeny_provision::render(&Screen::Updating { percent }, frame) {
+        warn!("ota: the updating screen could not be drawn: {:?}", e);
+    }
 }
 
 /// Draw one of those into the frame, through `crates/provision`'s renderer.
@@ -1023,6 +1046,11 @@ impl Driver {
             self.link_was_up = up;
             if !up {
                 crate::RSSI_DBM.store(0, Ordering::Relaxed);
+                // Card 240 reads the difference across an upload: research 006
+                // section 4's open risk is that ~50 ms of masked interrupts
+                // per sector erase costs the association, and this is the
+                // number that would say so.
+                LINK_DOWNS.fetch_add(1, Ordering::Relaxed);
             }
             info!("wifi: link {}", if up { "up" } else { "down" });
             let acts = step(

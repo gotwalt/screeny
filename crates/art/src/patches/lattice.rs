@@ -11,6 +11,9 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "GPU, raymarched. Solids on true black, lit into the mid-to-bright range, supersampled for slow flight.",
     params: PARAMS,
     make,
+    // `lattice.wgsl` reads `u.seed` for the roll phase and for the per-cell hue
+    // hash, so a new seed re-colours and re-angles the flight.
+    seeded: true,
 };
 
 // Order matters: the shader reads these as P(0), P(1), ...

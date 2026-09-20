@@ -12,8 +12,12 @@
       <h1 id="patch-name">&nbsp;</h1>
       <p id="patch-blurb"></p>
     </div>
+    <!-- Card 151 took the Seed readout out of here. The number is opaque - it
+         says nothing about what is on the panel - and what a person wants from
+         it is "show me another one like this", which is the Another button in
+         the Parameters section. It is still in /api/v1/status, in the state
+         file and in that button's tooltip, for reproducing a frame. -->
     <dl class="readouts" aria-label="Run">
-      <div><dt>Seed</dt><dd id="ro-seed">–</dd></div>
       <div><dt>Time</dt><dd id="ro-time">–</dd></div>
       <div><dt>Rate</dt><dd id="ro-fps">–</dd></div>
       <!-- Card 198: the one thing on this screen that is about the panel
@@ -44,17 +48,48 @@
       <!-- Card 145: why the GPU patches are greyed out, said once, here rather
            than only on stderr. -->
       <p class="hint" id="gpu-note" hidden></p>
-      <div class="row row--seed">
-        <label for="seed">Seed</label>
-        <input id="seed" type="number" min="0" max="4294967295" step="1" inputmode="numeric">
-        <button type="button" id="new-seed" title="N">New seed</button>
-      </div>
     </section>
 
     <section id="sec-params">
       <div class="section-head">
         <h2>Parameters</h2>
-        <button type="button" class="quiet" id="reset-params">Reset</button>
+        <!-- Card 151: "another one like this", which is the only thing the seed
+             is good for to a person. Shown only for a patch whose picture
+             actually depends on its seed (`PatchDef::seeded`); a patch with
+             better words of its own offers those under Now playing instead. -->
+        <button type="button" class="quiet" id="another" hidden>Another</button>
+      </div>
+
+      <!-- Card 151: the patch's settings, at the head of what they hold.
+           The name it is on, a mark when it has been moved since, the list to
+           load from - Default first, which is what "Reset" became - and the
+           five things a person can do. No prompt() and no confirm(): a name is
+           typed inline and a delete is confirmed inline, because those dialogs
+           cannot be driven, cannot be styled and stop the page. -->
+      <div class="setting" id="setting">
+        <div class="setting__head">
+          <select id="setting-list" aria-label="Setting"></select>
+          <span class="setting__mark" id="setting-mark" hidden title="Moved since it was loaded">modified</span>
+        </div>
+        <div class="setting__actions">
+          <button type="button" id="setting-save">Save</button>
+          <button type="button" id="setting-saveas">Save as…</button>
+          <button type="button" id="setting-rename">Rename</button>
+          <button type="button" id="setting-delete">Delete</button>
+          <button type="button" id="setting-revert">Revert</button>
+        </div>
+        <form class="setting__name" id="setting-name" hidden>
+          <label for="setting-name-input" id="setting-name-label">Save as</label>
+          <input id="setting-name-input" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+          <button type="submit" id="setting-name-ok">Keep</button>
+          <button type="button" class="quiet" id="setting-name-cancel">Cancel</button>
+        </form>
+        <p class="setting__confirm" id="setting-confirm" hidden>
+          <span id="setting-confirm-what"></span>
+          <button type="button" id="setting-confirm-yes">Delete</button>
+          <button type="button" class="quiet" id="setting-confirm-no">Keep it</button>
+        </p>
+        <p class="hint" id="setting-error" data-tone="bad" hidden></p>
       </div>
       <div id="params"></div>
     </section>

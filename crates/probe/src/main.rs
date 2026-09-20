@@ -36,6 +36,9 @@
 //!   http [--http HOST[:PORT]] [--only N|SECTION] [--list]
 //!        [--allow-reboot] [--allow-wifi-trial] [--cap-probe]
 //!                            the HTTP API's conformance suite (card 228)
+//!   fw-scan FILE             run the device's own image validator here, on a file
+//!   fw-upload FILE [--http HOST[:PORT]] [--force]
+//!                            stage an image into the device's inactive slot (card 240)
 //! ```
 //!
 //! The suites themselves are `src/suite/` (the wire) and `src/http/` (the
@@ -64,7 +67,8 @@ const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT] | --name NAME] [--
                                            [--restore-idle N] [--list] |\n\
                                lock-test (= conformance --only 7) |\n\
                                http [--http HOST[:PORT]] [--only N|SECTION] [--list]\n\
-                                    [--allow-reboot] [--allow-wifi-trial] [--cap-probe]";
+                                    [--allow-reboot] [--allow-wifi-trial] [--cap-probe] |\n\
+                               fw-scan FILE | fw-upload FILE [--http HOST[:PORT]] [--force]";
 
 struct Args {
     host: String,
@@ -152,6 +156,11 @@ fn run() -> Result<bool, String> {
     if cmd == "http" && has_flag(rest, "--list") {
         return cmd_http_list();
     }
+    // `fw-scan` reads a file and says what the device would make of it; it has
+    // no device, so it must not need one to resolve (card 240).
+    if cmd == "fw-scan" {
+        return cmd_fw_scan(rest);
+    }
     let ctrl_addr = resolve(&args.host, args.ctrl_port)?;
     let frame_addr = resolve(&args.host, args.frame_port)?;
 
@@ -207,6 +216,11 @@ fn run() -> Result<bool, String> {
             let persist = rest.iter().any(|a| a == "--persist");
             simple(ctrl_addr, Request::SetWifi(SetWifi { ssid, psk, persist }))
         }
+        // Card 240. `fw-scan` is handled above, before anything is resolved.
+        // `fw-upload` speaks HTTP, not UDP, and exists so that a bench
+        // procedure is one line rather than a `curl` with a 240 s timeout, a
+        // content type and a local validation step spelled out by hand.
+        "fw-upload" => cmd_fw_upload(&args, rest),
         "bench" => cmd_bench(ctrl_addr, rest),
         "stream" => cmd_stream(&args, frame_addr, ctrl_addr, rest),
         "conformance" => cmd_conformance(frame_addr, ctrl_addr, rest, None),
@@ -825,4 +839,144 @@ fn cmd_http(args: &Args, ctrl_addr: SocketAddr, rest: &[String]) -> Result<bool,
         ctrlc: true,
     };
     http::run(&opts).map(|s| s.ok())
+}
+
+// ---------------------------------------------------------------------------
+// Firmware images (card 240)
+// ---------------------------------------------------------------------------
+
+/// `fw-scan FILE`: run the device's own validator over an image, here.
+///
+/// The same `screeny-fwimage` scanner the firmware runs, on the same bytes, so
+/// "this file would be accepted" is answerable on the bench Mac in a
+/// millisecond instead of after fifteen seconds of flash writes on the device.
+/// Talks to nothing.
+fn cmd_fw_scan(rest: &[String]) -> Result<bool, String> {
+    let path = rest.first().ok_or("fw-scan needs a path to an image")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    Ok(report_scan(path, &bytes))
+}
+
+/// The slot in `firmware/partitions.csv`. Both `ota_0` and `ota_1` are 2 MiB.
+const SLOT_LEN: u32 = 0x20_0000;
+
+/// Scan `bytes` and print what the device would have said. Returns whether it
+/// would be accepted.
+fn report_scan(path: &str, bytes: &[u8]) -> bool {
+    use screeny_fwimage::{Scan, SECTOR};
+    let mut scan = Scan::new(SLOT_LEN);
+    let mut failed = None;
+    for piece in bytes.chunks(SECTOR) {
+        if let Err(e) = scan.push(piece).and_then(|()| scan.check_front()) {
+            failed = Some(e);
+            break;
+        }
+    }
+    let result = failed.map_or_else(|| scan.finish(), Err);
+    match result {
+        Ok(img) => {
+            println!(
+                "{path}: {} bytes on disk | image {} bytes, {} segments, {} trailing",
+                bytes.len(),
+                img.len,
+                img.segments,
+                img.trailing
+            );
+            println!(
+                "  esp_app_desc.version {:?} | sha256 {}",
+                img.version,
+                hex32(&img.digest)
+            );
+            println!(
+                "  {} of a {} byte slot ({:.1}%), {} sectors to stage",
+                img.len,
+                SLOT_LEN,
+                f64::from(img.len) * 100.0 / f64::from(SLOT_LEN),
+                bytes.len().div_ceil(SECTOR),
+            );
+            println!("  every check passed: the device would answer ok");
+            true
+        }
+        Err(e) => {
+            println!(
+                "{path}: {} bytes on disk | REFUSED: {:?} after {} bytes",
+                bytes.len(),
+                e,
+                scan.seen()
+            );
+            false
+        }
+    }
+}
+
+fn hex32(d: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in d {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// `fw-upload FILE [--http HOST[:PORT]] [--force]`: stage an image on the
+/// device.
+///
+/// Scans the file first and **refuses to send one the device would refuse**,
+/// unless `--force` - which is exactly what a bench procedure wants when it is
+/// deliberately uploading a broken image to watch the refusal. Prints the
+/// reply and how long the whole thing took, which is the number to compare
+/// with the device's own `ota:` log line.
+fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
+    use screeny_device_api::reply::FirmwareReply;
+    use screeny_device_api::route;
+    use screeny_probe::http::client::Client;
+
+    let path = rest.first().ok_or("fw-upload needs a path to an image")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let good = report_scan(path, &bytes);
+    if !good && !has_flag(rest, "--force") {
+        return Err(
+            "this image would be refused; pass --force to send it anyway (which is what a \
+             deliberate bad-image test wants)"
+                .into(),
+        );
+    }
+
+    let (host, port) = match flag(rest, "--http") {
+        Some(v) => match v.rsplit_once(':') {
+            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (
+                h.to_string(),
+                p.parse::<u16>().map_err(|_| "bad --http port")?,
+            ),
+            _ => (v, 80),
+        },
+        None => (args.host.clone(), 80),
+    };
+    let addr = resolve(&host, port)?;
+    // Far longer than the client's ordinary timeout: an upload is tens of
+    // seconds of flash writes and the reply only comes at the end of them.
+    let client = Client::new(addr, host).with_timeout(Duration::from_secs(240));
+    println!("uploading {} bytes to http://{addr}{}", bytes.len(), route::FIRMWARE);
+    let t0 = Instant::now();
+    let res = client.post_bytes(route::FIRMWARE, &bytes)?;
+    let elapsed = t0.elapsed();
+    println!(
+        "HTTP {} in {:.1} s ({:.0} KB/s)",
+        res.status,
+        elapsed.as_secs_f64(),
+        bytes.len() as f64 / 1024.0 / elapsed.as_secs_f64().max(0.001),
+    );
+    if res.status != 200 {
+        println!("  body: {}", String::from_utf8_lossy(&res.body));
+        return Ok(false);
+    }
+    let reply: FirmwareReply = res.parse()?;
+    println!(
+        "  ok {} written {} error {:?}",
+        reply.ok, reply.written, reply.error
+    );
+    println!(
+        "  nothing has been booted: this firmware never writes otadata. Card 241 is what \
+         makes a staged image the one that runs."
+    );
+    Ok(reply.ok)
 }
