@@ -1447,10 +1447,14 @@ async fn selftest_one(request: &str, out: &mut [u8]) -> (u16, usize, u32) {
     let mut overflow = 0usize;
     let t0 = Instant::now();
     {
-        // Not `HTTP_BUF`: the canned requests below are ~150 bytes of request
-        // line, headers and body, and this buffer is `.bss` in a build that
-        // already carries a second copy of the whole serve machinery.
-        let mut http_buf = [0u8; 512];
+        // Not `HTTP_BUF`: the canned requests below are request line, headers
+        // and body, and this buffer is `.bss` in a build that already carries
+        // a second copy of the whole serve machinery. 768 rather than card
+        // 222's 512 because card 233 added the two oversize-body cases, and
+        // the longest of them is ~515 bytes on the wire. The `413` is decided
+        // from `Content-Length` before the body is read, so this only has to
+        // hold what picoserve buffers while parsing the head.
+        let mut http_buf = [0u8; 768];
         let socket = mem_socket::MemSocket {
             r: mem_socket::Reader {
                 data: request.as_bytes(),
@@ -1670,6 +1674,25 @@ pub async fn selftest_task(stack: Stack<'static>) {
 /// values that change nothing observable: the brightness and idle mode that
 /// are already in force cannot be known here, so `identify` asks for 1 ms and
 /// `settings` sets the brightness the device is already at.
+///
+/// **Card 222's twelve cases are below unchanged**, which is the point: they
+/// are the before/after evidence for card 233's dispatch. Eight more follow
+/// them, and every one is a question only the new dispatch can be asked:
+///
+/// * `DELETE /api/v1/status` and `PUT /api/v1/settings` - a verb this API has
+///   no [`route::Method`] for, which used to be picoserve's plain-text 405
+///   (probe rules 26 and 37).
+/// * `HEAD /` and `POST /` - the two methods `/` does not take. `HEAD` is a
+///   405 *by decision*; see the module docs.
+/// * `/api/v1/status/` and `/api/v1/%73tatus` - the two ways a path can nearly
+///   be a route. The first must be a 404 and the second must be `status`,
+///   because `known_path` compares the way picoserve's `Route` did.
+/// * `POST /api/v1/identify` with 153 bytes and `POST /api/v1/wifi` with 385 -
+///   one byte over the route's own `max_request_len` (152) and one over the
+///   global `MAX_REQUEST_LEN` (384). The identify one is the interesting half:
+///   153 is comfortably inside the global bound, so a server that knew only
+///   that number would parse it and answer `400`, and `413` is the proof that
+///   the per-route bound is being read from the table (probe rules 28 and 29).
 #[cfg(feature = "http-selftest")]
 static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
     (
@@ -1713,7 +1736,7 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
         400,
     ),
     (
-        "POST /api/v1/reboot unconf",
+        "POST reboot unconf (out_of_range)",
         "POST /api/v1/reboot HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"confirm\":\"NO\"}",
         400,
     ),
@@ -1731,5 +1754,46 @@ static SELFTEST_ROUTES: &[(&str, &str, u16)] = &[
         "GET /nope (404)",
         "GET /nope HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
         404,
+    ),
+    // --- card 233 -------------------------------------------------------
+    (
+        "DELETE /api/v1/status (405)",
+        "DELETE /api/v1/status HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "PUT /api/v1/settings (405)",
+        "PUT /api/v1/settings HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "HEAD / (405, card 233)",
+        "HEAD / HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        405,
+    ),
+    (
+        "POST / (405)",
+        "POST / HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        405,
+    ),
+    (
+        "GET /api/v1/status/ (404)",
+        "GET /api/v1/status/ HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        404,
+    ),
+    (
+        "GET /api/v1/%73tatus (200)",
+        "GET /api/v1/%73tatus HTTP/1.1\r\nHost: s\r\nConnection: close\r\n\r\n",
+        200,
+    ),
+    (
+        "POST identify 153 > 152 (413)",
+        "POST /api/v1/identify HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 153\r\n\r\n{\"nothing\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        413,
+    ),
+    (
+        "POST wifi 385 > 384 (413)",
+        "POST /api/v1/wifi HTTP/1.1\r\nHost: s\r\nConnection: close\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 385\r\n\r\nnothing=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        413,
     ),
 ];
