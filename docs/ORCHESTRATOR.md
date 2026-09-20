@@ -149,24 +149,23 @@ saved or reverted. What the code called `Settings` (panel kind, dither, limiter)
 state v4; proven before merging on a copy of workbench's real state file, and again by the
 deploy itself (`state.v3.json` sits beside `state.json` in `/data`; the owner's
 `clocks-dials` parameters and speed arrived intact). 118 and 117 went out with it.
-**In flight (three Opus workers, branch from `main`, worktrees):** 151
-(`card/151-named-settings`: state v5; also takes the seed's number off the page - the
-owner: "not interesting to humans" - leaving one "Another" button on patches that are
-`seeded`), **155** (`card/155-vesta`: the owner's split-flap night clock; he withdrew "half
-the panel" - spend the pixels, the flip sizes the clock; its PNGs land in the scratchpad's
-`vesta/` for showing him), 164 (`card/164-network-per-panel`: KB/s out and in per panel on
-`/panel`; fenced away from 151's files, expect a small reconcile in `player.rs`/`api.rs`).
-Also in flight: **168** (`card/168-flock`: the owner's second new patch - a slow 3D flock seen by a
-camera that is itself a boid, invisible geometry, a hue wheel; PNG strips land in the
-scratchpad's `flock/`). **The owner's limit since 2026-09-20 ~15:00: at most TWO workers at a time, for now.** 164
-and 168 were asked to pause (WIP commit + a "Paused" Log entry on their branches, cards
-left in `doing/`); resume each with a SendMessage to the same agent when a slot frees -
-168 (flock) first, it is the owner's design ask - or, after a context reset, start a new
-worker from the branch. Running: 151 and 155. **Queued behind 151:** 161 (30 fps and nothing else: the owner wants 60 fps support and the
-rate control gone; the sender's spec 6.9 loss ladder stays and the card says why), then 157
-(two things called `Output`). At merge: vesta's `PatchDef` literal needs 151's new `seeded`
-field. The firmware session's long soak was cancelled by the owner; redeploy freely, with
-the usual warning. The owner
+**Done and deployed 2026-09-20 ~16:00:** **151** (named settings: working copy + named
+settings per patch, `modified` computed, read-only Default, `settings/load|save|rename|
+delete`, state v5 with `state.v4.json` kept; the seed's number is off the page - one
+"Another" button on `seeded` patches; on workbench the owner's tuned `clocks-dials` shows
+as "Default, modified" until he saves it under a name) and **155 - `vesta`**, his split-flap
+night clock (14x30 modules, red on black, cards falling under gravity with a lit edge and
+a shadow; APL ~1%, ~0.5 KB exact frames; its PNGs are in the scratchpad's `vesta/`; eleven
+"Open with the owner" items in the card, first among them whether a night patch or a
+setting may ask for a panel brightness). **The owner's limit: at most TWO workers at a
+time, for now.** Running (both resumed after a pause, by SendMessage to the same agents):
+164 (`card/164-network-per-panel`, nearly done) and **168** (`card/168-flock`, the owner's
+second new patch: a slow 3D flock seen by a camera that is itself a boid; strips land in
+the scratchpad's `flock/`). After a context reset, start a new worker from the branch and
+its card Log. **Queued, in order:** 161 (30 fps and nothing else; the sender's spec 6.9
+loss ladder stays and the card says why), 159 (the Panel screen's `prompt()`/`confirm()`
+become inline), 157 (two things called `Output`), 199 (last panic on `/panel`), 156, 114.
+The owner
 said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
 permission for `screeny-studio`/`screeny-art`, is the one to check the first time he does).
