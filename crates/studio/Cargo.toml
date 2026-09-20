@@ -29,6 +29,13 @@ screeny-art = { path = "../art", default-features = false, features = ["sender"]
 # registry and the device controls name it directly because they use it
 # directly. No GUI and no graphics in that tree: see crates/screeny/README.md.
 screeny = { path = "../screeny" }
+# Card 180: the device's own HTTP API, defined once for the firmware, the
+# simulator and here. The Studio reads `GET /api/v1/status` and parses it into
+# `screeny_device_api::reply::StatusReply` rather than restating those shapes,
+# so a field the firmware adds arrives here in the same commit. `no_std`, no
+# alloc, no I/O: it serves nothing and talks to nothing. There is no HTTP
+# client dependency to go with it - see `src/devhttp.rs` for why.
+screeny-device-api = { path = "../device-api", features = ["std"] }
 # The server. No `tracing`, no `form`, no `tower-log`: this is a handful of
 # routes and one socket, and every feature is a crate in the tree.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }

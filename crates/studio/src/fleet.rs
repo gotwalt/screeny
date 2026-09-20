@@ -332,6 +332,114 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
     }
 }
 
+// ------------------------------------------- the device's own HTTP status ----
+
+/// **Read each device's own `GET /api/v1/status`** - the things only the
+/// device knows: heap, free stack, firmware slot, reset reason, WiFi.
+///
+/// This is the other half of the seam card 106 left: [`spawn_telemetry`] above
+/// still owns the frame counters and the link, and this adds to them rather
+/// than replacing them. Absent or failing HTTP is normal and never a problem
+/// in `/healthz`.
+///
+/// **Every rule the firmware session asked for is a property of this one task**
+/// (card 222: the device has one connection worker and no listen backlog, so a
+/// second simultaneous connection is dropped at SYN):
+///
+/// * *one poller* - one task, spawned once;
+/// * *one connection at a time* - the loop `await`s each read before starting
+///   the next, so there is one in flight across the whole fleet, not merely
+///   one per device;
+/// * *no faster than every 10 s* - [`crate::MIN_DEVICE_HTTP_EVERY`], which is
+///   what `Config::default` carries and what `main` clamps to;
+/// * *`Connection: close`, ~2 s, bounded reply* - [`crate::devhttp`];
+/// * *capped jittered backoff* - [`fail`], the same one the telemetry poll uses;
+/// * *never on a render thread* - `spawn_blocking`;
+/// * *never triggered by a browser* - no route calls this. A browser reads the
+///   studio's cached copy through `/api/v1/status`.
+pub fn spawn_device_http(st: AppState) {
+    if !st.cfg.device_http {
+        return;
+    }
+    let mut stop = st.stop.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(st.cfg.device_http_every);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut backoff: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => status_once(&st, &mut backoff).await,
+                // The borrow `wait_for` hands back is not `Send` and this
+                // future has to be: discard it inside the block.
+                () = async { drop(stop.wait_for(|s| *s).await) } => break,
+            }
+        }
+    });
+}
+
+async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
+    let devices_now = st.devices.list();
+    backoff.retain(|id, _| devices_now.iter().any(|d| d.stored.id == *id));
+
+    for record in devices_now {
+        let id = record.stored.id.clone();
+        if let Some((_, left)) = backoff.get_mut(&id) {
+            if *left > 0 {
+                *left -= 1;
+                continue;
+            }
+        }
+        // Nowhere to ask yet. Not a failure and not worth backing off for:
+        // the telemetry poll is what finds out where this device is.
+        let Some(addr) = record.http_addr(st.cfg.device_http_port) else { continue };
+
+        let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status(addr, crate::devhttp::TIMEOUT)).await;
+        match read {
+            Ok(Ok(reply)) => {
+                let first = record.http.reads == 0;
+                // The reply is handed straight to the registry and never held
+                // here: it carries the SSID, and nothing below may print it.
+                let fw = reply.fw.to_string();
+                let slot = format!("{:?}", reply.fw_slot).to_lowercase();
+                if let Some((reboots, rebooted)) = st.devices.heard_http(&id, reply) {
+                    if first {
+                        eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
+                    }
+                    if rebooted {
+                        eprintln!("studio: `{}` rebooted: {reboots} since the studio started", record.label());
+                    }
+                }
+                backoff.remove(&id);
+            }
+            Ok(Err(fault)) => {
+                if st.devices.http_failed(&id, fault.absent, fault.why.clone()) {
+                    if fault.absent {
+                        eprintln!(
+                            "studio: `{}` has no HTTP status API ({fault}); its UDP telemetry is all the studio will show",
+                            record.label()
+                        );
+                    } else {
+                        eprintln!("studio: `{}`: reading its status: {fault}", record.label());
+                    }
+                }
+                // A device with no server is asked at the slowest rate at
+                // once rather than climbing to it: a firmware update is the
+                // only thing that changes the answer, and that is not a thing
+                // that happens twice a minute.
+                if fault.absent {
+                    backoff.insert(id, (MAX_BACKOFF, MAX_BACKOFF));
+                } else {
+                    fail(backoff, &id);
+                }
+            }
+            Err(e) => {
+                st.devices.http_failed(&id, false, e.to_string());
+                fail(backoff, &id);
+            }
+        }
+    }
+}
+
 /// Capped exponential backoff with a little jitter, so a house full of panels
 /// that are all off does not poll in lockstep.
 fn fail(backoff: &mut BTreeMap<String, (u32, u32)>, id: &str) {

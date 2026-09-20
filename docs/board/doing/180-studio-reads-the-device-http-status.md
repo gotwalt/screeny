@@ -90,3 +90,38 @@ with firmware 0.2.0 it looks exactly as it does today.
   25-37 ms and inside 1 s when the one worker is busy, so a 2 s total deadline is
   generous rather than tight; rule #3 says `boot_id` is stable across two reads, which
   is what makes "count reboots from `boot_id`" honest.
+
+- **The server half.** `crates/studio/src/devhttp.rs` is the client: one
+  `GET /api/v1/status`, blocking, `Connection: close`, 2 s for connect + write + read
+  together, a 4 KB ceiling on the reply, and a `Fault` that says whether the device
+  simply has no HTTP server. **No HTTP client dependency** - the whole file is 200
+  lines over `std::net`, and what this device needs of a client is the opposite of
+  what a client crate is for: no pool, no keep-alive, no retries of its own. The
+  precedent is already in the tree twice (`crates/sim/src/http.rs`, and this crate's
+  own test client).
+
+  `crates/studio/src/fleet.rs` grew `spawn_device_http`, beside the telemetry poll it
+  was always going to sit next to. Every rule the firmware session asked for is a
+  property of that one task rather than a comment: one poller, and because the loop
+  `await`s each read before starting the next, **one connection in flight across the
+  whole fleet** - not merely one per device. Backoff is the telemetry poll's own
+  `fail()`; a device that has no server is pushed straight to the cap (2 min) rather
+  than climbing to it, since only a firmware update changes that answer.
+
+  `crates/studio/src/devices.rs` grew `DeviceFacts` (the reply `#[serde(flatten)]`ed,
+  so a field the firmware adds reaches the page in the same commit), `HttpHealth`, and
+  `DeviceRecord::http_addr` - **derived** from the resolved frame address and port 80,
+  never stored, for the same reason the registry is keyed by id and not by address.
+
+  Two numbers picked, with the owner's healthy device (`stack_free 4312`,
+  `heap 47240/98304`) as the anchor: `LOW_STACK = 2048` (half the healthy reading -
+  about one exception frame plus picoserve's buffer, and card 222 already watched it
+  fall to 5.2 KB under load) and `HIGH_HEAP = 0.85` (the device sits at 48% and the
+  simulator at 67%, so a line at 85% is a real change and still leaves ~14 KB).
+
+  **The SSID.** It is in the payload, it goes on the owner's page and into the
+  studio's own `/api/v1/status`, and nowhere else. `DeviceFacts` has a hand-written
+  `Debug` that prints `ssid: <redacted>`, because `DeviceRecord` derives `Debug` and
+  that would otherwise be one `{:?}` from stderr; the poller hands the reply straight
+  to the registry and never holds it; `heard_http` returns counts rather than the
+  payload so the log lines cannot reach it; and nothing new is persisted.
