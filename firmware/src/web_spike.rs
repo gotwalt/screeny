@@ -2,8 +2,8 @@
 //!
 //! Everything here exists to make the compiler agree with a claim in
 //! `docs/research/007-device-web-and-portal.md`, and to put a real number on
-//! "what does an HTTP server + a soft-AP + a captive portal cost in flash and
-//! `.bss` on this stack". It is never flashed, it is not wired into any
+//! "what does a soft-AP + a captive portal cost in flash and `.bss` on this
+//! stack". It is never flashed, it is not wired into any
 //! product behaviour, and the build cards replace it wholesale.
 //!
 //! What it proves links, in order:
@@ -14,11 +14,9 @@
 //! 2. A second `embassy_net::Stack` can be built over that interface with a
 //!    **static** 192.168.4.1/24 config, its own `StackResources` and its own
 //!    runner task.
-//! 3. `picoserve 0.20` compiles against `embassy-net 0.9.1` on Xtensa: routes,
-//!    a `&'static str` page with an ETag, a urlencoded form, JSON out, a 302
-//!    catch-all for every unrouted path (the captive-portal redirect), and a
-//!    streaming request body with a raised timeout (the OTA sink card 200
-//!    owns).
+//! 3. **Retired by card 222.** The HTTP third of this spike proved
+//!    `picoserve 0.20` links against `embassy-net 0.9.1` on Xtensa; the real
+//!    server in `crate::http` is now in the default build and is the evidence.
 //! 4. `edge-dhcp 0.8` runs a DHCP server over a plain `edge-nal-embassy` UDP
 //!    socket - no raw socket - and emits RFC 8910 option 114.
 //! 5. `edge-captive 0.8` answers every A query with 192.168.4.1 over the same
@@ -33,8 +31,6 @@ use core::net::Ipv4Addr;
 
 #[cfg(feature = "spike-ap")]
 pub mod ap;
-#[cfg(feature = "spike-http")]
-pub mod http;
 #[cfg(feature = "spike-portal")]
 pub mod portal;
 #[cfg(feature = "spike-qr")]
@@ -49,15 +45,6 @@ pub mod qr;
 /// before already expects the number.
 pub const AP_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 const AP_PREFIX: u8 = 24;
-
-/// One HTTP worker. Two would double both TCP buffers and the HTTP buffer.
-const HTTP_TASKS: usize = 1;
-/// picoserve's own buffer: request line + headers + whatever of the body has
-/// already arrived. 2 KB fits every request this device answers.
-const HTTP_BUF: usize = 2048;
-/// smoltcp's per-socket buffers.
-const TCP_RX: usize = 2048;
-const TCP_TX: usize = 1024;
 
 /// DHCP and DNS each get one datagram's worth; neither protocol needs more.
 const DHCP_BUF: usize = 640;
@@ -75,14 +62,12 @@ const DHCP_LEASES: usize = 4;
 pub fn spawn_all(spawner: embassy_executor::Spawner, seed: u64) {
     let (stack, runner) = ap::ap_stack(seed);
     spawner.spawn(ap::ap_net_task(runner).unwrap());
-    #[cfg(feature = "spike-http")]
-    spawner.spawn(http::http_task(0, stack).unwrap());
     #[cfg(feature = "spike-portal")]
     {
         spawner.spawn(portal::dhcp_task(stack).unwrap());
         spawner.spawn(portal::dns_task(stack).unwrap());
     }
-    #[cfg(not(any(feature = "spike-http", feature = "spike-portal")))]
+    #[cfg(not(feature = "spike-portal"))]
     let _ = stack;
 }
 

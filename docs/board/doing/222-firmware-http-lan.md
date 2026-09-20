@@ -167,3 +167,57 @@ and why a card's own budget is tighter).
 So the card's `.stack >= 22 KB` budget leaves **9976 bytes** of new `.data` +
 `.bss` for the whole server. That is the number every sizing decision below is
 measured against.
+
+**Step 2 - the server, and the RAM argument it lost.**
+
+`firmware/src/http.rs` + `firmware/src/http_page.html`; `picoserve` and
+`screeny-device-api` are now ordinary (non-optional) firmware dependencies;
+`embassy-net` gains `tcp`; `FW_VERSION` -> `0.4.0`. `spike-http` and
+`src/web_spike/http.rs` are gone, `web_spike_portal.html` with them, and
+`device-web-spike` is now `spike-ap + spike-portal + spike-qr`.
+
+**The card asked for two connection workers and the RAM said no.** Built with
+two first, and measured:
+
+| build | `.stack` | `http_task` POOL |
+|---|---|---|
+| before (fw 0.3.0) | 32504 | - |
+| two workers | 15344 | 15008 (7504 each) |
+| one worker | **23648** | 7504 |
+
+7504 bytes a worker: 3584 of buffers (http 1536 / rx 1024 / tx 1024) and ~3920
+of picoserve's `serve` future, which holds the router and whichever handler
+future is in flight. Two of them put `.stack` at 15344 - under the 16384 floor
+`tools/fw-size.sh` refuses, never mind the card's 22 KB budget. So the first
+and cheapest lever on the card's list is the one pulled, and it is the **only**
+one: core 1's `APP_CORE_STACK` and the 32 KB heap arena are untouched. With one
+worker keep-alive is off (picoserve's own docs: enable it only when several
+sockets serve), so one browser cannot own the server.
+
+Total cost of the whole card: **8856 bytes** of `.data` + `.bss`, leaving 1120
+bytes of margin against the 22528 budget.
+
+Surprises worth writing down:
+
+1. **`mk_static!` inside a `pool_size > 1` task is one buffer shared by every
+   instance of it.** The spike's `http_task` used it with `HTTP_TASKS = 1`, so
+   nobody had met this; with two workers the second one's
+   `StaticCell::uninit()` panics ("already full") on the first poll, which
+   would have been a boot panic loop on the bench. The buffers are task locals
+   now - the same `.bss`, correctly divided, and accounted in the task pool
+   where `xtensa-esp32-elf-nm` can see it.
+2. **`embassy_net::Stack` is not `Sync`** (it holds a `&RefCell<Inner>`), so it
+   cannot live in the `static` the handlers read. `frames_task` already asks
+   the stack for its address on every 20 ms tick for the status screen, so it
+   publishes it into an `AtomicU32` on the way past and the handlers read that.
+3. **`SET_NAME` with an empty string is not "go back to the default".** The
+   receiver takes it literally, which would leave the `GET_INFO` body and the
+   mDNS instance name blank. `crates/device-api` documents `name: ""` as "go
+   back to `screeny-<id>`", so the substitution is done in the handler, before
+   the opcode is built, rather than in the shared state machine where it would
+   change what the wire protocol means.
+
+Every remaining feature still builds: `display-on-core0`, `spike-ota`,
+`store-selftest`, `apsta-probe`, `fb-on-stack`, `device-web-spike`,
+`gpio-probe`, and the new `http-selftest`. `bench-wifi` was deliberately not
+built (the card forbids it, and the device's credentials are already in flash).

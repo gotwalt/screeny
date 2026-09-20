@@ -253,13 +253,17 @@ macro_rules! with_store {
 }
 
 impl Flash {
-    /// The raw flash handle, for the `spike-ota` build's OTA evidence.
+    /// The raw flash handle, for the things that read a *different* partition.
     ///
-    /// `FlashStorage::new` panics if it is called twice, so the spike borrows
-    /// the store's handle instead of building its own. Nothing in the default
-    /// build reaches for this, and nothing should: everything that writes to
-    /// the settings partition goes through the methods below.
-    #[cfg(feature = "spike-ota")]
+    /// `FlashStorage::new` panics if it is called twice, so everything that
+    /// needs the chip borrows the store's handle instead of building its own:
+    /// the `spike-ota` build's OTA evidence, and card 222's one-shot read of
+    /// the partition table and `otadata` for `GET /api/v1/status`'s `fw_slot`
+    /// and `fw_state`.
+    ///
+    /// **Reads only.** Everything that writes to the settings partition goes
+    /// through the methods below, so that the counters, the debounce and the
+    /// `ERR_STORAGE` path stay in one place.
     pub fn raw(&mut self) -> &mut FlashStorage<'static> {
         &mut self.flash
     }

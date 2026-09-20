@@ -28,7 +28,8 @@
 //! | 0 | `net` | embassy-net runner |
 //! | 0 | `frames` | UDP 49374: drain, newest wins, decode, source lock, idle screens |
 //! | 0 | `control` | UDP 49375: every opcode in spec section 6.3 |
-//! | 0 | `mdns` | `_screeny._udp`, TXT from the same bytes as `GET_INFO` |
+//! | 0 | `mdns` | `_screeny._udp` and `_http._tcp`, TXT from the `GET_INFO` bytes |
+//! | 0 | `http` x2 | TCP 80: the status page and the `screeny-device-api` JSON |
 //! | 0 | `telemetry` | the serial-log numbers a camera cannot measure |
 
 #![no_std]
@@ -40,6 +41,7 @@ mod apsta_probe;
 mod display;
 mod fb;
 mod gamma;
+mod http;
 mod mdns;
 mod net;
 mod panel_init;
@@ -52,12 +54,7 @@ mod stack_probe;
 mod store;
 mod tidbyt;
 /// Card 201's compile-only spike. Never flashed; see the module docs.
-#[cfg(any(
-    feature = "spike-ap",
-    feature = "spike-http",
-    feature = "spike-portal",
-    feature = "spike-qr"
-))]
+#[cfg(any(feature = "spike-ap", feature = "spike-portal", feature = "spike-qr"))]
 mod web_spike;
 
 use core::cell::UnsafeCell;
@@ -112,8 +109,9 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 
 /// The `fw=` TXT key and `GET_INFO` field.
 ///
-/// 0.3.0 is card 212: settings live in flash.
-pub const FW_VERSION: &str = "0.3.0";
+/// 0.3.0 was card 212: settings live in flash. 0.4.0 is card 222: the device
+/// answers HTTP on the LAN.
+pub const FW_VERSION: &str = "0.4.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -516,24 +514,59 @@ async fn try_join(controller: &mut WifiController<'static>, w: &Wifi, attempts: 
                     info.ssid, info.channel, info.bssid
                 );
                 WIFI_STATE.store(wifi_state::CONNECTED, Ordering::Relaxed);
+                http::clear_wifi_failure();
                 return true;
             }
             // Only the reason, not the whole `DisconnectedInfo`: the reason is
             // the diagnostic, and it keeps one more copy of the SSID out of the
             // bench log.
-            Err(ConnectionError::Failed(info)) => warn!(
-                "wifi: join attempt {} of {} failed: {:?}",
-                attempt, attempts, info.reason
-            ),
-            Err(e) => warn!(
-                "wifi: join attempt {} of {} failed: {:?}",
-                attempt, attempts, e
-            ),
+            Err(ConnectionError::Failed(info)) => {
+                http::note_wifi_failure(fail_reason(info.reason));
+                warn!(
+                    "wifi: join attempt {} of {} failed: {:?}",
+                    attempt, attempts, info.reason
+                );
+            }
+            Err(e) => {
+                http::note_wifi_failure(screeny_device_api::FailReason::Other);
+                warn!(
+                    "wifi: join attempt {} of {} failed: {:?}",
+                    attempt, attempts, e
+                );
+            }
         }
         Timer::after(Duration::from_millis(2000)).await;
     }
     WIFI_STATE.store(wifi_state::FAILED, Ordering::Relaxed);
     false
+}
+
+/// Sort a radio disconnect reason into the three buckets the HTTP API and the
+/// portal page use (`crates/provision`'s `FailReason`, by way of
+/// `crates/device-api`'s).
+///
+/// Only "wrong password" and "no such network" are worth telling apart: they
+/// are the two a person standing at the device can act on, and everything else
+/// is "try again". The 802.11 reason codes that mean a key exchange did not
+/// complete are all `auth`, because from the outside they are all a wrong
+/// password.
+fn fail_reason(r: esp_radio::wifi::DisconnectReason) -> screeny_device_api::FailReason {
+    use esp_radio::wifi::DisconnectReason as D;
+    use screeny_device_api::FailReason as F;
+    match r {
+        D::NoAccessPointFound
+        | D::NoAccessPointFoundWithCompatibleSecurity
+        | D::NoAccessPointFoundInAuthmodeThreshold
+        | D::NoAccessPointFoundInRssiThreshold => F::NotFound,
+        D::AuthenticationFailed
+        | D::AuthenticationExpired
+        | D::FourWayHandshakeTimeout
+        | D::HandshakeTimeout
+        | D::MicFailure
+        | D::GroupKeyUpdateTimeout
+        | D::_802_1xAuthenticationFailed => F::Auth,
+        _ => F::Other,
+    }
 }
 
 /// How an association ended.
@@ -796,6 +829,11 @@ async fn main(spawner: Spawner) {
     //
     // This is a read, and core 1 is not running yet, so nothing is parked.
     let (settings, _report) = store::init(peripherals.FLASH).await;
+    // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
+    // here rather than per request - it needs the `STORE` lock and a 3 KB
+    // partition-table buffer, and nothing can change the answer until card
+    // 241's confirm/revert lands.
+    http::read_fw_health().await;
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
 
@@ -956,20 +994,30 @@ async fn main(spawner: Spawner) {
     // MAC in lowercase hex, and it is what `id=`, the default name and the
     // mDNS host name are all built from.
     let mac = interface.mac_address();
-    let id = {
-        let mut s = heapless::String::<8>::new();
+    // `&'static str`, not a local: `GET /api/v1/status` reports it and so does
+    // the mDNS TXT of the `_http._tcp` service, and both live in tasks.
+    let id: &'static str = {
+        let s = mk_static!(heapless::String<8>, heapless::String::new());
         const HEX: &[u8; 16] = b"0123456789abcdef";
         for b in &mac[3..6] {
             let _ = s.push(HEX[(b >> 4) as usize] as char);
             let _ = s.push(HEX[(b & 0xf) as usize] as char);
         }
-        s
+        s.as_str()
     };
-    info!("device: mac {:02x?} id {}", mac, id.as_str());
+    info!("device: mac {:02x?} id {}", mac, id);
 
     let rng = Rng::new();
     let seed = ((rng.random() as u64) << 32) | rng.random() as u64;
+    // Card 222: a number the Studio can use to tell "the device rebooted" from
+    // "the link flapped", drawn from the hardware RNG once and never stored -
+    // a persisted counter would cost a flash write every boot.
+    http::BOOT_ID.store(rng.random(), Ordering::Relaxed);
 
+    // Six sockets: the frame port, the control port, mDNS, DHCP and the
+    // `http_task` worker, with one spare. `StackResources` is `.bss`, and
+    // `.bss` is core 0's stack, so this is not a free number - card 223's AP
+    // stack gets its own `StackResources`, so it does not need room here.
     let (stack, runner) = embassy_net::new(
         interface,
         embassy_net::Config::dhcpv4(Default::default()),
@@ -979,13 +1027,13 @@ async fn main(spawner: Spawner) {
 
     {
         let mut guard = net::CORE.lock().await;
-        *guard = Some(receiver::Core::new(&id, &settings));
+        *guard = Some(receiver::Core::new(id, &settings));
     }
 
     let host: &'static str = {
         let s = mk_static!(heapless::String<16>, heapless::String::new());
         let _ = s.push_str("screeny-");
-        let _ = s.push_str(&id);
+        let _ = s.push_str(id);
         s.as_str()
     };
 
@@ -1023,8 +1071,19 @@ async fn main(spawner: Spawner) {
     spawner.spawn(store::selftest::selftest_task(settings.clone()).unwrap());
     spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
-    spawner.spawn(mdns::mdns_task(stack, host).unwrap());
+    spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     spawner.spawn(telemetry_task().unwrap());
+
+    // Card 222: the LAN web server. `init` first - the handlers reach the
+    // stack, the id and the host name through it, and it must be set before a
+    // worker can accept a connection.
+    http::init(http::Ctx { id, host });
+    for i in 0..http::HTTP_TASKS {
+        spawner.spawn(http::http_task(i, stack).unwrap());
+    }
+    spawner.spawn(http::deferred_task().unwrap());
+    #[cfg(feature = "http-selftest")]
+    spawner.spawn(http::selftest_task(stack).unwrap());
 
     // Card 200 spike: reachable from `main` so the linker keeps it and
     // `xtensa-esp32-elf-size` measures something real. Off by default. Its
@@ -1045,7 +1104,6 @@ async fn main(spawner: Spawner) {
     // portal screen, all reachable so the linker keeps them. Compile-only.
     #[cfg(any(
         feature = "spike-ap",
-        feature = "spike-http",
         feature = "spike-portal",
         feature = "spike-qr"
     ))]

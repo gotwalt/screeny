@@ -72,16 +72,32 @@ gpio-probe = []
 
 # Card 201's compile-only spike. **Evidence, not the implementation.** It
 # exists so the research doc can quote a real image size and a real `.bss`
-# growth for "an HTTP server + a soft-AP + a captive portal on this stack",
-# and so that every API claim in the doc is one the compiler agreed with.
-# It is never flashed and the build cards replace it wholesale.
-device-web-spike = ["spike-ap", "spike-http", "spike-portal", "spike-qr"]
+# growth for "a soft-AP + a captive portal on this stack", and so that every
+# API claim in the doc is one the compiler agreed with. It is never flashed and
+# the build cards replace it wholesale.
+#
+# **The HTTP third of it was retired by card 222** (`spike-http` and
+# `src/web_spike/http.rs` are gone, along with `web_spike_portal.html`): the
+# real server is `src/http.rs` and it is in the default build, so a second,
+# untested spelling of the same router is two places to get it wrong. The AP,
+# portal and QR parts are card 223's and 231's evidence and still build.
+device-web-spike = ["spike-ap", "spike-portal", "spike-qr"]
 # Split so the research doc can attribute the flash and `.bss` growth to the
 # piece that caused it: each of these builds on its own.
 spike-ap = []
-spike-http = ["spike-ap", "dep:picoserve", "dep:embedded-io-async", "dep:serde"]
 spike-portal = ["spike-ap", "dep:edge-captive", "dep:edge-dhcp", "dep:edge-nal"]
 spike-qr = ["dep:qrcodegen-no-heap"]
+
+# Card 222's bench self-test. A worker cannot reach the device over the LAN, so
+# this asks the device to make the request itself: 30 s after boot it opens a
+# TCP connection **to its own address** on port 80 through embassy-net and
+# issues `GET /api/v1/status` a few dozen times while the Studio streams,
+# logging status codes, bytes, per-request time, and the fps / decode-drop /
+# `render` numbers over the window. If the stack cannot reach its own address
+# (a WiFi station has no loopback and an access point need not hairpin), it
+# says so and falls back to reporting that the accept loop is ready plus the
+# same telemetry window. Off by default.
+http-selftest = []
 
 # Both binaries are declared explicitly so that neither can be picked up (or
 # dropped) by accident: `screeny-fw` is the firmware, `gpio_probe` is the
@@ -115,7 +131,7 @@ esp-radio = { version = "=1.0.0-beta.1", features = ["esp32", "wifi", "unstable"
 # --- Async / net ---------------------------------------------------------
 embassy-executor = { version = "0.10.0" }
 embassy-time = { version = "0.5.1" }
-embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "udp", "proto-ipv4", "multicast"] }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "udp", "tcp", "proto-ipv4", "multicast"] }
 embassy-sync = { version = "0.8.0" }
 embassy-futures = { version = "0.1.2" }
 
@@ -177,22 +193,39 @@ sequential-storage = { version = "=8.0.1" }
 embedded-storage = { version = "=0.3.1" }
 embassy-embedded-hal = { version = "=0.6.0" }
 
-# --- card 201's spike (feature `device-web-spike` only) -------------------
-# All optional, all pinned, all chosen because they already agree with the
-# versions above: picoserve 0.20 wants embassy-net =0.9.1 / embassy-time
-# ^0.5.1 / heapless 0.9.3, and edge-captive / edge-dhcp 0.8 want edge-nal 0.7
-# and domain 0.12, which edge-mdns 0.8 + edge-nal-embassy 0.9 already carry.
-picoserve = { version = "=0.20.0", optional = true, default-features = false, features = [
+# --- the HTTP server (card 222) -------------------------------------------
+# `picoserve 0.20` is pinned because it is pinned *to our pins*: its own
+# manifest wants embassy-net =0.9.1, embassy-time ^0.5.1, heapless 0.9.3,
+# serde 1 and serde-json-core 0.6, which are the versions above. Card 201
+# proved it links on Xtensa at exactly this version; card 222 ships it.
+picoserve = { version = "=0.20.0", default-features = false, features = [
   "embassy",
   "json",
   "log",
 ] }
+# picoserve's `Read`/`Write` traits are `embedded-io-async`'s, and the request
+# body reader is named in `src/http.rs`, so the version has to be visible here.
+embedded-io-async = { version = "0.7.0" }
+serde = { version = "1", default-features = false, features = ["derive"] }
+# The JSON *parser*. picoserve's `Json` extractor would do, but its rejection
+# is plain text with picoserve's own status code, and every other failure on
+# this API is `{"error":...}` with `screeny-device-api`'s. `src/http.rs` calls
+# `from_slice_escaped` itself so that one shape covers all of them. Same
+# version picoserve depends on, so there is one copy in the binary.
+serde-json-core = { version = "=0.6.0", default-features = false }
+
+# The request and reply shapes, shared with the simulator and the Studio.
+screeny-device-api = { path = "../crates/device-api" }
+
+# --- card 201's spike (feature `device-web-spike` only) -------------------
+# What is left of it after card 222 retired the HTTP third: the soft-AP, the
+# captive portal and the QR encoder, which are cards 223 and 231. All optional,
+# all pinned: edge-captive / edge-dhcp 0.8 want edge-nal 0.7 and domain 0.12,
+# which edge-mdns 0.8 + edge-nal-embassy 0.9 already carry.
 edge-nal = { version = "=0.7.0", optional = true, default-features = false }
 edge-captive = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
 edge-dhcp = { version = "=0.8.0", optional = true, default-features = false, features = ["io"] }
 qrcodegen-no-heap = { version = "=1.8.1", optional = true }
-embedded-io-async = { version = "0.7.0", optional = true }
-serde = { version = "1", optional = true, default-features = false, features = ["derive"] }
 
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }
