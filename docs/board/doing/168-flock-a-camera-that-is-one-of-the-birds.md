@@ -197,3 +197,77 @@ the dither choice and every default are all still first guesses.
   reach of `6 + 1.1 * vmax / turn` metres, so it scales with how tightly the
   flock is allowed to turn. Whether that is enough to keep every bird outside
   every blob is exactly what the long run has to show.
+
+### 2026-09-20 - resumed: the flight, measured into shape
+
+Merged `main` (card 151's `seeded` field; `flock` says `seeded: true` - the world, the
+sun and the flock all come from the seed). Then built the long-run measurement **before**
+tuning anything, which is the only reason any of the below was found rather than guessed
+at. One ten-minute run at the defaults answers every question the card asks; each finding
+below is a number that failed and the change that fixed it.
+
+1. **The flock never moved.** `fly()` integrated velocity and never position. `first.png`
+   was 81 birds hanging in the air beating their wings. Found in thirty seconds by
+   printing the centroid every fifteen seconds and watching it not change.
+2. **The camera was 1.5 m from the nearest bird** - a 25-LED wing across the panel. Its
+   personal space is now `near * 1.15` and its separation weight is 7.0 against a bird's
+   3.4. `near` now means what it says.
+3. **The world was too small for the speed.** The flock crossed a 60 m world in 25 s and
+   lived at the boundary. `BOUND` 100 m, floor/ceiling -24..28 with a 13 m margin and a
+   standing spring to the cruise band, blobs scaled with it.
+4. **The camera must be *more* agile than a bird, not less.** A camera whose turn radius
+   is larger than the flock's circle is thrown off it every time they wheel; it then
+   watches dots for half a minute. Turn budget 1.15x a bird's, and the smoothness moved
+   entirely into where it *looks*.
+5. **It also has to be able to fly slower.** Once ahead of the flock it could not drop
+   back, because its minimum speed was the flock's. Its band is now 0.5x to 1.3x.
+6. **The view snapped through 180 degrees.** A lerp between directions passes through a
+   short vector whose direction is rounding noise. `turn_towards` walks the arc instead
+   and carries a hard ceiling.
+7. **The look needs a leash, on the look and not on its target.** Manoeuvring into its
+   seat the camera's heading is up to 70 degrees off the flock; a 55% blend of that is
+   still outside a 38-degree half-field. The flock's middle is now never more than 16
+   degrees off the view axis. Leashing the *target* was not enough: a low pass 50 degrees
+   behind its target still shows an empty panel.
+8. **The aim point was a mean of unit vectors**, which falls apart when birds are spread
+   around you - the horizontal parts cancel and the bearing spins. The long run caught it
+   as a two-second burst at 80 deg/s with the flock sitting still. It is now the direction
+   to the weighted mean *position*.
+9. **`level()` must be applied last, and to the aim point too.** Applied before the leash
+   it was simply undone and the horizon sat off the top of the frame.
+10. **The camera rides *below* the flock** (`near * 0.45`), so the view is a little
+    nose-up and the horizon sits low with the birds against the sky. Level or above, the
+    view spends its life pinned at the bottom of its band with two thirds of the panel
+    dark ground - the picture upside down.
+11. **Trail along the flock's ground track, not its course.** Following a diving flock
+    down its own vector parks the camera above it, and a view that must hold the horizon
+    then has the flock below its feet.
+12. **Nothing climbs or dives more steeply than 25 degrees.** This was the last source of
+    empty frames, and it is also most of what makes the flight read as cruising rather
+    than aerobatics.
+13. **`calm` now means a turn radius.** Remapped to 1.10 - 0.95*calm rad/s (a 4.5 m wheel
+    at 0, a 33 m one at 1), default raised to 0.85. This matters more than anything else
+    because *the view must pan at the flock's own turn rate* - that is geometry, not
+    taste - so a flock that wheels at 48 deg/s cannot be watched calmly from inside it.
+14. Separation 2.6 -> 3.6 m and birds 80 -> 55: at 80 tightly packed the panel was fog,
+    which is exactly what the brief warns about. Haze strengthened a lot (16 m halves a
+    bird's contrast), because at this size **depth reads as contrast far more than size**.
+
+Ten minutes at the defaults, seed 11, 55 birds, all inside their limits:
+
+```
+in frame  min 30  median 49  p05 42
+nearest   min 3.6 m  median 7.4 m   biggest bird median 5.4 LEDs, p95 6.8
+seat      median 13.5 m from the centroid, p95 16.7 m
+view      yaw p95 15.5 deg/s (max 25.8), roll p95 2.14 deg/s (max 4.58)
+limits    speed x1.000, turn rate x1.024, blob clearance 9.7 m
+loop      strongest self-similarity r=0.52 at 146 s
+```
+
+The periodicity measurement was wrong at first and flattered itself to r=1.00 on a path
+that never repeated: it normalised against the whole series' energy, and a smooth wander
+correlates with itself at every lag. It is now a Pearson correlation of the two
+overlapping windows, run over the **stationary** series (how fast the flock drifts and
+how fast it turns) rather than over where it happens to be.
+
+Frames are exact: `colours=43 bytes=1218/1464 (pal8-lz, exact) apl=8%`, limiter idle.

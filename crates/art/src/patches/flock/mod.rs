@@ -35,12 +35,17 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "Birds in slow motion, seen by a camera that is one of them: boids in 3D round invisible geometry, an indexed sky and a hue that drifts.",
     params: PARAMS,
     make,
+    // The world and the flock both come from the seed: the blobs' places,
+    // sizes and drift periods, where the sun is, and the birds themselves. So
+    // "another one like this" is a real thing to ask for, and the studio's
+    // Another button means it (card 151).
+    seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("birds", "Birds", 30.0, 150.0, 1.0, 80.0),
+    param("birds", "Birds", 30.0, 150.0, 1.0, 55.0),
     param("pace", "Pace", 0.15, 2.0, 0.05, 0.7),
-    param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.65),
+    param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.85),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
     choice("scheme", "Tones", SCHEMES, 0.0),
@@ -439,7 +444,10 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage) -> usize {
         // Depth reads as contrast: far birds are washed into the sky, and one
         // that comes closer than the camera's own personal space fades out
         // rather than filling the panel.
-        let haze = 0.34 + 0.66 * (-(z / 34.0).powi(2)).exp();
+        // Depth is carried by contrast far more than by size at this scale:
+        // sixteen metres of air already halves how much a bird stands out
+        // from the sky, which is what stops seventy of them reading as fog.
+        let haze = 0.20 + 0.80 * (-(z / 16.0).powf(1.6)).exp();
         let ink = haze * smoothstep(0.7, 1.8, z);
         if ink < 0.02 {
             continue;
