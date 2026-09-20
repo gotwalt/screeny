@@ -65,6 +65,15 @@ apsta-probe = ["esp-alloc/internal-heap-stats"]
 # it is a thing to measure against, not a configuration to run the panel in.
 fb-on-stack = []
 
+# **Card 243's bench build.** Panic on core 0 twenty seconds after boot,
+# **once** per power-on, so the orchestrator can watch the whole path: the
+# backtrace, the breadcrumb, the reset, the rejoin, and the next boot reporting
+# the panic in its log and in `GET /api/v1/status`. The one-shot latch lives in
+# the breadcrumb itself, so the reset it causes does not arm it again and a
+# flashed bench build cannot become the crash loop this card is about. Off by
+# default; never shipped.
+panic-test = []
+
 # Card 202's bench tool. It gates `[[bin]] gpio_probe` through
 # `required-features`, so a plain `cargo build --release` never builds it and
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
@@ -122,8 +131,20 @@ esp-alloc = { version = "=0.11.0", features = ["esp32"] }
 # the settings store reaches the `screeny` partition (card 212). It used to ride
 # on the `spike-ota` feature; it is unconditional now that the store ships.
 esp-bootloader-esp-idf = { version = "=0.6.0", features = ["esp32", "embedded-storage"] }
-esp-backtrace = { version = "=0.20.0", features = ["esp32", "panic-handler", "println"] }
+# **Without `panic-handler` since card 243**: `src/panic.rs` is this firmware's
+# `#[panic_handler]`, because the breadcrumb it writes needs the `&PanicInfo`
+# (esp-backtrace's `custom-halt` hook takes no arguments, so the `file:line` is
+# gone by the time it runs). What is used from here is `Backtrace::capture`,
+# which is public and not behind that feature, so the frames on the serial log
+# are still esp-backtrace's and `espflash monitor` symbolises them as before.
+esp-backtrace = { version = "=0.20.0", features = ["esp32", "println"] }
 esp-println = { version = "=0.18.0", features = ["esp32", "log-04", "auto"] }
+# The cycle counter and `interrupt::free`, for the panic path only. Already in
+# the tree as esp-hal's own dependency, at this version; named here because
+# `src/panic.rs` calls it directly. `CCOUNT` runs from reset and needs no
+# peripheral to have been set up, which is why the pre-reset settle is counted
+# in cycles and not in `Instant`s.
+xtensa-lx = { version = "=0.13.0" }
 
 # --- WiFi ----------------------------------------------------------------
 # NOTE: 1.0.0-beta.1 (not beta.2) — beta.2 wants esp-metadata-generated ^0.6,

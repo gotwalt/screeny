@@ -94,3 +94,84 @@ write a real SSID or password anywhere (dummies `Example-Wifi1` / `password9`; d
 with the `software` session: additive changes only, listed in your report.
 
 ## Log
+
+### 2026-09-20, worker-243, steps 1-2: the panic path and the crash-loop guard
+
+`firmware/src/panic.rs` (new, ~430 lines with the reasoning) is now this crate's
+`#[panic_handler]`. A panic records a breadcrumb in RTC memory, prints, and resets.
+
+**Four decisions that differ from the card's sketch, each for a reason found in the
+sources:**
+
+1. **RTC *slow*, not RTC fast.** Card 234's instrument says
+   `#[esp_hal::ram(rtc_fast, persistent)]`. That is wrong for this device: esp-hal's own
+   `ld/esp32/memory.x` lines 59-64 say RTC fast is "Only for core 0 (PRO_CPU)" and RTC
+   slow (8 KB at `0x5000_0000`) is not, and the card requires that **a panic on core 1
+   takes the same path**. The section is `.rtc_slow.persistent`, `52` bytes, confirmed
+   with `xtensa-esp32-elf-size -A`: `.rtc_slow.persistent 52 @ 0x50000000`. **Zero bytes
+   of `.bss`**, which is what the card asked for.
+2. **This file owns `#[panic_handler]`; `esp-backtrace` keeps `println` and loses
+   `panic-handler`.** `custom_halt()` takes no arguments (`esp-backtrace-0.20.0/src/lib.rs`
+   lines 200-210), so by the time it runs the `&PanicInfo` - and with it the `file:line`
+   step 3 has to report - is gone. The backtrace is still esp-backtrace's:
+   `Backtrace::capture()` is public and not behind the `panic-handler` feature, and the
+   handler prints the same banner, the same `PanicInfo` line and the same `0x4...` frame
+   list, so `espflash monitor` symbolises it exactly as before. What owning the handler
+   buys: the location, the ordering below, and a nesting guard.
+3. **The breadcrumb is written before anything is printed.** `esp-println`'s
+   `critical-section` feature is on by default (`esp-println-0.18.0/Cargo.toml:105`) and
+   `esp_sync::RawMutex` panics `"lock is not reentrant"` (`esp-sync-0.3.0/src/lib.rs:449`).
+   So printing is the step that can deadlock (the other core holds the lock and is itself
+   wedged) or double-panic (we panicked inside a `println!`). The record is in RTC memory
+   before either can happen. A nested panic - same core re-entering, or the other core
+   arriving - prints **nothing at all** and goes straight to the reset.
+4. **`software_reset()`, and what it does to the other core and to a flash write.**
+   `esp_hal::system::software_reset` -> `esp_rom_sys::rom::software_reset` -> the ROM's
+   `SW_SYS_RST`: it resets **both** CPUs and the digital peripherals together, and leaves
+   the RTC domain (and therefore the breadcrumb) alone. That is the property this needs:
+   unlike `software_reset_cpu`, there is no window in which core 1 goes on driving the
+   panel against a rebooting core 0, and unlike today's `interrupt_free(|| loop {})` there
+   is no window at all. It does **not** reset the flash chip, and that is the hazard: a
+   panic can land inside `esp-storage`'s 4 KB sector erase, which the chip finishes by
+   itself (~50 ms, research 006 section 4) while the ROM bootloader's first act after the
+   reset is to read that same chip. Hence `SETTLE_MS` = **120 ms** before the reset: 11 ms
+   of it is the UART FIFO draining at 115200 (the ESP32 printer is the ROM's
+   `uart_tx_one_char`, which waits for FIFO *space*, not for the line), and the rest
+   covers a worst-case erase. The wait is counted in **CPU cycles**
+   (`xtensa_lx::timer::delay`), not `Instant`s: `CCOUNT` runs from reset, so a panic that
+   arrives before `esp_hal::init` has configured TIMG0's LACT counter still gets a bounded
+   wait rather than a spin on a clock that never moves. Nothing in the path allocates,
+   awaits, or takes a lock of ours.
+
+**The crash-loop guard: N = 5 panics, each at an uptime below 60 s.** Five because a
+device with nobody in the room must be allowed to survive a transient, and each attempt
+costs one boot: five quick cycles is at most ~2 minutes of flapping. Sixty seconds because
+that is already the "too early to count as healthy" threshold research 006 section 6 gives
+the OTA health criterion, and the two questions should not disagree about what an early
+death is. A panic later than 60 s resets the run to one, so a device that panics once a
+day never reaches the guard and no separate "mark healthy" tick is needed.
+
+What the guard does, in two stages, because a panic handler cannot safely paint a panel:
+the 5th quick panic **latches** a flag and still resets, and the next boot reads the flag,
+draws `screens::crashed` (CRASHED / the file / `line N xM` / "power cycle") and stops
+before the radio - no HTTP, no mDNS, no stream. Only a panic that finds the flag *already*
+latched - i.e. the crashed screen's own boot could not be reached - ends the way every
+panic ended before 0.5.2, halting with interrupts off, having said so on the log. The
+recovery is a power cycle, which is what clears the region: esp-hal zero-fills
+`.rtc_slow.persistent` only when the reset reason is `ChipPowerOn` or unknown
+(`esp-hal-1.2.2/src/soc/mod.rs:106-110`), and on this chip the external reset pin reads as
+a power-on too.
+
+Breadcrumb layout, 13 words, checksummed (XOR + salt, written last so a reset in the
+middle of an update reads back as invalid rather than as half a record): magic+version,
+boots, panics, consecutive-quick-panics, panic uptime, panic line, 12 bytes of the
+panicking file's **base name** (the base name and not the path because the string goes
+into JSON and picoserve escapes `/` where the other two writers do not - the API's golden
+files are the form all three agree on), the boot number that panicked, flags, and the
+previous boot's reset reason as a code of this module's own (not `SocResetReason as u32`:
+the breadcrumb outlives a firmware update, and a hardware discriminant from a pinned crate
+is not a number to write into a region card 241 will read across one).
+
+`tools/fw-size.sh`, default build: `.stack` **27,376 -> 27,096** (`.data` +224, `.bss`
++56 for the one `AtomicU32` nesting guard; the breadcrumb itself costs nothing here).
+`--features panic-test`: 27,032. Floor 24,576.

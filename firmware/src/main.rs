@@ -45,6 +45,10 @@ mod http;
 mod mdns;
 mod net;
 mod panel_init;
+/// Card 243: the `#[panic_handler]`, the RTC breadcrumb and the crash-loop
+/// guard. It is this crate's panic handler, so it is not optional and not
+/// feature-gated.
+mod panic;
 mod patterns;
 mod receiver;
 mod screens;
@@ -74,7 +78,6 @@ use embassy_net::{Runner, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
-use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
 use esp_hal::interrupt::Priority;
@@ -655,6 +658,11 @@ async fn main(spawner: Spawner) {
     stack_probe::paint_core0();
 
     esp_println::logger::init_logger_from_env();
+    // Card 243, and **before anything that can fail**: count this boot, say
+    // what the last one left in RTC memory, and learn whether the crash-loop
+    // guard has latched. A panic in the boot path below is then counted like
+    // any other, which is the case the guard exists for.
+    let crumb = panic::boot();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
@@ -856,6 +864,37 @@ async fn main(spawner: Spawner) {
         spawner.spawn(display_task(build_hub75(), fb1, consumer).unwrap());
     }
 
+    // --- the crash-loop guard's last stop (card 243) -----------------------
+    //
+    // The breadcrumb says this device has panicked `CRASH_LOOP_MAX` times in a
+    // row, each within a minute of a boot. It stops here: the panel says so and
+    // nothing else is started - no radio, no HTTP, no stream - because a panel
+    // that reboots for ever on USB power is worse than one that says it is
+    // broken (card 243, the owner's "pretty crash proof").
+    //
+    // **Here** and not earlier, because this is the first point at which there
+    // is a panel to say it on, and not later, because everything below is a
+    // thing that could panic again. A power cycle clears the breadcrumb - the
+    // RTC region is zeroed on a power-on reset and on nothing else - so the
+    // recovery is the one the owner would try anyway.
+    if crumb.halt {
+        let last = crumb.last;
+        let (file, line) = match &last {
+            Some(p) => (p.file(), p.line),
+            None => ("?", 0),
+        };
+        let mut producer = producer;
+        screens::crashed(producer.back(), file, line, crumb.panics);
+        producer.publish();
+        warn!(
+            "boot: stopped after {} panics ({}:{}). The panel says CRASHED; power-cycle to clear.",
+            crumb.panics, file, line
+        );
+        loop {
+            Timer::after(Duration::from_secs(60)).await;
+        }
+    }
+
     // --- wifi -------------------------------------------------------------
     //
     // The controller is built with whatever `StationConfig::default()` is; the
@@ -991,6 +1030,10 @@ async fn main(spawner: Spawner) {
     spawner.spawn(http::deferred_task().unwrap());
     #[cfg(feature = "http-selftest")]
     spawner.spawn(http::selftest_task(stack).unwrap());
+    // Card 243's bench build: one deliberate panic on core 0, once per
+    // power-on. See the feature's comment in `Cargo.toml`.
+    #[cfg(feature = "panic-test")]
+    spawner.spawn(panic::panic_test_task().unwrap());
 
     // Card 200 spike: reachable from `main` so the linker keeps it and
     // `xtensa-esp32-elf-size` measures something real. Off by default. Its

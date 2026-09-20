@@ -151,6 +151,35 @@ fn ambient(frame: &mut Frame, phase: u32) {
     }
 }
 
+/// The crash-loop screen (card 243): the device has stopped on purpose.
+///
+/// Drawn once, at boot, before the network is brought up, by a device whose
+/// breadcrumb says it has panicked [`crate::panic::CRASH_LOOP_MAX`] times in a
+/// row. It is the whole user interface of that state - there is no HTTP, no
+/// mDNS and no stream - so it says what happened, where, and what to do.
+///
+/// Deliberately dim and static: it may be up for days on a USB-powered panel,
+/// and the one thing worse than a panel that has stopped is a panel that has
+/// stopped *and* is flashing.
+pub fn crashed(frame: &mut Frame, file: &str, line: u32, panics: u32) {
+    frame.clear();
+    let title = MonoTextStyle::new(&FONT_5X7, Rgb888::new(0xd0, 0x40, 0x30));
+    let value = MonoTextStyle::new(&FONT_4X6, VALUE);
+    let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+    let _ = Text::with_baseline("CRASHED", Point::new(1, 0), title, Baseline::Top).draw(frame);
+
+    let mut where_ = heapless::String::<16>::new();
+    // 16 characters: the longest base name this can hold is 12, and a line
+    // number of four digits plus the colon is the rest. Written in that order
+    // because the file is what identifies it and the line is the refinement.
+    let _ = write!(where_, "{}", cut(file, 11));
+    let _ = Text::with_baseline(&where_, Point::new(1, 9), value, Baseline::Top).draw(frame);
+    let mut at = heapless::String::<16>::new();
+    let _ = write!(at, "line {} x{}", line, panics);
+    let _ = Text::with_baseline(&at, Point::new(1, 16), value, Baseline::Top).draw(frame);
+    let _ = Text::with_baseline("power cycle", Point::new(1, 24), label, Baseline::Top).draw(frame);
+}
+
 /// The `IDENTIFY` overlay: "which one is this?".
 ///
 /// Section 6.3 requires it to work in any state, including while another
