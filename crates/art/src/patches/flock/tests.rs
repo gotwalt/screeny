@@ -2,8 +2,8 @@
 
 use super::sim::{bearing, wrap, Sim, Tuning, STEP};
 use super::*;
-use crate::patch::Params;
 use crate::frame::Frame;
+use crate::patch::Params;
 use crate::snapshot::{self, Shot};
 
 /// Ten minutes of flight, with everything worth knowing gathered as it goes.

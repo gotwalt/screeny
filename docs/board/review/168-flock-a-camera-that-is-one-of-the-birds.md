@@ -416,3 +416,23 @@ Everything below is taste, or a trade I made and could unmake.
    ever wanted, that is where it is.
 8. **How dark the deep sky goes.** The top of the frame reaches true black, which is
    this panel's strength but also means the top third is nearly empty. `sky` scales it.
+
+### The pictures
+
+Not committed. In the worker's scratchpad, `.../4b35e91d-.../scratchpad/flock/`.
+Every strip is consecutive frames of one flight, because a wingbeat and a camera's
+motion do not exist in a still.
+
+| file | what it is | does it read? |
+|---|---|---|
+| `flock-1-light-level.png` | light on dark, level flight, 6 frames 0.1 s apart | **Yes.** Crisp white V's and dashes on a deep blue sky, wing shape changing frame to frame, horizon band low-middle. The picture I would ship. |
+| `flock-2-light-bank.png` | the same in a banked turn, 6 frames 0.8 s apart | **Yes**, though quietly: the horizon is clearly tilted and rising across the strip. Reads as flying with them. |
+| `flock-3-dusk-level.png` | dusk silhouettes, level, `hue 35 spread 95` | **Partly.** A lovely warm sky with a bright horizon band, but the birds are dark shapes you have to look for, where the light scheme's are unmistakable. |
+| `flock-4-dusk-bank.png` | dusk, banked | **Yes** - and this is where dusk wins: the bright horizon band makes the roll far more legible than the dark sky does. |
+| `flock-5-close.png` | `near 2.5` | **Yes, best of all**: 8-10 LED birds with wings you can count. This is the look card 169 exists to make safe. |
+| `flock-6-far.png` | `near 14` | **Barely.** A faint shoal in a big sky - the other end of the range, and where "a camera that lags sees dots" lives. |
+| `flock-7-wheel.png` | the hue wheel, 6 frames two minutes apart at the default 5 deg/min | **Yes.** Blue to indigo to violet over ten minutes, sky and birds keeping their relationship, nothing flashing or going muddy. |
+| `flock-8-slow-beat.png` | `pace 0.3`, default `beat` | Slow-motion flapping. A real look, but a dream rather than birds. |
+| `flock-9-slow-fast-beat.png` | `pace 0.3, beat 5.0` | **Yes.** The flock barely drifts while the wings work at a believable rate. More convincingly birds. |
+| `flock-A-sky-dither.png` | the same frame with blue noise / Bayer4 / Bayer8 / no sky dither | The four are **indistinguishable**, at 1245 / 1118 / 1113 / 950 bytes. The choice was made on bytes, not looks. |
+| `flock-B-dusk-contrast-floor.png` | dusk at haze floor 0.46 vs 0.62, dithered and not | 0.62 is clearly the readable one. |

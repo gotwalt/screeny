@@ -602,15 +602,15 @@ impl Sim {
         }
 
         // Come home. Local cohesion only reaches `tune.cohesion` metres, so a
-        // flock that is ever pulled apart further than that stops being able
-        // to see itself and never comes back: over ten minutes it splits, and
-        // the camera spends the rest of the run chasing one half of it. This
-        // does nothing at all to a flock that is together - it starts outside
-        // the cohesion radius - and it is what makes the flight hold up over
-        // three seeds rather than the one it was first tuned on.
-        // ...but getting round the thing in front of you comes first. Pulling
-        // a bird home *while* it is dodging is how the flock gets squeezed
-        // into a blob: the two forces cancel and the avoidance loses.
+        // flock pulled further apart than that stops being able to see itself
+        // and never comes back: over ten minutes it splits, and the camera
+        // spends the rest of the run chasing one half of it. This does nothing
+        // at all inside `FLOCK_RADIUS`, and it is most of what makes the
+        // flight hold up over three seeds rather than the one it was tuned on.
+        //
+        // But getting round the thing in front of you comes first: pulling a
+        // bird home *while* it is dodging is how a flock gets squeezed into a
+        // blob, because the two forces cancel and the avoidance loses.
         let home = self.centre.sub(me.pos);
         let stray = home.len() - FLOCK_RADIUS;
         if stray > 0.0 && dodge < 0.05 {
