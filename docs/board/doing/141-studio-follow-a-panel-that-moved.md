@@ -100,3 +100,42 @@ destinations are IPv4, on the port asked for, and never loopback.
 `a_named_browse_returns_when_that_instance_answers` still passes untouched -
 nothing here goes near `collect_until`, `browse` or `browse_for_name`.
 `crates/screeny/README.md`: two lines in the API summary.
+
+### Worker, step 3 (the registry half)
+
+`crates/studio/src/devices.rs`:
+
+- `Registry::unheard(stale_after) -> Vec<String>` - who a probe is *for*:
+  devices with a real id that have not been heard from in longer than
+  `stale_after` (never heard counts, which is a studio that has just
+  restarted). A `pending:` id is excluded: nothing has ever spoken to it, so no
+  `id=` in a reply can be matched against it.
+- `Registry::probed(found, candidates, error) -> Vec<Moved>` - the matching
+  rule, by `id=` and nothing else. Same id at a new address: `set_address`,
+  which keeps the id, the player, the piece and the seed and makes the next
+  telemetry poll confirm the address. An unknown id: not this studio's
+  business. A *different* id at an address we hold: **not** a move, and the
+  record holding that address is untouched.
+- Two more exclusions I decided while writing it, both worth stating:
+  - **a device reached by *name* is left alone.** A name re-resolves on every
+    reconnect and already follows a lease (the card's own opening paragraph);
+    overwriting `stored.address` with a literal address would take that away
+    permanently, because `reach()` prefers the address over the instance name.
+  - **a device that answers from the address we already hold is not a move.**
+    It is alive and the telemetry is what is failing; re-setting the address
+    would throw away a good resolution for nothing.
+- `devices::probe(timeout, &[SocketAddr])`, the blocking wire call, beside
+  `browse`.
+- `DiscoveryHealth` gains `probes`, `moved`, `last_probe_error`. Additive, so
+  `/api/v1/status` carries them with no change to `health.rs` or `api.rs`.
+
+Three unit tests, all pure: `a_probe_is_only_for_devices_that_have_gone_quiet`,
+`a_probe_follows_a_device_that_answers_from_a_new_address` (which also pins
+that `http_addr` is the **new** IP once the poll has confirmed it - the card's
+"verify it rather than assuming it", in the form that cannot be shown on
+loopback because loopback has only one IP), and
+`a_probe_leaves_alone_everything_it_was_not_about` (unknown id, a different id
+at a known address, a name-reached device, a device that is streaming, and the
+same-address case).
+
+`cargo test -p screeny-studio --lib devices`: 14 passed, 0 failed.

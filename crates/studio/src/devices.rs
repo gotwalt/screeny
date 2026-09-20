@@ -471,6 +471,15 @@ pub struct DiscoveryHealth {
     /// The last browse that failed. Not a reason to be unhealthy: the studio
     /// works from configured addresses alone, by design.
     pub last_error: Option<String>,
+    /// Card 141: `GET_INFO` probes sent looking for a panel that has moved.
+    /// Far fewer than `browses`: one only happens when a device has been
+    /// unheard past `Config::stale_after`.
+    pub probes: u64,
+    /// How many devices a probe has moved to a new address.
+    pub moved: u64,
+    /// The last probe that failed, in words. Not a reason to be unhealthy
+    /// either - a machine with no broadcast route still runs the studio.
+    pub last_probe_error: Option<String>,
 }
 
 /// Every device the studio knows about.
@@ -487,6 +496,20 @@ pub struct Changes {
     pub renamed: Vec<(String, String)>,
     /// Devices that appeared.
     pub added: Vec<String>,
+}
+
+/// A device a probe found somewhere else (card 141).
+#[derive(Clone, Debug)]
+pub struct Moved {
+    /// The device's own id: the whole reason this is a move and not a new
+    /// device.
+    pub id: String,
+    /// Where the studio thought it was. Empty means "nowhere we knew of" - a
+    /// panel discovered by mDNS on a machine where mDNS has since stopped
+    /// working, which is the Docker case.
+    pub from: String,
+    /// Where it answered from.
+    pub to: String,
 }
 
 impl Registry {
@@ -583,12 +606,14 @@ impl Registry {
 
     /// This device is somewhere else now.
     ///
-    /// The one case a typed address cannot handle by itself: an address is a
-    /// way of reaching a panel, not a name for it, so when the panel moves
-    /// somebody has to say where to. The device keeps its id, and therefore
-    /// its player and everything it was playing; only the way there changes.
-    /// Clearing the resolution makes the next poll ask the new address who it
-    /// is, which is also how a wrong address is caught.
+    /// An address is a way of reaching a panel, not a name for it, so when the
+    /// panel moves something has to say where to: a human
+    /// (`POST /api/v1/devices/add`), or - card 141 - a `GET_INFO` probe that
+    /// heard the panel's own `id=` at a new address ([`Registry::probed`]).
+    /// The device keeps its id, and therefore its player and everything it was
+    /// playing; only the way there changes. Clearing the resolution makes the
+    /// next poll ask the new address who it is, which is also how a wrong
+    /// address is caught.
     pub fn set_address(&self, id: &str, to: &str) -> bool {
         let to = to.trim();
         match self.lock().get_mut(id) {
@@ -810,6 +835,94 @@ impl Registry {
         }
         changes
     }
+
+    // ------------------------------------------- card 141: it has moved ----
+
+    /// **The devices a probe would be for**: known by their own id, and not
+    /// heard from in longer than `stale_after`.
+    ///
+    /// Two exclusions, both deliberate:
+    ///
+    /// * a *provisional* id ([`PENDING`]) is a device nobody has ever spoken
+    ///   to, so no `id=` in any reply can be matched against it - probing on
+    ///   its behalf could only guess;
+    /// * a device that has answered recently is not lost, and
+    ///   [`Registry::probed`] must not touch it: taking its resolution away
+    ///   would drop a link that is happily streaming.
+    #[must_use]
+    pub fn unheard(&self, stale_after: Duration) -> Vec<String> {
+        let now = unix_now();
+        let limit = stale_after.as_secs();
+        self.lock()
+            .iter()
+            .filter(|(id, d)| {
+                !id.starts_with(PENDING) && d.seen_unix.map_or(u64::MAX, |s| now.saturating_sub(s)) > limit
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// **A probe answered: follow any of `candidates` that has moved.**
+    ///
+    /// The reply carries the panel's own `id=`, and that is the whole of the
+    /// matching rule:
+    ///
+    /// * *same id, new address* - the same panel, somewhere else. Its address
+    ///   is updated by [`Registry::set_address`], so it keeps its id, its
+    ///   player, its piece and its seed, and the next telemetry poll confirms
+    ///   the new address with a `GET_INFO` of its own.
+    /// * *an id nobody here knows* - not this studio's business. Discovery and
+    ///   a human adding a device are how panels arrive; a probe only follows
+    ///   ones already known.
+    /// * *a different id at an address we hold* - not a move. The record that
+    ///   holds that address is left exactly as it was, because nothing was
+    ///   heard about *it*.
+    ///
+    /// A device reached **by name** is left alone as well, and that is the
+    /// point of the card rather than an omission: a name is re-resolved on
+    /// every reconnect and already follows a lease, and overwriting it with a
+    /// literal address would take that away.
+    ///
+    /// `error` is the probe failing outright, kept for `/api/v1/status` and
+    /// never a fault: a machine with no broadcast route still runs a studio.
+    pub fn probed(&self, found: &[Device], candidates: &[String], error: Option<String>) -> Vec<Moved> {
+        {
+            let mut h = self.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            h.probes += 1;
+            h.last_probe_error = error;
+        }
+        let mut moves: Vec<Moved> = Vec::new();
+        {
+            let devices = self.lock();
+            for dev in found {
+                let Some(id) = dev.info.as_ref().map(|i| i.id.as_str()).filter(|i| !i.is_empty()) else { continue };
+                if !candidates.iter().any(|c| c == id) {
+                    continue;
+                }
+                let Some(record) = devices.get(id) else { continue };
+                let at = record.stored.address.trim();
+                // A name, not an address: it follows itself. See above.
+                if !at.is_empty() && parse_addr(at).is_none() {
+                    continue;
+                }
+                // Already where we think it is: the panel is alive and it is
+                // the telemetry that is failing. Not a move, and re-setting
+                // the address would throw away a resolution for nothing.
+                if parse_addr(at) == Some(dev.frame) {
+                    continue;
+                }
+                moves.push(Moved { id: id.to_string(), from: at.to_string(), to: dev.frame.to_string() });
+            }
+        }
+        for m in &moves {
+            self.set_address(&m.id, &m.to);
+        }
+        if !moves.is_empty() {
+            let mut h = self.discovery.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            h.moved += moves.len() as u64;
+        }
+        moves
+    }
 }
 
 /// `IP`, `IP:PORT` or `[v6]:PORT`; anything else is a name.
@@ -848,6 +961,21 @@ pub fn identify_at(frame: SocketAddr) -> Result<Device, String> {
 /// If mDNS itself fails. Finding nothing is `Ok(vec![])`, not an error.
 pub fn browse(timeout: Duration) -> Result<Vec<Device>, String> {
     screeny::discover::browse(timeout, None).map_err(|e| e.to_string())
+}
+
+/// One `GET_INFO` probe (spec 5.5), asked at `to` - the subnet broadcast
+/// addresses, or wherever `Config::probe_to` says.
+///
+/// Blocking and bounded: one datagram per destination, one window, whatever
+/// answered. Finding nothing is `Ok(vec![])` - the normal case, because a
+/// probe only happens when a panel is missing and a panel is usually missing
+/// because it is switched off.
+///
+/// # Errors
+///
+/// If the socket cannot be set up - no broadcast route, or no permission.
+pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>, String> {
+    screeny::discover::probe(timeout, to).map_err(|e| e.to_string())
 }
 
 /// Resolve a DNS-SD instance name to a device.
@@ -1059,6 +1187,115 @@ mod tests {
         assert!(renamed.is_none());
         assert_eq!(reg.list().len(), 1);
         assert_eq!(reg.get("abc123").expect("there").resolved.expect("resolved").frame.to_string(), "192.0.2.99:49374");
+    }
+
+    // ------------------------------------------- card 141: it has moved ----
+
+    /// A device as the state file hands it back after a restart: its real id,
+    /// an address from last time, and nothing heard yet.
+    fn stored_at(id: &str, address: &str) -> StoredDevice {
+        StoredDevice {
+            id: id.to_string(),
+            name: "desk".into(),
+            instance: String::new(),
+            address: address.to_string(),
+            manual: true,
+        }
+    }
+
+    /// Who a probe is for: a device with a real id that has not been heard
+    /// from. Not a pending one - there is no id to match a reply against - and
+    /// not one that answered a moment ago.
+    #[test]
+    fn a_probe_is_only_for_devices_that_have_gone_quiet() {
+        let reg = Registry::new();
+        reg.load(vec![stored_at("abc123", "192.0.2.7:49374")]);
+        reg.add_manual("192.0.2.8", "typed").expect("added");
+        reg.resolved(&device("screeny-live", "live01", "192.0.2.9:49374"));
+
+        let unheard = reg.unheard(Duration::from_secs(120));
+        assert_eq!(unheard, vec!["abc123".to_string()], "{unheard:?}");
+        // And a studio whose device has just answered probes for nobody.
+        let reg2 = Registry::new();
+        reg2.resolved(&device("screeny-live", "live01", "192.0.2.9:49374"));
+        assert!(reg2.unheard(Duration::from_secs(120)).is_empty());
+    }
+
+    /// **The card**: a panel that answers a probe from somewhere else is the
+    /// same panel. Its id, and so its player, survives; the address is the
+    /// only thing that changes; and the HTTP polling follows the new IP by
+    /// itself once the next poll has confirmed it.
+    #[test]
+    fn a_probe_follows_a_device_that_answers_from_a_new_address() {
+        let reg = Registry::new();
+        reg.load(vec![stored_at("abc123", "192.0.2.7:49374")]);
+        let before = reg.get("abc123").expect("loaded");
+        assert_eq!(before.http_addr(80), None, "nothing is resolved yet");
+
+        let candidates = reg.unheard(Duration::from_secs(120));
+        let moves = reg.probed(&[device("screeny-abc", "abc123", "192.0.2.99:49374")], &candidates, None);
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        assert_eq!(moves[0].id, "abc123");
+        assert_eq!(moves[0].from, "192.0.2.7:49374");
+        assert_eq!(moves[0].to, "192.0.2.99:49374");
+
+        let d = reg.get("abc123").expect("still the same device");
+        assert_eq!(reg.list().len(), 1, "a move must never make a second device");
+        assert_eq!(d.stored.address, "192.0.2.99:49374");
+        assert_eq!(d.stored.name, "desk", "and it is still the panel it was");
+        assert!(d.resolved.is_none(), "the next poll asks the new address who it is");
+        assert!(matches!(d.reach(), Reach::Addr(a) if a.to_string() == "192.0.2.99:49374"));
+
+        // That poll: the device answers, and the HTTP address - which is
+        // derived from the frame address's IP - is now the new one, with
+        // nobody having said anything about HTTP at all.
+        reg.resolved(&device("screeny-abc", "abc123", "192.0.2.99:49374"));
+        let d = reg.get("abc123").expect("there");
+        assert_eq!(d.http_addr(80).map(|a| a.to_string()).as_deref(), Some("192.0.2.99:80"));
+        assert_eq!(reg.discovery_health().moved, 1);
+        assert_eq!(reg.discovery_health().probes, 1);
+    }
+
+    /// Everything a probe must *not* do. Each of these was a way of losing a
+    /// device or a link.
+    #[test]
+    fn a_probe_leaves_alone_everything_it_was_not_about() {
+        let reg = Registry::new();
+        reg.load(vec![stored_at("abc123", "192.0.2.7:49374"), stored_at("byname", "screeny-byname")]);
+        reg.resolved(&device("screeny-live", "live01", "192.0.2.9:49374"));
+        let candidates = reg.unheard(Duration::from_secs(120));
+
+        let moves = reg.probed(
+            &[
+                // A device this studio has never heard of, at an address it
+                // has never heard of.
+                device("screeny-new", "new999", "192.0.2.50:49374"),
+                // A *different* device answering at an address we hold for
+                // `abc123`. Not a move: nothing was heard about `abc123`.
+                device("screeny-other", "oth777", "192.0.2.7:49374"),
+                // A device known by name. It re-resolves its name on every
+                // reconnect and must not be pinned to an address.
+                device("screeny-byname", "byname", "192.0.2.60:49374"),
+                // A device that is streaming happily and simply also
+                // answered. Taking its resolution away would drop its link.
+                device("screeny-live", "live01", "192.0.2.80:49374"),
+            ],
+            &candidates,
+            None,
+        );
+        assert!(moves.is_empty(), "{moves:?}");
+        assert_eq!(reg.list().len(), 3, "a probe never adds a device");
+        assert_eq!(reg.get("abc123").expect("there").stored.address, "192.0.2.7:49374");
+        assert_eq!(reg.get("byname").expect("there").stored.address, "screeny-byname");
+        let live = reg.get("live01").expect("there");
+        assert!(live.resolved.is_some(), "the streaming device kept its resolution");
+        assert_eq!(live.resolved.expect("resolved").frame.to_string(), "192.0.2.9:49374");
+        assert_eq!(reg.discovery_health().moved, 0);
+
+        // The panel answering from the address we already have is not a move
+        // either: it is alive and something else is wrong.
+        let same = reg.probed(&[device("screeny-abc", "abc123", "192.0.2.7:49374")], &candidates, None);
+        assert!(same.is_empty(), "{same:?}");
     }
 
     #[test]
