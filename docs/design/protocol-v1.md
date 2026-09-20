@@ -1157,7 +1157,7 @@ streamed to flash as it arrives and only its head has to fit.
 | GET | `/api/v1/wifi` | - | `WifiReply` | - |
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
 | POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
-| POST | `/api/v1/firmware` | a raw `application/octet-stream` image, streamed | `FirmwareReply` | the slot |
+| POST | `/api/v1/firmware[?activate=0]` | a raw `application/octet-stream` image, streamed | `FirmwareReply` | the slot |
 | POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
 | POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |
 
@@ -1170,7 +1170,12 @@ shape here bumps it and moves the prefix, a new optional field does not.
   wants in one request, plus `boot_id` (a random `u32` drawn once at boot, so a
   reader can tell a reboot from a link flap without inferring it from uptime
   going backwards), `stack_free`, `store_errors`, `portal`, `fw_slot`,
-  `fw_state` and `reset_reason`. Its `wifi_state` is **the link** -
+  `fw_state` and `reset_reason`. `fw_slot` is the slot the device is **really
+  running**, read from the MMU, and `fw_state` is the state of the `otadata`
+  entry that selected this boot - which after a rollback (§8.10) is the entry
+  of the image that was *rejected*, and reads `aborted` or `invalid` while the
+  device runs perfectly well on the one before it. That is the signal, not a
+  fault; `panic.update` says it in words. Its `wifi_state` is **the link** -
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
   **Nothing else goes in it.** It is the one route that is polled - the Studio
@@ -1186,11 +1191,26 @@ shape here bumps it and moves the prefix, a new optional field does not.
   of a boot, that one made. A device that panics prints a backtrace and reboots
   itself, so this is what a reader who was not watching the serial port can
   still see; `status.reset_reason` alone says only `software`, because that is
-  all the chip's register knows. **The answer cannot change while the device is
-  running** - a panic reboots it - so a reader asks once per `boot_id` and not
-  on every poll. A device that does not keep a breadcrumb answers
-  `{"boot_count":1,"panic_count":0,"last_panic":null}`, and one running firmware
-  older than 0.5.2 answers `404`.
+  all the chip's register knows. A device that does not keep a breadcrumb
+  answers `{"boot_count":1,"panic_count":0,"last_panic":null}`, and one running
+  firmware older than 0.5.2 answers `404`.
+
+  Since firmware 0.7.0 it also carries **`update`**, which is `null` or
+  `{outcome, reason, slot, version}` and is what became of the last firmware
+  update this device activated (§8.10): `outcome` is `trial` / `confirmed` /
+  `reverted`, `reason` is `null` or `deadline` / `aborted` / `rejected`, `slot`
+  is the slot the update was installed into, and `version` is the
+  `esp_app_desc.version` of the image in it - i.e. the version the update was
+  trying to install, which after a revert is the version that was *rejected*
+  rather than the one running. Every field is read out of flash, so the answer
+  survives a power cycle and is still true days later. A reader that has not
+  seen it - the simulator, or firmware older than 0.7.0 - MUST treat it as
+  `null`.
+
+  **The answer changes at most once while the device runs**: a panic reboots
+  it, and the only other thing in here that can move is an image on trial
+  confirming itself. So a reader asks once per `boot_id`, and again a minute or
+  two later if it saw `"trial"` - never on every poll.
 - **`telemetry`** is the 48 bytes of §6.7 as named fields, so a browser and a
   UDP sender see the same numbers (rule 10). It is the numbers and not an
   interpretation of them: `state` and `last_codec` are the raw bytes here,
@@ -1264,22 +1284,46 @@ shape here bumps it and moves the prefix, a new optional field does not.
   and 41). An upload that stops early is `bad_sha256`: the digest is what a
   truncated image fails.
 
-  **This route does not change which image boots.** Staging writes the
-  inactive slot and nothing else - not `otadata`, not the running slot, not
-  the partition table, not the settings partition - so a device that is
-  power-cycled at any point during or after an upload comes back running what
-  it was running before. Making a staged image the one that runs is a separate
-  step and is not specified here (card 241). One implementation of the checks
-  is `crates/fwimage`, which the firmware and `crates/sim` both link, so the
-  simulator refuses exactly what the device refuses.
+  One implementation of the checks is `crates/fwimage`, which the firmware and
+  `crates/sim` both link, so the simulator refuses exactly what the device
+  refuses.
 
-  Two consequences a caller should expect. The reply arrives only when the
+  **Staging writes the inactive slot and nothing else** - not the running slot,
+  not the partition table, not the settings partition - so an upload that is
+  refused, or interrupted, or never activated leaves a device that comes back
+  running what it was running before.
+
+  **`activate`, the one query parameter this API has.** Absent, it is `1`: an
+  accepted image is made the one the device boots and the device restarts into
+  it. `activate=0` stages and stops there, which is what a caller that wants to
+  install later, or a conformance suite pointed at a device somebody is using,
+  asks for. `1`/`true`/`yes` and `0`/`false`/`no` are accepted in any case; any
+  other value is `out_of_range`, refused before the body is read, because
+  guessing at `?activate=maybe` is how a panel reboots by accident. The reply's
+  `activating` says which happened, and is `false` on every refusal.
+
+  `activating: true` means the device has **decided** to activate, not that it
+  has: `otadata` is written after the reply is on the wire and acknowledged,
+  which is §8.9's rule about flash writes and handlers. A device that loses
+  power in between comes back on the old image and the upload is repeated. A
+  device that has nowhere to write `otadata` - no inactive slot, or a selection
+  it cannot read - answers `unavailable` **before** the image is sent rather
+  than after.
+
+  An upload is `busy` while another is in flight, while an accepted one is
+  waiting to be activated, and **while the running image is itself on trial**
+  (§8.10): during a trial the inactive slot holds the image the device may have
+  to roll back to, and staging over it would remove the only way back.
+
+  Three consequences a caller should expect. The reply arrives only when the
   whole image has been written and verified, which on the reference device is
-  tens of seconds - a client's read timeout has to allow for it. And the
-  device MAY take the panel over with an "updating" screen for the duration:
-  §8.4's rule that the frame path is never interrupted has this one exception,
-  and a sender streaming meanwhile is not disconnected and loses no frames it
-  will notice - only the panel stops showing them.
+  tens of seconds - a client's read timeout has to allow for it. The device MAY
+  take the panel over with an "updating" screen for the duration, and with a
+  second "installing" screen between the reply and the restart: §8.4's rule
+  that the frame path is never interrupted has this one exception, and a sender
+  streaming meanwhile is not disconnected and loses no frames it will notice -
+  only the panel stops showing them. And on an activating upload the connection
+  goes away a second or two after the reply, because the device restarts.
 
 `settings` and `identify` are carried out by building the control request of
 §6.3 and handing it to the same code the control port calls, with `req_id` 0 -
@@ -1399,6 +1443,61 @@ it could not connect to the server. Any reply that is not Apple's `Success`
 page, not a `204` and not Microsoft's text marks the network as captive, so the
 form does that job from the connection the sheet already has. `no-store` is
 there because a cached captive probe is a sheet that never opens again.
+
+### 8.10 The firmware update: trial, confirm, revert
+
+An activated image is **not** trusted. It is booted once **on trial**, and it
+has to earn the right to be booted again. This section is normative for a
+device that offers `activate`; a device that does not (§8.6) has nothing here
+to implement.
+
+The states are ESP-IDF's `otadata` image states, which `status.fw_state`
+already reports: `new`, `pending_verify`, `valid`, `invalid`, `aborted`,
+`undefined`. Where they live matters as much as what they are - they are in
+flash, in the two-entry `otadata` partition, so **every answer in this section
+survives losing power**, which is exactly what is being asked of an update that
+may have gone wrong.
+
+1. **Activate.** After an image has passed every check of §8.6, the device
+   points `otadata` at that slot and marks the entry `new`. Both writes happen
+   after the reply is on the wire and acknowledged. Then it restarts.
+2. **Trial.** The bootloader promotes `new` to `pending_verify` before it hands
+   over, so the image that comes up finds itself `pending_verify` and knows it
+   is on trial. `status.fw_state` reads `pending_verify` for the whole of it,
+   and `panic.update.outcome` reads `trial`.
+3. **Confirm.** The image marks its own entry `valid` once it is **healthy**,
+   which a device SHOULD define as: the station has an address, the panel has
+   drawn at least once, and either one HTTP request has been served or two
+   minutes have passed - and **never sooner than 60 s after boot**, so that an
+   image which dies at thirty seconds is still caught. It confirms **exactly
+   once**; an image that is not on trial MUST NOT write `otadata` at all.
+4. **Revert, three ways.**
+   - *It boots but never becomes healthy.* At **180 s** the image marks its own
+     entry `invalid` and restarts. `invalid` entries are not selected, so the
+     previous image boots. `panic.update.reason` is then `deadline`.
+   - *It resets before it confirms* - a panic, a watchdog, a brownout, a pulled
+     cable. The **bootloader** turns any `pending_verify` entry into `aborted`
+     on the next reset, whatever caused it, and `aborted` entries are not
+     selected either. `reason` is `aborted`, and `panic.last_panic` is what
+     tells a panic from the rest.
+   - *It hangs and never resets at all.* Nothing above can see this, so a
+     device SHOULD arm a hardware watchdog for the trial - longer than the
+     180 s deadline, so it never fires on a device that is merely slow - whose
+     reset then lands in the case above.
+5. **After a revert** the device is running the previous image and says so:
+   `fw_slot` is the slot really running (read from the MMU, not from
+   `otadata`), `fw_state` is the *rejected* entry's state - `invalid` or
+   `aborted` - and `panic.update` names the slot, the reason and the version
+   that was rejected.
+
+Two properties a caller may rely on. **An update never leaves a device that
+does not boot**: at every instant from the first staged byte to the confirm,
+losing power leaves either the image that was running before or the new one on
+trial, because the two `otadata` entries are in different flash sectors and
+only the one that is *not* selecting the running image is ever written.
+And **an update that goes wrong needs no cable**: every revert above is
+automatic, and the device is back on the network within about half a minute of
+whichever deadline caught it.
 
 ---
 

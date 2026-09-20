@@ -270,6 +270,21 @@ pub fn path_is_known(path: &str) -> bool {
 /// probe suite wants against a live device - is the thing you have to ask for.
 pub const ACTIVATE_KEY: &str = "activate";
 
+/// `?activate=` carried a value this API does not define.
+///
+/// Its own type rather than `()` so that a caller cannot confuse it with any
+/// other kind of nothing; there is exactly one way this can go wrong, so it
+/// carries no detail. Every server answers it
+/// [`ErrorCode::OutOfRange`](crate::ErrorCode::OutOfRange).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BadActivate;
+
+impl core::fmt::Display for BadActivate {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("activate must be 0 or 1")
+    }
+}
+
 /// What `?activate=` said, if anything.
 ///
 /// A query string, not a body, because the body of this route is a megabyte of
@@ -292,9 +307,9 @@ pub const ACTIVATE_KEY: &str = "activate";
 ///
 /// # Errors
 ///
-/// `Err(())` when `activate` is present with a value this does not recognise,
-/// which a server answers `out_of_range`.
-pub fn parse_activate(query: Option<&str>) -> Result<bool, ()> {
+/// [`BadActivate`] when `activate` is present with a value this does not
+/// recognise, which a server answers `out_of_range`.
+pub fn parse_activate(query: Option<&str>) -> Result<bool, BadActivate> {
     let Some(q) = query else {
         return Ok(true);
     };
@@ -321,7 +336,7 @@ pub fn parse_activate(query: Option<&str>) -> Result<bool, ()> {
             {
                 Ok(false)
             }
-            _ => Err(()),
+            _ => Err(BadActivate),
         };
     }
     answer

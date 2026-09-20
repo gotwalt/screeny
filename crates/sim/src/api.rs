@@ -681,9 +681,7 @@ fn post_identify(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
 fn post_firmware(head: &Head, body: Body<'_>) -> Response {
     let activate = match route::parse_activate(Some(&head.query)) {
         Ok(a) => a,
-        Err(()) => {
-            return error_response(ErrorCode::OutOfRange, "activate must be 0 or 1")
-        }
+        Err(e) => return error_response(ErrorCode::OutOfRange, &e.to_string()),
     };
     let Body::Stream { reader, len } = body else {
         return bare(ErrorCode::Internal);

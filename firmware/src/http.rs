@@ -1744,7 +1744,7 @@ async fn route_request<R: picoserve::io::Read>(
             };
             match route::parse_activate(decoded.as_deref()) {
                 Ok(activate) => post_firmware(activate, body).await,
-                Err(()) => Reply::detail(ErrorCode::OutOfRange, "activate must be 0 or 1"),
+                Err(_) => Reply::detail(ErrorCode::OutOfRange, "activate must be 0 or 1"),
             }
         }
         // Unreachable while this match covers `ROUTES`; a new row that nobody
