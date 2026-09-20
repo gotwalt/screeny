@@ -200,3 +200,31 @@ takes the wall `dt`, and `Limiter::apply` eases by `1 - exp(-dt/0.5)` and rises 
 
 Also added: `there_is_one_rate`, which pins `screeny_art::FPS` at 30 and checks
 `snapshot::FPS` is the same constant rather than a second copy of it.
+
+### After: what it costs now
+
+Same bench, same script, 30 s windows. For a true pair the **before** binary is
+`git archive main | ...` of `3b84a2d` built into its own target directory, so the two
+binaries differ only by this card. Per second over the window:
+
+| patch | rendered | offered | sent | coalesced | CPU (one core) |
+| --- | --- | --- | --- | --- | --- |
+| clocks-numerals, before | 59.97 | 59.97 | 30.00 | 29.97 | 19.0% |
+| clocks-numerals, after | **30.00** | 30.00 | 30.00 | **0.00** | 3.6% |
+| plasma, before | 59.98 | 59.98 | 29.99 | 29.99 | 2.4% |
+| plasma, after | **29.98** | 29.98 | 29.98 | **0.00** | **1.2%** |
+| metaballs, before | 59.68 | 59.68 | 30.00 | 29.67 | 20.8% |
+| metaballs, after | **29.67** | 29.67 | 29.67 | **0.00** | 13.6% |
+
+**Rendering is halved and the panel gets exactly what it got before.** `frames_offered`
+now equals `frames_sent` to within a frame, `frames_coalesced` is 0 over 30 s (the very
+first frame of a link can still be folded; one appeared in one run, before the window),
+`frames_dropped` is 0, and the simulator's interarrival stays at 33.1-33.7 ms.
+
+On CPU, take plasma as the clean reading: **2.4% of a core to 1.2%**, exactly the halving,
+because plasma's cost is nearly all render. metaballs halves its rendering but keeps its
+encode - the encoder and the meter run per *sent* frame, and that was already 30 - so it
+goes 20.8% to 13.6%. clocks-numerals is not a stable benchmark and should not be quoted as
+one: its cost depends on whether it is mid-dance, and two before/after pairs measured
+19.0% -> 3.6% and 12.8% -> 11.3%. The honest summary is **the render half of the cost is
+halved; the encode half is unchanged**, which is what halving the render rate should do.
