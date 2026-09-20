@@ -196,3 +196,82 @@ resolved yet (`connecting`). It now polls `GET /api/v1/wifi` until the state is 
 `connecting`, bounded by 150 s. That is the wait that is right for both targets: on the
 bench the device is unreachable for about a minute first, and connection failures during
 that window are not counted as failures.
+
+**Step 5 - what the orchestrator runs on the bench.**
+
+`main` moved under me while I worked, and one of the things it brought matters here:
+firmware before 0.4.1 stored posted credentials **before** they had joined, and the
+orchestrator's own wrong-credentials test over HTTP once replaced the working pair in
+flash. So `--allow-wifi-trial` now prints that warning before it runs, names the
+firmware version, and - when `--allow-reboot` is not also given - prints the bench rule
+that follows it ("reboot the device and see it rejoin before calling the test passed").
+Rule 35 *is* that check: on a LAN address, a device that answers `GET /api/v1/status`
+again after a reboot has rejoined, because there is no other way the request arrived.
+Its detail says so.
+
+```sh
+D=192.168.7.221
+
+# 0. what it will do, before doing it. Talks to nothing; no device needed.
+cargo run --release -p screeny-probe -- http --list
+
+# 1. THE ONE TO RUN AFTER EVERY FLASH. Safe by default: nothing leaves the
+#    network, nothing restarts, nothing is written to flash, and brightness only
+#    ever steps down. Name, brightness, idle mode and the identify overlay are
+#    put back on every exit path and the last line says what they went back to.
+#    It does take the panel for ~2 s with the identify overlay (rule 21), and it
+#    does NOT need the source lock - running it while the Studio streams is
+#    better evidence, not worse. ~60-90 s on the bench.
+cargo run --release -p screeny-probe -- --addr $D http
+
+# 2. when something failed: one section, or one rule, by number.
+cargo run --release -p screeny-probe -- --addr $D http --only settings
+cargo run --release -p screeny-probe -- --addr $D http --only 10
+
+# 3. the brightness cap. Drives the panel to the firmware cap for a moment and
+#    then back to what it found - the same opt-in, and the same reason, as the
+#    UDP suite's --cap-probe. Only with the panel in view.
+cargo run --release -p screeny-probe -- --addr $D http --cap-probe
+
+# 4. the credentials trial AND the reboot the bench rule requires, in one run
+#    and in the right order (rules 32, 33, then 35). FIRMWARE 0.4.1 OR LATER.
+#    The device is off its network for about a minute, then restarts; the run
+#    takes ~3 minutes. Do not start it without being able to reach the device.
+cargo run --release -p screeny-probe -- --addr $D http --allow-wifi-trial --allow-reboot
+```
+
+What to expect on firmware 0.4.x, so that a SKIP is not read as a hole: rules 11 and 12
+(`networks`) and 23 and 24 (`firmware`) skip themselves on the route's own
+`503 unavailable` until cards 223 and 240; rule 29 will probably report the per-route
+length bound as a known difference, because 0.4.x enforces only the global 384-byte one
+(and `{"nothing":"..."}` parses as an empty settings request, so that route may answer
+200 rather than any refusal at all). Rules 8, 14, 29 and 33 are the `KNOWN_223` four.
+
+**Test counts.** Root `cargo test`: **657 passed, 0 failed** (exit 0). `crates/probe`
+14 unit tests, 10 of them new; `crates/sim` 131, 5 of them new in
+`tests/http_conformance.rs`. **The 64-rule UDP conformance suite is untouched**:
+`git diff` against the merge base shows no change under `crates/probe/src/suite/`,
+`crates/sim/tests/conformance.rs`, `crates/sim/src/core.rs` or `crates/sim/src/device.rs`,
+and `tests/conformance.rs` still passes (36 s). Clippy on `crates/probe` and
+`crates/sim`: no new warning, the two it prints are the pre-existing
+`manual_is_multiple_of` ones in `vectors.rs` and `main.rs`.
+
+**Proposed cards** (233, 234, 235 and 239 are already spoken for):
+
+- **236 - what `status.wifi_state` means in the portal.** The question rule 8 raised and
+  that I did not answer. In `Portal` both `GET /api/v1/wifi` and (now) `link_state()`
+  report the provisioning machine's sticky byte, so a device sitting in the portal after
+  a failed trial reads `wifi_state: failed` where "the link" argues for `disconnected`.
+  `device-web.md` decides it, then the firmware, the simulator and rule 8 follow. Small,
+  no hardware.
+- **237 - the HTTP suite as the "HTTP costs no frame" gate.** Decision 7 is the standing
+  rule and card 222 proved it once, by hand, with a shell loop and an eye on telemetry.
+  The suite already holds both halves of the device: a mode that samples UDP telemetry
+  across the whole run and reports the `frames_rx`/`frames_shown` deltas, the decode and
+  stale counters and `render_us_max` against an idle baseline would make that a rule
+  that runs after every flash instead of a thing somebody remembers to do. Hardware.
+- **238 - `GET /` with the headers a real browser sends.** Card 222 flagged it and
+  nobody has measured it: `HTTP_BUF` is 1536 bytes and a desktop Chrome request head is
+  larger. This suite sends a minimal head, so it cannot see the problem. A rule that
+  replays a realistic ~1.3 KB header block, and one deliberately over the buffer, would
+  answer "does a real browser get the page" without a browser. Small, no hardware.

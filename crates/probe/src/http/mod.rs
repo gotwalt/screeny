@@ -28,7 +28,11 @@
 //! reboots it, interrupts a stream or writes to flash:
 //!
 //! * `POST /api/v1/wifi` is only ever sent a body that **cannot** start a join
-//!   (no `ssid` field), unless [`Opts::allow_wifi_trial`] is set.
+//!   (no `ssid` field), unless [`Opts::allow_wifi_trial`] is set - and that
+//!   flag carries a warning of its own, because firmware before 0.4.1 wrote
+//!   posted credentials to flash *before* they had joined and a
+//!   wrong-credentials test on such a build costs the device its stored pair
+//!   (`docs/design/device-web.md`).
 //! * `POST /api/v1/reboot` is only ever sent an unconfirmed body, unless
 //!   [`Opts::allow_reboot`] is set.
 //! * `POST /api/v1/firmware` is only ever sent a body that cannot pass the
@@ -584,9 +588,20 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     }
     if opts.allow_wifi_trial {
         println!(
-            "  --allow-wifi-trial: this posts the dummy pair Example-Wifi1 / password9 and\n\
-                 waits for the fallback. THE DEVICE IS OFF ITS NETWORK FOR ABOUT A MINUTE."
+            "  --allow-wifi-trial: posts the dummy pair Example-Wifi1 / password9 and waits for\n     \
+             the fallback. THE DEVICE IS OFF ITS NETWORK FOR ABOUT A MINUTE.\n     \
+             Firmware before 0.4.1 stored credentials *before* they had joined, so on such a\n     \
+             build this overwrites the working pair in flash and the device can join nothing\n     \
+             after its next reboot (device-web.md, \"credentials are stored only after they\n     \
+             have joined\"): do not point this at one."
         );
+        if !opts.allow_reboot {
+            println!(
+                "     The bench rule after any wrong-credentials test is to reboot the device and\n     \
+                 see it rejoin before calling the test passed. `--allow-reboot` does that as\n     \
+                 rule 35; without it, do it by hand."
+            );
+        }
     }
     if opts.allow_reboot {
         println!("  --allow-reboot: this restarts the device and waits for it to come back.");

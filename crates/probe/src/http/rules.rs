@@ -1393,10 +1393,18 @@ fn reboot_confirmed(cx: &mut Ctx) -> Result<Outcome, String> {
     std::thread::sleep(Duration::from_secs(2));
     let t0 = Instant::now();
     let after = cx.wait_for_device(PATIENCE)?;
+    // Answering again at a LAN address is the whole of the bench rule
+    // `device-web.md` states after a wrong-credentials test: it rebooted and
+    // it rejoined, because there is no other way this request arrived.
+    let rejoined = if cx.http.addr().ip().is_loopback() {
+        ""
+    } else {
+        ", so it rejoined its network"
+    };
     verdict(
         after.boot_id != before.boot_id,
         format!(
-            "back in {:.0} s, boot_id {} -> {}, reset_reason {:?}, uptime {} ms",
+            "back in {:.0} s{rejoined}, boot_id {} -> {}, reset_reason {:?}, uptime {} ms",
             t0.elapsed().as_secs_f32(),
             before.boot_id,
             after.boot_id,
