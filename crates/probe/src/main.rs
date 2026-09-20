@@ -1092,7 +1092,7 @@ fn watch_the_update(addr: SocketAddr, host: &str, t0: Instant) -> bool {
             UpdateOutcome::Reverted => {
                 println!(
                     "  REVERTED: the update did not stick and the previous image is running. \
-                     `screeny-probe panic` has the panic record, if there is one."
+                     GET /api/v1/panic has the panic record, if there is one."
                 );
                 return false;
             }
