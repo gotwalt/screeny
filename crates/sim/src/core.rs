@@ -20,17 +20,21 @@
 //! [`Core::flush_frames`], which is the point at which exactly one frame is
 //! decoded and swapped onto the panel.
 
+use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Mutex;
 use std::time::Instant;
 
-use screeny_proto::control::{wifi_state, IdleMode, SetWifi, Telemetry};
+use screeny_proto::control::{IdleMode, SetWifi, Telemetry};
 use screeny_proto::{Rgb888Frame, MAX_UDP_PAYLOAD, NBYTES};
 use screeny_receiver as rx;
 
 use crate::config::{Config, PanelModel};
+use crate::net::display_addr;
 use crate::event::Event;
 use crate::panel;
 use crate::stats::Stats;
+use crate::wifi::WifiModel;
 
 pub use screeny_receiver::FrameMeta as SharedFrameMeta;
 
@@ -97,6 +101,13 @@ struct Sim<'a> {
     out: &'a mut Outbox,
     env: &'a Env,
     panel: &'a mut Panel,
+    wifi: &'a mut WifiModel,
+    ident: &'a mut Ident,
+    /// The time the caller was given. `Host::micros` measures from the core's
+    /// own epoch; this is the device's, and it is what the provisioning
+    /// machine has to be driven with so every part of the simulator agrees
+    /// about what time it is.
+    now_us: u64,
 }
 
 impl rx::Host for Sim<'_> {
@@ -131,25 +142,61 @@ impl rx::Host for Sim<'_> {
                 self.panel.apply(&self.env.panel_model);
             }
         }
+        // A reboot the simulator does not carry out still has to be visible:
+        // `boot_id` is the one thing a client can tell a restart by, and both
+        // `REBOOT` over UDP and `POST /api/v1/reboot` arrive here, so drawing
+        // it once in this arm covers both by construction.
+        if matches!(e, rx::Event::Reboot) {
+            self.ident.boot_id = draw_boot_id();
+        }
         if let Some(e) = Event::from_shared(&e) {
             self.out.events.push(e);
         }
     }
 
     fn wifi(&self) -> (&'static str, u8) {
-        (SIM_SSID, wifi_state::CONNECTED)
+        (intern(self.wifi.ssid()), self.wifi.wifi_state())
     }
 
     fn set_wifi(&mut self, w: &SetWifi<'_>) -> Result<(), u8> {
-        // Accepted and logged, never acted on: there is no radio here. The PSK
-        // is not logged either - section 8.4's invariant holds in the
-        // simulator too, which is why only these two fields are read.
+        // Logged first, exactly as before: the event carries the SSID and the
+        // persist flag and has no field for a PSK, which is how section 8.4's
+        // invariant is kept rather than remembered.
         self.out.events.push(Event::SetWifi {
             ssid: w.ssid.to_string(),
             persist: w.persist,
         });
+        // ...and now it feeds the provisioning machine, which is the same one
+        // `POST /api/v1/wifi` feeds. `w.psk` is not passed on and is not kept:
+        // the scripted radio decides the outcome, so the simulator has no use
+        // for a password and therefore never holds one.
+        self.wifi
+            .post_credentials(w.ssid, self.now_us, &mut self.out.events);
+        // Spec section 8.2 is "reply before disconnecting", and the reply is
+        // built by the caller the moment this returns, before any scripted
+        // join can be delivered by a tick. `Ok` whatever the machine did with
+        // it: `SET_WIFI` has always been accepted here, and card 224 may not
+        // change what the simulator does on UDP.
         Ok(())
     }
+}
+
+/// `screeny_receiver::Host::wifi` returns a `&'static str`, because on the
+/// device the SSID lives in a `static` that outlives everything. Here it lives
+/// in the provisioning machine and changes, so it is interned: one leak per
+/// *distinct* SSID a run ever reports, which is one in every run that is not a
+/// test of provisioning itself. Recorded in card 224's log as feedback on the
+/// `Host` trait rather than papered over.
+fn intern(s: &str) -> &'static str {
+    static POOL: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut g = POOL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pool = g.get_or_insert_with(HashSet::new);
+    if let Some(found) = pool.get(s) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    pool.insert(leaked);
+    leaked
 }
 
 /// The receiver, minus its sockets.
@@ -161,12 +208,49 @@ pub struct Core {
     back: Box<Rgb888Frame>,
     /// The datagram the shared core asked us to keep for this drain.
     survivor: Option<Vec<u8>>,
+    /// The scripted radio and the provisioning machine (card 224).
+    wifi: WifiModel,
+    /// What the device would report about itself over HTTP but cannot measure
+    /// on a host.
+    ident: Ident,
+}
+
+/// The parts of `GET /api/v1/status` a simulator can only make up: which flash
+/// slot is running, why the chip last restarted, how much stack is left. They
+/// are constants here, named so that nobody mistakes them for measurements.
+#[derive(Debug, Clone)]
+pub struct Ident {
+    /// The stable short device id.
+    pub id: String,
+    /// A random number drawn once at boot, and again whenever the device
+    /// reboots. Same id as last time means the link flapped; a different one
+    /// means it restarted. See [`draw_boot_id`].
+    pub boot_id: u32,
+    /// The firmware version string.
+    pub fw: String,
+    /// Heap in use, bytes. A plausible constant.
+    pub heap_used: u32,
+    /// Heap total, bytes. The firmware's 64 + 32 KB (card 220).
+    pub heap_size: u32,
+    /// Stack never touched, bytes.
+    pub stack_free: u32,
+    /// Settings-store errors since boot. Always 0: there is no flash here.
+    pub store_errors: u32,
 }
 
 impl Core {
     /// Build a receiver from a configuration.
+    ///
+    /// The provisioning machine is booted here, so a `Core` driven directly by
+    /// a unit test has the same WiFi life a running device has.
     #[must_use]
     pub fn new(cfg: &Config) -> Self {
+        Self::new_with(cfg, &mut Vec::new())
+    }
+
+    /// As [`Core::new`], collecting the events the boot produced.
+    #[must_use]
+    pub fn new_with(cfg: &Config, events: &mut Vec<Event>) -> Self {
         let mut r = rx::Receiver::new(&rx::Params {
             id: &cfg.id,
             fw: &cfg.fw,
@@ -193,6 +277,16 @@ impl Core {
             },
             back: Box::new([0u8; NBYTES]),
             survivor: None,
+            wifi: WifiModel::new(cfg, display_addr(cfg.bind), events),
+            ident: Ident {
+                id: cfg.id.clone(),
+                boot_id: draw_boot_id(),
+                fw: cfg.fw.clone(),
+                heap_used: 64 * 1024,
+                heap_size: 96 * 1024,
+                stack_free: 20 * 1024,
+                store_errors: 0,
+            },
         }
     }
 
@@ -208,9 +302,30 @@ impl Core {
 
     /// The telemetry `state` byte. Section 7.3: `IDENTIFY` is an overlay, not
     /// a stream state, and it is what the byte reports while it is up.
+    ///
+    /// Card 224 adds the second overlay, `PROVISIONING`, from the same
+    /// machine `GET_WIFI` reads, so the two cannot disagree. `IDENTIFY` wins
+    /// when both are up: it lasts seconds and somebody is standing there
+    /// asking "which one is this?", while the portal can be up for hours.
     #[must_use]
     pub fn state_byte(&self) -> u8 {
-        self.rx.state_byte()
+        let base = self.rx.state_byte();
+        if base == screeny_proto::control::state::IDENTIFY {
+            return base;
+        }
+        self.wifi.overlay_state().unwrap_or(base)
+    }
+
+    /// The scripted radio and the provisioning machine.
+    #[must_use]
+    pub fn wifi(&self) -> &WifiModel {
+        &self.wifi
+    }
+
+    /// The made-up half of `GET /api/v1/status`.
+    #[must_use]
+    pub fn ident(&self) -> &Ident {
+        &self.ident
     }
 
     /// The source that holds the lock, if any.
@@ -316,9 +431,22 @@ impl Core {
     /// decoded or displayed until [`Core::flush_frames`].
     pub fn offer_frame(&mut self, now_us: u64, from: SocketAddr, data: &[u8], out: &mut Outbox) {
         let Core {
-            rx, env, panel, survivor, ..
+            rx,
+            env,
+            panel,
+            survivor,
+            wifi,
+            ident,
+            ..
         } = self;
-        let mut h = Sim { out, env, panel };
+        let mut h = Sim {
+            out,
+            env,
+            panel,
+            wifi,
+            ident,
+            now_us,
+        };
         if rx.offer_frame(&mut h, now_us, from, data) == rx::Offer::Keep {
             // The device swaps two static buffers here; a simulator can afford
             // the copy, and it keeps `Core` free of borrowed datagrams.
@@ -335,19 +463,75 @@ impl Core {
             panel,
             back,
             survivor,
+            wifi,
+            ident,
+            ..
         } = self;
         let kept = survivor.take();
-        let mut h = Sim { out, env, panel };
+        let mut h = Sim {
+            out,
+            env,
+            panel,
+            wifi,
+            ident,
+            now_us,
+        };
         rx.flush_frames(&mut h, now_us, kept.as_deref(), back);
     }
 
-    /// Advance the timers: `LIVE -> HOLD`, `HOLD -> IDLE`, `IDENTIFY` expiry.
+    /// Advance the timers: `LIVE -> HOLD`, `HOLD -> IDLE`, `IDENTIFY` expiry,
+    /// and the provisioning machine's own (card 224).
     pub fn tick(&mut self, now_us: u64, out: &mut Outbox) {
         let Core {
-            rx, env, panel, ..
+            rx,
+            env,
+            panel,
+            wifi,
+            ident,
+            ..
         } = self;
-        let mut h = Sim { out, env, panel };
+        let mut h = Sim {
+            out,
+            env,
+            panel,
+            wifi,
+            ident,
+            now_us,
+        };
         rx.tick(&mut h, now_us);
+        self.wifi.tick(now_us, &mut out.events);
+    }
+
+    /// Spec section 7.3's "any -> WiFi link down -> `HOLD`", and the
+    /// provisioning machine's own link timer, from one call so they cannot be
+    /// done by halves.
+    pub fn set_link_down(&mut self, down: bool, now_us: u64, out: &mut Outbox) {
+        let Core {
+            rx,
+            env,
+            panel,
+            wifi,
+            ident,
+            ..
+        } = self;
+        let mut h = Sim {
+            out,
+            env,
+            panel,
+            wifi,
+            ident,
+            now_us,
+        };
+        if down {
+            rx.link_down(&mut h, now_us);
+        }
+        self.wifi.set_link_down(down, now_us, &mut out.events);
+    }
+
+    /// Drive the provisioning machine directly: `POST /api/v1/wifi`, the
+    /// button wipe, a station arriving on the soft-AP.
+    pub fn wifi_mut(&mut self) -> &mut WifiModel {
+        &mut self.wifi
     }
 
     // -----------------------------------------------------------------
@@ -359,9 +543,21 @@ impl Core {
         let mut buf = [0u8; MAX_UDP_PAYLOAD];
         let n = {
             let Core {
-                rx, env, panel, ..
+                rx,
+                env,
+                panel,
+                wifi,
+                ident,
+                ..
             } = self;
-            let mut h = Sim { out, env, panel };
+            let mut h = Sim {
+                out,
+                env,
+                panel,
+                wifi,
+                ident,
+                now_us,
+            };
             rx.control(&mut h, now_us, from, data, &mut buf)
         };
         if let Some(n) = n {
@@ -372,6 +568,25 @@ impl Core {
 
 /// The stream state of spec section 7.3.
 pub use crate::event::State;
+
+/// A fresh `boot_id`.
+///
+/// The clock's nanoseconds mixed with a counter, through splitmix64's
+/// finaliser. Not cryptography and not a dependency: it has to be different
+/// from the last one, and two draws in the same nanosecond still are.
+#[must_use]
+pub fn draw_boot_id() -> u32 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut x = nanos ^ SEQ.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::SeqCst);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((x ^ (x >> 31)) >> 16) as u32
+}
 
 /// The SSID the simulator claims to be on. Not a real network; `GET_WIFI`
 /// has to answer something and the spec forbids it answering with a PSK.

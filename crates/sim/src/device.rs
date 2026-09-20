@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -90,7 +90,13 @@ impl Bus {
     }
 }
 
-struct Shared {
+/// Everything the threads and the HTTP routes share.
+///
+/// `pub(crate)` rather than private since card 224: `crate::api` serves the
+/// device's HTTP API and needs the same `Core` under the same lock, because a
+/// second lock or a second copy of the state is exactly how a browser and a
+/// UDP sender start disagreeing.
+pub(crate) struct Shared {
     core: Mutex<Core>,
     bus: Bus,
     faults: Mutex<Faults>,
@@ -98,15 +104,33 @@ struct Shared {
     boot: Instant,
     frame_addr: SocketAddr,
     control_addr: SocketAddr,
+    http_addr: Mutex<Option<SocketAddr>>,
     display_addr: Ipv4Addr,
+    instance: String,
     fade_ms: u32,
     panel_model: crate::config::PanelModel,
     rssi_dbm: i8,
 }
 
 impl Shared {
-    fn now_us(&self) -> u64 {
+    pub(crate) fn now_us(&self) -> u64 {
         self.boot.elapsed().as_micros() as u64
+    }
+
+    /// The device under its one lock.
+    pub(crate) fn core(&self) -> &Mutex<Core> {
+        &self.core
+    }
+
+    /// Put events on the bus a test watches.
+    pub(crate) fn publish(&self, events: &[Event]) {
+        self.bus.publish(events);
+    }
+
+    /// The mDNS instance name, which is one of the names the captive-portal
+    /// `Host` rule accepts as this device's own.
+    pub(crate) fn instance(&self) -> &str {
+        &self.instance
     }
 }
 
@@ -138,6 +162,15 @@ pub struct Snapshot {
     pub idle_mode: IdleMode,
     /// Friendly name.
     pub name: String,
+    /// Where the provisioning machine is (card 224).
+    pub wifi_phase: crate::WifiPhase,
+    /// The `GET_WIFI` join-state byte, from the same machine.
+    pub wifi_state: u8,
+    /// The SSID `GET_WIFI` reports. Empty when there is none. **Never a
+    /// PSK**: the simulator holds none.
+    pub ssid: String,
+    /// Whether the captive portal's soft-AP is up.
+    pub portal: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +201,136 @@ impl SimHandle {
         self.shared.control_addr
     }
 
+    /// The address the HTTP server is bound to, or `None` when
+    /// [`Config::http`](crate::Config::http) is off. With
+    /// [`Config::http_port`](crate::Config::http_port) 0 this is where you
+    /// find out the port.
+    #[must_use]
+    pub fn http_addr(&self) -> Option<SocketAddr> {
+        *self.shared.http_addr.lock().unwrap()
+    }
+
+    /// The base URL of the HTTP API, ready to append a route to.
+    #[must_use]
+    pub fn http_url(&self) -> Option<String> {
+        self.http_addr().map(|a| format!("http://{a}"))
+    }
+
+    /// Choose what the scripted radio does with the **next** join attempt.
+    ///
+    /// Card 081's `--wifi-result`, per request. An attempt already in flight
+    /// keeps the outcome it started with only until the next tick, which is
+    /// what a test that wants to change its mind mid-join expects.
+    pub fn set_wifi_outcome(&self, outcome: crate::WifiOutcome) {
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .wifi_mut()
+            .set_outcome(outcome);
+    }
+
+    /// Take the WiFi link down, or bring it back.
+    ///
+    /// Spec section 7.3's "any -> WiFi link down -> `HOLD`" and research 007
+    /// section 5.2's `Online -> Joining` after `link_down_ms`, from one call,
+    /// so the stream state machine and the provisioning machine cannot be
+    /// given half the news.
+    pub fn set_link_down(&self, down: bool) {
+        let now = self.shared.now_us();
+        let mut out = Outbox::default();
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .set_link_down(down, now, &mut out);
+        self.shared.bus.publish(&out.events);
+        out.clear();
+    }
+
+    /// Post credentials the way `POST /api/v1/wifi` does, without an HTTP
+    /// request. The PSK is not a parameter, because nothing here keeps one.
+    pub fn post_wifi(&self, ssid: &str) -> crate::Posted {
+        let now = self.shared.now_us();
+        let mut events = Vec::new();
+        let posted = self
+            .shared
+            .core
+            .lock()
+            .unwrap()
+            .wifi_mut()
+            .post_credentials(ssid, now, &mut events);
+        self.shared.bus.publish(&events);
+        posted
+    }
+
+    /// The button's five-second hold: forget the network, raise the portal.
+    pub fn wifi_wipe(&self) {
+        let now = self.shared.now_us();
+        let mut events = Vec::new();
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .wifi_mut()
+            .wipe(now, &mut events);
+        self.shared.bus.publish(&events);
+    }
+
+    /// Tell the machine a phone did or did not join the soft-AP, which is
+    /// what gates the portal's ten-minute retry.
+    pub fn set_ap_client(&self, present: bool) {
+        let now = self.shared.now_us();
+        let mut events = Vec::new();
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .wifi_mut()
+            .set_ap_client(present, now, &mut events);
+        self.shared.bus.publish(&events);
+    }
+
+    /// The random number drawn at boot, and again at every reboot. A client
+    /// that sees a new one knows the device restarted rather than that the
+    /// link flapped.
+    #[must_use]
+    pub fn boot_id(&self) -> u32 {
+        self.shared.core.lock().unwrap().ident().boot_id
+    }
+
+    /// Where the provisioning machine is.
+    #[must_use]
+    pub fn wifi_phase(&self) -> crate::WifiPhase {
+        self.shared.core.lock().unwrap().wifi().phase()
+    }
+
+    /// The SSID the store holds, if any. There is no method for the PSK,
+    /// because the simulator never keeps one (spec section 8.4).
+    #[must_use]
+    pub fn stored_ssid(&self) -> Option<String> {
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .wifi()
+            .stored_ssid()
+            .map(str::to_string)
+    }
+
+    /// How many times the settings store has been written since boot. A
+    /// failed trial join must not move this.
+    #[must_use]
+    pub fn wifi_commits(&self) -> u32 {
+        self.shared.core.lock().unwrap().wifi().commits()
+    }
+
+    /// `GET /api/v1/wifi`'s body, without an HTTP request.
+    #[must_use]
+    pub fn wifi_reply(&self) -> screeny_device_api::reply::WifiReply {
+        self.shared.core.lock().unwrap().wifi().wifi_reply()
+    }
+
     /// Microseconds since the device started. The same clock the state
     /// machine and `uptime_ms` use.
     #[must_use]
@@ -191,6 +354,10 @@ impl SimHandle {
             brightness: c.brightness(),
             idle_mode: c.idle_mode(),
             name: c.name().to_string(),
+            wifi_phase: c.wifi().phase(),
+            wifi_state: c.wifi().wifi_state(),
+            ssid: c.wifi().ssid().to_string(),
+            portal: c.wifi().ap_up(),
         }
     }
 
@@ -225,10 +392,15 @@ impl SimHandle {
             fade_ms: self.shared.fade_ms,
             identify: c.identify_until_us().is_some(),
             name: c.name(),
-            addr: self.shared.display_addr,
+            addr: c.wifi().ip().map_or(self.shared.display_addr, Ipv4Addr::from),
             rssi_dbm: self.shared.rssi_dbm,
             brightness: c.brightness(),
             model: self.shared.panel_model,
+            // Card 224: in `Portal` and `Trial` the panel is the provisioning
+            // crate's, so the window and the `--dump-dir` PNGs show what the
+            // device will show, pixel for pixel.
+            provisioning: c.wifi().screen(now),
+            network_down: !c.wifi().online(),
         };
         screens::render(&scene, &mut out);
         out
@@ -329,6 +501,7 @@ pub struct SimDevice {
     handle: SimHandle,
     threads: Vec<JoinHandle<()>>,
     mdns: Option<Advertisement>,
+    http: Option<crate::http::Server>,
 }
 
 impl SimDevice {
@@ -371,15 +544,13 @@ impl SimDevice {
         let frame_addr = frame_sock.local_addr()?;
         let control_addr = control_sock.local_addr()?;
 
-        let mut core = Core::new(&cfg);
+        let mut boot_events = Vec::new();
+        let mut core = Core::new_with(&cfg, &mut boot_events);
         // The TXT record must advertise the port a sender can actually reach,
         // which with `control_port: 0` is only known now.
         core.set_control_port(control_addr.port());
 
-        let display_addr = match cfg.bind {
-            IpAddr::V4(a) if !a.is_unspecified() => a,
-            _ => crate::net::local_ipv4().unwrap_or(Ipv4Addr::LOCALHOST),
-        };
+        let display_addr = crate::net::display_addr(cfg.bind);
 
         let shared = Arc::new(Shared {
             core: Mutex::new(core),
@@ -389,11 +560,30 @@ impl SimDevice {
             boot: Instant::now(),
             frame_addr,
             control_addr,
+            http_addr: Mutex::new(None),
             display_addr,
+            instance: cfg.instance.clone(),
             fade_ms: cfg.timing.fade_ms,
             panel_model: cfg.panel,
             rssi_dbm: cfg.rssi_dbm,
         });
+        shared.bus.publish(&boot_events);
+
+        // The HTTP server, if the configuration asks for it. It binds the same
+        // address the sockets do, so `--bind 127.0.0.1` keeps everything on
+        // loopback and a test cannot accidentally serve the LAN.
+        let http = if cfg.http {
+            let bind = SocketAddr::new(cfg.bind, cfg.http_port);
+            let server = crate::http::Server::start(
+                bind,
+                crate::api::handler(Arc::clone(&shared)),
+                crate::api::wants_stream(),
+            )?;
+            *shared.http_addr.lock().unwrap() = Some(server.addr());
+            Some(server)
+        } else {
+            None
+        };
 
         let mdns = if cfg.mdns {
             Some(Advertisement::start(
@@ -444,6 +634,7 @@ impl SimDevice {
             handle: SimHandle { shared },
             threads,
             mdns,
+            http,
         })
     }
 
@@ -472,12 +663,21 @@ impl SimDevice {
 
     fn stop_and_join(&mut self) {
         self.handle.shared.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = self.http.take() {
+            h.shutdown();
+        }
         if let Some(m) = self.mdns.take() {
             m.shutdown();
         }
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
+    }
+
+    /// The address the HTTP API is served on, or `None` when it is off.
+    #[must_use]
+    pub fn http_addr(&self) -> Option<SocketAddr> {
+        self.handle.http_addr()
     }
 }
 

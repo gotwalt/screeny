@@ -19,6 +19,10 @@
 // uses all of it.
 #![allow(dead_code, unused_imports)]
 
+/// A minimal HTTP client, for the card-224 suites. Written from the RFC
+/// rather than sharing the server's parser; see its docs.
+pub mod http;
+
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;

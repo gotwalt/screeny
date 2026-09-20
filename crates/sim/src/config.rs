@@ -13,6 +13,8 @@ use screeny_proto::control::IdleMode;
 /// firmware cannot disagree about what the constants are.
 pub use screeny_receiver::Timing;
 
+pub use crate::wifi::{WifiOutcome, WifiTiming};
+
 /// Deliberate misbehaviour, so a sender can be tested against a bad network
 /// and a slow device without either being real.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -94,7 +96,43 @@ pub struct Config {
     pub panel: PanelModel,
     /// Seed for the fault-injection RNG, so a dropped-frame test repeats.
     pub fault_seed: u64,
+
+    // --- card 224: the HTTP API and the WiFi life ---------------------------
+    /// Serve the device's HTTP API (`crates/device-api`'s routes). On by
+    /// default: a simulator that does not answer the same questions the device
+    /// answers is not a simulator.
+    pub http: bool,
+    /// HTTP port. **0 binds an ephemeral one**, which is what tests want; ask
+    /// [`SimHandle::http_addr`](crate::SimHandle::http_addr) for the port it
+    /// actually got. The binary defaults to [`DEFAULT_HTTP_PORT`], never 80:
+    /// nothing on this bench runs as root.
+    pub http_port: u16,
+    /// The SSID the simulator claims its store holds, and so what `GET_WIFI`
+    /// and `/api/v1/status` report. Never a PSK; the simulator keeps none.
+    pub wifi_ssid: String,
+    /// The soft-AP's name, which is what the portal screen and its QR carry.
+    /// Spec-shaped: `screeny-<id>`.
+    pub ap_ssid: String,
+    /// What the scripted radio does with a join attempt.
+    pub wifi_outcome: WifiOutcome,
+    /// How long a scripted join attempt takes before it is answered. The boot
+    /// join with [`WifiOutcome::Ok`] is instant whatever this says - see
+    /// [`crate::wifi`].
+    pub wifi_join_ms: u32,
+    /// Research 007 section 5.2's timing, or a test's compressed version of
+    /// it. [`WifiTiming::SPEC`] is a device's behaviour and is the default.
+    pub wifi_timing: WifiTiming,
+    /// Boot straight into the captive portal: an empty store and no
+    /// compile-time credentials, which is what a factory-fresh device is.
+    pub start_in_portal: bool,
 }
+
+/// The port the `screeny-sim` binary serves HTTP on by default.
+///
+/// Not 80: binding it needs root, and nothing on this bench runs as root. The
+/// device itself serves port 80; a simulator sharing a host with a browser
+/// cannot.
+pub const DEFAULT_HTTP_PORT: u16 = 8080;
 
 impl Default for Config {
     fn default() -> Self {
@@ -115,6 +153,14 @@ impl Default for Config {
             faults: Faults::default(),
             panel: PanelModel::default(),
             fault_seed: 0x5EED_5CEE,
+            http: true,
+            http_port: DEFAULT_HTTP_PORT,
+            wifi_ssid: crate::core::SIM_SSID.into(),
+            ap_ssid: "screeny-515151".into(),
+            wifi_outcome: WifiOutcome::Ok,
+            wifi_join_ms: 200,
+            wifi_timing: WifiTiming::SPEC,
+            start_in_portal: false,
         }
     }
 }
@@ -127,6 +173,7 @@ impl Config {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             frame_port: 0,
             control_port: 0,
+            http_port: 0,
             mdns: false,
             ..Config::default()
         }

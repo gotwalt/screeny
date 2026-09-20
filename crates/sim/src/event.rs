@@ -145,7 +145,44 @@ pub enum Event {
     },
     /// `REBOOT` arrived, with the right magic. Logged, not acted on.
     Reboot,
+
+    // --- card 224: provisioning and HTTP ------------------------------------
+    /// The provisioning machine moved (research 007 section 5.2).
+    WifiPhaseChanged {
+        /// Where it was.
+        from: WifiPhase,
+        /// Where it is now.
+        to: WifiPhase,
+    },
+    /// The provisioning machine asked the caller to do something. Reported
+    /// rather than interpreted: `screeny_provision::Action` is the vocabulary,
+    /// and the simulator does not invent a second one.
+    WifiAction {
+        /// What it asked for.
+        action: WifiAction,
+    },
+    /// A test took the WiFi link down (spec section 7.3).
+    LinkDown,
+    /// A test brought the link back.
+    LinkUp,
+    /// An HTTP request was answered.
+    ///
+    /// The **query string and the body are deliberately not here.** A PSK
+    /// arrives in the body of `POST /api/v1/wifi`, and spec section 8.4 says
+    /// it never reaches a log line; the only way to be sure of that is for the
+    /// log to have no field it could occupy.
+    Http {
+        /// The method, uppercased.
+        method: String,
+        /// The path, without its query string.
+        path: String,
+        /// The status the simulator answered with.
+        status: u16,
+    },
 }
+
+pub use screeny_provision::machine::Action as WifiAction;
+pub use screeny_provision::State as WifiPhase;
 
 impl Event {
     /// The owned form of what the shared receiver reported, or `None` for the
