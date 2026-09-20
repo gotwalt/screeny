@@ -25,9 +25,19 @@ pub const STATUS: &str = "/api/v1/status";
 /// `GET /api/v1/telemetry`: [`TelemetryReply`].
 pub const TELEMETRY: &str = "/api/v1/telemetry";
 /// `GET /api/v1/networks`: [`NetworksReply`]. Triggers a scan; rate-limited to
-/// one per 10 s, and a caller that asks sooner gets
+/// one per [`SCAN_MIN_INTERVAL_MS`], and a caller that asks sooner gets
 /// [`ErrorCode::RateLimited`](crate::ErrorCode::RateLimited).
 pub const NETWORKS: &str = "/api/v1/networks";
+
+/// The shortest gap between two scans [`NETWORKS`] will really perform.
+///
+/// A scan takes the radio off the channel it is associated on for the better
+/// part of a second per band, which on a device that is also receiving frames
+/// is a visible stall. The portal page polls, so the number has to live
+/// somewhere both implementations read rather than in each of their heads:
+/// card 224 found the simulator and the firmware were about to pick it
+/// separately. Pair it with [`RateLimit`].
+pub const SCAN_MIN_INTERVAL_MS: u32 = 10_000;
 /// `GET /api/v1/wifi`: [`WifiReply`].
 /// `POST /api/v1/wifi`: an urlencoded [`WifiForm`](crate::form::WifiForm),
 /// answered with [`AcceptedReply::TRYING`].
@@ -183,6 +193,144 @@ pub const MAX_REQUEST_LEN: usize = {
     max
 };
 
+/// The row for `path` and `method`, if the API has one.
+///
+/// Every server was writing the same
+/// `ROUTES.iter().find(|r| r.path == p && r.method == m)`; card 224 asked for
+/// it to be written once. Pair it with [`path_is_known`] to tell a `405` from
+/// a `404`:
+///
+/// ```
+/// use screeny_device_api::route::{self, Method};
+///
+/// // Known pair: serve it, and size the body check from the row.
+/// let r = route::find(route::WIFI, Method::Post).unwrap();
+/// assert!(r.mutating);
+///
+/// // Known path, wrong method: 405, not 404.
+/// assert!(route::find(route::STATUS, Method::Post).is_none());
+/// assert!(route::path_is_known(route::STATUS));
+///
+/// // Unknown path: 404.
+/// assert!(!route::path_is_known("/api/v1/nope"));
+/// ```
+#[must_use]
+pub fn find(path: &str, method: Method) -> Option<&'static Route> {
+    let mut i = 0;
+    while i < ROUTES.len() {
+        let r = &ROUTES[i];
+        if r.path == path && r.method == method {
+            return Some(r);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether any method is served at `path`.
+///
+/// This is the difference between "wrong method" (`405`) and "no such thing"
+/// (`404`), and it is also the right answer for a verb this API has no
+/// [`Method`] for at all: `PUT /api/v1/status` is a `405`.
+#[must_use]
+pub fn path_is_known(path: &str) -> bool {
+    let mut i = 0;
+    while i < ROUTES.len() {
+        if ROUTES[i].path == path {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+/// "Not more often than every `interval_ms`", with no clock of its own.
+///
+/// [`NETWORKS`] is the reason it exists, but nothing here is scan-specific.
+/// Like [`screeny_provision`](https://docs.rs/) and the receive rules, it
+/// takes `now_ms` rather than reading a clock, so the whole of its behaviour -
+/// including the 49.7-day `u32` wrap - is a unit test that runs in
+/// microseconds.
+///
+/// **A refused request does not reset the timer.** Card 221 settled the same
+/// question for the portal's retry: a caller that polls every second must not
+/// be able to hold the window open forever, and a limiter that punished
+/// polling would never let a busy page through at all.
+///
+/// ```
+/// use screeny_device_api::route::{RateLimit, SCAN_MIN_INTERVAL_MS};
+///
+/// let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
+/// assert!(limit.allow(1_000), "the first one always goes through");
+/// assert!(!limit.allow(5_000));
+/// assert_eq!(limit.retry_after_ms(5_000), 6_000);
+/// // Being refused at 5_000 did not push the window out to 15_000.
+/// assert!(limit.allow(11_000));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimit {
+    interval_ms: u32,
+    /// When the last *allowed* call happened. `None` until there is one, so a
+    /// device whose clock really is at 0 ms is not a special case.
+    last: Option<u32>,
+}
+
+impl RateLimit {
+    /// A limiter that allows one call per `interval_ms`, starting with the
+    /// next one whenever it comes.
+    #[must_use]
+    pub const fn new(interval_ms: u32) -> Self {
+        RateLimit {
+            interval_ms,
+            last: None,
+        }
+    }
+
+    /// The gap this limiter enforces.
+    #[must_use]
+    pub const fn interval_ms(&self) -> u32 {
+        self.interval_ms
+    }
+
+    /// Whether a call is allowed now, recording it if it is.
+    ///
+    /// `now_ms` is a free-running millisecond counter and is allowed to wrap;
+    /// the comparison is wrapping, so a wrap costs at most one extra allowed
+    /// call and never a permanently closed window.
+    pub fn allow(&mut self, now_ms: u32) -> bool {
+        if let Some(last) = self.last {
+            if now_ms.wrapping_sub(last) < self.interval_ms {
+                return false;
+            }
+        }
+        self.last = Some(now_ms);
+        true
+    }
+
+    /// How long until [`allow`](Self::allow) would say yes: `0` when it would
+    /// say yes now. Good for the `detail` of a
+    /// [`RateLimited`](crate::ErrorCode::RateLimited) reply.
+    #[must_use]
+    pub fn retry_after_ms(&self, now_ms: u32) -> u32 {
+        match self.last {
+            Some(last) => {
+                let since = now_ms.wrapping_sub(last);
+                self.interval_ms.saturating_sub(since)
+            }
+            None => 0,
+        }
+    }
+
+    /// Forget the last call, so the next one is allowed whenever it comes.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +366,94 @@ mod tests {
     #[test]
     fn the_biggest_request_is_the_wifi_form() {
         assert_eq!(MAX_REQUEST_LEN, crate::form::MAX_FORM_LEN);
+    }
+
+    #[test]
+    fn find_agrees_with_the_table_for_every_row() {
+        for r in ROUTES {
+            assert_eq!(find(r.path, r.method), Some(r), "{}", r.path);
+            assert!(path_is_known(r.path));
+        }
+    }
+
+    /// The whole point of the pair: a `405` is a known path and an unknown
+    /// method, a `404` is neither.
+    #[test]
+    fn a_wrong_method_is_not_an_unknown_path() {
+        // `GET /api/v1/status` exists; `POST` of it does not.
+        assert!(find(STATUS, Method::Post).is_none());
+        assert!(path_is_known(STATUS));
+        // `/api/v1/wifi` is the one path that has both.
+        assert!(find(WIFI, Method::Get).is_some());
+        assert!(find(WIFI, Method::Post).is_some());
+        // Nothing at all.
+        for p in ["/api/v1/nope", "/status", "", "/api/v1/status/"] {
+            assert!(!path_is_known(p), "{p:?}");
+            assert!(find(p, Method::Get).is_none(), "{p:?}");
+            assert!(find(p, Method::Post).is_none(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_call_is_always_allowed_and_the_next_one_waits() {
+        let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
+        assert_eq!(limit.interval_ms(), 10_000);
+        assert_eq!(limit.retry_after_ms(0), 0, "nothing has happened yet");
+        assert!(limit.allow(0), "a clock that really is at zero is not special");
+        assert!(!limit.allow(0));
+        assert!(!limit.allow(9_999));
+        assert_eq!(limit.retry_after_ms(9_999), 1);
+        assert!(limit.allow(10_000));
+        assert_eq!(limit.retry_after_ms(10_000), 10_000);
+    }
+
+    /// Card 221's answer, applied here: polling must not hold the window open.
+    #[test]
+    fn a_refused_call_does_not_push_the_window_out() {
+        let mut limit = RateLimit::new(100);
+        assert!(limit.allow(1_000));
+        for t in 1_001..1_100 {
+            assert!(!limit.allow(t), "{t}");
+        }
+        assert!(limit.allow(1_100), "still 100 ms after the allowed one");
+    }
+
+    /// 49.7 days in, `now_ms` wraps. Wrapping arithmetic means the window is
+    /// measured correctly straight through it.
+    #[test]
+    fn the_window_survives_the_u32_wrap() {
+        let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
+        let last = u32::MAX - 5_000;
+        assert!(limit.allow(last));
+        // 5 s before the wrap and 4 999 ms after it: both inside the window.
+        assert!(!limit.allow(u32::MAX));
+        assert!(!limit.allow(4_998), "wrapped, but only 9 999 ms have passed");
+        assert_eq!(limit.retry_after_ms(4_998), 1);
+        // One more millisecond and the window is open again.
+        assert!(limit.allow(4_999));
+        // ...and the new `last` is the wrapped value, so the next window is
+        // measured from there.
+        assert!(!limit.allow(14_998));
+        assert!(limit.allow(14_999));
+    }
+
+    #[test]
+    fn a_reset_opens_the_window_at_once() {
+        let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
+        assert!(limit.allow(1_000));
+        assert!(!limit.allow(1_001));
+        limit.reset();
+        assert!(limit.allow(1_001));
+    }
+
+    /// A zero interval is a limiter that limits nothing, not one that blocks
+    /// everything.
+    #[test]
+    fn a_zero_interval_allows_everything() {
+        let mut limit = RateLimit::new(0);
+        for t in 0..5 {
+            assert!(limit.allow(t));
+            assert_eq!(limit.retry_after_ms(t), 0);
+        }
     }
 }

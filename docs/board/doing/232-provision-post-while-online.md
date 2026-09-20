@@ -164,3 +164,36 @@ give" - it is true while `Trial`/`Portal` and also for a sticky failure.
 clean, `cargo check --target thumbv7em-none-eabi` clean, and
 `the_firmware_knows_exactly_what_this_crate_costs_it` still passes unchanged:
 `Provisioner` is still <= 176 bytes (the `bool` and the origin byte land in padding).
+
+### 2026-09-20 - `crates/device-api`: the three paper cuts, additive only
+
+New public items, all additions - nothing existing renamed, removed or changed in
+meaning, and no golden file touched (`git diff --stat crates/device-api/tests/` is
+empty):
+
+| item | what |
+|---|---|
+| `route::SCAN_MIN_INTERVAL_MS: u32 = 10_000` | the number `NETWORKS`'s doc comment used to spell out in prose; the comment now links to it |
+| `route::RateLimit` | `new(interval_ms)`, `allow(now_ms) -> bool`, `retry_after_ms(now_ms)`, `interval_ms()`, `reset()` |
+| `route::find(path, method) -> Option<&'static Route>` | the `ROUTES.iter().find(..)` every server was about to write |
+| `route::path_is_known(path) -> bool` | the 405-vs-404 half of the pair |
+| `RateLimit` re-exported at the crate root | next to `Method`, `Route`, `ROUTES` |
+
+`RateLimit` holds `last: Option<u32>` rather than a sentinel, so a device whose clock
+really is at 0 ms is not a special case (the simulator's local copy used `last != 0` and
+would have scanned twice in the first 10 s of a run that started at exactly 0). Every
+comparison is `wrapping_sub`, and a refused call leaves `last` alone - card 221's answer
+for the portal retry, applied here: a page that polls every second must not be able to
+hold the window shut forever.
+
+`FirmwareReply` keeps its shape exactly; only the docs changed. They now say `ok: true`
+means every check *that build runs at all* ran and passed, and that a build which cannot
+run all five of research 006's checks answers `ErrorCode::Unavailable` with the missing
+ones in `detail` rather than a qualified success. No `checks_run` field, and the reason
+is written down: a caller that has to ask which checks ran cannot act on the answer.
+
+One knock-on edit outside `route.rs`: `reply.rs`'s own unit test builds a `Trial` literal
+and needed the new `origin` field. That is a test, not the reply shape.
+
+`cargo test -p screeny-device-api`: **71 + 3 doc**, up from 64 + 1. Clippy clean,
+`thumbv7em-none-eabi` clean.
