@@ -4,8 +4,8 @@ title: SCREENY_PACING_SECS shortens the pacing test into failing
 type: test
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker-093
+branch: card/093-pacing-test-tolerance
 ---
 
 ## Goal
