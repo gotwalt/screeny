@@ -184,3 +184,97 @@ Rust touched: `src/ui.rs` (the file list, the second tidy URL, the doc comment),
 `tests/api.rs` that named the old script. No route, no state schema, no socket message.
 
 `cargo test -p screeny-studio --test ui`: **20 passed**.
+
+### Step 2 - card 197, folded in
+
+A `<datalist id="speed-stops">` on `#speed` with **0.5x, 1.00x and 2x**, drawn by card
+183's `drawStops` because it is a `.slider` with a `list` and that mechanism was built to
+be general. **They do not snap**, for card 172's reason and card 183's: a magnet at 1.00
+makes 0.95 and 1.05 unreachable with a mouse, and a speed a script set must be shown
+exactly. What the card really asked - is a mark enough, or does a slider with an obvious
+home want a way *back* to it - is answered with the default the orchestrator named: a
+**double-click on the slider returns it to 1.00x**, pushed to the player like any other
+change, with `title="Double-click for 1.00×"` on the input so the affordance is not a
+secret.
+
+The test is the general one card 197 asked for rather than a second special case:
+`every_slider_that_declares_stops_declares_reachable_ones` walks **every** `list=` on
+either screen, pulls the input's own `min`/`max` out of the same tag, and asserts each
+declared stop is inside it - so the next slider that declares stops is checked by the
+test that already exists. It also pins Speed's three, the double-click, and that what
+draws the marks never touches the value.
+
+Measured in Chrome at 1400 px, reading the resolved positions back (the same check card
+183 did): track `left 1189, width 291`, thumb 7 px, so the formula puts 0.5x at 1221.6,
+1.00x at 1258.0 and 2x at 1330.9 - the three marks measured **1221, 1258, 1330**. Both
+ends land on the arithmetic and 1.00x is within 0.1 px. A drag to 2.75x read `2.75×` on
+the page and `state.speed 2.75` on the API; a double-click read `1.00×` and `1`.
+
+### Step 3 - in a real browser, and what could not be checked there
+
+A studio and a simulator of my own on loopback, both under `timeout`, nothing near the
+bench panel or the LAN: `screeny-sim --bind 127.0.0.1 --no-mdns --headless --frame-port
+50971 --control-port 50972 --http-port 50973` and `screeny-studio --listen
+127.0.0.1:50970 --no-discover --device-http-port 50973 --ui-dir crates/studio/ui` with a
+state dir in the scratchpad. The simulator's SSID was set to the dummy `Example-Wifi1`.
+
+**Every URL, over real HTTP**, with the content type the browser is given:
+
+| | | |
+|---|---|---|
+| `/` `/index.html` | 200 | `text/html; charset=utf-8`, 11862 B |
+| `/panel` `/panel/` `/panel.html` | 200 | `text/html; charset=utf-8`, 4336 B |
+| `/common.js` `/picture.js` `/panel.js` | 200 | `text/javascript; charset=utf-8` |
+| `/style.css` | 200 | `text/css; charset=utf-8` |
+| `/dashboard` | 307 | to `/`, as card 170 left it |
+| `/main.js` `/nope.js` `/../Cargo.toml` `/sub/dir.js` | 404 | |
+
+`node --check` on all three scripts: clean. And, because a missing export is a link
+error rather than a syntax error, each screen's module was imported in node with
+`document` undefined: **both linked** (every named import resolves), then failed at
+evaluation where they touch the DOM, which is what that check can show.
+
+**Rendered in Chrome**, both screens, console clean on load and after a reload:
+
+| | what happened |
+|---|---|
+| `/` | the chip reads `DESK · LIVE · 30 FPS ›` in the amber "on" tone; brightness 120 with both hint lines; no horizontal scroll |
+| the chip | clicking it goes to `/panel`; the browser's **back button** returns to `/` with the chip already right |
+| `/panel` | `DESK`, *Sending to 127.0.0.1:50971*, the pill `ON THE PANEL`, the output switch, brightness, Identify/Rename/Reboot, the chooser folded, the link facts, the Device block (slot, up, memory, free stack, WiFi, reboots, last reset, when idle) and Studio (ok, version, adapter, state file, browsers) |
+| output off, on the Panel screen | pill `Output off`, help *"The panel is on its own idle screen…"*, and the **simulator stopped receiving**: `frames_rx` 5679 -> 5679 over two seconds. On again: `On the panel`, *Sending to…* |
+| the other screen, at once | with the Picture screen open in a **second tab**, the switch on the Panel screen changed its chip to `Desk · output off` / `away` and dimmed the stage frame - the two screens are one state stream, as the card requires |
+| Identify | the notice line says *Identifying* in the "say" tone |
+| brightness | typing 3 snapped to **6** (card 136); 80 applied, the note became *"Kept at 80 across reconnects."* |
+| no panel at all | `NO PANEL YET`, *"Nothing is being sent. The studio is still playing the piece; the Picture screen shows it."*, card 173's *"Not looking for panels: this studio was started with --no-discover…"*, card 181's *"Drive a panel as soon as one is found"*, the chooser opened itself, **no Device block**, and the Picture screen's chip read `No panel`. Nothing on either screen claimed anything was reaching a panel |
+| a panel that needs attention | a simulator restarted with `--store-errors 2`: the chip went to the fault tone and read **`DESK · LIVE · 30 FPS · STORE ERRORS ›`**. This is the thing a second screen could have cost, and it does not |
+
+**Both widths, both screens**, in a same-origin iframe harness (the extension's own
+window cannot be resized; this is how cards 170 and 183 did it), each measured as well as
+looked at - `innerWidth`, `matchMedia('(min-width: 1100px)')` and
+`scrollWidth === clientWidth`:
+
+| | 390 px | 1400 px |
+|---|---|---|
+| `/` | one column: stage 390 wide, then the inspector, meters last; bench **off**; no horizontal scroll | bench **on**: stage 1060, inspector 340 on the right, meters under the stage; no horizontal scroll |
+| `/panel` | one column: Panel, Link + Device, Studio, in that order; no horizontal scroll | two columns: Panel 420 with a rule down its right, Link 620 beside it, Studio under the Link; the title block held to the same 1040 so the readouts sit over the columns rather than adrift |
+
+**What I could not check, honestly.** The extension drives a window that is genuinely in
+the background, so `document.hidden` was `true` throughout: `requestAnimationFrame` never
+ran, **the canvas stayed black**, and the two-second status poll was (correctly) not
+repeating - only the reads an action forces. So the *picture* was not judged by eye here,
+exactly as in cards 120 and 170, and the owner's glance is that check. It also means one
+thing that looks like a bug is not: with the tab hidden, the brightness slider kept a
+stale value between actions, and a forced read put it right at once (`80`).
+
+Cleanup: both tabs closed, both servers stopped, `ps` clean of anything of mine.
+
+### Step 4 - the README, and the evidence
+
+`crates/studio/README.md`: the "one page" paragraph is now the two screens and what is on
+each, the status chip and the Panel screen asking for no frames; "Editing the UI"
+describes six files, the module split and `common.js`'s rule; the truth-telling paragraph
+gains 181, 197 and the brightness line; and the `tests/ui.rs` row says what it now pins.
+
+Root `cargo test --release --no-fail-fast`: **742 passed, 0 failed, 1 ignored**.
+`cargo clippy --workspace --all-targets`: **silent**. Neither of card 117's two known
+flakes recurred, though another worktree was running its soak in a loop at the time.

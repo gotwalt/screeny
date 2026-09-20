@@ -518,6 +518,9 @@ select:hover { border-color: var(--dim); }
   #sec-panel { grid-area: panel; border-right: 1px solid var(--rule); }
   #sec-link { grid-area: link; }
   #sec-studio { grid-area: studio; }
+  /* ...and the title block is held to the same 1040 px, so the readouts sit
+     over the columns rather than adrift at the edge of a wide window. */
+  body.panel-page .titleblock { max-width: 1040px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
