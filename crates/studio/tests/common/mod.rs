@@ -198,10 +198,20 @@ impl Ws {
         Self::connect_on(TcpStream::connect(addr).await.expect("connect to the studio"), client).await
     }
 
+    /// A socket that says on the way in what pace it wants (card 120).
+    pub async fn connect_asking(addr: SocketAddr, query: &str) -> Ws {
+        let stream = TcpStream::connect(addr).await.expect("connect to the studio");
+        Self::open(stream, format!("?{query}")).await
+    }
+
     /// As [`Ws::connect`], on a socket the caller has already made - which is
     /// how the stalled-browser test gives itself a tiny receive buffer.
     pub async fn connect_on(stream: TcpStream, client: Option<&str>) -> Ws {
         let query = client.map_or(String::new(), |c| format!("?client={c}"));
+        Self::open(stream, query).await
+    }
+
+    async fn open(stream: TcpStream, query: String) -> Ws {
         let mut ws = Ws { stream, buf: Vec::new() };
         let head = format!(
             "GET /api/v1/ws{query} HTTP/1.1\r\nHost: studio\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
@@ -219,6 +229,19 @@ impl Ws {
             }
             ws.fill().await.expect("the studio completed the handshake");
         }
+    }
+
+    /// Say something to the server: one masked text frame, as a browser sends
+    /// them. Card 120's `{"type":"preview",...}` is the only thing a page ever
+    /// sends, and a client frame **must** be masked (RFC 6455 5.1).
+    pub async fn say(&mut self, text: &str) {
+        let payload = text.as_bytes();
+        assert!(payload.len() < 126, "the test client only writes short frames");
+        let mask = [0x37u8, 0xfa, 0x21, 0x3d];
+        let mut out = vec![0x81, 0x80 | payload.len() as u8];
+        out.extend_from_slice(&mask);
+        out.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        self.stream.write_all(&out).await.expect("write a client frame");
     }
 
     async fn fill(&mut self) -> std::io::Result<()> {
@@ -311,17 +334,52 @@ impl Ws {
     /// How many frames arrive in `window`. The measure of whether a browser is
     /// being served properly.
     pub async fn count_frames(&mut self, window: Duration) -> usize {
+        self.measure(window).await.frames
+    }
+
+    /// Everything that arrives in `window`, and what it weighs: card 120's
+    /// question is bytes per second per tab, so a test can ask it directly.
+    pub async fn measure(&mut self, window: Duration) -> Traffic {
         let deadline = tokio::time::Instant::now() + window;
-        let mut n = 0;
+        let mut t = Traffic::default();
         while let Some(left) = deadline.checked_duration_since(tokio::time::Instant::now()) {
             match tokio::time::timeout(left, self.next()).await {
-                Ok(Some(Msg::Binary(_))) => n += 1,
-                Ok(Some(_)) => {}
-                Ok(None) => break,
+                Ok(Some(Msg::Binary(b))) => {
+                    t.frames += 1;
+                    t.frame_bytes += b.len();
+                }
+                Ok(Some(Msg::Text(s))) => {
+                    t.texts += 1;
+                    t.text_bytes += s.len();
+                }
+                Ok(Some(Msg::Close)) | Ok(None) => break,
                 Err(_) => break,
             }
         }
-        n
+        t.window = window;
+        t
+    }
+}
+
+/// What one browser was sent over a window.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Traffic {
+    pub frames: usize,
+    pub frame_bytes: usize,
+    pub texts: usize,
+    pub text_bytes: usize,
+    pub window: Duration,
+}
+
+impl Traffic {
+    #[must_use]
+    pub fn bytes_per_s(&self) -> f64 {
+        (self.frame_bytes + self.text_bytes) as f64 / self.window.as_secs_f64().max(f64::EPSILON)
+    }
+
+    #[must_use]
+    pub fn fps(&self) -> f64 {
+        self.frames as f64 / self.window.as_secs_f64().max(f64::EPSILON)
     }
 }
 

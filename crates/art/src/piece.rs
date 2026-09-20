@@ -259,8 +259,16 @@ mod tests {
     }
 
     /// The names on a choice are the **piece's own** names, not a second copy
-    /// that can drift. `RESTS` is read directly; the dances and the moods are
-    /// generated with an rng, so their lists are written out and checked here.
+    /// that can drift. Since card 182 there is no second copy left: `RESTS`,
+    /// `dance::NAMES` and `ambient::MOOD_NAMES` are each read directly by the
+    /// `PARAMS` block that declares the stops.
+    ///
+    /// What is left to check is the part that is still written by hand and
+    /// still could be wrong: the **offsets** - that `dance` is "vary", then the
+    /// repertoire, then "composed", and `mood` is "wander" and then the moods -
+    /// and that the ranges a piece shipped have not moved under them. So this
+    /// builds every dance and every mood and asks each one its name, exactly as
+    /// it did when the lists were duplicated.
     #[test]
     fn the_named_stops_are_the_pieces_own_names() {
         use crate::pieces::clocks::{ambient, dance, dials, DANCE_CHOICES, RESTS};

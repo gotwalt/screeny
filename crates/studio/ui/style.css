@@ -272,9 +272,17 @@ button.danger:hover { border-color: var(--over); color: var(--over); }
 button.quiet { flex: none; height: auto; padding: 2px 0; border: 0; background: none; color: var(--dim); }
 button.quiet:hover { color: var(--paper); }
 
-.slider { display: grid; grid-template-columns: 1fr auto; row-gap: 7px; align-items: baseline; }
+.slider { position: relative; display: grid; grid-template-columns: 1fr auto; row-gap: 7px; align-items: baseline; }
 .slider output { font-size: 12.5px; }
 .slider input { grid-column: 1 / -1; }
+
+/* Card 183: the stops a slider declares in its `list`, drawn under the track.
+   Out of flow, so nothing moves; built by `drawStops` in main.js, which puts
+   each mark where the *thumb* lands rather than at a flat percentage. Four
+   pixels tall and one wide: enough to aim at, quiet enough to ignore. */
+.slider .stops { position: absolute; left: 0; right: 0; bottom: 0; height: 0; pointer-events: none; }
+.slider .stops i { position: absolute; top: -5px; width: 1px; height: 4px; margin-left: -0.5px; background: var(--rule); }
+.slider:hover .stops i { background: var(--dim); }
 
 input[type="range"] {
   -webkit-appearance: none;

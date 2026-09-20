@@ -340,6 +340,56 @@ fn the_rate_control_spans_the_players_whole_range() {
     assert!(!INDEX_HTML.contains(r#"name="fps""#), "the two-stop radio group is gone");
 }
 
+/// Card 183: the stops the rate slider declares are **drawn**, and drawn where
+/// the thumb actually lands.
+///
+/// The drift this guards against is the one the card was written about: the
+/// mark's position is `3.5px + frac * (W - 7px)`, which is the thumb's own
+/// geometry, and the thumb's width lives in `style.css`. If somebody changes
+/// the thumb and not the arithmetic, the marks go quietly out of line - worst
+/// at the right-hand end, where 60 fps is - and nothing else would say so.
+#[test]
+fn the_rate_sliders_stops_are_drawn_where_the_thumb_lands() {
+    assert!(INDEX_HTML.contains(r#"list="fps-stops""#), "the rate slider still declares its stops");
+    assert!(MAIN_JS.contains("function drawStops"), "and something draws them");
+    assert!(MAIN_JS.contains("drawStops)"), "drawStops has to actually be called");
+    assert!(STYLE_CSS.contains(".slider .stops"), "the marks need somewhere to be");
+
+    // The thumb, as the stylesheet has it.
+    let thumb = STYLE_CSS
+        .split_once("::-webkit-slider-thumb {")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(block, _)| block.to_string())
+        .expect("a thumb rule");
+    let width = thumb
+        .split("width:")
+        .nth(1)
+        .and_then(|w| w.split(';').next())
+        .map(str::trim)
+        .expect("the thumb's width");
+    assert_eq!(width, "7px", "the thumb changed width; the marks' arithmetic has to change with it");
+    assert!(
+        MAIN_JS.contains("calc(3.5px + ${at} * (100% - 7px))"),
+        "the marks must use the thumb's own geometry: 3.5px + frac * (W - 7px)"
+    );
+
+    // And every stop is a rate the slider can actually reach.
+    let list = INDEX_HTML.split_once(r#"<datalist id="fps-stops">"#).expect("the stops").1;
+    let list = list.split_once("</datalist>").expect("a closed datalist").0;
+    let stops: Vec<f64> = list
+        .split(r#"<option value=""#)
+        .skip(1)
+        .filter_map(|o| o.split('"').next().and_then(|v| v.parse().ok()))
+        .collect();
+    assert!(stops.len() >= 4, "found only {stops:?}");
+    for stop in &stops {
+        assert!(
+            (screeny_studio::player::MIN_FPS..=screeny_studio::player::MAX_FPS).contains(stop),
+            "{stop} is not a rate the player can be on"
+        );
+    }
+}
+
 /// And the rate a script set is the rate the page reports - it is not quietly
 /// changed by a control that could not express it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

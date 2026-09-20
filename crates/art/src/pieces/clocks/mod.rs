@@ -117,24 +117,23 @@ pub(crate) const REST_CHOICES: &[&str] = &[RESTS[0].name, RESTS[1].name, RESTS[2
 
 /// And the `dance` parameter's: `0` varies, `1..=DANCES` name a dance from
 /// `dance::dance`, and one past them is "always composed".
-/// `piece::tests::the_named_stops_are_the_pieces_own_names` checks the middle
-/// against the repertoire.
-pub(crate) const DANCE_CHOICES: &[&str] = &[
-    "vary",
-    "formation",
-    "bloom",
-    "line wave",
-    "ripple",
-    "magnet",
-    "cascade",
-    "fan",
-    "checker",
-    "scissors",
-    "swell",
-    "scatter",
-    "vortex",
-    "composed",
-];
+///
+/// Card 182: the middle **is** `dance::NAMES`, so a new dance is one name in
+/// one place. What is still written by hand is the two ends and the offset,
+/// and `piece::tests::the_named_stops_are_the_pieces_own_names` guards those.
+pub(crate) const DANCE_CHOICES: &[&str] = &dance_choices();
+
+const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
+    let mut out = [""; dance::DANCES + 2];
+    out[0] = "vary";
+    let mut i = 0;
+    while i < dance::DANCES {
+        out[i + 1] = dance::NAMES[i];
+        i += 1;
+    }
+    out[dance::DANCES + 1] = "composed";
+    out
+}
 
 impl Rest {
     /// The treatment a `rest` parameter value asks for.

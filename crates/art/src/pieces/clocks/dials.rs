@@ -67,13 +67,23 @@ const PARAMS: &[ParamSpec] = &[
 const GRIDS: [(usize, usize); 3] = [(4, 2), (6, 3), (8, 4)];
 
 /// Card 163: `grid` and `mood` are lists of named things, so they say so.
-/// `GRID_CHOICES` is `GRIDS` written out and `MOOD_CHOICES` is "wander" plus
-/// the eight moods in `Mood::new` order;
-/// `piece::tests::the_named_stops_are_the_pieces_own_names` checks both
-/// against the pieces' own.
+/// `GRID_CHOICES` is `GRIDS` written out, small and checked; `MOOD_CHOICES` is
+/// "wander" and then `ambient::MOOD_NAMES` itself (card 182), so a new mood is
+/// one name in one place. `piece::tests::the_named_stops_are_the_pieces_own_names`
+/// checks the grids against `GRIDS` and guards the moods' offset.
 pub(crate) const GRID_CHOICES: &[&str] = &["4 x 2", "6 x 3", "8 x 4"];
-pub(crate) const MOOD_CHOICES: &[&str] =
-    &["wander", "drift", "sway", "breathe", "corners", "unison", "tide", "rings", "streamlines"];
+pub(crate) const MOOD_CHOICES: &[&str] = &mood_choices();
+
+const fn mood_choices() -> [&'static str; MOODS + 1] {
+    let mut out = [""; MOODS + 1];
+    out[0] = "wander";
+    let mut i = 0;
+    while i < MOODS {
+        out[i + 1] = super::ambient::MOOD_NAMES[i];
+        i += 1;
+    }
+    out
+}
 
 /// Seconds before the mark that the dials start gathering, so that they are
 /// reading the time as it arrives.

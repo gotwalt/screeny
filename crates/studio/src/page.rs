@@ -14,6 +14,7 @@
 use screeny_art::pipeline::Stats;
 use screeny_art::{pieces, Settings, N};
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -65,17 +66,55 @@ pub fn blank_packet() -> Vec<u8> {
 /// costs nothing - it cannot slow the render loop or the panel link down.
 /// That property is card 105's and the whole server rests on it.
 ///
-/// It is also how a player knows whether anybody is looking: `watchers` is the
-/// number of open preview sockets, and a player whose panel is away and whose
-/// page nobody has open drops to `player::IDLE_FPS`.
+/// It is also how a player knows whether anybody is looking: [`Screen::watchers`]
+/// is the number of preview sockets **being sent frames**, and a player whose
+/// panel is away and whose page nobody is looking at drops to
+/// `player::IDLE_FPS`.
+///
+/// Card 120: "open a socket" and "want frames" came apart, because a tab that
+/// has been switched away from asks for none. A hidden tab is therefore *not* a
+/// watcher - it must not hold a panel-less studio at 60 fps for a phone in a
+/// pocket - so the count is kept here by [`Viewer`] rather than read off the
+/// `watch` channel's receiver count.
 pub struct Screen {
     frames: watch::Sender<Arc<Vec<u8>>>,
+    /// Preview sockets open, whether or not they want frames.
+    sockets: AtomicUsize,
+    /// Of those, the ones being sent frames right now.
+    watching: AtomicUsize,
+    frames_sent: AtomicU64,
+    bytes_sent: AtomicU64,
+}
+
+/// What the preview has cost, on `/api/v1/status` as `sockets`.
+///
+/// The one number card 120 is about: with the studio running for months in a
+/// container, `bytes_sent` over a minute is what `docker stats` would otherwise
+/// be the only witness to.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct PreviewCost {
+    /// Preview sockets open.
+    pub open: usize,
+    /// Of those, the ones being sent frames. A hidden tab is not one.
+    pub watching: usize,
+    /// Frame packets sent to browsers since the process started, across every
+    /// socket - not frames rendered, which is `preview.ticks`.
+    pub frames_sent: u64,
+    /// What they weighed, payload only (WebSocket framing is 2-4 bytes more).
+    /// Includes the JSON: state changes and the twice-a-second heartbeat.
+    pub bytes_sent: u64,
 }
 
 impl Screen {
     #[must_use]
     pub fn new() -> Arc<Screen> {
-        Arc::new(Screen { frames: watch::Sender::new(Arc::new(blank_packet())) })
+        Arc::new(Screen {
+            frames: watch::Sender::new(Arc::new(blank_packet())),
+            sockets: AtomicUsize::new(0),
+            watching: AtomicUsize::new(0),
+            frames_sent: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+        })
     }
 
     /// Replace the newest frame. Never blocks, never fails.
@@ -94,10 +133,76 @@ impl Screen {
         self.frames.subscribe()
     }
 
-    /// How many browsers are reading.
+    /// How many browsers are being sent frames. A tab that has said it is
+    /// hidden is not one of them.
     #[must_use]
     pub fn watchers(&self) -> usize {
-        self.frames.receiver_count()
+        self.watching.load(Ordering::Relaxed)
+    }
+
+    /// What the preview is costing.
+    #[must_use]
+    pub fn cost(&self) -> PreviewCost {
+        PreviewCost {
+            open: self.sockets.load(Ordering::Relaxed),
+            watching: self.watching.load(Ordering::Relaxed),
+            frames_sent: self.frames_sent.load(Ordering::Relaxed),
+            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Register one preview socket. It counts as a watcher only once it says it
+    /// wants frames.
+    #[must_use]
+    pub fn viewer(self: &Arc<Self>) -> Viewer {
+        self.sockets.fetch_add(1, Ordering::Relaxed);
+        Viewer { screen: Arc::clone(self), wants: false }
+    }
+}
+
+/// One preview socket's claim on the picture, and its share of the bill.
+///
+/// Dropping it gives the claim back, however the socket ended - so a browser
+/// that vanishes cannot leave a studio rendering at full rate for ever.
+pub struct Viewer {
+    screen: Arc<Screen>,
+    wants: bool,
+}
+
+impl Viewer {
+    /// Whether this socket is being sent frames.
+    #[must_use]
+    pub fn wants_frames(&self) -> bool {
+        self.wants
+    }
+
+    /// Say whether this socket wants frames. Idempotent.
+    pub fn set_wants_frames(&mut self, wants: bool) {
+        if wants == self.wants {
+            return;
+        }
+        self.wants = wants;
+        if wants {
+            self.screen.watching.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.screen.watching.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// One message went out: `frame` distinguishes a frame packet from the
+    /// JSON, because only the frames are worth pacing.
+    pub fn sent(&self, bytes: usize, frame: bool) {
+        self.screen.bytes_sent.fetch_add(bytes as u64, Ordering::Relaxed);
+        if frame {
+            self.screen.frames_sent.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        self.set_wants_frames(false);
+        self.screen.sockets.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

@@ -361,10 +361,35 @@ Three kinds of message come out of the frame socket:
 A browser identifies itself with an `X-Studio-Client` header on changes and
 `?client=<id>` on the socket; the server does not echo a browser its own change.
 
-Subscribing to the socket is also how the server knows somebody is watching: a player
-whose panel is away and whose page nobody has open drops to 5 fps rather than rendering
-60 for a month. Nothing a browser does can slow a player down - the frame cell has one
-slot and the render loop never waits for a reader.
+**And one goes in** (card 120). A frame packet is 6196 bytes, so every frame a second
+is 6.2 KB/s per tab; a socket says how many of them it wants, on the way in with
+`?fps=&repeat=` or at any time with
+
+```json
+{"type":"preview","fps":30,"repeat":false}
+```
+
+- `fps` - the most frame packets a second. **`0` means none**: what the page sends when
+  its tab is hidden, where every frame would be received and thrown away. State changes
+  and the heartbeat carry on, so a hidden tab stays correct for about half a kilobyte a
+  second. Default 30; a client that wants every frame of a 60 fps player asks for 60.
+- `repeat` - whether to send a picture identical to the one this socket was last sent.
+  `false` skips it, except once a second so the header's counters keep moving; a held
+  clock face is the same 6196 bytes for fifteen seconds at a time. Default `true`.
+
+The page asks for 30 while visible, 10 when `navigator.connection` says the link is slow
+or the owner has asked for less data, and 0 when hidden. Anything else a browser sends is
+ignored, so an old page and a new server understand each other in both directions.
+
+Asking for frames is also how the server knows somebody is watching: a player whose panel
+is away and whose page nobody is **looking at** drops to 5 fps rather than rendering 60
+for a month - a hidden tab is not a watcher, or a phone left on the page in a pocket
+would hold a core open. Nothing a browser does can slow a player down: the frame cell has
+one slot, the render loop never waits for a reader, and pacing is done by dropping a
+frame where it stands rather than by holding one.
+
+`GET /status` says what all this is costing, under `sockets`: `open`, `watching`,
+`frames_sent`, `bytes_sent`.
 
 **Brightness** is a policy, not a one-off: it is re-applied whenever the link comes back,
 and whenever the panel's own telemetry disagrees with what it last said it applied - a
@@ -395,7 +420,9 @@ value changes - it is an `f32` set with `set_param` either way - so a piece asks
 control it wants by how it declares the parameter, and never by putting a key in a label.
 
 **Nothing on the page may say something that is not so.** The rate control spans the
-player's whole range rather than offering two stops it might not be on (172); the panel
+player's whole range rather than offering two stops it might not be on (172), and the
+stops it declares are drawn where the thumb lands rather than declared and left invisible
+(183); the panel
 section says whether the studio is even looking for panels (173); "Reconnects" is a
 player-lifetime count that survives the link being rebuilt (171); and a piece that needs
 a graphics adapter there is none for is struck through with the reason rather than
@@ -413,12 +440,13 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | file | what it pins |
 |---|---|
 | `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
+| `tests/preview.rs` | card 120: a hidden tab is sent no pictures, keeps its heartbeat and comes straight back; a socket is paced to what it asked for; an unchanged picture is not sent again; **a hidden tab is not a watcher**, so a studio with no panel and only hidden tabs idles at 5 fps; and `sockets` on `/status` counts at least what a browser received |
 | `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
 | `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
-| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), and that a parameter with named stops carries them (163) |
+| `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), that its declared stops are **drawn** on the thumb's own geometry and the stylesheet's thumb width still matches the arithmetic (183), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

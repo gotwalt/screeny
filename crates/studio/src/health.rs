@@ -69,6 +69,10 @@ pub struct Status {
     /// panel is showing. The key is still `preview` so that scripts written
     /// against card 106's shape keep working.
     pub preview: PreviewStatus,
+    /// Card 120: what the preview sockets are costing. A studio meant to be
+    /// forgotten in a container should be able to say how much of its traffic
+    /// is browsers, without anybody having to read `docker stats`.
+    pub sockets: crate::page::PreviewCost,
     /// One entry per device, whether or not it has a player or is reachable.
     pub devices: Vec<DeviceStatus>,
 }
@@ -267,6 +271,7 @@ pub fn collect(st: &AppState) -> Status {
         discovery: st.devices.discovery_health(),
         gpu: screeny_art::gpu_status(),
         preview,
+        sockets: st.screen.cost(),
         devices,
     }
 }

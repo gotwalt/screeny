@@ -27,6 +27,11 @@ struct Ripple {
     w: f32,
 }
 
+impl Ripple {
+    /// The same thing `Ripple::default()` is, where a `const` is needed.
+    const ZERO: Ripple = Ripple { amp: 0.0, k: (0.0, 0.0), w: 0.0 };
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Mood {
     pub name: &'static str,
@@ -46,7 +51,26 @@ pub struct Mood {
 
 pub const MOODS: usize = 8;
 
+/// What each mood is called, in the order [`Mood::new`] builds them.
+///
+/// Card 182: **the one list**. `Mood::new` puts the name on from here rather
+/// than each arm carrying a literal, and `dials::MOOD_CHOICES` - the `mood`
+/// parameter's named stops - is built from it.
+pub const MOOD_NAMES: [&str; MOODS] =
+    ["drift", "sway", "breathe", "corners", "unison", "tide", "rings", "streamlines"];
+
 impl Mood {
+    /// Nothing moving. The arms of [`Mood::new`] say only what they change, and
+    /// the name is put on at the end, so this one is never seen.
+    const STILL: Mood = Mood {
+        name: "",
+        turn: 0.0,
+        ripples: [Ripple::ZERO; 2],
+        rings: Ripple::ZERO,
+        open: (0.0, 0.0),
+        open_wave: Ripple::ZERO,
+    };
+
     /// `which` is 0..MOODS; the numbers within a mood are drawn afresh each time.
     pub fn new(which: usize, rng: &mut Rng) -> Mood {
         let mut ripple = |amp: (f32, f32), k: (f32, f32), w: (f32, f32)| Ripple {
@@ -56,82 +80,71 @@ impl Mood {
         };
         let none = Ripple::default();
         let folded = (5.0, 9.0);
-        let mood = match which % MOODS {
+        let which = which % MOODS;
+        let mood = match which {
             // Folded needles turning steadily, each a little ahead of its neighbour.
             0 => Mood {
-                name: "drift",
                 turn: 22.0,
                 ripples: [ripple((35.0, 70.0), (0.35, 0.7), (0.15, 0.4)), ripple((10.0, 25.0), (0.9, 1.4), (0.3, 0.6))],
-                rings: none,
                 open: folded,
-                open_wave: none,
+                ..Mood::STILL
             },
             // Needles nodding like grass in a current; the field does not turn.
             1 => Mood {
-                name: "sway",
                 turn: 0.0,
                 ripples: [ripple((30.0, 60.0), (0.4, 0.8), (0.5, 0.9)), ripple((10.0, 22.0), (1.0, 1.6), (0.7, 1.1))],
-                rings: none,
                 open: folded,
-                open_wave: none,
+                ..Mood::STILL
             },
             // Needles open into chevrons and lines and close again, in waves.
             2 => Mood {
-                name: "breathe",
                 turn: 9.0,
                 ripples: [ripple((25.0, 50.0), (0.3, 0.6), (0.2, 0.4)), ripple((8.0, 18.0), (0.8, 1.3), (0.3, 0.5))],
-                rings: none,
                 open: (6.0, 180.0),
                 open_wave: ripple((1.0, 1.0), (0.35, 0.6), (0.35, 0.55)),
+                ..Mood::STILL
             },
             // Rigid right-angle corners, carried round by a broad wave.
             3 => Mood {
-                name: "corners",
                 turn: 18.0,
                 ripples: [ripple((60.0, 110.0), (0.3, 0.55), (0.15, 0.3)), ripple((10.0, 20.0), (0.9, 1.3), (0.3, 0.5))],
-                rings: none,
                 open: (90.0, 90.0),
-                open_wave: none,
+                ..Mood::STILL
             },
             // Everything agrees: parallel lines, turning as one.
             4 => Mood {
-                name: "unison",
                 turn: 14.0,
                 ripples: [ripple((0.0, 4.0), (0.3, 0.5), (0.2, 0.3)), none],
-                rings: none,
                 open: (180.0, 180.0),
-                open_wave: none,
+                ..Mood::STILL
             },
             // One long slow wave through open lines.
             5 => Mood {
-                name: "tide",
                 turn: 0.0,
                 ripples: [ripple((50.0, 80.0), (0.25, 0.4), (0.25, 0.4)), ripple((5.0, 12.0), (0.7, 1.0), (0.2, 0.4))],
-                rings: none,
                 open: (150.0, 180.0),
                 open_wave: ripple((1.0, 1.0), (0.2, 0.35), (0.15, 0.25)),
+                ..Mood::STILL
             },
             // Rings spreading from a focus that wanders about the panel.
             6 => Mood {
-                name: "rings",
                 turn: 4.0,
                 ripples: [ripple((8.0, 16.0), (0.4, 0.7), (0.2, 0.4)), none],
                 rings: Ripple { amp: 90.0, k: (0.9, 0.0), w: 0.65 },
                 open: (20.0, 70.0),
                 open_wave: ripple((1.0, 1.0), (0.3, 0.5), (0.2, 0.35)),
+                ..Mood::STILL
             },
             // Open lines on a field so gentle that neighbours join end to end
             // into long curves across the whole panel.
             _ => Mood {
-                name: "streamlines",
                 turn: 5.0,
                 ripples: [ripple((30.0, 50.0), (0.18, 0.3), (0.12, 0.22)), ripple((6.0, 12.0), (0.45, 0.7), (0.15, 0.3))],
-                rings: none,
                 open: (180.0, 180.0),
-                open_wave: none,
+                ..Mood::STILL
             },
         };
-        Mood { turn: mood.turn * rng.range(0.75, 1.25) * rng.sign(), ..mood }
+        Mood { name: MOOD_NAMES[which], turn: mood.turn * rng.range(0.75, 1.25) * rng.sign(), ..mood }
     }
 
     /// Glide a fraction `f` of the way to `goal`.
