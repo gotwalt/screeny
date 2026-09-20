@@ -23,7 +23,8 @@
 # measured a 10.7 KB high-water mark and 16 KB looked like half as much again.
 # Then card 222 put a web server on the device and real TCP traffic took core 0
 # to ~17.9 KB - picoserve's nested-`Either` router alone puts two frames
-# totalling 7,872 bytes on the stack before a handler runs
+# totalling 7,872 bytes on the stack before a handler runs (historical: card 233
+# replaced that router, and the measured demand is now the 13 KB boot path)
 # (`docs/research/010-stack-and-ram-levers.md` section 2). A build could have
 # passed this check with 16,384 bytes of `.stack` against a 17,900-byte demand
 # and died on the guard. A floor under the demand is worse than no floor,
