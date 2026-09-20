@@ -50,6 +50,7 @@ const PARAMS: &[ParamSpec] = &[
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 20.0, 240.0, 1.0, 90.0),
     param("weight", "Hand weight (0 = auto)", 0.0, 4.0, 0.05, 0.0),
+    param("tip", "Hand tip (1 = blunt)", 0.2, 1.0, 0.05, 0.45),
     param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 75.0),
     param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.09),
     param("hue2", "Minute hand hue", 0.0, 360.0, 1.0, 35.0),
@@ -266,6 +267,6 @@ impl Piece for Flow {
             Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.01), light: mix(ctx.get("light"), 0.97) },
         ];
         let mark = grip * ctx.get("mark");
-        Dials { angles: &self.angles, cols, rows, cell, lens, half, tints, rest: &[], ring: 0.0, mark }.draw()
+        Dials { angles: &self.angles, cols, rows, cell, lens, half, tip: ctx.get("tip"), tints, rest: &[], ring: 0.0, mark }.draw()
     }
 }

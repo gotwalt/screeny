@@ -40,6 +40,7 @@ const PARAMS: &[ParamSpec] = &[
     toggle("hours24", "24-hour", true),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 2.0),
+    param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.45),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
     param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 80.0),
     param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.05),
@@ -474,6 +475,7 @@ impl Piece for Clocks {
         let tint = |hue: &str, chroma: &str| draw::Tint { hue: ctx.get(hue), chroma: ctx.get(chroma), light: ctx.get("light") };
         let look = Look {
             half: ctx.get("weight") * 0.5,
+            tip: ctx.get("tip"),
             tints: [tint("hue", "chroma"), tint("hue2", "chroma2")],
             ring: ctx.get("dials"),
         };
@@ -495,6 +497,8 @@ impl Piece for Clocks {
 /// hands' colours, and the dial rings.
 struct Look {
     half: f32,
+    /// The hands' taper while they dance: `draw::Dials::tip`.
+    tip: f32,
     tints: [draw::Tint; 2],
     ring: f32,
 }
@@ -512,6 +516,11 @@ fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled:
         // The rounded tip ends exactly on the cell edge, meeting its neighbour's.
         lens: [CELL * 0.5 - look.half; 2],
         half: look.half,
+        // A digit is drawn by hands meeting end to end across the cell edges,
+        // and a stroke that pinched at every joint would not read as one. So
+        // the taper is the dancers': it goes as the picture settles onto the
+        // time, and the hands are blunt again by the time they are a numeral.
+        tip: look.tip + (1.0 - look.tip) * settled.clamp(0.0, 1.0),
         rest: &scales,
         tints: look.tints,
         ring: look.ring,
@@ -541,7 +550,7 @@ mod tests {
 
     fn look() -> Look {
         let tint = |hue| draw::Tint { hue, chroma: 0.05, light: 0.93 };
-        Look { half: 1.0, tints: [tint(80.0), tint(80.0)], ring: 0.0 }
+        Look { half: 1.0, tip: 0.45, tints: [tint(80.0), tint(80.0)], ring: 0.0 }
     }
 
     /// What one cell of a glyph asks of its dial, so a pose can be read back.
@@ -665,6 +674,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The taper belongs to the dance. A numeral is strokes meeting end to end
+    /// across the cell edges, so once the time has landed the picture is the
+    /// one blunt hands draw, whatever `tip` says - and while they dance a
+    /// tapered hand is a lighter one.
+    #[test]
+    fn a_numeral_is_drawn_with_blunt_hands_whatever_the_tip() {
+        let rest = RESTS[DEFAULT_REST];
+        let (angles, idle) = (pose(21, 12, rest), resting(21, 12));
+        let with = |tip, settled| picture(&angles, &idle, rest, settled, Look { tip, ..look() });
+        let indices = |f: Frame| match f {
+            Frame::Indexed { indices, .. } => indices,
+            Frame::Linear(_) => panic!("not an indexed frame"),
+        };
+        assert_eq!(indices(with(0.3, 1.0)), indices(with(1.0, 1.0)), "the taper survived into the numeral");
+        let total = |f: &Frame| ink(f).iter().sum::<f32>();
+        assert!(total(&with(0.3, 0.0)) < total(&with(1.0, 0.0)) * 0.9, "a tapered dancer is not lighter than a blunt one");
     }
 
     /// A resting dial is drawn at full strength while the hands are dancing and

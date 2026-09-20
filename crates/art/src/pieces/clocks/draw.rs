@@ -15,9 +15,15 @@ pub struct Tint {
     pub light: f32,
 }
 
-/// The darkest step of a hand's ramp. Anything dimmer is left black, because
-/// the panel has almost no levels down there.
-const DARK: f32 = 0.32;
+/// The darkest step of a hand's ramp. Anything dimmer is left black.
+///
+/// It was 0.32 while the panel was thought to have almost no levels down there;
+/// card 102 measured that it has (only sRGB 0 and 1 come out black). At 0.32 the
+/// faintest edge a hand could have was a pixel it covers 4% of, and everything
+/// from 2% up was rounded *up* to that - which is what made a tip look blunt
+/// and a slow hand's edge arrive in a visible step. At 0.16 the faintest edge
+/// is half a percent, so an edge fades in from nothing.
+const DARK: f32 = 0.16;
 const STEPS: usize = 15;
 
 pub struct Dials<'a> {
@@ -29,8 +35,13 @@ pub struct Dials<'a> {
     /// Length of the hour and minute hands, from the centre to the middle of
     /// the rounded tip.
     pub lens: [f32; 2],
-    /// Half the hands' thickness.
+    /// Half the hands' thickness, at the centre of the dial.
     pub half: f32,
+    /// Half the thickness at the tip, as a share of `half`: 1 is a hand with
+    /// parallel sides and a blunt round end, less is a hand that tapers to a
+    /// finer one. A tapered hand is drawn that much longer, so that its tip
+    /// still ends where the blunt one did.
+    pub tip: f32,
     /// Hour hand, minute hand.
     pub tints: [Tint; 2],
     /// Per-dial `[ink, length]` scale, for dials drawn as being at rest rather
@@ -76,8 +87,11 @@ impl Dials<'_> {
             let i = (cy as usize).min(self.rows - 1) * self.cols + (cx as usize).min(self.cols - 1);
             let (px, py) = ((cx.fract() - 0.5) * self.cell, (cy.fract() - 0.5) * self.cell);
             let [ink, reach] = self.rest.get(i).copied().unwrap_or([1.0, 1.0]);
+            let tip = self.tip.clamp(0.0, 1.0);
             for (h, tint) in inks.iter().enumerate() {
-                if hand_distance(px, py, self.angles[i][h], self.lens[h] * reach) <= self.half {
+                let len = (self.lens[h] + self.half * (1.0 - tip)) * reach;
+                let (distance, along) = hand_distance(px, py, self.angles[i][h], len);
+                if distance <= self.half * (1.0 - (1.0 - tip) * along) {
                     return tint.scale(ink);
                 }
             }
@@ -98,18 +112,42 @@ impl Dials<'_> {
     }
 }
 
-/// Distance from a point to the hand: a segment from the dial's centre along
-/// `angle` (degrees clockwise from 12 o'clock; y grows downwards) for `len`.
-fn hand_distance(px: f32, py: f32, angle: f32, len: f32) -> f32 {
+/// Distance from a point to the hand - a segment from the dial's centre along
+/// `angle` (degrees clockwise from 12 o'clock; y grows downwards) for `len` -
+/// and how far along it the nearest point is, 0 at the centre to 1 at the tip.
+fn hand_distance(px: f32, py: f32, angle: f32, len: f32) -> (f32, f32) {
     let (s, c) = angle.to_radians().sin_cos();
     let (dx, dy) = (s, -c);
     let along = (px * dx + py * dy).clamp(0.0, len);
-    ((px - dx * along).powi(2) + (py - dy * along).powi(2)).sqrt()
+    let distance = ((px - dx * along).powi(2) + (py - dy * along).powi(2)).sqrt();
+    (distance, if len > 0.0 { along / len } else { 0.0 })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tapered hand is finer at the tip than at the centre, and reaches
+    /// exactly as far as the blunt one it replaces.
+    #[test]
+    fn a_tapered_hand_is_finer_at_the_tip_and_no_shorter() {
+        let tints = [Tint { hue: 80.0, chroma: 0.05, light: 0.93 }; 2];
+        // One dial, both hands pointing right along the middle of the cell.
+        let angles = vec![[90.0, 90.0]];
+        let lit = |tip: f32| {
+            let dials = Dials { angles: &angles, cols: 1, rows: 1, cell: 16.0, lens: [7.0; 2], half: 1.0, tip, tints, rest: &[], ring: 0.0, mark: 0.0 };
+            let Frame::Indexed { indices, .. } = dials.draw() else { panic!("not indexed") };
+            // How much hand is in each column of the dial: both hands share one
+            // tint here, so a ramp index is a measure of ink.
+            let step = |i: u8| if i == 0 { 0 } else { (usize::from(i) - 1) % STEPS + 1 };
+            (0..16).map(|x| (0..H).map(|y| step(indices[y * 64 + x])).sum::<usize>()).collect::<Vec<_>>()
+        };
+        let (blunt, fine) = (lit(1.0), lit(0.4));
+        let reach = |cols: &[usize]| cols.iter().rposition(|n| *n > 0).unwrap();
+        assert_eq!(reach(&blunt), reach(&fine), "the tapered hand stops short of where the blunt one ended");
+        assert_eq!(blunt[9], blunt[14], "a blunt hand has parallel sides: {blunt:?}");
+        assert!(fine[14] < fine[9] && fine[14] < blunt[14], "the tip is no finer: {fine:?} against {blunt:?}");
+    }
 
     /// A hand's soft edge must stay the hand's colour. Blue cannot hold much
     /// chroma when light, so its ink is pale, and a ramp built at constant
@@ -120,7 +158,7 @@ mod tests {
         for hue in [255.0, 20.0, 140.0, 320.0] {
             let tints = [Tint { hue, chroma: 0.15, light: 0.82 }, Tint { hue: 35.0, chroma: 0.01, light: 0.97 }];
             let angles = vec![[90.0, 270.0]; 8];
-            let dials = Dials { angles: &angles, cols: 4, rows: 2, cell: 16.0, lens: [7.0; 2], half: 0.8, tints, rest: &[], ring: 0.0, mark: 1.0 };
+            let dials = Dials { angles: &angles, cols: 4, rows: 2, cell: 16.0, lens: [7.0; 2], half: 0.8, tip: 1.0, tints, rest: &[], ring: 0.0, mark: 1.0 };
             let Frame::Indexed { indices, .. } = dials.draw() else { panic!("not indexed") };
             // The hour hand points right and the mark is above it: everything in
             // the right half of each dial, and its top rows, is the hour ramp
