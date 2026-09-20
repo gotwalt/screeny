@@ -259,3 +259,13 @@ Everything below is taste, and none of it is settled.
 ## Follow-up
 
 None that needs a card. Everything above is a conversation, not work.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `01-settled-2112.png` and `03-flap-five-angles.png` before merging: the settled
+face reads at a glance and the seam is the signature; the five-angle strip reads as a card
+falling about an axle - the lit edge travelling down, the next numeral already showing
+behind it, the shadow ahead of the card - not as a wipe. Merged `--no-ff` with
+`seeded: false` added to the definition (card 151's field; the picture is the time).
+`cargo test -p screeny-art`: 88 + 4 + 3 pass; studio 174 pass; clippy silent. Deployed the
+same afternoon for the owner's eye; the eleven "Open with the owner" items above are his.
