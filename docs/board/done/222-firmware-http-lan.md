@@ -432,3 +432,32 @@ run on this card finished between 06:23 and 06:54 UTC, and the stream was
 present throughout each of them (`30 fps rx` on the telemetry line, `state 1`,
 a source holding the lock), so none of the evidence above falls in that window
 and nothing was re-run because of it.
+
+### Orchestrator, over the wire after the merge (2026-09-20)
+
+- Every route answered as the worker's table says: `status`, `telemetry`, `wifi` 200 and
+  parse against the golden shapes; `networks` 503; wrong method 405; unknown path 404;
+  bad JSON 400; oversize WiFi form 413; `GET /` 200, 6,136 bytes. `fw 0.4.0`, `fw_slot
+  ota_0`, `fw_state valid`.
+- Settings over HTTP (`name`, `brightness` 64, `idle_mode` dim) survived
+  `POST /api/v1/reboot`; `boot_id` changed across it and `reset_reason` read `software`.
+  Restored afterwards; `name: ""` correctly returns to `screeny-4a00a4`.
+- `POST /api/v1/wifi` with the dummy pair: `{"result":"trying"}`, then fallback to the
+  stored network and `GET /api/v1/wifi` says `state: failed` - but **`reason` is `null`**
+  where it should be `not_found` (the firmware knows `NoAccessPointFound`). Goes to card
+  223, which wires `crates/provision` in and gets the reason from it.
+- `dns-sd -B _http._tcp` finds `screeny-4a00a4`. `identify` works.
+- **HTTP costs no frame**: 200 requests in 60 s (alternating `/api/v1/status` and `/`),
+  all 200, while the Studio streamed: 30 fps rx / 30 fps shown on every telemetry line,
+  0 stale / superseded / decode / rejected, `render` max 3,238-3,447 us (idle is the same).
+- Conformance: 60 passed, 0 failed, 4 skipped.
+- **Two findings that set the next card:**
+  1. **Core 0's stack is thin under real TCP traffic.** `stack_free` read 6,376 after a
+     handful of requests and **5,176** after the hammer: high-water ~18 KB of 23.2 KB,
+     deeper than the in-memory self-test's 14.2 KB. Card 223 needs ~9 KB more `.bss`.
+     RAM levers come first (card 227).
+  2. **Back-to-back connections pay exactly 1 s**: with one worker and no listen backlog
+     the next SYN is dropped and macOS retransmits after 1 s (`time_connect` 1.007 s;
+     first byte 18 ms after that). A lone request is 25-37 ms. The Studio polling every
+     few seconds never sees it; a browser loading the page and then polling does. The fix
+     is a second worker (7.5 KB), which needs the same levers.
