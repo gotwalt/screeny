@@ -134,6 +134,11 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   things against `screeny-sim` on localhost only. Anything on the real panel, WiFi
   streaming included, is the orchestrator's step after the merge. The owner's bar for a
   workstream is that it runs on the real panel, not only the sim: plan that step.
+- **Check the instructions you give other sessions against the running system.** After card
+  106 the orchestrator kept telling the firmware session that `set_panel {"on":false}`
+  releases the panel; it had become a silent no-op (200, body `null`) and cost that session a
+  35-failure conformance run. When an API's meaning changes under a merge, re-test the
+  exact call you have handed out, on the deployed service, before repeating it.
 - **Two independent implementations find spec bugs.** The simulator (second receiver)
   found 17 ambiguities; the firmware (third) found none. Keep doing that: when a spec
   matters, have it implemented twice before trusting it.
