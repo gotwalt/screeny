@@ -102,17 +102,18 @@ const _: () = assert!(matches!(
 
 /// smoltcp socket slots the AP stack is given.
 ///
-/// Three are used - DHCP on UDP/67, the DNS catch-all on UDP/53, and the HTTP
-/// listener - and one is spare, because `edge-nal-embassy`'s `Udp` has been
+/// Four are used - DHCP on UDP/67, the DNS catch-all on UDP/53, and one HTTP
+/// listener per worker ([`crate::http::HTTP_TASKS`], both of which follow the
+/// AP since the owner's phone test) - and one is spare, because `edge-nal-embassy`'s `Udp` has been
 /// seen to hold more than the one socket its buffer type names (see
 /// [`crate::NET_SOCKETS`], where the same surprise cost a boot loop). The
 /// failure mode of getting this wrong is `SocketSet::add` panicking on the
 /// first poll of a task, which is a boot loop, so the spare is not optional;
 /// a second spare was, and it is a socket's ~408 bytes of core 0's stack.
 ///
-/// Unlike the station's eight, these three are only *bound* while the AP is
+/// Unlike the station's eight, these are only *bound* while the AP is
 /// up: each service task drops its socket when the AP goes away.
-const AP_SOCKETS: usize = 4;
+const AP_SOCKETS: usize = 3 + crate::http::HTTP_TASKS;
 
 /// One datagram's worth each; neither protocol needs more. A BOOTP packet is
 /// 576 bytes at the outside and a DNS query over UDP is capped at 512.

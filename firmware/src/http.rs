@@ -1430,9 +1430,20 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 
 /// Which stack a worker serves.
 ///
-/// **Worker 0 is the LAN's and never moves. Worker 1 follows the soft-AP**:
-/// while the AP is up it listens on 192.168.4.1, and the rest of the time it
-/// is a second LAN worker exactly as card 227 made it.
+/// **Every worker follows the soft-AP**: while the AP is up they all listen on
+/// 192.168.4.1, and the rest of the time they are the LAN workers exactly as
+/// card 227 made them.
+///
+/// Card 223 moved only one, and the owner's phone test (2026-09-20) is why
+/// that was wrong. smoltcp has no listen backlog: with one socket, a second
+/// connection that arrives while the first is open is *refused*. An iPhone's
+/// captive sheet opens a connection it does not use straight away next to the
+/// one it does, the idle one held the only worker for `start_read_request`,
+/// and the sheet said "error opening page". From the bench Mac the same thing
+/// was every `curl` failing for as long as one idle `nc` was connected. It is
+/// card 227's finding again, on the other interface. The LAN has no HTTP for
+/// as long as the AP is up - which is the portal (no LAN at all) plus the 30 s
+/// grace window after a join, when the one client that matters is on the AP.
 ///
 /// A *third* worker bound to the AP stack was the obvious shape and is what
 /// this card did not do: a worker is 7,504 bytes of `.bss`
@@ -1502,20 +1513,6 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
     let mut rx = [0u8; TCP_RX];
     let mut tx = [0u8; TCP_TX];
 
-    // Worker 0 never leaves the LAN, so it never re-enters this loop.
-    if id != HTTP_AP_WORKER {
-        serve_on(
-            id,
-            stack,
-            false,
-            &lan,
-            &config,
-            &mut http_buf[..],
-            &mut rx[..],
-            &mut tx[..],
-        )
-        .await;
-    }
     loop {
         // Cancelling `listen_and_serve` drops whatever connection it was
         // serving, which is right in both directions: the AP going up means
@@ -1554,10 +1551,6 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
         }
     }
 }
-
-/// The worker that follows the soft-AP. See [`serve_on`].
-pub const HTTP_AP_WORKER: usize = 1;
-const _: () = assert!(HTTP_AP_WORKER < HTTP_TASKS);
 
 // ---------------------------------------------------------------------------
 // The bench self-test (feature `http-selftest`)
