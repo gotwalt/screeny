@@ -98,3 +98,5 @@ One thing worth recording: on one of three runs `tests/telemetry.rs
 a_sender_can_tell_network_loss_from_a_slow_device` failed, and passed on its own and on
 a re-run of the whole suite. It is a timing test over loopback UDP and has nothing to do
 with this card's code path (no HTTP in it), but it is a flake that exists.
+
+**Orchestrator, after the merge (2026-09-20):** merged to `main` as c471af0; `cargo test -p screeny-sim -p screeny-probe` on `main`: 153 passed, 0 failed. Nothing relied on the 302. The `telemetry.rs` loopback-timing flake the worker saw once did not show here; noted, not chased (decision 10).
