@@ -4,8 +4,8 @@ title: Studio players, devices and state - built to be forgotten
 type: build
 hardware: no
 depends: [105]
-owner:
-branch:
+owner: worker-106
+branch: card/106-studio-players-devices-state
 ---
 
 ## Goal
