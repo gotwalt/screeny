@@ -50,3 +50,7 @@ In `crates/sim`:
 be developed against a device that sometimes cannot get on the network.
 
 ## Log
+
+2026-09-20, firmware orchestrator: absorbed into card 224 (the simulator serves the
+device's HTTP API and models the WiFi states through `crates/provision`). Closed here;
+the work and its log are on 224.
