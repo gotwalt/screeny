@@ -77,33 +77,32 @@ use crate::store;
 
 /// How many connections are served at once.
 ///
-/// **One, and it is the RAM that decided it.** The card asked for two and two
-/// is what was built first; `tools/fw-size.sh` then measured the pool at
-/// **15,008 bytes** of `.bss` for the pair - 7,504 each: [`HTTP_BUF`] +
-/// [`TCP_RX`] + [`TCP_TX`] is 3,584 of that and picoserve's `serve` future,
-/// which holds the router and whichever handler future is in flight, is the
-/// other ~3,920. That build's `.stack` came out at 15,344, below the 16,384
-/// floor, never mind the card's 22 KB budget. Dropping to one worker is the
-/// first and cheapest lever the card lists, and it is the only one pulled:
-/// core 1's stack and the heap arena are untouched.
+/// **Two, since card 227 paid for the second one.** Card 222 wanted two and
+/// could not have them: the pool is **7,504 bytes** of `.bss` per worker -
+/// [`HTTP_BUF`] + [`TCP_RX`] + [`TCP_TX`] is 3,584 of that and picoserve's
+/// `serve` future, which holds the router and whichever handler future is in
+/// flight, is the other ~3,920 - and a second one put `.stack` at 15,344,
+/// below the 16,384 floor. Card 227 bought the room back from core 1's stack
+/// (measured, and it was three quarters empty) and the heap arena (measured
+/// against the APSTA peak, not the station one), and spent part of it here.
 ///
-/// What one worker costs in behaviour, and what pays for it:
+/// What the second worker buys, measured over the wire by the orchestrator at
+/// the end of card 222: smoltcp has **no listen backlog**, so with one worker
+/// a SYN arriving between two `accept()`s is simply unanswered and the client
+/// retransmits. macOS's first retransmit is at one second, and that is exactly
+/// what back-to-back connections paid: `time_connect` 1.007 s against 25-37 ms
+/// for a lone request. A browser that loads the page and then polls
+/// `/api/v1/status` hits it every time. Two workers means one is listening
+/// while the other answers.
 ///
-/// * Connections are serialised. Each request here is a handful of
-///   milliseconds (the page is ~5 KB of flash-resident text and every JSON
-///   reply is under 500 bytes), so the queue drains at browser speed.
-/// * smoltcp has no listen backlog: a SYN that arrives between two
-///   `accept()`s is unanswered and the client retransmits a second later.
-///   That is the real cost, and it is why **keep-alive is off** - picoserve's
-///   own documentation says to enable it "only if multiple sockets are
-///   handling HTTP connections", because otherwise one browser holding a
-///   kept-alive connection open is one browser holding the whole server.
-///   Closing after each response bounds the gap to one response time.
-///
-/// Raising this to two is a real improvement for a browser and needs one of
-/// the card's other two levers (core 1's 16 KB stack, or the 32 KB heap
-/// arena), which is the owner's call, not this card's. See the follow-up.
-pub const HTTP_TASKS: usize = 1;
+/// **Keep-alive stays off.** picoserve's own documentation says to enable it
+/// "only if multiple sockets are handling HTTP connections", which is now
+/// true - but with *two* sockets, two browsers holding kept-alive connections
+/// are still the whole server, and the page's 4 s poll would hold one open
+/// indefinitely. Closing after each response bounds the worst wait to one
+/// response time, which is a handful of milliseconds. Turning it on is a
+/// one-line change and a measurement, not a guess; it is not this card's.
+pub const HTTP_TASKS: usize = 2;
 
 /// picoserve's own buffer: the request line, all the headers, and the whole
 /// body of any route that parses one.
@@ -541,7 +540,7 @@ async fn status() -> StatusReply {
         uptime_ms: crate::now_ms(),
         heap_used: heap.current_usage as u32,
         heap_size: heap.size as u32,
-        stack_free: crate::stack_probe::headroom().unwrap_or(0) as u32,
+        stack_free: crate::stack_probe::CORE0.headroom().unwrap_or(0) as u32,
         rssi_dbm: crate::RSSI_DBM.load(Ordering::Relaxed),
         brightness: crate::BRIGHTNESS.load(Ordering::Relaxed),
         idle_mode,
@@ -1030,12 +1029,13 @@ pub async fn http_task(id: usize, stack: Stack<'static>) -> ! {
     // client can hold the server for is therefore ~8 s, and that needs it to
     // have connected and then gone quiet mid-header.
     //
-    // **Not** `keep_connection_alive()`: with one worker a kept-alive
-    // connection is one client owning the server until its idle timeout, and
-    // picoserve's own docs say to enable it only when several sockets are
-    // serving. `persistent_start_read_request` is therefore unused here; it is
-    // left at a short value so that turning keep-alive on with a second worker
-    // is a one-line change.
+    // **Not** `keep_connection_alive()`, even with [`HTTP_TASKS`] at two: a
+    // kept-alive connection is one of the two workers owned by one client
+    // until its idle timeout, and the status page polls every four seconds,
+    // which would hold one open for as long as the tab is. Closing after each
+    // response is what bounds the worst wait to one response time.
+    // `persistent_start_read_request` is therefore unused; it is left at a
+    // short value so that turning keep-alive on stays a one-line change.
     let config = picoserve::Config::new(picoserve::Timeouts {
         start_read_request: Duration::from_secs(3),
         persistent_start_read_request: Duration::from_secs(2),
@@ -1417,7 +1417,7 @@ pub async fn selftest_task(stack: Stack<'static>) {
     // rather than silently dropped.
     let mut out = [0u8; 640];
     let mut worst_us = 0u32;
-    let hw_before = crate::stack_probe::high_water().unwrap_or(0);
+    let hw_before = crate::stack_probe::CORE0.high_water().unwrap_or(0);
     for (label, request, expect) in SELFTEST_ROUTES {
         let (status, bytes, us) = selftest_one(request, &mut out).await;
         worst_us = worst_us.max(us);
@@ -1449,8 +1449,8 @@ pub async fn selftest_task(stack: Stack<'static>) {
         "selftest: slowest in-memory request {} us | core 0 stack high-water {} -> {} of {} bytes",
         worst_us,
         hw_before,
-        crate::stack_probe::high_water().unwrap_or(0),
-        crate::stack_probe::size(),
+        crate::stack_probe::CORE0.high_water().unwrap_or(0),
+        crate::stack_probe::CORE0.size(),
     );
 
     let after = {

@@ -110,8 +110,12 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// The `fw=` TXT key and `GET_INFO` field.
 ///
 /// 0.3.0 was card 212: settings live in flash. 0.4.0 is card 222: the device
-/// answers HTTP on the LAN.
-pub const FW_VERSION: &str = "0.4.1";
+/// answers HTTP on the LAN. 0.4.1 fixed `SET_WIFI` committing credentials to
+/// flash before proving them. 0.4.2 is card 227: core 1's stack measured and
+/// cut to fit, the heap arena trimmed, and a **second HTTP connection
+/// worker** - which is the part visible from outside, because back-to-back
+/// connections no longer pay a 1 s SYN retransmit.
+pub const FW_VERSION: &str = "0.4.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -149,16 +153,36 @@ const _: () = assert!(
     "panel refresh below 120 Hz: reduce PLANES or raise PIXEL_CLOCK"
 );
 
-/// Core 1's stack.
+/// Core 1's stack. **6 KB, and it is measured, not guessed** (card 227).
 ///
 /// It runs one task whose deepest call is `display::render` (a 192-byte row
 /// buffer), plus the HUB75 DMA interrupt at `Priority3`, which lands on
-/// whatever stack is current. 16 KB is generous for that; esp-rtos checks the
-/// guard on every switch and panics with the range, which is how the first
-/// flash of this firmware reported an 8 KB stack being eaten by two 12 KB
-/// framebuffers built in the wrong place.
+/// whatever stack is current - `xtensa-lx-rt`'s `SAVE_CONTEXT` opens with
+/// `addmi sp, sp, -256` on the interrupted stack, and there is no separate
+/// interrupt stack on this chip.
+///
+/// It was 16 KB from the first flash of this firmware to card 227, on the
+/// reasoning that 16 KB is "generous" - and it was: `stack_probe::CORE1`
+/// paints the region from core 0 before the core starts and scans it from
+/// core 0 afterwards, and after 200 s of 30 fps streaming with dither on and
+/// 2,378 HTTP connections in flight on the other core, **the high-water mark
+/// was 1,872 bytes of 16,384**. Three quarters of it had never been touched.
+///
+/// That was not free. Core 1's stack is ordinary `.bss`, and on this chip
+/// `.data`, `.bss` and core 0's main stack come out of one DRAM region with
+/// the stack as the remainder - so every byte over-provisioned here was a
+/// byte core 0 did not have. Releasing 10,240 of them is what paid for the
+/// second HTTP worker.
+///
+/// The size is card 227's rule, `max(2 * high_water, 6 KB)` rounded up to a
+/// kilobyte: `max(3744, 6144)` = 6,144. It is the 6 KB floor that binds, not
+/// the measurement, which means there is better than a **3.2x** margin over
+/// anything ever observed. Do not cut it further without a reason and a
+/// number; esp-rtos checks the guard on every context switch and panics with
+/// the range, so an undersized stack fails loudly - but the panic is a boot
+/// loop on a device that may not be on your desk.
 #[cfg_attr(feature = "display-on-core0", allow(dead_code))]
-static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<16384>> =
+static APP_CORE_STACK: static_cell::ConstStaticCell<CoreStack<6144>> =
     static_cell::ConstStaticCell::new(CoreStack::new());
 
 /// The two DMA framebuffers core 1 swaps between.
@@ -365,7 +389,14 @@ async fn display_task(
 /// `StackResources` is `.bss`, and `.bss` is core 0's stack, so this is not a
 /// free number. Card 223's AP gets its own stack and its own resources, so it
 /// does not need room here.
-const NET_SOCKETS: usize = 7;
+///
+/// **Eight since card 227**, because [`http::HTTP_TASKS`] is two and each
+/// worker holds its own `TcpSocket` for as long as it is listening or
+/// serving. Seven would have been exactly enough and left no spare at all,
+/// and the failure mode of getting this wrong is not a degraded server: it is
+/// `SocketSet::add` panicking on the first poll of a task, which is a boot
+/// loop. 408 bytes is the right price for the slot that is not needed.
+const NET_SOCKETS: usize = 8;
 
 /// How many times one credential pair is tried before the next is (spec 8.3).
 const JOIN_ATTEMPTS: u8 = 3;
@@ -798,14 +829,25 @@ async fn telemetry_task() {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
         tick += 1;
         if tick == STACK_TICK
-            && let Some(hw) = stack_probe::high_water()
+            && let Some(hw) = stack_probe::CORE0.high_water()
         {
             info!(
                 "stack: core 0 main high-water {} of {} bytes, {} free (painted at boot)",
                 hw,
-                stack_probe::size(),
-                stack_probe::headroom().unwrap_or(0),
+                stack_probe::CORE0.size(),
+                stack_probe::CORE0.headroom().unwrap_or(0),
             );
+            // Card 227: the same line for core 1, which until this card had
+            // never been measured at all. Its stack is ordinary `.bss`, so
+            // whatever it does not use is core 0's `.stack` being held hostage.
+            if let Some(hw1) = stack_probe::CORE1.high_water() {
+                info!(
+                    "stack: core 1 display high-water {} of {} bytes, {} free (painted before the core started)",
+                    hw1,
+                    stack_probe::CORE1.size(),
+                    stack_probe::CORE1.headroom().unwrap_or(0),
+                );
+            }
         }
         let swaps = SWAPS.load(Ordering::Relaxed);
         let stats = esp_alloc::HEAP.stats();
@@ -857,7 +899,7 @@ fn assert_pin(pin: &impl Pin, expected: u8) {
 async fn main(spawner: Spawner) {
     // First, before anything has had a chance to go deep: card 220's paint.
     // Everything below this line is inside the measurement.
-    stack_probe::paint();
+    stack_probe::paint_core0();
 
     esp_println::logger::init_logger_from_env();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
@@ -878,8 +920,20 @@ async fn main(spawner: Spawner) {
     // 60 s mark. Read that line before moving either number here. The heap
     // side of the same question — what the radio wants with a soft-AP up —
     // is the `apsta-probe` build.
+    // Card 227 takes the second arena from 32 KB to 24 KB. It is the card's
+    // last-resort lever and it was measured before it was pulled, against the
+    // **APSTA** peak rather than the station one, because the station number
+    // would have flattered it: `esp-alloc`'s own all-allocations watermark
+    // (the `apsta-probe` build turns on `internal-heap-stats`) is the only
+    // thing that sees the radio's transients, and it read 53,968 of 98,304
+    // with a soft-AP up. Eight kilobytes off the ceiling still leaves the
+    // worst instant of an APSTA run comfortably clear - see
+    // `docs/research/010-stack-and-ram-levers.md` for the run. **24 KB is the
+    // floor**: card 227 was told not to go below it and the margin above is
+    // now small enough that the next person should measure again rather than
+    // shave.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 32 * 1024);
+    esp_alloc::heap_allocator!(size: 24 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
@@ -1008,10 +1062,24 @@ async fn main(spawner: Spawner) {
     };
 
     #[cfg(not(feature = "display-on-core0"))]
+    let app_core_stack = {
+        let s = APP_CORE_STACK.take();
+        // Card 227: paint it here, from core 0, while the core it belongs to
+        // has not started and therefore nothing is live on it. `bottom()` and
+        // `top()` want `&mut`, which is why the `take()` is hoisted out of the
+        // `start_second_core` call it used to be an argument of.
+        let (bottom, top) = (s.bottom() as usize, s.top() as usize);
+        // SAFETY: core 1 is not running yet - `start_second_core` is the next
+        // statement - so no frame is live anywhere in this region.
+        unsafe { stack_probe::paint_core1(bottom, top) };
+        s
+    };
+
+    #[cfg(not(feature = "display-on-core0"))]
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL,
         peripherals.FROM_CPU_INTR1,
-        APP_CORE_STACK.take(),
+        app_core_stack,
         move || {
             let hub75 = build_hub75();
             let executor = mk_static!(
@@ -1135,6 +1203,9 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     spawner.spawn(telemetry_task().unwrap());
+    // Card 227: says when a stack goes deeper than it ever has, at 4 Hz, so
+    // the line lands next to whatever caused it. See `stack_probe`.
+    spawner.spawn(stack_probe::watch_task().unwrap());
 
     // Card 222: the LAN web server. `init` first - the handlers reach the
     // stack, the id and the host name through it, and it must be set before a
