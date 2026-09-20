@@ -233,3 +233,10 @@ whose rate half is measured and true and whose latency half is card 154's
 question, so 9.1 is left alone until that card answers it.
 
 Root `cargo test --release --no-fail-fast`: 300 tests, 52 binaries, all pass.
+
+### Orchestrator (2026-09-19)
+
+Merged to `main` cleanly on top of card 092's `Sender::drive` refactor. `cargo test --release -p screeny`:
+94 passed, 0 failed; `SCREENY_PACING_SECS=2` pacing suite: 4 passed in 10.8 s. The 10 s default stays for
+now (no loss, and the long run is the better drift evidence). Cards 153 and 154 accepted into the backlog;
+154 should be settled before anyone measures latency.

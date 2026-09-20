@@ -138,8 +138,9 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
   hide the refusal.
 - Parallel workers who were told not to touch each other's crates will duplicate code.
   That is the right trade during a build phase; schedule a consolidation card after.
-- The pacing tests in `crates/screeny` are timing-sensitive and can fail once under
-  heavy machine load (card 093). Re-run before believing a regression.
+- The pacing tests in `crates/screeny` used to fail under load; card 093 fixed the cause
+  (they counted the first and `FINAL` frames and asserted on the OS scheduler). They now
+  assert on the pacer's own schedule: a failure there is real until shown otherwise.
 - Remove finished worktrees (`git worktree unlock` + `git worktree remove`, no
   `--force`; delete stray untracked build files first) and merged branches. Each
   worktree carries its own `target/`: gigabytes each.
