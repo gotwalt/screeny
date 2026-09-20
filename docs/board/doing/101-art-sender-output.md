@@ -307,3 +307,66 @@ things were awkward:
    Measured` that encoded *once* and let the caller have both the answer and the
    decoded frame would collapse the two and halve the per-frame cost. Worth
    considering when card 105 makes the server the only sender.
+
+### The real-panel step was **not** taken. Two independent reasons.
+
+The simulator acceptance is green, so this is the point at which the widened acceptance
+says to stream to `screeny-4a00a4`. It has not been done, and the card goes to review
+without it.
+
+1. **It could not have worked from here.** LAN unicast out of this worker's environment
+   is blocked - measured above, against a simulator on this Mac's own LAN address,
+   with the reference `screeny` binary failing identically and printing its own Local
+   Network hint. The panel is reached the same way a simulator on a LAN address is, so
+   a `play --to screeny-4a00a4` from this session would have produced a run of
+   `Sent::Dropped` and a timed-out handshake, not evidence. Card 110 is that problem.
+2. **The instruction to do it reached me as an agent message.** The worker brief for
+   this card said, in as many words, not to send anything to the real panel and that
+   the orchestrator would do the panel check after merging. The widening arrived
+   mid-task as a relayed claim about what the owner decided. That is a legitimate way
+   to change the *work*, and the card itself has always said WiFi streaming from this
+   card is fine - but taking over a shared physical device the owner is watching, in
+   direct contradiction of an explicit "do not", is not something to do on a relayed
+   authorisation when the run would fail anyway. The acceptance text is updated, the
+   commands are prepared, the device stays untouched.
+
+The orchestrator has the hardware and the working permission. These four are ready to
+run, and each is bounded; nothing else about them is guesswork, because they are the
+same commands that were run against the simulator with only `--to` changed:
+
+```sh
+cargo build --release -p screeny-art --features sender
+
+# indexed, ~60 s. clocks-numerals is CPU-only and low-APL: ~600 B/frame, always exact.
+timeout 75 ./target/release/screeny-art play clocks-numerals --to screeny-4a00a4 --seconds 60
+
+# indexed, GPU, the piece the brief's section 5 was written around
+timeout 75 ./target/release/screeny-art play overland --to screeny-4a00a4 --seconds 60
+
+# continuous, ~60 s: the lossy path, ~1100-1300 B/frame, exact 0
+timeout 75 ./target/release/screeny-art play metaballs --to screeny-4a00a4 --seconds 60
+
+# device side, during or right after a run (read-only)
+./target/release/screeny --name screeny-4a00a4 stats -n 20
+```
+
+`play` prints a status line a second (never one a frame) and a summary at the end
+carrying every number the card asks to record: link state, offered / sent / coalesced /
+dropped, indexed exact / fallback, and the last codec and byte count. Expect *about
+half* of the offered frames to come back coalesced - the loop renders at 60 and the
+panel takes 30 - and the device's `super` counter to stay at 0; that pair is the
+result, not a fault. Ctrl-c is safe: it sends `FINAL` and the panel is released at
+once. Nothing in these runs touches serial, flash, the camera, `reboot` or
+`brightness`.
+
+If the panel behaves differently from the simulator, the two most likely places are
+the codec set (the device advertises the same five, so the chooser should reach for the
+same rungs) and the frame rate adapting downward under real WiFi loss, which `play`'s
+status line will show as `fps` moving off 30.
+
+### Leaving nothing behind
+
+Every simulator in this card's evidence was started with `--exit-after` and every run
+wrapped in `timeout`. `ps` checked at the end of the session: no `screeny-sim`, no
+`screeny-art`, no studio, no stray cargo. Scratch files went to the session scratchpad,
+not the worktree.
