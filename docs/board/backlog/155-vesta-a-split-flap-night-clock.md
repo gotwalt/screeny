@@ -51,11 +51,19 @@ he can move on the page, and come back with pictures.
   dark-grey cards, they will shimmer - and the 3D has to read from the numerals' own
   shading, the seam, and the moving flap's edge. The average picture level is on the page's
   meter: aim for a resting APL of a few percent and say what it is.
-- **"Fill only maybe half the pixels"** is read here as: the clock is modest, the numerals
-  occupy something like half the panel rather than running edge to edge, with true black
-  around them. (If he meant "light only every other LED" - a halftone to halve the light -
-  that is a `fill` parameter on the numerals' ink and is cheap to try: build it as a
-  parameter, off by default, and show both.)
+- **Size: spend the pixels.** The owner first said "fill only maybe half the pixels" and
+  then withdrew it the same afternoon: "my half the panel assertion is faulty. We might
+  need most of the panel in order to make the flipping operation really look right. And I
+  think I'd rather spend the pixels than be artificially constrained." So the flip is what
+  sizes the clock: make the modules as large as `HH:MM` allows on 64 x 32 - four modules
+  around 13-14 LEDs wide and most of the 32 tall, a narrow colon, a pixel or two of true
+  black between modules so each reads as its own flap - because a falling flap only looks
+  like one if it has enough rows to foreshorten through (a 10-row half-flap passes through
+  10, 9, 7, 5, 3, 1 rows; a 6-row one is a blink). Low light then comes from *what* is lit,
+  not how little of the panel: pure red, a moderate numeral level, black flap bodies, thin
+  strokes if they read better than heavy ones, and the panel's brightness. Keep `size` as a
+  parameter so the modest version can still be looked at, and keep the halftone `fill`
+  parameter (off by default) as a cheap way to halve the light without shrinking anything.
 - Layout to start from: `HH:MM`, four flap modules and a colon, 24-hour by default like
   the other clocks. No seconds. Whether the colon blinks (no: nothing in a bedroom should
   blink) is a parameter at most.
@@ -71,7 +79,7 @@ he can move on the page, and come back with pictures.
 
 `hue` (default red, 25-30 deg OKLCH or pure sRGB red - try both and say which looks
 cleaner in the snapshot), `light` (numeral level), `size` (how much of the panel the clock
-takes; default about half), `fill` (solid ... halftone), `flip` (seconds a flap takes to
+takes; default: as much as fits), `fill` (solid ... halftone), `flip` (seconds a flap takes to
 fall), `cascade` (flip straight to the new numeral, or through the ones between, as a real
 module does), `tilt` (how far off-axis the viewer is: 0 is flat-on, more shows more of the
 falling flap's perspective), `seam` (the dark line's weight), `hours24`, `offset`.
