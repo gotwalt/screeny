@@ -22,6 +22,16 @@ default = []
 # way card 007 shipped it, so the cost of the core split can be measured
 # against the identical decode path. Never ship this.
 display-on-core0 = []
+# Card 200 research spike. Compile-only evidence that the OTA + settings-store
+# APIs link on this pinned stack, and what they cost in flash and RAM. Off by
+# default; never flashed. See docs/research/006-flash-store-ota.md.
+spike-ota = [
+  "dep:esp-storage",
+  "dep:sequential-storage",
+  "dep:embedded-storage",
+  "dep:embassy-embedded-hal",
+  "esp-bootloader-esp-idf/embedded-storage",
+]
 
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------
@@ -75,6 +85,22 @@ screeny-proto = { path = "../crates/proto" }
 # no_std crate crates/sim runs on, so the device and the simulator cannot drift
 # apart in behaviour the way they could while each kept its own copy.
 screeny-receiver = { path = "../crates/receiver" }
+
+# --- card 200 spike: flash store + OTA (feature `spike-ota` only) ---------
+# esp-storage is already in the tree as an esp-bootloader-esp-idf dependency,
+# but pulled with default-features = false there, so `critical-section` (which
+# runs each ROM flash call with this core's interrupts masked) is off unless we
+# ask for it here.
+esp-storage = { version = "=0.10.0", optional = true, default-features = false, features = [
+  "esp32",
+  "critical-section",
+  "embedded-storage",
+] }
+# Async-only, hence embassy-embedded-hal's BlockingAsync around the blocking
+# NorFlash that esp-bootloader-esp-idf hands us.
+sequential-storage = { version = "=8.0.1", optional = true }
+embedded-storage = { version = "=0.3.1", optional = true }
+embassy-embedded-hal = { version = "=0.6.0", optional = true }
 
 # --- misc ----------------------------------------------------------------
 heapless = { version = "0.9.3" }

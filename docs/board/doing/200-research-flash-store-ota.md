@@ -199,3 +199,47 @@ buildable at all. Notes so far, all from `~/.cargo/registry/src/index.crates.io-
 - Baseline measurement, `cargo build --release` in a clean worktree (40 s, not minutes,
   because the registry is warm): `.bss` 127040, `.data` 31492, `.stack` 37536,
   `.text` 531205, `.rodata` 73064. `espflash save-image` -> **743,408 byte** app image.
+
+### 2026-09-19 — the compile-only spike (question 7)
+
+`firmware/src/spike_ota.rs` behind `--features spike-ota`, called from `main` so the
+linker keeps it. It reads the partition table, reads/writes otadata through `Ota`, walks
+`OtaUpdater::next_partition`, stages one 4 KB sector into the other slot, validates that
+slot (header magic, chip id, `esp_app_desc` magic + project name, appended SHA-256 via
+`PartitionEntry::sha256`), and does a `sequential-storage` `MapStorage` fetch+store over
+the `screeny` partition through `embassy_embedded_hal::adapter::BlockingAsync`.
+
+Two API surprises: `sequential-storage 8.0.1` is **async-only**
+(`embedded-storage-async 0.4.1`), so the blocking `NorFlashRegion` needs an adapter; and
+its no-cache type is `cache::Cache::new_uncached()`, not `NoCache`.
+
+Both builds clean (`. ~/export-esp.sh && cargo build --release [--features spike-ota]`,
+~11-40 s each in this worktree).
+
+| section | baseline | +spike | delta |
+|---|---|---|---|
+| `.text` (flash) | 531205 | 571233 | **+40028** |
+| `.rodata` (flash) | 73064 | 76632 | +3568 |
+| `.rwtext` (IRAM) | 11812 | 15516 | **+3704** |
+| `.data` | 31492 | 32176 | +684 |
+| `.bss` | 127040 | 138080 | **+11040** |
+| `.stack` (core 0) | 37536 | 25808 | **-11728** |
+| app image (`espflash save-image`) | 743408 | 791392 | **+47984** |
+
+The `.bss` growth is **not** library static state. `xtensa-esp32-elf-nm` says
+`___embassy_main4POOL` goes from **96** to **11136** bytes: it is the spike's own buffers
+(two 0xC00 partition-table buffers plus a 4096-byte staging chunk) held across `await`
+points inside the `main` task's future. Core 0's stack shrinks by the same amount, which
+is the `.bss`/stack sharing the card warned about, demonstrated to the byte. The design
+rule that falls out: **the 3 KB partition-table buffer and the OTA staging buffer must
+not be live across an `await`** - put them in synchronous helpers or on the heap.
+
+`espflash save-image --partition-table <the proposed csv>` confirms espflash picks
+`ota_0` (2,097,152 bytes) when the table has no `factory`: the app is 35.4% of a slot
+today, 37.7% with the spike's extra 47 KB.
+
+The proposed CSV round-trips through `espflash partition-table --to-binary` (3072 bytes,
+MD5 entry included, which `esp-bootloader-esp-idf`'s default `validation` feature
+requires) and the `undefined` data subtype (0x06) is accepted by both esp-idf-part and
+`DataPartitionSubType` (`partitions.rs` line 565), so `partition_type()` will not panic
+on it.

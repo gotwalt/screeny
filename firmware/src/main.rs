@@ -43,6 +43,8 @@ mod panel_init;
 mod patterns;
 mod receiver;
 mod screens;
+#[cfg(feature = "spike-ota")]
+mod spike_ota;
 mod tidbyt;
 
 use core::sync::atomic::{AtomicBool, AtomicI8, AtomicU32, AtomicU8, Ordering};
@@ -619,6 +621,14 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host).unwrap());
     spawner.spawn(telemetry_task().unwrap());
+
+    // Card 200 spike: reachable from `main` so the linker keeps it and
+    // `xtensa-esp32-elf-size` measures something real. Off by default.
+    #[cfg(feature = "spike-ota")]
+    {
+        let r = spike_ota::spike_report(peripherals.FLASH).await;
+        info!("spike: {:?}", r);
+    }
 
     loop {
         Timer::after(Duration::from_secs(60)).await;
