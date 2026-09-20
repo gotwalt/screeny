@@ -240,6 +240,17 @@ serde-json-core = { version = "=0.6.0", default-features = false }
 # The request and reply shapes, shared with the simulator and the Studio.
 screeny-device-api = { path = "../crates/device-api" }
 
+# Card 240: what makes an ESP32 app image one this device will run - research
+# 006 section 5's checks as a scanner that is fed the upload and never holds
+# it. `no_std`, no alloc, host-tested against images built byte by byte and
+# then deliberately broken, and linked by `crates/sim` too, so an upload the
+# simulator refuses is one the device refuses. It brings `sha2` with it, at
+# exactly the version `esp-bootloader-esp-idf` already pulls in, so there is
+# one SHA-256 implementation in the binary.
+# `default-features = false` drops the image *builder*, which is the only part
+# of it that wants `alloc` and the only part a device has no use for.
+screeny-fwimage = { path = "../crates/fwimage", default-features = false }
+
 # --- the setup portal (card 223) ------------------------------------------
 # The soft-AP's DHCP server and DNS catch-all. Card 201 proved they link at
 # exactly these versions; card 223 ships them. edge-captive / edge-dhcp 0.8

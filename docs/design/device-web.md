@@ -103,7 +103,11 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   shows a static "updating" screen with dither off.
 - **Open risk, bench only**: core 0 has interrupts masked for the same ~50 ms per
   sector erase. Whether esp-radio's WiFi survives that during an upload is the first
-  thing to measure on hardware.
+  thing to measure on hardware. Card 240 builds the instrument - one log line
+  per upload with per-sector erase/write min/mean/max, the fraction of the
+  upload spent inside a ROM call, and the frames, stream losses and link-down
+  edges over the same window - and the orchestrator's bench run is what
+  answers it.
 - **Rollback**: espflash's bundled bootloader has `APP_ROLLBACK_ENABLE` off. App-side
   revert (mark the running slot `Invalid`, reboot) covers every image that boots but
   never becomes healthy. Only a rebuilt ESP-IDF v6.1 bootloader covers an image that
@@ -333,7 +337,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
 | 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
-| 240 | OTA staging over HTTP into the inactive slot, the five-check validator, per-sector timing (the esp-radio interrupt-window measurement) | yes |
+| 240 | **built, in review (fw 0.6.0)** - `POST /api/v1/firmware` streams an upload into the inactive slot a sector at a time, never buffering it; the checks are `crates/fwimage`, which the firmware, the simulator and the probe all link; an "updating" screen with dither off takes the panel for the duration; per-sector erase/write timing and what the radio did are one log line per upload. `otadata` is not touched. The bench run is the orchestrator's (the card's Log has the procedure) | yes |
 | 241 | OTA activate / confirm / revert state machine, the "updating" screen, the health criterion | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | **done, on the device (fw 0.5.2)** - a panic prints its backtrace, leaves a breadcrumb in RTC slow memory and resets (proved with the `panic-test` build: panic -> `SW_RESET` -> rejoined -> `GET /api/v1/panic` reports it); crash-loop guard (5 panics under 60 s -> CRASHED screen, halt); boot-path stack lever; `http-selftest` fits again; `stack_free` 12.4 KB after the HTTP suite | yes |

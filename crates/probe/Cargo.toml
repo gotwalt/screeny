@@ -26,6 +26,13 @@ screeny-proto = { path = "../proto" }
 # for exactly that reason. `serde` is here only for the `DeserializeOwned`
 # bound on `Res::parse`.
 screeny-device-api = { path = "../device-api", features = ["std"] }
+# Card 240. Two jobs: the rules build real ESP32 images - correct checksum,
+# correct appended hash, one thing wrong - so that "the device refused an
+# ESP32-C3 image" means the chip check fired and not that the bytes were
+# rubbish; and `screeny-probe fw-upload` scans an image locally before it
+# sends it, with the device's own validator, so a bad file is caught on the
+# bench Mac rather than after fifteen seconds of flash writes.
+screeny-fwimage = { path = "../fwimage" }
 serde = { version = "1", default-features = false }
 serde_json = "1"
 # So that ctrl-c during a conformance run still restores the device's

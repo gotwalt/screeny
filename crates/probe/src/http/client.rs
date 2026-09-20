@@ -173,6 +173,9 @@ impl Res {
 pub struct Client {
     addr: SocketAddr,
     host: String,
+    /// How long one read or write may block. [`IO_TIMEOUT`] unless
+    /// [`Client::with_timeout`] says otherwise.
+    io_timeout: Duration,
     /// How many connects this client has had **refused** (card 236).
     ///
     /// Shared between clones on purpose: the suite hands a clone to its restore
@@ -192,8 +195,22 @@ impl Client {
         Client {
             addr,
             host: host.into(),
+            io_timeout: IO_TIMEOUT,
             refusals: Arc::new(AtomicU32::new(0)),
         }
+    }
+
+    /// A client that waits longer for one read or write.
+    ///
+    /// For `fw-upload` and nothing else (card 240): [`IO_TIMEOUT`] is ten
+    /// seconds, which is right for every request this API has except the one
+    /// whose reply arrives only after the device has erased and written two
+    /// hundred flash sectors. The suite does not use this - a rule that needs
+    /// more than ten seconds for an answer has found something.
+    #[must_use]
+    pub fn with_timeout(mut self, io_timeout: Duration) -> Self {
+        self.io_timeout = io_timeout;
+        self
     }
 
     /// How many connects were refused, over every clone of this client.
@@ -278,6 +295,55 @@ impl Client {
         self.request("POST", path, Some("application/octet-stream"), body)
     }
 
+    /// `POST path` with an octet-stream body whose `Content-Length` says
+    /// `declared` and whose body is `body` - then a half-close.
+    ///
+    /// For the one question that cannot be asked honestly any other way (card
+    /// 240, rule 42): **does the server refuse an oversize upload on the
+    /// header alone, before it reads the body?** Sending a real 2 MiB body
+    /// would take half a minute and would not distinguish the two answers.
+    ///
+    /// The half-close is the other half of it. A server that refuses without
+    /// reading has to account for the rest of the body before it can send its
+    /// reply on the same connection; shutting down this end's write side lets
+    /// it see end-of-stream and answer at once, rather than waiting out its
+    /// read timeout. Everything after the shutdown is an ordinary read of the
+    /// response, which is still coming the other way.
+    ///
+    /// # Errors
+    /// Anything that stops a response coming back.
+    pub fn post_bytes_declaring(
+        &self,
+        path: &str,
+        declared: usize,
+        body: &[u8],
+    ) -> Result<Res, String> {
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\
+             Content-Type: application/octet-stream\r\nContent-Length: {declared}\r\n\r\n",
+            self.host
+        );
+        let mut wire = head.into_bytes();
+        wire.extend_from_slice(body);
+        let t0 = Instant::now();
+        let mut s = self.connect()?;
+        s.set_read_timeout(Some(self.io_timeout))
+            .and_then(|()| s.set_write_timeout(Some(self.io_timeout)))
+            .map_err(|e| format!("timeouts: {e}"))?;
+        s.write_all(&wire).map_err(|e| format!("write: {e}"))?;
+        s.flush().map_err(|e| format!("flush: {e}"))?;
+        // "There is no more body coming." The response is still on its way.
+        s.shutdown(std::net::Shutdown::Write)
+            .map_err(|e| format!("shutdown: {e}"))?;
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf)
+            .map_err(|e| format!("read: {e}"))
+            .or_else(|e| if buf.is_empty() { Err(e) } else { Ok(0) })?;
+        let mut res = parse(&buf)?;
+        res.elapsed = t0.elapsed();
+        Ok(res)
+    }
+
     /// One request, spelled out. Any method, including ones this API has no
     /// [`Method`](screeny_device_api::Method) for.
     ///
@@ -323,8 +389,8 @@ impl Client {
     fn exchange(&self, wire: &[u8]) -> Result<(Vec<u8>, Duration), String> {
         let t0 = Instant::now();
         let mut s = self.connect()?;
-        s.set_read_timeout(Some(IO_TIMEOUT))
-            .and_then(|()| s.set_write_timeout(Some(IO_TIMEOUT)))
+        s.set_read_timeout(Some(self.io_timeout))
+            .and_then(|()| s.set_write_timeout(Some(self.io_timeout)))
             .map_err(|e| format!("timeouts: {e}"))?;
         s.write_all(wire).map_err(|e| format!("write: {e}"))?;
         s.flush().map_err(|e| format!("flush: {e}"))?;
