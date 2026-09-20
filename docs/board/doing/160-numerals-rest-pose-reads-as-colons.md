@@ -133,3 +133,45 @@ Dropped, with the pictures in the note:
   break the straight line, but three small dim marks are still three small dim marks.
   Not recommended; kept as treatment 4 because it is worth one look on the panel.
 
+### What ships
+
+| `rest` | | |
+|---|---|---|
+| 0 | `as it was` | both hands at 7:30, full ink. Only for comparison. |
+| 1 | `quiet` | the same pose at a fifth of the ink. The faithful one. |
+| **2** | **`hatched, quiet`** | **the default**: hour 7:30, minute 1:30 (one diagonal corner to corner, the dial reading about 1:37), a fifth of the ink. |
+| 3 | `hatched, faint` | the same at a tenth of the ink and 10% short, if 2 is still too present on the panel. |
+| 4 | `zigzag, quiet` | 7:30 mirrored on odd rows, a fifth of the ink. Not recommended. |
+
+Nothing in the dances or the servo model changed. `pose()` is the only place the digits
+formation is built and `Formation::Digits` reads it, so a new rest angle is inherited by
+every dance and by `Ambient::step_holding` without touching either. `clocks-dials` passes
+an empty slice for the new `draw::Dials` field and is byte-for-byte the same picture.
+
+### Evidence
+
+- `cargo test --release -p screeny-art`: 45 lib tests + 3 wire tests green, including
+  `an_indexed_piece_arrives_pixel_exact` for `clocks-numerals`. Six new tests:
+  the format (four digits, leading zeros, no separator, read back out of the pose in
+  every treatment and in 12-hour), resting dials drawing under half a digit dial's light
+  at all seven awkward times, the palette staying 31 colours in every treatment at three
+  points of the fade, the fade being monotonic and only after landing, every treatment
+  still dancing and landing exactly within the motor's limits, and a rest pose varying by
+  row at most, never by column. `dance.rs` and `ambient.rs` tests now go through the
+  shipped treatment.
+- Root `cargo test --release --no-fail-fast`: green, no failures.
+- Motion, 32 s against `screeny-sim --headless` on 127.0.0.1 (ephemeral-free fixed local
+  ports, `--exit-after 40`, both bounded, nothing left behind): 1920 offered, 960 sent,
+  **960 exact, 0 fallback, 0 dropped**, 348-814 B a frame. Three dances and the ambient
+  drift; the fade never made a frame lossy.
+- No hardware, no LAN, no camera: everything here is `snapshot`, tests and loopback.
+
+### For the owner, on the panel
+
+In the Studio, play **Clocks: numerals** and drag **Resting dials**. `0` is exactly what
+was on the panel when you found this, `2` is what I recommend, and "Now playing" names
+the treatment in force under the dance's name. To sit on an awkward time while you
+compare, set **Seconds the time is held** to 60 and **Time offset (minutes)** to walk the
+clock to 21:12 or 11:11 (it is minutes from now: 21:12 tomorrow morning is as good as
+tonight). **Seconds per minute** at about 20 will show you a dance every few seconds.
+
