@@ -244,3 +244,5 @@ Noted rather than touched, because the card is about one test and a small diff:
   of *received* frames and so exact on loopback as long as the settle holds.
 
 The tail-frame idea used here transplants to all four.
+
+**Orchestrator, after the merge (2026-09-20):** merged to `main`; `cargo test -p screeny-sim` green on `main`. Cause accepted: the *lossy* run asserted `frames_dropped_superseded == 0`, which is true only while the host schedules the frame thread within 4 ms. The four other fixed-settle tests in `tests/faults.rs` the worker names are **noted and left** (decision 10): they have not been seen to fail; if one does, the tail-frame pattern from this card is the fix.
