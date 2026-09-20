@@ -1,5 +1,5 @@
 //! Global safety stage at the end of the pipeline (brief sections 4 and 7), so
-//! pieces do not each have to remember the rules.
+//! patches do not each have to remember the rules.
 //!
 //! Two limits, both applied as a single gain on the whole frame. A gain keeps
 //! indexed frames exact, because only the palette changes.
@@ -8,7 +8,7 @@
 //!   is harsh and is where power limiting would bite.
 //! - **Rise limiter.** Mean luminance (and, separately, mean red) may only rise
 //!   so fast. A flash is a rise and a fall; if rises are slow, a fast flash
-//!   cannot reach a large amplitude, whatever the piece does. Falls are left
+//!   cannot reach a large amplitude, whatever the patch does. Falls are left
 //!   alone, so cutting to black is always instant.
 
 use crate::frame::{Frame, N};
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct LimiterSettings {
+pub struct LimiterConfig {
     pub enabled: bool,
     /// Cap on mean channel duty, 0..1.
     pub apl_cap: f32,
@@ -26,9 +26,9 @@ pub struct LimiterSettings {
     pub max_rise_per_s: f32,
 }
 
-impl Default for LimiterSettings {
+impl Default for LimiterConfig {
     fn default() -> Self {
-        LimiterSettings { enabled: true, apl_cap: 0.40, max_rise_per_s: 2.0 }
+        LimiterConfig { enabled: true, apl_cap: 0.40, max_rise_per_s: 2.0 }
     }
 }
 
@@ -71,7 +71,7 @@ impl Default for Limiter {
 }
 
 pub struct Limited {
-    /// Means of the frame as the piece made it.
+    /// Means of the frame as the patch made it.
     pub input: Means,
     /// Means of the frame after limiting.
     pub output: Means,
@@ -79,7 +79,7 @@ pub struct Limited {
 }
 
 impl Limiter {
-    pub fn apply(&mut self, s: &LimiterSettings, frame: &mut Frame, dt: f32) -> Limited {
+    pub fn apply(&mut self, s: &LimiterConfig, frame: &mut Frame, dt: f32) -> Limited {
         let input = Means::of(frame);
         if !s.enabled {
             self.apl_gain = 1.0;
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn strobe_is_held_down() {
-        let s = LimiterSettings::default();
+        let s = LimiterConfig::default();
         let mut lim = Limiter::default();
         let mut peak = 0.0_f32;
         // 7.5 Hz full-field strobe: two frames white, two black.
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn steady_white_settles_at_the_cap() {
-        let s = LimiterSettings::default();
+        let s = LimiterConfig::default();
         let mut lim = Limiter::default();
         let mut out = 0.0;
         for _ in 0..60 {
@@ -155,7 +155,7 @@ mod tests {
         let mut f = flat(0.05);
         for _ in 0..10 {
             f = flat(0.05);
-            lim.apply(&LimiterSettings::default(), &mut f, 1.0 / 30.0);
+            lim.apply(&LimiterConfig::default(), &mut f, 1.0 / 30.0);
         }
         assert_eq!(f.pixel(0), Rgb::splat(0.05));
     }

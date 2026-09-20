@@ -95,7 +95,7 @@ fn sky(rd: vec3<f32>, sun: vec3<f32>) -> vec3<f32> {
   return ramp(SKY, 4u, f, 0.3);
 }
 
-fn piece(uv: vec2<f32>) -> vec3<f32> {
+fn shade(uv: vec2<f32>) -> vec3<f32> {
   let sun = normalize(vec3<f32>(X(0), X(1), X(2)));
   let sea = P(3) * P(1);
 

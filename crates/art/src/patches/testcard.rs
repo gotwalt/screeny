@@ -4,9 +4,9 @@
 use crate::color::{oklch, srgb_to_linear, Rgb};
 use crate::frame::{Frame, W};
 use crate::pipeline::linear_frame;
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "testcard",
     name: "Test card",
     blurb: "Ramps, hue sweeps and a slow-moving line, for judging banding, brightness by hue and sub-pixel motion.",
@@ -16,13 +16,13 @@ pub const DEF: PieceDef = PieceDef {
 
 const PARAMS: &[ParamSpec] = &[param("speed", "Line speed (px/s)", 0.0, 30.0, 0.1, 3.0)];
 
-fn make(_seed: u64) -> Box<dyn Piece> {
+fn make(_seed: u64) -> Box<dyn Patch> {
     Box::new(TestCard)
 }
 
 struct TestCard;
 
-impl Piece for TestCard {
+impl Patch for TestCard {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let line_x = (ctx.t as f32 * ctx.get("speed")).rem_euclid(W as f32);
         let line = Rgb::new(1.0, 0.75, 0.3);
@@ -76,8 +76,8 @@ mod tests {
     use super::*;
     use crate::dither::Dither;
     use crate::panel::Panel;
-    use crate::piece::Params;
-    use crate::pipeline::{Pipeline, Settings};
+    use crate::patch::Params;
+    use crate::pipeline::{Pipeline, Output};
     use std::collections::BTreeSet;
 
     /// Row 4 of the test card is the darkest quarter of sRGB stretched across
@@ -95,16 +95,16 @@ mod tests {
         // The limiter and the codec preview are off: this row is about the
         // panel model, and a test card is deliberately the worst case for the
         // encoder (four ramps and two hue sweeps, so it goes lossy).
-        let settings = Settings {
+        let output = Output {
             panel,
             dither,
             codec_preview: false,
-            limiter: crate::limiter::LimiterSettings { enabled: false, ..Default::default() },
-            ..Settings::default()
+            limiter: crate::limiter::LimiterConfig { enabled: false, ..Default::default() },
+            ..Output::default()
         };
         let params = Params::defaults(PARAMS);
         let frame = TestCard.render(&Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &params });
-        let out = Pipeline::new(settings).process(frame, 1.0 / 30.0);
+        let out = Pipeline::new(output).process(frame, 1.0 / 30.0);
         // Row 17: the middle of strip 4 (rows 16..19), green channel of each
         // column. The strip is neutral grey, so one channel is the ramp.
         (0..W).map(|x| out.preview[(17 * W + x) * 3 + 1]).collect()
@@ -142,15 +142,15 @@ mod tests {
         assert!(dark_swing >= 3, "the dark end is where dither earns its keep: {dark_swing}");
 
         let bright = |dither| {
-            let settings = Settings {
+            let output = Output {
                 dither,
                 codec_preview: false,
-                limiter: crate::limiter::LimiterSettings { enabled: false, ..Default::default() },
-                ..Settings::default()
+                limiter: crate::limiter::LimiterConfig { enabled: false, ..Default::default() },
+                ..Output::default()
             };
             let params = Params::defaults(PARAMS);
             let frame = TestCard.render(&Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &params });
-            let out = Pipeline::new(settings).process(frame, 1.0 / 30.0);
+            let out = Pipeline::new(output).process(frame, 1.0 / 30.0);
             // Row 1: the grey ramp, right half, which is all above sRGB 128.
             (32..W).map(|x| out.preview[(W + x) * 3 + 1]).collect::<Vec<u8>>()
         };

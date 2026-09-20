@@ -1,4 +1,4 @@
-//! Clocks: dials. The same instrument as the numerals piece (`super`), with
+//! Clocks: dials. The same instrument as the numerals patch (`super`), with
 //! the other face: larger dials in continuous motion, which tell the time as
 //! analog clocks rather than by drawing digits.
 //!
@@ -26,14 +26,14 @@
 //! servo under one motor's speed and acceleration.
 
 use crate::frame::{Frame, W};
-use crate::piece::{choice, param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
+use crate::patch::{choice, param, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use super::ambient::{Ambient, Mood, MOODS};
 use super::dance::Motor;
 use super::draw::{Dials, Tint};
 use super::Hands as Pair;
 use crate::rng::Rng;
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "clocks-dials",
     name: "Clocks: dials",
     blurb: "Larger dials in continuous, flowing motion; each minute they gather to read the time as analog clocks, then let go. For a moving field that knows the time.",
@@ -70,7 +70,7 @@ const GRIDS: [(usize, usize); 3] = [(4, 2), (6, 3), (8, 4)];
 /// Card 163: `grid` and `mood` are lists of named things, so they say so.
 /// `GRID_CHOICES` is `GRIDS` written out, small and checked; `MOOD_CHOICES` is
 /// "wander" and then `ambient::MOOD_NAMES` itself (card 182), so a new mood is
-/// one name in one place. `piece::tests::the_named_stops_are_the_pieces_own_names`
+/// one name in one place. `patch::tests::the_named_stops_are_the_patches_own_names`
 /// checks the grids against `GRIDS` and guards the moods' offset.
 pub(crate) const GRID_CHOICES: &[&str] = &["4 x 2", "6 x 3", "8 x 4"];
 pub(crate) const MOOD_CHOICES: &[&str] = &mood_choices();
@@ -118,7 +118,7 @@ struct Flow {
     move_on: bool,
 }
 
-fn make(seed: u64) -> Box<dyn Piece> {
+fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = Rng::new(seed);
     let mood = REPERTOIRE[(rng.u64() % REPERTOIRE.len() as u64) as usize];
     let grid = 1;
@@ -217,7 +217,7 @@ impl Flow {
     }
 }
 
-impl Piece for Flow {
+impl Patch for Flow {
     fn playing(&self) -> Option<Playing> {
         let title = match self.tinge {
             Some(other) => format!("{}, tinged with {other}", self.field.name()),

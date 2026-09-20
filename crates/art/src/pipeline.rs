@@ -1,7 +1,7 @@
-//! Piece frame in, hand-over frame + faithful preview + statistics out.
+//! Patch frame in, hand-over frame + faithful preview + statistics out.
 //!
 //! ```text
-//! piece -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
+//! patch -> limiter -> quantise to the panel's duty steps (ordered dither) -> WireFrame -> outputs
 //!                                                              \-> meter -> encode
 //!                                                                        -> decode -> preview
 //! ```
@@ -13,7 +13,7 @@
 use crate::color::Rgb;
 use crate::dither::Dither;
 use crate::frame::{Frame, WireFrame, MAX_PALETTE, N, W};
-use crate::limiter::{Limiter, LimiterSettings};
+use crate::limiter::{Limiter, LimiterConfig};
 use crate::meter::{Measured, Meter};
 use crate::panel::Panel;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Settings {
+pub struct Output {
     /// Which panel a frame is quantised to and previewed through: the device,
     /// or the same panel without its temporal dither (card 102).
     ///
@@ -35,7 +35,7 @@ pub struct Settings {
     /// The bias is one duty step, so this only bites in the dark end, where
     /// the panel is coarser than the 8-bit hand-over. See [`Panel::quantise`].
     pub dither: Dither,
-    pub limiter: LimiterSettings,
+    pub limiter: LimiterConfig,
     /// Preview only: show the frame as the panel would - quantised to its duty
     /// steps, and with the dark end collapsed onto the levels it really has.
     /// Off shows the unquantised framebuffer, for comparison.
@@ -48,12 +48,12 @@ pub struct Settings {
     pub codec_preview: bool,
 }
 
-impl Default for Settings {
+impl Default for Output {
     fn default() -> Self {
-        Settings {
+        Output {
             panel: Panel::DEVICE,
             dither: Dither::default(),
-            limiter: LimiterSettings::default(),
+            limiter: LimiterConfig::default(),
             panel_model: true,
             codec_preview: true,
         }
@@ -72,7 +72,7 @@ pub struct Stats {
     pub exact: bool,
     /// Average picture level (mean channel duty) after limiting, 0..1.
     pub apl: f32,
-    /// The same, as the piece made it.
+    /// The same, as the patch made it.
     pub apl_in: f32,
     /// Mean luminance after limiting.
     pub luma: f32,
@@ -84,7 +84,10 @@ pub struct Stats {
     pub limiter_gain: f32,
 }
 
-pub struct Output {
+/// What one frame came out of the pipeline as.
+///
+/// It was called `Output` until card 150 gave that name to the block above.
+pub struct Processed {
     pub wire: WireFrame,
     /// `N * 3` sRGB bytes: what the panel is expected to show.
     pub preview: Vec<u8>,
@@ -95,7 +98,7 @@ pub struct Output {
 
 #[derive(Default)]
 pub struct Pipeline {
-    pub settings: Settings,
+    pub output: Output,
     limiter: Limiter,
     meter: Meter,
     prev_luma: Option<f32>,
@@ -104,13 +107,13 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(settings: Settings) -> Self {
-        Pipeline { settings, ..Default::default() }
+    pub fn new(output: Output) -> Self {
+        Pipeline { output, ..Default::default() }
     }
 
-    /// Forget limiter and statistics history, e.g. when the piece changes.
+    /// Forget limiter and statistics history, e.g. when the patch changes.
     pub fn reset(&mut self) {
-        *self = Pipeline::new(self.settings);
+        *self = Pipeline::new(self.output);
     }
 
     /// The meter, for pointing at a connected device's real budget and codec
@@ -120,8 +123,8 @@ impl Pipeline {
     }
 
     /// `dt` is wall-clock seconds since the previous frame.
-    pub fn process(&mut self, mut frame: Frame, dt: f64) -> Output {
-        let s = self.settings;
+    pub fn process(&mut self, mut frame: Frame, dt: f64) -> Processed {
+        let s = self.output;
         let panel = s.panel;
         if let Frame::Indexed { palette, .. } = &mut frame {
             palette.truncate(MAX_PALETTE);
@@ -175,7 +178,7 @@ impl Pipeline {
         }
         let dluma_peak = self.dluma_window.iter().fold(0.0_f32, |m, (_, d)| m.max(*d));
 
-        Output {
+        Processed {
             wire,
             preview,
             measured,
@@ -204,16 +207,16 @@ pub fn linear_frame(mut f: impl FnMut(usize, usize) -> Rgb) -> Frame {
 mod tests {
     use super::*;
 
-    /// An indexed frame reaches the panel as the piece drew it, and the
+    /// An indexed frame reaches the panel as the patch drew it, and the
     /// preview - which is now the decoded datagram, not a copy of the
     /// framebuffer - says so.
     #[test]
     fn indexed_frames_survive_exactly() {
         let palette: Vec<Rgb> = (0..8).map(|k| Rgb::splat(k as f32 / 63.0 * 4.0)).collect();
         let indices: Vec<u8> = (0..N).map(|i| (i % 8) as u8).collect();
-        let mut settings = Settings::default();
-        settings.limiter.enabled = false;
-        let out = Pipeline::new(settings).process(Frame::Indexed { palette, indices }, 1.0 / 30.0);
+        let mut output = Output::default();
+        output.limiter.enabled = false;
+        let out = Pipeline::new(output).process(Frame::Indexed { palette, indices }, 1.0 / 30.0);
         assert_eq!(out.stats.distinct_colours, 8);
         assert!(out.stats.exact);
         assert_eq!(out.stats.codec, screeny_proto::dec::codec::PAL4_LZ);
@@ -237,8 +240,8 @@ mod tests {
     #[test]
     fn the_codec_preview_can_be_turned_off() {
         let f = linear_frame(|x, y| Rgb::new(x as f32 / 63.0, y as f32 / 31.0, 0.5));
-        let settings = Settings { codec_preview: false, ..Settings::default() };
-        let out = Pipeline::new(settings).process(f, 1.0 / 30.0);
+        let output = Output { codec_preview: false, ..Output::default() };
+        let out = Pipeline::new(output).process(f, 1.0 / 30.0);
         assert_eq!(out.preview, out.wire.rgb);
         assert!(!out.stats.exact, "the statistics are still the real ones");
     }

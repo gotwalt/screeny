@@ -2,7 +2,7 @@
 name = "screeny-art"
 version = "0.1.0"
 edition = "2021"
-description = "Generative art pieces and the output pipeline for the screeny 64x32 LED panel"
+description = "Generative art patches and the output pipeline for the screeny 64x32 LED panel"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -35,7 +35,7 @@ screeny-sim = { path = "../sim", default-features = false }
 
 [features]
 default = ["gpu", "sender"]
-# GPU pieces, through wgpu. Build with --no-default-features for a CPU-only runner.
+# GPU patches, through wgpu. Build with --no-default-features for a CPU-only runner.
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 # `output::SenderOutput` and `screeny-art play`: frames to a real panel over
 # UDP, through `screeny`'s `Link`.

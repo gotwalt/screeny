@@ -10,12 +10,12 @@
 //! and hues are chosen in OKLCH so brightness holds across them.
 
 use crate::color::{oklch, Rgb};
-use crate::gpu::{Scene, ShaderPiece, MAX_EXTRA};
+use crate::gpu::{Scene, ShaderPatch, MAX_EXTRA};
 use crate::palette::Palette;
-use crate::piece::{param, Ctx, ParamSpec, Piece, PieceDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use std::f32::consts::TAU;
 
-pub const DEF: PieceDef = PieceDef {
+pub const DEF: PatchDef = PatchDef {
     id: "overland",
     name: "Overland",
     blurb: "GPU. A procedural world painted by palette index: 32 colours, exact on the wire, and the day cycle is palette animation.",
@@ -38,8 +38,8 @@ const PARAMS: &[ParamSpec] = &[
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
 ];
 
-fn make(seed: u64) -> Box<dyn Piece> {
-    ShaderPiece::with_scene("overland", include_str!("overland.wgsl"), PARAMS, seed, scene)
+fn make(seed: u64) -> Box<dyn Patch> {
+    ShaderPatch::with_scene("overland", include_str!("overland.wgsl"), PARAMS, seed, scene)
 }
 
 /// Land hues a seed can land on: green, savanna, red rock, alien, ice.
@@ -154,7 +154,7 @@ fn scene(ctx: &Ctx, seed: f32) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::piece::Params;
+    use crate::patch::Params;
 
     /// At every hour the palette is either true black or comfortably inside the
     /// range the panel can show: nothing lives in the crushed darks.

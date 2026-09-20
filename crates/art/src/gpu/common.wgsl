@@ -1,4 +1,4 @@
-// Shared by every GPU piece. All colour here is LINEAR light; never gamma-encode
+// Shared by every GPU patch. All colour here is LINEAR light; never gamma-encode
 // in a shader, the pipeline does that once at the end.
 
 const PI: f32 = 3.14159265;

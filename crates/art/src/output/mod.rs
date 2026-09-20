@@ -1,7 +1,7 @@
 //! Where finished frames go.
 //!
 //! Every `WireFrame` carries raw RGB, and the palette + indices too when the
-//! piece rendered indexed, so an output can take whichever it can use.
+//! patch rendered indexed, so an output can take whichever it can use.
 //!
 //! * [`PipeOutput`] writes the RGB: 6144 bytes a frame on a pipe, for anything
 //!   that is not this process.

@@ -1,4 +1,4 @@
-//! Just enough 4x4 matrix maths for mesh pieces. Column-major, right-handed,
+//! Just enough 4x4 matrix maths for mesh patches. Column-major, right-handed,
 //! clip-space depth 0..1 (wgpu's convention, not OpenGL's -1..1).
 
 pub type Mat4 = [[f32; 4]; 4];

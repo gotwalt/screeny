@@ -1,4 +1,4 @@
-//! What a piece produces, and what gets handed to an output.
+//! What a patch produces, and what gets handed to an output.
 
 use crate::color::Rgb;
 
@@ -23,7 +23,7 @@ pub const MAX_PALETTE: usize = 256;
 /// gradient fits where a 40-colour field of confetti does not.
 pub const GUARANTEED_PALETTE: usize = 32;
 
-/// A frame as a piece makes it: linear light, not yet quantised.
+/// A frame as a patch makes it: linear light, not yet quantised.
 ///
 /// Prefer `Indexed` for work you control. It goes to the panel exactly as made,
 /// and animating the palette costs almost nothing.
@@ -97,6 +97,6 @@ impl Frame {
 pub struct WireFrame {
     /// `N * 3` bytes, row-major R,G,B. Always present.
     pub rgb: Vec<u8>,
-    /// Present when the piece rendered indexed: sRGB palette and `N` indices.
+    /// Present when the patch rendered indexed: sRGB palette and `N` indices.
     pub indexed: Option<(Vec<[u8; 3]>, Vec<u8>)>,
 }

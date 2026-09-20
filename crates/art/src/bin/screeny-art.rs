@@ -1,17 +1,19 @@
-//! Headless runner. Renders a piece through the full pipeline and either
+//! Headless runner. Renders a patch through the full pipeline and either
 //! streams it to a panel, writes raw RGB frames to stdout, or writes a PNG of
 //! what the panel should look like.
 
 use screeny_art::output::{Output, PipeOutput};
-use screeny_art::piece::{self, Clock, Ctx, Params};
 use screeny_art::panel::Panel;
+use screeny_art::patch::{self, Clock, Ctx, Params};
 use screeny_art::snapshot::{self, Shot};
-use screeny_art::{pieces, preview, Pipeline, Settings};
+// `pipeline::Output` (how a frame is finished for the panel, card 150) is
+// spelled out: the sink trait imported above is also called `Output`.
+use screeny_art::{patches, pipeline, preview, Pipeline};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "sender")]
 const PLAY_USAGE: &str = "\
-  screeny-art play <piece> --to NAME|ADDR [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--wait] [--set id=value]...
+  screeny-art play <patch> --to NAME|ADDR [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--wait] [--set id=value]...
 ";
 #[cfg(not(feature = "sender"))]
 const PLAY_USAGE: &str = "\
@@ -24,8 +26,8 @@ usage:
   screeny-art list
 ";
 const USAGE_TAIL: &str = "\
-  screeny-art pipe <piece> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
-  screeny-art snapshot <piece> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+  screeny-art pipe <patch> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+  screeny-art snapshot <patch> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
 
 `play` streams to a panel: `--to` takes an mDNS instance name (preferred - the
 link re-resolves it, so it follows the device across a DHCP lease) or an
@@ -36,13 +38,13 @@ it appears instead of failing.
 `pipe` writes 6144-byte sRGB frames (64x32, row-major R,G,B) to stdout, paced by
 the wall clock. The seed is logged to stderr so a good run can be reproduced.
 
-`--time` tells the pieces that tell the time what time it is when the run
+`--time` tells the patches that tell the time what time it is when the run
 starts, instead of the machine's clock, so the same command draws the same
 picture today and tomorrow. It is a time of day on a fixed day, and the run
 goes forward from it: `snapshot --time 21:11:58 --at 4` renders the four
 seconds into 21:12:02. With `--time`, `--at` defaults to 20 s and `--warmup`
 to the whole run, because a clock has to be watched from its first frame and
-the numerals piece needs about 16 s to dance onto the time it was born on;
+the numerals patch needs about 16 s to dance onto the time it was born on;
 give either yourself to change it.
 
   numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --out x.png
@@ -61,7 +63,7 @@ fn main() {
 }
 
 struct Args {
-    piece: &'static piece::PieceDef,
+    patch: &'static patch::PatchDef,
     params: Params,
     seed: u64,
     fps: f64,
@@ -77,14 +79,14 @@ struct Args {
     out: Option<String>,
     to: Option<String>,
     wait: bool,
-    settings: Settings,
+    output: pipeline::Output,
 }
 
 fn run(argv: Vec<String>) -> Result<(), String> {
     let mut it = argv.into_iter();
     match it.next().as_deref() {
         Some("list") => {
-            for d in pieces::ALL {
+            for d in patches::ALL {
                 println!("{:<16} {}", d.id, d.blurb);
                 for p in d.params {
                     println!("    {:<10} {:>7} .. {:<7} default {:<7} {}", p.id, p.min, p.max, p.default, p.label);
@@ -112,11 +114,11 @@ fn run(argv: Vec<String>) -> Result<(), String> {
 }
 
 fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
-    let id = it.next().ok_or("which piece? try `screeny-art list`")?;
-    let piece = piece::find(&id).ok_or(format!("no piece called `{id}`; try `screeny-art list`"))?;
+    let id = it.next().ok_or("which patch? try `screeny-art list`")?;
+    let patch = patch::find(&id).ok_or(format!("no patch called `{id}`; try `screeny-art list`"))?;
     let mut a = Args {
-        piece,
-        params: Params::defaults(piece.params),
+        patch,
+        params: Params::defaults(patch.params),
         seed: SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() as u64),
         fps: 60.0,
         seconds: None,
@@ -129,7 +131,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         out: None,
         to: None,
         wait: false,
-        settings: Settings::default(),
+        output: pipeline::Output::default(),
     };
     while let Some(flag) = it.next() {
         // The one flag that stands alone.
@@ -151,7 +153,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
                 a.warmup = num()?.max(0.0);
                 a.warmup_given = true;
             }
-            // Card 162: what time it is, for the pieces that tell the time.
+            // Card 162: what time it is, for the patches that tell the time.
             "--time" => a.clock = Clock::parse(&value).map_err(|e| format!("--time: {e}"))?,
             "--scale" => a.scale = (num()? as usize).clamp(1, 64),
             // Card 102: the old `--levels 64|32|16` is gone. 32 and 16 were
@@ -159,7 +161,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             // has never been; 64 is the panel without its temporal dither,
             // and that is what `--panel bit-planes` is for.
             "--panel" => {
-                a.settings.panel = match value.as_str() {
+                a.output.panel = match value.as_str() {
                     "dithered" | "device" => Panel::Dithered,
                     "bit-planes" | "bitplanes" => Panel::BitPlanes,
                     _ => return Err(format!("--panel: `{value}` is not `dithered` or `bit-planes`")),
@@ -170,8 +172,8 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--set" => {
                 let (k, v) = value.split_once('=').ok_or("--set wants id=value")?;
                 let v: f32 = v.parse().map_err(|_| format!("--set {k}: `{v}` is not a number"))?;
-                if !a.params.set(piece.params, k, v) {
-                    return Err(format!("{} has no parameter `{k}`", piece.id));
+                if !a.params.set(patch.params, k, v) {
+                    return Err(format!("{} has no parameter `{k}`", patch.id));
                 }
             }
             _ => return Err(format!("unknown flag `{flag}`")),
@@ -180,7 +182,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     // Asking for a time of day is asking for a clock that has arrived at it,
     // so `--time` moves two defaults; either given explicitly still wins.
     //
-    // `--at 20`, because the numerals piece dances onto the minute it is born
+    // `--at 20`, because the numerals patch dances onto the minute it is born
     // on and that takes up to about 16 s (measured over 60 seeds and all 13
     // choreographies: longest 15.4 s). At 20 s every one of them has landed
     // and settled, and none has set off for the next minute, so
@@ -188,7 +190,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
     // whatever the seed.
     //
     // The whole run as `--warmup`, because a clock has to be watched from its
-    // first frame: two seconds of it would only show the piece being born.
+    // first frame: two seconds of it would only show the patch being born.
     if matches!(a.clock, Clock::Pinned(_)) {
         if !a.at_given {
             a.at = 20.0;
@@ -201,9 +203,9 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
 }
 
 fn pipe(a: Args) -> Result<(), String> {
-    eprintln!("screeny-art: piece={} seed={}", a.piece.id, a.seed);
-    let mut piece = (a.piece.make)(a.seed);
-    let mut pipeline = Pipeline::new(a.settings);
+    eprintln!("screeny-art: patch={} seed={}", a.patch.id, a.seed);
+    let mut patch = (a.patch.make)(a.seed);
+    let mut pipeline = Pipeline::new(a.output);
     let mut out = PipeOutput(std::io::stdout().lock());
     let period = Duration::from_secs_f64(1.0 / a.fps);
     let start = Instant::now();
@@ -215,7 +217,7 @@ fn pipe(a: Args) -> Result<(), String> {
         if a.seconds.is_some_and(|s| t >= s) {
             return Ok(());
         }
-        let frame = piece.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
+        let frame = patch.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
         let result = pipeline.process(frame, t - last_t);
         last_t = t;
         match out.send(&result.wire) {
@@ -233,7 +235,7 @@ fn pipe(a: Args) -> Result<(), String> {
     }
 }
 
-/// Stream a piece to a panel.
+/// Stream a patch to a panel.
 ///
 /// The loop is `pipe`'s, unchanged: render at `--fps` off the wall clock and
 /// hand every frame over. The link owns the cadence and folds away the frames
@@ -253,7 +255,7 @@ fn play(a: Args) -> Result<(), String> {
     } else {
         SenderOutput::open(target).map_err(|e| format!("connecting to {to}: {e}"))?
     };
-    eprintln!("screeny-art: piece={} seed={} -> {}", a.piece.id, a.seed, out.status().target);
+    eprintln!("screeny-art: patch={} seed={} -> {}", a.patch.id, a.seed, out.status().target);
 
     // `Drop` sends FINAL, but a signal skips destructors and the panel would
     // then hold the last frame until its stream timeout. Catch it and fall out
@@ -262,8 +264,8 @@ fn play(a: Args) -> Result<(), String> {
     let flag = stop.clone();
     let _ = ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed));
 
-    let mut piece = (a.piece.make)(a.seed);
-    let mut pipeline = Pipeline::new(a.settings);
+    let mut patch = (a.patch.make)(a.seed);
+    let mut pipeline = Pipeline::new(a.output);
     let period = Duration::from_secs_f64(1.0 / a.fps);
     let start = Instant::now();
     let mut next = start;
@@ -288,7 +290,7 @@ fn play(a: Args) -> Result<(), String> {
             }
         }
 
-        let frame = piece.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
+        let frame = patch.render(&Ctx { t, dt: t - last_t, now: a.clock.now(t), params: &a.params });
         let result = pipeline.process(frame, t - last_t);
         last_t = t;
         out.send(&result.wire).map_err(|e| format!("sending frame: {e}"))?;
@@ -346,8 +348,8 @@ fn snapshot(a: Args) -> Result<(), String> {
     // The run itself is `snapshot::take`, which is what the tests render
     // through too, so a pinned picture is checked by the same code the command
     // runs (card 162).
-    let shot = Shot { seed: a.seed, at: a.at, warmup: a.warmup, clock: a.clock, settings: a.settings };
-    let result = snapshot::take(a.piece, &a.params, &shot);
+    let shot = Shot { seed: a.seed, at: a.at, warmup: a.warmup, clock: a.clock, output: a.output };
+    let result = snapshot::take(a.patch, &a.params, &shot);
     let (w, h, rgba) = preview::render_dots(&result.preview, a.scale);
 
     let file = std::fs::File::create(&path).map_err(|e| format!("{path}: {e}"))?;
@@ -374,8 +376,8 @@ fn snapshot(a: Args) -> Result<(), String> {
         );
     }
     eprintln!(
-        "screeny-art: piece={} seed={} t={:.2}  colours={} bytes={}/{} ({}, {})  apl={:.0}% (piece {:.0}%)  limiter x{:.2}",
-        a.piece.id,
+        "screeny-art: patch={} seed={} t={:.2}  colours={} bytes={}/{} ({}, {})  apl={:.0}% (patch {:.0}%)  limiter x{:.2}",
+        a.patch.id,
         a.seed,
         a.at,
         s.distinct_colours,

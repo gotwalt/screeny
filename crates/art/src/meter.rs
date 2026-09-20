@@ -99,7 +99,7 @@ impl Meter {
         self.budget
     }
 
-    /// Forget the previous frame's codec, e.g. when the piece changes.
+    /// Forget the previous frame's codec, e.g. when the patch changes.
     pub fn reset(&mut self) {
         self.enc.reset();
         self.last = Measured::default();

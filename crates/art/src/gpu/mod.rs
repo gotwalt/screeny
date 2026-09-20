@@ -1,20 +1,20 @@
-//! GPU rendering for pieces, through wgpu.
+//! GPU rendering for patches, through wgpu.
 //!
 //! wgpu needs no window and no event loop, so this works the same on the engine
 //! thread of the studio (Metal on a Mac) and headless on a Linux box (Vulkan, or
 //! OpenGL ES over EGL where that is all the GPU offers; force one with
 //! `WGPU_BACKEND=gl` or `=vulkan`).
 //!
-//! A GPU piece is an ordinary [`Piece`](crate::Piece). It draws into an
+//! A GPU patch is an ordinary [`Patch`](crate::Patch). It draws into an
 //! [`Offscreen`] target several times the panel's resolution, in linear light,
 //! and `Offscreen::finish` reads that back and box-filters it down to a 64x32
 //! [`Frame`]. Everything after that (limiter, dither, panel model) is shared
-//! with CPU pieces.
+//! with CPU patches.
 
 mod fragment;
 pub mod mat;
 
-pub use fragment::{Scene, SceneFn, ShaderPiece, MAX_EXTRA};
+pub use fragment::{Scene, SceneFn, ShaderPatch, MAX_EXTRA};
 
 use crate::color::Rgb;
 use crate::frame::{Frame, H, N, W};
@@ -24,8 +24,8 @@ use std::sync::OnceLock;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// WGSL shared by every GPU piece: OKLCH, so shaders pick colours the same way
-/// CPU pieces do, plus the usual small helpers. Shaders output linear light.
+/// WGSL shared by every GPU patch: OKLCH, so shaders pick colours the same way
+/// CPU patches do, plus the usual small helpers. Shaders output linear light.
 pub const COMMON_WGSL: &str = include_str!("common.wgsl");
 
 pub struct Gpu {
@@ -39,7 +39,7 @@ pub struct Gpu {
 
 impl Gpu {
     /// The process-wide device, created on first use. The error is kept, so a
-    /// machine without a usable GPU reports it once and pieces fall back to black.
+    /// machine without a usable GPU reports it once and patches fall back to black.
     pub fn shared() -> Result<&'static Gpu, &'static str> {
         Self::once().as_ref().map_err(|e| e.as_str())
     }
@@ -69,12 +69,12 @@ impl Gpu {
 /// Whether this process has a graphics adapter, decided once (card 145).
 ///
 /// The studio puts this on `/api/v1/status` and on the page, because a GPU
-/// piece with no adapter renders black and the only trace of *why* used to be
+/// patch with no adapter renders black and the only trace of *why* used to be
 /// one line on stderr - which in a container is `docker logs`, which nobody is
 /// reading.
 ///
 /// Asking opens the device if it has not been opened yet, which is exactly
-/// what the first GPU piece would do; the answer is cached by
+/// what the first GPU patch would do; the answer is cached by
 /// [`Gpu::shared`]'s `OnceLock`, so asking again is free.
 #[must_use]
 pub fn status() -> crate::GpuStatus {

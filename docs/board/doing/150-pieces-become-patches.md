@@ -4,8 +4,8 @@ title: One vocabulary - a piece is a patch, and "settings" is freed for what the
 type: build
 hardware: no
 depends: [198, 162]
-owner:
-branch:
+owner: worker (Claude Opus 5)
+branch: card/150-pieces-become-patches
 ---
 
 ## Goal
@@ -84,3 +84,37 @@ into the new build with nothing lost; `curl -d '{"piece":"metaballs"}' .../api/v
 still works and `.../set_patch` with `{"patch":...}` does too; the page says Patch.
 
 ## Log
+
+### Area 1 - `crates/art`, the types and the modules (2026-09-20)
+
+341 "piece" hits and 66 "settings" hits in `crates/art` on `main`, every one read.
+`src/piece.rs` -> `src/patch.rs` and `src/pieces/` -> `src/patches/` with `git mv`, so
+history follows. `Piece` -> `Patch`, `PieceDef` -> `PatchDef`, `ShaderPiece` ->
+`ShaderPatch`, `piece::` -> `patch::`, `pieces::` -> `patches::`, and the prose with
+them. Patch ids are untouched: `metaballs`, `clocks-dials`, `lattice`, ... all as they
+were. The CLI's own words changed too (`<patch>`, `which patch?`, `no patch called
+'{id}'`, `screeny-art: patch=... apl=... (patch ...%)`), because the binary lives in
+this crate and has to compile with it; the crate's README is the next commit.
+
+Three decisions this area forced, none of them in the card:
+
+- **`pipeline::Settings` -> `Output` collided with `pipeline::Output`**, the struct
+  `process` returns (wire + preview + stats + measured). That one is now
+  `pipeline::Processed`, with a line saying what it used to be called. There is still a
+  `crate::output::Output` *trait* (the frame sink), so the two files that import both -
+  `src/bin/screeny-art.rs` and `tests/sender.rs` - spell the settings type
+  `pipeline::Output` and say why in a comment.
+- **`LimiterSettings` -> `LimiterConfig`.** The card wants the word "settings" gone from
+  the code, and this is the only other place in `crates/art` that had it. Type name only:
+  it is serialised as the `limiter` key of the block above, which has not moved.
+- **The WGSL entry point could not be called `patch`: it is a reserved keyword in WGSL**
+  (naga refuses the module: "name `patch` is a reserved keyword"). Caught by rendering
+  `lattice`, not by the tests, which never reach a shader. It is `fn shade(uv)` now, in
+  `fragment.wgsl`, `lattice.wgsl` and `overland.wgsl`.
+
+No pixels moved. `cargo test -p screeny-art`: 70 pass (63 + 4 + 3). Clippy silent. The
+five WGSL files are byte-identical to `main`'s once `piece`->`patch` and
+`piece(uv`->`shade(uv` are applied to them, so no shader arithmetic changed; and the
+three GPU patches were each rendered through `screeny-art snapshot` to prove the
+modules still compile (`lattice` 1277 B lossy, `overland` 832 B exact, `knot` 668 B
+exact, all on Metal).
