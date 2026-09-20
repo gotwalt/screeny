@@ -316,6 +316,48 @@ changes. Following a move *without* being told is what an instance name is for, 
    long a resolution may go unconfirmed is `Config::stale_after` now, two minutes by
    default: a panel rebooting is not a panel that has moved.
 
+### Step 6 - the evidence
+
+**Root `cargo test --release --no-fail-fast`, whole workspace: 334 passed, 0 failed.**
+(310 on `main` before this card; the 24 are this card's.) `cargo clippy -p screeny-studio
+--all-targets`: **no warnings at all in this crate**.
+
+**The long soak, once, on the final build** - `SCREENY_SOAK_SECS=420`, release, under
+`timeout`:
+
+```
+soak: 420 s, 90 faults in 90 rounds
+soak: rss 11392 -> 12272 KiB (+880 KiB, +7.7%)
+soak: rendered 10616 frames (10464 since the baseline), 330 sent to the panel, 1 reconnects
+soak: panics 0, stalls 0, restarts 88, state written 179 times, telemetry 0.0 s old
+```
+
+Seven minutes, ninety injected faults - twenty-two of each kind - and the studio came
+back from every one of them without being touched. **Memory grew 880 KiB in seven
+minutes, and that figure is the whole test process**: the studio, twenty-three
+simulators started and stopped, and the test's own HTTP client. A player leaking one
+frame per tick would have been 65 MB by the end.
+
+Two numbers that look wrong and are not:
+
+- **330 frames sent** against 10616 rendered. `LinkStats` is per link, and the link is
+  rebuilt every time the panel *moves* (twenty-two times), so this is the count since the
+  last move, about fifteen seconds' worth. Across a run with no moves it tracks the
+  render count as usual.
+- **88 restarts.** A piece change replaces the render core, by design - a piece owns its
+  own state and there is no meaningful way to carry it across - and round four changes
+  the piece four times. Twenty-two rounds x four. Panics and stalls are separately zero.
+
+The first attempt at the long run failed after 233 s: the moved-panel round walked up
+the test's port band and ran off the end of it. The band wraps now. Worth recording
+because it is the kind of thing a sixty-second run cannot find, which is the argument
+for running the long one at all.
+
+**Nothing left running.** Every simulator in every test goes away with its test; the
+browser demo's studio and simulator were started under `timeout` and stopped by hand.
+`ps` at the end of the session shows no `screeny-studio`, no `screeny-sim` and no stray
+`cargo` belonging to this worktree.
+
 ### Cards written, not done (reserved range 140-144)
 
 - **140** - a device player's composing pieces cannot be acted on (`Player::act` is a
@@ -328,3 +370,29 @@ changes. Following a move *without* being told is what an instance name is for, 
   all thirteen of card 105's routes and should not be mixed into a behavioural change.
 - **144** - the preview and a player can fight over the same panel (spec 7.4's source
   lock). Two candidate answers; the owner should pick.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| device registry: mDNS + manual, keyed by stable id, a collection everywhere | `src/devices.rs`; 6 unit tests, `a_typed_address_becomes_a_device_and_starts_playing` |
+| players: one per device, piece + params + seed + fps + brightness policy, through `screeny::Sender` | `src/player.rs`, `src/fleet.rs` |
+| a distinct preview player, pointable at a device; promotion explicit | `Engine` stays the preview; `promoting_the_preview_is_explicit` |
+| containment: panic and stall caught, logged once, replaced by a fallback | `src/player.rs`; `a_bad_piece_is_contained_and_the_rest_carries_on`, with a second panel playing throughout |
+| state store: atomic, versioned, resumes exactly; corrupt/missing never a crash loop | `src/state.rs`; 7 unit tests + `a_broken_state_file_starts_a_working_server` |
+| `/healthz` 200/503 and `/api/v1/status` per device | `src/health.rs`; `a_missing_panel_is_never_unhealthy`, `a_wedged_preview_is_a_503_...`, `a_state_directory_that_cannot_be_used_is_a_503` |
+| device controls in the UI: brightness, identify, name, stats, reboot | `POST /api/v1/device/*` and the dashboard; `the_device_controls_reach_the_device` |
+| soak: automated, bounded, fault injection, flat memory, no task death, recovery | `tests/soak.rs`; the numbers above |
+| **kill and restart the simulator, the server, or both, in any order** | `the_panel_comes_back_whatever_is_restarted` - four rounds, every time |
+| the dashboard | `ui/dashboard.*`, rendered in a browser; `tests/ui.rs` |
+| `--state-dir` / `SCREENY_STATE_DIR` / `./.screeny-studio`, `SCREENY_LISTEN` | `src/main.rs`; `a_flag_beats_the_environment_which_beats_the_default` |
+| bounded by construction | one render thread per player, one link, one control request, one browse, a one-slot mailbox for the state file, capped jittered backoff, every fault logged once |
+| root `cargo test --release --no-fail-fast` green; clippy clean | 334 passed, 0 failed; 0 clippy warnings in `screeny-studio` |
+
+**Not done here, on purpose**: a scheduler or rotation (104), multi-panel sync or
+fan-out (091), auth (041), Docker (107), preview bandwidth (120), `Link::measure`.
+
+**Additive changes outside `crates/studio`, in full**: `PartialEq` on
+`screeny_art::Settings` and `LimiterSettings`; `SenderOutput::attach_deferred`. Nothing
+in `crates/screeny` was touched. Nothing in `crates/demos`. No hardware, no serial, no
+camera, and no LAN packet: every target in every run was an explicit `127.0.0.1`.

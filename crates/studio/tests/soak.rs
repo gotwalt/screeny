@@ -40,13 +40,17 @@ fn sim_on(port: u16) -> Option<SimDevice> {
     .ok()
 }
 
+/// A free pair at or after `from`, wrapping round the band - a long soak moves
+/// the panel dozens of times and must not run off the end of it. The port it
+/// has just left is free again, so wrapping always finds one.
 fn start_sim(from: u16) -> (SimDevice, u16) {
-    for port in (from..LAST_PORT).step_by(2) {
+    let start = if from >= LAST_PORT { FIRST_PORT } else { from };
+    for port in (start..LAST_PORT).step_by(2).chain((FIRST_PORT..start).step_by(2)) {
         if let Some(dev) = sim_on(port) {
             return (dev, port);
         }
     }
-    panic!("no free consecutive port pair in {from}..{LAST_PORT}");
+    panic!("no free consecutive port pair in {FIRST_PORT}..{LAST_PORT}");
 }
 
 /// Resident set size in KiB, from the one tool every Unix has. Good enough:
