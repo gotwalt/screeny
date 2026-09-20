@@ -72,11 +72,11 @@ measurement are deferred.
 - [x] 080 `screeny-probe conformance`: 64 wire-level rules, same suite against sim and device;
   firmware 0.2.0: 60 passed, 0 failed, 4 skipped by design. Follow-ups 130-133
 - 102 reconcile art's panel model and colour rules with the measured device - art session
-- 104 piece runner / scheduler (design with the owner) - art session
+- 104 piece runner / scheduler - **parked by the owner 2026-09-20** (no scheduling, no transitions: the focus is the pieces themselves)
 
 Studio track (`docs/design/studio-vision.md`), in order: 101 Studio streams to the panel -> 105 server-first Studio, Tauri
 removed -> 106 players/devices/state, built to be forgotten -> 107 docker-compose on
-`workbench.local` -> 104 scheduler, 102 panel-model reconcile, demos ported into art.
+`workbench.local` -> ~~104 scheduler~~ (parked 2026-09-20), 102 panel-model reconcile (done), then **aesthetic work on the pieces**; demos ported into art when a piece is wanted from there.
 
 Then, small and optional:
 - 062 mDNS lifecycle (goodbye, re-announce, TTL)

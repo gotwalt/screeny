@@ -116,10 +116,16 @@ them") - he has said no sandbox, ask only if he raises it. The workbench reboot 
 is the owner's to run (`ssh workbench.local sudo systemctl reboot`): this session's
 permission guard refuses it, and that is fine.
 
-**Waiting on the owner (asked 2026-09-20 morning, not yet answered):** card 104's shape
-(default offered: a playlist of pieces with their remembered settings, rotating every N
-minutes with no near-repeats, time-of-day rules on top, quiet hours at night, ~1 s cross-fade
-instead of today's cut); which `rest` treatment he likes on the panel (default `hatched,
+**The owner's direction, 2026-09-20 midday: back to focused aesthetic work on the pieces.**
+He does not care about scheduling or transitions: 104 is in `parked/`, and cross-fade-or-cut
+is not to be asked again. Infrastructure cards run only when they get in the way of looking
+at pieces; the ones that do are 162 (a snapshot cannot pin the time a clock shows, so
+before/after renders of the clock pieces are not comparable) and the edit-to-panel loop
+(the panel is held by the deployed Studio, and a deploy is a push plus a docker build; for
+quick looks run `screeny-art play` from the Mac after `set_panel {"on":false}` on
+workbench, and turn it back on after).
+
+**Waiting on the owner (asked 2026-09-20 morning, not yet answered):** which `rest` treatment he likes on the panel (default `hatched,
 quiet`); keep or delete the Reconnects row; should the unasked-for reboot count age out or
 notify (default no); is 30 fps right for the browser preview (default yes); a glance at the
 page in a *visible* tab after card 120 (nobody has seen the drawn picture since); the
@@ -130,8 +136,8 @@ double-click back to it? Check that the firmware session handed the panel
 back after borrowing it (`player.on` true in `/api/v1/status`) - `on:false` now survives a
 restart.
 
-**Next up, in order:** 104 (scheduler), 102 (art's panel model vs the
-measured device), porting `crates/demos` into `crates/art`. Small independent cards
+**Next up:** whatever the owner's eye finds in the pieces (115's hands first); 162 when
+clock renders need comparing; porting `crates/demos` into `crates/art` when wanted. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
 on the owner's say-so: WiFi provisioning (will be a captive portal + HTTP settings
 page), camera-based measurement (dropped: camera accuracy unknown, the owner judges by
