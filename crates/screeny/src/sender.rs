@@ -149,10 +149,33 @@ impl Default for SenderConfig {
 }
 
 /// Running totals for a stream.
+///
+/// **Which frames a number is over** matters here, and card 153 is what
+/// happens when it is not said: two frames are on the wire but outside the
+/// paced window - the one at slot 0, which goes out at `elapsed == 0`, and the
+/// `FINAL` frame [`Sender::finish`] sends immediately behind the last paced
+/// one (spec 9.4 step 5). So:
+///
+/// * [`SendStats::frames_sent`], [`SendStats::bytes`], [`SendStats::by_codec`]
+///   and [`SendStats::mean_bytes`] count **every datagram**, `FINAL` included.
+///   They are about what went on the wire, and `FINAL` did.
+/// * [`SendStats::actual_fps`], [`SendStats::min_gap`] and
+///   [`SendStats::max_gap`] are over **the paced window** only: `FINAL` is not
+///   part of the stream's rhythm and neither end of it is a full slot.
+/// * [`SendStats::mean_encode`], [`SendStats::encode_max`] and
+///   [`SendStats::encode_pct`] are over **the frames that were encoded**
+///   ([`SendStats::frames_encoded`]), which `FINAL` is not: it retransmits the
+///   payload before it.
 #[derive(Clone, Debug, Default)]
 pub struct SendStats {
-    /// Frames put on the wire.
+    /// Frames put on the wire, including the `FINAL` frame.
     pub frames_sent: u64,
+    /// Frames put on the wire with `FINAL` set - normally exactly one, at the
+    /// end of the stream, and zero for a stream still running.
+    pub frames_final: u64,
+    /// Frames handed to the encoder. One per paced frame; `FINAL` does not
+    /// encode anything, it resends the last payload.
+    pub frames_encoded: u64,
     /// Frames the schedule passed over because encoding or rendering ran
     /// long. Spec 9.1: skipping is correct, bursting is not.
     pub frames_skipped: u64,
@@ -199,26 +222,67 @@ pub struct SendStats {
     pub last_fallback_colours: usize,
     /// When the stream started.
     pub started: Option<Instant>,
+    /// When the first paced frame went on the wire. `FINAL` excluded.
+    pub first_paced: Option<Instant>,
+    /// When the most recent paced frame went on the wire. `FINAL` excluded.
+    pub last_paced: Option<Instant>,
 }
 
 impl SendStats {
-    /// Frames per second actually achieved so far.
+    /// Frames sent as part of the paced stream: [`SendStats::frames_sent`]
+    /// without the `FINAL` frame.
+    #[must_use]
+    pub fn frames_paced(&self) -> u64 {
+        self.frames_sent.saturating_sub(self.frames_final)
+    }
+
+    /// The rate the paced stream actually ran at, in frames per second.
+    ///
+    /// Measured **from the first paced send to the last**: `n` paced frames
+    /// span `n - 1` intervals, and neither the frame at slot 0 (which goes out
+    /// at `elapsed == 0`) nor the `FINAL` frame (which leaves immediately
+    /// behind the last paced one) contributes a slot of wall clock.
+    ///
+    /// Card 153: this used to be `frames_sent / started.elapsed()`, which is
+    /// `(slots + 2) / (slots * period)` - high by `2 / slots`, so +0.7% over a
+    /// 10 s run and +3.2% over a 2 s one, while the pacer was keeping 30.00
+    /// fps in both (card 093 measured it 50 times). The figure is now the same
+    /// at any stream length, which is what makes it comparable with the
+    /// device's own `frames_rx`.
+    ///
+    /// Zero until two paced frames have gone out, because one frame in no time
+    /// is not a rate.
+    ///
+    /// What is left is not arithmetic: the frame at slot 0 goes out without
+    /// sleeping first, while every later frame leaves about 4 ms after its
+    /// slot because `thread::sleep` overshoots (card 154). The span is
+    /// therefore one overshoot longer than the slots it covers and the rate
+    /// reads that much **low** - 0.2-0.4% over a two-second run, under 0.1%
+    /// over ten. That is a real latency being reported, not a miscount, and
+    /// card 154 is where it gets fixed.
     #[must_use]
     pub fn actual_fps(&self) -> f64 {
-        match self.started {
-            Some(t) if self.frames_sent > 0 => {
-                let s = t.elapsed().as_secs_f64();
-                if s > 0.0 {
-                    self.frames_sent as f64 / s
-                } else {
-                    0.0
-                }
-            }
-            _ => 0.0,
+        let (Some(first), Some(last)) = (self.first_paced, self.last_paced) else {
+            return 0.0;
+        };
+        let span = last.saturating_duration_since(first).as_secs_f64();
+        let intervals = self.frames_paced().saturating_sub(1);
+        if span > 0.0 && intervals > 0 {
+            intervals as f64 / span
+        } else {
+            0.0
         }
     }
 
-    /// Mean payload size.
+    /// Mean payload size over every datagram sent, `FINAL` included.
+    ///
+    /// Card 153 asked which way this should go: `FINAL` is a real datagram
+    /// carrying a real payload - the previous frame's - so it belongs in an
+    /// average of what went on the wire. It is also a duplicate, so it pulls
+    /// the mean by one frame's worth towards the last frame's size; over a
+    /// stream of any length that is nothing, and over a stream of two frames
+    /// the mean of three datagrams is still the honest answer to "what did
+    /// this cost the network".
     #[must_use]
     pub fn mean_bytes(&self) -> f64 {
         if self.frames_sent == 0 {
@@ -228,13 +292,18 @@ impl SendStats {
         }
     }
 
-    /// Mean encode time.
+    /// Mean encode time over the frames that were **encoded**.
+    ///
+    /// The other half of card 153's question, and it goes the other way:
+    /// `FINAL` retransmits the payload before it and costs no encode at all,
+    /// so counting it would divide a real total by an imaginary frame and
+    /// report every stream as slightly faster to encode than it was.
     #[must_use]
     pub fn mean_encode(&self) -> Duration {
-        if self.frames_sent == 0 {
+        if self.frames_encoded == 0 {
             Duration::ZERO
         } else {
-            self.encode_total / self.frames_sent as u32
+            self.encode_total / self.frames_encoded as u32
         }
     }
 
@@ -257,6 +326,7 @@ impl SendStats {
     }
 
     fn record_encode(&mut self, d: Duration) {
+        self.frames_encoded += 1;
         self.encode_total += d;
         self.encode_max = self.encode_max.max(d);
         let bucket = (d.as_micros() / 500) as usize;
@@ -612,14 +682,23 @@ impl Sender {
         self.stats.bytes += payload.len() as u64;
         *self.stats.by_codec.entry(codec).or_insert(0) += 1;
         // The `FINAL` frame goes out the moment the source ends, right behind
-        // the frame before it, so it is not part of the paced stream and does
-        // not belong in the gap statistics.
-        if let (Some(prev), false) = (self.last_send, final_frame) {
-            let gap = now.duration_since(prev);
-            self.stats.min_gap = Some(self.stats.min_gap.map_or(gap, |m| m.min(gap)));
-            self.stats.max_gap = Some(self.stats.max_gap.map_or(gap, |m| m.max(gap)));
+        // the frame before it, so it is not part of the paced stream: it does
+        // not belong in the gap statistics and it does not extend the window
+        // `SendStats::actual_fps` measures over (card 153).
+        if final_frame {
+            self.stats.frames_final += 1;
+        } else {
+            if let Some(prev) = self.last_send {
+                let gap = now.duration_since(prev);
+                self.stats.min_gap = Some(self.stats.min_gap.map_or(gap, |m| m.min(gap)));
+                self.stats.max_gap = Some(self.stats.max_gap.map_or(gap, |m| m.max(gap)));
+            }
+            if self.stats.first_paced.is_none() {
+                self.stats.first_paced = Some(now);
+            }
+            self.stats.last_paced = Some(now);
+            self.last_send = Some(now);
         }
-        self.last_send = Some(now);
         Ok(())
     }
 
@@ -979,5 +1058,102 @@ pub fn sleep_until(target: Instant) {
     }
     while Instant::now() < target {
         std::hint::spin_loop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stream that ran at exactly `fps` for `slots` paced frames and then
+    /// sent `FINAL` immediately behind the last one. Synthetic instants, so
+    /// this is the arithmetic and nothing else - no sleeping, no scheduler.
+    fn perfect(fps: f64, slots: u64) -> SendStats {
+        let period = period_of(fps);
+        let start = Instant::now();
+        let last = start + period.mul_f64((slots - 1) as f64);
+        SendStats {
+            // `slots` paced frames plus the `FINAL` frame.
+            frames_sent: slots + 1,
+            frames_final: 1,
+            frames_encoded: slots,
+            started: Some(start),
+            first_paced: Some(start),
+            last_paced: Some(last),
+            ..SendStats::default()
+        }
+    }
+
+    /// Card 153: the reported rate must mean the same thing at every stream
+    /// length. The old formula - `frames_sent / started.elapsed()` - was
+    /// `(slots + 2) / (slots * period)`, so it read 30.99 over a 2 s run and
+    /// 30.19 over a 10 s one while the pacer kept 30.00 in both (card 093
+    /// measured that 50 times).
+    #[test]
+    fn the_reported_rate_is_the_same_at_every_stream_length() {
+        for (secs, slots) in [(2.0, 60u64), (6.0, 180), (10.0, 300)] {
+            let s = perfect(30.0, slots);
+            let got = s.actual_fps();
+            assert!(
+                (got - 30.0).abs() <= 30.0 * 0.005,
+                "{secs} s / {slots} slots reported {got:.3} fps, outside 30.0 +-0.5%"
+            );
+            // What the old arithmetic would have said, for the record:
+            // `frames_sent / elapsed`, two frames more than the window holds.
+            // 31.02 at 2 s, 30.34 at 6 s, 30.20 at 10 s - which is what card
+            // 093 measured on the real thing (30.92-30.99, 30.31-30.33,
+            // 30.19-30.20). This is the number this test exists to fail on.
+            let elapsed = (slots - 1) as f64 / 30.0;
+            let old = s.frames_sent as f64 / elapsed;
+            assert!(old > 30.0 * 1.006, "{secs} s: old formula read {old:.3}");
+        }
+
+        // Rates other than 30, and a run short enough that the old formula was
+        // out by a tenth.
+        assert!((perfect(10.0, 20).actual_fps() - 10.0).abs() < 0.001);
+        assert!((perfect(60.0, 7).actual_fps() - 60.0).abs() < 0.001);
+    }
+
+    /// The ends of the stream, one at a time.
+    #[test]
+    fn the_window_excludes_the_final_frame_and_the_frame_at_slot_zero() {
+        // Two paced frames a period apart: one interval, so one period.
+        let s = perfect(30.0, 2);
+        assert_eq!(s.frames_paced(), 2);
+        assert!((s.actual_fps() - 30.0).abs() < 0.001);
+
+        // One paced frame is not a rate, whatever the clock says.
+        let start = Instant::now();
+        let s = SendStats {
+            frames_sent: 2,
+            frames_final: 1,
+            frames_encoded: 1,
+            started: Some(start),
+            first_paced: Some(start),
+            last_paced: Some(start),
+            ..SendStats::default()
+        };
+        assert_eq!(s.frames_paced(), 1);
+        assert!(s.actual_fps() < f64::EPSILON, "one frame is not a rate");
+
+        // Nothing sent at all is not a rate either.
+        assert!(SendStats::default().actual_fps() < f64::EPSILON);
+        assert_eq!(SendStats::default().frames_paced(), 0);
+    }
+
+    /// The other two means, and the decision card 153 asked for: bytes are
+    /// over every datagram, encode time is over the frames that were encoded.
+    #[test]
+    fn the_per_frame_means_say_which_frames_they_are_over() {
+        let s = SendStats {
+            frames_sent: 5, // four paced plus FINAL
+            frames_final: 1,
+            frames_encoded: 4,
+            bytes: 500,
+            encode_total: Duration::from_millis(4),
+            ..SendStats::default()
+        };
+        assert!((s.mean_bytes() - 100.0).abs() < f64::EPSILON, "every datagram");
+        assert_eq!(s.mean_encode(), Duration::from_millis(1), "only the encodes");
     }
 }

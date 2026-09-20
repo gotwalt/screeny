@@ -223,9 +223,12 @@ struct Panel { bits: u32, subframes: u32 }
 const NOMINAL, TEMPORAL, DIMMED, DEEP;      // selection scores against TEMPORAL
 
 // --- discovery (spec 5) ------------------------------------------------
-struct Target { addr: Option<SocketAddr>, name: Option<String>,
-                timeout: Option<Duration>, broadcast: bool }
-    fn resolve(&self) -> Result<Device>
+struct Target { addr: Option<SocketAddr>, host: Option<String>, port: Option<u16>,
+                name: Option<String>, timeout: Option<Duration>, broadcast: bool }
+    Target::parse(&str)      // an address, a host name, or an instance name
+    Target::direct(&str)     // an address or a host name; never a browse
+    fn resolve(&self) -> Result<Device>      // blocking; call it off your loop
+    fn label(&self) -> String                // what was asked for, as asked
 fn discover::browse(Duration, want: Option<usize>) -> Result<Vec<Device>>
 fn discover::broadcast_probe(Duration, port) -> Result<Vec<Device>>   // spec 5.5
 
@@ -269,11 +272,16 @@ struct LinkConfig { sender, cadence, reconnect, silence, backoff }
 struct LinkStats; struct Limits; struct Pace;
 enum Cadence { Free, Limit }   enum LinkState { Up, Connecting, Waiting, Closed }
 
-struct SendStats { frames_sent, frames_skipped, bytes, by_codec, encode_total,
-                   encode_max, min_gap, max_gap, fps, fps_changes, telemetry,
-                   busy, decode_failures, codecs_withdrawn, codec_limited,
-                   indexed_exact, indexed_fallback, last_fallback_colours }
-    actual_fps() mean_bytes() mean_encode() encode_pct(p)
+struct SendStats { frames_sent, frames_final, frames_encoded, frames_skipped,
+                   bytes, by_codec, encode_total, encode_max, min_gap, max_gap,
+                   fps, fps_changes, telemetry, busy, decode_failures,
+                   codecs_withdrawn, codec_limited, indexed_exact,
+                   indexed_fallback, last_fallback_colours,
+                   started, first_paced, last_paced }
+    frames_paced()        // frames_sent without the FINAL frame
+    actual_fps()          // first paced send to last: the paced window only
+    mean_bytes()          // every datagram, FINAL included
+    mean_encode() encode_pct(p)        // the frames that were encoded
 
 fn sender::period_of(fps) -> Duration
 fn sender::sleep_until(Instant)             // sleep, then spin the last ms
@@ -282,6 +290,8 @@ fn sender::sleep_until(Instant)             // sleep, then spin the last ms
 enum Error { Io, Timeout, Device(ErrorCode), BadReply, NotFound, NoSuchDevice,
              Mdns, Metadata, NoCommonCodec, Budget, Frame, BadIndex }
     fn hint(&self) -> Option<String>        // the next step, in words
+    fn hint_for(&self, Platform) -> Option<String>   // ... for a named platform
+enum Platform { MacOs, Linux, Other }   const Platform::HOST
     impl From<Error> for std::io::Error     // for embedders whose trait is io
 ```
 
@@ -332,7 +342,7 @@ discovery does not:
 
 | option | |
 |---|---|
-| `--addr IP[:PORT]` | talk to this address, skipping discovery entirely |
+| `--addr IP\|HOST[:PORT]` | talk to this address, or to a host name the system resolver knows, skipping discovery entirely |
 | `--name NAME` | pick a discovered device by instance or friendly name |
 | `--timeout SECS` | how long to browse for (default 3) |
 | `--broadcast` | use the broadcast `GET_INFO` probe instead of mDNS (spec 5.5) |
@@ -507,8 +517,11 @@ median period, drift, how late the host woke it - whether it passed or not.
 - **A browse that finds nothing is normal**, not an error. macOS can make
   multicast vanish until the socket is recreated; `dns-sd -B _screeny._udp`
   uses Apple's own responder and is the fastest way to tell "the device is not
-  advertising" from "this process cannot see multicast". `--addr` always
-  works.
+  advertising" from "this process cannot see multicast". On Linux the second
+  opinion is `avahi-browse -rt _screeny._udp` and the usual cause is a
+  container on the default bridge, which carries no LAN multicast;
+  `Error::hint` says whichever of those applies to the machine it is printed
+  on (card 147). `--addr` always works.
 - **Local Network permission.** A CLI run from Terminal or over SSH is exempt;
   a bundled, re-signed or launchd-started binary is not, and closing the
   Terminal window that started a running sender can revoke the exemption

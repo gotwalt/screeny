@@ -5,7 +5,6 @@
 //! here.
 
 use std::io::{IsTerminal, Read, Write};
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -42,8 +41,9 @@ struct Cli {
 /// How to find the device. `--addr` always works and skips discovery.
 #[derive(Args, Debug, Clone)]
 struct TargetArgs {
-    /// Device address as `IP` or `IP:port`, skipping discovery entirely.
-    #[arg(long, global = true, value_name = "IP[:PORT]")]
+    /// Device address as `IP`, `IP:port`, or a host name the system resolver
+    /// knows. Either way discovery is skipped.
+    #[arg(long, global = true, value_name = "IP|HOST[:PORT]")]
     addr: Option<String>,
 
     /// Pick a discovered device by instance or friendly name.
@@ -60,34 +60,19 @@ struct TargetArgs {
 }
 
 impl TargetArgs {
-    fn parse_addr(&self) -> Result<Option<SocketAddr>> {
-        let Some(s) = &self.addr else { return Ok(None) };
-        if let Ok(a) = s.parse::<SocketAddr>() {
-            return Ok(Some(a));
-        }
-        if let Ok(ip) = s.parse::<std::net::IpAddr>() {
-            return Ok(Some(SocketAddr::new(ip, screeny::proto::DEFAULT_FRAME_PORT)));
-        }
-        // A host name: let the resolver have it, defaulting the port.
-        let with_port = if s.contains(':') {
-            s.clone()
-        } else {
-            format!("{s}:{}", screeny::proto::DEFAULT_FRAME_PORT)
-        };
-        let mut it = std::net::ToSocketAddrs::to_socket_addrs(&with_port)
-            .with_context(|| format!("resolving {s:?}"))?;
-        it.next()
-            .map(Some)
-            .ok_or_else(|| anyhow::anyhow!("{s:?} resolved to no addresses"))
-    }
-
+    /// `--addr` is classified by [`screeny::Target::direct`] - an address, or
+    /// a host name for the system resolver, never a browse - and the lookup
+    /// itself happens inside `Target::resolve`, so there is one grammar and
+    /// one resolver for the CLI, the library and the art system (card 146).
     fn to_target(&self) -> Result<screeny::Target> {
-        Ok(screeny::Target {
-            addr: self.parse_addr()?,
-            name: self.name.clone(),
-            timeout: Some(Duration::from_secs_f64(self.timeout)),
-            broadcast: self.broadcast,
-        })
+        let mut t = match &self.addr {
+            Some(s) => screeny::Target::direct(s),
+            None => screeny::Target::default(),
+        };
+        t.name = self.name.clone();
+        t.timeout = Some(Duration::from_secs_f64(self.timeout));
+        t.broadcast = self.broadcast;
+        Ok(t)
     }
 
     fn resolve(&self) -> Result<Device> {
@@ -746,14 +731,27 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
     }
 
     let verbose = cli.verbose;
+    // The live line is a rate over the tick interval, and card 153's lesson
+    // applies to it too: count paced frames over the time that actually
+    // passed, not frames over an interval assumed to be a second. The last
+    // tick arrives immediately after `FINAL`, a sliver of time with nothing
+    // paced in it; the summary line below says everything it could, so skip it
+    // rather than print a rate over a few milliseconds.
     let mut last = 0u64;
+    let mut last_at = Instant::now();
     let mut tick = move |s: &SendStats| {
-        let sent = s.frames_sent - last;
-        last = s.frames_sent;
+        let now = Instant::now();
+        let dt = now.duration_since(last_at).as_secs_f64();
+        let sent = s.frames_paced() - last;
+        if dt < 0.25 {
+            return;
+        }
+        last = s.frames_paced();
+        last_at = now;
         let mut line = format!(
             "{:>7} frames  {:>5.1} fps  {:>6.0} B  enc {:>5.2}/{:>5.2} ms (mean/p95)",
             s.frames_sent,
-            sent as f64,
+            sent as f64 / dt,
             s.mean_bytes(),
             s.mean_encode().as_secs_f64() * 1000.0,
             s.encode_pct(0.95).as_secs_f64() * 1000.0
@@ -796,12 +794,15 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
         Src::Indexed(s) => sender.run_indexed_with(*s, &stop, &mut tick),
     };
     let s = sender.stats();
+    // The rate is over the paced window and says so: the frame count includes
+    // the `FINAL` frame, which is a datagram but not a slot (card 153).
     println!(
-        "sent {} frames in {:.1} s ({:.2} fps), {} skipped, {:.0} B mean, \
+        "sent {} frames in {:.1} s ({:.2} fps over {} paced), {} skipped, {:.0} B mean, \
          encode mean {:.2} ms / p95 {:.2} ms / max {:.2} ms",
         s.frames_sent,
         s.started.map_or(0.0, |t| t.elapsed().as_secs_f64()),
         s.actual_fps(),
+        s.frames_paced(),
         s.frames_skipped,
         s.mean_bytes(),
         s.mean_encode().as_secs_f64() * 1000.0,

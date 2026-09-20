@@ -36,11 +36,17 @@ cargo build -p screeny-art --no-default-features --features gpu
 ## Sending to a panel
 
 `play <piece> --to NAME|ADDR` streams a piece over UDP through
-[`screeny`](../screeny)'s `Link`. `--to` takes an mDNS instance name - preferred,
-because the link re-resolves it on every reconnect and so follows the device
-across a DHCP lease - or an `IP[:PORT]`. `--wait` starts without a panel and
-picks one up when it appears; `--seconds` bounds the run; ctrl-c sends `FINAL`
-so the panel is released at once.
+[`screeny`](../screeny)'s `Link`. `--to` takes three shapes, told apart by
+`Target::parse` (card 146):
+
+| you write | it is | found by |
+|---|---|---|
+| `screeny-4a00a4` | an mDNS instance name - **preferred**, because the link re-resolves it on every reconnect and so follows the device across a DHCP lease | a browse |
+| `10.0.0.5`, `10.0.0.5:49374` | an address | nothing; used as given |
+| `host.docker.internal:49374`, `panel.lan` | a host name: anything with a dot or a port in it | the system resolver, on the link's connect thread, again on every reconnect |
+
+`--wait` starts without a panel and picks one up when it appears; `--seconds`
+bounds the run; ctrl-c sends `FINAL` so the panel is released at once.
 
 Three things are worth knowing before building on it:
 
