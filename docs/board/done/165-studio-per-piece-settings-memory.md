@@ -371,3 +371,20 @@ from defaults - which on that box means discovery adopts `screeny-4a00a4` and pl
 until somebody says otherwise. To undo a rollback: put the v2 image back and
 `mv /data/state.v2.json /data/state.json`. (I did not run this against the live service;
 it is what `a_state_file_from_the_future_is_kept_not_parsed` pins, unchanged by this card.)
+
+### Orchestrator: merged, deployed, verified on the live service (2026-09-19 22:40 PDT)
+
+Merged cleanly on top of card 160 (whose new `rest` param is the live example of "a param
+that did not exist when the file was written"). `cargo test --release -p screeny-art -p
+screeny-studio`: 128 passed, 0 failed. Reset keeping the seed: agreed, it is what the button's
+label promises.
+
+Live service on workbench: backed up the v1 file first (`~/screeny-backups/state-v1-*.json`
+on workbench). After the deploy: log line `the state file was schema v1; migrated to v2`
+once, `state.repaired: []`, no `state.bad.json`, the panel back on `overland` seed 4242 ~4 s
+after the deploy returned. The file on disk stayed v1 until the first change (an unchanged
+state is never written) - then `version: 2` with the `pieces` map. Through the API against
+the real panel: tuned `plasma` (hue 200, cycle 0.3), switched to `clocks-numerals` and set
+`rest` 3, back to `plasma` -> `{cycle: 0.3, hue: 200}` restored; on disk
+`pieces: {clocks-numerals: {seed, params: {rest: 3}}, plasma: {...}, overland: {seed}}`.
+Then reset both so the owner starts from defaults; the panel was left on `overland`.
