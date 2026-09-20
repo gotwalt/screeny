@@ -121,12 +121,12 @@ pub struct Built {
 /// within this factor of the cost the same palette size had on the previous
 /// frame. Beyond it, the content has changed enough that a stale palette might
 /// be latched, and a fresh median cut is computed and compared.
-const SEED_DRIFT: f64 = 1.25;
+pub const SEED_DRIFT: f64 = 1.25;
 
 /// ...and regardless of drift, a fresh median cut is computed this often, so
 /// a slow scene change cannot creep past the drift test one frame at a time.
 /// Once a second at 30 fps.
-const RESEED_EVERY: usize = 30;
+pub const RESEED_EVERY: usize = 30;
 
 /// Iterations actually worth spending at this palette size. Large palettes
 /// are already close after median cut.

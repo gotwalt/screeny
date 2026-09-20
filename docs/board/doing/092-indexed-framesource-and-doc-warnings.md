@@ -78,3 +78,15 @@ Where the card's Context has drifted since it was written (cards 016, 011,
   `FractalZoom` does not. Nothing consumes it. The expansion the card is about
   is in `main.rs`'s `PieceSource`, which calls `Piece::render` (which does
   `Indexed::to_frame()`) and then copies 6144 bytes into the sender's frame.
+
+### The four doc warnings
+
+`SEED_DRIFT` and `RESEED_EVERY` in `crates/encode/src/quant.rs` are now `pub`,
+which is the option the card preferred: both are named in the public prose of
+the `quant` module and of `quant::build`, and the numbers - 1.25 and 30 frames
+- are the whole of the "is the seeded palette still good?" rule. A reader of
+those docs who cannot see them is reading a sentence with a hole in it.
+
+Before: `cargo doc -p screeny-encode --no-deps` = 4 warnings
+(`rustdoc::private_intra_doc_links`, quant.rs:23, 29, 154, 155).
+After: `cargo doc -p screeny-encode -p screeny --no-deps` = silent.
