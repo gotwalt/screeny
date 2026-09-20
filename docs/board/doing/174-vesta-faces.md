@@ -4,8 +4,8 @@ title: vesta - the numerals' face is a choice, and the choices include real pixe
 type: build
 hardware: no
 depends: [155]
-owner:
-branch:
+owner: worker-174
+branch: card/174-vesta-faces
 ---
 
 ## Goal
