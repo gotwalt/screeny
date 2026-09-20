@@ -3,8 +3,8 @@
 //!
 //! Hand-written on purpose. A test client is the one place where borrowing the
 //! server's own library would hide the bug worth catching, and the alternative
-//! - an HTTP client crate and a WebSocket crate - is a large dependency tree
-//! for two dozen lines of framing.
+//! (an HTTP client crate and a WebSocket crate) is a large dependency tree for
+//! two dozen lines of framing.
 
 #![allow(dead_code)]
 

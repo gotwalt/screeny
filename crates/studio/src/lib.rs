@@ -162,7 +162,6 @@ impl Studio {
     }
 
     /// The router, for a test that would rather call it in process.
-    #[must_use]
     pub fn router(&self) -> Router {
         router(self.state.clone())
     }
