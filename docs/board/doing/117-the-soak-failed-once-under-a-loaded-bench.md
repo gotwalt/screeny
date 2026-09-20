@@ -113,6 +113,34 @@ Neither failure reproduced alone, and I did not spend long trying to: the soak's
 above is shown by measurement rather than by a reproduction, and the embed one is a
 port race whose fix does not depend on having seen it.
 
+### 2026-09-20, later: the new message caught a second one on its second run
+
+Repeating the soak to prove it, run 1 of 5 failed - and this time it said what happened,
+which is the whole point of the card:
+
+```
+the telemetry poll stopped: the last telemetry is 10.0 s old after 60 s, and the poll
+period is 0.2 s: {... "last_error":"asking for telemetry: Connection refused (os error
+61)", "last_seen_ago":10.0, "player":{"panel":{"connected":true, ...
+```
+
+One investigation, one line, exactly as the card asked. **The last round before the
+deadline had taken the panel away**: round 2 unplugs it for seven seconds, and if the
+soak's clock runs out in the round after that, the final snapshot is read while the
+telemetry poll is still working its way back through its own backoff. `telemetry_ago`
+was 10.0 s against a bound of 10.0, with the panel connected and frames flowing beside
+it. Nothing had stopped; the test was asking "is the poll current *this instant*" when
+the property it means is "is the poll alive".
+
+So the end of the soak now **waits, bounded, for the poll to catch up** and asserts on
+the answer that satisfied it - the same pattern as every other wait here, and the same
+"one moment, one read" rule `until_json` exists for. The 10 s bound is unchanged and now
+lives in a named `FRESH` with its arithmetic beside it (fifty poll periods). A poll that
+really had died still fails, 30 s later, with the device beside it.
+
+Two flakes, then, in the one test, both of the same family: a test asserting on an
+instant that the code had not promised anything about.
+
 ### Note from the orchestrator (2026-09-20)
 
 A second one of the same family, seen once while merging 196 with two other worktrees

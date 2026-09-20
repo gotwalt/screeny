@@ -107,6 +107,11 @@ const WAIT: Duration = Duration::from_secs(30);
 /// A third of a second at 30 fps.
 const FLOWING: u64 = 10;
 
+/// How old the last telemetry may be for the poll to count as alive, in
+/// seconds. The poll runs every 200 ms here, so this is **fifty periods**: it
+/// asks whether the task is running at all, not whether it was prompt.
+const FRESH: f64 = 10.0;
+
 /// Recovery, defined once: the link is up again and frames are moving again.
 ///
 /// Returns how many times the frame counter had to be re-based; see
@@ -280,7 +285,22 @@ async fn the_server_survives_a_bounded_soak() {
     }
 
     // ---- what it all came to ----
-    let end = status(at).await;
+    //
+    // **Wait for the telemetry poll to be current before reading the end.**
+    // The last round can take the panel away seconds before the deadline -
+    // round 2 unplugs it for seven - and the poll being behind at that instant
+    // is the panel's absence, not a dead task. Seen on 2026-09-20: a run that
+    // ended one round after the panel came back read `telemetry_ago` at exactly
+    // 10.0 s with `asking for telemetry: Connection refused` beside it, and
+    // failed an assertion about a thread that was perfectly alive.
+    //
+    // What says the task is alive is that it *catches up*, which is a bounded
+    // wait like every other one here - and the answer that satisfies it is the
+    // single moment everything below is asserted on (`common::until_json`).
+    let end = until_json(at, WAIT, "the telemetry poll to catch up after the last round", "/api/v1/status", |v| {
+        v["devices"][0]["telemetry_ago"].as_f64().unwrap_or(999.0) < FRESH
+    })
+    .await;
     let d = end["devices"].as_array().and_then(|x| x.first().cloned()).expect("the panel");
     let ticks = d["player"]["health"]["ticks"].as_u64().expect("ticks");
     let end_rss = rss_kib();
@@ -322,11 +342,11 @@ async fn the_server_survives_a_bounded_soak() {
         ticks - base_ticks
     );
     assert_eq!(d["player"]["running"], true, "the render thread is gone: {}", d["player"]["health"]);
-    // The poll runs every 200 ms here, so ten seconds is fifty periods: this
-    // asks whether the task is alive, not whether it was prompt.
+    // True by construction - it is what the wait above waited for - and stated
+    // anyway, because it is one of the three properties this test is for.
     let telemetry_ago = d["telemetry_ago"].as_f64().unwrap_or(999.0);
     assert!(
-        telemetry_ago < 10.0,
+        telemetry_ago < FRESH,
         "the telemetry poll stopped: the last telemetry is {telemetry_ago:.1} s old after {elapsed} s, \
          and the poll period is 0.2 s: {d}"
     );
