@@ -235,6 +235,37 @@ impl Timeline {
         self.span() - self.slots() as f64 * self.period
     }
 
+    /// How far the rate the run actually held sits from the rate that was
+    /// asked for, as a fraction: `+0.01` is a frame period 1% too long.
+    ///
+    /// It is the slope of lateness across the run - the median of the first
+    /// half against the median of the second half - and neither of the two
+    /// obvious estimators does the job:
+    ///
+    /// - The **median interval** is bimodal on this bench. `thread::sleep`
+    ///   overshoots by about 4 ms, more than `sleep_until`'s 1 ms spin
+    ///   window, so a wake-up sits either on its slot or about 4 ms past it,
+    ///   and every flip between the two states makes one interval long and
+    ///   the next one short. The intervals pile up at three values instead of
+    ///   one, and with a few dozen of them under load the median settles on a
+    ///   side pile: measured at 33.99 ms on a 2 s run whose mean interval was
+    ///   33.48 ms.
+    /// - The **mean interval** is [`Timeline::drift`] rewritten, which is a
+    ///   two-sample estimator: it is the first wake-up against the last, so
+    ///   its noise is one wake-up's lateness however long the run is. Over
+    ///   10 s that is nothing; over 2 s it is half the 1% budget.
+    ///
+    /// Medians of halves shrug off the flips, and the two of them are about
+    /// half the run apart, so the estimate gets better the longer the run -
+    /// which is what lets the same +-1% hold at 2 s and at 10 s.
+    fn rate_error(&self) -> f64 {
+        let late = self.lateness();
+        let half = late.len() / 2;
+        let lo = median(&sorted(late[..half].to_vec()));
+        let hi = median(&sorted(late[half..].to_vec()));
+        (hi - lo) / (self.slots() as f64 / 2.0)
+    }
+
     /// Short gaps with nothing behind them to explain the catch-up: the
     /// definition of a burst that a busy host cannot manufacture, because a
     /// busy host can only ever make the *previous* wake-up late.
@@ -253,21 +284,38 @@ impl Timeline {
         self.lateness().iter().filter(|l| **l > DISTURBED).count()
     }
 
+    /// The same run as the receiver saw it: one arrival per wake-up, against
+    /// the slot the pacer meant it for, so every measure above can be asked
+    /// of the wire as well as of the schedule.
+    fn at_the_receiver(&self, arrivals: &[Instant]) -> Timeline {
+        assert_eq!(arrivals.len(), self.len(), "an arrival per paced frame");
+        Timeline {
+            period: self.period,
+            ticks: self
+                .ticks
+                .iter()
+                .zip(arrivals)
+                .map(|(t, at)| Tick { slot: t.slot, at: *at })
+                .collect(),
+        }
+    }
+
     fn summary(&self) -> String {
         let late = sorted(self.lateness());
         let mut s = String::new();
         let _ = write!(
             s,
             "{} wake-ups over {:.3} s, {} slots ({} skipped); \
-             median period {:.4} ms (want {:.4}); drift {:+.1} ms; \
+             period {:+.3}% of {:.4} ms (median interval {:.4} ms); drift {:+.1} ms; \
              lateness min {:.2} ms median {:.2} ms p95 {:.2} ms max {:.2} ms; \
              {} wake-ups held up past half a period by the host",
             self.len(),
             self.span(),
             self.slots() + 1,
             self.skipped(),
-            median(&sorted(self.per_slot())) * 1e3,
+            self.rate_error() * 100.0,
             self.period * 1e3,
+            median(&sorted(self.per_slot())) * 1e3,
             self.drift() * 1e3,
             late[0] * self.period * 1e3,
             median(&late) * self.period * 1e3,
@@ -363,15 +411,13 @@ fn holds_thirty_fps_within_one_percent() {
     );
     assert_eq!(skipped, tl.skipped(), "skip accounting disagrees: {report}");
 
-    // The rate. The median interval is the pacer's: a late wake-up stretches
-    // one interval and squeezes the next, which moves the tails and not the
-    // middle. 1% of 33.333 ms is 333 us; 50 baseline runs on a loaded host
-    // landed inside 30 us of the ideal at 2 s, 6 s and 10 s alike.
-    let typical = median(&sorted(tl.per_slot()));
+    // The rate: the slope of lateness across the run, which is the estimator
+    // that survives a busy host and means the same thing at every run length.
+    // See `Timeline::rate_error`.
     assert!(
-        (typical - period).abs() <= 0.01 * period,
-        "typical frame interval was {:.4} ms, outside 33.3333 ms +-1%: {report}",
-        typical * 1e3
+        tl.rate_error().abs() <= 0.01,
+        "the run held a frame period {:+.3}% off 33.3333 ms, outside +-1%: {report}",
+        tl.rate_error() * 100.0
     );
 
     // No accumulated drift. Slot-normalised, so a skip forced by the host is
@@ -441,11 +487,12 @@ fn holds_thirty_fps_within_one_percent() {
         tl.len(),
         arrivals.len()
     );
-    let on_the_wire = median(&sorted(arrival_gaps(&state)));
+    let wire = tl.at_the_receiver(&arrivals);
     assert!(
-        (on_the_wire - period).abs() <= 0.01 * period,
-        "frames arrived {:.4} ms apart, outside 33.3333 ms +-1%: {report}",
-        on_the_wire * 1e3
+        wire.rate_error().abs() <= 0.01,
+        "frames arrived at a period {:+.3}% off 33.3333 ms, outside +-1%: {}",
+        wire.rate_error() * 100.0,
+        wire.summary()
     );
 }
 
@@ -574,13 +621,15 @@ fn other_frame_rates_are_paced_too() {
         let report = tl.summary();
         eprintln!("{fps} fps: {report}");
 
-        // The median again, not frames over elapsed: these runs are a second
+        // The slope again, not frames over elapsed: these runs are a second
         // and a half long, where the frame at t=0 is worth 4% on its own.
-        let typical = median(&sorted(tl.per_slot()));
+        // Three percent rather than one: at 60 fps this host's 4 ms of sleep
+        // overshoot is a quarter of a period, and there are only 90 slots to
+        // average it over.
         assert!(
-            (typical - period).abs() <= 0.03 * period,
-            "asked for {fps} fps, frames were {:.3} ms apart (want {:.3}): {report}",
-            typical * 1e3,
+            tl.rate_error().abs() <= 0.03,
+            "asked for {fps} fps and the run held a period {:+.3}% off {:.3} ms: {report}",
+            tl.rate_error() * 100.0,
             period * 1e3
         );
         assert!(
