@@ -123,3 +123,42 @@ re-exports the type but never constructs one, and `crates/demos` only uses
 `Panel`. `lab/` has its own private copy of the model and is untouched. So the
 only pictures that move are the simulator's window, its `--dump-dir` PNGs at
 non-255 brightness, and the idle `DIM` screen (`screens.rs`, brightness/10).
+
+### Evidence, and what a camera would see (2026-09-19)
+
+- `cargo test -p screeny-panel -p screeny-sim`: green (9 + 22 + the sim's ten
+  integration binaries). `cargo clippy --release -p screeny-panel -p
+  screeny-sim --all-targets`: clean.
+- Root `cargo test --release --no-fail-fast`: green apart from
+  `screeny/tests/pacing.rs holds_thirty_fps_within_one_percent`, the card 093
+  flake - four workers were building on this machine at the time. Re-run alone:
+  all 4 pacing tests pass in 18.57 s. Nothing in this change is near the pacer.
+- `screeny-sim --headless --exit-after 3 --brightness 128`: starts, advertises,
+  exits 0, no window, no process left behind. `ps` clean at hand-off.
+- **`--dump-dir` cannot show this change.** `dump.rs` is fed
+  `Snapshot::decoded` on purpose ("this is for `cmp`"), so the PNGs are
+  byte-identical at every brightness. That is a gap, not a bug: card 135.
+  Instead the ramp was rendered through the two `Lut`s directly, in a
+  throwaway program outside the repo, and eyeballed: at 160 and 128 the new
+  model's ramp has the same fine steps as at 255 and is simply darker, while
+  the old model's visibly widens into blocks at the dark end.
+- What a camera would see, if card 061 ever runs: 64 steps at the bench cap,
+  not 41. The old model also predicted 30 sRGB codes crushed to black at 160
+  against the panel's 22, so it drew dark detail as flat black that the panel
+  does show. Judged in the window until then, per the card.
+
+### Scope
+
+Cards written, not done: **135** (the simulator can only dump the decoded
+frame, so nothing headless can show the panel's picture) and **136** (the
+brightness control has 25 real steps, 1..=5 lights none, and
+`docs/design/protocol-v1.md` section 6.6 says neither). A dated note went on the
+end of card 102 with the dimming arithmetic and what it means for
+`crates/art`'s 32/16-level "dim room" options.
+
+No edits inside card 080's files (`sequence`, `arbitration`, `control`,
+`telemetry`, `malformed`, `tests/common/`): `control.rs`'s brightness
+assertions - "dimmer than at full" and "brightness 0 is black" - hold under the
+new model unchanged, and `tests/control.rs` passes untouched. Nothing in
+`crates/studio`, `crates/screeny`, `crates/art` or `crates/probe` was touched;
+neither `art` nor `studio` even depends on `screeny-panel`.
