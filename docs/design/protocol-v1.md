@@ -1080,6 +1080,224 @@ rediscovered later (card 041):
   wire), the one request type that holds a PSK prints its length and not its
   bytes, and `crates/provision`'s machine has nowhere to put one at all.
 
+### 8.5 The HTTP API: transport
+
+The device serves one HTTP API and two HTML pages. The routes, the request and
+reply bodies, the error shape and every bound are **one crate**,
+`crates/device-api` (`screeny-device-api`), which the firmware, `crates/sim`
+and the Studio all link; `crates/device-api/tests/golden/` holds a checked-in
+example of every body, and `screeny-probe http` holds a device to the 38 rules
+of `crates/probe/src/http/rules.rs`. Rule numbers are cited below where one
+pins a sentence.
+
+| | |
+|---|---|
+| Transport | **TCP 80**, fixed. No TLS. |
+| Version | HTTP/1.1. Every response carries `Connection: close`; keep-alive is off. |
+| Authentication | none (§8.4). |
+| Advertised | `_http._tcp.local.` on port 80, sharing the instance name, host name and `A` record of §5.1's `_screeny._udp`. |
+| Concurrency | a device SHOULD serve at least **two** connections at once. |
+| Timeouts | 3 s to send a request line, 5 s to finish a request that has started, 5 s for the response to be accepted. |
+
+Keep-alive is off on purpose: with a handful of workers, one browser polling a
+page would hold one of them for as long as the tab is open, and closing after
+each response bounds the worst wait to one response time. Two workers is a
+floor rather than a detail because smoltcp has **no listen backlog** - a
+connection arriving while every worker is busy is *refused*, not queued - and
+iOS does not retry a refused connection where macOS retries after a second.
+
+**Which interface.** Every worker follows the soft-AP: while the AP of §8.1 is
+up the API is served on 192.168.4.1 and **not** on the station address, and the
+rest of the time it is served on the station address. The station has no
+network while the portal is up, so there is nobody on the LAN for the borrowed
+worker to have served; the window where both exist is §8.3's 30 s grace.
+
+The request line, the headers and the body of a buffered route MUST fit the
+server's request buffer together (1,536 bytes in firmware 0.5.1, against a
+desktop browser's ~700 bytes of headers and §8.8's 384-byte body bound). A
+request that overruns it is **answered** `payload_too_large`, not dropped.
+
+### 8.6 The HTTP API: routes
+
+| Method | Path | Request | Reply | Request <= |
+|---|---|---|---|---|
+| GET | `/` | - | the status page, or the setup page on the AP (§8.9) | - |
+| GET | `/setup` | - | the setup page (§8.9) | - |
+| POST | `/setup` | urlencoded `ssid=&psk=` | the setup page, saying what is happening | 384 |
+| GET | `/api/v1/status` | - | `StatusReply` | - |
+| GET | `/api/v1/telemetry` | - | `TelemetryReply` | - |
+| GET | `/api/v1/networks` | - | `NetworksReply` | - |
+| GET | `/api/v1/wifi` | - | `WifiReply` | - |
+| POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
+| POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
+| POST | `/api/v1/firmware` | **reserved**, see below | - | - |
+| POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
+| POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |
+
+`GET` and `POST` are the only methods this API defines; §8.8 says what any
+other verb gets. `api` is the first field of `StatusReply` and is
+`API_VERSION` = 1, the same 1 as the path prefix: a breaking change to any
+shape here bumps it and moves the prefix, a new optional field does not.
+
+- **`status`** is the `GET_INFO` and telemetry numbers a person or the Studio
+  wants in one request, plus `boot_id` (a random `u32` drawn once at boot, so a
+  reader can tell a reboot from a link flap without inferring it from uptime
+  going backwards), `stack_free`, `store_errors`, `portal`, `fw_slot`,
+  `fw_state` and `reset_reason`. Its `wifi_state` is **the link** -
+  `connected` / `connecting` / `disconnected` - and never the sticky result of
+  the last credentials attempt (§8.3; probe rule 8).
+- **`telemetry`** is the 48 bytes of §6.7 as named fields, so a browser and a
+  UDP sender see the same numbers (rule 10). It is the numbers and not an
+  interpretation of them: `state` and `last_codec` are the raw bytes here,
+  where `status.state` is the same byte as a word.
+- **`networks`** is a scan: at most 16 entries, strongest first, one really
+  performed scan per `SCAN_MIN_INTERVAL_MS` = 10 s (rules 11, 12). A scan takes
+  the radio off its channel for the better part of a second per band, which on
+  a device that is also receiving frames is a visible stall, so a caller that
+  asks sooner gets `rate_limited` and SHOULD be told in `detail` how long to
+  wait; being refused does not push the window out. An SSID that is not UTF-8
+  is left out of the list rather than shown wrongly.
+- **`GET wifi`** is what the setup page's reload reads: `{state, ssid, ip,
+  reason}`, where a trial in flight or just finished wins over the station's
+  own state for as long as §8.3 says it is current, and `reason` is
+  `auth` / `not_found` / `other`. `reason` is non-null exactly when `state` is
+  `failed` (rule 14).
+- **`POST wifi`** and **`POST /setup`** take the same bytes and start the same
+  trial (§8.3); one answers JSON and the other HTML. The reply goes out
+  **before** the radio work starts, for §8.2's reason, and the credentials
+  reach flash only after they have joined. Neither carries a `persist` bit.
+- **`settings`** changes any subset of the three live settings; an absent field
+  means "leave it alone" and an empty request is a no-op, not an error. The
+  reply is the whole settings state after clamping, not an echo, so a caller
+  that moved only the brightness still learns the name and a caller whose
+  brightness was capped learns the cap. `name: ""` means "go back to
+  `screeny-<id>`" - a rule of this route only; `SET_NAME` (§6.3) takes the
+  string literally.
+- **`reboot`** takes the same four bytes as §6.3's `REBOOT` magic, spelled
+  `"RBOO"`, so that a crawler, a prefetcher or a captive probe cannot restart
+  the panel. A body that parses with the wrong word is `out_of_range`, not
+  `bad_request`: what is wrong is the value (rule 34). The reply goes out
+  before the restart.
+- **`identify`** mirrors `IDENTIFY`, whose wire field is a `u16` of
+  milliseconds, so a `duration_ms` above 65535 is `out_of_range` (rule 22).
+- **`firmware`** is **reserved for cards 240/241** and is not specified here.
+  Until it lands, a device MUST answer it `unavailable` rather than accepting
+  an upload it cannot vouch for (§8.8).
+
+`settings` and `identify` are carried out by building the control request of
+§6.3 and handing it to the same code the control port calls, with `req_id` 0 -
+§6.1's "no reply wanted". The brightness cap, the name truncation, the idle
+mode, the debounced store write and the mDNS re-announce are therefore one
+implementation with two front doors.
+
+### 8.7 The HTTP API: bodies and errors
+
+Request bodies are JSON, **except** `POST /api/v1/wifi` and `POST /setup`,
+which are `application/x-www-form-urlencoded`. That is not a style choice: an
+802.11 SSID is a byte string and not text, and the form is what an iOS captive
+mini-browser can post at all. The parser takes bytes, decodes `+` and `%XX`,
+ignores unknown keys so a page can carry a hidden field without a firmware
+change, treats a missing or empty `psk` as an open network, refuses an empty
+`ssid` (§8.2 says `ssid_len` is `1..=32`), and **refuses a duplicate key**
+rather than taking the last one: `psk=right&psk=wrong` must not be a coin toss
+about what reaches flash.
+
+An SSID is bytes on the way in and text on the way out. One that is not UTF-8
+is reported as `null` rather than lossily converted, because a lossy conversion
+changes its length and misleads whoever is comparing it with what they typed.
+
+Everything that fails answers **one shape** on every route, including the 404
+for an unknown path:
+
+```json
+{"error":"<code>"}
+{"error":"<code>","detail":"<a short sentence, <= 48 characters>"}
+```
+
+`detail` is for the person and is absent - not `null` - when there is nothing
+useful to add; a sentence that does not fit is dropped rather than truncated.
+The code is for the program and the HTTP status is a property of the code, so
+that a browser switching on the status and a caller switching on the code
+cannot disagree (rules 37, 27):
+
+| Status | Codes |
+|---|---|
+| 400 | `bad_request`, `bad_form`, `bad_json`, `out_of_range` |
+| 401 | `unauthorized` (reserved, §8.4) |
+| 403 | `forbidden` |
+| 404 | `not_found` |
+| 405 | `method_not_allowed` |
+| 409 | `busy` |
+| 413 | `payload_too_large` |
+| 429 | `rate_limited` |
+| 500 | `storage`, `wifi`, `internal` |
+| 503 | `unavailable` |
+
+That is the closed set. A refusal a sender would have met on the control port
+has the same name here: §6.5's `ERR_BAD_LENGTH` and `ERR_VERSION` are
+`bad_request`, `ERR_UNKNOWN_OP` is `not_found`, `ERR_BUSY` is `busy`,
+`ERR_BAD_ARG` is `out_of_range`, `ERR_STORAGE` is `storage`, `ERR_WIFI` is
+`wifi`, `ERR_NOT_PERMITTED` is `forbidden` and `ERR_RATE_LIMITED` is
+`rate_limited`.
+
+### 8.8 The HTTP API: limits, methods and paths
+
+- **Every route declares its own request bound** (§8.6's last column) and it is
+  enforced on that route, not only at the global maximum of 384 bytes: a
+  153-byte body to `identify` is `payload_too_large`, although 153 is well
+  inside 384 (rules 28, 29). The global bound is the WiFi form's, which is the
+  longest body any route takes.
+- **Reply bounds are documentation, not buffers.** A JSON reply is measured
+  into a counting writer and then streamed, so no reply needs a buffer; the
+  bounds exist for callers deserialising into fixed arrays and for the honest
+  answer to "how big can this get" (rule 36). Worst case: `status` 1,039,
+  `telemetry` 426, `networks` 3,710, `wifi` 345, `settings` 247,
+  `{"result":...}` 24. They assume every byte of every name escaping to six
+  characters, which is why a real status reply is about 385 bytes.
+- **A route this build cannot serve answers `unavailable` (503)**, not 404 and
+  not a qualified success: the route exists and the device cannot serve it in
+  this state, and retrying later is the right behaviour. Firmware 0.5.1 answers
+  it for `GET /api/v1/networks` and `POST /api/v1/firmware`.
+- **A known path with a method it does not have is 405; an unknown path is
+  404** (rules 25, 27), and a verb this API has no method for at all - `PUT`,
+  `DELETE`, `HEAD` - is 405 **in the error shape above**, not a server's
+  built-in plain text (rule 26). `HEAD /` is a 405 by that rule.
+- **A path is matched decoded and exactly**: `/api/v1/%73tatus` is `status`,
+  and `/api/v1/status/` is not a route.
+
+### 8.9 The HTTP API: the pages and the captive catch-all
+
+`GET /` on the station interface is the **status page**: one self-contained
+HTML file with its status table already rendered by the server, so that it
+works with JavaScript disabled, and with no external stylesheet, script, font
+or image - a device on a network with no route out must not be waiting on a CDN
+(rule 30). With JavaScript the page replaces the same table every few seconds
+from `GET /api/v1/status`.
+
+`GET /` on the **AP** interface is the setup page of §8.1 instead: a client
+that was dragged there by the QR code or by the catch-all is there to type a
+network name, not to read a status table. `/setup` itself answers on both
+interfaces, so the form is reachable over the LAN too.
+
+**The captive catch-all.** On the AP interface, and only while the AP is
+actually up, a request for a path this server does not have is answered with
+**the setup page itself, `200`, `Cache-Control: no-store`** - not a redirect to
+it, and not a 404. `/`, `/setup` and every route of §8.6 are unaffected, so a
+phone on the setup network can still read the API. On the station interface the
+same request is an ordinary 404: the catch-all is a property of the **listener**
+and not of the `Host:` header.
+
+It is a `200` and not a `302` because of what the owner's phone did on
+2026-09-20 (iOS 18.7, card 223). The captive sheet fetches
+`hotspot-detect.html` on one connection and opens a second it never uses, which
+holds a worker for its read timeout; a redirect made it open a *third* within
+milliseconds, while the worker that had just answered was between `close` and
+`accept`; smoltcp refused the SYN and iOS did not retry it, so the sheet said
+it could not connect to the server. Any reply that is not Apple's `Success`
+page, not a `204` and not Microsoft's text marks the network as captive, so the
+form does that job from the connection the sheet already has. `no-store` is
+there because a cached captive probe is a sheet that never opens again.
+
 ---
 
 ## 9. Sender implementation notes (macOS, and Linux)
@@ -1292,6 +1510,25 @@ implementation is for. None of them changes a byte on the wire.
 29. **A datagram larger than 1472 bytes** - discarded and counted, not parsed
     from its truncated prefix (section 1).
 30. **What `frames_rejected` counts** - the frame port only (section 2.2).
+
+Closed by card 225 (2026-09-20), bringing section 8 in line with what firmware
+0.5.1 does and giving the HTTP API a normative home. Nothing here changes a
+byte on the wire; `txtvers` and `proto` are unaffected.
+
+31. **The serial console of 8.1** - struck. It was never built and will not be:
+    the portal, the settings page and `SET_WIFI` are the three paths
+    (device-web decision 5, section 8.1).
+32. **Compile-time credentials** - step 2 of the join order, present only in a
+    `bench-wifi` build, and they seed an **empty** store rather than replacing
+    a stored pair that failed (device-web decision 6, section 8.3).
+33. **What a posted pair does** - one trial machine behind three front doors,
+    committing nothing until it has joined, not retrying an authentication
+    failure, and falling back to the stored network with a sticky `FAILED`
+    when it was posted to a device that was already online (section 8.3).
+34. **The HTTP API** - sections 8.5-8.9: transport, the route table, the
+    bodies, the one error shape and its statuses, the limits, the two pages
+    and the captive catch-all. `POST /api/v1/firmware` is **reserved** for
+    cards 240/241 and is deliberately not specified.
 
 Still open (do not block implementation):
 

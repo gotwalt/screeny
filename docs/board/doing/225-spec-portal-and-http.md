@@ -105,3 +105,48 @@ around the captive answer. Every claim in the edits below is from those files.
   invariant now says "never carried by any HTTP reply" and "never written to a
   log line" instead of "printed by the serial console", and names the three
   places that enforce it.
+
+### Step 2 - the HTTP API, sections 8.5-8.9
+
+**Where it went, and why not section 9.** A new top-level section would have
+renumbered 9, 10 and 11, and "spec 9.1", "spec 9.2", "spec 9.4" are cited from
+about twenty places in `crates/screeny` (the pacer, the socket notes, the
+discovery sequence) - which a docs-only card cannot fix. So the API is
+**8.5 transport, 8.6 routes, 8.7 bodies and errors, 8.8 limits and methods,
+8.9 the pages and the captive catch-all**, at the same `###` level as the rest
+of section 8, and section 8's title now names it. §8.4 keeps its number, which
+matters: "spec 8.4" is cited from `crates/device-api`, `crates/provision` and
+`firmware/` as the no-PSK invariant.
+
+What is in them, all checked against code:
+
+- 8.5: TCP 80, no TLS, HTTP/1.1 with `Connection: close`, keep-alive off and
+  why, at least two workers and why (no smoltcp backlog; iOS does not retry a
+  refused SYN), the 3/5/5 s timeouts, `_http._tcp` on port 80, that every
+  worker follows the soft-AP so the LAN has no HTTP while the AP is up, and
+  that head + body must fit the request buffer (1,536) or be answered `413`.
+- 8.6: the table (the seven JSON routes, `POST /api/v1/firmware` reserved, plus
+  `/` and `/setup`), with each route's request bound, and a paragraph per route
+  for the semantics that are not in the shape: `status.wifi_state` is the link,
+  `boot_id`, telemetry's raw bytes, the scan cap and rate limit, `GET wifi`'s
+  trial precedence and `reason`, reply-before-radio, `settings` returning the
+  whole state and its `name: ""` rule, `"RBOO"`, `duration_ms` bounded by the
+  `u16` on the wire. Ends with the note that `settings` and `identify` are
+  carried out by building the §6.3 control request with `req_id` 0.
+- 8.7: why two routes are urlencoded and not JSON, the form rules (`+`, `%XX`,
+  unknown keys ignored, duplicate key refused, missing `psk` = open, empty
+  `ssid` refused), SSID bytes-in/text-out, the one error shape and the
+  status-per-code table, and §6.5's codes mapped onto it.
+- 8.8: per-route bounds enforced on the route (not only the global 384), reply
+  bounds are documentation because replies are streamed (with the six numbers),
+  `unavailable` for a route a build cannot serve, 404/405 including a verb the
+  API has no method for and `HEAD /`, and decoded-and-exact path matching.
+- 8.9: `GET /` is the status page on the LAN and the setup page on the AP,
+  `/setup` answers on both, and the catch-all - AP listener only, while the AP
+  is up, `200` + the setup page + `no-store`, never a `302`, a property of the
+  listener and not of `Host:` - with the iOS reason from card 223.
+- Section 11 gains a "Closed by card 225" block, items 31-34, noting that
+  nothing here changes a byte on the wire.
+
+Probe rule numbers cited in the text: 8, 10, 11, 12, 14, 22, 25, 26, 27, 28,
+29, 30, 34, 36, 37, 38 - each beside the sentence it pins.
