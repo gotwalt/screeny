@@ -77,3 +77,70 @@ port, no LAN, no camera. Bounded commands only. Never write a real SSID or passw
 (dummies `Example-Wifi1` / `password9`). Leave `crates/art` and `crates/studio` alone.
 
 ## Log
+
+### Step 1 - the await chain between "response written" and "listening again"
+
+Read, at the pinned versions: `picoserve 0.20.0`, `embassy-net 0.9.1`, `smoltcp 0.13.1`,
+all under `~/.cargo/registry/src/index.crates.io-.../`. Line numbers below are in those
+sources.
+
+**The chain, in order, with what each await is waiting for:**
+
+1. `picoserve/src/lib.rs:466` - the handler's `write_to` returns `ResponseSent`. Every
+   byte of the reply is now in smoltcp's 1,024-byte tx buffer (or already on the wire);
+   `Content-Length` was measured by the counting pass before the first byte went out.
+2. `lib.rs:468-473` - `KeepAlive::Close`, so `LoopResult::Stop(Ok(..))` and the serve
+   loop falls out of `serve_and_shutdown`'s inner `async` block. No await.
+3. `lib.rs:518-525` - `connection_flags.connection_must_be_aborted()` is false for a
+   request whose body was read (or had none), so it is
+   **`socket.shutdown(&config.timeouts, timer)`**, not `abort`.
+4. `picoserve/src/io.rs:339-368`, the `impl Socket<EmbassyRuntime> for TcpSocket`:
+   a. `self.close()` - `embassy-net/src/tcp.rs:416` -> `smoltcp::socket::tcp::close()`.
+      Queues the FIN behind whatever is still in the tx buffer. Not an await.
+      smoltcp will emit it as soon as everything buffered has been *sent*
+      (`smoltcp/src/socket/tcp.rs:2285-2291`: `can_fin` needs
+      `remote_last_seq == local_seq_no + tx_buffer.len()`; Nagle explicitly does not
+      hold a FIN back, line 2281's `&& !want_fin`).
+   b. `io.rs:351-364` - `select(` `run_with_timeout(timeouts.read_request /* 5 s */,`
+      `rx.discard_all_data())`, `tx.flush().and_then(pend_forever)` `)`.
+      `discard_all_data` (`io.rs:16-22`) loops `read()` **until it returns 0**, and
+      embassy-net returns `Ok(0)` only for `smoltcp::RecvError::Finished`
+      (`embassy-net/src/tcp.rs:538`), i.e. only once **the peer has closed its own write
+      half**. The other arm can never finish the select: `tx.flush()` is followed by
+      `pend_forever`. So this await is **"wait until the client's application calls
+      `close()`"**, bounded only by the 5 s `read_request` timeout.
+      *This is the peer-dependent await, and it is the whole bug.*
+   c. `io.rs:366-371` - `run_with_timeout(timeouts.write /* 5 s */, self.flush())`.
+      embassy-net's flush (`tcp.rs:629-651`) is pending while
+      `send_queue() > 0` (unACKed data), or the state is `FinWait1 | Closing | LastAck`
+      (our FIN unACKed), or a RST is still queued. So it resolves once **everything we
+      sent, FIN included, has been acknowledged**. Peer-dependent too, but only by one
+      ACK, and BSD/macOS force `TF_ACKNOW` on a FIN, so it is ~1 RTT.
+5. The `TcpSocket` is consumed by `shutdown(self)` and dropped at its end;
+   `Drop` (`embassy-net/src/tcp.rs:467`) removes the handle from smoltcp's `SocketSet`,
+   so no TIME-WAIT entry lingers - the slot is free immediately.
+6. `picoserve/src/lib.rs:766-771` - `log_info!("{} requests handled from {:?}", ..)`.
+7. `lib.rs:723-733` - `continue`, a fresh `TcpSocket::new`, `log_info!("{}: Listening on
+   TCP:{}...", ..)`, then `socket.accept(port).await`.
+
+**Which part depends on the client: 4b, entirely.** The device is parked until the
+*client application* closes its socket. `screeny-probe`'s own client
+(`crates/probe/src/http/client.rs:269-298`) stops reading the moment `Content-Length` is
+satisfied and drops the `TcpStream` when `exchange` returns, so on a good day its FIN is
+one RTT behind - but nothing in the protocol requires that, macOS schedules the close
+whenever it likes, and a browser or iOS's captive sheet can sit on a read connection for
+much longer. That is exactly the shape of card 223 finding 3 (the sheet's second,
+unused connection pinning a worker) seen from the other end of the connection, and it is
+why an A/B with no firmware change could go from 30/0/8 to 9-17 refusals: the variable
+is on the Mac.
+
+**Second, smaller contributor, on the same path:** steps 6 and 7 are two `log_info!`s
+per connection through `esp-println`'s **blocking** UART at 230,400 baud, plus
+`"Received connection from {:?}"` at `lib.rs:747`. ~150 bytes of serial per connection is
+~6.5 ms of core 0 spent *between* the close and the `accept` - on top of the formatting.
+The module already says per-request logging belongs on the setup network only
+(`firmware/src/http.rs:1285-1304`); picoserve's three lines were never subject to that
+rule because picoserve writes them.
+
+**Baseline build (unchanged tree, for the before/after):** `.stack` **27,088**,
+`.bss` 110,272, `.data` 59,236, image 974,181.
