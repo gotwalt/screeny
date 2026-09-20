@@ -102,3 +102,36 @@ there); `cargo clippy -p screeny-sim --all-targets` no worse than before your ch
 (run it with a timeout and kill it; leave nothing running).
 
 ## Log
+
+### 2026-09-20, worker-224: reading, and the shape of the thing
+
+Read `CLAUDE.md`, `docs/README.md`, this card, `docs/design/device-web.md` ("The HTTP
+API" and the build order), `docs/research/007-device-web-and-portal.md` sections 4.3/4.4
+and 5.2, all of `crates/device-api/src/`, `crates/provision/src/{lib,machine,screen}.rs`,
+all of `crates/sim/src/`, and `crates/receiver/src/lib.rs`'s `Host` trait and public
+methods. Branch created off `main` at 2e04a4a (the worktree was based on b94ddcd, so a
+`git merge main` came first, as the prompt said it would).
+
+Decisions made before writing anything:
+
+- **A hand-rolled HTTP/1.1 server over `TcpListener`, no crate.** `tiny_http` is not
+  vendored under `~/.cargo/registry/src/`, so taking it means a network fetch and four
+  new transitive crates (`ascii`, `chunked_transfer`, `httpdate`, `log`) for a server
+  that needs GET, POST, `Content-Length`, one streamed body and a `Host` rule. The
+  simulator is `crates/studio`'s dev-dependency, so its dependency list is everybody's.
+  Hand-rolling also keeps the simulator honest about the firmware's constraints: no
+  chunked replies, an explicit `Content-Length` on everything, `Connection: close`.
+  New dependencies are therefore only `screeny-device-api` (`std` feature, for
+  `std::error::Error`), `screeny-provision`, and `serde_json` (already in the workspace
+  via `crates/studio`; `crates/device-api`'s golden tests prove it writes the same bytes
+  as the firmware's `serde-json-core`).
+- **HTTP mutations go through the *UDP* control path.** `POST /api/v1/settings`,
+  `/identify` and `/reboot` build a `screeny_proto::control::Request`, write it with
+  `Request::write` and feed it to the same `Core::control` a datagram would reach; the
+  reply datagram is decoded for its error code and then dropped instead of being sent.
+  So brightness clamping, name truncation and `REBOOT`'s magic word cannot differ between
+  the browser and a UDP sender, because they are the same code. Card 222 should share
+  its apply-path the same way rather than writing a second one.
+- **`GET_WIFI`, the telemetry state byte, `GET /api/v1/wifi` and the panel all read one
+  `screeny_provision::Provisioner`**, held inside `Core` under the existing
+  `Mutex<Core>`, so they cannot disagree and no new lock order appears.
