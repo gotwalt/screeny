@@ -4,8 +4,8 @@ title: SendStats::actual_fps() counts the frames at both ends of a stream
 type: build
 hardware: no
 depends: []
-owner:
-branch:
+owner: worker-146
+branch: card/146-147-153-sender-fixes
 ---
 
 ## Goal

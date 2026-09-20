@@ -4,6 +4,8 @@ title: "`screeny discover` tells a Linux container to open macOS System Settings
 type: build
 hardware: no
 depends: []
+owner: worker-146
+branch: card/146-147-153-sender-fixes
 ---
 
 ## Goal

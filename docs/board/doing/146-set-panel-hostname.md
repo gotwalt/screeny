@@ -4,6 +4,8 @@ title: set_panel takes an instance name or an address, and a hostname looks like
 type: build
 hardware: no
 depends: [106]
+owner: worker-146
+branch: card/146-147-153-sender-fixes
 ---
 
 ## Goal
