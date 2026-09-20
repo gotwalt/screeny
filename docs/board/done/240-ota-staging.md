@@ -643,3 +643,29 @@ written nowhere.
    against, and spec 8.6 now says so - but it is the one place this API's status
    codes and its error codes deliberately part company, and it is the owner's to
    overrule if he would rather have a 4xx.
+
+**Orchestrator, after the merge (2026-09-20): merged as 9f3c32a; fw 0.6.0 is on the device.**
+Built from `main`: `.stack` 26,944. Boot: `store: running from 0x10000; an upload would
+stage into 0x210000 (2048 KB)`. Mac wired, WiFi off, serial attached throughout.
+- `screeny-probe http`: **37 passed, 0 failed, 6 skipped, 0 connects refused** (rules 23, 24
+  and 40-43 run on the device now; the serial log shows `upload refused: WrongChip` in 3 ms
+  and `WrongProject` in 63 ms, **0 sectors erased** for either).
+- `screeny-probe fw-upload screeny-fw-0.6.0-upload.bin` **under the Studio's live 30 fps
+  stream**: `HTTP 200 in 25.4 s (38 KB/s)`, `ok true written 998448`. The instrument:
+  `998448 bytes in 244 sectors, 25297 ms wall, 12042 ms flash-busy (47%) | erase us
+  min/mean/max 34246/39896/54580 | write us 7229/9457/11236 | slowest sector 63923 us` and
+  `the radio meanwhile - frames +729, stream lost +200, link downs +0, rssi -57 -> -57,
+  render max 2799 us, heap 54424 of 90112`, then `staged image accepted - 998448 bytes,
+  5 segments, version "0.6.1"`.
+- **Research 006 section 4's open risk is closed for this unit: 244 erases of ~40 ms (55 ms
+  worst) with interrupts masked, and the WiFi link never dropped.** The cost is the
+  stream: ~21% of frames lost for the 25 s of the upload (729 shown of ~930 sent), which
+  decision 7 allows - the updating screen has the panel anyway. 006's 50 ms / 8 ms
+  estimates were right to within 20%.
+- After it: `fw 0.6.0`, `fw_slot ota_0`, `fw_state valid` - nothing was activated, as
+  designed; `stack_free` 11,584; `/api/v1/panic` clean; stream back at 30 fps, zero drops.
+- UDP conformance once, panel released: **60/0/4**.
+- Not run: the truncated image with `--force` and an explicit reboot-then-check (this card
+  never writes `otadata`, and card 241's bench will reboot the device many times).
+  The failed-upload-answers-200 question (worker's item 3) stands as built: it matches the
+  simulator, the probe and the spec; the owner can overrule it.
