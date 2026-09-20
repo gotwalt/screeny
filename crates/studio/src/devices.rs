@@ -81,6 +81,10 @@ pub struct DeviceRecord {
     /// [`crate::devhttp::DEFAULT_PORT`]. Live only, never persisted: it is how
     /// a simulator - which cannot bind 80 without root - is talked to.
     pub http_port: Option<u16>,
+    /// Card 164: what this panel has cost the network, and how fast it is
+    /// costing it. Live only, never persisted - it is about this process's own
+    /// uptime, and a total read back out of a file would be a lie about it.
+    pub traffic: TrafficMeter,
     /// When this studio last asked this panel to reboot, and has not yet seen
     /// it come back (card 195).
     ///
@@ -207,6 +211,195 @@ impl Telem {
             jitter_us: t.jitter_us,
             decode_us: t.decode_us,
         }
+    }
+}
+
+// ------------------------------------ card 164: what a panel costs the net ----
+
+/// The rate's time constant: a change is most of the way into the figure after
+/// about this long.
+///
+/// Five seconds because the number is read by a person watching a page, and
+/// the two things worth seeing - a stream starting and a panel going away -
+/// should show up while they are still looking, without the figure twitching
+/// with every frame that is a few bytes larger than the last.
+pub const TRAFFIC_WINDOW: Duration = Duration::from_secs(5);
+
+/// **What is added per datagram to turn a payload into a figure for the
+/// wire**: an IPv4 header and a UDP header (`screeny::UDP_OVERHEAD`).
+///
+/// There is no equivalent for the HTTP path and none is invented: TCP's
+/// retransmissions, its ACKs and its handshake are invisible from user space,
+/// so [`Traffic::http`] is the bytes written to and read from the socket and
+/// nothing else. The README says so, and so does the page.
+const UDP: u64 = screeny::UDP_OVERHEAD;
+
+/// Bytes and packets one way on one path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Flow {
+    /// Payload bytes. For UDP, the datagram's payload; for HTTP, the bytes
+    /// written to or read from the socket. Headers are **not** in here.
+    pub bytes: u64,
+    /// Datagrams, for a UDP path. For HTTP: requests one way, replies the
+    /// other - a connection's worth, not a segment's.
+    pub packets: u64,
+}
+
+impl Flow {
+    fn take(&mut self, w: screeny::Wire) {
+        self.bytes += w.bytes;
+        self.packets += w.packets;
+    }
+
+    /// Payload plus `overhead` bytes per packet.
+    fn on_the_wire(&self, overhead: u64) -> u64 {
+        self.bytes + self.packets * overhead
+    }
+}
+
+/// One path, both ways.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct PathFlow {
+    pub out: Flow,
+    /// `in` is a keyword in Rust and the obvious name on the wire.
+    #[serde(rename = "in")]
+    pub inbound: Flow,
+}
+
+/// Bytes a second, each way, on each path.
+///
+/// **Computed in one place** - [`Registry::sample_traffic`], on the
+/// supervisor's own tick - so that every browser reads the same number and
+/// nothing has to divide two counters it fetched at two different moments. An
+/// exponentially weighted average with [`TRAFFIC_WINDOW`] as its time
+/// constant, which means the figure is independent of how often the tick
+/// happens to run.
+///
+/// These are **wire** bytes: payload plus [`UDP`] per datagram for the two UDP
+/// paths, and payload alone for HTTP.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct Rates {
+    pub out: f64,
+    #[serde(rename = "in")]
+    pub inbound: f64,
+    pub frames_out: f64,
+    pub frames_in: f64,
+    pub control_out: f64,
+    pub control_in: f64,
+    pub http_out: f64,
+    pub http_in: f64,
+}
+
+/// **What one panel has cost this studio's network, over every path.**
+///
+/// The three paths are the three conversations the studio has with a panel,
+/// and they are kept apart because they answer different questions:
+///
+/// * `frames` - the stream, UDP on the frame port, and the `TELEMETRY` and
+///   `BUSY` datagrams that come back along it. Nearly all of the traffic.
+/// * `control` - UDP on the control port: the telemetry poll, brightness,
+///   identify, rename, reboot, and the `GET_INFO` handshake at the head of
+///   every link session. Requests out, replies in.
+/// * `http` - TCP port 80 on the panel: `GET /api/v1/status` every ten
+///   seconds (card 180). Bytes written and bytes read.
+///
+/// **What is not here**, deliberately: the mDNS browse and the broadcast probe
+/// (card 141). Neither is traffic *with a panel* - a browse is multicast to
+/// nobody in particular and a probe is one datagram to the subnet that every
+/// panel answers - so attributing either to a device would be inventing a
+/// number.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct Traffic {
+    pub frames: PathFlow,
+    pub control: PathFlow,
+    pub http: PathFlow,
+    /// Every path together, **with the per-datagram overhead added**, so
+    /// `bytes` here is what the link carried rather than what the payloads
+    /// held. `packets` is the plain sum.
+    pub total: PathFlow,
+    pub rate: Rates,
+    /// The rate's time constant, in seconds, so the page can say what the
+    /// number is an average over rather than guessing.
+    pub window_s: f64,
+}
+
+/// The counters, plus what [`Registry::sample_traffic`] needs to turn them
+/// into a rate. Not on the wire: [`Traffic`] is.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrafficMeter {
+    /// Cumulative, and only ever growing.
+    pub totals: Traffic,
+    /// The last lifetime figure read off this device's link. The link is
+    /// rebuilt whenever the studio re-aims it, and a rebuilt link counts from
+    /// zero, so a figure **below** the last one is a new link and is taken
+    /// whole rather than as a difference.
+    last_link: screeny::LinkTraffic,
+    /// When the rate was last worked out, and the wire bytes it was worked out
+    /// from: `[frames_out, frames_in, control_out, control_in, http_out,
+    /// http_in]`.
+    at: Option<Instant>,
+    was: [u64; 6],
+}
+
+impl TrafficMeter {
+    /// The six wire figures, in the order [`TrafficMeter::was`] holds them.
+    fn wire(&self) -> [u64; 6] {
+        let t = &self.totals;
+        [
+            t.frames.out.on_the_wire(UDP),
+            t.frames.inbound.on_the_wire(UDP),
+            t.control.out.on_the_wire(UDP),
+            t.control.inbound.on_the_wire(UDP),
+            t.http.out.on_the_wire(0),
+            t.http.inbound.on_the_wire(0),
+        ]
+    }
+
+    /// Roll the totals up and advance the rate. `now` is passed in so that one
+    /// pass over the fleet uses one instant.
+    fn sample(&mut self, now: Instant) {
+        let t = &mut self.totals;
+        t.total.out = Flow {
+            bytes: t.frames.out.on_the_wire(UDP) + t.control.out.on_the_wire(UDP) + t.http.out.bytes,
+            packets: t.frames.out.packets + t.control.out.packets + t.http.out.packets,
+        };
+        t.total.inbound = Flow {
+            bytes: t.frames.inbound.on_the_wire(UDP) + t.control.inbound.on_the_wire(UDP) + t.http.inbound.bytes,
+            packets: t.frames.inbound.packets + t.control.inbound.packets + t.http.inbound.packets,
+        };
+        t.window_s = TRAFFIC_WINDOW.as_secs_f64();
+
+        let wire = self.wire();
+        let Some(then) = self.at.replace(now) else {
+            // The first pass has no interval to divide by, so it sets the
+            // baseline and reports nothing. A studio that has just started
+            // says "0 KB/s" for one tick rather than inventing a spike.
+            self.was = wire;
+            return;
+        };
+        let dt = now.saturating_duration_since(then).as_secs_f64();
+        if dt <= 0.0 {
+            return;
+        }
+        // 1 - e^(-dt/tau): the weight this interval carries. Working it out
+        // from dt rather than fixing it means the figure means the same thing
+        // whatever the tick period is, which is what lets the tests run the
+        // supervisor fast.
+        let alpha = 1.0 - (-dt / TRAFFIC_WINDOW.as_secs_f64()).exp();
+        let step = |rate: &mut f64, i: usize| {
+            let delta = wire[i].saturating_sub(self.was[i]) as f64;
+            *rate += alpha * (delta / dt - *rate);
+        };
+        let r = &mut self.totals.rate;
+        step(&mut r.frames_out, 0);
+        step(&mut r.frames_in, 1);
+        step(&mut r.control_out, 2);
+        step(&mut r.control_in, 3);
+        step(&mut r.http_out, 4);
+        step(&mut r.http_in, 5);
+        r.out = r.frames_out + r.control_out + r.http_out;
+        r.inbound = r.frames_in + r.control_in + r.http_in;
+        self.was = wire;
     }
 }
 
@@ -749,6 +942,106 @@ impl Registry {
         }
     }
 
+    // ----------------------------- card 164: what this panel costs the net ----
+
+    /// **Read a player's link totals into this device's counters.**
+    ///
+    /// The link's figure is a lifetime one and only ever grows, so the
+    /// ordinary case is a difference. The exception is a link the studio threw
+    /// away and rebuilt - re-aiming it at a resolved address, output switched
+    /// off and on, a panel that moved - which counts from zero again; a figure
+    /// below the last one is exactly that, and is taken whole.
+    ///
+    /// Called once a second from the supervisor, which is the one place that
+    /// already walks every player. Nothing on the frame path touches this.
+    pub fn metered_link(&self, id: &str, now: screeny::LinkTraffic) {
+        let mut devices = self.lock();
+        let Some(d) = devices.get_mut(id) else { return };
+        let m = &mut d.traffic;
+        // **One decision for the whole link**, not one per counter. A rebuilt
+        // link resets every field at once, and the frame counters are the ones
+        // that will have moved, so a single field going backwards is what
+        // says so - and the handshake, whose figure is the same 24 bytes in
+        // both lives, is then taken whole with the rest rather than looking
+        // unchanged.
+        let was = m.last_link;
+        let back = |now: screeny::Wire, was: screeny::Wire| now.packets < was.packets || now.bytes < was.bytes;
+        let fresh = back(now.frames.out, was.frames.out)
+            || back(now.frames.inbound, was.frames.inbound)
+            || back(now.control.out, was.control.out)
+            || back(now.control.inbound, was.control.inbound);
+        let step = |to: &mut Flow, now: screeny::Wire, was: screeny::Wire| {
+            to.bytes += if fresh { now.bytes } else { now.bytes - was.bytes };
+            to.packets += if fresh { now.packets } else { now.packets - was.packets };
+        };
+        step(&mut m.totals.frames.out, now.frames.out, was.frames.out);
+        step(&mut m.totals.frames.inbound, now.frames.inbound, was.frames.inbound);
+        step(&mut m.totals.control.out, now.control.out, was.control.out);
+        step(&mut m.totals.control.inbound, now.control.inbound, was.control.inbound);
+        m.last_link = now;
+    }
+
+    /// One control request, on this device's control port: what it cost, both
+    /// ways. A fresh [`screeny::ControlClient`] per request, so this is added
+    /// rather than differenced.
+    pub fn metered_control(&self, id: &str, t: screeny::Traffic) {
+        if let Some(d) = self.lock().get_mut(id) {
+            d.traffic.totals.control.out.take(t.out);
+            d.traffic.totals.control.inbound.take(t.inbound);
+        }
+    }
+
+    /// One `GET /api/v1/status` on this device's own HTTP port: the bytes
+    /// written and the bytes read.
+    ///
+    /// Counted **whether or not the read worked**: a request that timed out
+    /// still went out, and a reply that turned out not to be this API still
+    /// came down the wire. `packets` here is one request and one reply, not
+    /// segments - TCP's are not visible from user space and are not guessed
+    /// at, which is also why no overhead is added to this path.
+    pub fn metered_http(&self, id: &str, out: u64, inbound: u64) {
+        if let Some(d) = self.lock().get_mut(id) {
+            let t = &mut d.traffic.totals.http;
+            if out > 0 {
+                t.out.bytes += out;
+                t.out.packets += 1;
+            }
+            if inbound > 0 {
+                t.inbound.bytes += inbound;
+                t.inbound.packets += 1;
+            }
+        }
+    }
+
+    /// **Work out every device's rate, once.**
+    ///
+    /// The supervisor calls this on its own tick and nothing else does, which
+    /// is what makes the figure the same in every browser: `/api/v1/status`
+    /// only reads it. Every device is sampled, including one with no player
+    /// and one that has gone away, so a panel that stops being sent frames
+    /// *decays to zero* rather than freezing at whatever it was last doing.
+    pub fn sample_traffic(&self) {
+        self.sample_traffic_at(Instant::now());
+    }
+
+    /// [`Registry::sample_traffic`] at a given instant.
+    ///
+    /// One instant for the whole pass, so two devices sampled in the same tick
+    /// divide by the same interval. Exposed so that a test can drive a
+    /// five-second time constant without waiting five seconds; the supervisor
+    /// passes `Instant::now()`.
+    pub fn sample_traffic_at(&self, now: Instant) {
+        for d in self.lock().values_mut() {
+            d.traffic.sample(now);
+        }
+    }
+
+    /// What one device has cost, for `/api/v1/status`.
+    #[must_use]
+    pub fn traffic(&self, id: &str) -> Traffic {
+        self.lock().get(id).map(|d| d.traffic.totals).unwrap_or_default()
+    }
+
     /// Record that a control request failed. Logged by the caller, once.
     pub fn control_failed(&self, id: &str, why: String) {
         if let Some(d) = self.lock().get_mut(id) {
@@ -983,12 +1276,38 @@ pub fn parse_addr(s: &str) -> Option<SocketAddr> {
 ///
 /// If the device does not answer.
 pub fn identify_at(frame: SocketAddr) -> Result<Device, String> {
+    identify_at_counted(frame).1
+}
+
+/// [`identify_at`], saying what it cost on the control port (card 164).
+///
+/// The cost comes back whether or not the device answered: four datagrams at a
+/// panel that is off is exactly the traffic the page is meant to be able to
+/// account for.
+pub fn identify_at_counted(frame: SocketAddr) -> (screeny::Traffic, Result<Device, String>) {
     let mut dev = Device::from_addr(frame);
-    let mut client = ControlClient::connect(dev.control).map_err(|e| e.to_string())?;
-    client.set_timeout(CONTROL_TIMEOUT);
-    let info = client.info().map_err(|e| e.to_string())?;
-    dev.apply(info);
-    Ok(dev)
+    let mut client = match control(dev.control) {
+        Ok(c) => c,
+        Err(e) => return (screeny::Traffic::default(), Err(e)),
+    };
+    let info = client.info().map_err(|e| e.to_string());
+    let cost = client.traffic();
+    (cost, info.map(|i| { dev.apply(i); dev }))
+}
+
+/// **Run one control request and say what it cost** (card 164).
+///
+/// Every control conversation the studio has goes through here or through
+/// [`identify_at_counted`], so "what has this panel cost me" has one answer
+/// rather than one per caller. The cost is reported however the request went:
+/// a request that timed out is four datagrams the network carried.
+pub fn control_call<T>(addr: SocketAddr, f: impl FnOnce(&mut ControlClient) -> Result<T, String>) -> (screeny::Traffic, Result<T, String>) {
+    let mut c = match control(addr) {
+        Ok(c) => c,
+        Err(e) => return (screeny::Traffic::default(), Err(e)),
+    };
+    let out = f(&mut c);
+    (c.traffic(), out)
 }
 
 /// One browse of `_screeny._udp`.
@@ -1217,6 +1536,153 @@ mod tests {
         assert!(reg.take_http_retry(&id), "90 s of uptime became 2 s: it rebooted");
         assert!(!reg.take_http_retry(&id), "taken, not read: one reboot is one extra poll");
         assert!(!reg.take_http_retry("nobody"), "there is no such panel");
+    }
+
+    // ------------------------------ card 164: what a panel costs the net ----
+
+    fn wire(bytes: u64, packets: u64) -> screeny::Wire {
+        screeny::Wire { bytes, packets }
+    }
+
+    /// The counter the frame path feeds: a link's lifetime figure, banked as a
+    /// **difference**, and a link that was rebuilt - which counts from zero
+    /// again - taken whole. The studio rebuilds a link whenever it re-aims it,
+    /// so this is the ordinary case and not an edge.
+    #[test]
+    fn a_rebuilt_link_adds_to_the_total_instead_of_resetting_it() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+
+        let link = |out: u64, packets: u64| screeny::LinkTraffic {
+            frames: screeny::Traffic { out: wire(out, packets), inbound: wire(packets * 20, packets) },
+            control: screeny::Traffic { out: wire(24, 1), inbound: wire(96, 1) },
+        };
+        reg.metered_link(&id, link(1000, 10));
+        reg.metered_link(&id, link(3000, 30));
+        let t = reg.traffic(&id);
+        assert_eq!(t.frames.out.bytes, 3000, "a difference, not a sum of snapshots");
+        assert_eq!(t.frames.out.packets, 30);
+        assert_eq!(t.control.out.packets, 1, "one handshake, seen twice, is one handshake");
+
+        // The link is thrown away and built again: its counters start at zero,
+        // and the studio's must not.
+        reg.metered_link(&id, link(200, 2));
+        let t = reg.traffic(&id);
+        assert_eq!(t.frames.out.bytes, 3200, "the new link's bytes are added whole");
+        assert_eq!(t.frames.out.packets, 32);
+        assert_eq!(t.control.out.packets, 2, "and its handshake is a second one");
+
+        // And it never goes backwards, whatever it is handed.
+        reg.metered_link(&id, screeny::LinkTraffic::default());
+        assert_eq!(reg.traffic(&id).frames.out.packets, 32);
+    }
+
+    /// The other two paths, and the overhead rule: 28 B a datagram for the two
+    /// UDP paths, **nothing** for HTTP, where user space cannot see the
+    /// segments.
+    #[test]
+    fn the_total_is_the_payload_plus_the_overhead_only_where_there_is_one() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+
+        reg.metered_link(
+            &id,
+            screeny::LinkTraffic {
+                frames: screeny::Traffic { out: wire(1000, 10), inbound: wire(40, 2) },
+                ..screeny::LinkTraffic::default()
+            },
+        );
+        reg.metered_control(&id, screeny::Traffic { out: wire(24, 4), inbound: wire(0, 0) });
+        reg.metered_http(&id, 130, 400);
+        reg.sample_traffic();
+
+        let t = reg.traffic(&id);
+        assert_eq!(t.http.out, Flow { bytes: 130, packets: 1 }, "one request");
+        assert_eq!(t.http.inbound, Flow { bytes: 400, packets: 1 }, "one reply");
+        assert_eq!(
+            t.total.out.bytes,
+            1000 + 28 * 10 + 24 + 28 * 4 + 130,
+            "UDP pays 28 B a datagram and HTTP pays nothing"
+        );
+        assert_eq!(t.total.out.packets, 10 + 4 + 1);
+        assert_eq!(t.total.inbound.bytes, 40 + 28 * 2 + 400);
+        assert!((t.window_s - TRAFFIC_WINDOW.as_secs_f64()).abs() < f64::EPSILON);
+
+        // A read that produced nothing in one direction does not invent a
+        // packet in it.
+        reg.metered_http(&id, 130, 0);
+        assert_eq!(reg.traffic(&id).http.inbound.packets, 1);
+    }
+
+    /// **The rate, on a synthetic clock**: the first sample sets a baseline
+    /// rather than inventing a spike, a steady stream settles on the figure
+    /// the arithmetic says it should, and a panel that stops being sent
+    /// anything **decays to nothing** rather than freezing at what it was last
+    /// doing.
+    ///
+    /// 30 datagrams a second of 1000 payload bytes is 30 KB/s of payload and
+    /// 30.84 KB/s on the wire, which is what the page has to say.
+    #[test]
+    fn the_rate_settles_on_the_arithmetic_and_decays_back_to_nothing() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+        let start = Instant::now();
+        let mut sent = 0u64;
+        let mut packets = 0u64;
+        let mut stream = |secs: u64| {
+            sent += 30_000;
+            packets += 30;
+            reg.metered_link(
+                &id,
+                screeny::LinkTraffic {
+                    frames: screeny::Traffic { out: wire(sent, packets), inbound: wire(0, 0) },
+                    ..screeny::LinkTraffic::default()
+                },
+            );
+            reg.sample_traffic_at(start + Duration::from_secs(secs));
+        };
+
+        stream(1);
+        assert_eq!(reg.traffic(&id).rate.out, 0.0, "the first pass has no interval to divide by");
+        for s in 2..=60 {
+            stream(s);
+        }
+
+        let want = 30_000.0 + 28.0 * 30.0; // payload plus the overhead rule
+        let busy = reg.traffic(&id).rate.out;
+        assert!(
+            (busy - want).abs() < want * 0.01,
+            "a steady 30 fps at 1000 B should read {want:.0} B/s, not {busy:.0}"
+        );
+        assert!(
+            (reg.traffic(&id).rate.frames_out - busy).abs() < f64::EPSILON,
+            "with only the frame path in play, the total is the frame path"
+        );
+
+        // Unplugged. Nothing is added; the figure has to fall away rather than
+        // sit at 30 KB/s for ever.
+        for s in 61..=120 {
+            reg.sample_traffic_at(start + Duration::from_secs(s));
+        }
+        let quiet = reg.traffic(&id).rate.out;
+        assert!(quiet < busy / 1000.0, "a panel nobody is sending to: {busy:.0} -> {quiet:.3}");
+        assert_eq!(reg.traffic(&id).frames.out.packets, packets, "and the total is untouched");
+    }
+
+    /// A device the studio has never counted anything for reads as zero rather
+    /// than as missing, and one that does not exist does not panic.
+    #[test]
+    fn a_panel_that_has_cost_nothing_says_so() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+        reg.sample_traffic();
+        let t = reg.traffic(&id);
+        assert_eq!(t.total.out.bytes, 0);
+        assert_eq!(t.rate.out, 0.0);
+        reg.metered_control("nobody", screeny::Traffic { out: wire(24, 1), inbound: wire(0, 0) });
+        reg.metered_http("nobody", 1, 1);
+        reg.metered_link("nobody", screeny::LinkTraffic::default());
+        assert_eq!(reg.traffic("nobody").total.out.bytes, 0);
     }
 
     #[test]
