@@ -139,6 +139,21 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
     assert!(posts > 100, "the drag itself did not keep up: {posts} changes in {window:?}");
     assert_eq!(own.states, 0, "the dragging browser was told about its own drag {} times", own.states);
     assert!(seen.states > 0, "the second browser was told nothing at all about the drag");
+    // The pacer's own schedule, not the scheduler's: one message every 50 ms
+    // is 20 a second, so three seconds cannot hold more than 60 of them
+    // however the bench is loaded. The bound is that arithmetic plus a
+    // message's worth of slack at each end.
+    assert!(
+        seen.per_s() <= 22.0,
+        "a drag still cost the second browser {:.1} state messages a second ({} in {window:?})",
+        seen.per_s(),
+        seen.states
+    );
+    assert!(
+        seen.states * 2 < posts,
+        "{} state messages for {posts} changes is not a saving",
+        seen.states
+    );
     assert!(
         server_side >= seen.state_bytes as u64,
         "sockets.bytes_sent ({server_side}) counted less than the one browser received ({})",
@@ -150,5 +165,86 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
     let hue = last["state"]["params"]["hue"].as_f64().expect("the hue parameter");
     println!("the second browser's last message: rev {}, hue {hue} (the drag ended on {ended_on})", last["rev"]);
 
+    studio.stop().await;
+}
+
+/// A deliberate change - a piece picked, a switch flipped - is not a burst, and
+/// must still feel instant on the other browser. The pacer's leading edge is
+/// what makes that true: after a quiet moment there is nothing held, so the
+/// change goes out where it stands.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_single_change_still_arrives_at_once() {
+    let studio = studio().await;
+    let at = studio.addr;
+    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await.status, 200);
+    let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
+    watcher.event("state").await; // the hello
+
+    // Ten changes, each after a moment of quiet, which is what a person
+    // clicking things produces. The first one is thrown away: the studio is
+    // still starting the piece, and what is being measured is the steady case.
+    let mut worst = Duration::ZERO;
+    let mut total = Duration::ZERO;
+    for i in 0..10u32 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let value = f64::from(10 + i);
+        let sent = tokio::time::Instant::now();
+        let body = format!(r#"{{"id":"hue","value":{value}}}"#);
+        assert_eq!(post_as(at, "/api/v1/set_param", &body, Some("dragger")).await.status, 200);
+        let ev = watcher.event("state").await;
+        let took = sent.elapsed();
+        assert_eq!(ev["state"]["params"]["hue"], value, "the change that arrived was not the one made");
+        if i > 0 {
+            worst = worst.max(took);
+            total += took;
+        }
+    }
+    println!("a single change reached the second browser in {:?} at worst, {:?} on average", worst, total / 9);
+
+    // The pacer's own schedule says zero: a leading edge holds nothing. The
+    // bound is loose because an HTTP round trip and two task wake-ups on a
+    // loaded bench are not, and because failing here must mean "it was held",
+    // which would cost `STATE_GAP` (50 ms) at least and a whole burst's worth
+    // at worst.
+    assert!(worst < Duration::from_millis(250), "a single change took {worst:?} to reach the other browser");
+    studio.stop().await;
+}
+
+/// The end of a drag is the value the other browser is left resting on, so the
+/// last change of a burst is **held, not dropped**: it arrives within one gap
+/// of the drag stopping. This is the difference between pacing state and
+/// pacing frames, where a frame that is not due is thrown away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_value_a_drag_ended_on_always_arrives() {
+    let studio = studio().await;
+    let at = studio.addr;
+    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await.status, 200);
+    let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
+    watcher.event("state").await; // the hello
+
+    // Three drags in a row, each ending somewhere else: one lucky pass proves
+    // nothing about a trailing edge.
+    for round in 0..3 {
+        let (posts, ended_on) = drag(at, "dragger", Duration::from_millis(700)).await;
+        let stopped = tokio::time::Instant::now();
+        // Everything the drag produced is read through until the value it
+        // ended on turns up; `event` gives up after PATIENCE rather than hang.
+        let mut seen = 0;
+        let took = loop {
+            let ev = watcher.event("state").await;
+            seen += 1;
+            if (ev["state"]["params"]["hue"].as_f64().expect("the hue parameter") - f64::from(ended_on)).abs()
+                < f64::EPSILON
+            {
+                break stopped.elapsed();
+            }
+            assert!(seen < 200, "the drag's last value never arrived after {seen} state messages");
+        };
+        println!("round {round}: {posts} changes ending on hue {ended_on}; it arrived {took:?} after the drag stopped");
+        // One gap (50 ms) is the pacer's answer; the bound is loose for the
+        // same reasons as above, and is nowhere near "it was dropped", which
+        // has no answer at all and would time out.
+        assert!(took < Duration::from_millis(500), "the drag's last value took {took:?} to arrive");
+    }
     studio.stop().await;
 }

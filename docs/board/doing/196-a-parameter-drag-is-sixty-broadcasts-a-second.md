@@ -92,3 +92,56 @@ narrower instrument: it separates state from heartbeat, which the server's
 counter does not.
 
 Verdict: worth doing, and by the card's preferred shape.
+
+### `Gate`: the state stream paced the way the frames are
+
+`crates/studio/src/ws.rs` grew a `Gate` beside `Pace`, one per socket, with one
+constant: `STATE_GAP = 50 ms`, which is 20 messages a second. Three edges, as
+the card asked:
+
+- **leading**: a change more than a gap after this socket's last state message
+  goes out where it stands. A piece picked or a switch flipped is as immediate
+  as it ever was; only a burst is thinned.
+- **coalescing**: inside the gap, the newest state (by `rev`) *replaces*
+  whatever was held. One slot, newest wins - the same shape as the frame cell
+  and the state file's mailbox.
+- **trailing**: the held one goes out when the gap is up. This is the one place
+  state differs from frames: a frame that is not due is **dropped**, a state
+  change is **held**, because the value a drag ended on is what the other
+  browser is left resting on.
+
+The trailing edge is a fourth arm of the socket's `select!` whose future is
+`sleep_until(last_at + STATE_GAP)` when something is held and `pending()` when
+nothing is, so a socket with no changes to deliver schedules nothing at all.
+
+One subtlety worth writing down. A socket is not told about its **own**
+changes, and it never was - but now that a message can be held, a browser's own
+change can arrive while somebody else's is waiting, and delivering that held
+message 50 ms later would carry a whole state that predates this browser's own
+change and would put its own control back where it was. So `skip_own` keeps the
+held message but refreshes its `state` and `rev` with the newer one: whose
+change it was is not echoed, the newest state still is. Before this card the
+same thing was true by luck of ordering; now it is on purpose.
+
+**After**, same test, same bench:
+
+| | before | after |
+|---|---|---|
+| state messages to the second browser | 60.0/s | **19.3-19.7/s** |
+| bytes | 24 949 B/s | **8 038-8 178 B/s** |
+| a single deliberate change | immediate | **4.3 ms average, 21 ms worst of ten** |
+| the value a drag ended on | arrives | **arrives, 25-51 ms after the drag stopped** |
+
+So a drag costs the second browser a third of what it did, the page's own
+changes still arrive at once, and nothing is left resting on a stale value.
+
+The page's JS was **not touched**: `ui/main.js` ignores `rev` and `from`
+entirely and calls `sync(message.state)`, so a paced stream of newest-wins
+states is exactly what it already wanted.
+
+Tests, all new, in `crates/studio/tests/pacing.rs`:
+`a_drag_costs_the_second_browser_a_bounded_number_of_messages` (the measurement
+above, now with bounds), `a_single_change_still_arrives_at_once`,
+`the_value_a_drag_ended_on_always_arrives` (three drags, each ending somewhere
+else). `tests/api.rs::two_browsers_see_each_others_changes` was not edited and
+still passes as written.

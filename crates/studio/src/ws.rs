@@ -58,6 +58,30 @@
 //! whether anybody is looking - so a studio whose panel is away and whose only
 //! tabs are hidden idles at `player::IDLE_FPS` instead of rendering 60 fps for
 //! nobody.
+//!
+//! # And the state is paced too (card 196)
+//!
+//! Dragging a slider is about sixty `set_param` a second, and each one used to
+//! put a full `StudioState` - measured at 416 bytes - on every *other* socket.
+//! That is 25 KB/s of JSON for one control moving, and on a hidden tab, which
+//! asks for no pictures at all, it is everything that tab costs.
+//!
+//! The newest state is the only one worth having, exactly as the newest frame
+//! is, so [`Gate`] does for state what [`Pace`] does for frames - with one
+//! difference that matters. A frame that is not due is **dropped**; a state
+//! change that is not due is **held**, because a state message is also how a
+//! deliberate change (a piece picked, a switch flipped) reaches the other
+//! browser and the last one must never be lost. So:
+//!
+//! - **leading edge**: a change after a quiet moment goes out at once. A single
+//!   change is as immediate as it ever was; only a burst is thinned.
+//! - **coalesced**: while a socket is inside [`STATE_GAP`] of its last state
+//!   message the newest state (by `rev`) replaces whatever was held.
+//! - **trailing edge**: the held one goes out when the gap is up, so the value
+//!   a drag *ended* on always arrives and no browser rests on a stale one.
+//!
+//! At [`STATE_GAP`] that is 20 messages a second - invisible to a human, and
+//! a third of what a drag used to cost.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -67,6 +91,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::api::StateEvent;
 use crate::page::{Viewer, HEADER};
 use crate::AppState;
 
@@ -88,6 +113,15 @@ const MAX_FPS: f64 = crate::player::MAX_FPS;
 /// ten seconds. Only a guard - `Duration::from_secs_f64` panics on an absurd
 /// one - since `0` is how a browser says "none".
 const MIN_FPS: f64 = 0.1;
+/// The shortest time between two state messages on one socket (card 196):
+/// 20 a second.
+///
+/// A human cannot see a slider redrawn faster than this, and a drag - the only
+/// thing that produces state changes in bursts - is the one case being thinned.
+/// It is a *gap*, not a budget: nothing is held longer than this, so the cost
+/// of the cap is at most `STATE_GAP` of latency on the second, third and
+/// following changes of a burst, and none at all on the first.
+const STATE_GAP: Duration = Duration::from_millis(50);
 /// With `repeat` off, how long a picture that has not changed may go unsent.
 /// The page draws its meters out of the frame header, so an unchanging picture
 /// still has something to say; once a second is enough for it.
@@ -188,6 +222,64 @@ impl Pace {
     }
 }
 
+/// One socket's state pacing: at most one state message every [`STATE_GAP`],
+/// and the one that goes is always the newest (card 196).
+///
+/// Unlike [`Pace`] this **holds** rather than drops, because the last change of
+/// a burst is the value the other browser is left resting on. See the module
+/// docs for the three edges.
+#[derive(Default)]
+struct Gate {
+    /// When a state message was last sent on this socket. `None` until the
+    /// first one, so the first change of all is immediate.
+    last_at: Option<Instant>,
+    /// The newest state this socket has not been told about yet.
+    held: Option<StateEvent>,
+}
+
+impl Gate {
+    /// A change to send now, or `None` when it is held for the trailing edge.
+    fn offer(&mut self, ev: StateEvent, now: Instant) -> Option<StateEvent> {
+        if self.last_at.is_none_or(|t| now.duration_since(t) >= STATE_GAP) {
+            self.last_at = Some(now);
+            self.held = None;
+            return Some(ev);
+        }
+        // Newest wins, by `rev`: the broadcast delivers in order, but a resync
+        // after a lag is made on the spot and may not be.
+        if self.held.as_ref().is_none_or(|h| h.rev <= ev.rev) {
+            self.held = Some(ev);
+        }
+        None
+    }
+
+    /// This socket's **own** change, which it is never told about - but which
+    /// does make anything held for it stale, since the held message carries a
+    /// whole state and would put this browser's own control back where it was.
+    /// So the state goes on, and whose change it was does not.
+    fn skip_own(&mut self, ev: StateEvent) {
+        if let Some(held) = &mut self.held {
+            if held.rev <= ev.rev {
+                held.rev = ev.rev;
+                held.state = ev.state;
+            }
+        }
+    }
+
+    /// When the held change is due, if one is held.
+    fn due(&self) -> Option<Instant> {
+        self.held.as_ref()?;
+        Some(self.last_at.map_or_else(Instant::now, |t| t + STATE_GAP))
+    }
+
+    /// The held change, once it is due.
+    fn release(&mut self, now: Instant) -> Option<StateEvent> {
+        let ev = self.held.take()?;
+        self.last_at = Some(now);
+        Some(ev)
+    }
+}
+
 /// Whether two frame packets draw the same thing. Only the pixels: the header
 /// carries a sequence number and a clock, which always differ.
 fn same_picture(a: &[u8], b: &[u8]) -> bool {
@@ -209,6 +301,7 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
     // asking for frames is. See the module docs.
     let mut viewer = st.screen.viewer();
     let mut pace = Pace::new(q.fps.unwrap_or(DEFAULT_FPS), q.repeat.unwrap_or(true));
+    let mut gate = Gate::default();
     viewer.set_wants_frames(pace.wants_frames());
 
     // What the browser would otherwise have to ask for on connecting.
@@ -235,12 +328,26 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
             }
             r = states.recv() => match r {
                 // Skip the change this very browser made.
-                Ok(ev) if ev.from.is_some() && ev.from == me => None,
-                Ok(ev) => as_text(&ev),
+                Ok(ev) if ev.from.is_some() && ev.from == me => {
+                    gate.skip_own(ev);
+                    None
+                }
+                Ok(ev) => gate.offer(ev, Instant::now()).as_ref().and_then(as_text),
                 // Too far behind to know what it missed: give it the truth.
-                Err(RecvError::Lagged(_)) => as_text(&st.state_event(None, st.page_state())),
+                Err(RecvError::Lagged(_)) => {
+                    let ev = st.state_event(None, st.page_state());
+                    gate.offer(ev, Instant::now()).as_ref().and_then(as_text)
+                }
                 Err(RecvError::Closed) => break,
             },
+            // The trailing edge: what a burst of changes ended on, once this
+            // socket's gap is up. Nothing is scheduled when nothing is held.
+            () = async {
+                match gate.due() {
+                    Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+                    None => std::future::pending().await,
+                }
+            } => gate.release(Instant::now()).as_ref().and_then(as_text),
             r = status.changed() => {
                 if r.is_err() { break }
                 let msg = status.borrow_and_update().clone();
