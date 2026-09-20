@@ -24,8 +24,11 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
   orchestrator to push `main` there as the deployment workflow needs (workbench builds from
   `origin/main`); no force-pushes, no other branches, workers never push. Before the first
   push the real WiFi values were checked against all history and the tree: no hits.
-- **Another Claude session works on firmware in this same checkout** (owner, 2026-09-20):
-  its cards are numbered 200+, it may hold the serial port and reflash the panel at any
+- **Another Claude session ("firmware") works in this same checkout** (owner, 2026-09-20).
+  By agreement between the sessions: it owns `firmware/`, the serial port and flashing, and
+  cards 200-249 (device-web track: on-device HTTP, captive portal, OTA, WiFi reset); this
+  session keeps cards up to 199. `crates/proto`, `crates/receiver` and the protocol spec are
+  shared - each tells the other before changing them. Its cards are numbered 200+, it may hold the serial port and reflash the panel at any
   time, and its untracked or modified files appear in `git status` here. Never `git add -A`
   in the main checkout - add your own paths explicitly - and expect the panel to reboot
   under a real-panel run; check `screeny info` for the firmware version before blaming
