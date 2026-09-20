@@ -315,3 +315,106 @@ Left alone, and why:
   on the wire" - is about `crates/demos`, which keeps its words.
 - `docs/design/protocol-v1.md` and `device-web.md`: out of scope, and neither says
   "piece".
+
+### Verification against a running studio (2026-09-20)
+
+No hardware, no LAN: a `screeny-sim` and a `screeny-studio` on explicit loopback ports
+(`127.0.0.1`, sim frames 49474 / control 49475, studio 8799 and 8801), `--no-mdns`,
+`--no-discover`, `--no-device-http`, both under `timeout`, both killed by the script's
+own trap.
+
+**The page.** `GET /` carries `id="patches"` once and `id="pieces"` not at all, with
+`aria-label="Patch"`; `GET /panel` carries `titleblock__patch`. All three scripts are
+served and pass `node --check`; `picture.js` names the new routes three times and no
+old one. `GET /api/v1/bootstrap` answers `{gpu, patches, payload_bytes, state}` with
+`state` = `{device, fps, on, output, params, patch, paused, seed, speed}` - eight
+patches, no `pieces`, no `settings`.
+
+**The routes.** New: `set_patch {"patch":...}`, `patch_playing`, `patch_act` - all 200.
+Old, each one: `set_piece {"piece":"metaballs"}` -> 200 and the reply says
+`patch: metaballs` with no `piece` and no `settings` key in it at all; `set_piece
+{"id":"plasma"}` -> 200; `set_settings {"settings":{...}}` -> 200 and the reply's
+`output` carries the new dither and panel; `piece_playing` -> 200; `piece_act` -> 200.
+`player/set` with `{"piece":"plasma","seed":7,"settings":{"dither":"bayer4"}}` -> 200,
+answering `patch plasma seed 7 dither bayer4`, again with no old key in the reply.
+`/api/v1/status`'s `preview` block says `patch`.
+
+**It really streams.** With the simulator attached through `set_panel {"on":true,"to":
+"127.0.0.1:49474"}`, the simulator logged `30.2 fps PAL8_LZ ~1375 B LIVE rx 379 shown
+379 gaps 0 stale 0 super 0 dec 0 rej 0`. The state file written on the way out is v4,
+with `patch`, `output` and `patches`.
+
+**The migration, for real.** A v3 file (the fixture above, dummy names) put in a state
+directory and a studio started on it: it comes up on `clocks-dials`, seed 4242, grid 2
+mood 3, 30 fps, speed 0.75, `on: false`, focus `aa11bb`, output `bit_planes` / `bayer4`
+/ apl_cap 0.32 / codec_preview off, brightness 96 - every field the v3 file had.
+`/api/v1/status` says *"the state file was schema v3; migrated to v4; the v3 file is
+kept as state.v3.json"*, `repaired` is empty, `state.v3.json` is byte-identical to what
+was written, and the rewritten `state.json` is v4 and contains none of `"piece"`,
+`"pieces"`, `"settings"`.
+
+**In a browser** (the Chrome tooling was available): both screens loaded from
+`127.0.0.1:8803` and **the console was empty on both**. The Picture screen drew the
+`Patch` radiogroup with all eight patches, the "Now playing" block ("fan > quarter,
+point - dancing, 7 s to go"), every parameter control including the named-choice lists,
+and the Panel screen drew its panel, link and studio sections with "The studio is still
+playing the patch; the Picture screen shows it." The tab was closed and the server
+stopped afterwards.
+
+### What still says "piece" or "settings", and why (2026-09-20)
+
+`git grep -i piece` over `crates/art`, `README.md`: **nothing**. `git grep -i settings`
+over `crates/art`: **nothing**. `crates/studio` keeps 75 hits and every one is
+deliberate:
+
+| where | why it stays |
+|---|---|
+| `api.rs`: the four `.route("/piece_*" / "/set_settings", ...)` lines and their comment | the old paths, answering on the new handlers |
+| `api.rs`, `state.rs`: eight `#[serde(alias = "piece" / "pieces" / "settings")]` and the doc line beside each | the old request-body and state-file keys |
+| `state.rs`: `raw.get("patches").or_else(|| raw.get("pieces"))`, `o.remove("pieces")`, `b.get("output").or_else(|| b.get("settings"))` | reading a file written before v4 |
+| `state.rs`: the v1/v2/v3 fixtures in the tests (about 30 hits) | they **are** old files |
+| `state.rs`: `settings.levels` in `note_retired_levels` and its three assertions | card 102's retired key, named as the file names it |
+| `player.rs` line 42's comment | says why the sink trait is imported `as FrameSink` |
+| `tests/api.rs`: the two compatibility tests and their names | they are about the old names |
+| `tests/memory.rs`: the v1 and v2 fixtures, and the owner's quoted words | old files; quoted speech |
+| `README.md`: the schema paragraph and the "old names still work" paragraph | they document exactly this |
+| `README.md` line 257: "errors in the device's own settings store" | the firmware's `crates/settings`, not ours |
+| `panel.js` line 203, `device_health.rs` lines 247/264 | the same device-side settings store |
+| `docs/README.md`, `state.rs`'s schema doc, `studio-vision.md`'s Tauri list, card 119's note | they say what the old word was |
+
+Out of scope and left, as the card asks (89 hits):
+
+- **`crates/demos`** (52) keeps its words by the card's own instruction, and so does
+  `crates/screeny`'s `PieceSource<P: screeny_demos::Piece>` in `src/main.rs` (14) - it
+  wraps a demos piece, so renaming it would make it lie. `crates/screeny`'s other hits
+  are plain English ("the four pieces", "the piece that makes the rest possible") or
+  the same demos type in a doc comment.
+- **`crates/proto`** (1: "four independent pieces"), **`crates/receiver`** (1: "from
+  the pieces above"), **`crates/provision`** (1: "the three pieces"),
+  **`crates/device-api`** (1: "spelled in two pieces") - all English.
+- **`firmware/src/bin/gpio_probe.rs`** (1): "printed piecewise".
+- `docs/design/architecture.md` (1): about `crates/demos`.
+
+Nothing in `firmware/`, `crates/proto`, `crates/receiver`, `crates/sim`,
+`crates/probe`, `crates/device-api`, `crates/settings`, `crates/provision`,
+`crates/demos`, `docs/design/protocol-v1.md` or `docs/design/device-web.md` was
+touched.
+
+### Handing over
+
+`cargo test --release --no-fail-fast` at the root: **765 passed, 0 failed** across 84
+test binaries, cargo exit 0. `cargo clippy --workspace --all-targets`: **nothing**. No background process is
+left: the two servers each ran under `timeout` inside a script with its own `trap`,
+and the browser tab was closed.
+
+Two things found on the way that are **not** this card's and were not done:
+
+- **`screeny_art::output::Output` and `screeny_art::pipeline::Output` are now two
+  different `Output`s.** The first is the frame-sink trait, the second is card 150's
+  settings block. Three files import both and have to disambiguate - `screeny-art.rs`
+  and `tests/sender.rs` spell the settings type `pipeline::Output`, `player.rs` imports
+  the trait `as FrameSink`. Renaming the sink trait (`output::Sink`) would end it; it
+  is a small, mechanical change and nothing outside `crates/art` and `crates/studio`
+  implements it.
+- **`crates/art/README.md` line 11 still calls `crates/studio` "a Tauri v2 desktop app
+  for designing patches".** Wrong since card 105.
