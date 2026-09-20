@@ -526,6 +526,202 @@ for card 223, demand is the scarcer of the two.
 
 ---
 
+## 8. Card 233: one dispatch. What it cost the demand, and what it did not buy
+
+Section 3 said the router should be one future and guessed "roughly 5 KB of
+*depth*". Section 7 made it card 233 and said card 223 should depend on it.
+It is built (firmware **0.4.3**), and both halves of that need correcting: the
+depth is real and bigger than the high-water can show, and the **supply** it
+freed is **1,264 bytes, not 5 KB**. Card 223 still needs card 234 or 235.
+
+### What the dispatch looks like now
+
+`firmware/src/http.rs` has no route table of nested layers. The whole router
+is:
+
+```rust
+fn router() -> Router<ServicePathRouter<Dispatch>> {
+    Router::from_service(Dispatch)
+}
+```
+
+`Dispatch` is a single `picoserve::routing::PathRouterService`. It reads
+`parts.method()` and `parts.path()`, calls `route_request(..) -> Reply`, and
+writes that one `Reply`. Two facts about picoserve 0.20 shaped it:
+
+* **`PathRouter` is sealed** (`routing::sealed::PathRouterIsSealed`). A
+  hand-written one is not possible. **`PathRouterService` is not sealed**, and
+  `Router::from_service` wraps one in the `ServicePathRouter` that
+  `picoserve::Server` accepts, so owning the dispatch needs no fork and no
+  change to `Server::new` / `listen_and_serve`.
+* **`route()` has no catch-all path description.** The only wildcard is
+  `parse_path_segment`, which captures one segment, so "a `Router` with a
+  single catch-all route" would have needed one route per path depth *and*
+  would have kept the `Route<..>` layer that is the thing being removed.
+
+picoserve still does every byte of the protocol: accept loop, the four
+timeouts, request line and headers, body buffering, the counting pass that
+sets `Content-Length`, the header block, streaming, `Connection: close`, and
+draining an unread body in `finalize()`.
+
+**The second half mattered as much as the first.** Nine nested routing layers
+were only part of the shape; each handler also returned its own
+`Result<Json<T>, ApiError>`, so picoserve monomorphised the whole response
+writer **seven** times and the request path's frame held whichever was in
+flight. `ApiBody` is now one enum with a hand-written untagged `Serialize`
+(each variant serialises as the reply type it holds - nothing changes on the
+wire) and `Reply` is `Page | Api(u16, ApiBody)`. Two writers instead of seven,
+worth **8,000 bytes of flash and ~530 bytes of frame** as its own measured
+build step.
+
+### The before/after frame table
+
+`xtensa-esp32-elf-objdump -d --demangle`, largest `entry a1, N` per symbol,
+**N parsed as hex above 255**.
+
+| | frame | before | after |
+|---|---|---|---|
+| 1 | `TaskStorage<http_task>::poll` (accept loop, `serve_and_shutdown` inlined) | 5,536 | **4,400** |
+| 2 | `Router::handle_request::poll` | 784 | **1,712** (`Dispatch` + `Reply::write_to` inlined in) |
+| 3 | router `Either<..>::poll`, outer | 2,416 | gone |
+| 4 | router `Either<..>::poll`, inner tail | 2,192 | gone |
+| 5 | `Result<Json<AcceptedReply>, ApiError>::write_to_with_state` | 1,040 | gone |
+| 5' | same, `Json<()>` + `IgnoreBody` (the HEAD copy) | 1,104 | gone |
+| 6 | `ApiError::write_to` / `get_page` | 464 / 608 | gone |
+| 7 | `route_request::poll` (the `match`, every handler body unioned) | - | **1,488** |
+| | **deepest chain** | **~10,240** | **~7,600** |
+
+`route_request` and the inlined `Reply::write_to` are alternatives in time -
+the reply is computed, the handler future is dropped, *then* it is written -
+so the worst case is 1 + 2 + max(3, writer). **-2,640 bytes of depth.**
+Section 2's warning still applies: a column of objdump frames is an upper
+bound per function and not a call chain. What makes this one worth quoting is
+that it is like-for-like, and that the device agreed.
+
+### The device agreed, twice
+
+**The self-test is the clean measurement.** `--features http-selftest` runs
+every route through the real router over a byte-slice socket and prints core
+0's high-water either side of the whole table. Two card-222 runs and one card
+233 run, same bench, same method:
+
+| build | high-water across the whole route table |
+|---|---|
+| card 222 (`222-selftest-c`, `-d`) | 13,056 -> **14,208** (+1,152) |
+| card 233 (`card233-selftest`) | 13,056 -> **13,056** (**+0**) |
+
+The HTTP request path used to push the mark 1,152 bytes above the boot mark.
+It now does not reach the boot mark at all. All 20 route cases answered the
+expected status first try.
+
+**Real traffic says the same thing.** 200 s on the default 0.4.3 build, the
+Studio streaming throughout, the orchestrator driving 904 requests from the
+LAN plus the 38-rule HTTP conformance suite:
+
+| build | `.stack` | high-water | `stack_free` |
+|---|---|---|---|
+| 0.4.2 run A | 22,832 | 13,328 | 8,480 |
+| 0.4.2 run C | 33,072 | 13,232 | 18,816 |
+| 0.4.2, 60 s line | 33,072 | 13,056 | 18,992 |
+| **0.4.3 under load** | **34,352** | **13,056** | **20,272** |
+
+`watch_task` logs a line every time a mark **grows**. Across the whole run
+there is **not one growth line for core 0**: the mark set at boot was never
+beaten. On 0.4.2 the same load walked it to 13,232-13,328 in 16-to-112-byte
+steps. Section 2's "serving HTTP flat out is worth 272 bytes" is now worth
+**zero**.
+
+### What it did *not* buy, and the number that matters for 223
+
+`tools/fw-size.sh`, default build:
+
+| build | `.data` | `.bss` | `.stack` | image |
+|---|---|---|---|---|
+| 0.4.2 | 58,388 | 105,136 | **33,072** | 957,185 |
+| **0.4.3** | 58,380 | 103,872 | **34,352** | 910,041 |
+| delta | -8 | **-1,264** | **+1,280** | **-47,144** |
+
+`http_task::POOL` (`nm -S`), the two workers' `.bss`: **14,576 -> 13,312**,
+i.e. **7,288 -> 6,656 per worker**. That -1,264 and the `.stack` +1,280 are
+**the same bytes from the two ends of one DRAM region**, not two wins.
+
+So against card 233's own exit test - "measured high-water down and/or the
+http pool entry down, >= 2 KB in total" - the honest arithmetic is
+**176 to 272 bytes of high-water plus 1,264 bytes of pool = about 1.5 KB. The
+target is missed by roughly 500 bytes.** Section 3's "roughly 5 KB" was a
+guess made from the frame table, and section 2's own lesson - that a frame
+table is not a call chain - is exactly why it was too big.
+
+What the card *did* buy that no `.bss` lever can:
+
+* **`stack_free` 18,816 -> 20,272 under load**, and it is now a number that
+  does not creep: the high-water is set at boot and HTTP no longer touches it.
+* **47 KB of flash**, which is 5% of the image and is space card 240's OTA
+  path will want.
+* **The demand is gone, not reduced.** Card 223's portal handlers run on this
+  dispatch. Whatever they add, they add to a 13,056-byte boot mark and a
+  7,600-byte request path, not to a 10,240-byte one.
+
+### The budget for card 223, restated
+
+Section 6 predicted `.stack` ~23,400 and `stack_free` 8-9 KB for card 223, and
+said the shortfall against the 24,576 floor was ~1,200 bytes. Card 233 moves
+both, but not enough to change the conclusion:
+
+* `.stack` at 0.4.3 is 34,352, so the spike's -15,800 (minus the 6,144 QR
+  frame card 223 does not pay) lands card 223 at about **24,700** - just over
+  the floor, with nothing to spare and one un-priced decision still open (the
+  spike is a *second* picoserve instance; 223 should serve the portal from the
+  two workers that already exist, which is now much cheaper to do because
+  there is one dispatch to add a branch to).
+* `stack_free` should be in the region of **10-11 KB** rather than 8-9, and
+  the demand side of it is far less likely to creep.
+
+**Card 223 should still take card 234 or 235 as a dependency.** Either one
+alone (~1.9 KB) turns "just over the floor" into "comfortably over it", and
+neither changes behaviour on the wire. Card 234 is the better first pick: the
+frame socket's transmit buffer is sized for two full MTUs on a socket whose
+outgoing traffic is small `Outbox` replies.
+
+### Three conformance findings, fixed by owning the dispatch
+
+Not RAM, but they are why the card was worth doing even at 1.5 KB. The first
+device run of `screeny-probe http` on 0.4.2 was 26 passed / 3 failed / 9
+skipped. On 0.4.3 it is **30 passed / 0 failed / 8 skipped**:
+
+* **Rules 26 and 37** - a verb the API has no `route::Method` for
+  (`DELETE /api/v1/status`) was answered by picoserve's own plain-text
+  `405 Method DELETE not allowed for ...`. A `MethodRouter` has no slot for a
+  verb it was not given, so this could not be fixed without owning the
+  dispatch. It is now `405 {"error":"method_not_allowed"}`.
+* **Rule 34** - `POST /api/v1/reboot` without the magic word answered
+  `bad_request`; the body parsed and `confirm` was present, so what is wrong
+  is its *value*. It is now `out_of_range`, the same mapping UDP `REBOOT`'s
+  bad magic gets and what the simulator answers. Both are HTTP 400.
+* **Rule 29** - each route's own `max_request_len` is enforced, because a
+  single dispatch makes it a table lookup: `413 payload_too_large` with a
+  sentence. It flipped from its `KNOWN_223` skip to a pass with the probe's
+  constant untouched. The on-device self-test proves the per-route half
+  specifically: `POST /api/v1/identify` with 153 bytes is comfortably inside
+  the global 384-byte bound and one byte over that route's own 152, and it is
+  refused.
+
+**One deliberate behaviour change.** picoserve's generated method router
+answered `HEAD` by running the `GET` handler through a body-discarding
+`ResponseWriter` (`routing::head_method_util::ignore_body`). That module is
+private *and cannot be reimplemented outside the crate*: `Response`'s
+`status_code` / `headers` / `body` fields are `pub(crate)`, so no foreign
+`ResponseWriter` can rebuild a response with an empty body, and `Json`'s
+`write_to` and `JsonBody` are private too, so the `Content` route to the same
+end is closed. `HEAD /` is therefore now `405 method_not_allowed` - which is
+what `route::Method` (Get and Post, and nothing else) and probe rule 26
+prescribe for a verb this API has no method for, and it is one error shape
+rather than two. Removing it also deleted the second copy of the whole
+response path. Card 233's log proposes a follow-up if RFC-conformant `HEAD` is
+wanted back; it needs a change to picoserve, not to this firmware.
+
+---
+
 ## Appendix: reproducing this
 
 ```
