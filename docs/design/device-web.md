@@ -25,6 +25,8 @@ Claude session): decisions, what the research settled, and the build order at th
 | 5 | **The serial console of spec 8.1 is superseded** by the portal and the settings page (CLAUDE.md: "do not build other schemes"). `SET_WIFI` (8.2) stays and writes the same store. The spec is edited when the store lands, with notice to the software session. | orchestrator, 2026-09-20 |
 | 6 | **Compile-time credentials become optional**: when present they seed an empty store (bench convenience); a build without them boots straight to the portal. That is what a public repo needs. | orchestrator, 2026-09-20 |
 | 7 | **The frame path is the product.** No HTTP request, flash write or portal activity may cost a frame at 30 fps, except a firmware update, which is allowed to take the panel over with an "updating" screen. | standing |
+| 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the owner pressing (card 203). | owner, 2026-09-20 |
+| 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | owner, 2026-09-20 |
 
 ## Working agreement with the software session
 
@@ -36,6 +38,31 @@ conformance --slow` (firmware 0.2.0: 60 pass, 0 fail, 4 skip). Once the Studio r
 on workbench it holds the source lock around the clock; release it with
 `POST http://workbench.local:8787/api/v1/set_panel {"on":false}` before bench work
 and give it back with `{"on":true,"to":"screeny-4a00a4"}`.
+
+## How to think about storage and RAM on this device
+
+**Flash (storage) is not a constraint.** 8 MB chip; the firmware image is 0.74 MB and
+is projected at ~0.9 MB with HTTP, the portal, DHCP/DNS, the QR encoder and OTA linked
+in. Each of the two app slots is 2 MB, the settings partition is 64 KB (the settings
+are under 200 bytes), and 3.9 MB of the chip is unallocated.
+
+**RAM is the constraint, and it is three separate pools** (ESP32: 520 KB of SRAM on
+paper, far less in practice, no PSRAM in use):
+
+| pool | size | what is in it today | headroom |
+|---|---|---|---|
+| Main data RAM (`.data` + `.bss` + core 0's stack, one 196 KB region) | 31 + 127 + **37.5 KB stack** | the 32 KB heap arena, three 6 KB frame slots (18 KB), core 1's 16 KB stack, two 12 KB DMA framebuffers, ~12 KB of task state, WiFi driver statics | **the stack is whatever is left over**: every static byte added comes straight out of core 0's stack. This is the pool that breaks first. |
+| Heap (64 KB of reclaimed ROM RAM + the 32 KB arena above = 96 KB) | ~45 KB used in station mode | the WiFi driver's buffers, almost entirely | ~50 KB free today; soft-AP + station together is unmeasured (card 220) |
+| Instruction RAM (code that must run with flash off) | 63 KB used of ~128 KB | the WiFi blobs (51 KB), the panel refresh ISR, flash-write helpers (+3.7 KB with OTA) | comfortable |
+
+What the device-web features cost, measured by the research spikes: HTTP server ~7.6 KB,
+DHCP + DNS ~5.4 KB, second network stack for the AP ~3.9 KB, QR encoder ~0.1 KB - about
+**17 KB of main RAM**, against 37.5 KB of slack that is also the stack. Hence the
+order of work: first stop `main` from needing 24 KB of transient stack for the
+framebuffers (card 220), then measure the heap with the AP up, then add features one at
+a time with `xtensa-esp32-elf-size` as the gate on every card. The rule for all
+firmware cards: big short-lived buffers go on the heap for the duration of the
+operation; nothing large is held across an `await` (it silently becomes `.bss`).
 
 ## What the research settled
 
