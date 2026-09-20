@@ -359,3 +359,487 @@ something 006 could only guess at:
    becomes, concretely, the RTC bit plus the watchdog: the *logic* still needs
    flash and cannot run before `store::init`, but the thing that rescues a hang
    can, and does.
+
+### 2. What was built, and the numbers
+
+#### The pieces
+
+**`crates/otastate`** (new, `no_std`, no alloc, no clock) is the part of this
+card that is pure reasoning: `classify(booted, selected, state) -> Boot` and
+`decide(Health) -> Wait | Confirm | Revert`. The firmware calls both, so the
+device and `cargo test` cannot disagree about when an update has proved itself.
+Behind its `model` feature - on by default, **off in the firmware** - is a paper
+`otadata` and a paper ESP-IDF v6.1 bootloader: the unconditional
+`PENDING_VERIFY -> ABORTED` loop, `NEW -> PENDING_VERIFY`, `ota_select_valid`,
+and `esp-bootloader-esp-idf`'s own sequence arithmetic, each cited to file and
+line. `tests/interruptions.rs` cuts the power at every instant of the table
+above, twice over (an erased sector and a torn one), and asserts what boots.
+
+**`firmware/src/ota.rs`** grows the three `otadata` writes and nothing else
+touches it: `write_selection` (activate), `write_state` (confirm and revert),
+each `#[inline(never)]` and synchronous under the store's `STORE` lock.
+`note_boot` classifies the boot, promotes an interrupted activation, reads the
+rejected image's version out of the other slot and logs the line that says an
+update was rolled back. `trial_task` exists **only on a trial boot**;
+`activate_task` sleeps on a signal, waits 2 s and resets.
+
+**`firmware/src/main.rs`** arms the RTC watchdog from the breadcrumb bit as the
+first statement after `esp_hal::init`, and disarms it a second later if the
+boot classification says this is not a trial.
+
+**`firmware/src/http.rs`** parses `?activate=`, counts requests for the health
+criterion, answers `activating` and carries `update` on `GET /api/v1/panic`.
+
+#### Where the card and 006 differed, and what I did
+
+Only the three places the design note lists, and 006 wins in all three - it is
+just that two of its sentences were written before card 242 existed and one
+before there was an HTTP route. Nothing in 006's plan was dropped. The card's
+own health criterion is word for word 006 section 6's, so there was nothing to
+reconcile there: 60 s floor, 120 s HTTP grace, 180 s revert.
+
+One thing the card asks for that I deliberately did **not** build: the card's
+step 5 says "after a revert the device says so ... `GET /api/v1/panic`'s reply
+is the natural home". It is, and it is there - but I did not put *why* in RTC
+memory, because `otadata` already holds it (`INVALID` = the app gave up,
+`ABORTED` = something reset it) and `otadata` survives a power cut where RTC
+memory does not. The breadcrumb's contribution is one bit, and it buys the
+watchdog.
+
+#### What was established about the bootloader, and how
+
+From ESP-IDF `release/v6.1`'s own sources (quoted in the design note above):
+`bootloader_utility_get_selected_boot_partition` turns **any** `PENDING_VERIFY`
+entry into `ABORTED` on **every** boot before it selects anything, without
+looking at the reset reason; `bootloader_common_ota_select_invalid` treats
+`ABORTED` and `INVALID` as unusable, so the other entry is chosen; and with both
+unusable and no `factory` partition the bootloader boots `ota_0`. That is the
+whole revert mechanism and the app contributes nothing to it.
+
+From `esp-bootloader-esp-idf 0.6.0`'s `src/ota.rs`: `set_current_app_partition`
+writes `current_slot().next()` - never the entry that is selecting the running
+image - and `current_app_partition` ignores the image states, which is both this
+card's detection and its trap.
+
+From `esp-hal-1.2.2/src/lib.rs` lines 768-778: `esp_hal::init` disables the
+super watchdog, the RTC watchdog and both timer-group watchdogs, so **nothing
+is armed on this device by default** and the hang case needed one.
+
+**What the bench must establish, because it cannot be established here:**
+
+1. That the rollback bootloader on the device really behaves like its source.
+   The two `ESP_LOGD` lines are compiled out at the default INFO level, so there
+   is no log line to look for: the evidence is *which image boots*, and step 3
+   of the procedure below is the test.
+2. That the RTC watchdog's timeout really is ~240 s. `set_timeout` converts
+   through the **calibrated** RTC slow-clock period, so it should be accurate,
+   but nothing here has run it. A premature fire would show as
+   `reset reason rtc_wdt` in the boot line and would revert a good update -
+   safe, and visible.
+3. That an `otadata` write during a live stream costs the radio nothing. It is
+   one sector (~60 ms), against the 244 of an upload that card 240 measured with
+   `link downs +0`, so this is a formality.
+
+#### Which mechanism covers which failure
+
+Unchanged from the design note's table, and now with the code behind each:
+the bootloader's abort loop for every reset (panic included, via card 243's
+handler); `ota::trial_task`'s 180 s deadline for an image that boots and is
+useless; the RTC watchdog, armed from the breadcrumb bit, for an image that
+hangs; and card 240's validator for one that is structurally broken.
+
+#### RAM, measured (`tools/fw-size.sh`, floor 24,576)
+
+| build | `.stack` 0.6.0 | `.stack` 0.7.0 | `.bss` | image |
+|---|---|---|---|---|
+| default | 26,944 | **26,240** | 110,464 | 1,013,501 |
+| `panic-test` | 26,880 | **26,176** | 110,528 | 1,014,321 |
+| `http-selftest` | 26,528 | **25,824** | 110,848 | 1,048,253 |
+| `start-in-portal` | 26,944 | **26,240** | 110,464 | 1,013,369 |
+| `ota-test-unhealthy` | - | **26,240** | 110,464 | 1,013,605 |
+| `ota-test-panic` | - | **26,176** | 110,528 | 1,013,973 |
+
+`.bss` 110,208 -> 110,464 (**+256**), `.data` 59,444 -> 59,892 (+448),
+`.rwtext` (IRAM) unchanged at 66,932: nothing new is `#[ram]`. The ceiling
+costs 704 bytes for the whole card, which is the update record's statics, the
+watchdog handle, the request counter and `otastate`'s code.
+
+**Heap: nothing at all.** Card 240's one 4 KB staging allocation is still the
+only thing this firmware asks the allocator for by name, and this card adds no
+allocation on any path - the `otadata` entry is 32 bytes on the stack and the
+version read is 112.
+
+#### Core 0's stack, by card 243b's method
+
+`xtensa-esp32-elf-objdump -d`, frames from `entry a1, N` plus `addmi a1, a1, -N`
+(hex included). The numbers that matter:
+
+| frame | bytes | what it is |
+|---|---|---|
+| `route_request`'s `poll` | **2,128** | every HTTP request pays it; 2,304 on 0.6.0, so the query parsing and the activation branch came in **176 bytes cheaper** than what they replaced |
+| `Select<serve_on, wait_ap>` | 4,576 | unchanged |
+| `FlashRegion::write` | **4,176** | the `otadata` write's sector buffer |
+| `ota::write_selection` | 160 | |
+| `ota::write_state` | 128 | |
+| `ota::read_version` | 176 | |
+| `activate_task` / `trial_task` poll | 128 each | |
+| `main`'s poll (holds `read_fw_health`) | 3,088 | unchanged |
+
+So the **`otadata` write chain is ~4.5 KB**: task poll 128 + `write_selection`
+160 + `FlashRegion::write` 4,176, on top of the executor. The same write inside
+an HTTP handler would have sat on ~6.7 KB of serve chain instead of on nothing,
+for ~11 KB - which is why it is in a task, and is card 227's lesson restated
+with this card's numbers.
+
+**One correction to card 240's Log, found while measuring.** It says that
+`NorFlashRegion::read`/`write` on a word-aligned buffer avoid esp-storage's
+4 KB frame. The *copy* is avoided - the fallback branch is not taken - but the
+**frame is not**: `NorFlashRegion::ReadNorFlash::read` is 4,144 bytes and
+`NorFlash::write` is 4,160 in this build, because the compiler reserves the
+alignment-fallback buffer on entry whether or not the branch runs. So card 240's
+upload path is deeper than its Log claims (~11 KB with the serve chain, which is
+consistent with the `stack_free` 11,584 the bench measured after an upload).
+It changes no decision here and is not a regression; it is a number that should
+be right in the record.
+
+#### Reply sizes
+
+`FirmwareReply` 8 -> **12 bytes**, `PanicReply` grows by `UpdateRecord`. Neither
+is on the hot path and `ApiBody`'s size is still `StatusReply`'s 208, which
+`crates/device-api/tests/sizes.rs`'s
+`no_reply_is_bigger_than_the_one_on_the_hot_path` asserts and which is why card
+243b's +3,488-byte lesson is not repeated here. `MAX_JSON_LEN`: firmware
+57 -> 76, panic 231 -> 410.
+
+#### The host tests, and what they cover
+
+`crates/otastate`, **34 tests** (11 unit + 23 integration):
+
+| what | tests |
+|---|---|
+| a serial-flashed device is `Settled` and writes nothing, ever | `a_serial_flashed_device_runs_ota_0_and_has_nothing_to_prove`, `a_settled_boot_writes_nothing_to_otadata_however_many_times_it_reboots` |
+| the health criterion, every clause | `nothing_confirms_before_sixty_seconds_however_healthy`, `every_part_of_the_criterion_is_needed`, `a_device_nobody_visits_confirms_at_two_minutes`, `an_image_that_never_becomes_healthy_is_reverted_at_three_minutes`, `health_arriving_on_the_deadline_tick_keeps_the_update` |
+| **every interruption point** (rows 5a, 5b, 6, 9, 10), for an erased sector *and* a torn one | `every_interruption_of_an_activation_leaves_a_device_that_boots`, `an_interrupted_sequence_write_boots_the_image_that_was_already_running`, `an_activation_interrupted_before_the_state_write_still_puts_the_image_on_trial`, `an_interrupted_state_write_...`, `losing_power_between_the_last_write_and_the_reset_is_simply_the_update`, `power_lost_during_the_confirm_write_un_installs_rather_than_half_installs`, `power_lost_during_the_revert_write_still_boots_the_previous_image` |
+| the three ways a trial ends badly (row 8) | `an_image_that_never_becomes_healthy_is_reverted_at_the_deadline`, `a_panic_during_the_trial_is_rolled_back_by_the_bootloader_alone`, `a_reset_that_is_not_a_panic_is_rolled_back_the_same_way` |
+| the promotion of row 5b really arms the bootloader | `an_unproven_image_that_dies_is_still_rolled_back` |
+| the crate's own trap: the next update after a rollback | `an_update_after_a_rollback_still_activates` |
+| it never gets stuck | `a_crash_loop_cannot_happen_because_the_second_boot_is_the_old_image`, `a_run_of_bad_updates_never_leaves_the_device_off_the_air`, `updates_alternate_slots_for_as_long_as_they_keep_working` |
+| the bootloader's floor | `a_structurally_broken_image_never_runs_even_if_otadata_selects_it`, `an_otadata_with_nothing_usable_in_it_boots_ota_0`, `a_device_that_cannot_read_otadata_still_runs_and_says_it_does_not_know` |
+| row 12, why an upload during a trial is refused | `during_a_trial_the_inactive_slot_is_the_image_we_may_have_to_go_back_to` |
+
+`crates/fwimage` +4 (`version_of` against a good image, an erased slot, a
+half-staged one, an image with no descriptor, and somebody else's app);
+`crates/device-api` +4 goldens and the doc test for `parse_activate`;
+`crates/provision` +1 (the installing screen is not the updating one and has no
+bar).
+
+#### One thing this card cannot test on the host
+
+**That the promotion in `note_boot` is the right call at all.** Interruption 5b
+is a window of one sector write, and everything about closing it is reasoning
+plus the model. If the orchestrator wants it on the bench it is one deliberate
+power cut in the two seconds after `fw-upload --activate` prints its reply - and
+it is not in the procedure below, because "pull the plug at the right
+millisecond" is not a repeatable bench step and the failure it guards against is
+already the least likely one in the table.
+
+### 3. The bench procedure (for the orchestrator - the worker touched no hardware)
+
+Four steps, about **fifteen minutes** in total, and every one of them says what
+"stop" looks like. **The recovery that always works is `tools/fw-run.sh`**: it
+passes `--erase-data-parts ota`, so a serial flash erases `otadata` and the
+bootloader starts again from `ota_0` whatever state the device had got itself
+into. Nothing in this card can prevent that, because nothing in this card can
+write outside the inactive slot and `otadata`.
+
+Before anything: `backup/tidbyt-stock-*.bin` must exist and be 8,388,608 bytes.
+Bench Mac wired with its WiFi **off** (the en0/en5 stall, card 223). Serial
+monitor attached and logging for the whole run - this card's evidence is almost
+all serial lines. Take the source lock off the Studio and check `screeny stats`
+says HOLD or IDLE:
+
+```bash
+curl -s -X POST http://workbench.local:8787/api/v1/player/set \
+     -H 'content-type: application/json' -d '{"device":"4a00a4","on":false}'
+```
+
+**Artefacts** (this session's scratchpad,
+`/private/tmp/claude-501/-Users-aaron-src-screeny/81d1cc11-75c9-4f5f-a521-784097e6406f/scratchpad/`):
+
+| file | `esp_app_desc.version` | bytes | what |
+|---|---|---|---|
+| `screeny-fw-0.7.0-default.elf` | `0.7.0` | - | **the build to serial-flash** |
+| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,013,552 | a good update: must confirm |
+| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,013,376 | never reports healthy: must revert at 180 s |
+| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,013,984 | panics at 20 s: must be rolled back by the bootloader |
+| `screeny-fw-0.7.1-good.elf`, `-unhealthy.elf`, `-panic.elf` | | | the ELFs, for symbolising a backtrace |
+
+The three `.bin`s were made from those ELFs with, from the repository root and
+after `. ~/export-esp.sh`:
+
+```bash
+espflash save-image --chip esp32 --flash-size 8mb \
+  --partition-table firmware/partitions.csv <elf> <out>.bin
+```
+
+`--flash-size 8mb` is not optional: without it espflash assumes 4 MB and refuses
+the table. **The version strings are deliberately all different**, so every
+answer below names which image it is talking about without anybody having to
+remember what was uploaded. All three pass `screeny-probe fw-scan`.
+
+---
+
+**Step 0 - flash 0.7.0 and check the baseline (about 3 minutes).**
+
+```bash
+. ~/export-esp.sh
+cd firmware && cargo build --release && cd ..
+tools/fw-size.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw
+tools/fw-run.sh /private/tmp/.../scratchpad/screeny-fw-0.7.0-default.elf fw-0.7.0-flash 30
+```
+
+Expect `.stack 26240`, over the 24,576 floor. On the serial log, after the two
+`boot:` lines:
+
+```
+store: running from 0x10000; an upload would stage into 0x210000 (2048 KB)
+http: fw slot Ota0 state Valid
+```
+
+and **no `ota:` line at all** - a serial-flashed device is `Settled`, so this
+card's machinery does not run and `otadata` is not written. Then:
+
+```bash
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 http
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 conformance --slow
+curl -s http://192.168.7.221/api/v1/panic | jq
+```
+
+Expect HTTP **41 passed, 0 failed, 4 skipped, 0 connects refused** (45 rules;
+44 and 45 are new), UDP **60/0/4**, and
+`{"boot_count":1,"panic_count":0,"last_panic":null,"update":null}`.
+
+*Stop if* the `http: fw slot ... state ...` line says anything but
+`Ota0 Valid`, or if there is an `ota: REVERTED`/`ota: ON TRIAL` line: the device
+is not in the clean state the rest of this depends on. Recovery: `tools/fw-run.sh`
+again, and if it repeats, the partition table or the bootloader is not what the
+repository says.
+
+---
+
+**Step 1 - the good update (about 2 minutes, of which 60-120 s is waiting).**
+
+Give the panel back to the Studio first, so the whole thing happens under a live
+30 fps stream:
+
+```bash
+curl -s -X POST http://workbench.local:8787/api/v1/player/set \
+     -H 'content-type: application/json' -d '{"device":"4a00a4","on":true}'
+sleep 10
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 \
+  fw-upload /private/tmp/.../scratchpad/screeny-fw-0.7.1-good.bin --activate
+```
+
+`--activate` is the flag that makes this reboot the device; without it
+`fw-upload` stages and stops, which is card 240's behaviour.
+
+**On the panel:** "updating" with a bar filling for ~25 s, then **"installing /
+restarting"** for two seconds, then the boot.
+
+**On the wire**, in order:
+
+```
+HTTP 200 in 25.x s (39 KB/s)
+  ok true written 1013552 error None activating true
+  waiting for the device to come back (up to 90 s)...
+  back after ~45 s: fw 0.7.1 slot Ota1 state PendingVerify boot_id N uptime ~20000 ms
+  waiting for the trial to end (up to 240 s)...
+  at ~45 s: Trial slot Ota1 version Some("0.7.1") reason None
+  at ~75 s: Confirmed slot Ota1 version Some("0.7.1") reason None
+  CONFIRMED: the update stuck.
+```
+
+**On the serial log**, the four `ota:` lines of card 240 and then five more that
+are this card's whole deliverable:
+
+```
+ota: staged image accepted - 1013552 bytes, 5 segments, version "0.7.1"
+ota: ACTIVATED 0x210000 - restarting into it on trial. If it does not prove itself within 180 s, or resets before it does, the bootloader brings fw 0.7.0 back.
+<the ROM banner and the bootloader>
+boot: #1 since power-on, reset reason software (...)
+ota: trial boot - RTC watchdog armed for 240 s (it is never fed; confirming turns it off)
+store: running from 0x210000; an upload would stage into 0x10000 (2048 KB)
+http: fw slot Ota1 state PendingVerify
+ota: ON TRIAL - this boot is a firmware update's first run from Ota1. It confirms itself once it is healthy (never before 60 s) or reverts at 180 s.
+ota: trial at 30 s - ip true, http 0, swaps NNNN (healthy false)
+ota: CONFIRMED at 6x s - fw 0.7.1 is now this device's firmware (otadata says valid). ip true, http N, swaps NNNN.
+ota: RTC watchdog disabled
+```
+
+The confirm lands at **60-63 s** if anything has made an HTTP request (the
+probe's wait does, every second), and at **120 s** on a silent network.
+
+Then, and this is the check that matters:
+
+```bash
+curl -s http://192.168.7.221/api/v1/status | jq '{fw, fw_slot, fw_state, boot_id}'
+# fw "0.7.1", fw_slot "ota_1", fw_state "valid"
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 reboot
+sleep 30
+curl -s http://192.168.7.221/api/v1/status | jq '{fw, fw_slot, fw_state}'
+# still 0.7.1 / ota_1 / valid: a confirmed update survives a reboot
+curl -s http://192.168.7.221/api/v1/panic | jq '.update'
+# null - a settled boot has nothing to report
+```
+
+*Stop if* the device comes back on `0.7.0`: something reverted a healthy image,
+and the serial log's `ota:` lines say which deadline did it. *Stop also if* the
+boot line reads `reset reason rtc_wdt`: the watchdog fired early, which means
+`TRIAL_WDT_S`'s conversion is wrong on this chip - report the number and the
+uptime it fired at. Either way the device is fine and running 0.7.0.
+
+---
+
+**Step 2 - the update that never becomes healthy (about 5 minutes).**
+
+This is the app-side deadline on its own: the image boots, joins, serves and
+draws, and simply never says it is healthy.
+
+```bash
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 \
+  fw-upload /private/tmp/.../scratchpad/screeny-fw-0.7.1-unhealthy.bin --activate
+```
+
+Expect the upload and the reboot exactly as in step 1, then **nothing happening
+for three minutes**, then a revert. On the wire:
+
+```
+  back after ~45 s: fw 0.7.2-unhealthy slot Ota0 state PendingVerify ...
+  at ~45 s: Trial slot Ota0 version Some("0.7.2-unhealthy")
+  at ~230 s: Reverted slot Ota0 version Some("0.7.2-unhealthy") reason Some(Deadline)
+  REVERTED: the update did not stick and the previous image is running.
+```
+
+On the serial log, the trial image's own account of itself:
+
+```
+ota-test: BENCH BUILD - this image will never report healthy, so it must be reverted at 180 s (card 241)
+ota: trial at 30 s - ip false, http 0, swaps 0 (healthy false)
+ota: trial at 60 s - ip false, http 0, swaps 0 (healthy false)
+...
+ota: REVERTING at 180 s - fw 0.7.2-unhealthy never became healthy (ip false, http requests 0, swaps 0). Marking this slot invalid and restarting into the previous image.
+<reset, ROM banner, bootloader>
+http: fw slot Ota1 state Invalid
+ota: REVERTED - the last firmware update did not stick. ota_0 was rolled back (it booted but never became healthy, so it marked itself invalid), and this device is running Ota1 again, fw 0.7.1.
+```
+
+and then:
+
+```bash
+curl -s http://192.168.7.221/api/v1/status | jq '{fw, fw_slot, fw_state}'
+# "0.7.1", "ota_1", "invalid"   <- fw_state is the *rejected* entry's; spec 8.10
+curl -s http://192.168.7.221/api/v1/panic | jq '.update'
+# {"outcome":"reverted","reason":"deadline","slot":"ota_0","version":"0.7.2-unhealthy"}
+```
+
+**The whole cycle is 180 s + ~20 s of boot, so the device is unreachable for
+about 25 s and back on its feet inside four minutes of the upload finishing.**
+
+*Stop if* it is still running `0.7.2-unhealthy` five minutes after the upload:
+the deadline did not fire, and the serial log's `ota: trial at N s` lines say
+how far it got. The device is reachable, so `screeny-probe reboot` gets you back
+(the bootloader aborts a `PENDING_VERIFY` on that reset), and `tools/fw-run.sh`
+always does.
+
+---
+
+**Step 3 - the update that panics (about 2 minutes). This is the card's point.**
+
+Nothing in the application does the work here: the panic handler resets the
+chip and the **bootloader** is what refuses to boot the image again.
+
+```bash
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 \
+  fw-upload /private/tmp/.../scratchpad/screeny-fw-0.7.1-panic.bin --activate
+```
+
+On the serial log, and this is the sequence to read carefully:
+
+```
+ota: ACTIVATED 0x10000 - restarting into it on trial. ...
+boot: #1 since power-on, reset reason software
+ota: trial boot - RTC watchdog armed for 240 s ...
+http: fw slot Ota0 state PendingVerify
+ota: ON TRIAL - ... from Ota0 ...
+ota-test: BENCH BUILD - panicking on core 0 in 20 s, on every boot (card 241)
+<at ~20 s of uptime>
+====================== PANIC ======================
+panicked at src/ota.rs:1347:
+ota-test: deliberate panic during an OTA trial (card 241)
+Backtrace: 0x400d....
+panic: resetting the chip (card 243; the breadcrumb is in RTC memory).
+<reset, ROM banner, bootloader>
+boot: #2 since power-on, reset reason software (the boot before it started with software)
+boot: last panic was boot #1 at uptime 20xxx ms, ota.rs:1347, 1 in a row (1 panic(s) since power-on)
+http: fw slot Ota1 state Aborted
+ota: REVERTED - the last firmware update did not stick. ota_0 was rolled back (it reset before it could confirm itself - a panic, a watchdog or a power cut; GET /api/v1/panic says which), and this device is running Ota1 again, fw 0.7.1.
+```
+
+**`state Aborted` is the bootloader's own signature** and the only evidence
+there will be that the rollback half of card 242's bootloader is compiled in:
+nothing in this firmware writes `ABORTED`, and the `ESP_LOGD` line that would
+have said so is compiled out at INFO. If that line reads `Aborted`, the
+bootloader did it.
+
+```bash
+curl -s http://192.168.7.221/api/v1/panic | jq
+# {"boot_count":2,"panic_count":1,
+#  "last_panic":{"uptime_ms":20xxx,"boot":1,"file":"ota.rs","line":1347,"consecutive":1},
+#  "update":{"outcome":"reverted","reason":"aborted","slot":"ota_0","version":"0.7.3-panic"}}
+```
+
+**It must panic exactly once.** `ota-test-panic` panics on *every* boot on
+purpose, so a second panic 20 s later would mean the device booted the bad image
+again - i.e. the rollback did not happen. `panic_count` 1 and `consecutive` 1 is
+the pass.
+
+*Stop if* `panic_count` reaches 2, or if the device stops answering altogether:
+the bootloader on this device does not have `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`
+after all, and card 243's crash-loop guard will halt it with `CRASHED` on the
+panel after five panics (~2 minutes). Recovery is a **power cycle** to clear the
+latch, then `tools/fw-run.sh`. That would be the most important finding of this
+card and is worth the serial log verbatim.
+
+---
+
+**Step 4 - put the bench back.**
+
+The device is running `0.7.1` from `ota_1` with `fw_state invalid` or `aborted`
+and `panic.update.outcome` `reverted`, which is correct and is what a device
+that has survived two bad updates should say. To get back to a plain 0.7.0:
+
+```bash
+tools/fw-run.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw fw-0.7.0-final 25
+curl -s -X POST http://workbench.local:8787/api/v1/player/set \
+     -H 'content-type: application/json' -d '{"device":"4a00a4","on":true}'
+```
+
+Turn the Mac's WiFi back on. Nothing here leaves a background process: every
+`curl` is one request and `fw-upload` exits when the trial ends or its own
+bound expires.
+
+**Recovery, by case:**
+
+| what | the device is | do this |
+|---|---|---|
+| an upload refused | untouched, or with a partial image in a slot nothing boots | nothing; designed behaviour |
+| `fw-upload` prints `REVERTED` | running the previous image, on the network | read `/api/v1/panic`; that is the test passing |
+| `fw-upload` times out waiting for it to come back | probably mid-rollback | wait two more minutes, then `screeny-probe status` |
+| unreachable for more than 5 minutes | a crash loop, or a boot that hangs | power-cycle (clears the crash-loop latch and the breadcrumb), then `tools/fw-run.sh` |
+| `fw_state` reads `undefined` and uploads answer `unavailable` | running fine, `otadata` unreadable | `tools/fw-run.sh`; report it, it should not happen |
+| anything at all, last resort | - | `tools/fw-run.sh`: it erases `otadata` and writes `ota_0`, and always wins |
+
+**What this card does NOT ask the bench to do**: pull the power in the
+two-second window between the reply and the `otadata` write (interruption 5b),
+or in the ~60 ms of a confirm write. Both are covered by the host model, neither
+is a repeatable bench step, and both fail safe by construction.
