@@ -906,6 +906,128 @@ mod tests {
         }
     }
 
+    /// What a conforming device answers, from the shared golden file.
+    fn status() -> StatusReply {
+        serde_json::from_str(include_str!("../../device-api/tests/golden/status.json")).expect("the golden status")
+    }
+
+    /// The two levels the firmware session measured, and the heap line, read
+    /// off one reply each. The numbers are theirs; what is pinned here is
+    /// which side of them a reading falls on.
+    #[test]
+    fn the_stack_has_two_levels_and_the_heap_has_one() {
+        let facts = |stack: u32, used: u32, size: u32| {
+            DeviceFacts::of(
+                StatusReply { stack_free: stack, heap_used: used, heap_size: size, ..status() },
+                None,
+                &mut None,
+            )
+        };
+        // The healthy panel: ~20 KB of stack, 51% of 90 KB.
+        let good = facts(20_272, 45_612, 90_112);
+        assert!(!good.stack_warn && !good.stack_fault && !good.low_heap);
+
+        // The margin going, and gone.
+        let warn = facts(6000, 45_612, 90_112);
+        assert!(warn.stack_warn && !warn.stack_fault, "6000 B is a warning, not a fault");
+        assert!(!warn.low_stack, "the old name is the fault level");
+        let fault = facts(3000, 45_612, 90_112);
+        assert!(fault.stack_fault && fault.stack_warn, "a fault is below the warning line too");
+        assert!(fault.low_stack, "and the old name follows it");
+
+        // Exactly on a line is not past it.
+        assert!(!facts(STACK_WARN, 0, 1).stack_warn);
+        assert!(!facts(STACK_FAULT, 0, 1).stack_fault);
+        assert!(facts(STACK_FAULT - 1, 0, 1).stack_fault);
+
+        // The heap: the worst instant the firmware session measured (60%) is
+        // quiet; 90% is not.
+        assert!(!facts(20_000, 54 * 1024, 90_112).low_heap);
+        assert!(facts(20_000, 88_474, 98_304).low_heap);
+        // A device that reports no heap at all is not a device in trouble.
+        assert!(!facts(20_000, 0, 0).low_heap);
+    }
+
+    /// **One ask excuses one reboot**, and a reboot with no ask behind it is
+    /// counted. The window is what an integration test cannot show without
+    /// waiting two minutes, so it is shown here.
+    #[test]
+    fn an_ask_excuses_exactly_one_reboot() {
+        let first = DeviceFacts::of(status(), None, &mut None);
+        assert_eq!(first.reboots, 0, "the first read ever cannot be a reboot");
+        assert_eq!(first.unasked_reboots, 0);
+
+        // Rebooted, and we asked: counted as a reboot, not as a mystery, and
+        // the ask is used up.
+        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
+        let mut ask = Some(Instant::now());
+        let second = DeviceFacts::of(rebooted.clone(), Some(&first), &mut ask);
+        assert_eq!(second.reboots, 1);
+        assert_eq!(second.unasked_reboots, 0, "this studio asked for it");
+        assert!(ask.is_none(), "the ask is consumed, so it cannot excuse a second reboot");
+
+        // Rebooted again, and nobody here asked.
+        let again = StatusReply { boot_id: rebooted.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
+        let third = DeviceFacts::of(again, Some(&second), &mut ask);
+        assert_eq!(third.reboots, 2);
+        assert_eq!(third.unasked_reboots, 1, "the second reboot had no ask behind it");
+        assert!(!third.odd_reset, "and it is still a quiet reset reason: the page says it gently");
+    }
+
+    /// An ask from long ago excuses nothing. It is taken all the same - it was
+    /// about a reboot that has already happened or never will - so it cannot
+    /// sit there waiting to excuse next month's crash.
+    #[test]
+    fn an_ask_older_than_the_window_does_not_excuse_a_reboot() {
+        let first = DeviceFacts::of(status(), None, &mut None);
+        let stale = Instant::now().checked_sub(REBOOT_ASK_WINDOW + Duration::from_secs(1));
+        // A machine whose clock has not been up that long: nothing to test.
+        let Some(stale) = stale else { return };
+        let mut ask = Some(stale);
+        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
+        let second = DeviceFacts::of(rebooted, Some(&first), &mut ask);
+        assert_eq!(second.unasked_reboots, 1, "an ask from before the window is not an excuse");
+        assert!(ask.is_none(), "and it is cleared rather than left lying around");
+    }
+
+    /// A reboot whose reason is *not* `software` is not one of these at all:
+    /// a brownout is something that happened to the panel and already has a
+    /// tone of its own.
+    #[test]
+    fn a_brownout_is_not_an_unasked_for_software_reboot() {
+        let first = DeviceFacts::of(status(), None, &mut None);
+        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Brownout, ..status() };
+        let second = DeviceFacts::of(rebooted, Some(&first), &mut None);
+        assert_eq!(second.reboots, 1);
+        assert_eq!(second.unasked_reboots, 0, "it is not a mystery: the panel says what happened");
+        assert!(second.odd_reset, "and that stands out on its own");
+    }
+
+    /// The registry's half: the ask is recorded per device and read back by
+    /// the next status read.
+    #[test]
+    fn the_registry_remembers_which_panel_was_asked_to_reboot() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+        let other = reg.add_manual("192.0.2.8", "other").expect("added");
+        assert!(reg.asked_to_reboot(&id));
+        assert!(!reg.asked_to_reboot("nobody"), "there is no such panel");
+        assert!(reg.get(&id).expect("there").reboot_ask.is_some());
+        assert!(reg.get(&other).expect("there").reboot_ask.is_none(), "one panel's ask is not another's");
+
+        // One read, then a reboot: counted, and not counted as unasked.
+        let reply = status();
+        reg.heard_http(&id, reply.clone()).expect("recorded");
+        let heard = reg
+            .heard_http(&id, StatusReply { boot_id: reply.boot_id + 1, reset_reason: ResetReason::Software, ..reply })
+            .expect("recorded");
+        assert_eq!(heard.reboots, 1);
+        assert!(heard.rebooted);
+        assert_eq!(heard.unasked_reboots, 0, "we asked for this one");
+        assert!(!heard.unasked);
+        assert!(reg.get(&id).expect("there").reboot_ask.is_none(), "the ask was used up");
+    }
+
     #[test]
     fn a_manual_address_gets_a_provisional_id_and_adopts_its_real_one() {
         let reg = Registry::new();
