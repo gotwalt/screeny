@@ -195,6 +195,13 @@ Failures are one shape: `{"error":"<code>", "detail"?:"..."}`, the HTTP status b
 property of the code. Every mutating request carries an optional `pin`/`counter`, parsed
 and ignored today (decision 3); `check_auth` is the single hook for parked card 041.
 
+Requested by the software session (2026-09-20), to land with card 222: `StatusReply`
+gains **`boot_id`**, a random `u32` drawn once at boot, so the Studio can tell "the device
+rebooted" from "the link flapped" without inferring it from uptime going backwards. A
+random id rather than a persistent counter on purpose: it costs no flash write per boot.
+(Add it to `crates/device-api` and its golden files after card 224 merges, so the
+simulator picks it up in the same change.)
+
 What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
