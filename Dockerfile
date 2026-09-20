@@ -113,7 +113,6 @@ ENV TZ=America/Los_Angeles \
 
 EXPOSE 8787
 
-# The compose files pass `--listen` explicitly as well, because the binary does
-# not read SCREENY_LISTEN yet (card 106). Once it does, this is the whole story.
+# No CMD: the binary reads SCREENY_LISTEN and SCREENY_STATE_DIR (card 106), and a
+# flag here would silently beat the environment a compose file sets.
 ENTRYPOINT ["/usr/local/bin/screeny-studio"]
-CMD ["--listen", "0.0.0.0:8787"]

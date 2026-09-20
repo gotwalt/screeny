@@ -44,8 +44,6 @@ services:
       SCREENY_LISTEN: "0.0.0.0:8787"
       SCREENY_PORT: "8787"
 
-    command: ["--listen", "0.0.0.0:8787"]
-
     # So `host.docker.internal` resolves on Linux too, where it is not built in.
     extra_hosts:
       - "host.docker.internal:host-gateway"

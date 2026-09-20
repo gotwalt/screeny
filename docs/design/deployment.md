@@ -260,10 +260,7 @@ An `.env` is host state, not repo state: it is in `.gitignore` and in
 
 ## Two things the container cannot fix
 
-- **The state volume is only as good as the binary.** `SCREENY_STATE_DIR=/data` is
-  set and `/data` is a named volume owned by uid 10001, but the studio does not write
-  a state file yet - card 106 is what makes a restart resume what was playing. Until
-  it lands, a restart comes back on the default piece with the panel switch off.
-- **`SCREENY_LISTEN` is set and ignored.** Same card. That is why the compose files
-  also pass `--listen` on the command line; delete the `command:` lines once the env
-  var is honoured.
+- **State and listen address come from the environment** since card 106: the studio
+  writes `state.json` under `SCREENY_STATE_DIR=/data` (a named volume owned by uid 10001)
+  and listens on `SCREENY_LISTEN`. A restart resumes what every panel was playing. The
+  image has no `CMD` on purpose: a flag would silently beat the environment.

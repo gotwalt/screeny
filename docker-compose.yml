@@ -51,16 +51,11 @@ services:
       TZ: "${TZ:-America/Los_Angeles}"
       # Mesa's ANV. wgpu reads this itself (`Instance::new(...).with_env()`).
       WGPU_BACKEND: vulkan
-      # Read by the binary from card 106 onwards; harmless before that.
+      # Read by the binary (card 106): flags win over these, and none are passed.
       SCREENY_STATE_DIR: /data
       SCREENY_LISTEN: "0.0.0.0:${SCREENY_PORT:-8787}"
       # Only the healthcheck below uses this one.
       SCREENY_PORT: "${SCREENY_PORT:-8787}"
-
-    # Until card 106 lands, the binary knows only flags, so the port is said
-    # twice - here and in SCREENY_LISTEN above. Delete this `command:` once the
-    # env var is honoured.
-    command: ["--listen", "0.0.0.0:${SCREENY_PORT:-8787}"]
 
     volumes:
       # The state file, so a restart resumes what was playing. Owned by uid
