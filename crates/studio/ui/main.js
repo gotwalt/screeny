@@ -603,6 +603,10 @@ async function start() {
     }
     facts($('#panel-facts'), rows);
 
+    const looking = discoveryLine(Boolean(attachedId()));
+    $('#discovery-note').textContent = looking;
+    $('#discovery-note').hidden = !looking;
+
     // Card 167: remembered settings this build could not use as written. Not a
     // fault - it is what the memory is for - so it is said plainly, once.
     const repaired = picture ? picture.state.repaired : [];
@@ -614,6 +618,38 @@ async function start() {
     showFound();
   }
   bind({ refresh: showPanel });
+
+  /** Card 173: which of the three "nothing here yet" this is.
+   *
+   *  An empty list looks the same whether the first browse has simply not
+   *  finished, mDNS is broken on this host, or discovery is switched off and
+   *  nothing will ever appear. The first is "wait a moment" and the third is
+   *  "you have to type something", so the page has to tell them apart. None of
+   *  it is a fault: a browse that finds nothing is the normal case, so this is
+   *  a hint and never reaches `/healthz`.
+   *
+   *  Returns '' when there is nothing worth saying, which is the ordinary
+   *  state of an attached panel on a host where discovery works. */
+  function discoveryLine(attached) {
+    const d = picture && picture.discovery;
+    if (!d) return '';
+    const type = 'Type an address under “Change which panel”.';
+    if (!d.enabled) {
+      return attached
+        ? 'Not looking for other panels: this studio was started with --no-discover.'
+        : `Not looking for panels: this studio was started with --no-discover. ${type}`;
+    }
+    if (d.last_error) {
+      return `Looking for panels is not working here: ${d.last_error}. ${type}`;
+    }
+    if (!d.browses) return 'Looking for panels…';
+    if (attached) return '';
+    const browses = `${d.browses} ${d.browses === 1 ? 'browse' : 'browses'}`;
+    const found = (picture.devices || []).length;
+    return found
+      ? `Looking: ${browses}, ${found} found.`
+      : `Looking: ${browses}, nothing found yet. ${type}`;
+  }
 
   /** Every panel this studio knows about: the chooser, folded away. */
   function showFound() {

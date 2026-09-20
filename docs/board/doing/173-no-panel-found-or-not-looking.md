@@ -52,3 +52,39 @@ Start a studio with `--no-discover` and no state: the page says it is not lookin
 says what to do instead.
 
 ## Log
+
+### The card against today's tree
+
+The Context still holds. Card 170 rewrote the page around one panel, but
+`showFound()` is still there, still opens the chooser once when nothing is
+attached, and still draws an empty list for all three reasons.
+`DiscoveryHealth` is still on `/api/v1/status` unchanged, so **no API change
+was needed for this card** - only the page reading what was already there.
+
+### What I did
+
+- `ui/index.html`: one `#discovery-note` line in the panel section, right under
+  `#panel-name` / `#panel-help`, `hidden` until there is something to say. It
+  is a `.hint`, so it is drawn in the dim tone and never in `bad`: a browse
+  that finds nothing is the normal case (`crates/screeny/README.md`) and none
+  of this reaches `/healthz`.
+- `ui/main.js`: `discoveryLine(attached)` turns `status.discovery` into one
+  sentence, and `showPanel()` puts it up. The five answers:
+  - discovery off, nothing attached - "Not looking for panels: this studio was
+    started with --no-discover. Type an address under “Change which panel”."
+  - discovery off, a panel attached - the same fact, quietly, without the
+    instruction: this is the card's second deliverable, for somebody wondering
+    why their *second* panel never turns up.
+  - `last_error` set - "Looking for panels is not working here: <error>. Type
+    an address…" (avahi holding 5353; Docker on macOS).
+  - `browses == 0` - "Looking for panels…" - the first thirty seconds.
+  - browsed and still empty - "Looking: 3 browses, nothing found yet. Type an
+    address…", and with something found, "Looking: 3 browses, 2 found."
+  - attached, discovery on and working - **nothing**. No line for the case
+    where there is nothing to explain.
+- `tests/ui.rs`: `the_page_can_say_whether_it_is_looking_for_panels` (the
+  element exists, the script branches on all three of `enabled`, `last_error`
+  and `browses`, and the line is never given the `bad` tone) and
+  `status_says_whether_discovery_is_on` (`test_config` is `--no-discover`, so
+  `discovery.enabled` is false, `browses` 0, `last_error` null, and `ok` is
+  still true).

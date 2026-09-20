@@ -156,6 +156,35 @@ fn the_page_keeps_its_promises() {
     }
 }
 
+/// Card 173: the page has somewhere to say whether it is even looking for
+/// panels, and the script tells the three cases apart rather than leaving an
+/// empty list to mean all of them.
+#[test]
+fn the_page_can_say_whether_it_is_looking_for_panels() {
+    assert!(INDEX_HTML.contains("id=\"discovery-note\""), "the panel section needs a line for the discovery state");
+    for case in ["d.enabled", "d.last_error", "d.browses"] {
+        assert!(MAIN_JS.contains(case), "the discovery line must distinguish {case}");
+    }
+    // A browse that finds nothing is normal, so this line is never drawn in
+    // the fault tone and never reaches `/healthz`.
+    let line = MAIN_JS.find("function discoveryLine").expect("the discovery line");
+    let body = &MAIN_JS[line..line + 1200];
+    assert!(!body.contains("'bad'"), "a browse that finds nothing is not a fault");
+}
+
+/// The same fact over the API, which is what the line is drawn from: with
+/// discovery off, `/api/v1/status` says so rather than looking like a browse
+/// that has found nothing yet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_says_whether_discovery_is_on() {
+    let studio = studio().await; // `test_config`: discovery off, as `--no-discover`
+    let status = get(studio.addr, "/api/v1/status").await.json();
+    assert_eq!(status["discovery"]["enabled"], false, "{}", status["discovery"]);
+    assert_eq!(status["discovery"]["browses"], 0);
+    assert_eq!(status["discovery"]["last_error"], serde_json::Value::Null, "not looking is not an error");
+    assert_eq!(status["ok"], true, "not looking for panels is never unhealthy");
+}
+
 /// Card 170's layout requirement, as far as a text file can carry it: the
 /// two-column bench is behind a breakpoint, so at every narrower width the
 /// page is an ordinary scrolling column and the picture cannot overlap the
