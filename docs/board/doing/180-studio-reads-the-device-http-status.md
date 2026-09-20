@@ -209,3 +209,28 @@ with firmware 0.2.0 it looks exactly as it does today.
 
   Console clean on every load (no messages at all, on a reload with the console being
   watched from before navigation). Tabs closed; `ps` shows nothing of mine running.
+
+- **Cards written, from the reserved range 190-194.**
+  - **190** (design): should the five device controls go over HTTP rather than UDP? The
+    card the brief asked for. The honest cost is named in it: today a control request and
+    a status read cannot collide, because one is UDP and one is TCP, and moving the
+    controls over gives that up against a device with one connection worker.
+  - **191**: learn the HTTP port from the `_http._tcp` advertisement instead of assuming
+    80. Not a bug - the assumption is true of every panel that exists - but it is an
+    assumption, and it needs `crates/screeny` to browse a second service type.
+  - **192**: **the simulator can only play a healthy device.** The four things card 180
+    made stand out - an unexpected reset reason, `store_errors`, a `fw_state` that is not
+    `valid`, memory running out - are constants in `crates/sim/src/api.rs`, so the page
+    has never been seen in its unhappy state against a device-shaped thing. They are
+    covered by unit tests over the golden JSON and by a hand-written server in
+    `tests/device_status.rs`, which is not the same thing. That card is `crates/sim`, so
+    it is the firmware session's to pick up or refuse.
+
+- **`crates/studio/README.md`** gained a section on reading the panel's own status - the
+  one-connection-worker rule and every property that follows from it, what happens when
+  a panel has no HTTP server, and where the SSID may and may not go - plus the two new
+  test files in the table and a line about `facts` in the status route.
+
+- **Green.** `cargo clippy --workspace --all-targets`: silent. `cargo test --release
+  --no-fail-fast`: every crate, 0 failed. `ps` shows nothing of mine running; every
+  simulator and studio started by hand was under `timeout` and has been stopped.

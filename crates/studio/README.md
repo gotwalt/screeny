@@ -215,11 +215,45 @@ in seconds rather than waiting for somebody to restart the container. (That was 
 
 `GET /api/v1/status` is the same judgement with everything behind it: per device, the
 last frame sent, the last telemetry heard, fps, drops by cause, RSSI, uptime, reconnects
-and what it is playing. **Both answer even while a piece is wedged**, because that
+and what it is playing - and, since card 180, `facts`: what only the panel knows, read
+from **the panel's own** `GET /api/v1/status` over HTTP. **Both answer even while a piece is wedged**, because that
 is the moment somebody wants them. Card 106 had to work at this - the design view's
 engine lived behind a `Mutex` that a stuck piece held for ever, so the heartbeat cached
 the last readable view. A player's core is owned by its own render thread and is behind
 no shared lock at all, so there is nothing left for a stuck piece to hold.
+
+### Reading the panel's own status (card 180)
+
+Firmware 0.4.0 and later serve an HTTP API of their own on port 80
+(`docs/design/device-web.md`), and `GET /api/v1/status` there carries what UDP
+telemetry cannot: heap, free stack, firmware slot and `otadata` state, why the chip last
+restarted, settings-store errors, the WiFi state and SSID, and `boot_id`. The studio
+reads it, merges it with the telemetry rather than replacing it, and puts it on the page
+under **Device**. `boot_id` changing is the panel rebooting, and that is the only thing
+reboots are counted from - never uptime.
+
+**The panel is fragile in exactly one way, and the whole design of this is that one
+rule.** It has one connection worker and no listen backlog, so a second simultaneous
+connection is dropped at SYN and costs a second of retransmit. So: one poller task
+(`fleet::spawn_device_http`), which `await`s each read before starting the next - one
+connection in flight across the whole fleet, not one per panel; no faster than
+`MIN_DEVICE_HTTP_EVERY` (10 s), which is what `Config::default` carries and what `main`
+sets; `Connection: close`, a 2 s deadline over connect, write and read together, and a
+4 KB ceiling on the reply (`src/devhttp.rs`, hand-written over `std::net` rather than an
+HTTP client crate); capped jittered backoff; on a blocking thread, never a render one.
+**A browser never triggers a read** - it gets the studio's cached copy from this
+server's own `/api/v1/status`.
+
+A panel with no HTTP server is normal - older firmware, or the portable profile pointed
+at `screeny-sim --no-http`. The studio says so once, falls back to UDP telemetry alone,
+asks again every two minutes in case somebody updates the firmware, and never mentions
+it in `/healthz`. `--no-device-http` turns the whole thing off; `--device-http-port`
+points it somewhere other than 80, which is how a simulator is talked to.
+
+**The SSID is in that payload.** It belongs on the owner's page and in this server's
+`/api/v1/status`, and nowhere else: `DeviceFacts` has a hand-written `Debug` that
+redacts it, and nothing about a device is written to the state file, because these are
+live facts and not state. `tests/ssid.rs` checks both.
 
 ## The API
 
@@ -358,6 +392,8 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
 | `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
+| `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
+| `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/ui.rs` | the page and its two files are served, `/dashboard` redirects, every element the script reaches for exists, every route it calls exists, the narrow layout stays the default - and, since the truth-telling cards, that the page can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that the rate slider spans `MIN_FPS..=MAX_FPS` and a rate a script set is what the page reports (172), and that a parameter with named stops carries them (163) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a piece that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |
