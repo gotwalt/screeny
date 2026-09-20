@@ -4,8 +4,8 @@ title: The art system sends to the panel through crates/screeny
 type: build
 hardware: no
 depends: [011, 100]
-owner:
-branch:
+owner: worker-101
+branch: card/101-art-sender-output
 ---
 
 ## Goal
