@@ -28,7 +28,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-pub use screeny_device_api::{FwSlot, FwState};
+pub use screeny_device_api::{FwSlot, FwState, RevertReason, UpdateOutcome};
 
 #[cfg(feature = "model")]
 pub mod model;
@@ -126,23 +126,6 @@ pub fn decide(h: Health) -> TrialAction {
 // ---------------------------------------------------------------------------
 // What kind of boot this is
 // ---------------------------------------------------------------------------
-
-/// Why the previous image came back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RevertReason {
-    /// The trial image ran, never became healthy, and marked itself `INVALID`
-    /// at [`REVERT_AT_MS`]. The one reason the app itself chose.
-    Deadline,
-    /// The trial image was still `PENDING_VERIFY` when the chip reset, and the
-    /// bootloader turned it into `ABORTED`. A panic, a watchdog, a brownout, the
-    /// EN button or somebody pulling the cable all land here: ESP-IDF's abort
-    /// loop does not look at the reset reason.
-    Aborted,
-    /// `otadata` selected a slot and the bootloader ran a different one without
-    /// having aborted anything - i.e. the selected image did not verify, so the
-    /// bootloader fell back. A truncated or corrupted slot looks like this.
-    Rejected,
-}
 
 /// What this boot is, as far as the update machinery is concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

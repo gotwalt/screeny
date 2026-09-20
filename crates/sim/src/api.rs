@@ -332,7 +332,7 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         (route::Method::Get, route::WIFI) => get_wifi(shared),
         (route::Method::Post, route::WIFI) => post_wifi(shared, head, body),
         (route::Method::Post, route::SETTINGS) => post_settings(shared, head, body),
-        (route::Method::Post, route::FIRMWARE) => post_firmware(body),
+        (route::Method::Post, route::FIRMWARE) => post_firmware(head, body),
         (route::Method::Post, route::REBOOT) => post_reboot(shared, head, body),
         (route::Method::Post, route::IDENTIFY) => post_identify(shared, head, body),
         // Unreachable: the table walk above proved the pair is in `ROUTES`.
@@ -401,6 +401,10 @@ fn panic_breadcrumb() -> Response {
         boot_count: 1,
         panic_count: 0,
         last_panic: None,
+        // Card 241, and `null` for the same reason as `last_panic`: this
+        // simulator has no `otadata` and no slots, so it has never activated a
+        // firmware image and saying otherwise would be inventing one.
+        update: None,
     })
 }
 
@@ -666,7 +670,21 @@ fn post_identify(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
 ///
 /// `written` is deliberately "bytes that reached the sink", the same as the
 /// device's, so a truncated upload reports where it stopped.
-fn post_firmware(body: Body<'_>) -> Response {
+///
+/// **Activation** (card 241) is parsed here and goes no further. The query flag
+/// is read with the shared [`route::parse_activate`], so a caller that spells
+/// it wrongly is refused `out_of_range` by the simulator exactly as it is by
+/// the device - which is the half of this route a simulator *can* be held to.
+/// The other half it cannot: there is no `otadata` here, no second slot and no
+/// bootloader to hand over to, so an accepted image always answers
+/// `activating: false` and nothing restarts.
+fn post_firmware(head: &Head, body: Body<'_>) -> Response {
+    let activate = match route::parse_activate(Some(&head.query)) {
+        Ok(a) => a,
+        Err(()) => {
+            return error_response(ErrorCode::OutOfRange, "activate must be 0 or 1")
+        }
+    };
     let Body::Stream { reader, len } = body else {
         return bare(ErrorCode::Internal);
     };
@@ -725,7 +743,18 @@ fn post_firmware(body: Body<'_>) -> Response {
     }
     let written32 = u32::try_from(written).unwrap_or(u32::MAX);
     match scan.finish() {
-        Ok(_) => ok_json(&FirmwareReply::ok(written32)),
+        // **`activating` is always false here, whatever the caller asked**, and
+        // that is the honest answer rather than a missing feature: this process
+        // has one "slot" and it is the running binary. A simulator that claimed
+        // to be rebooting into an image it threw away would be the one thing a
+        // simulator must never be - a different answer from the device's about
+        // something a caller acts on. `FirmwareReply` carries the flag for
+        // exactly this: the caller learns the image was accepted *and* that
+        // nothing is restarting, from the reply it already parses.
+        Ok(_) => {
+            let _ = activate;
+            ok_json(&FirmwareReply::ok(written32))
+        }
         Err(e) => ok_json(&FirmwareReply::failed(written32, e)),
     }
 }

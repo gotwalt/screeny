@@ -258,6 +258,76 @@ pub fn path_is_known(path: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/v1/firmware?activate=... (card 241)
+// ---------------------------------------------------------------------------
+
+/// The one query parameter this API has.
+///
+/// `POST /api/v1/firmware` **activates by default**: the natural reading of
+/// "send this firmware to the panel" is that the panel then runs it, and the
+/// five-line instruction for the owner is one `curl`. Staging without
+/// activating - which is all card 240's firmware could do, and which is what a
+/// probe suite wants against a live device - is the thing you have to ask for.
+pub const ACTIVATE_KEY: &str = "activate";
+
+/// What `?activate=` said, if anything.
+///
+/// A query string, not a body, because the body of this route is a megabyte of
+/// firmware streamed straight to flash: there is nowhere to put a flag in it,
+/// and a header would be a second convention for one bit.
+///
+/// Accepts `1`/`true`/`yes` and `0`/`false`/`no`, in any case, and **refuses
+/// anything else** rather than guessing. Guessing is how `?activate=maybe`
+/// reboots a panel.
+///
+/// ```
+/// use screeny_device_api::route::parse_activate;
+///
+/// assert_eq!(parse_activate(None), Ok(true), "the default is to activate");
+/// assert_eq!(parse_activate(Some("activate=0")), Ok(false));
+/// assert_eq!(parse_activate(Some("activate=false")), Ok(false));
+/// assert_eq!(parse_activate(Some("other=1")), Ok(true), "unknown keys are ignored");
+/// assert!(parse_activate(Some("activate=maybe")).is_err());
+/// ```
+///
+/// # Errors
+///
+/// `Err(())` when `activate` is present with a value this does not recognise,
+/// which a server answers `out_of_range`.
+pub fn parse_activate(query: Option<&str>) -> Result<bool, ()> {
+    let Some(q) = query else {
+        return Ok(true);
+    };
+    let mut answer = Ok(true);
+    for pair in q.split('&') {
+        let (key, value) = match pair.split_once('=') {
+            Some((k, v)) => (k, v),
+            // A bare `?activate` is the HTML-form spelling of "yes".
+            None => (pair, "1"),
+        };
+        if !key.eq_ignore_ascii_case(ACTIVATE_KEY) {
+            continue;
+        }
+        answer = match value {
+            v if v.eq_ignore_ascii_case("1")
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes") =>
+            {
+                Ok(true)
+            }
+            v if v.eq_ignore_ascii_case("0")
+                || v.eq_ignore_ascii_case("false")
+                || v.eq_ignore_ascii_case("no") =>
+            {
+                Ok(false)
+            }
+            _ => Err(()),
+        };
+    }
+    answer
+}
+
+// ---------------------------------------------------------------------------
 // Rate limiting
 // ---------------------------------------------------------------------------
 

@@ -96,8 +96,8 @@ pub mod route;
 pub mod text;
 
 pub use enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, StreamState,
-    WifiState,
+    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    StreamState, UpdateOutcome, WifiState,
 };
 pub use error::{ErrorCode, ErrorReply};
 pub use route::{Method, RateLimit, Route, ROUTES};

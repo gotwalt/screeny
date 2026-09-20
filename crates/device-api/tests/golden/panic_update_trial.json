@@ -1,0 +1,11 @@
+{
+  "boot_count": 2,
+  "panic_count": 0,
+  "last_panic": null,
+  "update": {
+    "outcome": "trial",
+    "reason": null,
+    "slot": "ota_1",
+    "version": "0.7.1"
+  }
+}

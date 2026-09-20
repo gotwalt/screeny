@@ -9,13 +9,13 @@ mod common;
 
 use common::check;
 use screeny_device_api::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, StreamState,
-    WifiState,
+    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply,
-    StatusReply, TelemetryReply, WifiReply,
+    StatusReply, TelemetryReply, UpdateRecord, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::text::{ipv4_text, text};
@@ -71,6 +71,7 @@ fn the_panic_breadcrumb() {
                 line: 321,
                 consecutive: 1,
             }),
+            update: None,
         },
     );
 }
@@ -84,6 +85,56 @@ fn the_panic_breadcrumb_of_a_device_that_has_not_panicked() {
             boot_count: 1,
             panic_count: 0,
             last_panic: None,
+            update: None,
+        },
+    );
+}
+
+#[test]
+fn an_update_on_trial() {
+    // Card 241: the device rebooted into a freshly activated image and has not
+    // confirmed it yet. `boot_count` 1 because `tools/fw-run.sh`'s reset clears
+    // the breadcrumb and an OTA reboot does not - this is the second boot since
+    // power-on, and the panic record is empty because nothing crashed.
+    check(
+        "panic_update_trial",
+        &PanicReply {
+            boot_count: 2,
+            panic_count: 0,
+            last_panic: None,
+            update: Some(UpdateRecord {
+                outcome: UpdateOutcome::Trial,
+                reason: None,
+                slot: FwSlot::Ota1,
+                version: Some(text("0.7.1").unwrap()),
+            }),
+        },
+    );
+}
+
+#[test]
+fn an_update_that_was_rolled_back() {
+    // The shape that answers "why is it still on the old version?". The panic
+    // record is what tells `aborted` because it panicked from `aborted` because
+    // it was unplugged: both are the same `otadata` state.
+    check(
+        "panic_update_reverted",
+        &PanicReply {
+            boot_count: 3,
+            panic_count: 1,
+            last_panic: Some(PanicRecord {
+                uptime_ms: 20_101,
+                boot: 2,
+                file: text("main.rs").unwrap(),
+                line: 1034,
+                consecutive: 1,
+            }),
+            update: Some(UpdateRecord {
+                outcome: UpdateOutcome::Reverted,
+                reason: Some(RevertReason::Aborted),
+                slot: FwSlot::Ota1,
+                version: Some(text("0.7.1").unwrap()),
+            }),
         },
     );
 }
@@ -213,7 +264,10 @@ fn settings() {
 
 #[test]
 fn firmware() {
+    // `?activate=0`: staged, and nothing about what boots has changed.
     check("firmware_ok", &FirmwareReply::ok(761_232));
+    // The default: the device is about to reboot into it (card 241).
+    check("firmware_activating", &FirmwareReply::activating(998_448));
     check(
         "firmware_failed",
         &FirmwareReply::failed(4_096, FirmwareError::WrongProject),
@@ -292,6 +346,8 @@ fn the_golden_directory_has_no_strays() {
         "status_portal",
         "panic",
         "panic_none",
+        "panic_update_trial",
+        "panic_update_reverted",
         "telemetry",
         "networks",
         "wifi_connected",
@@ -302,6 +358,7 @@ fn the_golden_directory_has_no_strays() {
         "settings_request_brightness_only",
         "settings_reply",
         "firmware_ok",
+        "firmware_activating",
         "firmware_failed",
         "accepted_trying",
         "accepted_rebooting",

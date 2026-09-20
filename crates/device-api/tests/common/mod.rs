@@ -24,13 +24,13 @@ use std::path::PathBuf;
 use serde::{de::DeserializeOwned, Serialize};
 
 use screeny_device_api::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, StreamState,
-    WifiState,
+    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply,
-    StatusReply, TelemetryReply, WifiReply, MAX_NETWORKS,
+    StatusReply, TelemetryReply, UpdateRecord, WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
@@ -189,6 +189,17 @@ pub fn worst_panic_reply() -> PanicReply {
         // `Some`, not `None`: the bound has to cover the reply that carries a
         // record, since that is the longest one that can exist.
         last_panic: Some(worst_panic()),
+        update: Some(worst_update()),
+    }
+}
+
+/// The longest [`UpdateRecord`] that can exist.
+pub fn worst_update() -> UpdateRecord {
+    UpdateRecord {
+        outcome: UpdateOutcome::Confirmed,
+        reason: Some(RevertReason::Deadline),
+        slot: FwSlot::Unknown,
+        version: Some(worst_text()),
     }
 }
 

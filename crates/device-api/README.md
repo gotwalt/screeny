@@ -18,11 +18,12 @@ Sizes are bytes of JSON, and the size columns come from the constants in the cod
 |---|---|---|---|---|---|
 | GET | `/api/v1/status` | - | `StatusReply` | - | 1039 |
 | GET | `/api/v1/telemetry` | - | `TelemetryReply` | - | 426 |
+| GET | `/api/v1/panic` | - | `PanicReply` | - | 410 |
 | GET | `/api/v1/networks` | - | `NetworksReply` (≤ 16, strongest first) | - | 3710 |
 | GET | `/api/v1/wifi` | - | `WifiReply` | - | 345 |
 | POST | `/api/v1/wifi` | urlencoded `WifiForm` | `AcceptedReply` (`"trying"`) | 384 | 24 |
 | POST | `/api/v1/settings` | `SettingsRequest` | `SettingsReply` | 373 | 247 |
-| POST | `/api/v1/firmware` | raw `application/octet-stream`, streamed | `FirmwareReply` | streamed | 57 |
+| POST | `/api/v1/firmware[?activate=0]` | raw `application/octet-stream`, streamed | `FirmwareReply` | streamed | 76 |
 | POST | `/api/v1/reboot` | `RebootRequest` (`{"confirm":"RBOO"}`) | `AcceptedReply` (`"rebooting"`) | 188 | 24 |
 | POST | `/api/v1/identify` | `IdentifyRequest` | `AcceptedReply` (`"identifying"`) | 152 | 24 |
 
@@ -43,6 +44,15 @@ wherever it comes from. Unlike every other route it is **HTTP 200 whether or not
 image was accepted**: `error` and `written` are fields of this reply, and `written` -
 how far the upload got - has nowhere else to go (spec 8.6).
 
+Since card 241 the route **activates by default**: an accepted image becomes the one the
+device boots, on trial, and the device restarts into it - which is what `activating: true`
+in the reply is warning the caller about. `?activate=0` (`route::parse_activate`, which
+also takes `true`/`false` and `yes`/`no`, and refuses anything else as `out_of_range`)
+stages the image and changes nothing about what boots, which is card 240's behaviour and
+is what a probe suite wants against a device somebody is using. What became of the last
+activation is `PanicReply::update` on `GET /api/v1/panic` - read out of `otadata`, so it
+survives a power cycle - and **not** a field of `StatusReply`, which is polled and full.
+
 Anything that fails answers `ErrorReply`: `{"error":"<code>"}` with an optional
 `"detail"`, and the HTTP status is `ErrorCode::status()` - one function, so the browser's
 status and the Studio's code cannot disagree. `ErrorCode::ALL` is the closed set:
@@ -62,9 +72,11 @@ form post.
 
 ```
 status.json          status_portal.json      telemetry.json     networks.json
+panic.json           panic_none.json         panic_update_trial.json
+panic_update_reverted.json
 wifi_connected.json  wifi_disconnected.json  wifi_failed.json   wifi_trying.json
 settings_request.json    settings_request_brightness_only.json  settings_reply.json
-firmware_ok.json     firmware_failed.json
+firmware_ok.json     firmware_activating.json                   firmware_failed.json
 accepted_trying.json accepted_rebooting.json accepted_identifying.json
 reboot_request.json  identify_request.json   identify_request_with_pin.json
 error.json           error_with_detail.json  wifi_form.txt

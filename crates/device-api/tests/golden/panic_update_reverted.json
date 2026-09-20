@@ -1,0 +1,17 @@
+{
+  "boot_count": 3,
+  "panic_count": 1,
+  "last_panic": {
+    "uptime_ms": 20101,
+    "boot": 2,
+    "file": "main.rs",
+    "line": 1034,
+    "consecutive": 1
+  },
+  "update": {
+    "outcome": "reverted",
+    "reason": "aborted",
+    "slot": "ota_1",
+    "version": "0.7.1"
+  }
+}

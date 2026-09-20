@@ -7,7 +7,7 @@
 
 use screeny_device_api::FirmwareError;
 use screeny_fwimage::build::{Builder, Segment, CHIP_ID_ESP32C3};
-use screeny_fwimage::{plan_write, Image, Scan, HEADER_LEN, SECTOR};
+use screeny_fwimage::{plan_write, Image, Scan, HEADER_LEN, HEAD_LEN, SECTOR};
 
 /// Two megabytes: `ota_0` and `ota_1` in `firmware/partitions.csv`.
 const SLOT: u32 = 0x20_0000;
@@ -463,4 +463,54 @@ fn a_version_string_survives_the_round_trip() {
     let out = scan_in_chunks(&b.build(), SLOT, SECTOR).unwrap();
     assert_eq!(out.version.as_str(), Some("9.9.9-rc1+bench"));
     assert_eq!(format!("{:?}", out.version), "\"9.9.9-rc1+bench\"");
+}
+
+// ---------------------------------------------------------------------------
+// version_of: naming an image that is already in flash (card 241)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_version_can_be_read_from_the_front_of_an_image_without_scanning_it() {
+    let mut b = Builder::good();
+    b.version = "0.7.1";
+    let image = b.build();
+    let v = screeny_fwimage::version_of(&image[..HEAD_LEN]).expect("a good image has a version");
+    assert_eq!(v.as_str(), Some("0.7.1"));
+    // And the same answer as a full scan, which is the property that matters:
+    // the two must never disagree about what is in the slot.
+    let scanned = scan_in_chunks(&image, SLOT, SECTOR).unwrap();
+    assert_eq!(v, scanned.version);
+}
+
+#[test]
+fn a_slot_that_holds_no_image_has_no_version_to_report() {
+    // An erased slot, a half-staged one, and one holding something that is not
+    // an ESP image at all. All three are things card 241 can find in the
+    // inactive slot, and all three answer "nothing" rather than guessing.
+    assert_eq!(screeny_fwimage::version_of(&[0xFF; HEAD_LEN]), None);
+    assert_eq!(screeny_fwimage::version_of(&[0x00; HEAD_LEN]), None);
+    let short = Builder::good().build();
+    assert_eq!(screeny_fwimage::version_of(&short[..HEAD_LEN - 1]), None);
+}
+
+#[test]
+fn an_image_without_an_app_descriptor_has_no_version() {
+    let mut b = Builder::good();
+    b.desc_magic = 0xDEAD_BEEF;
+    let image = b.build();
+    assert_eq!(screeny_fwimage::version_of(&image[..HEAD_LEN]), None);
+}
+
+#[test]
+fn somebody_elses_app_still_names_its_version() {
+    // Reporting is not admitting: an image that reached the slot passed check
+    // 4 on the way in, so refusing to name it here would only lose the fact.
+    let mut b = Builder::wrong_project();
+    b.version = "1.2.3";
+    let image = b.build();
+    assert_eq!(
+        screeny_fwimage::version_of(&image[..HEAD_LEN])
+            .and_then(|v| v.as_str().map(str::to_owned)),
+        Some("1.2.3".to_owned())
+    );
 }

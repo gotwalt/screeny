@@ -279,6 +279,56 @@ impl ResetReason {
     );
 }
 
+/// What became of the last firmware update this device activated (card 241).
+///
+/// It is a property of `otadata`, not of anything in RAM, so it survives a
+/// power cycle and is still the answer days later - until the next activation
+/// overwrites the entry it is read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateOutcome {
+    /// It is running now and has not proved itself yet. The device will either
+    /// confirm it or put the previous image back within three minutes.
+    Trial,
+    /// It proved itself and is now the image this device boots.
+    Confirmed,
+    /// It did not, and the image before it is running. [`RevertReason`] says
+    /// why.
+    Reverted,
+}
+
+impl UpdateOutcome {
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("trial", "confirmed", "reverted");
+}
+
+/// Why a firmware update was rolled back (card 241).
+///
+/// Read out of the rejected image's `otadata` entry, so the device still knows
+/// which of these happened after it has been unplugged and plugged back in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevertReason {
+    /// The new image ran, never met the health criterion, and marked itself
+    /// [`FwState::Invalid`] at its deadline. The one reason the firmware chose
+    /// for itself, and the one that means "it booted and was useless" rather
+    /// than "it fell over".
+    Deadline,
+    /// The new image was still [`FwState::PendingVerify`] when the chip reset,
+    /// so the bootloader marked it [`FwState::Aborted`]. A panic, a watchdog, a
+    /// brownout or somebody pulling the power all land here: ESP-IDF's abort
+    /// loop does not look at the reset reason. `GET /api/v1/panic`'s
+    /// `last_panic` is what tells a panic from the others.
+    Aborted,
+    /// The bootloader would not run the image `otadata` selected at all, and
+    /// fell back. A slot that was corrupted after it was verified looks like
+    /// this.
+    Rejected,
+}
+
+impl RevertReason {
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("deadline", "aborted", "rejected");
+}
+
 /// Why a firmware upload was refused.
 ///
 /// The first five are research 006 section 5's five checks on the image
