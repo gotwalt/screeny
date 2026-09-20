@@ -108,6 +108,7 @@ pub static FAULT_PATCHES: &[PatchDef] = &[
         blurb: "Panics on its fourth frame. For the containment tests only.",
         params: &[],
         make: |_| Box::new(FaultPatch { frames: 0, kind: Fault::Panic }),
+        seeded: false,
     },
     PatchDef {
         id: "fault-stall",
@@ -115,6 +116,7 @@ pub static FAULT_PATCHES: &[PatchDef] = &[
         blurb: "Stops returning frames on its fourth. For the containment tests only.",
         params: &[],
         make: |_| Box::new(FaultPatch { frames: 0, kind: Fault::Stall }),
+        seeded: false,
     },
 ];
 

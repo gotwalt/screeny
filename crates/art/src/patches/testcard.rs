@@ -12,6 +12,8 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "Ramps, hue sweeps and a slow-moving line, for judging banding, brightness by hue and sub-pixel motion.",
     params: PARAMS,
     make,
+    // `make(_seed)`: this chart is the same chart whatever the seed is.
+    seeded: false,
 };
 
 const PARAMS: &[ParamSpec] = &[param("speed", "Line speed (px/s)", 0.0, 30.0, 0.1, 3.0)];

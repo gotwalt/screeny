@@ -112,3 +112,28 @@ The shape I am building, decided from the card and the code:
 - `speed` joins the per-patch memory, because a setting carries it: without that,
   switching patch and back would lose the speed a setting set and `modified` would lie.
   `fps` and `paused` stay per player - they are about playback, not about the patch.
+
+### `seeded`, read off each patch's own code (worker)
+
+`PatchDef` gains `seeded: bool` - "is *another one like this* something a person can ask
+this patch for?" - and every definition sets it with a comment saying what its seed does.
+Nothing else in `crates/art` is touched (card 155's worker is adding `vesta` in the same
+crate; its literal is the orchestrator's to reconcile).
+
+| patch | seeded | what it uses its seed for |
+|---|---|---|
+| `plasma` | yes | three waves' directions, frequencies, speeds and phases, the ring centre and its frequency |
+| `metaballs` | yes | every body's radius, path amplitude, frequency and phase |
+| `knot` | yes | which of five (p, q) torus knots, and the tilt it is seen from |
+| `lattice` | yes | `u.seed` in the shader: the roll phase and the per-cell hue hash |
+| `overland` | yes | `u.seed`: the biome (green / savanna / red rock / alien / ice), every noise offset, the path |
+| `testcard` | no | `make(_seed)` - it ignores it entirely |
+| `clocks-numerals` | no | only which choreography a given minute is danced to; the picture is the time. It offers "Play it again" / "Compose another", which act at once |
+| `clocks-dials` | no | the opening mood and the ambient field, but it wanders on by itself and offers "Move on" |
+
+The clocks are the case the card names: their seed is not *nothing*, but it is not
+"another one like this" either, and each already has better words of its own
+(`patch_act`). Two tests in `patches/mod.rs` keep the claim honest: every CPU patch that
+says `seeded` really does draw a different second frame on another seed, and the test
+card really is the same card on any seed. (The GPU three are excluded: a test machine may
+have no adapter; their `u.seed` use is in the `.wgsl` above.)

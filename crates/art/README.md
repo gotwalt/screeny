@@ -181,7 +181,14 @@ determinism claim is checked on the code that is shipped.
    A choice is still an `f32` from end to end - wire, state file, per-patch
    memory - so use one whenever a parameter's values have names, rather than
    putting the key in the label. Take the names from the patch's own words.
-3. List it in `ALL` in `crates/art/src/patches/mod.rs`. If it needs a GPU, list
+3. Say whether it is `seeded` (card 151): does changing the seed give a person
+   *another one like this*? The studio draws one quiet **Another** button from
+   that and nothing at all when it is false, because the seed itself is an
+   opaque number and no use to anybody. A patch that ignores its seed says
+   `false`; so does one that composes as it goes and offers its own action
+   through `Patch::playing` - "Compose another" is the better word, and it acts
+   at once instead of rebuilding the patch.
+4. List it in `ALL` in `crates/art/src/patches/mod.rs`. If it needs a GPU, list
    its id in `NEEDS_GPU` beside it, so the studio can say why it is black on a
    machine with no adapter (card 145).
 

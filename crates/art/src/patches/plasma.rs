@@ -15,6 +15,10 @@ pub const DEF: PatchDef = PatchDef {
     blurb: "Indexed and palette-cycled. Black is a band in the palette, not the bottom of a fade.",
     params: PARAMS,
     make,
+    // Three wave directions, frequencies, speeds and phases, the centre of the
+    // rings and their frequency: every one of them comes out of the seed, so a
+    // new seed is a visibly different plasma.
+    seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[
