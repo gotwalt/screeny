@@ -557,3 +557,27 @@ the settings commit. `curl http://192.168.7.221/api/v1/panic` answers
 the full record on one that has; `GET /api/v1/status` no longer carries those fields. The
 `panic-test` build's evidence is unchanged except for where the record is read: the serial
 lines are the same, and the HTTP check moves from `/api/v1/status` to `/api/v1/panic`.
+
+**Orchestrator, after the merges (2026-09-20): b2060b3 (243) and 2c276c0 (243b). fw 0.5.2 is on the device.**
+- `panic-test` build, on the device: exactly the Log's prediction. Panic at 20,101 ms ->
+  banner, `panicked at src/panic.rs:600`, backtrace -> `rst:0x3 (SW_RESET)` ->
+  `boot: #2 ... reset reason software` / `last panic was boot #1 at uptime 20101 ms,
+  panic.rs:600, 1 in a row` -> rejoined from the store, the Studio took the panel back.
+  **RTC slow memory survives the reset with the card-242 bootloader.** The status API (then)
+  and `/api/v1/panic` (now) report it.
+- Default 0.5.2 (first merge): HTTP 30/0/8, UDP 60/0/4 **with the bench Mac's WiFi on** -
+  card 234's procedure, run once, serial attached for all 11 minutes: no stall, no WARN,
+  no ERROR. But core 0's high-water went 12,608 -> 17,440 at the first HTTP settings post
+  (`stack_free` 7,808; 0.5.1: 13,280). Sent back; 243b found it (StatusReply +44 bytes =
+  +3.5 KB of serve-chain frame) and moved the breadcrumb to `GET /api/v1/panic`.
+- Default 0.5.2 (243b, the build on the device): `.stack` 27,088; after `screeny-probe http`
+  `stack_free` **12,352**; `GET /api/v1/panic` -> `{"boot_count":1,"panic_count":0,
+  "last_panic":null}`. Boot-path high-water after the join 12,608 (0.5.1: 13,056).
+- Not fixed: the first `boot:` serial line is still garbled after the 20 ms wait. Cosmetic;
+  left (decision 10). The crashed-screen branch (five quick panics) has never run.
+- **Found while checking this card, not caused by it**: `screeny-probe http` now gets 9-17
+  `Connection refused` per run on *any* build, including the 0.5.2 ELF that passed 30/0/8
+  an hour earlier. No error on the device; the probe's source-port sequence has one gap per
+  refusal. The workers are slow to get back to `accept` after a response and how slow
+  depends on the client's TCP timing. That is card 236. The UDP suite and the stream are
+  unaffected.
