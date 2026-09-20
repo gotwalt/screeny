@@ -258,6 +258,36 @@ fn the_screens_keep_their_promises() {
     }
 }
 
+/// Card 164: **what a panel costs the network is on the Panel screen, and the
+/// page does not do the arithmetic.**
+///
+/// The rate is worked out once, on the server, on the supervisor's own tick -
+/// that is what makes two browsers agree - so what has to be pinned here is
+/// that the page *reads* it. A `/` in this block would be a second opinion, in
+/// the same way a threshold written into the page would be (card 195).
+#[test]
+fn the_network_line_is_on_the_panel_screen_and_is_read_rather_than_worked_out() {
+    assert!(PANEL_JS.contains("function networkRows("), "the Panel screen draws the network line");
+    assert!(!PICTURE_JS.contains("traffic"), "nothing about network traffic on the Picture screen");
+
+    // It reads the server's own figures rather than deriving any of them.
+    for field in ["r.out", "r.in", "r.frames_out", "r.control_out", "r.http_out", "t.total.out.bytes"] {
+        assert!(PANEL_JS.contains(field), "the network line should read `{field}` from the server");
+    }
+    let block = PANEL_JS
+        .split("function networkRows(")
+        .nth(1)
+        .and_then(|s| s.split("\n  }").next())
+        .expect("the network block");
+    assert!(!block.contains(" / "), "the page must not compute a rate of its own: {block}");
+
+    // KB is 1000 bytes here, which is not what `kb`/`size` mean - those are
+    // about memory. Two functions, deliberately, and the shared file says why.
+    assert!(COMMON_JS.contains("export function kbs("), "a network rate has its own formatter");
+    assert!(COMMON_JS.contains("export function netSize("), "and so does a network total");
+    assert!(COMMON_JS.contains("/ 1000"), "network numbers are in powers of ten");
+}
+
 /// Card 173: the page has somewhere to say whether it is even looking for
 /// panels, and the script tells the three cases apart rather than leaving an
 /// empty list to mean all of them.

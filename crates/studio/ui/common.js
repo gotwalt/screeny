@@ -66,6 +66,33 @@ export const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 /** A size a person reads rather than counts: KB up to a megabyte, then MB. */
 export const size = (bytes) => (bytes < 1024 * 1024 ? kb(bytes) : `${(bytes / 1048576).toFixed(1)} MB`);
 
+/* Card 164: network numbers are in powers of ten.
+ *
+ * `kb` and `size` above are 1024 and are about memory and buffers. A network
+ * is measured in thousands - a 100 Mbit link is 100,000,000 bits - so the two
+ * are deliberately different functions rather than one with a flag, because
+ * getting them confused is how a page ends up 2.4% wrong and nobody notices. */
+
+/** A rate: KB/s, one decimal under 10 so a small number is still a number.
+ *  `unit` false leaves the suffix off for a list of figures that share one,
+ *  and that form is **always kilobytes**, whatever the size. */
+export function kbs(bytesPerSecond, unit = true) {
+  const k = (bytesPerSecond || 0) / 1000;
+  if (unit && k >= 1000) return `${(k / 1000).toFixed(2)} MB/s`;
+  const n = k < 10 ? k.toFixed(1) : k.toFixed(0);
+  return unit ? `${n} KB/s` : n;
+}
+
+/** A total, in the same powers of ten: "2.1 GB" is the number that answers
+ *  "what has this cost my network". */
+export function netSize(bytes) {
+  const b = bytes || 0;
+  if (b < 1000) return `${Math.round(b)} B`;
+  if (b < 1e6) return `${(b / 1e3).toFixed(1)} KB`;
+  if (b < 1e9) return `${(b / 1e6).toFixed(1)} MB`;
+  return `${(b / 1e9).toFixed(2)} GB`;
+}
+
 /** What the panel does when nothing is streaming, spelled out. The keys are
  *  `screeny_device_api::IdleMode`; anything else falls back to the raw name,
  *  so firmware that grows a mode says something rather than nothing. */
