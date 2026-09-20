@@ -378,3 +378,14 @@ None worth a card. Two things deliberately left alone and written here instead:
   this design that would not be bounded by a handful of `u64`.
 - **The `kbs` decimal** is the one judgement call in the whole card (see above); it is one
   line if the owner meant the literal reading of "one decimal under 10".
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed the scope (18 files; `crates/screeny`'s changes are additive stats, the one
+reordering in `Sender::connect` keeps the handshake's bytes even when it fails) and merged
+`--no-ff`. Root suite: 853 passed, 1 failed -
+`crates/sim/tests/telemetry.rs::a_sender_can_tell_network_loss_from_a_slow_device`, card
+143's exact-count-under-load test (the firmware session's crate); alone: 5 of 5. Clippy
+silent. The one-decimal-throughout choice for KB/s stands: it matches the card's own
+example. Deployed the same afternoon; the acceptance (a KB/s out on `/panel` that agrees
+with fps x frame size) is read off the deployed status below the deploy.
