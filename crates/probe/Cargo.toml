@@ -5,9 +5,20 @@ edition.workspace = true
 license.workspace = true
 description = "Bench tool for card 008: drives a screeny receiver (device or simulator) over the v1 wire protocol and reports what it measured"
 
+# A library as well as a binary since card 080: `suite` is the wire-level
+# conformance suite, and `link`/`enc`/`vectors` are the one sender and the one
+# set of section-4 encoders that both this tool and `crates/sim`'s integration
+# tests drive. The library depends on `screeny-proto` and nothing else.
+[lib]
+name = "screeny_probe"
+path = "src/lib.rs"
+
 [[bin]]
 name = "screeny-probe"
 path = "src/main.rs"
 
 [dependencies]
 screeny-proto = { path = "../proto" }
+# So that ctrl-c during a conformance run still restores the device's
+# brightness and idle mode. `Drop` covers every other exit path.
+ctrlc = "3.5.2"

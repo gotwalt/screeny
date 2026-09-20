@@ -14,7 +14,7 @@
 //! pointing it at the hardware.
 //!
 //! ```text
-//! screeny-probe [--addr HOST[:FRAMEPORT]] [--ctrl PORT] <command>
+//! screeny-probe [--addr HOST[:FRAMEPORT] | --name NAME] [--ctrl PORT] <command>
 //!
 //!   info                     GET_INFO, printed as key=value
 //!   ping N                   N round trips, with the distribution
@@ -29,27 +29,32 @@
 //!   reboot                   REBOOT (guarded)
 //!   bench CMD ARG            private opcode 0x80: G/D/W/O/P
 //!   stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final]
-//!   lock-test                the whole of spec section 7.4, as a test
-//!   conformance              the MUSTs that are cheap to probe from outside
+//!   conformance [--only SEC] [--slow] [--cap-probe] [--restore-idle N] [--list]
+//!                            the whole wire-level suite, rule by rule
+//!   lock-test                an alias for `conformance --only 7`
 //! ```
-
-mod link;
-mod vectors;
+//!
+//! The suite itself is `src/suite/`, and it is a library so that
+//! `crates/sim`'s integration tests can run the same rules in process
+//! (card 080).
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use screeny_proto::control::{op, state as tstate, ErrorCode, IdleMode, Request, Telemetry};
+use screeny_proto::control::{ErrorCode, IdleMode, Request, Telemetry};
 use screeny_proto::txt;
 
-use link::{Control, FrameLink, OwnedReply, Pacer};
+use screeny_probe::link::{Control, FrameLink, OwnedReply, Pacer};
+use screeny_probe::{state_name, suite, vectors};
 
-const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT]] [--ctrl PORT] [--vectors DIR] <command>\n\
+const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT] | --name NAME] [--ctrl PORT] [--vectors DIR] <command>\n\
                      commands: info | ping N | stats | reset-stats | brightness N | identify MS |\n\
                                idle MODE | name NAME | release | wifi | reboot | bench CMD ARG |\n\
                                stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final] |\n\
-                               lock-test | conformance";
+                               conformance [--only SECTION] [--slow] [--cap-probe]\n\
+                                           [--restore-idle N] [--list] |\n\
+                               lock-test (= conformance --only 7)";
 
 struct Args {
     host: String,
@@ -87,6 +92,19 @@ fn parse_args() -> Result<Args, String> {
                     }
                     _ => a.host = v,
                 }
+            }
+            // `--name` is the same sugar the other tools take, resolved
+            // through the OS's mDNS responder rather than by browsing: the
+            // device's host name is `<instance>.local` (spec section 5.1), and
+            // `--addr` still always works when multicast is having a bad day.
+            "--name" => {
+                let v = it.next().ok_or("--name needs a value")?;
+                let v = v.trim_end_matches('.');
+                a.host = if v.ends_with(".local") {
+                    v.to_string()
+                } else {
+                    format!("{v}.local")
+                };
             }
             "--ctrl" => a.ctrl_port = it.next().ok_or("--ctrl needs a value")?.parse().map_err(|_| "bad port")?,
             "--vectors" => a.vectors = it.next().ok_or("--vectors needs a value")?,
@@ -166,8 +184,10 @@ fn run() -> Result<bool, String> {
         "reboot" => simple(ctrl_addr, Request::Reboot),
         "bench" => cmd_bench(ctrl_addr, rest),
         "stream" => cmd_stream(&args, frame_addr, ctrl_addr, rest),
-        "lock-test" => cmd_lock_test(frame_addr, ctrl_addr, &args),
-        "conformance" => cmd_conformance(frame_addr, ctrl_addr),
+        "conformance" => cmd_conformance(frame_addr, ctrl_addr, rest, None),
+        // Kept as an alias: the orchestrator's runbooks and cards 008 and 016
+        // all say `lock-test`, and section 7 is exactly what it used to mean.
+        "lock-test" => cmd_conformance(frame_addr, ctrl_addr, rest, Some("7")),
         other => Err(format!("unknown command {other:?}\n{USAGE}")),
     }
 }
@@ -311,17 +331,6 @@ fn cmd_stats(addr: SocketAddr) -> Result<bool, String> {
     };
     print_telemetry(&t);
     Ok(true)
-}
-
-fn state_name(b: u8) -> &'static str {
-    match b {
-        tstate::IDLE => "IDLE",
-        tstate::LIVE => "LIVE",
-        tstate::HOLD => "HOLD",
-        tstate::IDENTIFY => "IDENTIFY",
-        tstate::PROVISIONING => "PROVISIONING",
-        _ => "?",
-    }
 }
 
 fn print_telemetry(t: &Telemetry) {
@@ -644,522 +653,64 @@ fn telemetry(ctrl: &mut Control) -> Result<Telemetry, String> {
 }
 
 // ---------------------------------------------------------------------------
-// lock-test
-// ---------------------------------------------------------------------------
-
-/// Spec section 7.4, driven from two sockets, which is the only way to test
-/// it: a source is a UDP 4-tuple, so "another sender" means another socket.
-fn cmd_lock_test(
-    frame_addr: SocketAddr,
-    ctrl_addr: SocketAddr,
-    _args: &Args,
-) -> Result<bool, String> {
-    let mut ctrl = Control::connect(ctrl_addr).map_err(|e| e.to_string())?;
-    let mut pass = true;
-    let mut check = |name: &str, ok: bool, detail: String| {
-        println!("  {:<44} {}  {detail}", name, if ok { "PASS" } else { "FAIL" });
-        if !ok {
-            pass = false;
-        }
-    };
-
-    let payload = vectors::solid_frame(0);
-    let solid = screeny_proto::dec::codec::SOLID;
-    let key = screeny_proto::F_KEY;
-
-    let mut a = FrameLink::connect(frame_addr).map_err(|e| e.to_string())?;
-    let mut b = FrameLink::connect(frame_addr).map_err(|e| e.to_string())?;
-    println!(
-        "lock-test: A={} B={}",
-        a.local().map_err(|e| e.to_string())?,
-        b.local().map_err(|e| e.to_string())?
-    );
-
-    // Make sure nobody else holds it, then let HOLD settle.
-    ctrl.request(Request::Release)?;
-    std::thread::sleep(Duration::from_millis(600));
-    ctrl.request(Request::ResetStats)?;
-
-    // --- 1. A takes the lock ------------------------------------------
-    for _ in 0..10 {
-        a.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(33));
-    }
-    let t = telemetry(&mut ctrl)?;
-    check(
-        "1. A streaming -> state LIVE, frames shown",
-        t.state == tstate::LIVE && t.frames_shown >= 5,
-        format!("state {} shown {}", state_name(t.state), t.frames_shown),
-    );
-
-    // --- 2. B is locked out and told why ------------------------------
-    let rej_before = t.frames_rejected;
-    let _ = b.poll();
-    let mut busy: Option<(u8, u32)> = None;
-    for _ in 0..6 {
-        // Keep A's lock alive while B knocks.
-        a.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        b.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(40));
-        for r in b.poll() {
-            if let OwnedReply::Busy {
-                reason,
-                remaining_ms,
-            } = r
-            {
-                busy = Some((reason, remaining_ms));
-            }
-        }
-    }
-    let t2 = telemetry(&mut ctrl)?;
-    check(
-        "2. B locked out -> BUSY on B's frame socket",
-        busy.is_some(),
-        match busy {
-            Some((r, ms)) => format!("reason {r} remaining {ms} ms"),
-            None => "no BUSY received".into(),
-        },
-    );
-    check(
-        "2b. B's frames counted in frames_rejected",
-        t2.frames_rejected > rej_before,
-        format!("{} -> {}", rej_before, t2.frames_rejected),
-    );
-    check(
-        "2c. BUSY rate-limited to one per second",
-        true,
-        "see count below".into(),
-    );
-    // Count BUSYs over two seconds of continuous knocking.
-    let mut busies = 0u32;
-    let t0 = Instant::now();
-    while t0.elapsed() < Duration::from_millis(2100) {
-        a.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        b.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(33));
-        busies += b
-            .poll()
-            .iter()
-            .filter(|r| matches!(r, OwnedReply::Busy { .. }))
-            .count() as u32;
-    }
-    check(
-        "2d. BUSY count over 2.1 s of knocking is <= 3",
-        busies <= 3,
-        format!("{busies} BUSY packets for ~63 rejected frames"),
-    );
-
-    // --- 3. takeover after LOCK_MS ------------------------------------
-    std::thread::sleep(Duration::from_millis(
-        screeny_proto::LOCK_MS as u64 + 100,
-    ));
-    let _ = b.poll();
-    for _ in 0..5 {
-        b.send(solid, key, &payload).map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(33));
-    }
-    let t3 = telemetry(&mut ctrl)?;
-    let busy_after = b
-        .poll()
-        .iter()
-        .filter(|r| matches!(r, OwnedReply::Busy { .. }))
-        .count();
-    check(
-        "3. after LOCK_MS of silence, B takes over",
-        t3.state == tstate::LIVE && busy_after == 0 && t3.frames_shown > t2.frames_shown,
-        format!(
-            "state {} shown {} -> {} ({busy_after} late BUSY)",
-            state_name(t3.state),
-            t2.frames_shown,
-            t3.frames_shown
-        ),
-    );
-
-    // --- 4. FINAL releases immediately --------------------------------
-    b.send(solid, screeny_proto::F_KEY | screeny_proto::F_FINAL, &payload)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(120));
-    let t4 = telemetry(&mut ctrl)?;
-    check(
-        "4. a displayed FINAL releases the lock (state HOLD)",
-        t4.state == tstate::HOLD,
-        format!("state {}", state_name(t4.state)),
-    );
-    // And the panel is now free for anyone, well inside LOCK_MS.
-    let _ = a.poll();
-    a.send(solid, key, &payload).map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(120));
-    let t5 = telemetry(&mut ctrl)?;
-    let late_busy = a
-        .poll()
-        .iter()
-        .filter(|r| matches!(r, OwnedReply::Busy { .. }))
-        .count();
-    check(
-        "4b. A takes over instantly after FINAL, no BUSY",
-        t5.state == tstate::LIVE && late_busy == 0,
-        format!("state {} ({late_busy} BUSY)", state_name(t5.state)),
-    );
-
-    // --- 5. RELEASE from the control port -----------------------------
-    ctrl.request(Request::Release)?;
-    std::thread::sleep(Duration::from_millis(80));
-    let t6 = telemetry(&mut ctrl)?;
-    check(
-        "5. RELEASE from the same IP releases the lock",
-        t6.state == tstate::HOLD,
-        format!("state {}", state_name(t6.state)),
-    );
-
-    // --- 6. stream timeout -> HOLD ------------------------------------
-    a.send(solid, key, &payload).map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(100));
-    let live = telemetry(&mut ctrl)?;
-    std::thread::sleep(Duration::from_millis(
-        screeny_proto::STREAM_TIMEOUT_MS as u64 + 200,
-    ));
-    let t7 = telemetry(&mut ctrl)?;
-    check(
-        "6. STREAM_TIMEOUT_MS with no frames -> HOLD",
-        live.state == tstate::LIVE && t7.state == tstate::HOLD,
-        format!(
-            "{} -> {}",
-            state_name(live.state),
-            state_name(t7.state)
-        ),
-    );
-
-    println!(
-        "lock-test: {}",
-        if pass { "all PASS" } else { "FAILURES ABOVE" }
-    );
-    Ok(pass)
-}
-
-// ---------------------------------------------------------------------------
 // conformance
 // ---------------------------------------------------------------------------
 
-/// The MUSTs that can be checked from outside with one datagram each.
+/// Run the wire-level conformance suite (`src/suite/`).
 ///
-/// Not a substitute for `crates/proto`'s own tests - those check the library
-/// both implementations share. These check the parts only a *device* can get
-/// wrong: which port answers what, which malformed packet gets an error
-/// rather than silence, and whether `req_id == 0` really does buy silence.
-fn cmd_conformance(frame_addr: SocketAddr, ctrl_addr: SocketAddr) -> Result<bool, String> {
-    let mut ctrl = Control::connect(ctrl_addr).map_err(|e| e.to_string())?;
-    let frame = FrameLink::connect(frame_addr).map_err(|e| e.to_string())?;
-    let mut pass = true;
-    let mut check = |name: &str, ok: bool, detail: String| {
-        println!("  {:<52} {}  {detail}", name, if ok { "PASS" } else { "FAIL" });
-        if !ok {
-            pass = false;
+/// This replaced two hand-rolled command bodies - the old `conformance` and
+/// `lock-test` - with one rule catalogue, so that the simulator's integration
+/// tests and the bench run exactly the same checks (card 080). `lock-test`
+/// survives as an alias for `--only 7`, because the orchestrator's runbooks
+/// and several done cards name it.
+fn cmd_conformance(
+    frame_addr: SocketAddr,
+    ctrl_addr: SocketAddr,
+    rest: &[String],
+    force_only: Option<&str>,
+) -> Result<bool, String> {
+    if has_flag(rest, "--list") {
+        let rules = suite::all();
+        println!("{} rules:", rules.len());
+        for r in &rules {
+            let mut tags = Vec::new();
+            if r.flags & suite::LOOPBACK_ONLY != 0 {
+                tags.push("loopback-only");
+            }
+            if r.flags & suite::SLOW != 0 {
+                tags.push("slow");
+            }
+            if r.flags & suite::CAP_PROBE != 0 {
+                tags.push("cap-probe");
+            }
+            println!(
+                "  {:<5} {:<62} ~{:>4.1}s {}",
+                r.section,
+                r.name,
+                r.secs,
+                tags.join(",")
+            );
         }
+        return Ok(true);
+    }
+
+    let restore_idle: u8 = match flag(rest, "--restore-idle") {
+        Some(v) => v.parse().map_err(|_| "--restore-idle needs 0..=3")?,
+        None => 0,
     };
+    if IdleMode::from_u8(restore_idle).is_none() {
+        return Err("--restore-idle must be 0..=3".into());
+    }
 
-    let hdr = |op: u8, flags: u8, req_id: u16, len: u16| -> Vec<u8> {
-        let mut v = vec![
-            screeny_proto::MAGIC,
-            (screeny_proto::VERSION << 4) | screeny_proto::TYPE_CONTROL,
-            op,
-            flags,
-        ];
-        v.extend_from_slice(&req_id.to_le_bytes());
-        v.extend_from_slice(&len.to_le_bytes());
-        v
+    let opts = suite::Opts {
+        frame_addr,
+        ctrl_addr,
+        only: force_only
+            .map(str::to_string)
+            .or_else(|| flag(rest, "--only")),
+        slow: has_flag(rest, "--slow"),
+        cap_probe: has_flag(rest, "--cap-probe"),
+        restore_idle,
     };
-
-    // 6.5: a `len` the datagram does not back up is ERR_BAD_LENGTH, built
-    // from the two header fields that are certainly present.
-    let r = ctrl.raw(&hdr(op::PING, 0, 0x1111, 99))?;
-    check(
-        "6.5  len the datagram does not back up -> ERR_BAD_LENGTH",
-        matches!(&r, Some(b) if b.len() >= 9 && b[3] & screeny_proto::C_ERROR != 0
-                 && b[8] == ErrorCode::BadLength.as_u8()),
-        describe(&r),
-    );
-
-    // 2.2: an unknown protocol version MAY be answered with ERR_VERSION.
-    let mut bad = hdr(op::PING, 0, 0x2222, 0);
-    bad[1] = (9 << 4) | screeny_proto::TYPE_CONTROL;
-    let r = ctrl.raw(&bad)?;
-    check(
-        "2.2  CONTROL of an unknown version -> ERR_VERSION",
-        matches!(&r, Some(b) if b.len() >= 9 && b[8] == ErrorCode::Version.as_u8()),
-        describe(&r),
-    );
-
-    // 6.3: an unknown opcode gets ERR_UNKNOWN_OP, not silence, so a sender
-    // can probe.
-    let r = ctrl.raw(&hdr(0x7E, 0, 0x3333, 0))?;
-    check(
-        "6.3  unknown opcode -> ERR_UNKNOWN_OP",
-        matches!(&r, Some(b) if b.len() >= 9 && b[8] == ErrorCode::UnknownOp.as_u8()),
-        describe(&r),
-    );
-
-    // 6.1: req_id 0 means no reply wanted, and that covers error replies.
-    let r = ctrl.raw(&hdr(0x7E, 0, 0, 0))?;
-    check(
-        "6.1  req_id 0 -> silence even for an error",
-        r.is_none(),
-        describe(&r),
-    );
-
-    // 6.1: a device must discard a CONTROL that arrives with REPLY set,
-    // or two devices on one LAN would talk to each other indefinitely.
-    let r = ctrl.raw(&hdr(op::PING, screeny_proto::C_REPLY, 0x4444, 0))?;
-    check(
-        "6.1  CONTROL with REPLY set -> discarded",
-        r.is_none(),
-        describe(&r),
-    );
-
-    // 6.5: a body that is not the opcode's size.
-    let mut b = hdr(op::PING, 0, 0x5555, 3);
-    b.extend_from_slice(&[0, 0, 0]);
-    let r = ctrl.raw(&b)?;
-    check(
-        "6.5  PING with a 3-byte body -> ERR_BAD_LENGTH",
-        matches!(&r, Some(b) if b.len() >= 9 && b[8] == ErrorCode::BadLength.as_u8()),
-        describe(&r),
-    );
-
-    // 6.3: REBOOT is guarded. The wrong magic must be ERR_BAD_ARG and must
-    // emphatically not reboot the device.
-    let mut b = hdr(op::REBOOT, 0, 0x6666, 4);
-    b.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
-    let r = ctrl.raw(&b)?;
-    check(
-        "6.3  REBOOT with the wrong magic -> ERR_BAD_ARG",
-        matches!(&r, Some(b) if b.len() >= 9 && b[8] == ErrorCode::BadArg.as_u8()),
-        describe(&r),
-    );
-
-    // 6.3: SET_IDLE with a mode nobody defines.
-    let mut b = hdr(op::SET_IDLE, 0, 0x7777, 1);
-    b.push(9);
-    let r = ctrl.raw(&b)?;
-    check(
-        "6.3  SET_IDLE 9 -> ERR_BAD_ARG",
-        matches!(&r, Some(b) if b.len() >= 9 && b[8] == ErrorCode::BadArg.as_u8()),
-        describe(&r),
-    );
-
-    // 5.5: GET_INFO is one reply per source per second, except that a repeat
-    // of an answered req_id is a retransmission and must be answered again.
-    let info = |id: u16| hdr(op::GET_INFO, 0, id, 0);
-    let first = ctrl.raw(&info(0x8888))?;
-    let repeat = ctrl.raw(&info(0x8888))?;
-    let fresh = ctrl.raw(&info(0x8889))?;
-    check(
-        "5.5  GET_INFO: first answered",
-        first.is_some(),
-        describe(&first),
-    );
-    check(
-        "5.5  GET_INFO: same req_id inside 1 s answered again",
-        repeat.is_some(),
-        describe(&repeat),
-    );
-    check(
-        "5.5  GET_INFO: a new req_id inside 1 s suppressed",
-        fresh.is_none(),
-        describe(&fresh),
-    );
-
-    // 2.2 / 6.7: everything the frame port rejects is counted, and nothing
-    // it rejects is answered. Three shapes: bad magic, bad version, a
-    // CONTROL on the frame port.
-    //
-    // One at a time, with the counter read in between. Sent as a burst these
-    // were flaky on the real device - two runs in three counted three of
-    // four - and a burst cannot tell "the firmware ignored one" from "the air
-    // ate one", which is the only question worth asking. Each is retried up
-    // to three times before it is called a failure: this is UDP over WiFi and
-    // a lost probe is not a lost MUST.
-    let junk: [(&str, Vec<u8>); 4] = [
-        ("bad magic", vec![0x00; 16]),
-        (
-            "version 9",
-            vec![0x53, 0x90, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-        ),
-        ("CONTROL on the frame port", hdr(op::PING, 0, 0x9999, 0)),
-        (
-            "FRAME len the datagram does not back up",
-            vec![0x53, 0x10, 0x7F, 0x01, 0, 0, 0xFF, 0x00, 1, 2, 3],
-        ),
-    ];
-    let mut answered = 0usize;
-    for (what, bytes) in &junk {
-        let mut counted = false;
-        let mut tries = 0;
-        while !counted && tries < 3 {
-            tries += 1;
-            ctrl.request(Request::ResetStats)?;
-            let _ = frame.poll();
-            frame.send_raw(bytes).map_err(|e| e.to_string())?;
-            std::thread::sleep(Duration::from_millis(150));
-            let t = telemetry(&mut ctrl)?;
-            answered += frame.poll().len();
-            counted = t.frames_rejected == 1
-                && t.frames_rx == 0
-                && t.frames_shown == 0
-                && t.frames_dropped_decode == 0;
-        }
-        check(
-            &format!("2.2  frame port: {what} -> frames_rejected += 1"),
-            counted,
-            format!("after {tries} attempt(s)"),
-        );
-    }
-    check(
-        "2.2  a CONTROL request on the frame port is not answered",
-        answered == 0,
-        format!("{answered} packets came back"),
-    );
-
-    // 4.7: a reserved codec id, and a payload of the wrong length, are both
-    // frames_dropped_decode - the frame was *admitted*, it just did not
-    // decode - and the previous frame stays lit.
-    ctrl.request(Request::ResetStats)?;
-    let mut f = FrameLink::connect(frame_addr).map_err(|e| e.to_string())?;
-    // One frame per drain, spaced out. Sent back to back they would be a
-    // single drain and four of the five would be *superseded* before anything
-    // tried to decode them, which is correct behaviour and a useless test.
-    for (codec, payload) in [
-        (screeny_proto::dec::codec::SOLID, &[9u8, 9, 9][..]),
-        (0x00, &[1, 2, 3][..]),                             // reserved codec
-        (0xFF, &[1, 2, 3][..]),                             // reserved codec
-        (screeny_proto::dec::codec::SOLID, &[1, 2][..]),     // short
-        (screeny_proto::dec::codec::SOLID, &[1, 2, 3, 4][..]), // long
-    ] {
-        f.send(codec, screeny_proto::F_KEY, payload)
-            .map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(60));
-    }
-    std::thread::sleep(Duration::from_millis(200));
-    let t = telemetry(&mut ctrl)?;
-    check(
-        "4.7  reserved codec and wrong-length payloads -> dropped_decode",
-        t.frames_dropped_decode == 4 && t.frames_rejected == 0,
-        format!(
-            "decode {} rejected {} rx {} shown {}",
-            t.frames_dropped_decode, t.frames_rejected, t.frames_rx, t.frames_shown
-        ),
-    );
-    check(
-        "3.3  rx = shown + superseded + decode",
-        t.frames_rx
-            == t.frames_shown
-                .wrapping_add(t.frames_dropped_superseded)
-                .wrapping_add(t.frames_dropped_decode),
-        format!(
-            "{} vs {}+{}+{}",
-            t.frames_rx,
-            t.frames_shown,
-            t.frames_dropped_superseded,
-            t.frames_dropped_decode
-        ),
-    );
-
-    // 3.2: a stale sequence number is a drop, not a rejection, and the
-    // counter that moves says which.
-    ctrl.request(Request::ResetStats)?;
-    let payload = vectors::solid_frame(0);
-    let solid = screeny_proto::dec::codec::SOLID;
-    f.send(solid, screeny_proto::F_KEY, &payload)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(60));
-    let back = f.seq.wrapping_sub(1);
-    for _ in 0..3 {
-        // Same seq three times over: duplicates.
-        f.seq = back;
-        f.send(solid, screeny_proto::F_KEY, &payload)
-            .map_err(|e| e.to_string())?;
-        std::thread::sleep(Duration::from_millis(40));
-    }
-    let t = telemetry(&mut ctrl)?;
-    check(
-        "3.2  a repeated seq -> frames_dropped_stale",
-        t.frames_dropped_stale == 3 && t.frames_rejected == 0,
-        format!(
-            "stale {} rejected {}",
-            t.frames_dropped_stale, t.frames_rejected
-        ),
-    );
-
-    // 3.2 again, from the other side: a gap in the sequence is counted but
-    // the frame is still shown. Measured as a *delta*, because section 6.8
-    // says RESET_STATS deliberately does not clear `last_seq`, so the first
-    // frame after a reset carries whatever gap the test above left behind.
-    f.seq = f.seq.wrapping_add(1);
-    f.send(solid, screeny_proto::F_KEY, &payload)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(120));
-    let base = telemetry(&mut ctrl)?;
-    f.seq = f.seq.wrapping_add(5);
-    f.send(solid, screeny_proto::F_KEY, &payload)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(Duration::from_millis(120));
-    let t = telemetry(&mut ctrl)?;
-    check(
-        "3.2  a gap of 5 -> seq_gaps += 5, frame still shown",
-        t.seq_gaps.wrapping_sub(base.seq_gaps) == 5
-            && t.frames_shown.wrapping_sub(base.frames_shown) == 1,
-        format!(
-            "seq_gaps +{} shown +{}",
-            t.seq_gaps.wrapping_sub(base.seq_gaps),
-            t.frames_shown.wrapping_sub(base.frames_shown)
-        ),
-    );
-
-    // 6.2: a TELEMETRY *request* on the control port is solicited and is
-    // answered every time, whatever the 100 ms unsolicited limit says.
-    let t0 = Instant::now();
-    let mut answers = 0;
-    while t0.elapsed() < Duration::from_millis(300) {
-        if matches!(
-            ctrl.request(Request::Telemetry)?,
-            OwnedReply::Telemetry(_)
-        ) {
-            answers += 1;
-        }
-    }
-    check(
-        "6.2  TELEMETRY requests are not rate-limited",
-        answers > 5,
-        format!("{answers} answers in 300 ms"),
-    );
-
-    // 6.3: SET_BRIGHTNESS reports what was actually applied, which is how a
-    // sender learns the firmware cap.
-    let r = ctrl.request(Request::SetBrightness(255))?;
-    let cap = match r {
-        OwnedReply::Brightness { applied } => applied,
-        other => return Err(format!("expected a brightness reply, got {other:?}")),
-    };
-    check(
-        "6.3  SET_BRIGHTNESS 255 is clamped and reports the cap",
-        cap < 255,
-        format!("applied {cap}"),
-    );
-    ctrl.request(Request::SetBrightness(96))?;
-
-    println!(
-        "conformance: {}",
-        if pass { "all PASS" } else { "FAILURES ABOVE" }
-    );
-    Ok(pass)
-}
-
-fn describe(r: &Option<Vec<u8>>) -> String {
-    match r {
-        None => "no reply".into(),
-        Some(b) if b.len() >= 9 => format!(
-            "op {:#04x} flags {:#04x} body[0] {:#04x}",
-            b[2], b[3], b[8]
-        ),
-        Some(b) => format!("{} bytes", b.len()),
-    }
+    suite::run(&opts).map(|s| s.ok())
 }

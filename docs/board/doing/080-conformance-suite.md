@@ -191,3 +191,43 @@ dev-depend on it. Reasons:
 `Sender` and `Control` are unified rather than copied: one `FrameLink` that can
 do both the probe's `connect` + auto-seq style and the tests' explicit-seq,
 explicit-`req_id`, no-retry style.
+
+### 3. The suite, built (2026-09-19)
+
+`crates/probe` is now a lib + bin. New: `src/lib.rs`, `src/enc.rs` (the
+encoders, moved), `src/suite/{mod,framing,sequence,codecs,control,telemetry,
+arbitration}.rs`. Changed: `src/link.rs` (one `FrameLink`/`Control` with both
+API styles), `src/vectors.rs` (loads the `.rgb` expectations too, so there is
+one vector loader), `src/main.rs` (the two hand-rolled command bodies deleted;
+`conformance` now runs the rule catalogue and `lock-test` is an alias for
+`conformance --only 7`).
+
+**64 rules.** `--list` prints them. The runner:
+
+- refuses to start if the device does not answer a `TELEMETRY` request, so
+  "the device is not there" is one error and not sixty failures;
+- prints the brightness it found and an estimated run time before it starts;
+- one line per rule: `[n/64] SECTION  name  PASS|FAIL|SKIP  measurement`;
+- skips, with the reason printed, the three rules that cannot be honest
+  against a real device (`LOOPBACK_ONLY`: a datagram over 1472 bytes is
+  fragmented away by the radio, so "the counter did not move" would look like
+  a pass), the two that wait out `HOLD_MS` (`--slow`) and the one that would
+  drive the panel to the firmware's brightness cap (`--cap-probe`);
+- re-runs a failing rule once when it is flagged `RETRY`, because these count
+  exact numbers of datagrams and on WiFi a lost probe is not a lost MUST;
+- restores brightness, the idle mode and the lock on *every* exit path -
+  `Drop` for a normal return or a panic, a `ctrlc` handler for ctrl-c - and
+  prints what it restored to, read back from the device.
+
+Safety, which is the whole reason the card exists: no `SET_WIFI` and no valid
+`REBOOT` is ever sent at a device (the `SET_WIFI` *error* cases are real rules
+but are `LOOPBACK_ONLY`); `SET_BRIGHTNESS` only ever steps **down** from what
+it found and puts it back; `SET_NAME` is exercised by setting the device's
+name to the name it already has; `IDENTIFY` is always stopped explicitly; and
+every payload is a dim `SOLID` or a checked-in vector, nothing near white.
+
+First run against `screeny-sim` on loopback: **48 passed, 3 skipped, 14
+failed** - and all fourteen failures were `Connection refused` because the
+simulator I had started with `--exit-after 180` exited underneath the run at
+rule 50. The suite reported that honestly rather than passing, which is the
+right failure mode. Re-running with a longer-lived simulator next.
