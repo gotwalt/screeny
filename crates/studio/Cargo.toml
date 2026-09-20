@@ -2,15 +2,31 @@
 name = "screeny-studio"
 version = "0.1.0"
 edition = "2021"
-description = "Desktop preview for designing screeny generative art"
-build = "build.rs"
+description = "Screeny Studio: an HTTP + WebSocket server for designing generative art for the panel"
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+[lib]
+name = "screeny_studio"
+path = "src/lib.rs"
+
+[[bin]]
+name = "screeny-studio"
+path = "src/main.rs"
 
 [dependencies]
 # `sender` on: the studio can stream what it is showing to a real panel.
+# Named explicitly even if `screeny-art` makes it a default (card 112), so
+# that this crate says what it needs either way.
 screeny-art = { path = "../art", features = ["sender"] }
-tauri = { version = "2", features = [] }
+# The server. No `tracing`, no `form`, no `tower-log`: this is a handful of
+# routes and one socket, and every feature is a crate in the tree.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# The reference receiver: "send to panel" is proved against it on loopback,
+# never against the bench device. `window` off - the tests are headless.
+screeny-sim = { path = "../sim", default-features = false }
+# So a test can give itself a tiny receive buffer and stall on purpose.
+socket2 = "0.6"
