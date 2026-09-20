@@ -396,3 +396,102 @@ fan-out (091), auth (041), Docker (107), preview bandwidth (120), `Link::measure
 `screeny_art::Settings` and `LimiterSettings`; `SenderOutput::attach_deferred`. Nothing
 in `crates/screeny` was touched. Nothing in `crates/demos`. No hardware, no serial, no
 camera, and no LAN packet: every target in every run was an explicit `127.0.0.1`.
+
+### For the orchestrator: the real-panel run, from a browser
+
+The panel step is yours. From the main checkout after merging:
+
+```sh
+cargo run --release -p screeny-studio
+#   studio: http://127.0.0.1:8787/
+#   studio: state in .screeny-studio
+```
+
+Discovery is **on** by default now, so it will browse and find `screeny-4a00a4` within
+thirty seconds - and, because there is no state file yet, **adopt it and start playing**
+(`studio: no player was configured; ... will play clocks-numerals`). That is the card's
+"first device found plays a default piece", and it is the first thing to check: the
+panel should light up on its own, with nobody having asked for anything.
+
+Then open **`http://127.0.0.1:8787/dashboard`**:
+
+1. One card, named `screeny-4a00a4`, pill reading **PLAYING**. The health list should
+   show `up . 30 fps`, frames climbing, `pal8-lz` or `pal4-lz`, `exact`, and the
+   device's own telemetry: `live`, uptime, `-NN dBm`, `dropped: none`.
+2. **Piece** - pick `metaballs`, then `overland`. The panel follows within a second.
+   `overland` is a GPU piece, so this is also the check that wgpu works in this build.
+3. **Rate** 30 vs 60. **Seed** and **New**.
+4. **Brightness** - the slider's maximum should snap down to the firmware's cap the
+   first time you ask for more than it gives, and the notice line should say so. Its
+   lowest non-zero stop is 6 (card 136). Please note what the cap turns out to be: the
+   simulator's is not the real one, and nothing here has ever seen the real one.
+5. **Identify** - the "which one is this?" pattern for three seconds.
+6. **Rename** to something, and check `screeny info --name screeny-4a00a4` shows it.
+7. **Reboot** - behind a confirm. The card should go to **PANEL AWAY** and come back by
+   itself, playing the same thing, with `reconnects` up by one and no operator action.
+   If a brightness policy was set, it should be re-applied automatically.
+8. **Play my preview** - design something in `/`, then press it: that panel starts
+   playing it. Check the design view's own "Send to panel" is *not* needed for this, and
+   that changing the design view afterwards does **not** change the panel.
+9. From a **phone** on the LAN, with `--listen 0.0.0.0:8787`: the same page, one column.
+
+Then the acceptance itself, which is the point of the card:
+
+```sh
+# 1. the server
+kill -TERM <pid>            # 'studio: stopping; releasing the panel'; device LIVE -> HOLD
+cargo run --release -p screeny-studio
+# the panel comes back playing whatever it was playing, by itself
+
+# 2. the panel
+#    unplug it for ten seconds and plug it back in; watch the dashboard card
+
+# 3. both, in either order
+```
+
+Without a browser, if the numbers are all you want:
+
+```sh
+curl -s localhost:8787/healthz                        # ok
+curl -s localhost:8787/api/v1/status | python3 -m json.tool | head -60
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"device":"<id from status>","piece":"overland"}' localhost:8787/api/v1/player/set
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"device":"<id>","level":40}' localhost:8787/api/v1/device/brightness
+```
+
+and `screeny --name screeny-4a00a4 stats -n 20` for the device side, read-only.
+
+**Two things to expect.** `screeny-studio` will ask for macOS Local Network permission
+on a fresh build (card 110). And `.screeny-studio/state.json` appears in the working
+directory - it is gitignored; `--state-dir` or `SCREENY_STATE_DIR` puts it elsewhere.
+
+### For card 107 (Docker)
+
+- **`SCREENY_STATE_DIR=/data`** and a volume there. Nothing else needs configuring; the
+  studio creates the directory if it is missing and says once, on `/healthz` and
+  `/api/v1/status`, if it cannot write it.
+- **`SCREENY_LISTEN=0.0.0.0:8787`** works as the env fallback for `--listen`, so compose
+  needs no command line at all.
+- **The healthcheck.** `GET /healthz` is 200/503 now and it means something. **It does
+  not go 503 because a panel is missing** - deliberately, so `restart: unless-stopped`
+  never fights an unplugged panel. Read "Health: what 503 means" in
+  `crates/studio/README.md` before writing the healthcheck's `retries`; the four
+  conditions are all ones a restart genuinely fixes.
+- `SIGTERM` already releases the panels and flushes the state file, so
+  `stop_grace_period` can stay short; two seconds is plenty.
+- Discovery is on unless `--no-discover`. On Linux with `network_mode: host` that is
+  what you want. If avahi fights over 5353, the studio still works entirely from
+  configured addresses - `/api/v1/status` reports `discovery.last_error` and stays 200.
+- `TZ` matters: the clock pieces read the local time zone.
+
+### For card 104 (runner/scheduler)
+
+The seam is `Player::configure(&PlayerChange)` and the `StoredPlayer` it writes. A
+scheduler changes a player's piece, seed and parameters and the rest already follows -
+the state file, the dashboard, the fallback, the persistence. Quiet hours are
+`PlayerChange { brightness }` and `{ on }` on a clock; both are already policy rather
+than one-off commands, and both already survive a restart and a reconnect.
+
+Do **not** build the scheduler inside `fleet::supervise`: that loop is the watchdog and
+should stay something one can read in one screen.
