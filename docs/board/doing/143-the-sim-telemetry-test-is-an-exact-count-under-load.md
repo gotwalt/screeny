@@ -4,8 +4,8 @@ title: The simulator's loss-versus-slowness test counts exactly, and says little
 type: test
 hardware: no
 depends: [117]
-owner:
-branch:
+owner: worker-143
+branch: card/143-sim-telemetry-flake
 ---
 
 ## Goal
