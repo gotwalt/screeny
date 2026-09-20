@@ -28,7 +28,9 @@ system lives in the same workspace. Evidence: `docs/research/005-end-to-end.md`.
   By agreement between the sessions: it owns `firmware/`, the serial port and flashing, and
   cards 200-249 (device-web track: on-device HTTP, captive portal, OTA, WiFi reset); this
   session keeps cards up to 199. `crates/proto`, `crates/receiver` and the protocol spec are
-  shared - each tells the other before changing them. Its cards are numbered 200+, it may hold the serial port and reflash the panel at any
+  shared - each tells the other before changing them. The agreement is written down in
+  `docs/design/device-web.md`. The firmware session schedules cards 062, 063, 068, 081, 130,
+  131 and 136 - do not assign them; 065, 110 and 132 stay here. Its cards are numbered 200+, it may hold the serial port and reflash the panel at any
   time, and its untracked or modified files appear in `git status` here. Never `git add -A`
   in the main checkout - add your own paths explicitly - and expect the panel to reboot
   under a real-panel run; check `screeny info` for the firmware version before blaming
