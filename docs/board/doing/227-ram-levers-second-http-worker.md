@@ -290,3 +290,32 @@ needs next.
 `docs/research/010-stack-and-ram-levers.md` started: the method and the bug in
 it, the objdump frame tables, the interrupt answer, and deliverable 3's
 finding. The measured sections are still to come.
+
+**Step 5 - the scan, checked on the host before it costs another flash.**
+
+Having burned a bench window on an inverted comparison, the paint/scan
+arithmetic was lifted into a standalone host program (scratchpad, not
+committed - the firmware crate is `no_std` on the Xtensa target and has
+nowhere to put a `#[test]`) and run against a simulated region:
+
+```
+ok   fresh region: 0                     ok   used 192: 192
+ok   fresh headroom: 15360               ok   used 2048: 2048
+ok   used 4096: 4096                     ok   used 8192: 8192
+ok   paint exhausted: 15360              ok   headroom at exhaustion: 0
+ok   coincidental paint in used region: 4096
+```
+
+The last case is the one that matters: a word inside the *used* region that
+happens to hold the paint value does not fool an upward scan, and would have
+truncated a resumed downward cursor. The "paint exhausted" case reproduces
+flash 1's 15,360-of-16,384-with-0-free exactly, which confirms the diagnosis
+rather than leaving it a guess.
+
+The **fw-size floor is 24576, not the 28672 the card suggested.** 28 KB is
+inconsistent with the card's own budget for 223: ~9 KB of `.bss` for the
+soft-AP, DHCP, DNS and the portal takes `.stack` from the mid-thirties to the
+mid-twenties, so a 28 KB floor is one the next planned card has to fail - and a
+floor somebody has to edit to get their work through protects nothing. 24 KB is
+the highest round number card 223 can still clear and is 6.6 KB above the worst
+depth ever measured (~17,900).
