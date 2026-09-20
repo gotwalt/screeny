@@ -454,3 +454,14 @@ touches nothing this card changed.
 
 The card is in `review/`; the `git mv` landed in commit b92e419 together with a
 comment fix rather than as the very last commit on the branch.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `flock-1-light-level.png` and `flock-5-close.png` before merging. Honest read of
+the stills: the sky and its horizon band are right and quiet; at the default distance the
+birds are small bright clusters that a still cannot call birds - which the card expected,
+since it is the wingbeat that makes two LEDs a bird - and at `near 2.5` several are
+unmistakable V's and dashes. Whether the motion carries the default is the owner's to see
+on the panel. Merged `--no-ff`; `cargo test -p screeny-art`: 92 + 4 + 3 pass; clippy
+silent; the full root suite runs with the next batch. Card 169 (riding close scatters the
+flock) is the obvious next step if he prefers the close view.
