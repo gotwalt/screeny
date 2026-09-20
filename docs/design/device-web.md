@@ -3,7 +3,7 @@
 **Status (2026-09-20, late): research done (200-202); on the device: the partition
 table (210), the rollback bootloader (242, part), framebuffers off the stack (220),
 strongest-mesh-node join; host crates done: `crates/settings` (211), `crates/provision`
-(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); in flight: 227 (RAM levers, hardware) and 232 (state-machine and API refinements).** This file is the
+(221); `crates/device-api` (226), the simulator's HTTP API and WiFi states (224); on the device: fw 0.3.0 with the settings store (212); fw 0.4.0 with the HTTP server on the LAN (222); in flight: 227 (RAM levers, hardware); 232 (state-machine and API refinements) done.** This file is the
 source of truth for the device-web track (cards 200-249, coordinated by the `firmware`
 Claude session): decisions, what the research settled, and the build order at the end.
 
@@ -233,6 +233,25 @@ What card 222 must not rediscover:
 - `GET /api/v1/networks` at worst case is 3.7 KB, several TCP segments: that is the route
   the "HTTP costs no frame" bench proof should hammer, not `/status`.
 
+Credentials posted while the device is online (card 232) - now part of the machine:
+
+- `Online` or `Joining` + credentials posted -> a trial **without the AP**
+  (`TrialOrigin::Online`): the one station drops its association and tries the new
+  network. Success commits and announces; failure goes back to the **stored** network
+  (then the built-ins, then the portal only if there is nothing at all), never clearing
+  the store. No overlay, no portal screen, no address on the panel: the stream keeps the
+  panel through the rejoin. `ip()` is `None` for the length of the trial.
+- The failed result is sticky until the next post, a button wipe or a reboot
+  (`trial_is_current()`, `wifi_state()`); a later card may add an explicit acknowledge.
+- What the firmware must do (card 223): feed **every** `POST /api/v1/wifi` and `SET_WIFI`
+  into the one `Provisioner` whatever its state, reply first, then `step`; read
+  `GET /api/v1/wifi` from `trial_is_current()`/`trial()`, `GET_WIFI` from `wifi_state()`;
+  use `route::find`, `route::RateLimit` with `SCAN_MIN_INTERVAL_MS`, and per-route
+  `max_request_len`.
+- The simulator keeps UDP `SET_WIFI` "accepted, logged, not acted on" outside the portal
+  on purpose (other sessions' tests pin it); HTTP runs the real trial. Closing that
+  asymmetry is a later card, with notice to the software session.
+
 Orchestrator's defaults for card 201's open questions (the owner can overrule): the
 portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
 **does answer while a sender is streaming**, and a bench card proves it costs no frame;
@@ -255,7 +274,7 @@ Studio all depend on - `crates/proto` is not touched.
 | 227 | (in flight, hardware) RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
 | 223 | firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
-| 232 | (in flight) from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
+| 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
 | 225 | spec: strike 8.1, rewrite 8.3 to end at the portal, add the HTTP API section (shared surface: notice to the software session) | no |
 | 230 | button task: debounce, short press = identify screen | yes |
 | 231 | hold ladder with the on-panel countdown; 5 s wipes WiFi -> portal; held-at-boot | yes |
