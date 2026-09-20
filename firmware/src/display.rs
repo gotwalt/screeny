@@ -110,10 +110,15 @@ pub const fn slots_for(brightness: u8) -> usize {
     (brightness as usize * MAX_OE_SLOTS + 127) / 255
 }
 
-/// What we come up at. 96/255 is 9 slots, about 14% duty — a little above
-/// Tidbyt's shipping default of 12%, comfortable in a lit room, and below the
-/// point where the bench camera clips a white pixel.
-pub const DEFAULT_BRIGHTNESS: u8 = 96;
+/// What we come up at when flash holds no brightness. 96/255 is 9 slots, about
+/// 14% duty — a little above Tidbyt's shipping default of 12%, comfortable in a
+/// lit room, and below the point where the bench camera clips a white pixel.
+///
+/// An **alias**, not a second copy of the number: `screeny-settings` has to know
+/// the default too (a blank partition returns it from `Store::load`), and
+/// `crates/settings/README.md` asked card 212 to make this the one definition.
+/// The store's copy is the definition; this is the name the display code uses.
+pub const DEFAULT_BRIGHTNESS: u8 = screeny_settings::DEFAULT_BRIGHTNESS;
 
 // ---------------------------------------------------------------------------
 // sRGB frame -> DMA framebuffer
