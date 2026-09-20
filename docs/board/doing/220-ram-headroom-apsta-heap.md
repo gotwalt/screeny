@@ -117,3 +117,68 @@ exist (or the precise failure does), and the device is left streaming on the def
 build.
 
 ## Log
+
+### 2026-09-19 - host side, before any flash
+
+Claimed the card, branched `card/220-ram-headroom-apsta-heap` off `main` at a2536bc.
+
+**Deliverable 1 - framebuffers off the stack.** `hub75_framebuffer::bitplane::plain::frame::DmaFrameBuffer::new()`
+(the vendored copy, which is what `esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer`
+re-exports) is already a `const fn`: it builds an all-zero `PlaneData` array and
+then calls the `const fn format()`. So the fix is the cheap one the research doc
+hoped for and needs no `unsafe`: two module-level
+`static_cell::ConstStaticCell<FrameBuffer>`s initialised with `FrameBuffer::new()`,
+and `main` just `take()`s them. The compiler produces the 12 KB values, not the
+stack.
+
+Measured with `xtensa-esp32-elf-size -A`, release, in this worktree:
+
+| build | `.text` | `.rodata` | `.data` | `.bss` | `.stack` | image |
+|---|---|---|---|---|---|---|
+| `main` (card's baseline) | 531205 | 73064 | 31492 | 127040 | 37536 | 743408 |
+| this branch, `fb-on-stack` (the A/B) | 531621 | 73248 | 31492 | 127064 | 37512 | 744000 |
+| this branch, **default** | 531209 | 73176 | **56124** | **102424** | **37512** | 768144 |
+| this branch, `apsta-probe` | 534797 | 74184 | 56164 | 106432 | 33472 | 772784 |
+
+So 24,632 bytes moved out of `.bss` and into `.data`, and `.stack` did not move
+(37536 -> 37512, and the 24 bytes are the probe's own bookkeeping, not the
+framebuffers). That is the expected result and it is the *point*: `.data`,
+`.bss` and the stack come out of one region, so relocating 24 KB inside that
+region cannot change the remainder. What it removes is the 24 KB **transient** -
+what the remainder has to be big enough for. The price is 24 KB of flash
+(744,000 -> 768,144, 18.6% of a 2 MB OTA slot).
+
+`apsta-probe` costs +4,008 `.bss` on top of that, which is the AP interface plus
+`StackResources<4>`: card 201 predicted ~3.9 KB from the same pair, so that
+table holds.
+
+**Deliverable 2 - the method.** `esp-rtos 0.4.0` has no per-task stack
+watermark API (it only snapshots a guard word at `stack_bottom + guard_offset`
+and compares it on every switch), so: paint and scan, in `firmware/src/stack_probe.rs`.
+`_stack_end_cpu0` (0x3ffd6d60, == `_bss_end`) and `_stack_start_cpu0`
+(0x3ffe0000) bracket the region; the paint runs as the *first* statement of
+`main`, from bottom+1024 (leaving the guard word at bottom+60 alone) up to 512
+bytes below the painting function's own frame. The scan runs once, at the 60 s
+telemetry tick, and logs one line. It lives in the default firmware on purpose:
+the number is only worth having if it is the number the shipping build produces.
+
+**Deliverable 3 - the probe.** `firmware/src/apsta_probe.rs` behind the
+`apsta-probe` feature. One task owns the controller and the AP runner so
+nothing has to be signalled across tasks: 60 s of station-only (the *same*
+`station_loop` the default build runs - extracted, not copied), a heap line,
+then `set_config(AccessPointStation)` with an open `screeny-<id>` AP on channel
+1, then the second `embassy-net` stack at 192.168.4.1/24 with nothing listening.
+Both the station-only baseline and the APSTA number therefore come from one
+boot. The feature also turns on `esp-alloc/internal-heap-stats` so the log has a
+true `max_usage` beside the 5 s samples; the radio's transients are exactly what
+a sampler misses.
+
+Added `fb-on-stack` as a bench-only feature (same spirit as `display-on-core0`)
+so the "before" half of the stack measurement is reproducible without checking
+out an older commit.
+
+All six feature configurations build clean: default, `fb-on-stack`,
+`apsta-probe`, `device-web-spike`, `spike-ota`, `gpio-probe`.
+
+Was told by the orchestrator to hold off the serial port for ~10 minutes while
+the owner was at the panel; did host-side work only until released.
