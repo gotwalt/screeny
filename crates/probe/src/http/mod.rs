@@ -25,7 +25,7 @@
 //! # Safety: this is pointed at the real panel
 //!
 //! By default the suite does nothing that takes the device off its network,
-//! reboots it, interrupts a stream or writes to flash:
+//! reboots it, interrupts a stream or writes a firmware image:
 //!
 //! * `POST /api/v1/wifi` is only ever sent a body that **cannot** start a join
 //!   (no `ssid` field), unless [`Opts::allow_wifi_trial`] is set - and that
@@ -44,7 +44,9 @@
 //!   as the UDP suite's `--cap-probe`.
 //! * Everything it changes (name, brightness, idle mode, the identify overlay)
 //!   is put back on **every** exit path: a normal return, a failure, a panic
-//!   and ctrl-c. The last line says what it restored to.
+//!   and ctrl-c. The last line says what it restored to. On the device those
+//!   three settings live in the settings partition, so a run is a handful of
+//!   small store writes and their undo - nothing near the firmware slots.
 //!
 //! # The two servers, and the differences that are known
 //!

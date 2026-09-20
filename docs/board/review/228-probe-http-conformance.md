@@ -181,7 +181,7 @@ The fix is one derivation in one place: `WifiModel::link_state()` (`pub(crate)`,
 public API change), used by `wifi_reply()`'s non-trial branch and by `api.rs`'s status
 route, so the two cannot drift apart again. **UDP `GET_WIFI` is untouched** - it still
 answers `wifi.wifi_state()`, sticky `FAILED` and all, and `crates/sim/tests/http_wifi.rs`
-still pins that. `crates/sim`: 131 tests green, the 64-rule UDP conformance test
+still pins that. `crates/sim`: 126 tests green, the 64-rule UDP conformance test
 unchanged and still green.
 
 Open question I did **not** decide (card 233 below): in `Portal`, `link_state()` still
@@ -216,9 +216,11 @@ D=192.168.7.221
 cargo run --release -p screeny-probe -- http --list
 
 # 1. THE ONE TO RUN AFTER EVERY FLASH. Safe by default: nothing leaves the
-#    network, nothing restarts, nothing is written to flash, and brightness only
-#    ever steps down. Name, brightness, idle mode and the identify overlay are
-#    put back on every exit path and the last line says what they went back to.
+#    network, nothing restarts, no firmware image is written, and brightness
+#    only ever steps down. Name, brightness, idle mode and the identify overlay
+#    are put back on every exit path and the last line says what they went back
+#    to (on the device those three are settings-store writes and their undo -
+#    a handful of small ones per run, nothing near the firmware slots).
 #    It does take the panel for ~2 s with the identify overlay (rule 21), and it
 #    does NOT need the source lock - running it while the Studio streams is
 #    better evidence, not worse. ~60-90 s on the bench.
@@ -248,7 +250,7 @@ length bound as a known difference, because 0.4.x enforces only the global 384-b
 200 rather than any refusal at all). Rules 8, 14, 29 and 33 are the `KNOWN_223` four.
 
 **Test counts.** Root `cargo test`: **657 passed, 0 failed** (exit 0). `crates/probe`
-14 unit tests, 10 of them new; `crates/sim` 131, 5 of them new in
+14 unit tests, 10 of them new; `crates/sim` 126, 5 of them new in
 `tests/http_conformance.rs`. **The 64-rule UDP conformance suite is untouched**:
 `git diff` against the merge base shows no change under `crates/probe/src/suite/`,
 `crates/sim/tests/conformance.rs`, `crates/sim/src/core.rs` or `crates/sim/src/device.rs`,
