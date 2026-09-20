@@ -4,8 +4,8 @@ title: Credentials posted while Online or Joining - the state machine handles th
 type: build
 hardware: no
 depends: [221, 224, 226]
-owner:
-branch:
+owner: worker-232
+branch: card/232-provision-post-while-online
 ---
 
 ## Goal
