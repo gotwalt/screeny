@@ -221,3 +221,106 @@ Every remaining feature still builds: `display-on-core0`, `spike-ota`,
 `store-selftest`, `apsta-probe`, `fb-on-stack`, `device-web-spike`,
 `gpio-probe`, and the new `http-selftest`. `bench-wifi` was deliberately not
 built (the card forbids it, and the device's credentials are already in flash).
+
+**Step 3 - the bench. Six flashes, and why each one happened.**
+
+| # | build | why | outcome |
+|---|---|---|---|
+| 1 | `http-selftest` | first run of the whole card | **panic**: `SocketSet::add`, the set was full. Everything before it was healthy (joined, LIVE, streaming); the panic was the self-test's client socket, at ~45 s |
+| 2 | default | the card's rule: a build that does not stay up is followed **immediately** by the last known-good one. This one doubled as the first `stack:` measurement | healthy, 30 fps, `stack: 13056 of 23648` |
+| 3 | `http-selftest`, `StackResources` 6 -> 7 | the fix for (1) | healthy; the TCP self-connect failed as the card predicted, fallback logged |
+| 4 | `http-selftest` + the in-memory router pass | the TCP half proves nothing here, so give the card the evidence it actually wants | all twelve routes right; frame path untouched |
+| 5 | `http-selftest`, SSID redacted | (4)'s log printed the station's SSID in the echoed reply bodies. That is a second place the firmware says an SSID out loud, which the card forbids | redaction confirmed (`"ssid":"<ssid>"`) |
+| 6 | default | the build the device must be left running, and the final numbers | healthy, 30 fps rx / 30 fps shown, zero decode drops |
+
+**Socket slots.** Six is the obvious count - frame, control, mDNS, DHCP, HTTP,
+one spare - and it panicked. `edge-nal-embassy`'s `Udp` holds more than the one
+socket its buffer type names, so six were already in use before the self-test
+asked for a seventh. `NET_SOCKETS` is 7 now: the measured count plus one really
+spare slot. It costs 408 bytes (`.stack` 23648 -> 23240) and it takes a
+panic-on-full out of the default build, not just out of the bench one.
+
+**The self-test.** The TCP half did what the card guessed it would:
+
+```
+WARN  selftest: embassy-net cannot reach its own address 192.168.7.221 -
+      no loopback on a station interface. Falling back to reporting readiness.
+INFO  selftest: fallback evidence - 1 accept loop(s) listening on tcp/80
+```
+
+"Can the device reach itself over TCP" is not the question the card is really
+asking, though - "does every route answer the right thing on the real device"
+is, and that needs only a `picoserve::io::Socket`. So the self-test provides
+one made of two byte slices and runs the **real router** through it, on the
+device, while the Studio streams. Every case passed first time:
+
+```
+GET /                      -> 200 (want 200) OK  6233 bytes, 7339 us
+GET /api/v1/status         -> 200 (want 200) OK   472 bytes, 4609 us
+GET /api/v1/telemetry      -> 200 (want 200) OK   443 bytes, 3536 us
+GET /api/v1/wifi           -> 200 (want 200) OK   167 bytes, 5057 us
+GET /api/v1/networks       -> 503 (want 503) OK   166 bytes, 2715 us
+POST /api/v1/identify      -> 200 (want 200) OK   112 bytes, 3310 us
+POST /api/v1/settings      -> 200 (want 200) OK   150 bytes, 3627 us
+POST /api/v1/settings bad  -> 400 (want 400) OK   153 bytes, 2895 us
+POST /api/v1/reboot unconf -> 400 (want 400) OK   147 bytes, 3164 us
+POST /api/v1/firmware      -> 503 (want 503) OK   166 bytes, 2757 us
+GET /api/v1/settings (405) -> 405 (want 405) OK   118 bytes, 2817 us
+GET /nope (404)            -> 404 (want 404) OK   109 bytes, 2465 us
+```
+
+2.5-7.3 ms a request, the page being the slow one (it is ~6.2 KB rendered and
+picoserve formats it once per send-buffer chunk). Over that window the frame
+path did not notice: **33 fps rx, 33 fps shown, 0 decode drops, 0 rejected,
+`render` max 3182 us** against 3241-3326 us idle on the same build. (33 rather
+than 30 is the window's integer-second division, not the device going fast.)
+
+**Stack.** The self-test also answers a question nobody could answer before:
+until now no request had ever run through the router on the device, so the 60 s
+`stack:` line had never seen the HTTP path's depth.
+
+```
+selftest: core 0 stack high-water 13056 -> 14208 of 17272 bytes
+```
+
+The whole route table costs **1152 bytes** of stack depth. So on the shipping
+build the deepest this firmware goes is ~14208 of 23240, leaving ~8 KB.
+
+| | before (0.3.0) | after (0.4.0) |
+|---|---|---|
+| `.data` | 57388 | 58164 |
+| `.bss` | 106712 | 115192 |
+| `.stack` | 32504 | **23240** |
+| `.rwtext` | 66540 | 66548 |
+| image | 816305 | 956357 |
+| 60 s `stack:` high-water | 10688 | **13056** of 23240, 9160 free |
+
+The high-water moved 10688 -> 13056 because of one thing: `read_fw_health`'s
+3 KB partition-table buffer. It is transient, on `main`'s real stack (there is
+no `await` after it is declared, so it never becomes a future's field, and the
+main task's pool is unchanged at 1464 bytes), and it buys `fw_slot` and
+`fw_state` without a flash read per status request.
+
+**Core 1's stack was not painted**, and its 16 KB was not touched: the card
+lists it as the *second* lever and the first one was enough. Measuring it is a
+follow-up.
+
+**Fields that are real, and the one class that is not.** Every field of
+`StatusReply` is measured: `boot_id` (hardware RNG, and it does change per boot
+- 835003802 then 236509247 on two runs), `stack_free` from `stack_probe`,
+`store_errors` from `store::FAILURES`, `fw_slot` / `fw_state` from the real
+`otadata` (`Ota0` / `Valid` on this device), `reset_reason` from esp-hal. No
+field reports `unknown` on this device today. The one honest caveat is
+`reset_reason`'s *resolution*: the ESP32's reason register cannot tell a panic
+from any other software reset, cannot see the external reset pin separately
+from a power-on, and does not distinguish the interrupt and task watchdogs from
+the other timer-group ones, so `panic`, `external`, `int_wdt` and `task_wdt`
+are variants this device will never produce. `portal` is hard `false` until
+card 223.
+
+**The page** is 5128 bytes of source and **6233 bytes as served** with the
+status table rendered in. Self-contained: inline CSS and JS, no external asset,
+no font, no framework. The status table is rendered by the firmware, so it is
+readable with JavaScript disabled; the script replaces the same cells every
+4 s. Settings, identify and reboot need JavaScript. The Wi-Fi form and the
+firmware upload are marked-out sections naming cards 223 and 240.
