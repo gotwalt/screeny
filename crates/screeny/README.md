@@ -282,6 +282,8 @@ fn sender::sleep_until(Instant)             // sleep, then spin the last ms
 enum Error { Io, Timeout, Device(ErrorCode), BadReply, NotFound, NoSuchDevice,
              Mdns, Metadata, NoCommonCodec, Budget, Frame, BadIndex }
     fn hint(&self) -> Option<String>        // the next step, in words
+    fn hint_for(&self, Platform) -> Option<String>   // ... for a named platform
+enum Platform { MacOs, Linux, Other }   const Platform::HOST
     impl From<Error> for std::io::Error     // for embedders whose trait is io
 ```
 
@@ -507,8 +509,11 @@ median period, drift, how late the host woke it - whether it passed or not.
 - **A browse that finds nothing is normal**, not an error. macOS can make
   multicast vanish until the socket is recreated; `dns-sd -B _screeny._udp`
   uses Apple's own responder and is the fastest way to tell "the device is not
-  advertising" from "this process cannot see multicast". `--addr` always
-  works.
+  advertising" from "this process cannot see multicast". On Linux the second
+  opinion is `avahi-browse -rt _screeny._udp` and the usual cause is a
+  container on the default bridge, which carries no LAN multicast;
+  `Error::hint` says whichever of those applies to the machine it is printed
+  on (card 147). `--addr` always works.
 - **Local Network permission.** A CLI run from Terminal or over SSH is exempt;
   a bundled, re-signed or launchd-started binary is not, and closing the
   Terminal window that started a running sender can revoke the exemption

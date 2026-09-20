@@ -279,8 +279,15 @@ fn control_requests_time_out() {
     assert!(started.elapsed() < Duration::from_millis(500));
     assert!(matches!(e, screeny::Error::Timeout { .. }), "{e:?}");
     assert!(e.to_string().contains(&addr.to_string()));
-    // Loopback counts as a local address, so the hint is attached.
-    assert!(e.hint().is_some_and(|h| h.contains("Local Network")));
+    // Loopback counts as a local address, so the hint is attached. What it
+    // says depends on the platform (card 147); that it says something, and
+    // names the check that works everywhere, does not.
+    let hint = e.hint().expect("a local address gets a hint");
+    assert!(hint.contains("screeny discover"), "{hint}");
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    assert!(hint.contains("Local Network"), "{hint}");
+    #[cfg(target_os = "linux")]
+    assert!(!hint.contains("Local Network"), "{hint}");
 }
 
 #[test]
