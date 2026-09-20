@@ -134,4 +134,43 @@ when `repeat` is off. No compression dependency was added, as the card asked.
 `frames_sent`, `bytes_sent` - so "what are the browsers costing" is answerable
 without `docker stats`. Additive; nothing else on that route moved.
 
-Still to do: the real-browser check (visible, hidden, two tabs, console clean).
+### In a real browser
+
+A Studio of its own: `--listen 127.0.0.1:8813 --no-discover --no-device-http
+--ui-dir crates/studio/ui`, a temp state dir, and nothing near the bench panel
+or `workbench.local`. Stopped afterwards; `ps` clean.
+
+**The extension drives a window that is genuinely in the background**, so
+`document.hidden` was `true` the moment the page loaded - which is the best
+possible first result: `open: 1, watching: 0, frames_sent: 0` and 4.6 KB of
+JSON, with no picture asked for at all. To drive the *visible* path from there I
+took over `document.hidden` in the page and dispatched `visibilitychange`, which
+exercises the page's own `previewFps()` and its message, and measured against
+the server's counters with real elapsed time (`setTimeout` is throttled in a
+background tab; the first measurement was wrong by exactly that factor before I
+noticed).
+
+| what | frames/s | bytes/s | `sockets` |
+|---|---|---|---|
+| one tab visible | 29.5 | 184 KB/s | `watching: 1` |
+| that tab hidden | 0 | 1.27 KB/s (two sockets' heartbeats) | `watching: 0` |
+| visible again | 28.9 | 180 KB/s | `watching: 1` |
+| **two** tabs visible | 59.8 | 372 KB/s | `watching: 2` |
+| back to one visible | 30.1 | 188 KB/s | `watching: 1` |
+
+So the counter really does stop and start with the tab, the claim is given back,
+and two tabs cost exactly twice one. A tab closed gives its socket back:
+`open` fell as tabs closed, and a hidden page left connected keeps costing
+530 B/s of heartbeat and nothing else, measured over six seconds with no tab in
+the foreground.
+
+**Not checked in a browser, and honestly so:** `requestAnimationFrame` does not
+run at all in that background window, so the canvas stays black there and
+`#ro-fps` reads `–`. What the page *draws* could not be judged by eye in this
+environment. The frame pump was not touched by this card - the same bytes arrive
+on the same handler - and `tests/panel.rs` still proves the browser's bytes and
+the panel's are the same. The owner should glance at the page once after this
+merges.
+
+Console: clean, on load and after a reload.
+
