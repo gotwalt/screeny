@@ -45,6 +45,11 @@ next to what the UDP telemetry already gives it.
   `Connection: close`, ~2 s timeout, capped backoff**, never from more than one task, and never
   let a browser trigger a poll (browsers read the Studio's cached copy). Measured by them: 200
   requests in 60 s during a 30 fps stream cost no frame.
+- `wifi_state` in `/api/v1/status` can read `failed` while the device is online: until the
+  firmware session's card 223 it is the sticky result of the last credentials *attempt*, not
+  the link. Rule until then: a non-null `ip` means connected; show "last WiFi change failed"
+  only as a note, never as a fault. After 223 it means the link (connected / connecting /
+  disconnected) and the attempt's outcome lives in `GET /api/v1/wifi`.
 - **The status payload contains the real WiFi SSID.** Show it on the owner's page; never write
   it into a tracked file, a fixture, a log line, a card or a screenshot (`CLAUDE.md`). Tests
   use the simulator, whose SSID is a dummy.
