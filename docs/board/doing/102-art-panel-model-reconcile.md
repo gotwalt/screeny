@@ -4,8 +4,8 @@ title: Reconcile the art system's panel model and colour budget with the measure
 type: build
 hardware: no
 depends: [100]
-owner:
-branch:
+owner: worker (card 102)
+branch: card/102-art-panel-model
 ---
 
 ## Goal
@@ -69,3 +69,13 @@ as `Lut::value_scaled` if a comparison is wanted.
 
 Also worth knowing for any brightness control in the studio: the control has 25
 steps, not 256, and brightness 1..=5 lights zero slots (card 136).
+
+### 2026-09-20 - claimed
+
+Branch `card/102-art-panel-model`, own worktree. Scope as the orchestrator set it:
+replace the obsolete 32/16-level model with the device's real time-averaged dark
+end, bring the colour-budget advice and meters in line with the real encoder
+(card 101), update `crates/art/README.md`'s assumptions. No hardware, no camera;
+acceptance is tests pinned against `crates/panel` plus the test card's dark ramp.
+Pieces' own look is not to be changed on my taste - the `overland` L 0.3 cut and
+the clocks' L 0.32 ramp floor go under "Open with the owner".
