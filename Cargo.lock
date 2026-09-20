@@ -1874,10 +1874,14 @@ dependencies = [
  "mdns-sd",
  "minifb",
  "png 0.18.1",
+ "screeny-device-api",
  "screeny-panel",
  "screeny-probe",
  "screeny-proto",
+ "screeny-provision",
  "screeny-receiver",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

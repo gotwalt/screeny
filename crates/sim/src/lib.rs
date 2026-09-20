@@ -69,14 +69,19 @@ pub mod net;
 pub mod panel;
 pub mod screens;
 pub mod stats;
+pub mod wifi;
 #[cfg(feature = "window")]
 pub mod window;
 
-pub use config::{Config, Faults, PanelModel, Timing};
+pub mod api;
+pub mod http;
+
+pub use config::{Config, Faults, PanelModel, Timing, DEFAULT_HTTP_PORT};
 pub use core::{Core, FrameMeta, Outbox};
 pub use device::{FrameSink, SimDevice, SimHandle, Snapshot};
-pub use event::{DropCause, Event, ReleaseReason, State};
+pub use event::{DropCause, Event, ReleaseReason, State, WifiAction, WifiPhase};
 pub use stats::Stats;
+pub use wifi::{Posted, WifiModel, WifiOutcome, WifiTiming};
 
 /// The mDNS instance name the simulator advertises under.
 ///

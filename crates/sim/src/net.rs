@@ -1,7 +1,8 @@
-//! One helper: which of this machine's addresses to print on the status
-//! screen when the device is bound to `0.0.0.0`.
+//! Two helpers: which of this machine's addresses to print on the status
+//! screen when the device is bound to `0.0.0.0`, and the address the simulated
+//! device believes it holds.
 
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
 /// The local IPv4 address the kernel would use to reach the LAN.
 ///
@@ -15,5 +16,19 @@ pub fn local_ipv4() -> Option<Ipv4Addr> {
     match sock.local_addr().ok()? {
         SocketAddr::V4(a) if !a.ip().is_unspecified() => Some(*a.ip()),
         _ => None,
+    }
+}
+
+/// The address the simulated device reports as its own: what it is bound to,
+/// or this machine's LAN address when it is bound to `0.0.0.0`.
+///
+/// One function, so the status screen, the provisioning machine's
+/// `Joined { ip }` and `GET /api/v1/status` cannot name three different
+/// addresses for the same device.
+#[must_use]
+pub fn display_addr(bind: IpAddr) -> Ipv4Addr {
+    match bind {
+        IpAddr::V4(a) if !a.is_unspecified() => a,
+        _ => local_ipv4().unwrap_or(Ipv4Addr::LOCALHOST),
     }
 }

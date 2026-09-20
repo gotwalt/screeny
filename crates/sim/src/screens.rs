@@ -125,10 +125,37 @@ pub struct Scene<'a> {
     pub brightness: u8,
     /// The panel model, for the `DIM` idle mode.
     pub model: PanelModel,
+    /// The provisioning screen, when the device is in `Portal` or `Trial`
+    /// (card 224). Drawn by `screeny_provision`, not by this module: the
+    /// window and the `--dump-dir` PNGs then show the device's own pixels,
+    /// down to the QR's polarity and quiet zone.
+    pub provisioning: Option<screeny_provision::Screen<'a>>,
+    /// The device is not on a network. The status screen says so instead of
+    /// printing an address it does not have (spec section 7.3's "the idle
+    /// screen says the network is down").
+    pub network_down: bool,
 }
 
 /// Compose the frame the panel is scanning out.
 pub fn render(s: &Scene<'_>, out: &mut Rgb888Frame) {
+    // The portal owns the whole panel while it is up: the device cannot be
+    // streaming to somebody who has not told it which network to join, and
+    // the QR has to be scannable rather than blended with anything.
+    if let Some(screen) = &s.provisioning {
+        if screeny_provision::render(screen, out).is_ok() {
+            if s.identify {
+                let mut c = Canvas::default();
+                c.px.copy_from_slice(out);
+                identify_overlay(s, &mut c);
+                out.copy_from_slice(&c.px[..]);
+            }
+            return;
+        }
+        // `Provisioner::screen` never asks for a layout `render` cannot draw,
+        // so this is unreachable; falling through to the idle screen is
+        // better than a blank panel if it ever becomes reachable.
+    }
+
     // The stream layer: the live frame, or black before the first one.
     let mut live = Canvas::default();
     if s.have_frame {
@@ -201,13 +228,20 @@ fn status_screen(s: &Scene<'_>, c: &mut Canvas) {
     let w = font::width_5x7(&name) as i32;
     c.text_5x7((W as i32 - w) / 2, 1, &name, [230, 230, 240]);
 
-    // Address, 3x5, centred.
-    let addr = s.addr.to_string();
-    let w = font::width_3x5(&addr) as i32;
-    c.text_3x5((W as i32 - w) / 2, 11, &addr, [90, 180, 255]);
+    // Address, 3x5, centred - or, with no network, what is wrong instead.
+    // A panel showing a stale address it can no longer be reached at is
+    // worse than one that admits the network is gone.
+    let (line, colour) = if s.network_down {
+        ("NO NETWORK".to_string(), [255, 150, 40])
+    } else {
+        (s.addr.to_string(), [90, 180, 255])
+    };
+    let w = font::width_3x5(&line) as i32;
+    c.text_3x5((W as i32 - w) / 2, 11, &line, colour);
 
-    // RSSI bars, five of them, growing to the right.
-    let bars = rssi_bars(s.rssi_dbm);
+    // RSSI bars, five of them, growing to the right. All dark with no link:
+    // the last measured RSSI means nothing once the link is gone.
+    let bars = if s.network_down { 0 } else { rssi_bars(s.rssi_dbm) };
     let x0 = (W as i32 - (5 * 4 - 1)) / 2;
     for b in 0..5i32 {
         let h = 2 + b * 2;
@@ -295,6 +329,8 @@ mod tests {
             rssi_dbm: -55,
             brightness: 255,
             model: PanelModel::default(),
+            provisioning: None,
+            network_down: false,
         }
     }
 

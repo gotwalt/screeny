@@ -19,6 +19,22 @@ window = ["dep:minifb"]
 screeny-proto = { path = "../proto" }
 screeny-panel = { path = "../panel" }
 screeny-receiver = { path = "../receiver" }
+# Card 224: the HTTP API's shapes, and the join/portal state machine. Both are
+# `no_std` crates the firmware links too, so the simulator and the device serve
+# and decide from one definition. `std` on device-api is `std::error::Error`
+# and nothing structural.
+screeny-device-api = { path = "../device-api", features = ["std"] }
+screeny-provision = { path = "../provision" }
+# The JSON writer. `crates/device-api`'s golden tests prove serde_json and the
+# firmware's serde-json-core produce the same bytes for every shape here, and
+# it is already in the workspace (crates/studio). No HTTP crate: the server is
+# ~300 lines over `TcpListener`, which keeps an async runtime out of a crate
+# every other crate's tests depend on. See card 224's log.
+# `serde` itself only for the `Serialize` bound on the JSON helper; no
+# derives here, because no shape is defined here.
+serde = { version = "1", default-features = false }
+serde_json = "1"
+
 mdns-sd = "0.21.3"
 png = "0.18.1"
 minifb = { version = "0.28.0", optional = true }
