@@ -312,3 +312,74 @@ flash and a reflash:
    the two.
 
 `.stack` unchanged at 27,952 after the fixes.
+
+### Flash 1 (`c223-selftest`, default + `http-selftest`): it booted, and it could not get online
+
+Boot, panel, store, the machine and the AP all came up - and the station never
+joined. Three attempts, every one of them *associated*, and then:
+
+```
+WARN - wifi: associated, but DHCP did not answer in 8 s
+WARN - wifi: the radio did not answer the attempt in 15 s
+WARN - wifi: associated, but DHCP did not answer in 8 s
+INFO - provision: joining -> portal
+```
+
+Two faults, and the second is one this project has already paid for once:
+
+1. **Eight seconds was under the measurement.** The capture logs of cards 227
+   and 233 have two or three five-second telemetry lines between the
+   "connected" line and the mDNS announcement, so **this mesh answers DHCP in
+   ten to twelve seconds**. `DHCP_WAIT` is 20 s now, and it is a window of the
+   firmware's own on top of the machine's 15 s rather than a share of it: the
+   machine's deadline exists so a *silent radio* still advances, and a radio
+   that has associated is not silent.
+2. **The retry called `connect_async` while still associated, and it hung** -
+   which is exactly the failure card 212 recorded on this bench ("without this,
+   `connect_async` was called while still associated and never returned"). The
+   DHCP timeout leaves the association up, so every retry walked into it.
+   `run_join` now drops any association it finds before configuring the radio,
+   and so does the re-associate after the soft-AP goes down.
+
+While in there: `ap_net_task` now runs the AP stack's `embassy-net` runner
+**only while the AP is up**. A runner polls its driver, and the soft-AP
+interface has nothing to poll for the months this device spends online; core 0
+also decodes thirty frames a second. `.stack` 27,952 -> 27,928 (the guard costs
+24 bytes).
+
+### Flash 2 (`c223-selftest2`, the same build corrected): green
+
+```
+provision: boot -> joining
+provision: action StartJoin { which: Stored, attempt: 1 }
+mdns: screeny-4a00a4.local -> 192.168.7.221 ...
+provision: joining -> online
+provision: action Announce
+```
+
+Joined from the store on the **first** attempt, announced, and streamed.
+
+* **Self-test, LAN pass: 20 of 20 right**, including card 222's twelve and card
+  233's eight, unchanged.
+* **Self-test, portal pass: 11 of 11 right.** The soft-AP is down on this
+  build, so the three captive probes correctly fall back to `404` - the
+  `302`-with-a-body half of that pair is the `start-in-portal` run below. The
+  rows that do not depend on the AP being up all pass: `GET /` is the **setup
+  form on the AP listener (1,297 bytes) and the status page on the LAN one
+  (6,950)**, `GET /setup` and `POST /setup` answer HTML on both, an oversize
+  form is `413`, `PUT /setup` is `405`, and a `Host: captive.apple.com` request
+  on the **LAN** listener is a plain `404` - which is the row that proves the
+  redirect is a property of the listener and not of a header.
+* `GET /api/v1/wifi` -> `{"state":"connected","ssid":"<ssid>","ip":"192.168.7.221","reason":null}`
+  (the self-test's own redaction; the firmware still says an SSID out loud in
+  exactly one line, the WiFi task's "connected").
+* **The frame path did not notice.** Over the self-test window, with 31
+  requests through the real router and the real handlers: `31 fps rx, 31 fps
+  shown, decode drops 0, rejected 0, render max 3301 us` - the same numbers as
+  fw 0.4.3 with no server running.
+* The 60 s line: `stack: core 0 main high-water 13056 of 22552 bytes, 8472
+  free`; core 1 `1872 of 6144`. **The demand has not moved** - 13,056 is the
+  boot path, the same number cards 227 and 233 measured - and the whole HTTP
+  route table plus the portal pass added *nothing* to it (`13056 -> 13056`
+  across the in-memory run). The headroom is 8.3 KB rather than 233's 14.6 KB
+  because that is what the AP side cost.

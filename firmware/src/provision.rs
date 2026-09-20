@@ -368,9 +368,18 @@ pub fn ap_stack(seed: u64) -> (Stack<'static>, Runner<'static, Interface>) {
     )
 }
 
+/// The AP stack's `embassy-net` runner, **only while the AP is up**.
+///
+/// A runner polls its driver, and the soft-AP interface's driver has nothing
+/// to poll for the months at a time this device spends online. Starting it
+/// with the AP and stopping it with the AP keeps core 0's executor - which
+/// also decodes thirty frames a second - out of that loop entirely.
 #[embassy_executor::task]
 pub async fn ap_net_task(mut runner: Runner<'static, Interface>) -> ! {
-    runner.run().await
+    loop {
+        wait_ap(true).await;
+        select(runner.run(), wait_ap(false)).await;
+    }
 }
 
 /// Block until the AP is (or is not) up. See [`AP_POLL`].
@@ -589,8 +598,23 @@ impl Held {
 /// with `ScanMethod::AllChannels` a scan alone is ~2 s.
 const ATTEMPT_WAIT: Duration = Duration::from_millis(Timing::SPEC.join_attempt_ms as u64);
 
-/// How long DHCP is given once the association is up, inside the same attempt.
-const DHCP_WAIT: Duration = Duration::from_secs(8);
+/// How long DHCP is given once the association is up.
+///
+/// **Twenty seconds, and it is measured on this bench, not chosen.** The first
+/// flash of this card used eight and the device could not get online at all:
+/// the association came up every time and then the attempt was abandoned. The
+/// capture logs of cards 227 and 233 say why - two or three five-second
+/// telemetry lines pass between the "connected" line and the mDNS
+/// announcement, so **this mesh answers DHCP in ten to twelve seconds**, and
+/// eight was under the measurement.
+///
+/// It is a window of the firmware's own, on top of the machine's
+/// [`ATTEMPT_WAIT`], rather than a share of it. The machine's fifteen seconds
+/// exist so that "a silent radio still advances" (`crates/provision`'s
+/// `join_attempt_ms`), and a radio that has associated is not silent: what is
+/// slow is the other end. Sharing one budget would have meant a join that
+/// works on this network failing at thirteen seconds.
+const DHCP_WAIT: Duration = Duration::from_secs(20);
 
 /// Feed the machine one event, carry nothing out: the actions are returned.
 fn step(ev: Event<'_>, now_ms: u32) -> screeny_provision::Actions {
@@ -849,6 +873,17 @@ impl Driver {
             self.apply_actions(acts, controller).await;
             return;
         };
+        // **Never call `connect_async` while still associated.** It does not
+        // return, and card 212 paid for that on the bench recovering a device
+        // whose stored pair had gone bad. It is not a theoretical case here: a
+        // retry after "associated, but DHCP did not answer" arrives with the
+        // association still up, which is exactly what the first flash of this
+        // card did - attempt 1 timed out in DHCP and attempt 2 then hung for
+        // the whole of `ATTEMPT_WAIT`. `NotConnected` means there was nothing
+        // to drop.
+        if controller.is_connected() {
+            let _ = controller.disconnect_async().await;
+        }
         self.sta = cfg;
         crate::set_current_ssid(w.ssid.as_bytes());
         let ch = Self::channel(controller);
@@ -1027,6 +1062,9 @@ pub async fn provision_task(
         }
         // A mode change restarted the radio under an online station.
         if core::mem::take(&mut d.reassociate) {
+            if controller.is_connected() {
+                let _ = controller.disconnect_async().await;
+            }
             let _ = with_timeout(ATTEMPT_WAIT, controller.connect_async()).await;
             continue;
         }
