@@ -228,3 +228,48 @@ goes 20.8% to 13.6%. clocks-numerals is not a stable benchmark and should not be
 one: its cost depends on whether it is mid-dance, and two before/after pairs measured
 19.0% -> 3.6% and 12.8% -> 11.3%. The honest summary is **the render half of the cost is
 halved; the encode half is unchanged**, which is what halving the render rate should do.
+
+### Verified against a running studio, and in a browser
+
+Loopback only, everything under `timeout`, nothing left behind.
+
+**An old state file loads.** A v5 file written the way a deployed studio writes one, with
+`"fps": 60.0` on its player. The studio said, once, on stderr and on `/api/v1/status`:
+
+```
+studio: state: `fps` (60.0) is not a setting any more: there is one rate, 30 fps,
+which is the panel's own (card 161) - rendering above it only fed the link frames
+it folded away
+```
+
+`state.recovered` is `null` - **no migration, no backup copy**, the state directory holds
+only `state.json` - and everything else in the file survived: patch `plasma`, `scale`
+2.5, speed 0.75, the output block, the panel it was aimed at, `on: true`. The next save
+rewrote the file as v5 without the `fps` key.
+
+**Old request bodies are accepted.** Against that studio:
+`POST /set_playback {"paused":false,"speed":0.75,"fps":60}` -> 200, paused and speed
+applied, `fps` back as 30. `POST /player/set {"device":"515151","seed":99,"fps":45}` ->
+200, seed 99 applied, `fps` back as 30.
+
+**Steady state.** `frames_offered` 1071, `frames_sent` 1071, `frames_coalesced` **0**,
+`frames_dropped` 0; the link at 30 fps and the simulator's interarrival at 33 ms.
+
+**The page**, in Chrome against the same studio:
+
+| | |
+| --- | --- |
+| `/` | `#fps`, `#fps-slider` and `#fps-stops` all absent. The Time section reads **Pause / Restart / Speed 1.00x** and nothing else. The slider labels left are the patch's parameters, Level, Speed, the two limiter ones and the two View ones - no rate among them. |
+| the readouts | Rate is still there and is the *measured* rate: the frame packet's own field read 30.07, which is what it would show. |
+| the chip | `bench · live · 30 fps` - the **link's** rate (spec 6.9), untouched by this card. |
+| `/panel` | no rate control either; `1,605 sent, 0 folded, 0 lost`, `Rendered 1,410 frames at 30 fps`, and card 164's network rows all present and unbothered. |
+| the controls that stayed | Pause toggled `state.paused`, the Speed slider moved it to 2.00x and back to 1.00x, and `state.fps` read 30 at every step. |
+| console | clean - no messages at all, on either screen, across a reload. |
+| 390 px / 1400 px | card 198's same-origin iframe harness. `/`: one column at 390 (stage 390, inspector 390, meters 390), and at 1400 the wide layout (stage 1060, inspector 340, meters 1060), `matchMedia('(min-width: 1100px)')` matching as it should. `/panel`: one column at 390, two at 1400. `scrollWidth === clientWidth` on all four - no horizontal scroll. |
+
+**Honestly, what could not be checked**: the extension drives a window that is genuinely
+in the background, so `document.hidden` was `true`, `requestAnimationFrame` never ran and
+the canvas stayed black - the same limitation cards 120, 170 and 198 recorded. So the
+Rate readout was read from the frame packet the page decodes rather than off the screen,
+and the picture itself is the owner's glance. No hardware, no LAN, no serial port, no
+camera were touched.
