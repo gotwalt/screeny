@@ -177,3 +177,15 @@ value that would mean the feature had broken - a held single change costs
   this card can reach it. Written up as card 117 rather than left unsaid; the
   failing assertion was not captured, which is the first thing to fix if it
   happens again.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Reviewed the `ws.rs` diff (the `Gate`, its three edges, `skip_own`) and merged `--no-ff`.
+Root `cargo test --release --no-fail-fast` on merged `main`: 719 passed, 1 failed -
+`crates/screeny/tests/embed.rs::reconnection_can_be_turned_off`, which this card does not
+touch. It panicked in `sim_pair` at "sim starts": the test stops a simulator and starts a
+second on the *same* port pair, and two other workers' worktrees were running the same suite
+on this machine at that moment, so another process can take the freed port in between.
+Re-run alone three times: 19/19 each time. A bench artefact of parallel workers, the same
+family as card 117's soak flake; noted there. Not yet deployed to workbench: it goes with the
+next batch (102, 141).

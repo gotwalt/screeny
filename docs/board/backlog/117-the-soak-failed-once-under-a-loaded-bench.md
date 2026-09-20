@@ -54,3 +54,12 @@ The soak is run enough times under a deliberate load to say something honest
 about its flake rate, and a failure now names the property and the number.
 
 ## Log
+
+### Note from the orchestrator (2026-09-20)
+
+A second one of the same family, seen once while merging 196 with two other worktrees
+running the suite: `crates/screeny/tests/embed.rs::reconnection_can_be_turned_off` panicked
+in `sim_pair` ("sim starts"). Those tests stop a simulator and start another on the *same*
+port pair; a parallel run of the same suite in another worktree can take the port in
+between. 19/19 three times when run alone. Worth the same treatment here: a retry with a
+bounded wait on the re-bind, and a message on the `expect` that says which port.
