@@ -682,3 +682,16 @@ workers' buffers); `link_state()` and an owned screen description belong in
 `crates/provision` (the firmware and the simulator each carry a copy today); the
 simulator should serve the setup page so its HTML has a test; re-announce mDNS when the
 station's address changes; `Timing` should model the DHCP phase (this mesh takes 10-12 s).
+
+**Orchestrator, 2026-09-20 later: the UDP suite is green on 0.5.0.** The owner turned the
+Mac's WiFi (en0) off, leaving wired en5 as its only interface on the subnet. Baseline
+first: `ping` to the router, 40 of 40 answered, max 1.3 ms (earlier the same day: 24
+timeouts in 80 s). Panel released from the Studio, `screeny stats` said HOLD then IDLE,
+then `screeny-probe --addr 192.168.7.221 conformance --slow`, first attempt:
+**60 passed, 0 failed, 4 skipped** (the usual four: three loopback-only oversize rules
+and the `--cap-probe` brightness rule). Panel given back; the Studio was streaming at
+30 fps with zero drops within seconds, device uptime 5 h 35 min across all of it. So the
+earlier failures were this Mac's two-interfaces-on-one-subnet path, not the firmware.
+Lesson for the bench: with en0 and en5 both up on 192.168.7.0/24 this Mac's path stalls
+for seconds at a time; turn WiFi off before conformance or flashing sessions.
+**Still open: the phone test.**
