@@ -347,3 +347,29 @@ to lint the script is removed too. Left behind on purpose: `screeny-studio:porta
 (491 MB) and the BuildKit cache mounts, which are what make the next build 1.2 s
 instead of 54 s. The `screeny-sim` used for the streaming test was bounded with
 `--exit-after 60` and exited on its own.
+
+### Orchestrator: merged, pushed, deployed to workbench (2026-09-19 21:00 PDT)
+
+Merged to `main`. The owner allowed pushing `main` to the private `origin` for deployment;
+before the first push every git object and commit message was scanned for the real WiFi
+values (read from the env file, never printed): zero hits. `git push origin main`, repo
+confirmed PRIVATE. Then `tools/deploy-workbench.sh` (GitHub route), exit 0: cloned into
+`~/src/screeny`, image built natively on x86_64 (cargo 40 s - the step QEMU could not do),
+`healthz: ok after 1s`.
+
+The three checks, all good:
+- (a) `docker exec screeny-studio screeny discover` finds `screeny-4a00a4` at
+  192.168.7.221:49374 - mdns-sd coexists with the host's avahi in a host-network container.
+- (b) `vulkaninfo --summary`: `Intel(R) Graphics (RPL-P)`, integrated, Mesa driver; and with
+  `overland` playing the Studio logs `screeny-art: gpu=Intel(R) Graphics (RPL-P) backend=Vulkan`.
+- (c) `date` in the container: PDT (the host is Etc/UTC). Runs as uid 10001 with group 993.
+
+Streaming to the real panel from workbench (`set_piece overland`, `set_panel on`): link `up`,
+30 fps, indexed exact 367 / fallback 0, `pal8-lz` ~800 B; device LIVE, 30-31 shown/s, all
+error counters 0. Container: healthy, `restart: unless-stopped`, docker enabled at boot,
+~16% of one core, 291 MiB. UI reachable from the bench Mac at http://workbench.local:8787/.
+
+**Still open before this card is done**: the card's acceptance is "after a host reboot the
+panel shows the configured piece with nobody logging in". That needs card 106's state store
+(today a restart comes back with the panel switch off), and rebooting workbench is the
+owner's call - it hosts his other services. Redeploy after 106 merges, then ask.
