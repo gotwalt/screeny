@@ -13,8 +13,9 @@ use std::time::Duration;
 /// The patches that read `Ctx::now`, and a run long enough to have told the
 /// time: the numerals patch dances onto the minute it is born on (about 9-16
 /// s), the dials patch gathers over the six seconds before the minute and
-/// holds it for eight.
-const TELLERS: [(&str, f64); 2] = [("clocks-numerals", 20.0), ("clocks-dials", 15.0)];
+/// holds it for eight, and `vesta` is born reading the time and holds it until
+/// the minute turns (card 155).
+const TELLERS: [(&str, f64); 3] = [("clocks-numerals", 20.0), ("clocks-dials", 15.0), ("vesta", 3.0)];
 
 /// Every frame of the run is rendered (`warmup == at`): a clock has to be
 /// watched from its first frame, which is what `--time` makes the default.
