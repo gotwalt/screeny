@@ -145,3 +145,35 @@ above, now with bounds), `a_single_change_still_arrives_at_once`,
 `the_value_a_drag_ended_on_always_arrives` (three drags, each ending somewhere
 else). `tests/api.rs::two_browsers_see_each_others_changes` was not edited and
 still passes as written.
+
+### Timing tests that do not flake (card 093's lesson)
+
+Every bound here is on **the pacer's own schedule**, with the scheduler's share
+of the answer left far outside it: 20 a second is one message every 50 ms, so
+three seconds cannot hold more than 60 however loaded the bench is, and the
+test allows 66. The two latency bounds (250 ms for a single change, 500 ms for
+the end of a drag) are ten times the measured figure and an order below the
+value that would mean the feature had broken - a held single change costs
+50 ms at least, and a dropped last change never arrives at all.
+
+- `tests/pacing.rs` run **10 times in a row**: 3 passed, 0 failed, every time.
+- Run **once while `cargo build --release --workspace` was building** into a
+  scratch target directory (load average 20): 3 passed, and the numbers did
+  not move - 19.3/s, 8038 B/s, a single change in 0.45 ms worst of ten, the
+  end of a drag in 27-32 ms. The load build was killed and its target
+  directory (622 MB) removed.
+
+### Handover
+
+- Root `cargo test --release --no-fail-fast`: **720 passed, 0 failed**.
+- `cargo clippy --workspace --all-targets`: silent.
+- `crates/studio/README.md`: the socket section now says state is paced too and
+  what it measured, and the test table has a `tests/pacing.rs` row.
+- One thing worth saying out loud: on the *first* root run,
+  `tests/soak.rs::the_server_survives_a_bounded_soak` failed while another
+  worker's `cargo clippy` was saturating the machine, and has not failed since
+  - it passed alone, it passed under a deliberate load build, and it passed on
+  the clean root run above. The soak opens no WebSocket at all, so nothing in
+  this card can reach it. Written up as card 117 rather than left unsaid; the
+  failing assertion was not captured, which is the first thing to fix if it
+  happens again.
