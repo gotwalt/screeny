@@ -175,3 +175,50 @@ is not a number to write into a region card 241 will read across one).
 `tools/fw-size.sh`, default build: `.stack` **27,376 -> 27,096** (`.data` +224, `.bss`
 +56 for the one `AtomicU32` nesting guard; the breadcrumb itself costs nothing here).
 `--features panic-test`: 27,032. Floor 24,576.
+
+### Step 3: the boot line, the API shape, the page
+
+**The boot line**, from `panic::boot()`, before anything that can fail, so that a panic in
+the boot path is counted like any other:
+
+```
+boot: #2 since power-on, reset reason software (the boot before it started with power_on)
+boot: last panic was boot #1 at uptime 20123 ms, main.rs:1034, 1 in a row (1 panic(s) since power-on)
+```
+
+**`crates/device-api` (shared, additive).** `StatusReply` gains three fields at the end -
+`boot_count`, `panic_count` and `last_panic: Option<PanicRecord>` - and `PanicRecord` is
+`{uptime_ms, boot, file, line, consecutive}`. `file` is a `String<12>`: the base name, not
+the path, because `tests/common/mod.rs` refuses a golden containing `/` (picoserve escapes
+it as `\/` and the other two writers do not), and twelve bytes is what three words of a
+breadcrumb hold. `"provision.rs"` is exactly twelve.
+
+**All three are `#[serde(default)]`, and that is load-bearing rather than tidy.** The
+first `cargo test` after adding them failed in `crates/studio/tests/device_status.rs`:
+its canned reply is a firmware-**0.4.2**-shaped body, and serde refused it with
+`missing field 'boot_count'`. That is not a test being fussy - it is the real
+compatibility case, because a Studio built from this commit still has to read the panel
+running 0.5.1 while it is being flashed. Spec §8.6 says "a new optional field does not
+bump `api`", which is only true if the reader tolerates the field's absence. With the
+`default`s the Studio test passes **unchanged and `crates/studio` is not touched by this
+card at all**.
+
+Golden files: `status.json` and `status_portal.json` gain the three fields, and
+`status_panicked.json` is new - the same device having panicked once and rebooted by
+itself, which is the shape the Studio will read to tell "it restarted for a reason" from
+"somebody pulled the plug". `tests/sizes.rs`: `StatusReply::MAX_JSON_LEN` 1018 -> **1142**,
+a real reply 364 -> **434** bytes, and one carrying a panic record **520**; the sanity
+check now pins both.
+
+**`crates/sim` (shared, additive):** `boot_count: 1, panic_count: 0, last_panic: None`, with
+a comment saying why that is the honest answer for a process whose panics the operating
+system reports. Nothing in the simulator reads them back.
+
+**The page** gets one row, `panic`, server-rendered and repainted by the script:
+`none in 3 boot(s) since power-on`, or
+`net.rs:321 at 94 s, boot 1 of 2 (1 in a row, 1 total)`. The generic paint loop skips
+`last_panic` (it is an object, and `typeof null` is `"object"` too), so the row has its own
+line in the script.
+
+`.stack` **26,392** after this step (the `StatusReply` grew, and it is held in a handler
+future).

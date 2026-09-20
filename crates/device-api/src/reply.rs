@@ -18,8 +18,8 @@ use crate::enums::{
     WifiState,
 };
 use crate::text::{
-    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, SsidText, MAX_FW_LEN, MAX_ID_LEN,
-    MAX_IP_LEN, MAX_NAME_LEN, MAX_SSID_LEN,
+    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, SsidText, MAX_FW_LEN,
+    MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN, MAX_SSID_LEN,
 };
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN, MIN_I8_LEN};
 
@@ -38,6 +38,46 @@ pub const MAX_NETWORKS: usize = 16;
 // GET /api/v1/status
 // ---------------------------------------------------------------------------
 
+/// What the device's panic breadcrumb says about the last panic (card 243).
+///
+/// The device keeps this in RTC memory, which survives a reset and is cleared
+/// only by losing power - so `last_panic` is "since this device was last
+/// unplugged", not "since this boot". A panic prints a full backtrace on the
+/// serial port and then reboots; this is the part of that event a reader who
+/// was not attached to the UART can still see, over HTTP, minutes or days
+/// later.
+///
+/// It is deliberately small. `file` is a base name and `line` a line number,
+/// which is enough to say *which* bug; the backtrace is where the exact answer
+/// lives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanicRecord {
+    /// Uptime in milliseconds when it panicked.
+    pub uptime_ms: u32,
+    /// Which boot panicked. `1` is the first boot after power-on, and
+    /// [`StatusReply::boot_count`] is the boot answering now, so
+    /// `boot_count - boot` is how many boots ago it was.
+    pub boot: u32,
+    /// The base name of the source file, e.g. `"net.rs"`. Never empty: a panic
+    /// with no location on record reads `"?"`.
+    pub file: PanicFileText,
+    /// The line within it, or `0` when the panic carried no location.
+    pub line: u32,
+    /// How many panics in a row, each within a minute of a boot, this one
+    /// made. `1` is an isolated panic; a device that reaches the firmware's
+    /// crash-loop limit stops rebooting and says so on the panel.
+    pub consecutive: u32,
+}
+
+impl PanicRecord {
+    pub(crate) const MAX_JSON_LEN: usize = 1
+        + field("uptime_ms", MAX_U32_LEN)
+        + field("boot", MAX_U32_LEN)
+        + field("file", 2 + MAX_PANIC_FILE_LEN * ESCAPE_MAX)
+        + field("line", MAX_U32_LEN)
+        + field("consecutive", MAX_U32_LEN);
+}
+
 /// `GET /api/v1/status`: everything the status page and the Studio's device
 /// view show, in one request.
 ///
@@ -45,6 +85,11 @@ pub const MAX_NETWORKS: usize = 16;
 /// `fw_slot`, `fw_state`, `reset_reason`, `stack_free` and `store_errors`.
 /// `slot` from 007 is `fw_slot` here, so that all four firmware-health fields
 /// sort together and none of them is just "slot".
+///
+/// Card 243 adds the last three - `boot_count`, `panic_count` and
+/// `last_panic` - which are the device's RTC breadcrumb. They are additive and
+/// at the end: a reader that does not know about them is unaffected, which is
+/// what §8.6 means by "a new optional field does not bump `api`".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusReply {
     /// The API version, always [`crate::API_VERSION`]. First field, so a
@@ -96,6 +141,25 @@ pub struct StatusReply {
     /// Settings-store errors since boot. Non-zero means the `screeny`
     /// partition is unhappy and the status page should say so.
     pub store_errors: u32,
+    /// Boots since the device last lost power, including this one, from the
+    /// RTC breadcrumb (card 243). `1` on a device that has just been plugged
+    /// in; a number that keeps climbing is a device that keeps restarting.
+    /// `0` means the device does not keep one (the simulator).
+    ///
+    /// **`serde(default)`, like the two below.** §8.6 says a new optional
+    /// field does not bump `api`, and that is only true if a reader tolerates
+    /// its absence: a Studio built from this commit still has to read a panel
+    /// running firmware 0.5.1, which has never heard of these three.
+    #[serde(default)]
+    pub boot_count: u32,
+    /// Panics recorded since the device last lost power. See [`PanicRecord`].
+    #[serde(default)]
+    pub panic_count: u32,
+    /// The last panic, or `null` when there has been none since the device was
+    /// plugged in - which is the normal answer. Absent, on an older firmware,
+    /// means the same thing a `null` does: nothing is known about a panic.
+    #[serde(default)]
+    pub last_panic: Option<PanicRecord>,
 }
 
 impl StatusReply {
@@ -121,7 +185,10 @@ impl StatusReply {
         + field("fw_slot", FwSlot::MAX_JSON_LEN)
         + field("fw_state", FwState::MAX_JSON_LEN)
         + field("reset_reason", ResetReason::MAX_JSON_LEN)
-        + field("store_errors", MAX_U32_LEN);
+        + field("store_errors", MAX_U32_LEN)
+        + field("boot_count", MAX_U32_LEN)
+        + field("panic_count", MAX_U32_LEN)
+        + field("last_panic", PanicRecord::MAX_JSON_LEN);
 }
 
 // ---------------------------------------------------------------------------

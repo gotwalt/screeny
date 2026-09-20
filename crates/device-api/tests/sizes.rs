@@ -86,7 +86,9 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     // assume every byte of every name escapes to six characters, which never
     // happens, so nobody should read `MAX_JSON_LEN` as "what a status reply
     // costs on the wire". The real one, with a name and an SSID somebody
-    // would actually type, is 364 bytes against a bound of 1018.
+    // would actually type, is 434 bytes against a bound of 1142 (it was 364
+    // against 1018 before card 243's three breadcrumb fields; a status reply
+    // that *carries* a panic record, `status_panicked.json`, is 520).
     let real = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/golden/status.json"
@@ -95,8 +97,21 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     let value: StatusReply = serde_json::from_str(&real).unwrap();
     let on_the_wire = wire(&value).len();
     assert!(
-        on_the_wire < 400,
+        on_the_wire < 500,
         "a real status reply is {on_the_wire} bytes"
+    );
+    // The one that carries a panic record is the longest a real device sends,
+    // and the firmware's self-test buffer is sized from it.
+    let panicked = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/golden/status_panicked.json"
+    ))
+    .unwrap();
+    let panicked: StatusReply = serde_json::from_str(&panicked).unwrap();
+    let panicked = wire(&panicked).len();
+    assert!(
+        panicked < 600,
+        "a status reply carrying a panic record is {panicked} bytes"
     );
     assert!(
         StatusReply::MAX_JSON_LEN > on_the_wire * 2,

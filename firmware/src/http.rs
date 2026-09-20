@@ -70,7 +70,7 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    AcceptedReply, PanicRecord, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
     IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
@@ -568,6 +568,11 @@ fn wifi_state() -> WifiState {
 /// The `CORE` lock is held for the three reads that need it and dropped before
 /// anything is serialised, let alone written to a socket.
 async fn status() -> StatusReply {
+    // Card 243. A dozen volatile reads of RTC memory, no lock and no flash, so
+    // it is read per request rather than cached: the panic record does not
+    // change while the device runs, but reading it here is cheaper than a
+    // second copy of it that could disagree.
+    let crumb = crate::panic::report();
     let (name, idle_mode, state) = {
         let mut guard = CORE.lock().await;
         let core = guard.as_mut().expect("core exists");
@@ -602,6 +607,15 @@ async fn status() -> StatusReply {
         fw_state: fw_state(),
         reset_reason: reset_reason(),
         store_errors: store::FAILURES.load(Ordering::Relaxed),
+        boot_count: crumb.boots,
+        panic_count: crumb.panics,
+        last_panic: crumb.last.map(|p| PanicRecord {
+            uptime_ms: p.uptime_ms,
+            boot: p.boot,
+            file: text::text(p.file()).unwrap_or_default(),
+            line: p.line,
+            consecutive: p.consecutive,
+        }),
     }
 }
 
@@ -922,6 +936,30 @@ impl core::fmt::Display for Page {
             format_args!("{} / {}", slot_word(s.fw_slot), state_word(s.fw_state)),
         )?;
         row(f, "reset", format_args!("{}", reset_word(s.reset_reason)))?;
+        // Card 243, one line: the whole breadcrumb. "none" is the answer this
+        // row should almost always give, and the boot count beside it is what
+        // says whether a device has been restarting quietly.
+        match &s.last_panic {
+            None => row(
+                f,
+                "panic",
+                format_args!("none in {} boot(s) since power-on", s.boot_count),
+            )?,
+            Some(p) => row(
+                f,
+                "panic",
+                format_args!(
+                    "{}:{} at {} s, boot {} of {} ({} in a row, {} total)",
+                    p.file,
+                    p.line,
+                    p.uptime_ms / 1000,
+                    p.boot,
+                    s.boot_count,
+                    p.consecutive,
+                    s.panic_count,
+                ),
+            )?,
+        }
         f.write_str(self.tail)
     }
 }

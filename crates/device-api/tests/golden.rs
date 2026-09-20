@@ -14,8 +14,8 @@ use screeny_device_api::enums::{
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
-    WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, SettingsReply, StatusReply,
+    TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::text::{ipv4_text, text};
@@ -45,12 +45,40 @@ fn status() -> StatusReply {
         fw_state: FwState::Valid,
         reset_reason: ResetReason::PowerOn,
         store_errors: 0,
+        boot_count: 1,
+        panic_count: 0,
+        last_panic: None,
     }
 }
 
 #[test]
 fn status_online() {
     check("status", &status());
+}
+
+#[test]
+fn status_after_a_panic() {
+    // Card 243: the same device, having panicked once and rebooted by itself.
+    // `reset_reason` is `software` because that is all the ESP32's register
+    // says about a panic; the breadcrumb is what makes it a panic, and says
+    // where. This is the shape the Studio reads to know a panel restarted for
+    // a reason rather than because somebody pulled the plug.
+    let s = StatusReply {
+        uptime_ms: 42_000,
+        boot_id: 2_244_121_910,
+        reset_reason: ResetReason::Software,
+        boot_count: 2,
+        panic_count: 1,
+        last_panic: Some(PanicRecord {
+            uptime_ms: 94_312,
+            boot: 1,
+            file: text("net.rs").unwrap(),
+            line: 321,
+            consecutive: 1,
+        }),
+        ..status()
+    };
+    check("status_panicked", &s);
 }
 
 #[test]
@@ -71,6 +99,7 @@ fn status_in_the_portal() {
         fw_state: FwState::PendingVerify,
         reset_reason: ResetReason::Software,
         store_errors: 2,
+        boot_count: 3,
         ..status()
     };
     check("status_portal", &s);
@@ -255,6 +284,7 @@ fn the_golden_directory_has_no_strays() {
     let known: &[&str] = &[
         "status",
         "status_portal",
+        "status_panicked",
         "telemetry",
         "networks",
         "wifi_connected",

@@ -19,5 +19,8 @@
   "fw_slot": "ota_1",
   "fw_state": "pending_verify",
   "reset_reason": "software",
-  "store_errors": 2
+  "store_errors": 2,
+  "boot_count": 3,
+  "panic_count": 0,
+  "last_panic": null
 }

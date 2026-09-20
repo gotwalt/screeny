@@ -381,6 +381,16 @@ fn status(shared: &Shared) -> Response {
         fw_state: ident.fw_state,
         reset_reason: ident.reset_reason,
         store_errors: ident.store_errors,
+        // Card 243's RTC breadcrumb. The simulator has no RTC memory and no
+        // panic path - a panic here is a process that stops, and the operating
+        // system is the one that says so - so the honest answer is "this is my
+        // first boot and nothing has crashed": `boot_count` 1 and no record.
+        // Nothing in the simulator reads these back; they exist so that a
+        // client written against the sim meets the same fields the device
+        // sends.
+        boot_count: 1,
+        panic_count: 0,
+        last_panic: None,
     };
     ok_json(&reply)
 }
