@@ -53,8 +53,8 @@ eye), DDP proxy, control-channel auth, multi-device.
 
 ## Running workers
 
-One card per worker, each in its own git worktree (`isolation: worktree`), the
-strongest model available for anything non-trivial. What has worked:
+One card per worker, each in its own git worktree (`isolation: worktree`). The owner
+wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
 
 - **A card is a contract**: Goal, Context (with file paths and what to read first),
   Deliverables (exact paths), Acceptance, Log. Put findings from earlier cards in the
