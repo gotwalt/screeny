@@ -151,3 +151,29 @@ from `t` rather than from when this one should have ended cost a frame a card - 
 fifth card of `09:59 -> 10:00` the modules were visibly out of step for no reason. Fixed:
 each landing hands the clock on at `began + fall`, and `step` retires every card that
 has landed since the last frame.
+
+**Step 3: looked at it.** PNGs are under the orchestrator's scratchpad,
+`.../scratchpad/vesta/` (not committed):
+
+| file | what | judgement |
+|---|---|---|
+| `01-settled-2112.png` | settled on 21:12, scale 12 | Reads at a glance. The seam is two black rows on the panel's own centre line and it is the signature it was supposed to be. |
+| `02-numerals-contact-sheet.png` | all ten numerals (01:23 / 04:56 / 07:08 / 09:09) | All ten distinct. `1` has a foot and a flag and does not look lonely; `4` is open-topped, `7` has no crossbar, `6` and `9` have spines that leave the bowl, `0` is a stadium against `8`'s pinch. |
+| `03-flap-five-angles.png` | the five angles, `flip=0.6` | **This is the one that matters and it reads.** 30: the old top halves squashed and dimmed. 61: a lit bar near the module top with the new top half showing above it. 97: the bar has travelled to the axle, `10:00` is readable in the top halves and `09:59` still in the bottom ones. 127: the card is below the axle showing the new bottom halves at half light, bar at its leading edge. 162: nearly landed. Not a wipe, not a squash - a card falling. |
+| `04-first-card-at-30fps.png` | one card at the default `flip`, all seven frames the panel gets | The same read in six frames. Every frame moves. |
+| `05-halftone-off-on.png` | `fill` 0 against 0.5 | Halves the light (APL 0.95% -> 0.48%) and keeps the size. The strokes do become a screen texture; that is what it is for. |
+| `06-size-full-and-modest.png` | 11:11 at `size` 1 and 0.7 | Full size is the design. 0.7 is there for comparison and for an owner who disagrees. |
+| `07-four-modules-mid-flip.png` | 09:59:59 + 4 frames, scale 12 | The `:59 -> :00` moment: four cards in the air, `10:00` arriving above, `09:59` still below. |
+| `08-tilt-0-16-34-mid-flip.png` | the same frame at tilt 0, 16, 34 | 0 is flat-on and the card goes edge-on exactly at 90. 16 (the default) puts the edge-on moment at the axle with the most to look at. 34 is a viewer standing over the board; also legible, more theatrical. |
+| `09-stroke-weight-16-20-24.png` | `weight` 1.6 / 2.0 / 2.4 at 18:14 | 2.4 closes up `8`'s counters. 1.6 is elegant but starts to break up on the dot rendering. 2.0 is the default. |
+| `10-across-the-room.png` | 04:56, 17:09, 14:47, 23:38 at scale 4 | The distance test. Every one reads instantly; `4`, `7`, `9` and `6` are unmistakable. |
+| `11-cascade-through-6-7-8-9.png` | the minutes' tens cascading 5 -> 6 -> 7 -> 8 -> 9 -> 0 | The cascade works and the four modules land at different times, which is the point of it. |
+
+**Measured**, at the defaults, from the snapshot's own stats line: resting APL **0.95%**,
+peaking at **1.23%** with four modules mid-flip; **460-620 bytes** of 1464, codec
+`pal8-lz`, **exact** on every frame looked at (settled, mid-flip, halftone, size 0.6,
+hue 40, light 220). 15-25 distinct colours in practice out of a 32-entry palette, so
+the fixed-rate rung is never needed.
+
+`cargo test --release -p screeny-art`: 86 lib + 4 sender + 3 pinned-time, all green.
+`cargo clippy --workspace --all-targets`: silent.

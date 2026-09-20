@@ -323,6 +323,92 @@ coverage is; a ramp at constant OKLCH chroma is a different colour from the ink
 dimmed (light blue cannot hold much chroma), and edge pixels used to fall onto
 the other hand's ramp. There is a regression test.
 
+## Vesta: a split-flap night clock (`patches/vesta/`, id `vesta`)
+
+`HH:MM` on four split-flap modules and a colon, red on black, for a dark room
+(card 155). CPU-rendered through `Frame::supersample`, one ramp of one hue plus
+black - 32 colours, so every frame is exact on the wire.
+
+**The layout spends the panel.** A module is 14 x 30 LEDs with its axle on the
+panel's own centre line (row 16, which is a pixel boundary, so a seam of 2 is
+exactly two black rows). The four centres are at x 8, 23, 41 and 56: one LED of
+true black inside each pair, a 4-LED colon in the middle, columns 1..63. A
+numeral is 12 x 22 LEDs of ink inside that - bowls are true circles of radius 5
+so two stack exactly, and `1` is given a foot so it does not stand alone in its
+module. A falling card needs rows to foreshorten through: a 15-row half-card
+passes 15, 14, 12, 9, 5 and 1 rows on its way down, where a 6-row one would be
+a blink.
+
+**One cosine is the whole projection.** `squash = cos(theta - tilt) / cos(tilt)`
+foreshortens the falling card; its *sign* says which face is towards us, because
+the card's normal dotted with the view direction is the same cosine; and its
+zero is where the card goes edge-on, which `tilt` moves past 90 degrees because
+a viewer above the board sees the front of a card for longer. It is 1 at rest,
+so a still module is a rectangle. Perspective widens the free edge by about a
+quarter as it passes edge-on (`flap::DEPTH`); the module's window clips it, as a
+real bezel would.
+
+**What makes it read as a card and not a wipe**, in order of how much each is
+worth: the next numeral's top half standing behind the falling one; the lit free
+edge, brightest exactly when the face has nothing left to show; the face dimming
+as it turns out of the light; and the card's shadow, which runs 1-2 LEDs *ahead*
+of it down the plate below because the light sits below the eye - put the light
+above and the shadow hides under the card and buys nothing.
+
+**The fall is gravity.** `theta'' = k sin theta` with the drum's own speed as
+the initial condition (`flap::PUSH`), integrated once and inverted into a table.
+At the default `flip` of 0.2 s the six frames the panel gets are 0, 13, 30, 52,
+84, 127 and 180 degrees: accelerating the whole way, with real motion in every
+one. A card released from balance instead of pushed spends half the fall in the
+first 30 degrees, which at 30 fps is three frames of nothing and then a slam.
+Landing has a hint of a settle and nothing more; a card does not ring.
+
+**Low light is few pixels at a moderate level** (card 102: large areas under
+sRGB 38 sparkle). The card bodies are true black, not dark grey. The hue is
+picked in OKLCH and normalised to a ray, and a channel that would land under
+sRGB 7 is turned off - OKLCH's gamut search stops just inside the boundary and
+leaves a thousandth of green behind at red, which is a second die lit in every
+numeral pixel. At the default hue the panel gets `(x, 0, 0)` and nothing else.
+Resting APL is **0.95%**, peaking at **1.23%** with four modules mid-flip;
+frames are 460-620 bytes, `pal8-lz`, exact.
+
+### Snapshots
+
+```bash
+# settled on 21:12
+cargo run --release -p screeny-art -- snapshot vesta --time 21:12 --out settled.png
+# the turn of four modules at once: 09:59:59 -> 10:00:00
+cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1667 --out flipping.png
+```
+
+The minute turns at engine `t = 31/30 = 1.0333` with `--time 09:59:59` (the
+snapshot steps at 30 fps and the first frame past 10:00:00 is frame 31), so a
+card is `n` frames into its fall at `--at (31 + n) / 30`. At the default
+`flip` of 0.2 that is six frames; `--set flip=0.6` stretches it to eighteen and
+gives the angles worth looking at:
+
+| flap at | `--at` | actual |
+|---|---|---|
+| ~30 deg | `--time 09:59:59 --at 1.2333 --set flip=0.6` | 29.7 |
+| ~60 deg | `--time 09:59:59 --at 1.3667 --set flip=0.6` | 61.4 |
+| ~90 deg | `--time 09:59:59 --at 1.4667 --set flip=0.6` | 97.2 |
+| ~120 deg | `--time 09:59:59 --at 1.5333 --set flip=0.6` | 127.5 |
+| ~150 deg | `--time 09:59:59 --at 1.6 --set flip=0.6` | 161.9 |
+
+(`the_snapshot_recipes_in_the_readme_land_where_they_say` checks that table.)
+
+`--warmup` defaults to the whole run under `--time`, which is what a clock
+needs; no `--seed`, because there is no randomness in the patch at all.
+
+### Parameters
+
+`light` (numeral level as an sRGB code, default 120 - card 102's sparkle floor
+is 38), `hue` (0 is pure red), `size`, `weight` (stroke, LEDs), `seam`, `flip`
+(a card's fall in seconds), `cascade` (flip through the numerals between, as a
+real module does - on), `tilt`, `fill` (halftone, off; 0.5 halves the light
+without shrinking anything), `pace`, `blink` (off: nothing in a bedroom should
+blink), `hours24`, `offset`.
+
 ## GPU and 3D patches
 
 GPU patches render through [wgpu](https://wgpu.rs) (`crates/art/src/gpu/`). It
