@@ -3,8 +3,11 @@
 //! One implementation, in [`screeny_panel::model`] (card 016), shared with the
 //! sender and the demos. `docs/design/generative-art-brief.md` section 5:
 //! sRGB -> linear -> quantise each channel to a fixed number of levels -> back
-//! to sRGB, with brightness applied in linear light because that is where a
-//! duty cycle lives.
+//! to sRGB, and then brightness as a scale on the emitted light, because on
+//! the device brightness is the length of the output-enable window and not a
+//! change to any pixel value (card 020, card 066). The window therefore shows
+//! the same number of duty steps at every brightness, just less light - which
+//! is what the panel does.
 //!
 //! The result is deliberately *not* what the sender sent. Anything that wants
 //! bit-exact pixels - every test in this crate, for instance - reads
@@ -65,5 +68,20 @@ mod tests {
         }
         assert_eq!(full.map(0), 0);
         assert_eq!(full.map(255), 255);
+        assert_eq!(Lut::new(panel_of(&model), 0).map(255), 0, "0 is black");
+    }
+
+    /// Card 066: the simulator dims the way the device dims. Half brightness
+    /// is half the light out of the same 64 duty steps, not half the steps.
+    #[test]
+    fn dimming_the_window_keeps_every_duty_step() {
+        let model = PanelModel::default();
+        let full = Lut::new(panel_of(&model), 255);
+        let half = Lut::new(panel_of(&model), 128);
+        let cap = Lut::new(panel_of(&model), 160); // the bench brightness cap
+        assert_eq!(full.distinct_levels().0, 64);
+        assert_eq!(half.distinct_levels(), full.distinct_levels());
+        assert_eq!(cap.distinct_levels(), full.distinct_levels());
+        assert!(half.map(255) < cap.map(255) && cap.map(255) < full.map(255));
     }
 }

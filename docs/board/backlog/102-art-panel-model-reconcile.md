@@ -49,3 +49,23 @@ Studio preview of the test card agrees with a camera capture of the panel showin
 same frames (capture by the orchestrator), to the eye, in the dark ramps.
 
 ## Log
+
+### Note from card 066 (2026-09-19)
+
+What the device's dimming actually is, in case it saves 102 the reading. The
+firmware quantises at full depth (`firmware/src/gamma.rs` is the sRGB EOTF and
+brightness is deliberately not in it) and then dims by shortening the
+output-enable window: `display::slots_for(b) = (b * 25 + 127) / 255` lit slots
+out of `MAX_OE_SLOTS = 25`, linear in duty and so linear in light. All 64 duty
+levels exist at every brightness; only the light goes away.
+
+Card 066 put that in `screeny_panel` as `MAX_OE_SLOTS`, `oe_slots(b)` and
+`oe_light(b)`, and `Lut::new` now quantises first and scales the emitted light
+after. So "dimmed by scaling" is not a thing the panel does at any brightness,
+and `crates/art`'s 32/16-level options are not a dim room - they are the old
+bug. If 102 wants "what a dim room looks like", it is 64 levels times
+`oe_light(brightness)`, not fewer levels. The pre-020 order is still available
+as `Lut::value_scaled` if a comparison is wanted.
+
+Also worth knowing for any brightness control in the studio: the control has 25
+steps, not 256, and brightness 1..=5 lights zero slots (card 136).
