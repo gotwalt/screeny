@@ -1,0 +1,4 @@
+# screeny: the one change from espflash's stock esp32 bootloader.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Same as espflash's own bootloader builds: no build date in the binary.
+# CONFIG_BOOTLOADER_COMPILE_TIME_DATE is not set
