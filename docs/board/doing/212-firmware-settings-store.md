@@ -177,3 +177,249 @@ credentials, then the failure idle screen with periodic retries (the portal is c
 therefore: flash a `bench-wifi` build once to seed the store, then flash the **default**
 build and watch it join from the store alone - which is also the card's acceptance and
 the state the device is left in.
+
+### What was built
+
+`firmware/src/store.rs` (829 lines) is the device half of `crates/settings`.
+`crates/settings` itself is **unchanged** - it needed no fix and got none.
+
+- **The partition table is read by a non-`async`, `#[inline(never)]` helper**
+  (`find_partition`). That is the whole trick for keeping card 200's 11 KB
+  accident from happening again: its 3072-byte buffer sits on a real stack frame
+  that is gone before the caller's first `await`, so it cannot become part of a
+  task future and therefore cannot become `.bss`. All that survives is the
+  32-byte `PartitionEntry` - which is also the only way the crate lets you get
+  back to a region later, since `FlashRegion`'s fields are `pub(crate)` and
+  there is no "build me a region from this offset and length".
+- **`Store` is built per operation, not held.** A `NorFlashRegion` borrows a
+  `FlashRegion` which borrows the `FlashStorage`, so a long-lived `Store` would
+  be a self-referential struct. Building one is a range check and a struct
+  literal (the map's cache is `new_uncached`), so this costs nothing.
+- **The "command channel" is one `AtomicU8` bitmask plus one `Signal`** - 1 byte
+  and ~12 bytes of `.bss`. A `Channel<Cmd, 4>` would have cost ~4x the command
+  size *and* its `try_send` would return `Full` in exactly the case where losing
+  the notification is unacceptable, because `note_dirty` is called from inside
+  the receiver's synchronous control handler and cannot block or fail. Two
+  changes to the same field coalesce, which is what the debounce wants anyway.
+- **Immediate vs debounced.** `SET_BRIGHTNESS` and `SET_IDLE` are debounced (3 s
+  of quiet, `screeny_settings::Debounce`) and their replies cannot report
+  `ERR_STORAGE`; a failed commit is logged and counted in `store::FAILURES`,
+  where card 222's status page can read it. `SET_NAME` and `SET_WIFI` are
+  written by `control_task` **before** it sends the reply, which is the only way
+  `ERR_STORAGE` can be honest; on failure the reply is rewritten as
+  `ERR_STORAGE` from the request's own opcode and `req_id`.
+- **Lock order.** Both `store_task` and `control_task` take `CORE` first,
+  release it, then take `STORE`; neither ever holds both. The store task reads
+  the live value (the `BRIGHTNESS` atomic, the receiver's `Core`) rather than
+  keeping a copy, so flash cannot disagree with the panel, and it drops the
+  `CORE` guard before the flash call so a sector erase is not also a lock hold.
+- **A counting `NorFlash` wrapper** sits under `BlockingAsync`, so "did this
+  write erase a sector?" is answered by the erase call itself rather than
+  guessed from a duration. It also gives card 063's acceptance ("a 60 s
+  brightness sweep costs a handful of writes") a number to read.
+- **`spike-ota` keeps its OTA half and loses its settings half** - the real
+  store replaces it. It now borrows the store's `FlashStorage` because
+  `FlashStorage::new` panics if called twice.
+- `display::DEFAULT_BRIGHTNESS` is now an alias of
+  `screeny_settings::DEFAULT_BRIGHTNESS`, as `crates/settings/README.md` asked.
+  `FW_VERSION` -> `0.3.0`.
+
+### `bench-wifi`, and proving that "off" means off
+
+`build.rs` checks `CARGO_FEATURE_BENCH_WIFI` and returns before it looks at the
+environment or either `wifi.env`, so with the feature off nothing is read. The
+`SSID`/`PASSWORD` constants are `#[cfg(feature = "bench-wifi")]`, so in a default
+build there is no name by which a credential could reach the binary.
+
+Checked, not just intended. With the **dummy** pair `Example-Wifi1` /
+`password9` exported in the environment:
+
+| build | occurrences of the dummy SSID in the ELF |
+|---|---|
+| `cargo build --release` | **0** |
+| `cargo build --release --features bench-wifi` | 1 |
+
+### Flash 1 - `bench-wifi,store-selftest` (`captures/card212-seed-selftest.log`)
+
+Booted, joined, 30 fps rx / 30 fps shown, zero drops. But **every store call
+returned `Corrupted`**, including the seed:
+
+```
+store: 'screeny' partition at 0x410000, 65536 bytes (16 pages)
+store: loaded schema Unreadable fallback 0b1111 error Some(Corrupted) | ...
+store: seeding failed: Corrupted
+selftest: counters before the reboot | commits 0 skips 0 failures 5 ...
+```
+
+Diagnosis: the `screeny` partition has **never been written**. 0x410000 is
+inside the region the stock Tidbyt image used, so the bytes there are neither
+`0xFF` nor a `sequential-storage` map, and the crate rightly refuses them. This
+is precisely the case the card describes: *a wrong settings partition is fixed
+in code with `erase_all`, not with `espflash erase-*`.*
+
+Worth recording that the failure was clean: `load` fell back to defaults, the
+device carried on, the panel stayed lit and the stream stayed at 30 fps with a
+dead store. That is the "never fails, never erases by itself" contract working.
+
+### The repair, and why it is narrow
+
+`store::repair` fires **only** on `SchemaState::Unreadable` + `StoreError::Corrupted`
+- the load could not read even the schema-version item, *after* `sequential-storage`
+had already re-run the operation through its own `run_with_auto_repair!` pass. A
+partly damaged map does not look like that; it comes back as defaults plus a
+`fallback` bitset and is left alone. Once per boot, before the panel is up, and
+nothing in the path reboots, so it cannot become a loop.
+
+### Flash 2 - the same features, with the repair (`captures/card212-repair-selftest.log`)
+
+```
+store: the 'screeny' partition does not hold a settings map ... Erasing it once, now.
+store: erase_all took 192917 us, 16 sectors
+store: loaded schema Blank fallback 0b1111 error None | name "" brightness 96 idle 0 | wifi none
+store: seeded the empty store from the build's credentials (Committed, 3452 us, 0 erases)
+```
+
+**Per-write timings, measured on the device, mid-stream at 30 fps:**
+
+| write | result | duration | sector erases |
+|---|---|---|---|
+| `erase_all` (64 KB, one-off repair) | - | 192,917 us | 16 |
+| seed credentials (SSID + PSK, 2 items) | Committed | 3,452 us | 0 |
+| `save_brightness` | Committed | 1,772 us | 0 |
+| `save_idle_mode` | Committed | 981 us | 0 |
+| `save_name` | Committed | 1,306 us | 0 |
+| `save_brightness`, same value again | **Skipped** | 647 us | 0 |
+| `save_name` (restore, pass 2) | Committed | 6,575 us | 0 |
+| `save_idle_mode` (restore, pass 2) | Committed | 1,250 us | 0 |
+
+Two surprises, both in our favour. **A single-item write costs ~1-7 ms, not the
+~8 ms research 006 estimated**, because `sequential-storage` appends a ~4-70
+byte item into an already-erased page - it does not rewrite a 4 KB page. And a
+**sector erase is ~12 ms, not ~50 ms**: 16 sectors in 193 ms. So the worst case
+this card was told to worry about is about four times cheaper than budgeted. No
+write in the whole run needed an erase at all; with 16 pages for a record of
+under 200 bytes, page recycling is a long way off.
+
+**What the panel and the stream did through the writes.** The telemetry line
+immediately after the four-write burst:
+
+```
+telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops stale 0 superseded 0
+  decode 0 rejected 0 gaps 0 | ia 33680 us jit 1162 us | decode 614 us (max 2227)
+  | render 3097 us (max 3207 window, 3962 boot) | state 1 codec 0x10 ...
+```
+
+`render` max over the whole burst was **3,243 us** against a ~3,100 us steady
+state - a 150 us blip, invisible. The costlier pair (the two pass-2 restores,
+6.6 ms + 1.3 ms back to back) did show up, and it is worth quoting because it is
+the honest worst case:
+
+```
+telemetry: 30 fps rx, 30 fps shown, 154 swaps/s | drops stale 0 superseded 1
+  decode 0 rejected 0 gaps 0 | ia 32947 us jit 9142 us | ... render 3086 us (max 7681 window ...)
+```
+
+One frame **superseded**, zero **decode** drops, still 30 fps shown. That is
+"drain the socket, newest wins" doing its job: a frame arrived while core 0 was
+inside the ROM write and a newer one replaced it. Core 1's first render after
+the unpark took 7.7 ms instead of 3.1 ms - one late refresh, no corrupt frame.
+Research 006's "do nothing special for a settings write" holds.
+
+**Settings survived the reboot** (the self-test's own verdict):
+
+```
+store: loaded schema Current fallback 0b0000 error None | name "selftest-212" brightness 111 idle 2 | wifi stored
+selftest: PASS 2, after the reboot - loaded name "selftest-212" brightness 111 idle 2; pass 1 wrote "selftest-212" 111 2
+selftest: all three settings survived the reboot: YES
+```
+
+and the telemetry after that boot reported `bright 111`, so the stored value
+reached the panel and not just the log. mDNS announced
+`selftest-212._screeny._udp.local` from the stored name, and the Studio kept
+streaming at 30 fps through the rename - so it is not discovering by instance
+name.
+
+### Flash 3 - the DEFAULT build (`captures/card212-default-from-store.log`)
+
+The acceptance the owner asked for. This binary contains no credentials at all:
+
+```
+store: loaded schema Current fallback 0b0000 error None | name "" brightness 111 idle 0 | wifi stored
+wifi: connected ...
+mdns: screeny-4a00a4.local -> 192.168.7.221 as screeny-4a00a4._screeny._udp.local port 49374 (10 txt keys)
+telemetry: 30 fps rx, 30 fps shown, 155 swaps/s | drops ... decode 0 ... | bright 111 | heap 45540/98304
+```
+
+It joined from flash alone, and `brightness 111` - written by the self-test two
+flashes earlier - came back, so a setting survives a **reflash** as well as a
+reboot (`fw-run.sh` never erases the `screeny` partition). The name and the idle
+mode are back to their defaults because pass 2 restored them on purpose; the
+brightness was deliberately left as the marker. **Set it back to 96 if you want
+the default.**
+
+### Sizes
+
+| | before | after (default build) | delta |
+|---|---|---|---|
+| `.rwtext` | 11,812 | 15,124 | +3,312 |
+| `.data` | 56,124 | 56,848 | +724 |
+| `.bss` | 102,424 | 106,712 | +4,288 |
+| `.stack` | 37,512 | 32,504 | **-5,008** |
+| `.text` | 531,237 | 569,697 | +38,460 |
+| `.rodata` | 73,176 | 78,816 | +5,640 |
+| flash image | 768,176 | 816,320 | +48,144 |
+
+The image grew by **48,144 bytes**, which is research 006's ~48 KB budget almost
+exactly.
+
+`.stack` fell by 5,008 bytes, well over the card's 2 KB tripwire, so I went and
+found out why before going on. `.stack` is a remainder - what the linker has
+left between `_bss_end` and 0x3ffe0000 - so it falls by exactly what `.data` and
+`.bss` gained. `xtensa-esp32-elf-nm` on both ELFs accounts for every byte:
+
+| symbol | delta | what it is |
+|---|---|---|
+| `__embassy_main::POOL` | +1,176 | `store::init` and the loaded `Settings` held across `main`'s awaits |
+| `net::control_task::POOL` | +1,000 | the `Immediate` (a `Wifi` is ~100 bytes) and the immediate-write future |
+| `wifi_task::POOL` | +936 | `active` / `builtin` / the new pair, ~100 bytes each |
+| `store::store_task::POOL` | +800 | the new task |
+| `store::STORE` | +184 (`.data`) | `FlashStorage` + the 32-byte entry + the 128-byte `Scratch` |
+| `NEW_WIFI` | +108 | `Signal<Wifi>` |
+| `CURRENT_SSID` | +36 | the 32-byte `GET_WIFI` buffer + its length |
+| the six counters, `DIRTY`, `WAKE` | +33 | |
+
+**No 3 KB partition-table buffer appears anywhere**, which is the thing the card
+warned about, and the `Scratch` buffer is in a named static rather than inside a
+future. It is more than the "few hundred bytes" the card budgeted, but it is
+four task futures and one static, all itemised, none of it a stray buffer.
+
+The measured number is the one that matters, and there is plenty of room:
+
+```
+before:  stack: core 0 main high-water  6000 of 37512 bytes, 30488 free (painted at boot)
+after:   stack: core 0 main high-water 10688 of 32504 bytes, 20792 free (painted at boot)
+```
+
+The +4,688 bytes of *depth* is `find_partition`'s 3 KB buffer plus the
+`esp-storage` / `sequential-storage` call chain under it - which is exactly
+where that buffer was moved to on purpose. 20.8 KB of headroom remains.
+
+### Flashes: three, and why each
+
+1. `card212-seed-selftest` - `bench-wifi,store-selftest`, the first real build.
+   Found the `Corrupted` partition.
+2. `card212-repair-selftest` - the same features plus `store::repair`. The
+   evidence run: repair, seed, four timed writes, reboot, reload, restore.
+3. `card212-default-from-store` - the **default** build, no features. The
+   acceptance: joins from the store alone with no credentials compiled in.
+
+No build failed to boot, so the known-good image was never needed. No monitors,
+servers or emulators were started beyond `fw-run.sh`'s own, each wrapped in
+`timeout 400` with `secs` of 150, 150 and 120. `pgrep -fl espflash` is empty.
+
+### Left for the orchestrator (needs the LAN, which a worker cannot reach)
+
+`SET_NAME`, `SET_BRIGHTNESS`, `SET_IDLE`, `GET_WIFI`, `SET_WIFI` and the
+`ERR_STORAGE` path have **never been exercised over the wire** - only the store
+calls underneath them have. The acceptance list at the top of this card is
+unchanged and is all still to do.
