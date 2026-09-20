@@ -22,7 +22,7 @@ pub const PATIENCE: Duration = Duration::from_secs(5);
 /// A studio on an ephemeral loopback port. Dropping the returned handle stops
 /// the engine thread, releases the panel and stops the server.
 pub async fn studio() -> Running {
-    let cfg = Config { listen: SocketAddr::from(([127, 0, 0, 1], 0)), ui_dir: None };
+    let cfg = Config { listen: SocketAddr::from(([127, 0, 0, 1], 0)), ..Config::default() };
     Studio::bind(cfg).await.expect("bind an ephemeral loopback port").spawn()
 }
 

@@ -118,3 +118,64 @@ every reconnect so it follows a lease, `Addr`, or `Unknown`.
 **Additive in `crates/art`, and only this**: `PartialEq` on `Settings` and
 `LimiterSettings` (so persisted state can be compared), and later in step 2
 `SenderOutput::attach_deferred`. Both are two-line additions; nothing behavioural.
+
+### Step 2 - players, the supervisor and the API
+
+**`crates/studio/src/player.rs`** - one player per device, plus the fleet that holds
+them.
+
+The important structural choice: **the panel link belongs to the player, not to the
+render core**. A core is the piece, its parameters and the pipeline, and nothing else.
+That is what makes the stall case honest - a wedged thread cannot be killed in Rust, so
+it is told to stop and *abandoned*, and what it takes with it is a piece's render state,
+never a socket, a `Link`'s background thread or the device's source lock. It also fixes
+card 105's handover note in passing: no mutex is held across a render on the device side.
+
+- **panic** -> `catch_unwind` on the render thread, counted, logged once, the core is
+  replaced by one running the fallback piece. The panicking thread starts its own
+  replacement, so the gap is milliseconds rather than a supervisor tick.
+- **stall** -> the supervisor sees no heartbeat for `WATCHDOG` (5 s), tells that core to
+  stop, counts it as abandoned, and starts a fresh core on the fallback.
+- **either, repeatedly** -> after `MAX_FAULTS` (3) in a row the player gives up, says so
+  once, and `/healthz` goes 503. A restart loop is worse than a stopped player. A human
+  asking for a piece again clears the refusal.
+- `fallback_piece(avoid)` is a fixed CPU-only ladder (`plasma`, `metaballs`,
+  `clocks-numerals`) so a log is predictable.
+- While the panel is not connected a player renders at `IDLE_FPS` (5) instead of its
+  configured rate: a panel unplugged for a month must not cost a core for a month.
+- The two deliberately broken pieces (`fault-panic`, `fault-stall`) live here, are **not**
+  in `screeny_art::pieces::ALL`, and are only offered when `Config::fault_pieces` is on
+  (tests, or `SCREENY_STUDIO_FAULTS=1`).
+
+**`crates/studio/src/fleet.rs`** - three slow loops, all bounded, all off the runtime
+when they touch the network:
+
+| task | period | what it does |
+|---|---|---|
+| supervisor | 1 s | watchdog, aims each link at its device's `Reach`, removes players whose device was forgotten, applies the brightness policy when a link comes up (on a blocking thread - a control request takes up to 1.2 s and must never be on a render thread) |
+| discovery | 30 s | one browse at a time; a rename from a browse moves the player with `Players::rekey`. Off unless asked for |
+| telemetry | 5 s | **the one seam** where the studio asks a device about itself (`TELEMETRY`, spec 6.7). Also does the `GET_INFO` that turns `pending:<typed>` into a real id. Capped exponential backoff with jitter per device, so a house full of panels that are all off does not poll in lockstep |
+
+**`crates/studio/src/health.rs`** - `/healthz` and `/api/v1/status`, with what 503 means
+written at the top of the file as well as in the README: the state file cannot be
+written; a player has given up; a player that should be running is not (after a 15 s
+start grace); the preview engine is wedged or gone. **A missing panel is never any of
+them.**
+
+**API added** (all under `/api/v1`, changes are `POST`):
+`GET status`, `GET devices`, `POST devices/add|forget|refresh`,
+`POST player/set`, `POST player/adopt_preview`,
+`POST device/brightness|identify|name|reboot|stats`.
+`set_panel` now takes a registry device id as well as a name or an address, and every
+change persists. `adopt_preview` is the explicit "make what I am previewing what panel X
+plays".
+
+**`main.rs`**: `--state-dir` / `SCREENY_STATE_DIR` / `./.screeny-studio`, `SCREENY_LISTEN`
+as the fallback for `--listen`, `--no-discover`, `SCREENY_STUDIO_FAULTS=1`. Flags beat
+env, env beats the default - a test pins all three. `Config::default()` has discovery
+**off** and `state_dir` **None** on purpose, so no test can browse the LAN or write a
+file; `main` turns both on.
+
+Measured: `cargo test -p screeny-studio` - 6 bin, 18 lib, 13 integration, all green.
+Card 105's 13 tests were untouched and still pass, including the panel and stalled-browser
+ones.
