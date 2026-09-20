@@ -164,10 +164,10 @@ has landed since the last frame.
 | `05-halftone-off-on.png` | `fill` 0 against 0.5 | Halves the light (APL 0.95% -> 0.48%) and keeps the size. The strokes do become a screen texture; that is what it is for. |
 | `06-size-full-and-modest.png` | 11:11 at `size` 1 and 0.7 | Full size is the design. 0.7 is there for comparison and for an owner who disagrees. |
 | `07-four-modules-mid-flip.png` | 09:59:59 + 4 frames, scale 12 | The `:59 -> :00` moment: four cards in the air, `10:00` arriving above, `09:59` still below. |
-| `08-tilt-0-16-34-mid-flip.png` | the same frame at tilt 0, 16, 34 | 0 is flat-on and the card goes edge-on exactly at 90. 16 (the default) puts the edge-on moment at the axle with the most to look at. 34 is a viewer standing over the board; also legible, more theatrical. |
+| `08-tilt-0-16-34-mid-flip.png` | 97.1 degrees at tilt 0, 16 and 34 | 0 is flat-on: the card is already past edge-on and showing its back. 16 (the default) catches it exactly at the axle, with the most to look at. 34 is a viewer standing over the board - the card is still facing us and already out of the light, which is the rough edge noted under "Open with the owner". |
 | `09-stroke-weight-16-20-24.png` | `weight` 1.6 / 2.0 / 2.4 at 18:14 | 2.4 closes up `8`'s counters. 1.6 is elegant but starts to break up on the dot rendering. 2.0 is the default. |
 | `10-across-the-room.png` | 04:56, 17:09, 14:47, 23:38 at scale 4 | The distance test. Every one reads instantly; `4`, `7`, `9` and `6` are unmistakable. |
-| `11-cascade-through-6-7-8-9.png` | the minutes' tens cascading 5 -> 6 -> 7 -> 8 -> 9 -> 0 | The cascade works and the four modules land at different times, which is the point of it. |
+| `11-cascade-through-6-7-8-9.png` | the minutes' tens at each card boundary: 10:60, 10:70, 10:80, 10:90, 10:00, settled | The module really does pass through every numeral between, as a real one does, and the four modules land at different times - the other three are on `1 0 _ 0` from the first row on. |
 
 **Measured**, at the defaults, from the snapshot's own stats line: resting APL **0.95%**,
 peaking at **1.23%** with four modules mid-flip; **460-620 bytes** of 1464, codec
@@ -175,8 +175,11 @@ peaking at **1.23%** with four modules mid-flip; **460-620 bytes** of 1464, code
 hue 40, light 220). 15-25 distinct colours in practice out of a 32-entry palette, so
 the fixed-rate rung is never needed.
 
-`cargo test --release -p screeny-art`: 86 lib + 4 sender + 3 pinned-time, all green.
-`cargo clippy --workspace --all-targets`: silent.
+`cargo test --release --no-fail-fast` at the root: **789 passed, 0 failed**, first run,
+nothing re-run (the studio's `moved`/`soak` and screeny's `pacing`/`loopback`/`embed`
+were green first time). `cargo clippy --workspace --all-targets`: **silent**.
+Rendering costs 1.7 ms a frame through the whole pipeline - encode, decode and all -
+which is 5% of a 30 fps budget.
 
 **Step 4: the recipe was written down against the wrong frame.** Two snapshots that
 should have been different came out byte-identical, which looked like a bug and was
@@ -213,7 +216,7 @@ Everything below is taste, and none of it is settled.
    matters most - it costs no colour depth (card 066) where `light` does. `light` is
    an sRGB code (default 120, card 102's sparkle floor is 38) and it is the wrong knob
    to be reaching for at 3 a.m. Whether a patch should be able to *ask* for a
-   brightness, or whether a named piece (card 151) should carry one, is his call;
+   brightness, or whether a named setting (card 151) should carry one, is his call;
    nothing was built.
 2. **The numeral level itself**: 120 was chosen in the preview, not in a dark bedroom.
    It may want to be half that.
@@ -222,8 +225,15 @@ Everything below is taste, and none of it is settled.
    that sells the 3D and it is also the brightest thing the patch ever draws. If it is
    too much at night it should come down, or become a parameter.
 4. **The shadow** (`SHADOW` 0.22, `PENUMBRA` 0.6 LEDs) and the **light's elevation**
-   (6 degrees, against `tilt`'s 16). The light being *below* the eye is what makes the
-   shadow visible at all; how much shadow is taste.
+   (a fixed 6 degrees, against `tilt`'s 16). The light being *below* the eye is what
+   makes the shadow visible at all; how much shadow is taste.
+   One consequence, visible in `08-tilt-0-16-34-mid-flip.png` and left as it is: the
+   card goes edge-on to the *light* at 96 degrees but edge-on to the *viewer* at
+   `90 + tilt`, so above about `tilt` 28 there are a few frames where the card is still
+   large and already unlit - a dark card where a numeral should be. At the default 16
+   the face is only about 3 LEDs tall by then and it does not show. If he wants the top
+   of that slider, the light should move with the viewpoint; that is a change to make
+   on purpose, not a default to guess at.
 5. **The fall's shape**, `flap::PUSH` = 0.12 - how hard the drum throws the card off
    the pin. Lower is more of a hang-then-slam, higher is more of a sweep.
 6. **`flip` = 0.2 s a card**, so `:59 -> :00` takes up to 1.0 s on the minutes' tens.
@@ -231,7 +241,7 @@ Everything below is taste, and none of it is settled.
 7. **Leading zeros.** `09:05` shows a `0` in the hours' tens; a real board would show a
    blank card there, and in 12-hour mode that is most of the day. Easy to add as a
    choice; not built because nothing said to.
-8. **The colon** is two 2-LED dots at a fifth and four fifths of the module, at 85% of
+8. **The colon** is two 2-LED dots at 30% and 70% of the module's height, at 85% of
    the numeral level, and does not blink by default. `blink` exists because the card
    allowed it; the default is off because nothing in a bedroom should blink.
 9. **`1` has a foot.** It is what keeps it from being a lonely stroke in a 14-LED

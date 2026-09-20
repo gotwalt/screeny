@@ -377,8 +377,8 @@ frames are 460-620 bytes, `pal8-lz`, exact.
 ```bash
 # settled on 21:12
 cargo run --release -p screeny-art -- snapshot vesta --time 21:12 --out settled.png
-# the turn of four modules at once: 09:59:59 -> 10:00:00
-cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1667 --out flipping.png
+# the turn of four modules at once, four frames in: 09:59:59 -> 10:00:00
+cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1333 --out flipping.png
 ```
 
 With `--time 09:59:59` the snapshot steps at 30 fps from 09:59:59, so 10:00:00

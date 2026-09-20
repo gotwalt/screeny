@@ -123,6 +123,13 @@ pub struct Fall {
 /// of the flap down the plate below it, which is the cue that says the card is
 /// off the surface. Put the light above the eye and the shadow hides under the
 /// card and is worth nothing.
+///
+/// It does not move with `tilt`, which has a consequence worth knowing: the
+/// card goes edge-on to the *light* at `90 + LIGHT` but edge-on to the
+/// *viewer* at `90 + tilt`, so a large tilt leaves a few frames where the card
+/// still faces us and is already unlit. At `tilt` 16 the face is 3 LEDs tall
+/// by then and it does not show; above about 28 it does. Card 155 left that
+/// with the owner rather than guessing at a light that follows the viewpoint.
 const LIGHT: f32 = 6.0;
 
 impl Fall {
