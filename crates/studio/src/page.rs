@@ -243,6 +243,11 @@ pub struct PatchInfo {
     /// [`Bootstrap::gpu`] saying there is none, the page marks it unavailable
     /// rather than letting it be picked and render black.
     pub needs_gpu: bool,
+    /// Card 151: whether "another one like this" means anything to this patch
+    /// (`PatchDef::seeded`). The page shows its one quiet **Another** button
+    /// only for a patch that says yes; the seed itself is not shown at all any
+    /// more, being an opaque number.
+    pub seeded: bool,
 }
 
 /// What the page is showing, which is what the panel is showing.
@@ -269,6 +274,19 @@ pub struct StudioState {
     pub on: bool,
     /// Which panel this is, or empty while no panel is attached.
     pub device: String,
+    /// Card 151: the setting the working copy was loaded from. Always a name;
+    /// `"Default"` ([`crate::state::DEFAULT_SETTING`]) when it is on the
+    /// patch's own.
+    pub setting: String,
+    /// This patch's saved settings, alphabetically. **Default is not in here**:
+    /// it is not stored, it is always there, and the page lists it first of its
+    /// own accord.
+    pub settings: Vec<String>,
+    /// Whether the working copy still *is* [`StudioState::setting`].
+    ///
+    /// Computed on every read from the values themselves, never stored, so it
+    /// cannot be left set by a change that forgot to clear it.
+    pub modified: bool,
 }
 
 /// Everything the UI needs to draw itself once.
@@ -294,6 +312,7 @@ pub fn patches(faults: bool) -> Vec<PatchInfo> {
             name: d.name,
             blurb: d.blurb,
             needs_gpu: patches::needs_gpu(d.id),
+            seeded: d.seeded,
             params: d
                 .params
                 .iter()

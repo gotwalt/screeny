@@ -51,7 +51,7 @@ use std::time::{Duration, Instant};
 
 use crate::devices::Reach;
 use crate::page::{self, Screen, StudioState};
-use crate::state::{unix_now, StoredPlayer, UNBOUND};
+use crate::state::{unix_now, StoredPlayer, Working, DEFAULT_SETTING, UNBOUND};
 
 /// Write down what this player's current patch is set to, in the studio's one
 /// patch memory. An unknown patch has no specs to compare against, so its
@@ -59,18 +59,25 @@ use crate::state::{unix_now, StoredPlayer, UNBOUND};
 /// entry ignored, kept in the file").
 fn remember_current(cfg: &StoredPlayer, memory: &crate::state::SharedMemory, faults: bool) {
     if let Some(def) = find_patch(&cfg.patch, faults) {
-        memory.remember(def, &cfg.params, cfg.seed);
+        memory.remember(def, &cfg.params, cfg.seed, cfg.speed);
     }
 }
 
 /// Put `cfg` on `def`, restoring whatever that patch was last left set to -
 /// here, or on another panel. One memory, one answer.
+///
+/// Card 151: **speed comes back with the parameters and the seed**, because it
+/// is part of a setting and therefore part of the working copy. A patch that
+/// has never said a speed leaves the player's alone, as it always did.
 fn recall_into(cfg: &mut StoredPlayer, def: &'static PatchDef, memory: &crate::state::SharedMemory, device: &str) {
     cfg.patch = def.id.to_string();
-    let (params, seed) = memory.recall(def, &format!("panel {}", label(device)));
-    cfg.params = params;
-    if let Some(seed) = seed {
+    let was = memory.recall(def, &format!("panel {}", label(device)));
+    cfg.params = was.params;
+    if let Some(seed) = was.seed {
         cfg.seed = seed;
+    }
+    if let Some(speed) = was.speed {
+        cfg.speed = speed.clamp(0.0, MAX_SPEED);
     }
 }
 
@@ -538,13 +545,34 @@ impl Player {
         self.cfg().clone()
     }
 
+    /// **The working copy** of the patch this player is on: what a setting
+    /// holds, as it is set right now (card 151).
+    ///
+    /// `None` for a patch this build has not got - there is no spec to measure
+    /// the values against, so there is nothing honest to save.
+    #[must_use]
+    pub fn working(&self) -> Option<(&'static PatchDef, Working)> {
+        let cfg = self.cfg();
+        let def = find_patch(&cfg.patch, self.faults)?;
+        Some((
+            def,
+            Working {
+                params: crate::state::sparse(def, &cfg.params),
+                seed: cfg.seed,
+                speed: cfg.speed,
+            },
+        ))
+    }
+
     /// What the page draws itself from: the patch, the seed, **every**
-    /// parameter at its effective value, the pipeline output and the
-    /// playback state.
+    /// parameter at its effective value, the pipeline output, the playback
+    /// state and - card 151 - the patch's settings, which one is loaded and
+    /// whether it has been moved since.
     #[must_use]
     pub fn state(&self) -> StudioState {
         let cfg = self.cfg().clone();
-        let params = match find_patch(&cfg.patch, self.faults) {
+        let def = find_patch(&cfg.patch, self.faults);
+        let params = match def {
             Some(def) => {
                 let mut p = Params::defaults(def.params);
                 for (id, v) in &cfg.params {
@@ -556,6 +584,20 @@ impl Player {
             // it rather than inventing some.
             None => BTreeMap::new(),
         };
+        // The list, the name and the mark travel with the state, so a browser
+        // needs no second read and the other browsers see a save the moment it
+        // happens (card 151).
+        let (setting, settings, modified) = match def {
+            Some(def) => {
+                let work = Working { params: crate::state::sparse(def, &cfg.params), seed: cfg.seed, speed: cfg.speed };
+                (
+                    self.memory.current_setting(def.id),
+                    self.memory.setting_names(def.id),
+                    self.memory.modified(def, &work),
+                )
+            }
+            None => (DEFAULT_SETTING.to_string(), Vec::new(), false),
+        };
         StudioState {
             patch: cfg.patch,
             seed: cfg.seed,
@@ -566,6 +608,9 @@ impl Player {
             fps: cfg.fps,
             on: cfg.on,
             device: cfg.device,
+            setting,
+            settings,
+            modified,
         }
     }
 
@@ -601,6 +646,29 @@ impl Player {
                 h.gave_up = None;
                 h.fell_back_from = None;
                 self.consecutive.store(0, Ordering::Relaxed);
+            }
+            // Card 151. **One change**, not one per parameter: the whole
+            // working copy is replaced here and the caller publishes once and
+            // writes once, so a panel follows a load at once rather than
+            // walking through a burst of intermediate pictures.
+            //
+            // First, so that a change that loads a setting *and* moves
+            // something - which is what the page does not do but a script may -
+            // ends up with the movement on top rather than under.
+            if let Some(name) = &change.load_setting {
+                let def = find_patch(&cfg.patch, self.faults)
+                    .ok_or_else(|| format!("`{}` is not a patch this build has, so it has no settings", cfg.patch))?;
+                let (work, repaired) = self.memory.load_setting(def, name)?;
+                if !repaired.is_empty() {
+                    // The `repaired` voice, said once per load rather than per
+                    // value or per frame: a setting older than the patch is
+                    // exactly what this is for, not an error.
+                    eprintln!("studio: player {}: `{}` loading `{name}`: {}", label(&cfg.device), def.id, repaired.join("; "));
+                }
+                cfg.params = work.params;
+                cfg.seed = work.seed;
+                cfg.speed = work.speed.clamp(0.0, MAX_SPEED);
+                want.rebuild = true;
             }
             if let Some(seed) = change.seed {
                 cfg.seed = seed;
@@ -639,6 +707,11 @@ impl Player {
             }
             if let Some(speed) = change.speed {
                 cfg.speed = speed.clamp(0.0, MAX_SPEED);
+                // Card 151: speed is part of a setting, so it is part of what
+                // is remembered about the patch rather than only of the
+                // player. `fps` and `paused` are not - they are about
+                // playback, not about the patch.
+                remember_current(&cfg, &self.memory, self.faults);
             }
             if let Some(s) = change.output {
                 cfg.output = s;
@@ -1058,6 +1131,9 @@ pub struct PlayerChange {
     /// "Reset": back to the patch's defaults, and forget what was remembered
     /// for it (card 165).
     pub reset_params: bool,
+    /// Card 151: put the working copy on this named setting of the current
+    /// patch - or on `Default`. One change, whatever it moves.
+    pub load_setting: Option<String>,
     pub fps: Option<f64>,
     pub paused: Option<bool>,
     pub speed: Option<f64>,
@@ -1660,6 +1736,7 @@ mod tests {
                     ("gone".to_string(), 1.0),    // a parameter this build does not have
                     ("drift".to_string(), 999.0), // out of the range this build allows
                 ]),
+                ..crate::state::PatchMemory::default()
             },
         )]));
         let p = Player::new(cfg, false, memory, Screen::new());
@@ -1678,7 +1755,7 @@ mod tests {
         let cfg = StoredPlayer { device: "abc".into(), on: false, ..StoredPlayer::default() };
         let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
             "from-the-future".to_string(),
-            crate::state::PatchMemory { seed: Some(3), params: BTreeMap::new() },
+            crate::state::PatchMemory { seed: Some(3), ..crate::state::PatchMemory::default() },
         )]));
         let p = Player::new(cfg, false, memory.clone(), Screen::new());
         p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");

@@ -137,3 +137,61 @@ The clocks are the case the card names: their seed is not *nothing*, but it is n
 says `seeded` really does draw a different second frame on another seed, and the test
 card really is the same card on any seed. (The GPU three are excluded: a test machine may
 have no adapter; their `u.seed` use is in the `.wgsl` above.)
+
+### The store: schema v5, the settings and the migration (worker)
+
+`state.rs`. The file's `patches` map is still one entry per patch; the entry is now the
+whole of what card 151 calls a patch:
+
+```jsonc
+"version": 5,
+"patches": {
+  "plasma": {
+    "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4,   // the working copy
+    "setting": "Lava",                                       // what it was loaded from
+    "settings": {                                            // the named ones
+      "Lava":     { "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4 },
+      "Slow ink": { "seed": 222, "params": {},               "speed": 0.2 }
+    }
+  }
+}
+```
+
+Decisions, and why:
+
+- **`modified` is nowhere in the file.** It is `modified(memory, def, working)`: the
+  working copy against the *usable* form of the setting it names. Usable, not raw - a
+  setting that had to be repaired for this build would otherwise read as modified from
+  the moment it was loaded, for ever.
+- **Both sides go through one funnel.** `sparse(def, params)` drops anything equal to the
+  patch's default, for the working copy and for a setting alike, which is what makes the
+  comparison honest *and* makes "a parameter the patch has gained takes its default" true
+  with no code for it. A parameter it has **lost** is dropped by `usable_setting` and said
+  once in the existing `repaired` voice, prefixed with which setting it was in.
+- **Default** is synthesised in `usable_setting`: no params, speed 1.0, seed
+  `DEFAULT_SEED` = 1. Fixed rather than fresh, so Default is one picture; it is the
+  studio's own starting seed because no patch declares one, and a `PatchDef` that later
+  does can override it without this changing.
+- **Bounds**: `MAX_SETTINGS` 64 a patch, names trimmed, 1..=40 characters, no control
+  characters, unique case-insensitively, `Default` reserved in any case. Every refusal is
+  a sentence a person can read; `check_name` is the one place they live, and the file
+  reader runs a hand-edited name through the same rules.
+- **Delete leaves what is playing alone**: the values stay, the name goes, so it is on
+  Default and honestly modified.
+
+Migration v4 -> v5 follows card 150's pattern: `back_up` first (`state.v4.json`, byte for
+byte), then `migrate_to_v5` behind its own `was < 5` guard beside `was < 3`. The one thing
+that *moves* is **speed**: it was a player's, it is now part of the working copy, so the
+patch each player was on takes that player's speed - and only when it is not 1.00x, or a
+file where nobody has ever tuned anything would come back with a memory entry invented for
+it (`migrating_a_v3_file_invents_no_memory` is the test that says so). A v1 file runs
+v1->v3 and then v4->v5 in one start.
+
+Tests added in `state.rs` (74 unit tests pass, clippy silent on both crates):
+save/load/modified round trip, Default is read-only in any spelling, the name rules, the
+64 bound, rename-follows-the-name and delete-leaves-it-playing, **a setting older than the
+patch** (lost / gained / out-of-range, and it must not read as modified after loading), a
+realistic v4 file (dummy device names) -> v5 with the speed carried and the backup byte
+for byte, a v5 file that does **not** run the migration again, v1 all the way up in one
+start, a hand-edited `settings` block where every way of being wrong costs that value
+alone, and a file with more than 64 settings cut to the bound.
