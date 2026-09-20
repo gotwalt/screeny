@@ -495,3 +495,25 @@ than one-off commands, and both already survive a restart and a reconnect.
 
 Do **not** build the scheduler inside `fleet::supervise`: that loop is the watchdog and
 should stay something one can read in one screen.
+
+### Orchestrator: merged, deployed, verified on workbench with the real panel (2026-09-19 22:40 PDT)
+
+Merged to `main` (one conflict, the root `README.md` table against card 107's edit: kept both
+halves). Root `cargo test --release --no-fail-fast` on the merge: 445 passed, 0 failed, 1
+ignored (includes the firmware session's crates). Dropped the now-redundant `--listen` flags
+from the Dockerfile `CMD` and both compose files (a flag would beat `SCREENY_LISTEN`).
+Pushed, redeployed with `tools/deploy-workbench.sh`.
+
+On workbench, against the real panel, nobody touching anything:
+- Fresh state volume: the first mDNS browse (at ~0 s) found nothing, the third (at ~60 s)
+  found `screeny-4a00a4`; the Studio adopted it as device `4a00a4` and started
+  `clocks-numerals` at 30 fps. `/healthz` was 200 throughout, including while no panel was known.
+- `/api/v1/status` shows the device's own telemetry (firmware 0.2.0, RSSI -55, brightness 96,
+  drops all 0, decode 536 us) and the player's health (panics 0, stalls 0).
+- Persistence: `player/set {piece: overland, seed: 4242}` -> `state.json` written under
+  `/data`; `docker restart screeny-studio`; **the panel link was `up` again ~6 s later playing
+  `overland` seed 4242**, exact frames, fallback 0, no operator action.
+- `/dashboard` serves (200). Brightness policy default is "leave it alone" (device stays at 96),
+  so the real firmware cap is still unrecorded; nothing was pushed at the panel to find it.
+
+Not done here: a phone-width check of the dashboard (owner), and card 144's question for the owner.
