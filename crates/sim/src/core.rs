@@ -25,11 +25,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::Instant;
 
+use screeny_device_api::{FwSlot, FwState, ResetReason};
 use screeny_proto::control::{IdleMode, SetWifi, Telemetry};
 use screeny_proto::{Rgb888Frame, MAX_UDP_PAYLOAD, NBYTES};
 use screeny_receiver as rx;
 
-use crate::config::{Config, PanelModel};
+use crate::config::{Config, Health, PanelModel};
 use crate::net::display_addr;
 use crate::event::Event;
 use crate::panel;
@@ -146,8 +147,17 @@ impl rx::Host for Sim<'_> {
         // `boot_id` is the one thing a client can tell a restart by, and both
         // `REBOOT` over UDP and `POST /api/v1/reboot` arrive here, so drawing
         // it once in this arm covers both by construction.
+        //
+        // Card 192 adds the second visible consequence: a device that restarts
+        // because it was asked to reports `software` as the reason from then
+        // on, so a status read after a reboot must not still say `power_on` -
+        // or still say `brownout`, which is the case that matters, because
+        // that is how somebody tells the reboot they asked for from the one
+        // the power supply gave them. A test that wants another reason after a
+        // reboot sets it again with `SimHandle::set_health`.
         if matches!(e, rx::Event::Reboot) {
             self.ident.boot_id = draw_boot_id();
+            self.ident.reset_reason = ResetReason::Software;
         }
         if let Some(e) = Event::from_shared(&e) {
             self.out.events.push(e);
@@ -233,7 +243,13 @@ pub struct Core {
 
 /// The parts of `GET /api/v1/status` a simulator can only make up: which flash
 /// slot is running, why the chip last restarted, how much stack is left. They
-/// are constants here, named so that nobody mistakes them for measurements.
+/// are made-up values here, named so that nobody mistakes them for
+/// measurements.
+///
+/// Since card 192 they are also *chosen*: [`Config::health`] sets them at
+/// startup and [`Core::set_health`] changes them on a running device, so the
+/// simulator can play a panel that is not well. Nothing else in the simulator
+/// acts on them - see [`Health`].
 #[derive(Debug, Clone)]
 pub struct Ident {
     /// The stable short device id.
@@ -244,14 +260,50 @@ pub struct Ident {
     pub boot_id: u32,
     /// The firmware version string.
     pub fw: String,
-    /// Heap in use, bytes. A plausible constant.
+    /// Heap in use, bytes.
     pub heap_used: u32,
     /// Heap total, bytes. The firmware's 64 + 32 KB (card 220).
     pub heap_size: u32,
     /// Stack never touched, bytes.
     pub stack_free: u32,
-    /// Settings-store errors since boot. Always 0: there is no flash here.
+    /// Settings-store errors since boot.
     pub store_errors: u32,
+    /// Why the chip last restarted. A simulated `REBOOT` sets this to
+    /// [`ResetReason::Software`], which is what the device's own does.
+    pub reset_reason: ResetReason,
+    /// Which app slot is running.
+    pub fw_slot: FwSlot,
+    /// The running slot's `otadata` state.
+    pub fw_state: FwState,
+}
+
+impl Ident {
+    /// The seven made-up values, in one struct.
+    #[must_use]
+    pub fn health(&self) -> Health {
+        Health {
+            reset_reason: self.reset_reason,
+            fw_slot: self.fw_slot,
+            fw_state: self.fw_state,
+            store_errors: self.store_errors,
+            heap_used: self.heap_used,
+            heap_size: self.heap_size,
+            stack_free: self.stack_free,
+        }
+    }
+
+    /// Replace all seven. Nothing is validated here: [`Health::check`] is the
+    /// CLI's business, and a test is allowed to ask for anything a device
+    /// could report.
+    pub fn set_health(&mut self, h: Health) {
+        self.reset_reason = h.reset_reason;
+        self.fw_slot = h.fw_slot;
+        self.fw_state = h.fw_state;
+        self.store_errors = h.store_errors;
+        self.heap_used = h.heap_used;
+        self.heap_size = h.heap_size;
+        self.stack_free = h.stack_free;
+    }
 }
 
 impl Core {
@@ -298,10 +350,13 @@ impl Core {
                 id: cfg.id.clone(),
                 boot_id: draw_boot_id(),
                 fw: cfg.fw.clone(),
-                heap_used: 64 * 1024,
-                heap_size: 96 * 1024,
-                stack_free: 20 * 1024,
-                store_errors: 0,
+                heap_used: cfg.health.heap_used,
+                heap_size: cfg.health.heap_size,
+                stack_free: cfg.health.stack_free,
+                store_errors: cfg.health.store_errors,
+                reset_reason: cfg.health.reset_reason,
+                fw_slot: cfg.health.fw_slot,
+                fw_state: cfg.health.fw_state,
             },
         }
     }
@@ -342,6 +397,17 @@ impl Core {
     #[must_use]
     pub fn ident(&self) -> &Ident {
         &self.ident
+    }
+
+    /// What this device is claiming about its own health (card 192).
+    #[must_use]
+    pub fn health(&self) -> Health {
+        self.ident.health()
+    }
+
+    /// Change what it claims, on a running device.
+    pub fn set_health(&mut self, health: Health) {
+        self.ident.set_health(health);
     }
 
     /// The source that holds the lock, if any.

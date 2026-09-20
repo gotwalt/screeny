@@ -422,6 +422,27 @@ impl SimHandle {
         *self.shared.faults.lock().unwrap()
     }
 
+    /// Change what `GET /api/v1/status` says about the device's health while
+    /// it is running: the reset reason, the firmware slot and its state, the
+    /// store errors and the three memory numbers (card 192).
+    ///
+    /// **Nothing else changes.** A `pending_verify` slot does not alter any
+    /// behaviour and a `brownout` reason reboots nothing; these are the rows
+    /// of a status page, and this is how they are made to appear.
+    ///
+    /// A simulated `REBOOT` after this call sets the reason back to
+    /// [`ResetReason::Software`](screeny_device_api::ResetReason::Software),
+    /// as a device's does. Calling this *after* the reboot pins it again.
+    pub fn set_health(&self, health: crate::Health) {
+        self.shared.core.lock().unwrap().set_health(health);
+    }
+
+    /// What the device is currently claiming about its health.
+    #[must_use]
+    pub fn health(&self) -> crate::Health {
+        self.shared.core.lock().unwrap().health()
+    }
+
     /// An index one past the newest event. Pass it to [`SimHandle::events`]
     /// or [`SimHandle::wait_for`] to read only what happens next.
     #[must_use]

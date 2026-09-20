@@ -26,8 +26,16 @@
 //! # What a simulator cannot answer honestly
 //!
 //! `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `heap_*` and
-//! `store_errors` are constants from [`crate::core::Ident`]: there is no flash
-//! here and no stack worth measuring. `POST /api/v1/firmware` accepts the
+//! `store_errors` are made up in [`crate::core::Ident`]: there is no flash
+//! here and no stack worth measuring. Card 192 lets a run *choose* them -
+//! `--reset-reason brownout`, `--store-errors 3` and the rest, or
+//! [`SimHandle::set_health`](crate::SimHandle::set_health) on a running
+//! device - so that the rows of a status page nobody ever sees can be seen.
+//! They stay reports and nothing else: no behaviour here reads them back, a
+//! `pending_verify` slot changes nothing and a `brownout` reason reboots
+//! nothing. The single exception is the one a device has too - a simulated
+//! `REBOOT`, over UDP or `POST /api/v1/reboot`, sets the reset reason to
+//! `software` from then on. `POST /api/v1/firmware` accepts the
 //! stream, discards it, and runs the two of research 006's five checks that
 //! need no image parser - the `0xE9` magic and the slot's length - and says so
 //! in the README rather than pretending the other three passed.
@@ -42,7 +50,7 @@ use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
 };
 use screeny_device_api::request::{IdentifyRequest, Mutating, RebootRequest, SettingsRequest};
-use screeny_device_api::{route, FirmwareError, FwSlot, FwState, ResetReason, StreamState};
+use screeny_device_api::{route, FirmwareError, StreamState};
 use screeny_proto::control::{self as proto, Reply, Request};
 
 use crate::core::Core;
@@ -354,11 +362,14 @@ fn status(shared: &Shared) -> Response {
         ip: wifi.ip().map(screeny_device_api::text::ipv4_text),
         state: StreamState::from_u8(core.state_byte()).unwrap_or(StreamState::Idle),
         portal: wifi.ap_up(),
-        // No flash here, and no reset to have a reason. Constants, named as
-        // such in `Ident`'s docs.
-        fw_slot: FwSlot::Ota0,
-        fw_state: FwState::Valid,
-        reset_reason: ResetReason::PowerOn,
+        // No flash here, and no reset to have a reason: these four are made
+        // up, and since card 192 they are made up *on purpose* - the flags
+        // and `SimHandle::set_health` choose them, so the unhappy rows of a
+        // status page can be seen. Reported and nothing more: no behaviour
+        // anywhere in the simulator reads them back. See `crate::Health`.
+        fw_slot: ident.fw_slot,
+        fw_state: ident.fw_state,
+        reset_reason: ident.reset_reason,
         store_errors: ident.store_errors,
     };
     ok_json(&reply)
