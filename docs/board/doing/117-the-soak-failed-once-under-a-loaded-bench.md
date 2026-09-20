@@ -4,6 +4,8 @@ title: The soak failed once on a loaded bench, and said nothing useful about why
 type: test
 hardware: no
 depends: []
+owner: worker-118-117
+branch: card/118-117-poll-backoff-and-flakes
 ---
 
 ## Goal

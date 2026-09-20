@@ -247,6 +247,148 @@ fn loop_until_bound(ports: Ports) -> SimDevice {
     }
 }
 
+// ---------------------------------- card 118: a panel that is coming back ----
+
+/// The poll period the two card 118 tests run at.
+///
+/// A whole second, which is slow for a test, because what they are about is a
+/// *number of polls*: the cap is `MAX_BACKOFF` = 12 of them, so the two
+/// behaviours - "back at once" and "back at the cap" - have to be a wall-clock
+/// distance apart for a test to tell them apart at all.
+const POLL: Duration = Duration::from_secs(1);
+
+/// Generously more than the two or three polls the ladder costs, and less than
+/// half the twelve the cap costs. Deliberately not tight: a loaded machine
+/// slips ticks, and this must fail because the *rule* is wrong, not because the
+/// scheduler was busy (card 093).
+const BACK_WITHIN: Duration = Duration::from_secs(8);
+
+/// **The card: a panel that has answered is not "a panel with no HTTP API".**
+///
+/// A panel reboots faster than it listens: the network stack is up, and frames
+/// and UDP telemetry are flowing again, seconds before the HTTP workers accept
+/// anything. Those seconds used to cost two minutes of a stale Device block,
+/// because one refused connection said `absent` and `absent` jumped straight to
+/// the cap.
+///
+/// Here the panel's UDP half never goes quiet - it is the simulator - and only
+/// the status API goes away and comes back, on the same port. That isolates the
+/// rule from everything else a reboot does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_panel_that_has_answered_http_is_not_absent() {
+    let server = CountingServer::start(Duration::ZERO);
+    let port = server.addr.port();
+    // The simulator is there to be *resolved* over UDP; the status reads are
+    // pointed at this test's own server.
+    let (dev, mut ports) = start_sim("simulated", false);
+    ports.http = port;
+    let studio = studio_reading(port, POLL).await;
+    let at = studio.addr;
+    attach(at, ports).await;
+
+    let first = until_json(at, PATIENCE, "the first status read", "/api/v1/status", |v| {
+        v["devices"][0]["http"]["reads"].as_u64().unwrap_or(0) >= 1
+    })
+    .await;
+    let reads = first["devices"][0]["http"]["reads"].as_u64().expect("reads");
+
+    // The panel starts rebooting: the port refuses.
+    server.stop();
+    let refused = until_json(at, PATIENCE, "the studio to see the connection refused", "/api/v1/status", |v| {
+        !v["devices"][0]["http"]["last_error"].is_null()
+    })
+    .await;
+    let h = &refused["devices"][0]["http"];
+    assert_eq!(h["absent"], false, "a panel that has answered {reads} times is not a panel without the API: {h}");
+    assert_eq!(refused["ok"], true, "a panel that is rebooting is not a server fault: {}", refused["problems"]);
+    assert!(
+        !refused["devices"][0]["facts"].is_null(),
+        "the last thing it said about itself stays on the page: {}",
+        refused["devices"][0]
+    );
+
+    // ...and finishes booting. The same port, because it is the same panel.
+    let back = CountingServer::start_at(port, Duration::ZERO).expect("the status API comes back on its own port");
+    let up = std::time::Instant::now();
+    until_json(at, PATIENCE, "the studio to read the panel again", "/api/v1/status", |v| {
+        v["devices"][0]["http"]["reads"].as_u64().unwrap_or(0) > reads
+    })
+    .await;
+    let took = up.elapsed();
+    println!(
+        "card 118: the status API came back and was read again after {:.1} s ({:.1} polls of {:.1} s; the cap would be 12)",
+        took.as_secs_f64(),
+        took.as_secs_f64() / POLL.as_secs_f64(),
+        POLL.as_secs_f64()
+    );
+    assert!(
+        took < BACK_WITHIN,
+        "a panel that had answered before waited {:.1} s ({:.1} polls) to be read again; the ladder from the bottom is two or three",
+        took.as_secs_f64(),
+        took.as_secs_f64() / POLL.as_secs_f64()
+    );
+
+    drop(dev);
+    studio.stop().await;
+    back.stop();
+}
+
+/// **The acceptance, in a simulator: reboot the panel and the Device block is
+/// about the new boot within seconds**, not within two minutes.
+///
+/// Everything goes at once here, the way it does on the bench: UDP, HTTP, the
+/// boot id and the uptime. The uptime coming back smaller is what the telemetry
+/// poll notices, and it clears whatever the status poller had climbed to while
+/// the panel was still booting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn a_panel_that_rebooted_is_read_again_within_a_poll_or_two() {
+    let (first, ports) = start_sim("simulated", true);
+    let studio = studio_reading(ports.http, POLL).await;
+    let at = studio.addr;
+    attach(at, ports).await;
+
+    // Enough uptime that the reboot is unambiguous in whole seconds - the
+    // resolution telemetry reports it at.
+    let seen = until_json(at, PATIENCE, "a panel that has been up for a few seconds", "/api/v1/status", |v| {
+        !v["devices"][0]["facts"].is_null() && v["devices"][0]["telemetry"]["uptime_s"].as_u64().unwrap_or(0) >= 3
+    })
+    .await;
+    let boot = seen["devices"][0]["facts"]["boot_id"].as_u64().expect("a boot id");
+
+    // Off, which is a refused connection or two, and on again.
+    drop(first);
+    until_json(at, PATIENCE, "the studio to see the panel go away", "/api/v1/status", |v| {
+        !v["devices"][0]["http"]["last_error"].is_null()
+    })
+    .await;
+    let again = loop_until_bound(ports);
+    let up = std::time::Instant::now();
+
+    let after = until_json(at, PATIENCE, "the studio to read the new boot", "/api/v1/status", |v| {
+        v["devices"][0]["facts"]["boot_id"].as_u64().unwrap_or(boot) != boot
+    })
+    .await;
+    let took = up.elapsed();
+    println!(
+        "card 118: the panel rebooted and its facts were fresh again after {:.1} s ({:.1} polls of {:.1} s)",
+        took.as_secs_f64(),
+        took.as_secs_f64() / POLL.as_secs_f64(),
+        POLL.as_secs_f64()
+    );
+    assert!(
+        took < BACK_WITHIN,
+        "the Device block was {:.1} s ({:.1} polls) behind the reboot: {}",
+        took.as_secs_f64(),
+        took.as_secs_f64() / POLL.as_secs_f64(),
+        after["devices"][0]
+    );
+    assert_eq!(after["devices"][0]["http"]["absent"], false, "{}", after["devices"][0]["http"]);
+    assert_eq!(after["ok"], true, "{}", after["problems"]);
+
+    drop(again);
+    studio.stop().await;
+}
+
 /// **One connection at a time.** The rule the device's one connection worker
 /// and missing listen backlog make load-bearing: a second simultaneous
 /// connection is dropped at SYN and costs a second of SYN retransmit.
@@ -327,7 +469,14 @@ struct CountState {
 
 impl CountingServer {
     fn start(hold: Duration) -> CountingServer {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        CountingServer::start_at(0, hold).expect("a port")
+    }
+
+    /// The same on a **named** port, so a test can take the status API away
+    /// and put it back where it was - which is what a panel rebooting looks
+    /// like to the studio's poller. Port 0 is an ephemeral one.
+    fn start_at(port: u16, hold: Duration) -> std::io::Result<CountingServer> {
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
         let addr = listener.local_addr().expect("its address");
         listener.set_nonblocking(true).expect("non-blocking");
         let state = Arc::new(CountState::default());
@@ -349,7 +498,7 @@ impl CountingServer {
                 }
             })
         };
-        CountingServer { addr, state, thread: Some(thread) }
+        Ok(CountingServer { addr, state, thread: Some(thread) })
     }
 
     /// `(served, most open at once, asked for close, the Host headers seen)`.

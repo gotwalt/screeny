@@ -447,6 +447,14 @@ pub struct HttpHealth {
     /// it is about this process's stderr, not about the device.
     #[serde(skip)]
     pub said: bool,
+    /// **Card 118: the panel rebooted, so ask it about itself now.** Set by
+    /// [`Registry::heard`] when UDP telemetry says the uptime went backwards,
+    /// and taken by the status poller, which drops this device's backoff.
+    ///
+    /// Not on the wire: it is about the studio's next ten seconds, not about
+    /// the device.
+    #[serde(skip)]
+    pub retry_now: bool,
 }
 
 fn state_name(s: u8) -> &'static str {
@@ -708,11 +716,36 @@ impl Registry {
     }
 
     /// Record telemetry heard from a device.
+    ///
+    /// **Card 118: uptime that went backwards is a reboot**, and the one thing
+    /// UDP telemetry can say about one - a panel that has restarted counts from
+    /// zero again. Reboots themselves are still counted from `boot_id` and
+    /// nothing else ([`Registry::heard_http`]); this is only a hint to the
+    /// status poller that now is the moment to ask, because a panel comes back
+    /// on UDP seconds before its HTTP workers are listening and whatever the
+    /// poller decided while it was refusing is about the panel before the
+    /// reboot.
     pub fn heard(&self, id: &str, t: &Telemetry) {
         if let Some(d) = self.lock().get_mut(id) {
-            d.telemetry = Some(Telem::of(t));
+            let fresh = Telem::of(t);
+            if d.telemetry.as_ref().is_some_and(|was| fresh.uptime_s < was.uptime_s) {
+                d.http.retry_now = true;
+            }
+            d.telemetry = Some(fresh);
             d.seen_unix = Some(unix_now());
             d.last_error = None;
+        }
+    }
+
+    /// Take the "this panel rebooted, ask it now" flag, clearing it.
+    ///
+    /// The status poller is the only caller: it is a hand-off between the two
+    /// polls, not a fact about the device, which is why it is taken rather than
+    /// read.
+    pub fn take_http_retry(&self, id: &str) -> bool {
+        match self.lock().get_mut(id) {
+            Some(d) => std::mem::take(&mut d.http.retry_now),
+            None => false,
         }
     }
 
@@ -781,6 +814,10 @@ impl Registry {
     /// Returns true the **first** time it is worth saying out loud for this
     /// device, and never again until a read succeeds: a panel with no HTTP
     /// server would otherwise write a line every ten seconds for months.
+    ///
+    /// `absent` means "this firmware serves no such API", which is a stronger
+    /// claim than "that connection was refused" and one the *caller* makes
+    /// (card 118: a panel that has answered before has already disproved it).
     pub fn http_failed(&self, id: &str, absent: bool, why: String) -> bool {
         let mut devices = self.lock();
         let Some(d) = devices.get_mut(id) else { return false };
@@ -1154,6 +1191,32 @@ mod tests {
         assert_eq!(heard.unasked_reboots, 0, "we asked for this one");
         assert!(!heard.unasked);
         assert!(reg.get(&id).expect("there").reboot_ask.is_none(), "the ask was used up");
+    }
+
+    /// **Card 118: uptime that went backwards is the panel rebooting**, and
+    /// that is a hand-off to the status poller: ask this one now, whatever the
+    /// backoff said. Uptime that went *forwards* is a panel that is simply
+    /// running, and says nothing.
+    #[test]
+    fn uptime_going_backwards_tells_the_status_poller_to_ask_again() {
+        let reg = Registry::new();
+        let (id, _) = reg.resolved(&device("screeny-abc", "abc123", "192.0.2.7:49374"));
+        let telem = |uptime_ms: u32| Telemetry { uptime_ms, ..Telemetry::default() };
+
+        // The first telemetry ever is not a reboot: there is nothing to have
+        // gone backwards from.
+        reg.heard(&id, &telem(90_000));
+        assert!(!reg.take_http_retry(&id), "the first reading cannot be a reboot");
+
+        // A panel that has simply been running.
+        reg.heard(&id, &telem(120_000));
+        assert!(!reg.take_http_retry(&id), "uptime going up is a panel that is up");
+
+        // And one that came back.
+        reg.heard(&id, &telem(2_000));
+        assert!(reg.take_http_retry(&id), "90 s of uptime became 2 s: it rebooted");
+        assert!(!reg.take_http_retry(&id), "taken, not read: one reboot is one extra poll");
+        assert!(!reg.take_http_retry("nobody"), "there is no such panel");
     }
 
     #[test]

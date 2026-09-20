@@ -466,6 +466,9 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
 ///   what `Config::default` carries and what `main` clamps to;
 /// * *`Connection: close`, ~2 s, bounded reply* - [`crate::devhttp`];
 /// * *capped jittered backoff* - [`fail`], the same one the telemetry poll uses;
+/// * *the cap is for firmware that has no server* - card 118: a panel that has
+///   answered once climbs the ladder from the bottom like any other failure,
+///   and a reboot seen over UDP clears its backoff outright;
 /// * *never on a render thread* - `spawn_blocking`;
 /// * *never triggered by a browser* - no route calls this. A browser reads the
 ///   studio's cached copy through `/api/v1/status`.
@@ -495,6 +498,15 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
 
     for record in devices_now {
         let id = record.stored.id.clone();
+        // **Card 118: a reboot is the best moment there is to ask.** The
+        // telemetry poll saw this panel's uptime go backwards, so everything
+        // this poller had decided about it - including a backoff climbed while
+        // the panel was refusing connections on its way up - is about the panel
+        // before the reboot. This does not poll *faster*: it only forgives the
+        // skips, and the tick is still `device_http_every`.
+        if st.devices.take_http_retry(&id) {
+            backoff.remove(&id);
+        }
         if let Some((_, left)) = backoff.get_mut(&id) {
             if *left > 0 {
                 *left -= 1;
@@ -546,8 +558,16 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                 backoff.remove(&id);
             }
             Ok(Err(fault)) => {
-                if st.devices.http_failed(&id, fault.absent, fault.why.clone()) {
-                    if fault.absent {
+                // **Card 118: "absent" is a claim about the firmware** - this
+                // panel serves no such API - and a panel that has answered
+                // once has already disproved it. A connection refused by a
+                // panel whose network stack is up before its HTTP workers are
+                // listening is an ordinary failure, and saying otherwise cost
+                // the bench two minutes of a stale Device block after every
+                // reflash.
+                let absent = fault.absent && record.http.reads == 0;
+                if st.devices.http_failed(&id, absent, fault.why.clone()) {
+                    if absent {
                         eprintln!(
                             "studio: `{}` has no HTTP status API ({fault}); its UDP telemetry is all the studio will show",
                             record.label()
@@ -556,11 +576,14 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                         eprintln!("studio: `{}`: reading its status: {fault}", record.label());
                     }
                 }
-                // A device with no server is asked at the slowest rate at
-                // once rather than climbing to it: a firmware update is the
-                // only thing that changes the answer, and that is not a thing
-                // that happens twice a minute.
-                if fault.absent {
+                // A device with no server *and nothing it has ever said to the
+                // contrary* is asked at the slowest rate at once rather than
+                // climbing to it: a firmware update is the only thing that
+                // changes the answer, and that is not a thing that happens
+                // twice a minute. One that has answered climbs the ordinary
+                // ladder from the bottom instead, so a reboot costs a poll or
+                // two rather than the full cap.
+                if absent {
                     backoff.insert(id, (MAX_BACKOFF, MAX_BACKOFF));
                 } else {
                     fail(backoff, &id);
