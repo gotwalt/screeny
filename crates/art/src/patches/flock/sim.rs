@@ -6,10 +6,27 @@
 //! drawn at, and every number in it is a metre, a metre per second or a radian
 //! per second, so the limits can be read and checked as what they are.
 //!
-//! The camera is `birds[0]`. It is a boid: it is in every other bird's
-//! neighbour list and they are in its own, and it obeys the same speed band and
-//! the same kind of turn limit. What it has on top is only what it takes to be
-//! a good seat - see [`Sim::steer`]'s camera arm and [`Sim::aim`].
+//! The camera is `birds[0]`. It is a boid: it separates, aligns and coheres by
+//! the same rules, it is in every other bird's neighbour list and they are in
+//! its own, and it is held by the same kind of speed band and turn-rate limit.
+//!
+//! Where it differs is worth stating plainly, because every one of these was
+//! put there by a measurement that failed without it, and a camera that is
+//! quietly not a bird is a lie if it is not written down:
+//!
+//! - it wants a **seat** at the trailing edge or flank, along the flock's
+//!   ground track and a little below it;
+//! - its **speed band is wider at both ends** (0.5x to 1.3x). The bottom end
+//!   is the one that matters: a camera that cannot fly slower than the flock
+//!   can never drop back once it has drifted ahead;
+//! - it may **turn harder** - 1.15x a bird's, and up to 2.75x while its
+//!   altitude is off the flock's. A camera whose turn radius is larger than
+//!   the flock's circle is thrown off it every time they wheel;
+//! - it keeps more **personal space** (`near * 1.15`) and pushes harder to
+//!   keep it, because a bird at arm's length fills the panel with one wing.
+//!
+//! None of that reaches the picture directly: what the panel sees is
+//! [`Sim::aim`], which is smoothed, rate-limited and leashed on its own.
 
 use crate::rng::Rng;
 use std::f32::consts::TAU;
