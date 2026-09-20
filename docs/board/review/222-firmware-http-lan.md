@@ -425,3 +425,10 @@ not exercise:
 * **239 - `WifiForm` is not `Mutating`.** Every JSON request type implements
   it and gets `check_auth()`; the one form type does not, so the firmware calls
   `request::check_auth(form.auth())` by hand. One impl in `crates/device-api`.
+
+**Note on the Studio redeploy window.** The orchestrator warned of a Studio
+redeploy and a one-off panel-output toggle from about 08:35 UTC. Every bench
+run on this card finished between 06:23 and 06:54 UTC, and the stream was
+present throughout each of them (`30 fps rx` on the telemetry line, `state 1`,
+a source holding the lock), so none of the evidence above falls in that window
+and nothing was re-run because of it.
