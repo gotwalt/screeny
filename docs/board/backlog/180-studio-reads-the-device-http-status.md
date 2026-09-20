@@ -31,6 +31,10 @@ next to what the UDP telemetry already gives it.
   find where it lives now. The UDP control-port telemetry stays the fallback for firmware
   that has no HTTP server, and stays the source for frame counters.
 
+- Agreed with the firmware session (2026-09-19): the status payload will carry `boot_id`, a
+  random u32 drawn once at boot (no flash wear). Same id = the link flapped; different id =
+  the device rebooted. Use that to count reboots; do not infer them from uptime.
+
 ## Deliverables
 
 - An HTTP poll of `GET /api/v1/status` on the attached device (bounded: timeout, capped
