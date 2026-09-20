@@ -264,3 +264,9 @@ An `.env` is host state, not repo state: it is in `.gitignore` and in
   writes `state.json` under `SCREENY_STATE_DIR=/data` (a named volume owned by uid 10001)
   and listens on `SCREENY_LISTEN`. A restart resumes what every panel was playing. The
   image has no `CMD` on purpose: a flag would silently beat the environment.
+- **Settings survive deploys** (the owner's requirement, 2026-09-19): everything the studio
+  remembers - devices, what each panel plays, each piece's tuned settings (card 165) - is in
+  `/data/state.json` on the named volume `screeny_state`. A redeploy rebuilds the image and
+  recreates the container but keeps the volume; verified on workbench (a panel playing
+  `overland` seed 4242 was playing it again 4 s after a full redeploy). Only
+  `tools/deploy-workbench.sh --down --volumes` deletes it.
