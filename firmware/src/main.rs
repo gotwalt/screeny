@@ -75,7 +75,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hub75::framebuffer::bitplane::plain::DmaFrameBuffer;
 use esp_hub75::framebuffer::compute_rows;
 use esp_hub75::{Hub75, Hub75Config, Hub75Pins16};
-use esp_radio::wifi::sta::StationConfig;
+use esp_radio::wifi::sta::{ScanMethod, StationConfig};
 use esp_radio::wifi::{
     AuthenticationMethodConfig, Config as WifiConfig, ControllerConfig, Interface, PowerSaveMode,
     WifiController,
@@ -347,6 +347,11 @@ async fn display_task(
 fn station_config() -> StationConfig {
     StationConfig::default()
         .with_ssid(SSID.try_into().unwrap())
+        // The default fast scan joins the first access point that answers. On
+        // a mesh that is a lottery: five boots in a row picked five different
+        // nodes, from -54 to -78 dBm (card 220). Scanning every channel lets
+        // the driver's by-signal sort choose the strongest, for ~2 s at join.
+        .with_scan_method(ScanMethod::AllChannels)
         .with_authentication(AuthenticationMethodConfig::Wpa2Personal(
             PASSWORD.try_into().unwrap(),
         ))

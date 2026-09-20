@@ -55,6 +55,13 @@ Already established - do not rediscover:
   non-UTF-8 SSID is fine and should be said in a comment). **`crates/proto`,
   `crates/receiver` and the spec are shared with the software session: do not change
   them.** If you are sure one needs a change, stop and tell the orchestrator.
+- Card 220 landed: the framebuffers are `ConstStaticCell`s, core 0's measured stack
+  high-water is ~6 KB of 37.5 KB (`stack: core 0 main high-water ...` is logged once at
+  60 s - quote it before and after your change), the heap split stays 64 + 32 KB, and
+  `station_config()` / `station_loop()` are now separate functions in `main.rs`.
+  `station_config()` sets `ScanMethod::AllChannels` so the station joins the strongest
+  node of the owner's mesh instead of the first to answer: **keep that** in whatever
+  builds a `StationConfig` from stored credentials.
 - Decisions: stored credentials are tried first (3 attempts), then the compile-time
   ones if the build has any, and a build **without** compile-time credentials must now
   compile and boot (`firmware/build.rs` makes them optional; with none and an empty
