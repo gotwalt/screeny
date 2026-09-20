@@ -139,3 +139,66 @@ at a known address, a name-reached device, a device that is streaming, and the
 same-address case).
 
 `cargo test -p screeny-studio --lib devices`: 14 passed, 0 failed.
+
+### Worker, step 4 (the schedule, and the test against two simulators)
+
+**One new `Config` field** (`crates/studio/src/lib.rs`, the shared file - five
+lines including its doc comment, plus one line in `Default`):
+`probe_to: Vec<SocketAddr>`. Empty, the default, means the subnet broadcast
+address of every interface and the probe then follows `discover`, so
+`--no-discover` turns it off exactly as the card asks. A non-empty list is
+"ask these control addresses instead", which is what a container with no
+broadcast route needs and what the tests use. **No new CLI flag**; the two
+help lines that said "browse" now say "browse or probe".
+
+**The schedule** (`crates/studio/src/fleet.rs`): `spawn_discovery` now runs a
+probe after the browse on the same tick.
+
+- *only when something is missing*: `Registry::unheard(stale_after)` is empty,
+  so nothing is sent. A house that is working sends nothing at all.
+- *one in flight*: it is awaited on the one discovery task, after the browse -
+  so a probe can never delay a browse, and nothing here ever touches a player
+  (the supervisor re-aims the link on its next 1 s tick).
+- *capped, jittered backoff*: the existing `fail()`, under one key - the probe
+  is one thing for the fleet, not one per device. Twelve passes at the cap.
+- *window*: 1 s, clamped to the tick.
+- *logged per event*: one line when a panel is followed, one line when the
+  probe starts failing for a *new* reason, and silence for ever when it finds
+  nothing. `/api/v1/status` carries `discovery.probes`, `discovery.moved` and
+  `discovery.last_probe_error` for the rest.
+- *never on a render thread*: `spawn_blocking`.
+
+**The test** (`crates/studio/tests/moved.rs`, new file, two tests). mDNS off,
+loopback only, the probe pointed at a small band of loopback control ports -
+the file's stand-in for a broadcast, since the studio is never told which of
+them the panel moved to and learns it from the `id=` in the answer. Each test
+has a band of its own, because they run at the same time.
+
+- `a_panel_that_moved_is_followed_and_the_other_is_left_alone`: two
+  simulators, each playing something chosen; one is dropped and comes back on
+  a different port with the same id. The studio follows it with nobody saying
+  anything - same id, same player, same piece (`metaballs`), same seed (4242),
+  same fps, still two devices, still the same panel on the page - while the
+  other keeps its address, its resolution, its link (`sessions` unchanged) and
+  its frames. Measured: `mov001` moved 50940 -> 50944 and was followed; the
+  stayer went 7 -> 43 frames without a reconnect.
+- `the_status_poll_follows_a_panel_that_moved`: card 180's poll resumes by
+  itself at the new resolution (`http.reads` 1 -> 2, `facts` 0.0 s old, no
+  error). That `http_addr` is the *new IP* is the unit test, because loopback
+  has only one IP.
+
+**Two things found while writing it, both worth writing down.**
+
+1. `Registry::heard_http` counts as hearing from a device - correctly - so on
+   loopback, where the replacement simulator takes the **same** HTTP port
+   back, a panel that is replaced instantly never goes unheard and is never
+   probed for. The test therefore leaves the panel away for longer than
+   `stale_after`, which is what a panel taking a new DHCP lease does anyway.
+   On a real move the IP changes and UDP and HTTP stop together, so this is a
+   property of loopback rather than of the product.
+2. `POST /api/v1/devices/add {play:true}` **attaches** the panel it adds, so
+   the last panel added is the one the page shows. Not this card's business;
+   the test asserts that following a panel does not change which one is
+   attached, rather than which one that is.
+
+`cargo test -p screeny-studio --test moved`: 2 passed, 0 failed, in 6.9 s.

@@ -587,6 +587,19 @@ pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>> {
             {
                 break
             }
+            // An ICMP port-unreachable for one destination, reported on the
+            // next read: some stacks do this, and a probe is *expected* to ask
+            // addresses where nothing is listening - that is what a broadcast
+            // does. It says nothing about the other destinations, so keep
+            // listening until the window closes.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                continue
+            }
             Err(e) => return Err(e.into()),
         };
         let Ok(pkt) = ControlPacket::parse(&buf[..got]) else {
