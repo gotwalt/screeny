@@ -169,10 +169,27 @@ async fn the_page_and_the_panel_are_one() {
     assert_eq!(s["preview"]["seed"], 777);
 
     // A parameter, too - the half card 166 was written for.
+    //
+    // **Both halves out of one read, and waited for rather than sampled.**
+    // "It took the parameter" and "it is still streaming" are asserted on the
+    // same answer (`until_json` hands back the one that satisfied it), and
+    // being connected is waited for: the supervisor rebuilds the link when the
+    // studio learns where the panel really is - a typed address becoming a
+    // resolved device - and a loaded machine can put that rebuild exactly
+    // here. Card 117: this line was `assert_eq!(..., true)` with no message
+    // and no wait, and it failed once, under a full loaded suite, saying
+    // nothing.
     post(at, "/api/v1/set_param", r#"{"id":"count","value":8.0}"#).await;
-    let s = until_json(at, PATIENCE, "the panel to take the parameter", "/api/v1/status", |s| {
-        device_of(s)["player"]["params"]["count"] == 8.0
-    })
+    let s = until_json(
+        at,
+        Duration::from_secs(30),
+        "the panel to take the parameter and be streaming it",
+        "/api/v1/status",
+        |s| {
+            let d = device_of(s);
+            d["player"]["params"]["count"] == 8.0 && d["player"]["panel"]["connected"] == true
+        },
+    )
     .await;
     // The page's own state carries every parameter at its effective value, so
     // a browser can draw the sliders from it.
@@ -181,8 +198,15 @@ async fn the_page_and_the_panel_are_one() {
     assert!(boot["state"]["params"].as_object().expect("params").len() > 1, "{}", boot["state"]["params"]);
     assert_eq!(boot["state"]["device"], "aa44aa", "the page says which panel it is a window onto");
 
-    // And it is still streaming it, not just configured to.
-    assert_eq!(device_of(&s)["player"]["panel"]["connected"], true);
+    // And it is still streaming it, not just configured to - said of the same
+    // moment the parameter was read from, with the link's own account of
+    // itself if it is not.
+    assert_eq!(
+        device_of(&s)["player"]["panel"]["connected"],
+        true,
+        "the panel is streamed to, not merely configured: {}",
+        device_of(&s)["player"]["panel"]
+    );
     // Nothing is left that could promote a second picture onto the panel.
     let gone = post(at, "/api/v1/player/adopt_preview", r#"{"device":"aa44aa"}"#).await;
     assert_eq!(gone.status, 404, "`adopt_preview` should be gone, not quietly doing something");

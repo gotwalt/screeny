@@ -141,6 +141,33 @@ really had died still fails, 30 s later, with the device beside it.
 Two flakes, then, in the one test, both of the same family: a test asserting on an
 instant that the code had not promised anything about.
 
+### 2026-09-20, third of the family: `crates/studio/tests/fleet.rs`
+
+Sent by the orchestrator while this branch was being proved: `the_page_and_the_panel_are_one`
+failed once, at what was line 185, under a full loaded `cargo test` (main has two more
+busy host tests since 1678e0a), and passed alone and on the two full runs after it.
+
+The line was
+
+```rust
+// And it is still streaming it, not just configured to.
+assert_eq!(device_of(&s)["player"]["panel"]["connected"], true);
+```
+
+- no message, and worse, **no wait**: `s` is the answer that satisfied the wait for the
+*parameter*, and nothing in that wait says anything about the link. The supervisor
+rebuilds the link when the studio learns where the panel really is - a typed address
+becoming a resolved device - and for the moment in between, `connected` is false. On an
+idle machine that rebuild is long over by here; under load it can land exactly here.
+
+Same treatment, and it costs nothing: the parameter wait now waits for **both** halves in
+one condition, so the two facts still come out of one read (card 176's rule), the
+patience is the file's generous 30 s rather than 5, and the assertion prints the panel's
+own account of itself when it fails. Not a reproduction, and not called a fixed cause:
+what can be shown is that the test was asserting on an instant nothing had promised.
+
+`crates/studio/tests/fleet.rs`, 12 tests, passes; run 10 times in a row below.
+
 ### Note from the orchestrator (2026-09-20)
 
 A second one of the same family, seen once while merging 196 with two other worktrees
