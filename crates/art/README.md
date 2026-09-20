@@ -23,7 +23,7 @@ cargo run -p screeny-studio                      # the designer
 cargo run -p screeny-art -- list                 # pieces and their parameters
 cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
-cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out clock.png
+cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.png
 cargo test -p screeny-art                        # includes the end-to-end wire tests
 
 # to a panel (use --release, the encoder is ~10x slower in a debug build)
@@ -127,7 +127,7 @@ since card 162 it can also be *aimed*, with `--time HH:MM[:SS]` on `snapshot`,
 ```bash
 # from the repo root, with --release: 30 fps of the full pipeline per second of run
 cargo run --release -p screeny-art -- \
-  snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out settled.png
+  snapshot clocks-numerals --time 21:12 --out settled.png
 cargo run --release -p screeny-art -- \
   snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out dancing.png
 cargo run --release -p screeny-art -- \
@@ -136,32 +136,33 @@ cargo run --release -p screeny-art -- \
 
 | you want | the command |
 |---|---|
-| the numerals piece **settled on 21:12**, hands holding the time | `--time 21:12 --at 40 --set still=60` |
+| the numerals piece **settled on 21:12**, hands holding the time | `--time 21:12` |
 | it **mid-dance into 21:12**, two seconds from landing | `--time 21:11:20 --at 38 --seed 7` |
 | the dials piece **telling 10:10**, gathered and held | `--time 10:09:50 --at 15` |
 
 Reading those:
 
+- **The settled minute is `--time` and nothing else.** With `--time`, `--at`
+  defaults to 20 s and `--warmup` to the whole run: a clock has to be watched
+  from its first frame, and the numerals piece dances onto the minute it was
+  born on in up to about 16 s (15.4 s, the longest over 60 seeds and all
+  thirteen choreographies). At 20 s every one of them has landed and settled
+  and none has set off for the next minute. **No `--seed` either**: once the
+  hands have landed, what is on the panel is the minute, not the dance that got
+  there, and all 60 seeds give one PNG. There is a test.
 - **The run starts at the pinned time and goes forward**, so `--at` is seconds
-  after it. With `--time`, `--warmup` defaults to the whole run rather than 2 s,
-  because a clock has to be watched from its first frame; give `--warmup`
-  yourself to shorten it.
+  after it, and `--at`/`--warmup` given explicitly still mean what they always
+  did.
 - **A dance lands exactly as the minute turns.** So the way to catch one is to
   start before the minute and render just before it: born at 21:11:20 the piece
   dances onto 21:11, holds, sets off again around t=31 and lands at t=40, which
-  is 21:12:00. `--at 38` is two seconds from the end of that dance. The
-  choreography is chosen by the seed, so pin `--seed` for this one.
-- **Settling needs no seed.** Once the hands have landed, what is on the panel
-  is the minute, not the dance that got there: `--time 21:12 --at 40 --set
-  still=60` gives the identical PNG for any seed (there is a test). `still=60`
-  holds the time for the whole minute, so 40 s is after the longest opening
-  dance and before the next one sets off.
+  is 21:12:00. `--at 38` is two seconds from the end of that dance. This one
+  *is* the choreography, so pin `--seed`.
 - **The pinned day is day zero, not today.** The numerals piece seeds each
   minute's choreography from the absolute minute number, so "21:12 today" would
   pick a different dance tomorrow. `--time` means one thing for ever.
-- **Everything else still has to be pinned by hand.** `--seed` defaults to the
-  system clock, so a byte-identical repeat of a picture that depends on the
-  choreography wants `--seed N` as well.
+- **`--seed` is still the system clock by default.** Anything whose picture
+  depends on the piece's own randomness wants `--seed N` as well.
 - The pieces' `offset` parameter is unchanged: an offset in minutes, relative
   to whatever the clock says, which is what the studio's slider wants.
 
@@ -276,9 +277,10 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   `Turned` (the digits with each clock's corner rigidly rotated by a wave).
 - Digit shapes: 0, 2, 5, 6, 9 checked against 1080p footage of the original; 1,
   3, 4, 7, 8 follow manu.ninja's table (from the studio's promotional films).
-- **To render a chosen minute**, `--time` (above): `--time 21:12 --at 40 --set
-  still=60` is the settled picture of 21:12, the same PNG every time it is
-  typed. Before/after comparisons of this piece are only comparable that way.
+- **To render a chosen minute**, `--time` (above): `snapshot clocks-numerals
+  --time 21:12 --out x.png` is the settled picture of 21:12, the same PNG every
+  time it is typed, whatever the seed. Before/after comparisons of this piece
+  are only comparable that way.
 - In the studio, drag "Seconds per minute" down to ~30 to see the whole cycle
   quickly, and "Choreography" to pick a dance; dances and moods are logged to
   stderr with their start times. At 60 it is a real clock on local time. Set

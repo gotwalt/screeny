@@ -40,17 +40,18 @@ the wall clock. The seed is logged to stderr so a good run can be reproduced.
 starts, instead of the machine's clock, so the same command draws the same
 picture today and tomorrow. It is a time of day on a fixed day, and the run
 goes forward from it: `snapshot --time 21:11:58 --at 4` renders the four
-seconds into 21:12:02. With `--time`, `--warmup` defaults to the whole run
-(from engine time zero), because a clock has to be watched from its first
-frame; give `--warmup` yourself to shorten it. Pin `--seed` too for a picture
-that is the same byte for byte - by default it comes from the system clock.
+seconds into 21:12:02. With `--time`, `--at` defaults to 20 s and `--warmup`
+to the whole run, because a clock has to be watched from its first frame and
+the numerals piece needs about 16 s to dance onto the time it was born on;
+give either yourself to change it.
 
-  numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --at 40 --set still=60 --out x.png
+  numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --out x.png
   numerals, dancing into it:   snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out x.png
   dials, telling 10:10:        snapshot clocks-dials --time 10:09:50 --at 15 --out x.png
 
 The settled one needs no --seed: once the hands have landed, what is on the
-panel is the minute, not the dance that got there. The dancing one does.";
+panel is the minute, not the dance that got there. The dancing one does -
+`--seed` otherwise comes from the system clock, and the choreography with it.";
 
 fn main() {
     if let Err(e) = run(std::env::args().skip(1).collect()) {
@@ -67,8 +68,9 @@ struct Args {
     seconds: Option<f64>,
     at: f64,
     warmup: f64,
-    /// True once `--warmup` has been given, so `--time` may change the default
-    /// without overriding a choice.
+    /// Which of `--at` and `--warmup` have been given, so `--time` may change
+    /// their defaults without overriding a choice.
+    at_given: bool,
     warmup_given: bool,
     clock: Clock,
     scale: usize,
@@ -120,6 +122,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         seconds: None,
         at: 5.0,
         warmup: 2.0,
+        at_given: false,
         warmup_given: false,
         clock: Clock::Live,
         scale: 12,
@@ -140,7 +143,10 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             "--seed" => a.seed = value.parse().map_err(|_| format!("--seed: `{value}` is not an integer"))?,
             "--fps" => a.fps = num()?.clamp(1.0, 60.0),
             "--seconds" => a.seconds = Some(num()?),
-            "--at" => a.at = num()?,
+            "--at" => {
+                a.at = num()?;
+                a.at_given = true;
+            }
             "--warmup" => {
                 a.warmup = num()?.max(0.0);
                 a.warmup_given = true;
@@ -171,12 +177,25 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             _ => return Err(format!("unknown flag `{flag}`")),
         }
     }
-    // A pinned clock is watched from its first frame: a piece that dances onto
-    // the minute has to be alive before the minute turns, and two seconds of
-    // warmup would only show it being born. So `--time` makes the default
-    // warmup the whole run; an explicit `--warmup` still wins.
-    if matches!(a.clock, Clock::Pinned(_)) && !a.warmup_given {
-        a.warmup = a.at.max(0.0);
+    // Asking for a time of day is asking for a clock that has arrived at it,
+    // so `--time` moves two defaults; either given explicitly still wins.
+    //
+    // `--at 20`, because the numerals piece dances onto the minute it is born
+    // on and that takes up to about 16 s (measured over 60 seeds and all 13
+    // choreographies: longest 15.4 s). At 20 s every one of them has landed
+    // and settled, and none has set off for the next minute, so
+    // `--time 21:12` alone is the settled picture of 21:12 - the same PNG
+    // whatever the seed.
+    //
+    // The whole run as `--warmup`, because a clock has to be watched from its
+    // first frame: two seconds of it would only show the piece being born.
+    if matches!(a.clock, Clock::Pinned(_)) {
+        if !a.at_given {
+            a.at = 20.0;
+        }
+        if !a.warmup_given {
+            a.warmup = a.at.max(0.0);
+        }
     }
     Ok(a)
 }

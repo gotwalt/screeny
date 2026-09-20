@@ -58,25 +58,32 @@ fn two_pinned_times_are_two_pictures() {
     }
 }
 
-/// The settled numeral picture for a minute is the one command in the README,
-/// and it carries no seed: once the hands have landed on 21:12 and the time is
-/// being held, what is on the panel is the minute, not the dance that got
-/// there. Four unrelated seeds, one picture.
+/// `snapshot clocks-numerals --time 21:12 --out x.png` is the card's
+/// acceptance and the README's one obvious command, and it carries no seed:
+/// once the hands have landed on 21:12 and the time is being held, what is on
+/// the panel is the minute, not the dance that got there.
 ///
-/// `still=60` holds the time for the whole minute, so the frame at 40 s is
-/// after the longest opening dance and before the next one sets off.
+/// This is that command's shot - the binary's `--time` defaults, 20 s rendered
+/// from engine time zero - rendered with four unrelated seeds and with each of
+/// the thirteen choreographies pinned. One picture. 20 s is after the longest
+/// opening dance (15.4 s, measured over 60 seeds) and long before the piece
+/// sets off for 21:13, so nothing here is near an edge.
 #[test]
-fn the_settled_numerals_picture_is_the_minute_not_the_dance() {
+fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
     let def = piece::find("clocks-numerals").expect("the piece");
-    let mut params = Params::defaults(def.params);
-    assert!(params.set(def.params, "still", 60.0));
-    let render = |seed| {
-        let shot = Shot { seed, at: 40.0, warmup: 40.0, clock: at("21:12"), ..Shot::default() };
+    let render = |seed, dance| {
+        let mut params = Params::defaults(def.params);
+        assert!(params.set(def.params, "dance", dance));
+        let shot = Shot { seed, at: 20.0, warmup: 20.0, clock: at("21:12"), ..Shot::default() };
         take(def, &params, &shot).preview
     };
-    let want = render(1);
+    // dance 0 is "vary", so these four are four different choreographies.
+    let want = render(1, 0.0);
     for seed in [7, 42, 999] {
-        assert_eq!(want, render(seed), "seed {seed}: the settled minute must not depend on the choreography");
+        assert_eq!(want, render(seed, 0.0), "seed {seed}: the settled minute must not depend on the choreography");
+    }
+    for dance in 1..=13_u8 {
+        assert_eq!(want, render(7, f32::from(dance)), "dance {dance}: it lands on the same picture");
     }
 }
 
