@@ -24,7 +24,7 @@ Details: `docs/research/005-end-to-end.md`.
 | `crates/screeny` | Sender library + the `screeny` CLI (discover, stats, brightness, patterns, `pipe`, demos). |
 | `crates/demos` | Reference renderers: endless fractal zoom, word clock. |
 | `crates/sim` | A fake panel that speaks the whole protocol; LED-dot window or headless. |
-| `crates/probe` | `screeny-probe`, bench instrument: the wire-level conformance suite, paced vector streams. A library too, so `crates/sim`'s tests drive the same sender, encoders and rules. |
+| `crates/probe` | `screeny-probe`, bench instrument: the wire-level conformance suite (`conformance`), the HTTP API's conformance suite (`http`), paced vector streams. A library too, so `crates/sim`'s tests drive the same sender, encoders and rules. |
 | `firmware/` | The ESP32 firmware (separate cargo project, `esp` toolchain). |
 | `crates/art` | The generative art system: pieces, panel-aware pipeline, headless `screeny-art` binary. The primary source of frames. |
 | `crates/studio` | Screeny Studio: an HTTP + WebSocket server with the UI built in. **One page**: what the panel is showing, and everything that changes it. Owns what plays where across restarts; see `docs/design/studio-vision.md`. |

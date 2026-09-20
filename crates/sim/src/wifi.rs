@@ -255,6 +255,33 @@ impl WifiModel {
         self.p.screen(ms(now_us))
     }
 
+    /// The station's own join state: **the link**, and never the sticky
+    /// result of the last credentials attempt.
+    ///
+    /// `docs/design/device-web.md`, the card 223 paragraph: in
+    /// `GET /api/v1/status`, `wifi_state` means the link
+    /// (`connected` / `connecting` / `disconnected`); the sticky `failed` of a
+    /// posted attempt belongs to `GET /api/v1/wifi`, which is what
+    /// [`Self::wifi_reply`] puts there. Card 228's HTTP conformance rule 8
+    /// found the simulator reporting the sticky value in both places, exactly
+    /// as firmware 0.4.0 does; this is the one derivation both callers now
+    /// share, so they cannot drift apart again.
+    ///
+    /// In `Portal` the machine's own byte is used: there is no link to
+    /// describe, and that is also what `GET_WIFI` (spec 8.3) answers - which
+    /// this method deliberately does **not** change.
+    pub(crate) fn link_state(&self) -> screeny_device_api::WifiState {
+        use screeny_device_api::WifiState;
+        match self.p.state() {
+            State::Boot => WifiState::Disconnected,
+            State::Joining | State::Trial => WifiState::Connecting,
+            State::Online => WifiState::Connected,
+            State::Portal => {
+                WifiState::from_u8(self.p.wifi_state()).unwrap_or(WifiState::Disconnected)
+            }
+        }
+    }
+
     /// `GET /api/v1/wifi`'s body, built from the machine and nothing else.
     ///
     /// A trial in flight or just finished is what the page that posted reads,
@@ -266,21 +293,13 @@ impl WifiModel {
     /// simulator cannot answer this differently.
     #[must_use]
     pub fn wifi_reply(&self) -> WifiReply {
-        use screeny_device_api::WifiState;
         if self.p.trial_is_current() {
             if let Some(t) = self.p.trial() {
                 return WifiReply::from(t);
             }
         }
-        let state = match self.p.state() {
-            State::Boot => WifiState::Disconnected,
-            State::Joining | State::Trial => WifiState::Connecting,
-            State::Online => WifiState::Connected,
-            State::Portal => WifiState::from_u8(self.p.wifi_state())
-                .unwrap_or(WifiState::Disconnected),
-        };
         WifiReply {
-            state,
+            state: self.link_state(),
             ssid: screeny_device_api::text::text(self.ssid()).filter(|s: &_| !s.is_empty()),
             ip: self.p.ip().map(screeny_device_api::text::ipv4_text),
             reason: None,

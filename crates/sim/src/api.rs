@@ -341,8 +341,15 @@ fn status(shared: &Shared) -> Response {
         rssi_dbm: t.rssi_dbm,
         brightness: core.brightness(),
         idle_mode: core.idle_mode().into(),
-        wifi_state: screeny_device_api::WifiState::from_u8(wifi.wifi_state())
-            .unwrap_or(screeny_device_api::WifiState::Disconnected),
+        // The **link**, not the sticky result of the last credentials attempt:
+        // `docs/design/device-web.md`'s card 223 paragraph says that result
+        // belongs to `GET /api/v1/wifi` alone, and a device that fell back
+        // successfully must not read `failed` here while it is plainly
+        // connected. Card 228's rule 8 caught the simulator doing exactly
+        // that; `wifi.link_state()` is now the one derivation this route and
+        // `GET /api/v1/wifi` share. UDP `GET_WIFI` still answers
+        // `wifi.wifi_state()`, which is spec 8.3 and is unchanged.
+        wifi_state: wifi.link_state(),
         ssid: screeny_device_api::text::text(wifi.ssid()).filter(|s: &_| !s.is_empty()),
         ip: wifi.ip().map(screeny_device_api::text::ipv4_text),
         state: StreamState::from_u8(core.state_byte()).unwrap_or(StreamState::Idle),

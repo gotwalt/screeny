@@ -6,11 +6,15 @@
 //! sender and the same section-4 encoders, and card 080's rule was that there
 //! be one copy of each rather than two that drift.
 //!
-//! Everything here is built on `screeny-proto` and nothing else, so a
+//! The wire half is built on `screeny-proto` and nothing else, so a
 //! disagreement between the probe and a device can only mean one of them
-//! disagrees with `docs/design/protocol-v1.md`.
+//! disagrees with `docs/design/protocol-v1.md`. The HTTP half ([`http`], card
+//! 228) is the same idea one layer up: it parses every reply with
+//! `screeny-device-api`'s own types, so a disagreement there can only mean one
+//! of them disagrees with `docs/design/device-web.md`.
 
 pub mod enc;
+pub mod http;
 pub mod link;
 pub mod suite;
 pub mod vectors;

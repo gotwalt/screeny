@@ -33,11 +33,17 @@
 //!   conformance [--only SEC] [--slow] [--cap-probe] [--restore-idle N] [--list]
 //!                            the whole wire-level suite, rule by rule
 //!   lock-test                an alias for `conformance --only 7`
+//!   http [--http HOST[:PORT]] [--only N|SECTION] [--list]
+//!        [--allow-reboot] [--allow-wifi-trial] [--cap-probe]
+//!                            the HTTP API's conformance suite (card 228)
 //! ```
 //!
-//! The suite itself is `src/suite/`, and it is a library so that
-//! `crates/sim`'s integration tests can run the same rules in process
-//! (card 080).
+//! The suites themselves are `src/suite/` (the wire) and `src/http/` (the
+//! HTTP API), and they are libraries so that `crates/sim`'s integration tests
+//! can run the same rules in process (cards 080 and 228).
+//!
+//! The bench one-liner after a flash is
+//! `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http`.
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
@@ -56,7 +62,9 @@ const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT] | --name NAME] [--
                                stream [--codec ID|all|pattern] [--fps F] [--secs N] [--final] |\n\
                                conformance [--only SECTION] [--slow] [--cap-probe]\n\
                                            [--restore-idle N] [--list] |\n\
-                               lock-test (= conformance --only 7)";
+                               lock-test (= conformance --only 7) |\n\
+                               http [--http HOST[:PORT]] [--only N|SECTION] [--list]\n\
+                                    [--allow-reboot] [--allow-wifi-trial] [--cap-probe]";
 
 struct Args {
     host: String,
@@ -137,10 +145,15 @@ fn main() -> ExitCode {
 
 fn run() -> Result<bool, String> {
     let args = parse_args()?;
-    let ctrl_addr = resolve(&args.host, args.ctrl_port)?;
-    let frame_addr = resolve(&args.host, args.frame_port)?;
     let cmd = args.rest[0].clone();
     let rest = &args.rest[1..];
+    // `http --list` describes the catalogue and talks to nothing, so it has to
+    // work with no device, no DNS and no network at all.
+    if cmd == "http" && has_flag(rest, "--list") {
+        return cmd_http_list();
+    }
+    let ctrl_addr = resolve(&args.host, args.ctrl_port)?;
+    let frame_addr = resolve(&args.host, args.frame_port)?;
 
     match cmd.as_str() {
         "info" => cmd_info(ctrl_addr),
@@ -200,6 +213,7 @@ fn run() -> Result<bool, String> {
         // Kept as an alias: the orchestrator's runbooks and cards 008 and 016
         // all say `lock-test`, and section 7 is exactly what it used to mean.
         "lock-test" => cmd_conformance(frame_addr, ctrl_addr, rest, Some("7")),
+        "http" => cmd_http(&args, ctrl_addr, rest),
         other => Err(format!("unknown command {other:?}\n{USAGE}")),
     }
 }
@@ -725,4 +739,90 @@ fn cmd_conformance(
         restore_idle,
     };
     suite::run(&opts).map(|s| s.ok())
+}
+
+// ---------------------------------------------------------------------------
+// http
+// ---------------------------------------------------------------------------
+
+/// `http --list`: the catalogue, with each rule's number, section, route,
+/// estimate, opt-in flags and citation. Talks to nothing.
+fn cmd_http_list() -> Result<bool, String> {
+    use screeny_probe::http;
+
+    let rules = http::all();
+    println!(
+        "{} rules (CARD_223_LANDED is {}):",
+        rules.len(),
+        http::CARD_223_LANDED
+    );
+    for r in &rules {
+        let mut tags = Vec::new();
+        if r.flags & http::ALLOW_REBOOT != 0 {
+            tags.push("allow-reboot");
+        }
+        if r.flags & http::ALLOW_WIFI_TRIAL != 0 {
+            tags.push("allow-wifi-trial");
+        }
+        if r.flags & http::CAP_PROBE != 0 {
+            tags.push("cap-probe");
+        }
+        if r.flags & http::NEEDS_UDP != 0 {
+            tags.push("needs-udp");
+        }
+        if r.flags & http::KNOWN_223 != 0 {
+            tags.push("known-223");
+        }
+        println!(
+            "  #{:<3} {:<10} {:<60} ~{:>4.1}s {}",
+            r.n,
+            r.section,
+            r.name,
+            r.secs,
+            tags.join(",")
+        );
+        println!("       {:<10} {}", r.route, r.cite);
+    }
+    Ok(true)
+}
+
+/// Run the HTTP conformance suite (`src/http/`).
+///
+/// The address defaults to the one `--addr`/`--name` already named, on port
+/// 80, which is where the device serves it; `--http HOST[:PORT]` points it
+/// somewhere else (a simulator on `127.0.0.1:8080`, say) without moving the
+/// UDP ports, because two of the rules compare the two halves of the device
+/// against each other.
+fn cmd_http(args: &Args, ctrl_addr: SocketAddr, rest: &[String]) -> Result<bool, String> {
+    use screeny_probe::http;
+
+    // `--http` takes a host and an optional port; without it the HTTP API is
+    // on the device this run is already pointed at, on port 80.
+    let (host, port) = match flag(rest, "--http") {
+        Some(v) => match v.rsplit_once(':') {
+            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (
+                h.to_string(),
+                p.parse::<u16>().map_err(|_| "bad --http port")?,
+            ),
+            _ => (v, 80),
+        },
+        None => (args.host.clone(), 80),
+    };
+    let http_addr = resolve(&host, port)?;
+
+    let opts = http::Opts {
+        http_addr,
+        host,
+        // The same device, so the rules that compare a browser's numbers with
+        // a sender's have both halves. A `--http` pointed somewhere else is
+        // still given this control port: if it does not answer, those rules
+        // skip themselves and say so.
+        ctrl_addr: Some(ctrl_addr),
+        only: flag(rest, "--only"),
+        allow_reboot: has_flag(rest, "--allow-reboot"),
+        allow_wifi_trial: has_flag(rest, "--allow-wifi-trial"),
+        cap_probe: has_flag(rest, "--cap-probe"),
+        ctrlc: true,
+    };
+    http::run(&opts).map(|s| s.ok())
 }
