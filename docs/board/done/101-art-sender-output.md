@@ -370,3 +370,28 @@ Every simulator in this card's evidence was started with `--exit-after` and ever
 wrapped in `timeout`. `ps` checked at the end of the session: no `screeny-sim`, no
 `screeny-art`, no studio, no stray cargo. Scratch files went to the session scratchpad,
 not the worktree.
+
+### Orchestrator: merged, and accepted on the real panel (2026-09-19)
+
+Merged to `main` as `0dd4bae`. Root `cargo test --release --no-fail-fast`: 283 passed,
+0 failed; `-p screeny-art --features sender`: 37 + 3 passed.
+
+The worker could not take the panel step: LAN unicast is blocked from a worker's
+environment (its own measurement, above), so real-panel runs belong to the
+orchestrator. Run from the main checkout against `screeny-4a00a4` (192.168.7.221,
+firmware 0.2.0), by mDNS name, `screeny-art play <piece> --to screeny-4a00a4`:
+
+| piece | seconds | offered / sent / coalesced / dropped | indexed exact / fallback | codec, bytes | device (`screeny stats` during the run) |
+|---|---|---|---|---|---|
+| `clocks-numerals` | 60 | 3600 / 1800 / 1800 / 0 | 1800 / 0 | `pal8-lz`, 390-760 | LIVE, rx 30-31/s, shown 30-31/s, stale 0, supers 0, decode err 0, reject 0, decode ~550 us, rssi -57 |
+| `metaballs` (continuous) | 45 | 2700 / 1350 / 1350 / 0 | n/a (lossy) | `pal8-lz` ~1050-1150, some `bc1-dual` 1296 | LIVE, 30-31/s shown, all error counters 0 |
+| `overland` (indexed, GPU, Metal) | 45 | 2690 / 1345 / 1345 / 0 | 1345 / 0 | `pal8-lz`, 755-892 | LIVE, 30-31/s shown, all error counters 0 |
+
+Link `up` for every status line; each run exited 0 and the device went `LIVE -> HOLD`
+afterwards, so `FINAL` released the panel. The real device behaved exactly as the sim
+did. No camera evidence: the owner disconnected the camera on 2026-09-19; the picture
+is judged by eye.
+
+Trap found on the way: a plain `cargo test --release` rebuilds
+`target/release/screeny-art` *without* the `sender` feature, so `play` disappears
+until you rebuild with `--features sender` (card 112 decides the default).
