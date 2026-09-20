@@ -132,3 +132,11 @@ return value that is matched and dropped immediately, so boxing the `Device`
 would buy an allocation per resolve and save nothing.
 
 `cargo test -p screeny`: green (31 tests across lib, integration and doc tests).
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-art -p screeny-demos`: 179 passed, 0
+failed. `Error::AmbiguousName` accepted: everything that names the panel today (`screeny-4a00a4`, in
+the Studio, the docs and the firmware session's `set_panel` body) uses the full instance name, which can
+never be ambiguous. Reaches the live Studio with the next deploy. Card 186 (two `screeny-probe` lints)
+handed to the firmware session, which owns that crate now.

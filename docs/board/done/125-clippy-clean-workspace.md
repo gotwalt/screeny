@@ -136,3 +136,11 @@ that an `#[allow]` carries a reason, and the float/golden-frame rule.
 **Evidence.** `cargo clippy --workspace --all-targets` now prints four lines,
 all of them `screeny-probe`. `cargo test --release --workspace --no-fail-fast`
 green.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-art -p screeny-demos`: 179 passed, 0
+failed. `Error::AmbiguousName` accepted: everything that names the panel today (`screeny-4a00a4`, in
+the Studio, the docs and the firmware session's `set_panel` body) uses the full instance name, which can
+never be ambiguous. Reaches the live Studio with the next deploy. Card 186 (two `screeny-probe` lints)
+handed to the firmware session, which owns that crate now.
