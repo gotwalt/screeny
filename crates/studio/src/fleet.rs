@@ -421,9 +421,9 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                         eprintln!("studio: `{}` rebooted: {} since the studio started", record.label(), heard.reboots);
                     }
                     // Card 195, and said plainly rather than alarmingly: on
-                    // this firmware a crash and a reflash are the same three
-                    // bytes of `reset_reason`, so the line says what is known
-                    // and not what it might mean.
+                    // this firmware a crash and a reflash arrive as the same
+                    // `reset_reason`, so the line says what is known and not
+                    // what it might mean.
                     if heard.unasked {
                         eprintln!(
                             "studio: `{}` rebooted without the studio asking: {} of {} so far",
