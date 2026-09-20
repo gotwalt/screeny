@@ -182,3 +182,30 @@ with firmware 0.2.0 it looks exactly as it does today.
   instead. `set_panel`'s two bodies (`{"on":false}`, `{"on":true,"to":"..."}`) and their
   effect are untouched, and `tests/panel.rs::set_panel_hands_the_panel_over_and_takes_it_back`
   still passes unchanged.
+
+- **Rendered in a real browser**, Chrome, against `screeny-sim` on loopback only
+  (`--no-mdns`, frame 50900/control 50901, HTTP 50950) and a studio started by hand with
+  `--no-discover --listen 127.0.0.1:8799 --state-dir <tmp> --ui-dir crates/studio/ui
+  --device-http-port 50950`. Nothing touched the bench device or `workbench.local`; the
+  only network name in any picture is the simulator's dummy, `simulated`.
+
+  - `docs/research/img/180-device-block.png` - the panel section at a 1500 px viewport,
+    with the panel's own status read: slot, uptime, memory, free stack, WiFi, reboots,
+    last reset, idle behaviour. Quiet, nothing shouting.
+  - `docs/research/img/180-narrow-390.png` - the same at **390 px**. The MCP window here
+    would not shrink below about 1300 px, so the page was loaded in a 390 px-wide
+    same-origin iframe, which gives its content a genuine 390 px layout viewport:
+    `innerWidth 390`, `scrollWidth 390`, no horizontal overflow.
+  - `docs/research/img/180-reboot-seen.png` - after stopping the simulator and starting
+    another on the same ports: **"Reboots 1 since the studio started"**, `Up 27 s`, and
+    one line on the log, `studio: `Bench panel` rebooted: 1 since the studio started`.
+  - `docs/research/img/180-no-http.png` - a fresh studio and a simulator started
+    `--no-http`: the Device block is gone, `Up` and `Signal` are back in the list above,
+    and the section is exactly what it was. `/api/v1/status` says `ok: true`, `problems
+    []`, `/healthz` 200, and the log has **one** line about it, ever.
+  - `docs/research/img/181-no-panel-switch.png` - card 181, a studio with no panel:
+    "NO PANEL YET", "Nothing is being sent…", and the switch reading **"Drive a panel as
+    soon as one is found"**. No control in the section claims anything is reaching a panel.
+
+  Console clean on every load (no messages at all, on a reload with the console being
+  watched from before navigation). Tabs closed; `ps` shows nothing of mine running.
