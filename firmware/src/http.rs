@@ -34,6 +34,12 @@
 //!   `POST /api/v1/reboot` both do work that drops the connection that would
 //!   have carried their answer, so they hand it to [`deferred_task`] and
 //!   return. That is spec section 8.2's rule, which card 212 paid for.
+//! * **A worker's job is to be in `accept`.** smoltcp has no listen backlog, so
+//!   a connection that arrives while neither worker is listening is refused,
+//!   and the device never hears about it. Card 236 is the whole of that story:
+//!   [`serve_on`] owns the accept loop and [`BoundedSocket`] bounds the close,
+//!   so how long a worker stays away after answering is this device's decision
+//!   and not the client's.
 //! * **Never the PSK** (spec section 8.4). The one route that receives one
 //!   passes it to [`crate::store`] and to the radio and nowhere else; the log
 //!   line says how long it was.
@@ -60,6 +66,7 @@ use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use embassy_futures::select::{select, Either};
+use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
 use embassy_net::{IpAddress, IpEndpoint, Stack};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::once_lock::OnceLock;
@@ -1545,10 +1552,197 @@ async fn serve_on(
         HTTP_PORT,
         if ap { "setup network" } else { "lan" }
     );
-    Server::new(app, config, http_buf)
-        .listen_and_serve(id, stack, HTTP_PORT, rx, tx)
+    // Card 236: this is picoserve's own `listen_and_serve` loop
+    // (`picoserve/src/lib.rs:703-780`) spelt out here, for two reasons, and
+    // *only* those two - every byte of HTTP is still picoserve's.
+    //
+    // 1. The socket handed to `serve` is a [`BoundedSocket`], so the close is
+    //    this device's decision and not the client's. That is the card, and the
+    //    wrapper's documentation is where the reasoning lives.
+    // 2. picoserve logs three `info!` lines per connection ("Received
+    //    connection from", "N requests handled from", "Listening on TCP:80...")
+    //    and two of them sit *between* the close and the next `accept`. That is
+    //    ~150 bytes through `esp-println`'s **blocking** UART at 230,400 baud,
+    //    ~6.5 ms of core 0 on exactly the path this card is shortening, on
+    //    every request, forever. This module's rule is already that per-request
+    //    logging happens on the setup network only (see [`Dispatch`], which
+    //    still logs there); picoserve's lines were outside that rule only
+    //    because picoserve wrote them.
+    //
+    // The two socket options below are picoserve's own, copied deliberately:
+    // 45 s of smoltcp inactivity aborts a half-open connection that none of the
+    // picoserve timeouts can see, and the 30 s keep-alive is what makes that
+    // timer mean "the peer is gone" rather than "the peer is quiet".
+    loop {
+        let mut socket = TcpSocket::new(stack, rx, tx);
+        socket.set_keep_alive(Some(Duration::from_secs(30)));
+        socket.set_timeout(Some(Duration::from_secs(45)));
+        if let Err(e) = socket.accept(HTTP_PORT).await {
+            // picoserve logged and went straight round again. A fresh socket is
+            // always in `Closed` and the port is a constant, so neither
+            // `AcceptError` can actually happen - but "cannot happen" plus a
+            // loop with a log line in it is how a device fills a serial log at
+            // line rate, so this one pauses.
+            warn!("net: http worker {} could not accept: {:?}", id, e);
+            Timer::after(Duration::from_millis(100)).await;
+            continue;
+        }
+        // The result is the connection's, not the server's: a client that
+        // vanishes mid-request is an ordinary event on a LAN and the next
+        // `accept` is the whole response to it.
+        let _ = Server::new(app, config, http_buf)
+            .serve(BoundedSocket(socket))
+            .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Getting back to `accept` (card 236)
+// ---------------------------------------------------------------------------
+
+/// How long the close waits for the client to acknowledge the response.
+///
+/// 500 ms is far longer than it takes and far shorter than what it replaces.
+/// On this LAN the acknowledgement is one round trip - single-digit
+/// milliseconds - and BSD and Linux both set `TF_ACKNOW` on a FIN, so it is not
+/// subject to the delayed-ACK timer that makes everything else about a Mac's
+/// TCP adaptive. What the half-second is actually for is smoltcp's first
+/// retransmit of the FIN, so that one lost segment on a noisy channel still
+/// ends in a clean close rather than in the timeout arm.
+///
+/// It is also the new worst case: after this, the longest a client can hold a
+/// worker is `start_read_request` + `read_request` + `write` + this = 13.5 s of
+/// stalling *before* the reply, and 0.5 s after it. It used to be 10 s after
+/// it, and that 10 s was reachable by a client doing nothing wrong.
+const CLOSE_ACK_MS: u64 = 500;
+
+/// An `embassy-net` TCP socket whose close is bounded by **this** device.
+///
+/// ## What picoserve's own socket does, and why it is wrong here
+///
+/// `impl Socket for TcpSocket` (`picoserve/src/io.rs:339`) performs a textbook
+/// graceful shutdown: send the FIN, then read until the peer sends *its* FIN,
+/// then wait for the last acknowledgement. The middle step is
+/// `ReadExt::discard_all_data`, and embassy-net reports end-of-stream only when
+/// smoltcp answers `RecvError::Finished` - which happens when **the client's
+/// application** closes its socket. Nothing else ends that await but the 5 s
+/// `read_request` timeout.
+///
+/// smoltcp has no listen backlog, so a worker parked there is a connection this
+/// device *refuses*. With two workers, a sequential client only has to be
+/// slower to close than one request takes and the third connection is refused
+/// with nothing logged on the device - which is what `screeny-probe http`
+/// measured on 2026-09-20: 9 to 17 refusals of ~35 requests, where the same
+/// build an hour earlier had had none. There was no firmware change between
+/// those runs because the variable was never in the firmware. It is the same
+/// weakness the owner's iPhone hit on the setup network (card 223, finding 3),
+/// seen from the other end of the connection.
+///
+/// ## What this one does instead
+///
+/// `close()`, then wait for the **acknowledgement** and nothing else, then
+/// drop. The wait is `TcpSocket::flush`, which embassy-net
+/// (`embassy-net/src/tcp.rs:629`) defines as "no unacknowledged data, and the
+/// state is no longer `FinWait1 | Closing | LastAck`" - that is, every byte we
+/// sent *and the FIN* have been acknowledged by the peer's TCP.
+///
+/// **It cannot truncate a response.** The FIN occupies the sequence number
+/// after the last body byte, so an acknowledgement of the FIN is by definition
+/// an acknowledgement of everything before it: when `flush` returns, the whole
+/// reply is in the client's receive buffer. On top of that, every response this
+/// server sends carries `Content-Length` - picoserve measures each body with a
+/// counting writer before it writes a header, the streamed status page
+/// included - so no client here has to see the close to know where the body
+/// ended.
+///
+/// What is given up is the second half of the four-way close: we leave the
+/// connection in `FIN-WAIT-2` and drop it, rather than waiting for the client's
+/// FIN. `Drop` (`embassy-net/src/tcp.rs:467`) removes the socket from smoltcp's
+/// set, so the client's FIN, when it eventually comes, matches nothing and
+/// smoltcp answers it with a RST. By then that client has every byte and has
+/// closed; a client still *reading* sends nothing, so it draws no RST at all.
+/// The one case left - a client that has the bytes, has not read them, and
+/// sends a window update - gets a RST with data already in its socket buffer,
+/// and both Darwin's `soreceive` and Linux's `tcp_recvmsg` hand the buffered
+/// bytes to the application before they report the error. That is the trade
+/// decision 10 asks for: good enough and crash proof, not bomb-proof.
+///
+/// It costs no RAM. It is a newtype around the socket picoserve would have used
+/// (the read and write halves are still `TcpReader`/`TcpWriter`, so the request
+/// path monomorphises exactly as before), and it *removes* the 128-byte discard
+/// buffer that `discard_all_data` held across an await.
+struct BoundedSocket<'a>(TcpSocket<'a>);
+
+impl BoundedSocket<'_> {
+    /// Wait for everything queued - data, FIN or RST - to be acknowledged, or
+    /// give up after [`CLOSE_ACK_MS`].
+    ///
+    /// Giving up abandons unacknowledged bytes, which is the honest thing to do
+    /// and the reason the timeout is generous: half a second of silence from a
+    /// peer on the same LAN, after smoltcp has already retransmitted, is a peer
+    /// that is not coming back. Holding the worker for it would be the bug this
+    /// card is about.
+    async fn settle(&mut self) -> Result<(), picoserve::Error<embassy_net::tcp::Error>> {
+        match embassy_time::with_timeout(
+            Duration::from_millis(CLOSE_ACK_MS),
+            self.0.flush(),
+        )
         .await
-        .into_never()
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(picoserve::Error::Write(e)),
+            Err(embassy_time::TimeoutError) => {
+                warn!("http: the peer never acknowledged the close; dropping it");
+                Ok(())
+            }
+        }
+    }
+}
+
+impl picoserve::io::Socket<picoserve::EmbassyRuntime> for BoundedSocket<'_> {
+    type Error = embassy_net::tcp::Error;
+    type ReadHalf<'b>
+        = TcpReader<'b>
+    where
+        Self: 'b;
+    type WriteHalf<'b>
+        = TcpWriter<'b>
+    where
+        Self: 'b;
+
+    fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
+        self.0.split()
+    }
+
+    /// picoserve asks for this when the handler did not read the whole request
+    /// body, i.e. when there are bytes on the wire that no reply accounts for.
+    /// A RST is the right answer and is what picoserve's own socket sends; the
+    /// only change is the bound on waiting for it to leave.
+    async fn abort<T: picoserve::Timer<picoserve::EmbassyRuntime>>(
+        mut self,
+        _timeouts: &picoserve::Timeouts,
+        _timer: &T,
+    ) -> Result<(), picoserve::Error<Self::Error>> {
+        // Spelt out because `picoserve::io::Socket::abort` is in scope here and
+        // is what `self.0.abort()` would resolve to.
+        TcpSocket::abort(&mut self.0);
+        self.settle().await
+    }
+
+    /// The path every ordinary request takes. See the type's documentation.
+    ///
+    /// `_timeouts` is picoserve's set, and it is deliberately not used: the two
+    /// it would offer here are `read_request` and `write`, both 5 s, both sized
+    /// for a request that is still arriving rather than for a connection that
+    /// is over.
+    async fn shutdown<T: picoserve::Timer<picoserve::EmbassyRuntime>>(
+        mut self,
+        _timeouts: &picoserve::Timeouts,
+        _timer: &T,
+    ) -> Result<(), picoserve::Error<Self::Error>> {
+        self.0.close();
+        self.settle().await
+    }
 }
 
 #[embassy_executor::task(pool_size = HTTP_TASKS)]
@@ -1558,9 +1752,13 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
 
     // A stalled client must not be able to pin the one worker, so every phase
     // has a deadline: 3 s to send a request line at all, 5 s to finish a
-    // request that has started, 5 s for the reply to be accepted. The worst a
-    // client can hold the server for is therefore ~8 s, and that needs it to
-    // have connected and then gone quiet mid-header.
+    // request that has started, 5 s for the reply to be accepted, and - card
+    // 236, in [`BoundedSocket`] rather than here, because picoserve's `Config`
+    // has no knob for it - [`CLOSE_ACK_MS`] for the close. The worst a client
+    // can hold the server for is therefore ~8.5 s, and that needs it to have
+    // connected and then gone quiet mid-header. **The close is no longer part
+    // of that sum in any interesting way**: it used to be able to add 10 s of
+    // its own, and it was the *ordinary* case, not the stalled one, that paid.
     //
     // **Not** `keep_connection_alive()`, even with [`HTTP_TASKS`] at two: a
     // kept-alive connection is one of the two workers owned by one client
@@ -1906,7 +2104,6 @@ async fn selftest(
     rx: &mut [u8],
     tx: &mut [u8],
 ) {
-    use embassy_net::tcp::TcpSocket;
     use embedded_io_async::Write as _;
 
     // Three, not the forty the card suggested: the first run measured that a

@@ -135,8 +135,11 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// breadcrumb in RTC memory and reboots the chip** instead of spinning core 0
 /// for ever with the panel still lit - plus the crash-loop guard, the
 /// breadcrumb in `GET /api/v1/status`, and one partition-table read for the
-/// whole boot path.
-pub const FW_VERSION: &str = "0.5.2";
+/// whole boot path. **0.5.3 is card 236: an HTTP worker gets back to `accept`
+/// in a time this device sets** - the graceful close no longer waits for the
+/// client's own `close()`, only for the acknowledgement that proves the reply
+/// arrived - which is what was refusing 9-17 of ~35 sequential requests.
+pub const FW_VERSION: &str = "0.5.3";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
