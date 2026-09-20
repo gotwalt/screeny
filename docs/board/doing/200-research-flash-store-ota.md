@@ -158,3 +158,44 @@ buildable at all. Notes so far, all from `~/.cargo/registry/src/index.crates.io-
   `read_nor`/`write_nor` only do it when the caller's slice is not word-aligned. Everything
   `esp-bootloader-esp-idf`'s `FlashRegion::read/write` does goes through the 4 KB-stack
   versions (`flash/flash_access.rs`).
+
+### 2026-09-19 — espflash 4.6.0, the bundled bootloader, and the rollback answer
+
+- `espflash 4.6.0` is what is installed. `espflash flash` takes `--partition-table <CSV>`,
+  `--partition-table-offset`, `--bootloader <FILE>`, `--target-app-partition <LABEL>`,
+  `--erase-parts <LABELS>` and `--erase-data-parts <PARTS>`; an `espflash.toml` with an
+  `[idf]` table can carry the same keys (`src/cli/config.rs` line 94, alias `idf`).
+- **espflash never touches otadata on a flash.** `src/image_format/idf.rs` line 614-631:
+  it writes exactly three segments — bootloader, partition table, app — and picks the app
+  partition as `find("factory")` else the first `Type::App`. So with a table that has
+  ota_0/ota_1 and no factory, a serial flash overwrites **ota_0 only** and a stale otadata
+  pointing at ota_1 still wins on the next boot. A serial flash does *not* automatically
+  win. Fix: `--erase-data-parts ota` (erases otadata -> bootloader falls back to
+  slot 0) on every `tools/fw-run.sh` flash.
+- espflash's built-in default table (`idf.rs` line 745) is nvs 0x9000+0x5000,
+  phy_init 0xf000+0x1000, factory 0x10000+0x3f0000 — that is what is on the device today.
+- The bundled `resources/bootloaders/esp32-bootloader.bin` (26112 bytes) is built from
+  **ESP-IDF release/v6.1 with stock defaults**; `resources/bootloaders/manifest.yaml`
+  shows the only sdkconfig fragment for esp32 is
+  `# CONFIG_BOOTLOADER_COMPILE_TIME_DATE is not set`.
+- `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` defaults to **No** in ESP-IDF
+  (kconfig reference, stable/esp32). So the shipped bootloader has the OTA *slot selection*
+  (strings in the binary: "No factory image, trying OTA 0", "ota data partition invalid,
+  falling back to factory", "Set actual ota_seq=%lu in otadata[0]") but **not** the
+  `New -> PendingVerify -> Aborted` state machine
+  (`bootloader_utility.c` lines 392-402 and 442-448 in v6.1 are both inside
+  `#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`).
+- What that machinery buys, when enabled: `bootloader_common_loader.c` line 78-86 —
+  an otadata entry whose state is `ABORTED` or `INVALID` is *not valid*, so
+  `bootloader_common_get_active_otadata` picks the other entry, i.e. the previous slot.
+  That is the real rollback.
+- Even without it, `bootloader_utility_load_boot_image` (v6.1 line 590-612) walks
+  backwards from the selected slot to factory and *fully verifies* each candidate, so a
+  truncated or corrupt image already falls back. What is missing is only the case of an
+  image that is structurally perfect but does not work.
+- **ESP-IDF is not installed on this bench** (`IDF_PATH` unset, no `idf.py`, no `~/esp`);
+  `~/export-esp.sh` only sets the Xtensa Rust toolchain paths. Building a rollback
+  bootloader means installing ESP-IDF v6.1 first.
+- Baseline measurement, `cargo build --release` in a clean worktree (40 s, not minutes,
+  because the registry is warm): `.bss` 127040, `.data` 31492, `.stack` 37536,
+  `.text` 531205, `.rodata` 73064. `espflash save-image` -> **743,408 byte** app image.
