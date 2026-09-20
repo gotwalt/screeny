@@ -1,0 +1,93 @@
+# Screeny Studio on workbench.local (Ubuntu 24.04, Docker 29, Intel iGPU).
+#
+#   docker compose -p screeny build
+#   docker compose -p screeny up -d
+#   curl -s http://workbench.local:8787/healthz
+#
+# `tools/deploy-workbench.sh` does all of that over SSH; see
+# `docs/design/deployment.md`.
+#
+# This file assumes Linux: host networking so mDNS discovery and the outbound
+# UDP frame stream behave exactly as they do for a process on the host, and
+# `/dev/dri` for the GPU pieces. On a Mac, or any host without those, use
+# `docker-compose.portable.yml` instead - it is a complete file, not an
+# override, because compose merges lists by appending and there is no way to
+# take `devices:` back out again.
+#
+# There is no authentication on the studio (parked card 041). With host
+# networking it listens on every interface of workbench, which is the owner's
+# choice for a machine on the home LAN and the tailnet. Do not publish it
+# further: no reverse proxy, no port forward, no tunnel.
+
+name: screeny
+
+services:
+  studio:
+    container_name: screeny-studio
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Empty = the crate defaults, which include `gpu`. `none` builds a
+        # studio with no graphics driver compiled in at all.
+        FEATURES: "${SCREENY_FEATURES:-}"
+    image: screeny-studio:local
+
+    # mDNS is multicast and the panel is on the same subnet, so the container
+    # shares the host's network stack. `ports:` is meaningless here: the studio
+    # binds ${SCREENY_PORT} on the host directly.
+    network_mode: host
+
+    # The Intel iGPU. `group_add` puts the container's unprivileged user in the
+    # host's `render` group - 993 on workbench; `stat -c %g /dev/dri/renderD128`
+    # says what it is on any other host - which is what makes renderD128
+    # openable without running as root.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${SCREENY_RENDER_GID:-993}"
+
+    environment:
+      TZ: "${TZ:-America/Los_Angeles}"
+      # Mesa's ANV. wgpu reads this itself (`Instance::new(...).with_env()`).
+      WGPU_BACKEND: vulkan
+      # Read by the binary from card 106 onwards; harmless before that.
+      SCREENY_STATE_DIR: /data
+      SCREENY_LISTEN: "0.0.0.0:${SCREENY_PORT:-8787}"
+      # Only the healthcheck below uses this one.
+      SCREENY_PORT: "${SCREENY_PORT:-8787}"
+
+    # Until card 106 lands, the binary knows only flags, so the port is said
+    # twice - here and in SCREENY_LISTEN above. Delete this `command:` once the
+    # env var is honoured.
+    command: ["--listen", "0.0.0.0:${SCREENY_PORT:-8787}"]
+
+    volumes:
+      # The state file, so a restart resumes what was playing. Owned by uid
+      # 10001 because /data is owned by uid 10001 in the image.
+      - state:/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:$${SCREENY_PORT}/healthz"]
+      interval: 30s
+      timeout: 5s
+      # The first build of a GPU pipeline can take a few seconds on a cold
+      # start, and a failing healthcheck during start_period is not a failure.
+      start_period: 30s
+      retries: 3
+
+    # SIGTERM makes the studio send FINAL and let the panel go at once instead
+    # of leaving the last frame up until the stream times out. Give it room.
+    stop_grace_period: 20s
+
+    # Unattended for months: the log must not be able to fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  state:
