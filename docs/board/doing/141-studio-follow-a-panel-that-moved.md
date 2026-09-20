@@ -202,3 +202,28 @@ has a band of its own, because they run at the same time.
    attached, rather than which one that is.
 
 `cargo test -p screeny-studio --test moved`: 2 passed, 0 failed, in 6.9 s.
+
+### Worker, step 5 (the test was flaky; it is not now)
+
+Running the new test twelve times in a row caught it failing twice, and the
+failure was worth the trouble: the panel that **stayed** was `"resolved":
+false` at the moment the assertion read it, while its link was up and it was
+still streaming (`connected: true`, `sessions: 1`, `last_seen_ago: 2.0`).
+
+Why: `poll_once` walks the devices in turn, and a device at a dead address
+costs the pass its control timeout (`CONTROL_TIMEOUT`, 400 ms). With the
+test's `stale_after` at **one** second, the healthy panel's turn could come
+late enough that it was marked stale for a pass - and then re-resolved on the
+next one. Nothing to do with the probe, and not a product problem either: the
+product's `stale_after` is 120 s, so the same thing needs two minutes of
+silence from a panel whose link is up, which is a panel whose telemetry really
+has stopped. It is a property of compressing that line to a second in a test.
+
+Fixed in the test, twice over: `stale_after` is 3 s with a comment saying why
+it is not shorter, and the "panel that stayed" conditions are part of the
+`until_json` predicate, so everything asserted comes out of **one** read
+rather than a read taken after a wait for something else.
+
+`cargo test --release -p screeny-studio --test moved`, fourteen consecutive
+runs after the fix: 14 x `ok. 2 passed; 0 failed`, 6.4-10.3 s each. (Before
+the fix: 10 ok, 2 failed out of 12.)

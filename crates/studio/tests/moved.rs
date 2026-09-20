@@ -78,12 +78,17 @@ fn start_sim(base: u16, id: &str, http: Option<u16>, avoid: &[u16]) -> (SimDevic
     panic!("no free port pair in {base}..{}", base + PAIRS * 2);
 }
 
+/// How long a panel may be unheard before this studio decides it is somewhere
+/// else. Seconds rather than the product's two minutes, because a test cannot
+/// wait two minutes to cross that line - but not *one* second: the telemetry
+/// poll walks the devices in turn and a dead one costs the pass its control
+/// timeout, so with a shorter line a panel that is streaming perfectly well
+/// can be marked stale for a pass simply because its turn came late.
+const STALE_AFTER: Duration = Duration::from_secs(3);
+
 /// A studio that probes the band and gives up on an address quickly.
 ///
-/// `stale_after` is a second rather than the product's two minutes: it is the
-/// line between "the panel is rebooting" and "the panel is somewhere else",
-/// and a test cannot wait two minutes to cross it. `discover_every` is the
-/// probe's own tick.
+/// `discover_every` is the probe's own tick.
 async fn studio_probing(base: u16, dir: &std::path::Path, device_http: Option<u16>) -> Running {
     let cfg = Config {
         listen: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -93,7 +98,7 @@ async fn studio_probing(base: u16, dir: &std::path::Path, device_http: Option<u1
         discover_every: Duration::from_millis(300),
         supervise_every: Duration::from_millis(200),
         telemetry_every: Duration::from_millis(200),
-        stale_after: Duration::from_secs(1),
+        stale_after: STALE_AFTER,
         device_http: device_http.is_some(),
         device_http_every: Duration::from_millis(300),
         device_http_port: device_http.unwrap_or(80),
@@ -103,7 +108,7 @@ async fn studio_probing(base: u16, dir: &std::path::Path, device_http: Option<u1
 }
 
 /// The device with this id in `/api/v1/status`.
-fn device<'a>(status: &'a serde_json::Value, id: &str) -> serde_json::Value {
+fn device(status: &serde_json::Value, id: &str) -> serde_json::Value {
     status["devices"]
         .as_array()
         .and_then(|ds| ds.iter().find(|d| d["id"] == id))
@@ -166,11 +171,16 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
     let (_moved, now_at) = start_sim(BAND, "mov001", None, &[was_at, stays_at]);
     assert_ne!(now_at, was_at, "the panel has to come back somewhere else for this to be a move");
 
+    // One answer, about one moment: what is asserted below and what was
+    // waited for have to be the same read, including the panel that stayed.
     let after = until_json(at, PATIENCE, "the studio to find the panel at its new address", "/api/v1/status", |s| {
         let d = device(s, "mov001");
+        let stayer = device(s, "sta002");
         d["control_addr"] == serde_json::json!(format!("127.0.0.1:{}", now_at + 1))
             && d["resolved"] == true
             && d["player"]["panel"]["connected"] == true
+            && stayer["resolved"] == true
+            && stayer["player"]["panel"]["connected"] == true
     })
     .await;
 
@@ -251,7 +261,7 @@ async fn the_status_poll_follows_a_panel_that_moved() {
     let reads_before = device(&before, "mov003")["http"]["reads"].as_u64().unwrap_or(0);
 
     drop(mover);
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::sleep(STALE_AFTER + Duration::from_millis(500)).await;
     let (_moved, now_at) = start_sim(BAND2, "mov003", Some(http_port), &[was_at]);
     assert_ne!(now_at, was_at);
 
