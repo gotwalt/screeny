@@ -26,7 +26,7 @@
 //! servo under one motor's speed and acceleration.
 
 use crate::frame::{Frame, W};
-use crate::piece::{param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
+use crate::piece::{choice, param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
 use super::ambient::{Ambient, Mood, MOODS};
 use super::dance::Motor;
 use super::draw::{Dials, Tint};
@@ -42,8 +42,8 @@ pub const DEF: PieceDef = PieceDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("grid", "Dials (0: 4x2, 1: 6x3, 2: 8x4)", 0.0, 2.0, 1.0, 1.0),
-    param("mood", "Mood (0 = wander)", 0.0, MOODS as f32, 1.0, 0.0),
+    choice("grid", "Dials", GRID_CHOICES, 1.0),
+    choice("mood", "Mood", MOOD_CHOICES, 0.0),
     param("dwell", "Seconds in a mood", 8.0, 120.0, 1.0, 32.0),
     param("tell", "Tell the time every (s, 0 = never)", 0.0, 600.0, 5.0, 60.0),
     param("hold", "Seconds the time is held", 2.0, 30.0, 1.0, 8.0),
@@ -65,6 +65,15 @@ const PARAMS: &[ParamSpec] = &[
 /// the default: hands long enough to have a gesture, and enough of them for a
 /// wave to travel through.
 const GRIDS: [(usize, usize); 3] = [(4, 2), (6, 3), (8, 4)];
+
+/// Card 163: `grid` and `mood` are lists of named things, so they say so.
+/// `GRID_CHOICES` is `GRIDS` written out and `MOOD_CHOICES` is "wander" plus
+/// the eight moods in `Mood::new` order;
+/// `piece::tests::the_named_stops_are_the_pieces_own_names` checks both
+/// against the pieces' own.
+pub(crate) const GRID_CHOICES: &[&str] = &["4 x 2", "6 x 3", "8 x 4"];
+pub(crate) const MOOD_CHOICES: &[&str] =
+    &["wander", "drift", "sway", "breathe", "corners", "unison", "tide", "rings", "streamlines"];
 
 /// Seconds before the mark that the dials start gathering, so that they are
 /// reading the time as it arrives.

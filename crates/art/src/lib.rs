@@ -27,6 +27,57 @@ pub mod preview;
 pub mod rng;
 pub mod variety;
 
+/// Whether this process can render the GPU pieces, and why not when it cannot
+/// (card 145).
+///
+/// It exists in both builds on purpose: without the `gpu` feature there is no
+/// [`gpu`] module at all, and "this build has no GPU pieces" is itself the
+/// answer a person deserves instead of a black rectangle.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct GpuStatus {
+    /// True when an adapter was opened and the GPU pieces will draw.
+    pub available: bool,
+    /// The adapter's own name. Empty when there is none.
+    pub adapter: String,
+    /// The backend it came up on: "Metal", "Vulkan", "Gl". Empty when there is
+    /// no adapter.
+    pub backend: String,
+    /// Why there is no adapter, in the words wgpu used. `None` when there is
+    /// one.
+    pub error: Option<String>,
+}
+
+impl GpuStatus {
+    /// One line, for a log at startup and for the page. wgpu's own error
+    /// already begins "no GPU adapter", so it is passed through rather than
+    /// prefixed with a second way of saying the same thing.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match (&self.error, self.available) {
+            (_, true) => format!("gpu {} ({})", self.adapter, self.backend),
+            (Some(e), _) => e.clone(),
+            (None, _) => "no graphics adapter".to_string(),
+        }
+    }
+}
+
+/// The GPU outcome for this process. Decided once; see [`GpuStatus`].
+#[must_use]
+pub fn gpu_status() -> GpuStatus {
+    #[cfg(feature = "gpu")]
+    {
+        gpu::status()
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        GpuStatus {
+            available: false,
+            error: Some("this build has no GPU pieces: it was built with --no-default-features".into()),
+            ..GpuStatus::default()
+        }
+    }
+}
+
 pub use color::Rgb;
 pub use frame::{Frame, WireFrame, H, N, W};
 pub use meter::{Measured, Meter};

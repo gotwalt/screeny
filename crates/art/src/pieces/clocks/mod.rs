@@ -19,7 +19,7 @@ pub(crate) mod dials;
 pub(crate) mod draw;
 
 use crate::frame::Frame;
-use crate::piece::{param, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
+use crate::piece::{choice, param, toggle, Action, Ctx, ParamSpec, Piece, PieceDef, Playing};
 use crate::rng::Rng;
 use dance::Motor;
 
@@ -34,10 +34,10 @@ pub const DEF: PieceDef = PieceDef {
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 15.0),
-    param("dance", "Choreography (0 = vary, 13 = always composed)", 0.0, 13.0, 1.0, 0.0),
-    param("rest", REST_LABEL, 0.0, (RESTS.len() - 1) as f32, 1.0, DEFAULT_REST as f32),
+    choice("dance", "Choreography", DANCE_CHOICES, 0.0),
+    choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
-    param("hours24", "24-hour", 0.0, 1.0, 1.0, 1.0),
+    toggle("hours24", "24-hour", true),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 2.0),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
@@ -109,7 +109,32 @@ pub(crate) const RESTS: &[Rest] = &[
     rest("zigzag, quiet", [REST, REST], true, 0.20, 1.0),
 ];
 pub(crate) const DEFAULT_REST: usize = 2;
-const REST_LABEL: &str = "Resting dials (0: as it was, 1: quiet, 2: hatched quiet, 3: hatched faint, 4: zigzag quiet)";
+
+/// Card 163: the `rest` parameter's stops, in the treatments' own words.
+/// Taken from `RESTS` itself, so the page and the piece cannot disagree about
+/// what a treatment is called.
+pub(crate) const REST_CHOICES: &[&str] = &[RESTS[0].name, RESTS[1].name, RESTS[2].name, RESTS[3].name, RESTS[4].name];
+
+/// And the `dance` parameter's: `0` varies, `1..=DANCES` name a dance from
+/// `dance::dance`, and one past them is "always composed".
+/// `piece::tests::the_named_stops_are_the_pieces_own_names` checks the middle
+/// against the repertoire.
+pub(crate) const DANCE_CHOICES: &[&str] = &[
+    "vary",
+    "formation",
+    "bloom",
+    "line wave",
+    "ripple",
+    "magnet",
+    "cascade",
+    "fan",
+    "checker",
+    "scissors",
+    "swell",
+    "scatter",
+    "vortex",
+    "composed",
+];
 
 impl Rest {
     /// The treatment a `rest` parameter value asks for.

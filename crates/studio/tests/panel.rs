@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{get, post, preview_of, seq_of, studio, until, Ws};
+use common::{get, post, preview_of, seq_of, studio, until, until_json, Ws};
 use std::sync::mpsc::{channel, Receiver, Sender as Tx};
 use std::time::Duration;
 
@@ -47,6 +47,14 @@ fn start_sim() -> (SimDevice, u16, Receiver<Shown>) {
         }
     }
     panic!("no free consecutive port pair in 50700..50780");
+}
+
+/// A simulator on a **known** pair of ports, so a test can stop one and put
+/// another in its place - which is what "the panel went away and came back"
+/// looks like from the studio's side of the wire.
+fn sim_on(port: u16) -> SimDevice {
+    let cfg = Config { frame_port: port, control_port: port + 1, ..Config::for_test() };
+    SimDevice::start_with(cfg, None).expect("the ports the first simulator had")
 }
 
 /// Stop the piece and the limiter, so every frame the engine makes is the
@@ -302,6 +310,113 @@ async fn a_stalled_browser_is_eventually_dropped() {
     })
     .await;
     assert_eq!(closed, Ok(true), "the studio kept feeding a browser that stopped reading");
+}
+
+/// Card 171: **"Reconnects" counts what a person reads it as.**
+///
+/// It used to be `LinkStats::sessions - 1`, which is per *link object*, and
+/// the studio builds a new link whenever what it is aiming at changes - so a
+/// panel that had really reconnected three times could show `0`. The number is
+/// a player lifetime one now: banked across link rebuilds, and less the first
+/// connect.
+///
+/// The panel goes away and comes back twice; the page says 2. Then the studio
+/// itself lets the panel go and picks it up again, which **rebuilds the link** -
+/// the thing that used to wipe the count to `0` - and the answer stays 2,
+/// because the studio switching its own output off is not the panel dropping.
+/// `link_ups` still goes up, so nothing is hidden: the two numbers together
+/// say what happened. Only `reconnects` is asserted exactly; `link_ups` also
+/// moves when the studio re-aims on its own, at a moment this test does not
+/// control.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panel_that_comes_back_twice_says_two() {
+    let (first, port, _rx) = start_sim();
+    let studio = studio().await;
+    let at = studio.addr;
+    hold_still(at, "plasma").await;
+
+    let body = format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#);
+    assert_eq!(post(at, "/api/v1/set_panel", &body).await.status, 200);
+
+    // Patient on purpose, and everything asserted comes out of the **one**
+    // read that satisfied its wait: the link is read straight from the link
+    // object and the counts are written by the supervisor's own tick, so a
+    // snapshot taken afterwards would be a different moment (card 170's two
+    // flakes).
+    //
+    // A panel typed in as an address is aimed at **twice**: once at the
+    // address, and once at the device the telemetry poll finds there. The
+    // second is the studio learning where it is, not the panel moving, so the
+    // rounds below must not begin in the middle of it. Wait for the count to
+    // stop moving rather than for a fixed time - that settling is a condition,
+    // and a condition is what a test may wait on.
+    let patience = Duration::from_secs(30);
+    let ups = |v: &serde_json::Value| v["devices"][0]["player"]["health"]["link_ups"].as_u64().unwrap_or(0);
+    let deadline = tokio::time::Instant::now() + patience;
+    let (mut base, mut still) = (0, 0);
+    let settled = loop {
+        let now = get(at, "/api/v1/status").await.json();
+        let ready = now["preview"]["panel"]["connected"] == true && now["devices"][0]["resolved"] == true;
+        still = if ready && ups(&now) == base && base > 0 { still + 1 } else { 0 };
+        base = ups(&now);
+        // Two seconds without a link rebuild, at a 50 ms poll and a 200 ms
+        // supervisor: the studio has finished settling on this panel.
+        if still >= 40 {
+            break now;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the studio never settled on the panel: {now}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(
+        settled["devices"][0]["player"]["health"]["reconnects"], 0,
+        "settling on a freshly attached panel is not a reconnect: {}",
+        settled["devices"][0]["player"]["health"]
+    );
+
+    let mut panel = first;
+    for round in 1..=2u64 {
+        // Unplugged. On loopback a send to a closed port comes home as an ICMP
+        // report, so the link loses the session rather than streaming into
+        // nothing.
+        drop(panel);
+        until_json(at, patience, &format!("the panel to go away ({round})"), "/api/v1/status", |v| {
+            v["preview"]["panel"]["connected"] != true
+        })
+        .await;
+
+        // Plugged back in, at the same address.
+        panel = sim_on(port);
+        let back = until_json(at, patience, &format!("the panel to come back ({round})"), "/api/v1/status", |v| {
+            v["preview"]["panel"]["connected"] == true
+                && v["devices"][0]["player"]["health"]["reconnects"].as_u64().unwrap_or(0) >= round
+        })
+        .await;
+        let health = &back["devices"][0]["player"]["health"];
+        assert_eq!(health["reconnects"], round, "after {round} round(s) away: {health}");
+        // `>=`, not `==`: the studio re-aims on its own when it learns where a
+        // device is, and that is one more link-up at a moment this test does
+        // not control. `reconnects` is the number that has to be exact.
+        assert!(
+            ups(&back) >= base + round,
+            "each round away is at least one more link-up: {health}"
+        );
+    }
+
+    // And the studio letting the panel go is not the panel dropping: output
+    // off and on again rebuilds the link, and the count stays where it was.
+    assert_eq!(post(at, "/api/v1/set_panel", r#"{"on":false}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_panel", r#"{"on":true}"#).await.status, 200);
+    let after = until_json(at, patience, "output back on", "/api/v1/status", |v| {
+        v["preview"]["panel"]["connected"] == true && ups(v) >= base + 3
+    })
+    .await;
+    let health = &after["devices"][0]["player"]["health"];
+    assert_eq!(health["reconnects"], 2, "switching the output off and on is not the panel reconnecting: {health}");
+    // Nothing is hidden: the raw count went up even though the reconnect
+    // count did not, and it is bigger than "one connect plus the reconnects".
+    assert!(ups(&after) > 1 + 2, "the stream did come up again, and `link_ups` says so: {health}");
+    drop(panel);
+    studio.stop().await;
 }
 
 /// A socket whose receive buffer is smaller than one frame packet: it wedges

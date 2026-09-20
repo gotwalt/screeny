@@ -156,6 +156,186 @@ fn the_page_keeps_its_promises() {
     }
 }
 
+/// Card 173: the page has somewhere to say whether it is even looking for
+/// panels, and the script tells the three cases apart rather than leaving an
+/// empty list to mean all of them.
+#[test]
+fn the_page_can_say_whether_it_is_looking_for_panels() {
+    assert!(INDEX_HTML.contains("id=\"discovery-note\""), "the panel section needs a line for the discovery state");
+    for case in ["d.enabled", "d.last_error", "d.browses"] {
+        assert!(MAIN_JS.contains(case), "the discovery line must distinguish {case}");
+    }
+    // A browse that finds nothing is normal, so this line is never drawn in
+    // the fault tone and never reaches `/healthz`.
+    let line = MAIN_JS.find("function discoveryLine").expect("the discovery line");
+    let body = &MAIN_JS[line..line + 1200];
+    assert!(!body.contains("'bad'"), "a browse that finds nothing is not a fault");
+}
+
+/// Card 145: the GPU outcome is part of the studio's state rather than a line
+/// on stderr. `bootstrap` says which pieces need an adapter and whether there
+/// is one; `/api/v1/status` says the same thing; and a missing adapter is
+/// never a 503.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let gpu = &boot["gpu"];
+    assert!(gpu["available"].is_boolean(), "bootstrap should carry the adapter outcome: {boot}");
+    let pieces = boot["pieces"].as_array().expect("a list of pieces");
+    assert!(pieces.iter().all(|p| p["needs_gpu"].is_boolean()), "every piece says whether it needs an adapter");
+    // Built with the `gpu` feature, so there are some; without it there are
+    // none, and that is the truth for that build.
+    let marked: Vec<&str> = pieces
+        .iter()
+        .filter(|p| p["needs_gpu"] == true)
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert_eq!(marked, screeny_art::pieces::NEEDS_GPU.to_vec(), "the marked pieces are exactly the GPU ones");
+
+    let status = get(at, "/api/v1/status").await.json();
+    assert_eq!(status["gpu"], *gpu, "the two routes must not be able to disagree");
+    assert_eq!(status["ok"], true, "a missing adapter is not a server fault");
+    assert_eq!(get(at, "/healthz").await.status, 200);
+
+    // Whichever way this machine answered, one of the two halves is filled in.
+    if gpu["available"] == true {
+        assert!(!gpu["adapter"].as_str().unwrap_or("").is_empty(), "an available adapter has a name: {gpu}");
+        assert_eq!(gpu["error"], serde_json::Value::Null);
+    } else {
+        assert!(!gpu["error"].as_str().unwrap_or("").is_empty(), "an unavailable adapter has a reason: {gpu}");
+    }
+}
+
+/// And the page draws it: the GPU pieces are marked unavailable rather than
+/// offered and then black, and the reason is on the page.
+#[test]
+fn the_page_says_why_a_gpu_piece_is_not_available() {
+    assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the piece list needs a line for the adapter");
+    assert!(MAIN_JS.contains("input.disabled = true"), "a piece that cannot draw must not be offered");
+    assert!(MAIN_JS.contains("needs_gpu"), "the page reads the per-piece flag from bootstrap");
+    assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable piece has to look unavailable");
+}
+
+/// The same fact over the API, which is what the line is drawn from: with
+/// discovery off, `/api/v1/status` says so rather than looking like a browse
+/// that has found nothing yet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_says_whether_discovery_is_on() {
+    let studio = studio().await; // `test_config`: discovery off, as `--no-discover`
+    let status = get(studio.addr, "/api/v1/status").await.json();
+    assert_eq!(status["discovery"]["enabled"], false, "{}", status["discovery"]);
+    assert_eq!(status["discovery"]["browses"], 0);
+    assert_eq!(status["discovery"]["last_error"], serde_json::Value::Null, "not looking is not an error");
+    assert_eq!(status["ok"], true, "not looking for panels is never unhealthy");
+}
+
+/// Card 172: the rate control can show any rate a player may be on, and its
+/// range is the player's range rather than a second opinion about it.
+#[test]
+fn the_rate_control_spans_the_players_whole_range() {
+    let span = format!(
+        r#"id="fps" type="range" min="{}" max="{}" step="1""#,
+        screeny_studio::player::MIN_FPS as u32,
+        screeny_studio::player::MAX_FPS as u32
+    );
+    assert!(INDEX_HTML.contains(&span), "the rate slider must span MIN_FPS..=MAX_FPS; looked for {span}");
+    assert!(!INDEX_HTML.contains(r#"name="fps""#), "the two-stop radio group is gone");
+}
+
+/// And the rate a script set is the rate the page reports - it is not quietly
+/// changed by a control that could not express it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rate_set_through_the_api_is_what_the_page_reports() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    // A panel to aim a player at. Nothing is sent: it is never switched on.
+    let add = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:50999","name":"paper panel"}"#).await;
+    assert_eq!(add.status, 200, "{}", String::from_utf8_lossy(&add.body));
+    let device = add.json()["id"].as_str().expect("an id").to_string();
+
+    // The page is a window onto this player, so `player/set` and the page's
+    // own state are the same fps.
+    let set = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"{device}"}}"#)).await;
+    assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
+
+    for rate in [10.0, 15.0, 24.0, 45.0] {
+        let body = format!(r#"{{"device":"{device}","fps":{rate}}}"#);
+        let player = post(at, "/api/v1/player/set", &body).await;
+        assert_eq!(player.status, 200, "{}", String::from_utf8_lossy(&player.body));
+        assert_eq!(player.json()["fps"], rate);
+        // What a browser reloading would draw its control from.
+        let boot = get(at, "/api/v1/bootstrap").await.json();
+        assert_eq!(boot["state"]["fps"], rate, "the page has to be able to show {rate} fps");
+    }
+
+    // And a rate that is not a number does not reach the render loop, where
+    // `Duration::from_secs_f64(NaN)` would panic.
+    let body = format!(r#"{{"device":"{device}","fps":1e400}}"#);
+    let player = post(at, "/api/v1/player/set", &body).await;
+    let still = get(at, "/api/v1/bootstrap").await.json();
+    assert_eq!(still["state"]["fps"], 45.0, "an infinite rate left it where it was: {}", player.status);
+    studio.stop().await;
+}
+
+/// Card 163: a parameter whose values are a list of named stops says so in
+/// `bootstrap`, and setting it is still setting a number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
+    let studio = studio().await;
+    let at = studio.addr;
+
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let piece = boot["pieces"]
+        .as_array()
+        .expect("pieces")
+        .iter()
+        .find(|p| p["id"] == "clocks-numerals")
+        .expect("clocks-numerals")
+        .clone();
+    let param = |id: &str| {
+        piece["params"]
+            .as_array()
+            .expect("params")
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap_or_else(|| panic!("{id}"))
+            .clone()
+    };
+
+    // The owner's example: five named treatments, not a slider with the list
+    // in its label.
+    let rest = param("rest");
+    assert_eq!(rest["label"], "Resting dials", "the label is a label again");
+    assert_eq!(
+        rest["choices"],
+        serde_json::json!(["as it was", "quiet", "hatched, quiet", "hatched, faint", "zigzag, quiet"])
+    );
+    assert_eq!(rest["switch"], false);
+    assert_eq!((rest["min"].as_f64(), rest["max"].as_f64(), rest["default"].as_f64()), (Some(0.0), Some(4.0), Some(2.0)));
+
+    // The fourteen choreographies the label could not even try to name.
+    assert_eq!(param("dance")["choices"].as_array().expect("choices").len(), 14);
+    // A switch, not a two-stop slider.
+    assert_eq!(param("hours24")["switch"], true);
+    // And an ordinary number is untouched.
+    let pace = param("pace");
+    assert_eq!(pace["choices"], serde_json::json!([]));
+    assert_eq!(pace["switch"], false);
+
+    // The value is still an `f32` on the wire and in the state: nothing about
+    // a choice changes how it is set or stored.
+    assert_eq!(post(at, "/api/v1/set_piece", r#"{"id":"clocks-numerals"}"#).await.status, 200);
+    let set = post(at, "/api/v1/set_param", r#"{"id":"rest","value":4.0}"#).await.json();
+    assert_eq!(set["params"]["rest"], 4.0);
+    let clamped = post(at, "/api/v1/set_param", r#"{"id":"rest","value":9.0}"#).await.json();
+    assert_eq!(clamped["params"]["rest"], 4.0, "out of range is clamped by the spec, as it always was");
+    studio.stop().await;
+}
+
 /// Card 170's layout requirement, as far as a text file can carry it: the
 /// two-column bench is behind a breakpoint, so at every narrower width the
 /// page is an ordinary scrolling column and the picture cannot overlap the

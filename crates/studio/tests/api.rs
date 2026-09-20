@@ -64,13 +64,29 @@ async fn the_api_round_trips() {
     assert_eq!(after["settings"]["dither"], "bayer4");
     assert_eq!(after["settings"]["limiter"]["enabled"], false);
 
-    // set_playback, with the speed clamped and an unknown rate ignored.
+    // set_playback, with the speed and the rate clamped to the player's range.
     let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
     assert_eq!(play["paused"], true);
     assert_eq!(play["speed"], 8.0, "speed is clamped to 8x");
     assert_eq!(play["fps"], 30.0);
+    // Card 172 changed this line, and it is the point of that card: 45 used to
+    // be *ignored*, because the page could only offer 30 and 60. A player may
+    // be at any rate in MIN_FPS..=MAX_FPS - the soak uses 10, 15 and 24 - and
+    // a control that cannot show where the panel actually is was lying. The
+    // page's control is a slider over the whole range now, and this route
+    // takes what `player/set {fps}` has always taken.
     let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":45.0}"#).await.json();
-    assert_eq!(play["fps"], 30.0, "45 is not one of the offered rates, so the rate does not move");
+    assert_eq!(play["fps"], 45.0, "any rate the player may be on is accepted");
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":10.0}"#).await.json();
+    assert_eq!(play["fps"], 10.0, "including the ones the soak uses");
+    // Out of range is clamped, not refused: a slider cannot ask for these, but
+    // a script can, and the player has one rule about rates.
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":9000.0}"#).await.json();
+    assert_eq!(play["fps"], 60.0, "clamped to MAX_FPS");
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0,"fps":0.0}"#).await.json();
+    assert_eq!(play["fps"], 1.0, "clamped to MIN_FPS");
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0,"fps":30.0}"#).await.json();
+    assert_eq!(play["fps"], 30.0);
 
     // restart keeps the seed and starts the piece's clock again.
     let restarted = post(at, "/api/v1/restart", "{}").await;

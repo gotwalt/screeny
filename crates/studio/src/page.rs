@@ -17,11 +17,13 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::watch;
 
-/// Frames per second the page's rate control offers. The panel is assumed to
-/// take 60; 30 is there to see what a piece looks like at the measured rate.
-/// (A player may be set to any rate in `player::MIN_FPS..=player::MAX_FPS`
-/// through `POST /api/v1/player/set`; these are the two on the page.)
-pub const RATES: [f64; 2] = [30.0, 60.0];
+// Card 172 removed `RATES`, the two rates the page used to offer. A player may
+// be at any rate in `player::MIN_FPS..=player::MAX_FPS` - the soak uses 10, 15
+// and 24 - and a control that can only say 30 or 60 cannot show where a panel
+// actually is. The page's control is now a slider over the player's whole
+// range, with detents at the rates worth reaching for, and `set_playback`
+// clamps instead of ignoring.
+
 /// Frame packet header size; see [`pack`] and `ui/main.js`.
 pub const HEADER: usize = 52;
 /// Bytes in one frame packet: the header and then `N` sRGB triples.
@@ -116,6 +118,14 @@ pub struct ParamInfo {
     pub max: f32,
     pub step: f32,
     pub default: f32,
+    /// Card 163: the name of each stop, for a parameter whose values are a
+    /// list rather than a range. Empty for an ordinary number, and then the
+    /// page draws the slider it always did. **The value is still an `f32`**
+    /// on the wire, in the state file and in the per-piece memory; this only
+    /// changes which control is drawn and what it says.
+    pub choices: &'static [&'static str],
+    /// This one is off or on. Drawn as a switch.
+    pub switch: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -124,6 +134,10 @@ pub struct PieceInfo {
     pub name: &'static str,
     pub blurb: &'static str,
     pub params: Vec<ParamInfo>,
+    /// Card 145: this piece cannot draw without a graphics adapter. With
+    /// [`Bootstrap::gpu`] saying there is none, the page marks it unavailable
+    /// rather than letting it be picked and render black.
+    pub needs_gpu: bool,
 }
 
 /// What the page is showing, which is what the panel is showing.
@@ -158,6 +172,9 @@ pub struct Bootstrap {
     pub pieces: Vec<PieceInfo>,
     pub payload_bytes: u32,
     pub state: StudioState,
+    /// Card 145: whether this process has a graphics adapter, so the page can
+    /// say why the GPU pieces are not available instead of showing black.
+    pub gpu: screeny_art::GpuStatus,
 }
 
 /// Every piece this build offers, with its parameters.
@@ -171,10 +188,20 @@ pub fn pieces(faults: bool) -> Vec<PieceInfo> {
             id: d.id,
             name: d.name,
             blurb: d.blurb,
+            needs_gpu: pieces::needs_gpu(d.id),
             params: d
                 .params
                 .iter()
-                .map(|p| ParamInfo { id: p.id, label: p.label, min: p.min, max: p.max, step: p.step, default: p.default })
+                .map(|p| ParamInfo {
+                    id: p.id,
+                    label: p.label,
+                    min: p.min,
+                    max: p.max,
+                    step: p.step,
+                    default: p.default,
+                    choices: p.choices,
+                    switch: p.switch,
+                })
                 .collect(),
         })
         .collect()

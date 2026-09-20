@@ -31,14 +31,22 @@ pub const COMMON_WGSL: &str = include_str!("common.wgsl");
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// The adapter's own name, for [`status`]: "Apple M3 Pro", "llvmpipe".
+    pub adapter: String,
+    /// Which backend it came up on: "Metal", "Vulkan", "Gl".
+    pub backend: String,
 }
 
 impl Gpu {
     /// The process-wide device, created on first use. The error is kept, so a
     /// machine without a usable GPU reports it once and pieces fall back to black.
     pub fn shared() -> Result<&'static Gpu, &'static str> {
+        Self::once().as_ref().map_err(|e| e.as_str())
+    }
+
+    fn once() -> &'static Result<Gpu, String> {
         static GPU: OnceLock<Result<Gpu, String>> = OnceLock::new();
-        GPU.get_or_init(Gpu::open).as_ref().map_err(|e| e.as_str())
+        GPU.get_or_init(Gpu::open)
     }
 
     fn open() -> Result<Gpu, String> {
@@ -54,7 +62,30 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("GPU device: {e}"))?;
-        Ok(Gpu { device, queue })
+        Ok(Gpu { device, queue, adapter: info.name.clone(), backend: format!("{:?}", info.backend) })
+    }
+}
+
+/// Whether this process has a graphics adapter, decided once (card 145).
+///
+/// The studio puts this on `/api/v1/status` and on the page, because a GPU
+/// piece with no adapter renders black and the only trace of *why* used to be
+/// one line on stderr - which in a container is `docker logs`, which nobody is
+/// reading.
+///
+/// Asking opens the device if it has not been opened yet, which is exactly
+/// what the first GPU piece would do; the answer is cached by
+/// [`Gpu::shared`]'s `OnceLock`, so asking again is free.
+#[must_use]
+pub fn status() -> crate::GpuStatus {
+    match Gpu::once() {
+        Ok(gpu) => crate::GpuStatus {
+            available: true,
+            adapter: gpu.adapter.clone(),
+            backend: gpu.backend.clone(),
+            error: None,
+        },
+        Err(e) => crate::GpuStatus { available: false, error: Some(e.clone()), ..Default::default() },
     }
 }
 

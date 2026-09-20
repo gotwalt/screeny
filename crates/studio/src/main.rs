@@ -72,6 +72,18 @@ fn main() -> ExitCode {
         if cfg.fault_pieces {
             println!("studio: the fault pieces are offered (SCREENY_STUDIO_FAULTS=1)");
         }
+        // Card 145: the adapter, decided once and said here, so `docker logs`
+        // answers "why is overland black" without anybody having to select a
+        // piece first. Opening the device is what the first GPU piece would do
+        // anyway, and doing it now keeps the first `/api/v1/status` prompt.
+        // It is never fatal: the CPU pieces do not care.
+        let gpu = screeny_art::gpu_status();
+        let blocked = screeny_art::pieces::NEEDS_GPU;
+        if gpu.available || blocked.is_empty() {
+            println!("studio: {}", gpu.line());
+        } else {
+            println!("studio: {} - {} cannot be played here", gpu.line(), blocked.join(", "));
+        }
         // Ctrl-C and SIGTERM stop cleanly, which releases the panel at once
         // instead of leaving it on the last frame until its stream timeout.
         studio.stop_on_signal();

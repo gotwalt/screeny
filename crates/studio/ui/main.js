@@ -338,14 +338,136 @@ async function start() {
 
   const pieceById = Object.fromEntries(boot.pieces.map((p) => [p.id, p]));
 
+  // Card 145: a GPU piece with no adapter renders black, and used to say so
+  // only on the process's stderr - which in a container is `docker logs`,
+  // which nobody is reading. The outcome is decided once by the server and
+  // comes down in `bootstrap`.
+  const gpu = boot.gpu || { available: true };
+  const unplayable = (p) => Boolean(p && p.needs_gpu && !gpu.available);
+  const blocked = boot.pieces.filter(unplayable);
+
   $('#pieces').replaceChildren(...boot.pieces.map((p) => {
     const label = document.createElement('label');
     const input = Object.assign(document.createElement('input'), { type: 'radio', name: 'piece', value: p.id });
     const span = Object.assign(document.createElement('span'), { textContent: p.name });
+    if (unplayable(p)) {
+      // Not offered, rather than offered and then black.
+      input.disabled = true;
+      label.dataset.unavailable = 'yes';
+      label.title = 'Needs a graphics adapter, and there is none here.';
+      span.append(Object.assign(document.createElement('em'), { textContent: 'no GPU' }));
+    }
     input.addEventListener('change', async () => adopt(await call('set_piece', { id: p.id })));
     label.append(input, span);
     return label;
   }));
+
+  $('#gpu-note').hidden = blocked.length === 0;
+  if (blocked.length) {
+    const names = blocked.map((p) => p.name).join(', ');
+    $('#gpu-note').textContent = `${names} cannot be drawn here — ${gpu.error || 'no graphics adapter'}.`;
+  }
+
+  /** A black picture never passes silently: if the piece that is *already*
+   *  loaded needs an adapter there is none for - which is how a state file
+   *  from a machine with a GPU arrives in a container without one - the stage
+   *  says so until another piece is picked.
+   *
+   *  It is re-asserted rather than said once, because the notice line is
+   *  shared: the socket clears it when it (re)connects, and a transient
+   *  message may be sitting on it. So this writes only when the line is free
+   *  or already carries this message, and never pushes aside something
+   *  somebody is reading. */
+  let blackNotice = '';
+  function sayIfBlack() {
+    const piece = pieceById[state.piece];
+    const el = $('#notice');
+    if (!unplayable(piece)) {
+      if (el.textContent === blackNotice) notice('');
+      delete $('#gpu-note').dataset.tone;
+      blackNotice = '';
+      return;
+    }
+    $('#gpu-note').dataset.tone = 'bad';
+    blackNotice = `${piece.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another piece.`;
+    if (el.hidden || el.textContent === blackNotice) notice(blackNotice);
+  }
+
+  /** One parameter's control (card 163).
+   *
+   *  A parameter is still an `f32` from end to end - wire, state file,
+   *  per-piece memory - and every one of these sets it with `set_param`. What
+   *  the spec now *declares* is what shape the thing is: an ordinary number is
+   *  a slider, a list of named stops is a list, and off-or-on is a switch. A
+   *  parameter whose values are a list used to be a slider with the key
+   *  crammed into its label ("Resting dials (0: as it was, 1: quiet, ...)"),
+   *  so the person moving it was reading a legend and counting stops.
+   *
+   *  Three or fewer stops are a segmented control, which fits across the
+   *  inspector at 390 px. More than three - fourteen choreographies, nine
+   *  moods - is a select: a segmented control would either wrap into a muddle
+   *  or scroll sideways. */
+  function paramControl(spec) {
+    const id = `param-${spec.id}`;
+    const set = (v) => { state.params[spec.id] = v; call('set_param', { id: spec.id, value: v }); };
+    const value = () => state.params[spec.id];
+
+    if (spec.switch) {
+      const root = document.createElement('label');
+      root.className = 'switch';
+      const input = Object.assign(document.createElement('input'), { id, type: 'checkbox' });
+      root.append(input, Object.assign(document.createElement('span'), { textContent: spec.label }));
+      paramControls.push(bindSwitch(input, { get: () => value() >= 0.5, set: (on) => set(on ? 1 : 0) }));
+      return root;
+    }
+
+    if (spec.choices && spec.choices.length) {
+      return spec.choices.length <= 3 ? segmented(spec, id, value, set) : dropdown(spec, id, value, set);
+    }
+
+    const root = document.createElement('div');
+    root.className = 'slider';
+    const label = Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label });
+    const input = Object.assign(document.createElement('input'), {
+      id, type: 'range', min: spec.min, max: spec.max, step: spec.step,
+    });
+    root.append(label, document.createElement('output'), input);
+    paramControls.push(bindSlider(root, { get: value, set, format: (v) => trim(v, spec.step) }));
+    return root;
+  }
+
+  /** A short list: one button per stop, like the panel-model controls. */
+  function segmented(spec, id, value, set) {
+    const root = document.createElement('fieldset');
+    root.className = 'seg';
+    root.id = id;
+    root.append(Object.assign(document.createElement('legend'), { textContent: spec.label }));
+    spec.choices.forEach((name, i) => {
+      const label = document.createElement('label');
+      const input = Object.assign(document.createElement('input'), { type: 'radio', name: id, value: String(i) });
+      label.append(input, Object.assign(document.createElement('span'), { textContent: name }));
+      root.append(label);
+    });
+    paramControls.push(bindRadios(root, { get: () => Math.round(value()), set: (v) => set(Number(v)) }));
+    return root;
+  }
+
+  /** A long list: a select, which says the chosen name and can hold fourteen
+   *  of them at any width. */
+  function dropdown(spec, id, value, set) {
+    const root = document.createElement('div');
+    root.className = 'row row--choice';
+    const select = Object.assign(document.createElement('select'), { id });
+    select.append(...spec.choices.map((name, i) =>
+      Object.assign(document.createElement('option'), { value: String(i), textContent: name })));
+    root.append(Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label }), select);
+    select.addEventListener('change', () => set(Number(select.value)));
+    paramControls.push({
+      refresh() { if (!busy(select)) select.value = String(Math.round(value())); },
+    });
+    select.value = String(Math.round(value()));
+    return root;
+  }
 
   function adopt(next) {
     if (!next) return;
@@ -358,23 +480,9 @@ async function start() {
     document.querySelectorAll('#pieces input').forEach((i) => { i.checked = i.value === state.piece; });
 
     paramControls = [];
-    $('#params').replaceChildren(...(piece ? piece.params : []).map((spec) => {
-      const root = document.createElement('div');
-      root.className = 'slider';
-      const id = `param-${spec.id}`;
-      const label = Object.assign(document.createElement('label'), { htmlFor: id, textContent: spec.label });
-      const input = Object.assign(document.createElement('input'), {
-        id, type: 'range', min: spec.min, max: spec.max, step: spec.step,
-      });
-      root.append(label, document.createElement('output'), input);
-      paramControls.push(bindSlider(root, {
-        get: () => state.params[spec.id],
-        set: (v) => { state.params[spec.id] = v; call('set_param', { id: spec.id, value: v }); },
-        format: (v) => trim(v, spec.step),
-      }));
-      return root;
-    }));
+    $('#params').replaceChildren(...(piece ? piece.params : []).map((spec) => paramControl(spec)));
     $('#reset-params').hidden = !piece || piece.params.length === 0;
+    sayIfBlack();
     // Empty until the controls below are bound, which is the first call.
     for (const control of refreshers) control.refresh();
   }
@@ -412,7 +520,25 @@ async function start() {
   $('#restart').addEventListener('click', restart);
   showPaused();
   bind({ refresh: showPaused });
-  bind(bindRadios($('#fps'), { get: () => state.fps, set: (v) => { state.fps = Number(v); pushPlayback(); } }));
+  // Card 172: any rate the player may be on, including one a script set. The
+  // slider both shows it and changes it, and `set_playback` now clamps rather
+  // than ignoring, so the two can no longer disagree.
+  //
+  // Not `bindSlider`: its output reads the input, and an input with whole
+  // stops rounds a rate that has not got one. The readout says the rate the
+  // player is really on; only the thumb is rounded, and never by more than
+  // half a frame.
+  const fpsInput = $('#fps');
+  const fpsOut = $('#fps-slider').querySelector('output');
+  const showFps = () => {
+    const dragging = busy(fpsInput);
+    if (!dragging) fpsInput.value = String(state.fps);
+    const shown = dragging ? Number(fpsInput.value) : state.fps;
+    fpsOut.textContent = `${Number.isInteger(shown) ? shown : shown.toFixed(1)} fps`;
+  };
+  fpsInput.addEventListener('input', () => { state.fps = Number(fpsInput.value); showFps(); pushPlayback(); });
+  showFps();
+  bind({ refresh: showFps });
   bind(bindSlider($('#speed-slider'), {
     get: () => state.speed,
     set: (v) => { state.speed = v; pushPlayback(); },
@@ -577,7 +703,10 @@ async function start() {
       if (link.indexed_fallback) rows.push(['Requantised', nf.format(link.indexed_fallback), 'warn']);
     }
     if (player) {
-      rows.push(['Reconnects', Math.max(0, player.health.sessions - 1)]);
+      // Card 171: a player-lifetime count that survives the link being
+      // rebuilt, not `sessions - 1` - which was per link object, and the
+      // studio builds a new link whenever what it is aiming at changes.
+      rows.push(['Reconnects', `${nf.format(player.health.reconnects)} since the studio started`]);
       rows.push(['Rendered', `${nf.format(player.health.ticks)} frames at ${player.fps_measured.toFixed(0)} fps`]);
       if (player.health.panics || player.health.stalls) {
         rows.push(['Faults', `${player.health.panics} panics, ${player.health.stalls} stalls, ${player.health.restarts} restarts`, 'warn']);
@@ -603,6 +732,13 @@ async function start() {
     }
     facts($('#panel-facts'), rows);
 
+    const looking = discoveryLine(Boolean(attachedId()));
+    $('#discovery-note').textContent = looking;
+    $('#discovery-note').hidden = !looking;
+    // Card 145, on the half-second heartbeat: the notice line is shared, so
+    // a black GPU piece says so again as soon as the line is free.
+    sayIfBlack();
+
     // Card 167: remembered settings this build could not use as written. Not a
     // fault - it is what the memory is for - so it is said plainly, once.
     const repaired = picture ? picture.state.repaired : [];
@@ -614,6 +750,38 @@ async function start() {
     showFound();
   }
   bind({ refresh: showPanel });
+
+  /** Card 173: which of the three "nothing here yet" this is.
+   *
+   *  An empty list looks the same whether the first browse has simply not
+   *  finished, mDNS is broken on this host, or discovery is switched off and
+   *  nothing will ever appear. The first is "wait a moment" and the third is
+   *  "you have to type something", so the page has to tell them apart. None of
+   *  it is a fault: a browse that finds nothing is the normal case, so this is
+   *  a hint and never reaches `/healthz`.
+   *
+   *  Returns '' when there is nothing worth saying, which is the ordinary
+   *  state of an attached panel on a host where discovery works. */
+  function discoveryLine(attached) {
+    const d = picture && picture.discovery;
+    if (!d) return '';
+    const type = 'Type an address under “Change which panel”.';
+    if (!d.enabled) {
+      return attached
+        ? 'Not looking for other panels: this studio was started with --no-discover.'
+        : `Not looking for panels: this studio was started with --no-discover. ${type}`;
+    }
+    if (d.last_error) {
+      return `Looking for panels is not working here: ${d.last_error}. ${type}`;
+    }
+    if (!d.browses) return 'Looking for panels…';
+    if (attached) return '';
+    const browses = `${d.browses} ${d.browses === 1 ? 'browse' : 'browses'}`;
+    const found = (picture.devices || []).length;
+    return found
+      ? `Looking: ${browses}, ${found} found.`
+      : `Looking: ${browses}, nothing found yet. ${type}`;
+  }
 
   /** Every panel this studio knows about: the chooser, folded away. */
   function showFound() {

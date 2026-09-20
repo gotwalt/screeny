@@ -37,6 +37,9 @@
       <div class="playing__actions" id="playing-actions"></div>
       <ul class="playing__notes" id="playing-notes"></ul>
       <div class="pieces" id="pieces" role="radiogroup" aria-label="Piece"></div>
+      <!-- Card 145: why the GPU pieces are greyed out, said once, here rather
+           than only on stderr. -->
+      <p class="hint" id="gpu-note" hidden></p>
       <div class="row row--seed">
         <label for="seed">Seed</label>
         <input id="seed" type="number" min="0" max="4294967295" step="1" inputmode="numeric">
@@ -59,6 +62,9 @@
       </div>
       <p class="panel__name" id="panel-name">Looking for a panel…</p>
       <p class="hint" id="panel-help"></p>
+      <!-- Card 173: is the studio even looking? Never a fault tone - a browse
+           that finds nothing is normal - but never silent either. -->
+      <p class="hint" id="discovery-note" hidden></p>
 
       <label class="switch"><input type="checkbox" id="panel-out"><span>Show it on the panel</span></label>
 
@@ -100,11 +106,27 @@
         <button type="button" id="pause" title="Space">Pause</button>
         <button type="button" id="restart" title="R">Restart</button>
       </div>
-      <fieldset class="seg" id="fps">
-        <legend>Frames per second</legend>
-        <label><input type="radio" name="fps" value="30"><span>30</span></label>
-        <label><input type="radio" name="fps" value="60"><span>60</span></label>
-      </fieldset>
+      <!-- Card 172: a player may be at any rate from 1 to 60 and a script may
+           set one, so the control is a slider over the whole range rather than
+           two buttons that could both be unlit. The min and max are
+           `player::MIN_FPS`/`MAX_FPS`, checked by a test.
+
+           The datalist names the rates worth reaching for. Chrome only paints
+           tick marks on the *default* track and style.css replaces it, so they
+           are not drawn: card 183. The readout is the exact rate either way,
+           and the arrow keys step by one. -->
+      <div class="slider" id="fps-slider">
+        <label for="fps">Frames per second</label><output></output>
+        <input id="fps" type="range" min="1" max="60" step="1" value="60" list="fps-stops">
+        <datalist id="fps-stops">
+          <option value="1"></option>
+          <option value="10"></option>
+          <option value="15"></option>
+          <option value="24"></option>
+          <option value="30"></option>
+          <option value="60"></option>
+        </datalist>
+      </div>
       <div class="slider" id="speed-slider">
         <label for="speed">Speed</label><output></output>
         <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1">

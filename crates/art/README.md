@@ -121,8 +121,15 @@ clock pieces can be run faster than real time and tested.
 1. Copy `crates/art/src/pieces/metaballs.rs` (continuous colour) or
    `plasma.rs` (indexed).
 2. Give it a `DEF` with an id, a one-line blurb and `ParamSpec`s. The studio
-   builds its sliders from those.
-3. List it in `ALL` in `crates/art/src/pieces/mod.rs`.
+   builds its controls from those: `param(..)` for a number is a slider,
+   `choice(id, label, &["..", ".."], default)` for a list of named stops is a
+   list, and `toggle(id, label, default)` for off-or-on is a switch (card 163).
+   A choice is still an `f32` from end to end - wire, state file, per-piece
+   memory - so use one whenever a parameter's values have names, rather than
+   putting the key in the label. Take the names from the piece's own words.
+3. List it in `ALL` in `crates/art/src/pieces/mod.rs`. If it needs a GPU, list
+   its id in `NEEDS_GPU` beside it, so the studio can say why it is black on a
+   machine with no adapter (card 145).
 
 Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive
@@ -206,7 +213,8 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   blurred slashes are a texture. Dimming costs no palette entry: a hand's ink scaled
   in linear light is what its own anti-aliasing ramp already is, so it lands on a step
   of that ramp and the frame stays 31 colours. The other treatments (including `0`,
-  exactly what the piece did before) are switchable live so the panel can settle it;
+  exactly what the piece did before) are switchable live so the panel can settle it -
+  by name since card 163, rather than by counting a slider's stops against a legend;
   the evidence is `docs/research/010-numerals-rest-pose.md`. Resting dials only recede
   while the time is being held: a dance is always drawn at full strength, and the
   picture settles over 0.6 s as the hands land.
@@ -339,7 +347,7 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
 | 64 linear levels per channel (fewer when dimmed) | `panel.rs`: `NATIVE_LEVELS`; a runtime setting everywhere else |
-| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). The studio engine and `pipe` default to 60, with 30 selectable | `crates/studio/src/main.rs`: `RATES`; `screeny-art pipe --fps` |
+| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). Players and `pipe` default to 60; the studio's page offers the whole 1..60 range (card 172) | `crates/studio/src/player.rs`: `MIN_FPS`/`MAX_FPS`; `screeny-art pipe --fps` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 

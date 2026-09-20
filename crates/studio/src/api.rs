@@ -26,7 +26,7 @@ use screeny_art::Settings;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::page::{self, Bootstrap, StudioState, RATES};
+use crate::page::{self, Bootstrap, StudioState};
 use crate::player::{Player, PlayerChange};
 use crate::AppState;
 
@@ -142,6 +142,7 @@ async fn bootstrap(State(st): State<AppState>) -> Json<Bootstrap> {
         pieces: page::pieces(st.cfg.fault_pieces),
         payload_bytes: screeny_art::meter::PAYLOAD_BYTES,
         state: st.page_state(),
+        gpu: screeny_art::gpu_status(),
     })
 }
 
@@ -216,10 +217,15 @@ struct SetPlayback {
     fps: f64,
 }
 
-/// The page's rate control offers [`RATES`] and nothing else, so a rate that
-/// is not one of them leaves the rate where it is rather than being an error.
-/// (`POST /player/set {fps}` takes any rate in the player's range; this is the
-/// page's control, and card 105's behaviour is kept exactly.)
+/// **Card 172 changed this.** Card 105's rule was "the page offers 30 and 60,
+/// so anything else leaves the rate where it is" - which meant a panel a
+/// script had set to 10 fps showed a control with neither button lit, and
+/// clicking either silently *changed* the rate rather than revealing it.
+///
+/// The page's control is a slider over the player's whole range now, so this
+/// route accepts what `POST /player/set {fps}` has always accepted: any rate
+/// in `player::MIN_FPS..=player::MAX_FPS`, clamped there rather than ignored.
+/// The two routes can no longer disagree about what a rate is.
 async fn set_playback(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPlayback>) -> ApiResult<Json<StudioState>> {
     on_page(
         &st,
@@ -227,7 +233,7 @@ async fn set_playback(State(st): State<AppState>, headers: HeaderMap, Json(req):
         &PlayerChange {
             paused: Some(req.paused),
             speed: Some(req.speed),
-            fps: RATES.contains(&req.fps).then_some(req.fps),
+            fps: Some(req.fps),
             ..PlayerChange::default()
         },
     )
