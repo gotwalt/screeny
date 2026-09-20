@@ -84,8 +84,13 @@ Also done and deployed by the morning of 2026-09-20: the page-polish cards 173, 
 (one poller, one connection in flight, every 10 s) and the page has a Device block. The real
 SSID is in that payload and therefore in the Studio's `/api/v1/status`: keep it out of every
 tracked file, log, card and screenshot - never screenshot the deployed page. Do not `curl` the
-panel's port 80 by hand any more; read `workbench.local:8787/api/v1/status` instead. Nothing
-of this session's is in flight. Good next cards: 104 (scheduler - design with the owner), 102
+panel's port 80 by hand any more; read `workbench.local:8787/api/v1/status` instead. Also deployed 2026-09-20 morning: 195 (device health thresholds from the firmware session;
+unasked-for reboots named quietly), 120 (a hidden tab costs ~0.1-0.5 KB/s, a visible one about
+half what it did; `sockets` in status), 183, 182. Browser tooling note: the Chrome extension
+drives a *background* window, so `document.hidden` is true there - since card 120 the page
+then asks for no pictures and the canvas is black; verify frames with a hand-opened
+WebSocket (`/api/v1/ws?fps=30&repeat=false`), and leave judging the picture to the owner.
+Nothing of this session's is in flight. Good next cards: 104 (scheduler - design with the owner), 102
 (art's panel model vs the device), 120 (preview bandwidth), 141, 182, 183, 190, 191; card 192
 (a sim that can play an unhealthy device) was offered to the firmware session.
 Open with the owner, from card 170's worker: cross-fade or cut on a piece change; is
