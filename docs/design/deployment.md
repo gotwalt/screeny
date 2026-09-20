@@ -167,6 +167,11 @@ tools/deploy-workbench.sh --logs       # the last 200 lines
 tools/deploy-workbench.sh              # redeploy whatever is on origin/main now
 ```
 
+`restart: unless-stopped` means a crash is restarted and a `docker compose stop` is
+not. It also means a **bad argument looks like a crash loop**: the studio exits 1 on
+an unknown flag and Docker restarts it a few times a second. `--logs` shows the usage
+text straight away if that is what has happened.
+
 Portainer (`https://workbench.local:9443`) sees the stack as the `screeny` project
 and can stop, start and inspect it. Do the *building* over SSH: a Rust + wgpu image is
 far too slow to build inside Portainer, and Portainer's editor is not where a
