@@ -141,3 +141,11 @@ Tests, both kinds the card allowed:
   time instead of 12. The sharp assertion is agreement with `RxState::fps()`,
   which measures the same sends from the other side of the socket with the
   same estimator (card 093) - within 0.3%, 5 runs out of 5 in release.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-art`: green (203 passed across the
+run). The only failures seen were two timing-sensitive `crates/studio/tests/fleet.rs` tests that fail
+about one run in four on a loaded host and pass alone - not this branch; handed to card 170, which owns
+those tests. Decisions accepted as made: resolver before browse for `.local`; `mean_bytes` keeps `FINAL`,
+`mean_encode` drops it. Reaches the deployed Studio with the next deploy (card 170).

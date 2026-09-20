@@ -162,3 +162,11 @@ resolve costs 5 s per connection attempt on macOS (on the connect thread, so
 the engine is unaffected), and `resolve_aim` in `api.rs` still prefers a
 registry device's instance name over its address, which is still the right
 preference.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-art`: green (203 passed across the
+run). The only failures seen were two timing-sensitive `crates/studio/tests/fleet.rs` tests that fail
+about one run in four on a loaded host and pass alone - not this branch; handed to card 170, which owns
+those tests. Decisions accepted as made: resolver before browse for `.local`; `mean_bytes` keeps `FINAL`,
+`mean_encode` drops it. Reaches the deployed Studio with the next deploy (card 170).

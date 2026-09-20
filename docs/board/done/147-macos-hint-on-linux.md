@@ -99,3 +99,11 @@ Also changed, because the old wording was the same bug in prose:
 
 Evidence: `cargo test -p screeny --lib` 9 passed (3 of them new here),
 `--test loopback` 10 passed, `--test cli` 13 passed.
+
+### Orchestrator (2026-09-20)
+
+Merged to `main` cleanly. `cargo test --release -p screeny -p screeny-art`: green (203 passed across the
+run). The only failures seen were two timing-sensitive `crates/studio/tests/fleet.rs` tests that fail
+about one run in four on a loaded host and pass alone - not this branch; handed to card 170, which owns
+those tests. Decisions accepted as made: resolver before browse for `.local`; `mean_bytes` keeps `FINAL`,
+`mean_encode` drops it. Reaches the deployed Studio with the next deploy (card 170).
