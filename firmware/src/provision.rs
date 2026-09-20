@@ -605,7 +605,12 @@ fn step(ev: Event<'_>, now_ms: u32) -> screeny_provision::Actions {
         if after != before {
             info!("provision: {} -> {}", before.name(), after.name());
         }
-        AP_UP.store(p.ap_up(), Ordering::Relaxed);
+        // **`AP_UP` is deliberately not written here.** The machine flips its
+        // own `ap_up` *inside* this call and then asks for `RaiseAp`/`DropAp`;
+        // publishing it now would make `Driver::raise_ap` see the AP as
+        // already up and return without ever configuring the radio. The two
+        // actions own this flag, which is also what makes it mean "the radio
+        // and the services agree" rather than "the machine intends to".
         actions
     })
 }
@@ -749,13 +754,21 @@ impl Driver {
                 self.held.stored = Some(w);
             }
             // Device-web decision 6: the compile-time pair **seeds an empty
-            // store**. `seed_wifi` is the function with that guard in it, and
-            // it is deliberately the one used here: a stored pair that failed
-            // three times is the owner's to replace, not this build's to
-            // overwrite with the bench network.
+            // store**, and only an empty one. The machine reaches `Builtin`
+            // down two roads - nothing stored at all, and a stored pair that
+            // failed three times - and the second must not write: a stored
+            // pair that stopped working is the owner's to replace, not this
+            // build's to quietly overwrite with the bench network. That was
+            // the rule `station_loop` carried ("deliberately *not* stored")
+            // and it is carried here now, because this is the only place in
+            // the firmware that can commit.
             JoinTarget::Builtin => {
-                crate::store::seed_wifi(&w).await;
-                self.held.stored = Some(w);
+                if self.held.stored.is_some() {
+                    info!("provision: the build's credentials joined; the stored pair is left alone");
+                } else {
+                    crate::store::seed_wifi(&w).await;
+                    self.held.stored = Some(w);
+                }
             }
             // The store already holds them; that is where they came from.
             JoinTarget::Stored => {}
@@ -879,11 +892,10 @@ impl Driver {
                     reason: FailReason::Other,
                 }
             }
-            Ok(Either::Second(n)) => {
-                let acts = step(Event::Tick, crate::now_ms());
-                self.apply_actions(acts, controller).await;
-                return self.posted(n, controller).await;
-            }
+            // The machine turns this into `StopJoin` + a new `StartJoin`
+            // itself. Nothing else is fed in between - a `Tick` here could
+            // expire the attempt first and start a different join.
+            Ok(Either::Second(n)) => return self.posted(n, controller).await,
             Err(_) => {
                 warn!("wifi: the radio did not answer the attempt in {} s", ATTEMPT_WAIT.as_secs());
                 let _ = controller.disconnect_async().await;

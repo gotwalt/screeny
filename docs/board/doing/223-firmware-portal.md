@@ -286,3 +286,29 @@ real credential was read, built or written at any point. `apsta-probe` lost its
 call into `station_loop`, which card 223 deleted; it has its own three-line
 "connect, then poll the RSSI" instead, and the heap measurement either side of
 `set_config(AccessPointStation)` is unchanged.
+
+### Three bugs found by reading it back before the first flash
+
+Read before flashing, not after, because a boot loop on this bench costs a
+flash and a reflash:
+
+1. **`step()` published `AP_UP` and that broke `RaiseAp`.** The machine flips
+   its own `ap_up` *inside* `step`, so publishing it there made
+   `Driver::raise_ap` see the AP as already up and return without ever putting
+   the radio into APSTA - no soft-AP at all, which is the whole card. The two
+   actions own the flag now, which also makes it mean "the radio and the
+   services agree" rather than "the machine intends to".
+2. **`CommitCredentials { Builtin }` would have overwritten a stored pair.**
+   The machine reaches `Builtin` down two roads - nothing stored, and a stored
+   pair that failed three times - and `store::seed_wifi` has no emptiness guard
+   in it (the guard was in `main`, in the boot-time seeding this card
+   removed). On a `bench-wifi` build whose stored pair had gone bad, that would
+   have quietly replaced the owner's credentials with the bench network, which
+   is exactly what `station_loop`'s "deliberately *not* stored" comment existed
+   to prevent. The guard is now in the one place that can commit.
+3. **A stray `Tick` when a post interrupted a join attempt.** The machine turns
+   `CredentialsPosted` into `StopJoin` + a new `StartJoin` by itself; feeding a
+   `Tick` first could expire the attempt and start a *different* join between
+   the two.
+
+`.stack` unchanged at 27,952 after the fixes.
