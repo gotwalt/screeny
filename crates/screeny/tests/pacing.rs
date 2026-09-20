@@ -17,14 +17,14 @@
 //! quantity contaminated by the second, so the assertions are chosen to be
 //! blind to the contamination (card 093):
 //!
-//! - **Rate** is the *median* interval between wake-ups, not a frame count
-//!   divided by a wall-clock window. Lateness is one-sided - `sleep_until`
-//!   never returns early - so one late wake-up lengthens one interval and
-//!   shortens the next, leaving the middle of the distribution untouched. It
-//!   also means the same thing at every run length, which a count over a
-//!   window with ragged ends does not: measured over 50 runs on a loaded
-//!   host, the median was 33.32-33.36 ms whether the run was 2 s or 10 s,
-//!   while `SendStats::actual_fps()` read 30.99 at 2 s and 30.19 at 10 s.
+//! - **Rate** is the slope of lateness across the run, not a frame count
+//!   divided by a wall-clock window, and not the median interval either. See
+//!   [`Timeline::rate_error`], which is where the choice is argued and the
+//!   two easier estimators are shown failing. It means the same thing at
+//!   every run length, which a count over a window with ragged ends does not:
+//!   measured over 50 runs on a loaded host it stayed inside +-0.13% whether
+//!   the run was 2 s or 10 s, while `SendStats::actual_fps()` read 30.99 at
+//!   2 s and 30.19 at 10 s on the same pacer.
 //! - **Drift** is measured once over the whole run, normalised by the number
 //!   of *slots* rather than of frames so a legitimate skip does not read as
 //!   drift. It does not grow with the run for a correct pacer, so its
