@@ -83,12 +83,12 @@ do not read the clock.
 mid-dance, so the card's acceptance would have failed as literally written. `--time` now
 also moves `--at` to 20 s (and `--warmup` to the whole run; either given explicitly still
 wins). 20 s is measured: over 60 seeds the opening dance onto the born-on minute is
-8.9-15.4 s, over all thirteen named choreographies 9.1-15.0 s, and the next dance does
-not set off until ~45 s. So:
+8.9-15.4 s, and over all thirteen named choreographies at four seeds each 7.6-15.4 s.
+The next dance does not set off until ~45 s. So:
 
 | picture | command | measured |
 |---|---|---|
-| numerals settled on 21:12 | `--time 21:12` | `e02114173eb0819c...` for all 60 seeds, all 13 dances, and for `--at 40 --set still=60` |
+| numerals settled on 21:12 | `--time 21:12` | `e02114173eb0819c...` for all 60 seeds, for all 13 named dances at 4 seeds each, and for `--at 40 --set still=60` |
 | numerals 2 s from landing on 21:12 | `--time 21:11:20 --at 38 --seed 7` | `4d4551de149b258e...`, twice |
 | dials telling 10:10 | `--time 10:09:50 --at 15` | `f1d9b5f039ff167a...` for seeds 1/7/42/999, and twice minutes apart |
 
