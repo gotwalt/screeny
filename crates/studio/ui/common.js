@@ -139,7 +139,7 @@ export function makeAttempt(after) {
 export const CLIENT = crypto.randomUUID?.() ?? `c${Math.random().toString(36).slice(2)}`;
 
 // Reads; everything else is a POST carrying its arguments as JSON.
-const GETS = new Set(['bootstrap', 'frame', 'piece_playing', 'panel_status', 'status', 'devices']);
+const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices']);
 
 export async function invoke(cmd, args) {
   const init = GETS.has(cmd) ? {} : {
@@ -377,7 +377,7 @@ export function bindSwitch(input, { get, set }) {
 /** Brightness: the same control on both screens (card 198).
  *
  *  It is on the Picture screen because it changes how the picture looks on the
- *  LEDs and is part of judging a piece, and on the Panel screen because that is
+ *  LEDs and is part of judging a patch, and on the Panel screen because that is
  *  where the panel's controls are. One binding, so the two cannot drift: the
  *  maximum is the device's own ceiling once it has said what that is, the
  *  lowest non-zero stop is 6 (card 136), and what is shown is what the device

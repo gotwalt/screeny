@@ -201,3 +201,39 @@ now also needs the settings type `screeny_art::Output`; the trait is imported
 
 `cargo test -p screeny-studio --lib`: 62 pass. Clippy silent on the lib and the binary.
 The integration tests in `tests/` are the next area and do not build yet.
+
+### Area 4 - the page: `ui/*.js`, `*.html`, `style.css` (2026-09-20)
+
+58 hits across the six files, all read. In step with area 3, in the same series, so
+the page and the server never disagree.
+
+- Element ids and classes: `#pieces` -> `#patches`, `#piece-name`/`#piece-blurb` ->
+  `#patch-name`/`#patch-blurb`, `.pieces` -> `.patches`, `.titleblock__piece` ->
+  `.titleblock__patch`, the radio group's `name="piece"` and `aria-label="Piece"` ->
+  `patch`/`Patch`. `crates/studio/tests/ui.rs` is updated in the next commit.
+- Calls: `set_piece` -> `set_patch`, `set_settings` -> `set_output` (and the body is
+  `{ output }`), `piece_act` -> `patch_act`, `piece_playing` -> `patch_playing` in
+  `common.js`'s GET set. State: `state.piece` -> `state.patch`, `state.settings` ->
+  `state.output`, `boot.pieces` -> `boot.patches`; `pushSettings` -> `pushOutput`,
+  `pieceById` -> `patchById`.
+- Words on the page: "Pick another patch", "The patch asked for ...", "play it as the
+  patch intended", "which patch is this panel on".
+
+Four strings were **not** given the new word, because "settings" there is not ours:
+
+- `panel.js`'s device-facts comment says "an error in the device's own settings
+  store" - that is `crates/settings` on the firmware, out of scope and keeping its
+  name. (The mechanical pass had turned it into "output-store"; caught on review.)
+- The `#state-repairs` line now reads "Put right on the way in: ..." rather than
+  "Settings put right on the way in: ...". It lists remembered *values* the build
+  could not use, which is not what "settings" is about to mean.
+- `panel.html`'s comment beside it: "remembered values this build could not use".
+- The Forget confirmation was "Its settings go with it"; it is "Its player goes with
+  it" now, which is also more exactly what happens.
+- `picture.js`'s "per-viewer view settings" comment is "per-viewer view options":
+  browser-local view state, never sent to the server, and nothing to do with a
+  patch's settings.
+
+`node --check` passes on all three scripts (node v24.19.0 was already on the machine;
+nothing was installed). Every `#id` the three scripts ask for exists in one of the two
+pages - 84 ids, none missing - checked by script before the commit.

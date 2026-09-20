@@ -28,7 +28,7 @@ async function start() {
   /** The panel link, from the half-second heartbeat. Null when output is off. */
   let link = null;
 
-  const pieceById = Object.fromEntries(boot.pieces.map((p) => [p.id, p]));
+  const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
   const attachedId = () => (picture ? picture.preview.device : state.device) || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
@@ -96,9 +96,9 @@ async function start() {
     const name = device ? device.label : attachedId();
     $('#panel-name').textContent = name || 'No panel yet';
     $('#panel-help').textContent = !attachedId()
-      ? 'Nothing is being sent. The studio is still playing the piece; the Picture screen shows it.'
+      ? 'Nothing is being sent. The studio is still playing the patch; the Picture screen shows it.'
       : !state.on
-        ? 'The panel is on its own idle screen. The piece is still playing here.'
+        ? 'The panel is on its own idle screen. The patch is still playing here.'
         : link && link.connected
           ? `Sending to ${device ? (device.frame_addr || device.address || device.instance || device.id) : name}.`
           : `${name} is away. It will pick this up again by itself when it comes back.`;
@@ -107,8 +107,8 @@ async function start() {
     if (pill.textContent !== here.label) pill.textContent = here.label;
     pill.dataset.state = here.tone;
 
-    const piece = pieceById[state.piece];
-    $('#ro-playing').textContent = piece ? piece.name : state.piece;
+    const patch = patchById[state.patch];
+    $('#ro-playing').textContent = patch ? patch.name : state.patch;
     $('#ro-seed').textContent = state.seed;
   }
 
@@ -200,11 +200,12 @@ async function start() {
    *  **Quiet by default.** Everything here is a plain number in the ordinary
    *  tone. The things meant to catch an eye are the ones that mean something
    *  happened to the panel rather than in it: a reset that was not a power-on
-   *  or a reboot we asked for, a settings-store error, a firmware slot that is
-   *  not valid, and memory running out. Which is which is decided once, on the
-   *  server, beside the reasoning for the thresholds (`devices::STACK_WARN`,
-   *  `devices::STACK_FAULT`, `devices::HIGH_HEAP`, measured on the real device
-   *  by the firmware session) - never a number written out twice.
+   *  or a reboot we asked for, an error in the device's own settings store,
+   *  a firmware slot that is not valid, and memory running out. Which is
+   *  which is decided once, on the server, beside the reasoning for the
+   *  thresholds (`devices::STACK_WARN`, `devices::STACK_FAULT`,
+   *  `devices::HIGH_HEAP`, measured on the real device by the firmware
+   *  session) - never a number written out twice.
    *
    *  Card 195: free stack has two levels, because the margin going is worth a
    *  different noise from the margin being gone, and a reboot nobody here
@@ -300,7 +301,7 @@ async function start() {
     const repaired = store.repaired || [];
     $('#state-repairs').hidden = repaired.length === 0;
     if (repaired.length) {
-      $('#state-repairs').textContent = `Settings put right on the way in: ${repaired.join('; ')}`;
+      $('#state-repairs').textContent = `Put right on the way in: ${repaired.join('; ')}`;
     }
   }
 
@@ -371,7 +372,7 @@ async function start() {
       }
       const forget = Object.assign(document.createElement('button'), { type: 'button', className: 'quiet', textContent: 'Forget' });
       forget.addEventListener('click', () => {
-        if (!window.confirm(`Forget ${d.label}? Its settings go with it.`)) return;
+        if (!window.confirm(`Forget ${d.label}? Its player goes with it.`)) return;
         attempt(`Forgot ${d.label}`, () => invoke('devices/forget', { device: d.id }));
       });
       row.append(forget);
