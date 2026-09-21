@@ -243,6 +243,21 @@ worker's pick is `birds=6 size=2.5`, renders in the scratchpad's `flock/`). Back
 (every other slider has the Safari mid-drag flaw, seen only when someone else edits the same
 value; parked in spirit), 137, and the firmware session's 138 and 248.
 
+**Flock, the evening of 2026-09-21 (all deployed, last 7f261f0), each from the owner's words:**
+**123** - the bird has a wing (`flock/bird.rs`: two segments and a wrist that folds through the
+quick half of the beat, a lagging tip, filled area via `Coverage::triangle`, camber, a body that
+shortens from the dart's 0.70 of a span to 0.48 as it grows, chest/neck/head, tail fan, a notch
+before the tail); detail comes in by projected span (5-9 LEDs), so the 55-bird default is nearly
+card 168's. **124** - "let's add some roll & lean": a DRAWN lean (`Bird::lean`, six-fold gain on
+the honest roll, tanh to 54 degrees, 0.22 s in / 0.45 s out) that the flight never reads (tested
+bit-for-bit), inside wing tucked, one new control `lean` 0..2 (0 = honest roll). A pitch response
+was built, measured and removed (the camera sees birds from behind; it moved one pixel). Workers
+on these two were Opus: judged by eye over many render-and-look rounds. Contact sheets are in the
+scratchpad's `flock-wings/` and `flock-bank/`. Known, from the workers' own lists: a banked
+glider is a straight diagonal; no head shape; the lean is as common as the turns (lower `calm`
+for more). Backlog: **128** (the top/underside flash is lost when the ink quantises), 127, 137.
+At `birds` 150 x `size` 3 some frames go lossy (its own test bounds it); nobody watches that.
+
 **Next up:** whatever the owner's eye finds in the pieces (115's hands first); 162 when
 clock renders need comparing; porting `crates/demos` into `crates/art` when wanted. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
