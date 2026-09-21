@@ -161,17 +161,21 @@ setting may ask for a panel brightness). **The owner's limit: at most TWO worker
 time, for now.** Also done and deployed that afternoon: 164 (KB/s per panel on `/panel`:
 ~10-18 KB/s out for the clocks and vesta) and **168 - `flock`** (the owner: "this is
 great"; then asked for, and got from the orchestrator directly, a `backdrop` toggle - off
-is white birds on true black - merged, not yet deployed). **Running:** 161
-(`card/161-thirty-fps`) and **174** (`card/174-vesta-faces`: the owner disliked vesta's
-numerals - "the 5 has a super long descender" - and asked for pixel fonts and a font
-option; Terminus 32 bold lands 1:1 on the LEDs; the worker was also told to add a **blank
-card for the leading zero**, default on; sheets land in the scratchpad's `vesta-faces/`;
-an interim redraw of 5/6/9 is already on `main` and deployed). **Queued, in order:**
-**177** (flock: less predictable turns, real vertical motion, and spacing that is not a
-lattice - the owner's three notes; resume the flock worker `ad49acff83c4850b9` by
-SendMessage if this session still has it, else a new worker from the card), **178** (remove
-the `plasma` and `testcard` patches - "not interesting"; plasma is the Studio tests'
-fixture patch, so it is a careful card, after 161), 159, 157, 169, 199, 156, 114.
+is white birds on true black - merged, not yet deployed). **Done and deployed since:** 161 (one rate, 30 fps: `screeny_art::FPS`; no rate control;
+old state and requests accepted; the Studio now offers ~1 frame per frame sent), **174**
+(vesta's numerals are a choice from `crates/art/src/faces/` - Terminus Bold default,
+Terminus, Spleen, Dina 1:1 or 2x on the LEDs, Micro Grotesk, the stroked Vesta; a blank
+leading card, default on; licences in `faces/FACES.md`), flock's `backdrop` choice (sky /
+horizon line / black). **Running (two, the limit):** **177** (`card/177-flock-flight`:
+spacing that is not a lattice, less regular turns, real vertical motion) and **184**
+(`card/184-vesta-rotation`: the owner - "the fun of a flipboard is that it flips" - wants
+every position to make a full rotation on the minute; the faces worker
+`a70c6d0baefd6f3a9` was resumed for it in its kept worktree). **Paused, worktree kept:**
+178 (`card/178-remove-plasma-testcard`, worker `aa25b6b748a076263`; nothing removed yet,
+everything worked out in its Log: `metaballs` is the fixture, `fallback_patch()` names
+plasma, a player on a removed patch needs a load-time repair) - resume it by SendMessage
+when a slot frees. **Queued after that:** 175 (vesta's colon from the face), 159, 157,
+169, 199, 156, 114.
 **Parked by the owner's own words:** 179 - day and night modes switched by a virtual
 Matter switch from his smart home; a *mode* carries patch + setting + brightness, which
 answers vesta's open brightness question (not a patch's or a setting's to ask). Deploys:
