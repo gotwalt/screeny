@@ -219,10 +219,23 @@ six birds drawn as big as `size` goes.
 nothing outside `crates/art/src/patches/flock/` and `crates/art/README.md` changed, and
 `sim.rs` is byte-identical.
 
+`cargo test --release --no-fail-fast` at the root: everything green except one test in
+another crate, `crates/screeny/tests/embed.rs`'s
+`a_sixty_fps_producer_is_decimated_to_the_devices_rate`, which is a **wall-clock timing**
+test and failed while the machine was also compiling and rendering. Re-run on its own
+immediately afterwards it passes (`1 passed`). Nothing this card touches is anywhere near
+that test; it is load sensitivity, and worth knowing about the next time a worker sees it.
+
 **Pictures** in the session scratchpad under `flock-wings/`, before over after in each
-pair: `compare-default.png` (the 55-bird default, four moments), `compare-glide.png`,
-`compare-flapbig.png`, `compare-flap.png`, `compare-bank.png`, and the size-3 singles
-`before/bigsheet.png` / `after/bigsheet.png`.
+pair: `compare-flapbig.png` (one big bird, 16 consecutive frames of one beat at
+`birds 6 size 2.5 seed 7` from t = 44.0), `compare-glide.png` (t = 57.8),
+`compare-default.png` (the 55-bird default at four moments - the picture that must not
+change), `compare-bank.png` (t = 17.5 at `calm 0.15 wild 0.9`), `compare-flap.png`
+(a second beating bird at t = 78, seen at a better angle), the size-3 singles
+`after/bigsheet.png` and `before/bigsheet.png`, and the three turntables -
+`turntable-beat.png`, `turntable-glide.png`, `turntable-bank.png` - which are the model
+itself, one bird from six directions through eight phases, rows side / 45 below / below
+/ 45 above / three-quarter front / head-on.
 
 **What still looks wrong**, honestly:
 
