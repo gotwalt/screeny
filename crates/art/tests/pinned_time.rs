@@ -93,7 +93,9 @@ fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
 /// reads it.
 #[test]
 fn a_patch_that_does_not_tell_the_time_is_untouched() {
-    for id in ["plasma", "metaballs", "testcard"] {
+    // Card 178 took `plasma` and `testcard` out of this list with the patches
+    // themselves; `flock` is the other one that never reads `Ctx::now`.
+    for id in ["metaballs", "flock"] {
         assert_eq!(
             pixels(id, 3.0, at("21:12"), 7),
             pixels(id, 3.0, at("04:05:06"), 7),

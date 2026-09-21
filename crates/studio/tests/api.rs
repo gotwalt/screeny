@@ -23,27 +23,27 @@ async fn the_api_round_trips() {
     let first = boot["state"]["patch"].as_str().expect("a patch").to_string();
 
     // set_patch, and the error a typo gets.
-    let plasma = post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
-    assert_eq!(plasma.status, 200);
-    assert_eq!(plasma.json()["patch"], "plasma");
+    let chosen = post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
+    assert_eq!(chosen.status, 200);
+    assert_eq!(chosen.json()["patch"], "metaballs");
     let wrong = post(at, "/api/v1/set_patch", r#"{"id":"no-such-patch"}"#).await;
     assert_eq!(wrong.status, 400);
     assert_eq!(wrong.json()["error"], "no patch called `no-such-patch`");
-    assert_ne!(first, "plasma", "this test assumes the studio does not start on plasma");
+    assert_ne!(first, "metaballs", "this test assumes the studio does not start on metaballs");
 
     // set_param, clamped by the patch's own spec, and the error for a typo.
-    let set = post(at, "/api/v1/set_param", r#"{"id":"scale","value":2.0}"#).await;
+    let set = post(at, "/api/v1/set_param", r#"{"id":"size","value":2.0}"#).await;
     assert_eq!(set.status, 200);
-    assert_eq!(set.json()["params"]["scale"], 2.0);
+    assert_eq!(set.json()["params"]["size"], 2.0);
     let wrong = post(at, "/api/v1/set_param", r#"{"id":"nonesuch","value":1.0}"#).await;
     assert_eq!(wrong.status, 400);
-    assert_eq!(wrong.json()["error"], "plasma has no parameter `nonesuch`");
+    assert_eq!(wrong.json()["error"], "metaballs has no parameter `nonesuch`");
 
     // reset_params puts it back where the patch asked.
     let reset = post(at, "/api/v1/reset_params", "{}").await;
     assert_eq!(reset.status, 200);
-    let default_scale = reset.json()["params"]["scale"].clone();
-    assert_ne!(default_scale, 2.0);
+    let default_size = reset.json()["params"]["size"].clone();
+    assert_ne!(default_size, 2.0);
 
     // set_seed: given one, or told to find one.
     let seeded = post(at, "/api/v1/set_seed", r#"{"seed":4242}"#).await.json();
@@ -79,7 +79,7 @@ async fn the_api_round_trips() {
     assert_eq!(restarted.status, 200);
     assert_eq!(restarted.json()["seed"], fresh["seed"]);
 
-    // patch_playing / patch_act: plasma composes nothing, so both are null.
+    // patch_playing / patch_act: metaballs composes nothing, so both are null.
     let playing = get(at, "/api/v1/patch_playing").await;
     assert_eq!(playing.status, 200);
     assert_eq!(playing.json(), serde_json::Value::Null);
@@ -225,12 +225,12 @@ async fn two_browsers_see_each_others_changes() {
     bob.event("state").await;
 
     // Alice changes the patch and the seed.
-    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
+    post_as(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#, Some("alice")).await;
     post_as(at, "/api/v1/set_seed", r#"{"seed":1234}"#, Some("alice")).await;
 
     // Bob is told, in order, and the event says who did it.
     let ev = bob.event("state").await;
-    assert_eq!(ev["state"]["patch"], "plasma");
+    assert_eq!(ev["state"]["patch"], "metaballs");
     assert_eq!(ev["from"], "alice");
     let ev = bob.event("state").await;
     assert_eq!(ev["state"]["seed"], 1234);
@@ -267,12 +267,12 @@ async fn two_browsers_see_each_others_changes() {
 async fn a_late_browser_starts_in_step() {
     let studio = studio().await;
     let at = studio.addr;
-    post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":77}"#).await;
 
     let mut late = Ws::connect(at, None).await;
     let hello = tokio::time::timeout(PATIENCE, late.event("state")).await.expect("a hello");
-    assert_eq!(hello["state"]["patch"], "plasma");
+    assert_eq!(hello["state"]["patch"], "metaballs");
     assert_eq!(hello["state"]["seed"], 77);
     assert_eq!(hello["from"], serde_json::Value::Null, "a resync is for everyone");
 }
@@ -349,10 +349,10 @@ async fn the_routes_a_piece_had_still_answer() {
     let at = studio.addr;
 
     // POST /set_piece, with `id` as it always took it.
-    let r = post(at, "/api/v1/set_piece", r#"{"id":"plasma"}"#).await;
+    let r = post(at, "/api/v1/set_piece", r#"{"id":"clocks-dials"}"#).await;
     assert_eq!(r.status, 200);
     let state = r.json();
-    assert_eq!(state["patch"], "plasma");
+    assert_eq!(state["patch"], "clocks-dials");
     assert!(state.get("piece").is_none(), "the reply says `patch` and only `patch`: {state}");
     assert!(state.get("output").is_some(), "and `output`: {state}");
     // Card 150 freed the word `settings` for card 151, which took it: in a
@@ -365,7 +365,7 @@ async fn the_routes_a_piece_had_still_answer() {
     assert_eq!(r.status, 200, "{:?}", r.json());
     assert_eq!(r.json()["patch"], "metaballs");
     // ...or `patch`, on either route.
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"patch":"plasma"}"#).await.json()["patch"], "plasma");
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"patch":"clocks-dials"}"#).await.json()["patch"], "clocks-dials");
 
     // POST /set_settings, with the block still called `settings`.
     let mut output = state["output"].clone();
@@ -392,11 +392,11 @@ async fn player_set_takes_piece_and_settings_too() {
         .expect("a device id")
         .to_string();
 
-    let old = format!(r#"{{"device":"{id}","piece":"plasma","seed":7,"settings":{{"dither":"bayer8"}}}}"#);
+    let old = format!(r#"{{"device":"{id}","piece":"clocks-dials","seed":7,"settings":{{"dither":"bayer8"}}}}"#);
     let r = post(at, "/api/v1/player/set", &old).await;
     assert_eq!(r.status, 200, "{:?}", r.json());
     let status = r.json();
-    assert_eq!(status["patch"], "plasma");
+    assert_eq!(status["patch"], "clocks-dials");
     assert_eq!(status["seed"], 7);
     assert_eq!(status["output"]["dither"], "bayer8");
     assert!(status.get("piece").is_none() && status.get("settings").is_none(), "the reply is in one vocabulary: {status}");

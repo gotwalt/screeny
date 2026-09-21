@@ -287,7 +287,7 @@ async fn the_page_resumes_where_it_was() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
 
-    post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
+    post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":1234}"#).await;
     post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0}"#).await;
     let panel = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
@@ -297,7 +297,7 @@ async fn the_page_resumes_where_it_was() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let state = get(at, "/api/v1/bootstrap").await.json()["state"].clone();
-    assert_eq!(state["patch"], "plasma");
+    assert_eq!(state["patch"], "metaballs");
     assert_eq!(state["seed"], 1234);
     assert_eq!(state["paused"], true);
     assert_eq!(state["speed"], 2.0);
@@ -309,7 +309,7 @@ async fn the_page_resumes_where_it_was() {
         s["preview"]["panel"]["connected"] == true
     })
     .await;
-    assert_eq!(s["preview"]["patch"], "plasma", "{}", s["preview"]);
+    assert_eq!(s["preview"]["patch"], "metaballs", "{}", s["preview"]);
     assert_eq!(s["preview"]["panel_on"], true, "it should still be driving a panel: {}", s["preview"]);
     assert_eq!(s["preview"]["panel_to"], format!("127.0.0.1:{port}"));
     assert_eq!(s["preview"]["paused"], true, "including the playback state, which used to be the preview's");
@@ -335,7 +335,7 @@ async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
         s["devices"].as_array().is_some_and(|d| d.len() == 2 && d.iter().all(|x| x["resolved"] == true))
     })
     .await;
-    post(at, "/api/v1/player/set", r#"{"device":"good01","patch":"plasma"}"#).await;
+    post(at, "/api/v1/player/set", r#"{"device":"good01","patch":"vesta"}"#).await;
 
     for (bad, kind) in [("fault-panic", "panicking"), ("fault-stall", "stalling")] {
         let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"bad001","patch":"{bad}","seed":1}}"#)).await;
@@ -363,7 +363,7 @@ async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
         assert_eq!(bad_dev["player"]["running"], true, "the bad panel's player did not come back: {bad_dev}");
 
         // The other player never noticed.
-        assert_eq!(good_dev["player"]["patch"], "plasma", "the other player was disturbed: {good_dev}");
+        assert_eq!(good_dev["player"]["patch"], "vesta", "the other player was disturbed: {good_dev}");
         assert_eq!(good_dev["player"]["running"], true, "the other player stopped: {good_dev}");
         assert_eq!(good_dev["player"]["health"]["panics"], 0);
         assert_eq!(good_dev["player"]["health"]["stalls"], 0);

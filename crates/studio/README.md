@@ -148,19 +148,19 @@ why switching patches and switching back gives you what you had, before and afte
 ```jsonc
 "version": 5,
 "devices": [ { "id": "4a00a4", "name": "Desk", ... } ],
-"players": [ { "device": "4a00a4", "patch": "plasma", "on": true,
+"players": [ { "device": "4a00a4", "patch": "metaballs", "on": true,
                "paused": false, "speed": 1.0, ... } ],
 "focus": "4a00a4",                          // which panel the page is a window onto
 "patches": {                                // and how each patch is set, once
-  "plasma": {
-    "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4,   // the working copy
+  "metaballs": {
+    "seed": 111, "params": { "size": 2.5 }, "speed": 0.4,    // the working copy
     "setting": "Lava",                                       // loaded from this
     "settings": {                                            // card 151
-      "Lava":     { "seed": 111, "params": { "scale": 2.5 }, "speed": 0.4 },
-      "Slow ink": { "seed": 222, "params": {},               "speed": 0.2 }
+      "Lava":     { "seed": 111, "params": { "size": 2.5 }, "speed": 0.4 },
+      "Slow ink": { "seed": 222, "params": {},              "speed": 0.2 }
     }
   },
-  "metaballs": { "seed": 222, "params": { "count": 8 } }
+  "clocks-dials": { "seed": 222, "params": { "dwell": 90 } }
 }
 ```
 

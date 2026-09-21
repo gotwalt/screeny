@@ -43,7 +43,7 @@ async fn playing(at: std::net::SocketAddr, patch: &str, paused: bool) {
 async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", false).await;
+    playing(at, "flock", false).await;
 
     let mut tab = Ws::connect_asking(at, "client=tab&fps=30").await;
     let visible = tab.measure(WINDOW).await;
@@ -80,7 +80,7 @@ async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
 async fn a_socket_gets_the_rate_it_asked_for() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", false).await;
+    playing(at, "flock", false).await;
 
     let mut slow = Ws::connect_asking(at, "client=slow&fps=10").await;
     let mut quiet = Ws::connect_asking(at, "client=quiet").await;
@@ -156,7 +156,7 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
     let at = studio.addr;
     // No panel is ever attached here, so the only reason to render fast would
     // be a browser watching.
-    playing(at, "plasma", false).await;
+    playing(at, "flock", false).await;
 
     // Rendered frames over a window, read from the sequence number the render
     // loop stamps - the player's own rate, not the socket's.
@@ -212,7 +212,7 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
 async fn the_status_route_says_what_the_preview_costs() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", false).await;
+    playing(at, "flock", false).await;
 
     let idle = get(at, "/api/v1/status").await.json();
     assert_eq!(idle["sockets"]["open"], 0);

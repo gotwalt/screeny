@@ -21,13 +21,13 @@ through the `Output` trait (`crates/art/src/output/`), of which
 # from the repo root
 cargo run -p screeny-studio                      # the designer
 cargo run -p screeny-art -- list                 # patches and their parameters
-cargo run -p screeny-art -- pipe plasma | ...    # raw 6144-byte sRGB frames on stdout, 30 fps
-cargo run -p screeny-art -- snapshot plasma --seed 7 --at 6 --out plasma.png
+cargo run -p screeny-art -- pipe metaballs | ... # raw 6144-byte sRGB frames on stdout, 30 fps
+cargo run -p screeny-art -- snapshot metaballs --seed 7 --at 6 --out metaballs.png
 cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.png
 cargo test -p screeny-art                        # includes the end-to-end wire tests
 
 # to a panel (use --release, the encoder is ~10x slower in a debug build)
-cargo run --release -p screeny-art -- play plasma --to screeny-4a00a4
+cargo run --release -p screeny-art -- play metaballs --to screeny-4a00a4
 
 # the network-free build: no sockets, no mdns-sd, no `play`
 cargo build -p screeny-art --no-default-features            # also no GPU patches
@@ -175,7 +175,7 @@ determinism claim is checked on the code that is shipped.
 ## Adding a patch
 
 1. Copy `crates/art/src/patches/metaballs.rs` (continuous colour) or
-   `plasma.rs` (indexed).
+   `flock/` (indexed, and a palette built per frame).
 2. Give it a `DEF` with an id, a one-line blurb and `ParamSpec`s. The studio
    builds its controls from those: `param(..)` for a number is a slider,
    `choice(id, label, &["..", ".."], default)` for a list of named stops is a

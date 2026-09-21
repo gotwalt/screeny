@@ -191,7 +191,7 @@ async fn the_server_survives_a_bounded_soak() {
     // The typed address is provisional until the panel says who it is, and
     // only then is there a device id to configure a player against.
     until_json(at, WAIT, "the soak panel to say who it is", "/api/v1/status", |v| v["devices"][0]["id"] == DEVICE).await;
-    let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"plasma","seed":1,"fps":30}}"#)).await;
+    let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"flock","seed":1,"fps":30}}"#)).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
     until_json(at, WAIT, "the soak panel to start playing", "/api/v1/status", |v| {
         v["devices"][0]["player"]["panel"]["connected"] == true
@@ -257,19 +257,19 @@ async fn the_server_survives_a_bounded_soak() {
                 rebased += recovered(at, "the panel moving to another address").await;
                 let d = device(at).await;
                 assert_eq!(d["id"], DEVICE, "a panel that moved is still the same panel: {d}");
-                assert_eq!(d["player"]["patch"], "plasma", "a panel that moved is still playing the same thing: {d}");
+                assert_eq!(d["player"]["patch"], "flock", "a panel that moved is still playing the same thing: {d}");
             }
             // 4. Everything the operator does that is not a fault: change the
             //    patch, the seed and the rate, over and over. This is where a
             //    leak in the render core or the state store would show.
             _ => {
-                for (patch, fps) in [("metaballs", 60), ("plasma", 30), ("testcard", 10)] {
+                for (patch, fps) in [("flock", 60), ("clocks-numerals", 30), ("metaballs", 10)] {
                     post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"{patch}","fps":{fps}}}"#)).await;
                     post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
                     post(at, "/api/v1/set_seed", r#"{"seed":null}"#).await;
                     tokio::time::sleep(Duration::from_millis(700)).await;
                 }
-                post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"plasma","fps":30}}"#)).await;
+                post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"flock","fps":30}}"#)).await;
                 rebased += recovered(at, "a run of changes").await;
             }
         }

@@ -45,27 +45,27 @@ async fn switching_away_and_back_restores_the_settings() {
     let studio = studio().await;
     let at = studio.addr;
 
-    set_patch(at, "plasma").await;
-    set_seed(at, 111).await;
-    set_param(at, "scale", 2.5).await;
-    let plasma_default_drift = param(&set_param(at, "hue", 12.0).await, "drift");
-
     set_patch(at, "metaballs").await;
-    set_seed(at, 222).await;
-    let away = set_param(at, "count", 8.0).await;
-    assert!(away["params"].get("scale").is_none(), "the other patch's parameters do not come along");
+    set_seed(at, 111).await;
+    set_param(at, "size", 2.5).await;
+    let default_spread = param(&set_param(at, "hue", 12.0).await, "spread");
 
-    let back = set_patch(at, "plasma").await;
-    assert_eq!(back["patch"], "plasma");
+    set_patch(at, "clocks-dials").await;
+    set_seed(at, 222).await;
+    let away = set_param(at, "dwell", 90.0).await;
+    assert!(away["params"].get("size").is_none(), "the other patch's parameters do not come along");
+
+    let back = set_patch(at, "metaballs").await;
+    assert_eq!(back["patch"], "metaballs");
     assert_eq!(back["seed"], 111, "and on the seed it was left on");
-    assert_eq!(param(&back, "scale"), 2.5);
+    assert_eq!(param(&back, "size"), 2.5);
     assert_eq!(param(&back, "hue"), 12.0);
-    assert_eq!(param(&back, "drift"), plasma_default_drift, "an untouched parameter is still its default");
+    assert_eq!(param(&back, "spread"), default_spread, "an untouched parameter is still its default");
 
     // And the patch we went to is still where *it* was left.
-    let other = set_patch(at, "metaballs").await;
+    let other = set_patch(at, "clocks-dials").await;
     assert_eq!(other["seed"], 222);
-    assert_eq!(param(&other, "count"), 8.0);
+    assert_eq!(param(&other, "dwell"), 90.0);
 }
 
 /// The restored values have to reach the sliders. The design view redraws from
@@ -79,25 +79,25 @@ async fn a_second_browser_sees_the_restored_values() {
     let mut bob = Ws::connect(at, Some("bob")).await;
     bob.event("state").await; // the hello
 
-    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
-    bob.event("state").await;
-    post_as(at, "/api/v1/set_param", r#"{"id":"scale","value":2.5}"#, Some("alice")).await;
-    bob.event("state").await;
     post_as(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#, Some("alice")).await;
+    bob.event("state").await;
+    post_as(at, "/api/v1/set_param", r#"{"id":"size","value":2.5}"#, Some("alice")).await;
+    bob.event("state").await;
+    post_as(at, "/api/v1/set_patch", r#"{"id":"clocks-dials"}"#, Some("alice")).await;
     bob.event("state").await;
 
     // Alice switches back. Bob is told, and what he is told is the restored
     // value - not the default he would draw if he rebuilt from the patch spec.
-    post_as(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#, Some("alice")).await;
+    post_as(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#, Some("alice")).await;
     let ev = bob.event("state").await;
-    assert_eq!(ev["state"]["patch"], "plasma");
-    assert_eq!(param(&ev["state"], "scale"), 2.5, "the push carries the restored value: {ev}");
+    assert_eq!(ev["state"]["patch"], "metaballs");
+    assert_eq!(param(&ev["state"], "size"), 2.5, "the push carries the restored value: {ev}");
 
     // And a browser that arrives afterwards is handed the same thing.
     let mut late = Ws::connect(at, None).await;
     let hello = late.event("state").await;
-    assert_eq!(param(&hello["state"], "scale"), 2.5);
-    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["params"]["scale"], 2.5);
+    assert_eq!(param(&hello["state"], "size"), 2.5);
+    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["params"]["size"], 2.5);
 }
 
 /// Reset means "back to the defaults and **stay** there", so the old value
@@ -107,16 +107,16 @@ async fn reset_means_the_old_value_does_not_come_back() {
     let studio = studio().await;
     let at = studio.addr;
 
-    set_patch(at, "plasma").await;
-    let default_scale = param(&set_param(at, "scale", 2.5).await, "scale");
-    assert_eq!(default_scale, 2.5);
-    let reset = post(at, "/api/v1/reset_params", "{}").await.json();
-    let default_scale = param(&reset, "scale");
-    assert_ne!(default_scale, 2.5);
-
     set_patch(at, "metaballs").await;
-    let back = set_patch(at, "plasma").await;
-    assert_eq!(param(&back, "scale"), default_scale, "Reset was forgotten rather than obeyed: {back}");
+    let moved_size = param(&set_param(at, "size", 2.5).await, "size");
+    assert_eq!(moved_size, 2.5);
+    let reset = post(at, "/api/v1/reset_params", "{}").await.json();
+    let default_size = param(&reset, "size");
+    assert_ne!(default_size, 2.5);
+
+    set_patch(at, "clocks-dials").await;
+    let back = set_patch(at, "metaballs").await;
+    assert_eq!(param(&back, "size"), default_size, "Reset was forgotten rather than obeyed: {back}");
 }
 
 /// The memory is in the state file, so a fresh process on the same state
@@ -130,12 +130,12 @@ async fn the_memory_survives_a_restart_including_a_patch_that_is_not_showing() {
     {
         let studio = studio_in(&dir.0, false).await;
         let at = studio.addr;
-        set_patch(at, "plasma").await;
-        set_seed(at, 111).await;
-        set_param(at, "scale", 2.5).await;
-        // Leave it showing something else entirely.
         set_patch(at, "metaballs").await;
-        set_param(at, "count", 8.0).await;
+        set_seed(at, 111).await;
+        set_param(at, "size", 2.5).await;
+        // Leave it showing something else entirely.
+        set_patch(at, "clocks-dials").await;
+        set_param(at, "dwell", 90.0).await;
         studio.stop().await;
     }
 
@@ -143,19 +143,19 @@ async fn the_memory_survives_a_restart_including_a_patch_that_is_not_showing() {
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
     assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION, "the schema this build writes");
-    assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "in state.json and nowhere else:\n{text}");
-    assert_eq!(file["patches"]["plasma"]["seed"], 111);
+    assert_eq!(file["patches"]["metaballs"]["params"]["size"], 2.5, "in state.json and nowhere else:\n{text}");
+    assert_eq!(file["patches"]["metaballs"]["seed"], 111);
 
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["patch"], "metaballs", "it resumes what it was showing (card 106)");
-    assert_eq!(boot["state"]["params"]["count"], 8.0);
+    assert_eq!(boot["state"]["patch"], "clocks-dials", "it resumes what it was showing (card 106)");
+    assert_eq!(boot["state"]["params"]["dwell"], 90.0);
 
     // And the patch that was *not* showing is still as it was left.
-    let back = set_patch(at, "plasma").await;
+    let back = set_patch(at, "metaballs").await;
     assert_eq!(back["seed"], 111);
-    assert_eq!(param(&back, "scale"), 2.5, "a new process restored a patch it was not playing: {back}");
+    assert_eq!(param(&back, "size"), 2.5, "a new process restored a patch it was not playing: {back}");
 }
 
 /// A panel's player restores it the same way, reached the way a script
@@ -182,31 +182,31 @@ async fn a_panel_restores_a_patchs_memory_too() {
     assert_eq!(off.json()["on"], false);
     assert_eq!(off.json()["panel"], serde_json::Value::Null, "no link while output is off");
 
-    set(format!(r#"{{"device":"{id}","patch":"plasma","seed":11}}"#)).await;
-    set(format!(r#"{{"device":"{id}","param":{{"id":"scale","value":2.5}}}}"#)).await;
-    set(format!(r#"{{"device":"{id}","patch":"metaballs","seed":22}}"#)).await;
-    let away = set(format!(r#"{{"device":"{id}","param":{{"id":"count","value":8.0}}}}"#)).await.json();
-    assert!(away["params"].get("scale").is_none());
+    set(format!(r#"{{"device":"{id}","patch":"metaballs","seed":11}}"#)).await;
+    set(format!(r#"{{"device":"{id}","param":{{"id":"size","value":2.5}}}}"#)).await;
+    set(format!(r#"{{"device":"{id}","patch":"clocks-dials","seed":22}}"#)).await;
+    let away = set(format!(r#"{{"device":"{id}","param":{{"id":"dwell","value":90.0}}}}"#)).await.json();
+    assert!(away["params"].get("size").is_none());
 
-    let back = set(format!(r#"{{"device":"{id}","patch":"plasma"}}"#)).await.json();
+    let back = set(format!(r#"{{"device":"{id}","patch":"metaballs"}}"#)).await.json();
     assert_eq!(back["seed"], 11);
-    assert_eq!(param(&back, "scale"), 2.5);
+    assert_eq!(param(&back, "size"), 2.5);
 
     // One panel, one picture: the page is a window onto that player, so what
     // it says is what the panel says - the patch, the seed, the parameter and
     // the fact that output is off.
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["patch"], "plasma", "the page shows the attached panel: {}", boot["state"]);
+    assert_eq!(boot["state"]["patch"], "metaballs", "the page shows the attached panel: {}", boot["state"]);
     assert_eq!(boot["state"]["device"], id);
     assert_eq!(boot["state"]["seed"], 11);
     assert_eq!(boot["state"]["on"], false);
-    assert_eq!(param(&boot["state"], "scale"), 2.5);
+    assert_eq!(param(&boot["state"], "size"), 2.5);
 
     // The player's Reset, and it stays reset.
     let reset = set(format!(r#"{{"device":"{id}","reset_params":true}}"#)).await.json();
     assert!(reset["params"].as_object().expect("params").is_empty());
-    set(format!(r#"{{"device":"{id}","patch":"metaballs"}}"#)).await;
-    let after = set(format!(r#"{{"device":"{id}","patch":"plasma"}}"#)).await.json();
+    set(format!(r#"{{"device":"{id}","patch":"clocks-dials"}}"#)).await;
+    let after = set(format!(r#"{{"device":"{id}","patch":"metaballs"}}"#)).await.json();
     assert!(after["params"].as_object().expect("params").is_empty(), "Reset on a panel means it stays reset: {after}");
 }
 
@@ -236,24 +236,24 @@ async fn two_panels_share_the_one_memory() {
 
     // The page is a window onto the first one, so tuning it through the
     // design view's own routes is tuning that panel.
-    set_patch(at, "plasma").await;
-    set_param(at, "scale", 2.5).await;
+    set_patch(at, "metaballs").await;
+    set_param(at, "size", 2.5).await;
     set_seed(at, 505).await;
-    let on_the_first = set(format!(r#"{{"device":"{first}","patch":"plasma"}}"#)).await.json();
-    assert_eq!(param(&on_the_first, "scale"), 2.5, "the page and the panel it shows are one player");
+    let on_the_first = set(format!(r#"{{"device":"{first}","patch":"metaballs"}}"#)).await.json();
+    assert_eq!(param(&on_the_first, "size"), 2.5, "the page and the panel it shows are one player");
 
     // The *other* panel, asked for that patch, plays it the same way: there is
-    // one answer to "how is plasma set", not one per panel.
-    let on_the_second = set(format!(r#"{{"device":"{second}","patch":"plasma"}}"#)).await.json();
-    assert_eq!(param(&on_the_second, "scale"), 2.5);
+    // one answer to "how is metaballs set", not one per panel.
+    let on_the_second = set(format!(r#"{{"device":"{second}","patch":"metaballs"}}"#)).await.json();
+    assert_eq!(param(&on_the_second, "size"), 2.5);
     assert_eq!(on_the_second["seed"], 505);
 
     // And the other way round: tune it there, and the page follows on the
     // next switch back.
-    set(format!(r#"{{"device":"{second}","param":{{"id":"scale","value":0.6}}}}"#)).await;
-    set_patch(at, "metaballs").await;
-    let back = set_patch(at, "plasma").await;
-    assert_eq!(param(&back, "scale"), 0.6, "one memory, one answer: {back}");
+    set(format!(r#"{{"device":"{second}","param":{{"id":"size","value":0.6}}}}"#)).await;
+    set_patch(at, "clocks-dials").await;
+    let back = set_patch(at, "metaballs").await;
+    assert_eq!(param(&back, "size"), 0.6, "one memory, one answer: {back}");
 }
 
 /// The card's second acceptance, end to end: *"a hand-edited state file with
@@ -268,14 +268,14 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
         dir.0.join("state.json"),
         r#"{
           "version": 2,
-          "preview": { "piece": "metaballs" },
+          "preview": { "piece": "clocks-dials" },
           "pieces": {
-            "plasma": { "seed": 11, "params": {
-                "scale": 2.5,
-                "drift": 1e30,
-                "cycle": "sideways",
-                "bands": null,
-                "colours": [1, 2],
+            "metaballs": { "seed": 11, "params": {
+                "size": 2.5,
+                "speed": 1e30,
+                "spread": "sideways",
+                "count": null,
+                "samples": [1, 2],
                 "nonesuch": 4.0
             } },
             "no-such-piece": { "seed": 4 }
@@ -290,13 +290,13 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
     assert!(!dir.0.join("state.bad.json").exists(), "a bad value must not condemn the file");
 
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["patch"], "metaballs");
+    assert_eq!(boot["state"]["patch"], "clocks-dials");
     let spec = boot["patches"]
         .as_array()
         .expect("patches")
         .iter()
-        .find(|p| p["id"] == "plasma")
-        .expect("plasma is on the menu")
+        .find(|p| p["id"] == "metaballs")
+        .expect("metaballs is on the menu")
         .clone();
     let default_of = |id: &str| {
         spec["params"].as_array().expect("params").iter().find(|p| p["id"] == id).expect("a param")["default"]
@@ -309,14 +309,14 @@ async fn a_hand_edited_state_file_starts_a_working_server() {
             .expect("a number")
     };
 
-    let plasma = set_patch(at, "plasma").await;
-    assert_eq!(plasma["seed"], 11, "the good half of the entry was used");
-    assert_eq!(param(&plasma, "scale"), 2.5, "and so was the one good value");
-    assert_eq!(param(&plasma, "drift"), max_of("drift"), "out of range is clamped");
-    assert_eq!(param(&plasma, "cycle"), default_of("cycle"), "a string is the default");
-    assert_eq!(param(&plasma, "bands"), default_of("bands"), "a null is the default");
-    assert_eq!(param(&plasma, "colours"), default_of("colours"), "an array is the default");
-    assert!(plasma["params"].get("nonesuch").is_none(), "a parameter this build has not got is ignored");
+    let tuned = set_patch(at, "metaballs").await;
+    assert_eq!(tuned["seed"], 11, "the good half of the entry was used");
+    assert_eq!(param(&tuned, "size"), 2.5, "and so was the one good value");
+    assert_eq!(param(&tuned, "speed"), max_of("speed"), "out of range is clamped");
+    assert_eq!(param(&tuned, "spread"), default_of("spread"), "a string is the default");
+    assert_eq!(param(&tuned, "count"), default_of("count"), "a null is the default");
+    assert_eq!(param(&tuned, "samples"), default_of("samples"), "an array is the default");
+    assert!(tuned["params"].get("nonesuch").is_none(), "a parameter this build has not got is ignored");
 
     // The server says what it had to correct, and it is not a fault.
     let status = get(at, "/api/v1/status").await.json();
@@ -336,10 +336,10 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
   "devices": [],
   "players": [],
   "preview": {
-    "piece": "plasma",
+    "piece": "metaballs",
     "seed": 4242,
-    "params": { "scale": 2.5, "drift": 0.35, "cycle": 0.12, "bands": 1.5, "colours": 32.0,
-                "black": 0.45, "hue": 300.0, "spread": 140.0, "dither": 1.0 },
+    "params": { "count": 5.0, "speed": 0.5, "size": 2.5, "hue": 20.0,
+                "spread": 200.0, "samples": 4.0 },
     "settings": { "levels": 64, "dither": "bayer4",
                   "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 },
                   "panel_model": true, "codec_preview": true },
@@ -353,15 +353,15 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(boot["state"]["patch"], "plasma", "a v1 file still resumes what it was showing");
+    assert_eq!(boot["state"]["patch"], "metaballs", "a v1 file still resumes what it was showing");
     assert_eq!(boot["state"]["seed"], 4242);
-    assert_eq!(boot["state"]["params"]["scale"], 2.5);
+    assert_eq!(boot["state"]["params"]["size"], 2.5);
 
     // And the tuning it had is now remembered: go away and come back.
-    set_patch(at, "metaballs").await;
-    let back = set_patch(at, "plasma").await;
+    set_patch(at, "clocks-dials").await;
+    let back = set_patch(at, "metaballs").await;
     assert_eq!(back["seed"], 4242, "what v1 was playing became that patch's first memory");
-    assert_eq!(param(&back, "scale"), 2.5);
+    assert_eq!(param(&back, "size"), 2.5);
 
     // The file it rewrites is this build's schema, and the v1 file was not
     // condemned. (v1 -> v3 -> v5 in one start, since card 151.)
@@ -370,5 +370,5 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     assert!(!dir.0.join("state.bad.json").exists());
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
     assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION);
-    assert_eq!(file["patches"]["plasma"]["params"]["scale"], 2.5, "{text}");
+    assert_eq!(file["patches"]["metaballs"]["params"]["size"], 2.5, "{text}");
 }

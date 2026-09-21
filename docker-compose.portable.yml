@@ -21,8 +21,8 @@
 #   the default (`gpu`) build the GPU pieces fall back to Mesa's lavapipe
 #   software rasteriser if it is present and to black frames if it is not, and
 #   either way they say so on stderr. Build with `SCREENY_FEATURES=none` for a
-#   studio with the CPU pieces only - clocks-numerals, clocks-dials, plasma,
-#   metaballs, testcard - and no graphics driver in the tree at all.
+#   studio with the CPU pieces only - clocks-numerals, clocks-dials, vesta,
+#   metaballs, flock - and no graphics driver in the tree at all.
 
 name: screeny-portable
 

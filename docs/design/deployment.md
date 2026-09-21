@@ -162,7 +162,7 @@ GPU patches render black and say so once on stderr per patch
 (`screeny-art: <patch>: no GPU adapter: ...; rendering black`) - and, since card 145,
 the page says it too: `overland`, `lattice` and `knot` are struck through with "no GPU"
 and the reason is the line under the list, so the fallback (stay on the CPU patches -
-`clocks-numerals`, `clocks-dials`, `plasma`, `metaballs`, `testcard`) is the obvious
+`clocks-numerals`, `clocks-dials`, `vesta`, `metaballs`, `flock`) is the obvious
 thing to do rather than something to be told. The heavier alternative is to rebuild
 with no graphics driver in the tree at all:
 

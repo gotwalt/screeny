@@ -167,9 +167,14 @@ pub fn find_patch(id: &str, faults: bool) -> Option<&'static PatchDef> {
 ///
 /// CPU only and gentle on the panel, in a fixed order so the choice is
 /// predictable in a log. `avoid` is the patch that just failed.
+///
+/// `plasma` led this list until card 178 removed it. This is about a patch
+/// that **broke while running**, not about one this build has not got: a file
+/// naming a patch that no longer exists is repaired on the way in
+/// (`state::repair_unknown_players`) and never reaches here.
 #[must_use]
 pub fn fallback_patch(avoid: &str) -> &'static PatchDef {
-    for id in ["plasma", "metaballs", "clocks-numerals"] {
+    for id in ["metaballs", "clocks-numerals", "clocks-dials"] {
         if id != avoid {
             if let Some(d) = screeny_art::patch::find(id) {
                 return d;
@@ -1536,24 +1541,31 @@ mod tests {
         assert!(screeny_art::patch::find("fault-stall").is_none());
         assert!(find_patch("fault-panic", false).is_none());
         assert!(find_patch("fault-panic", true).is_some());
-        assert!(find_patch("plasma", false).is_some());
+        assert!(find_patch("metaballs", false).is_some());
     }
 
+    /// Every id the list itself names, so that the day one of them is removed
+    /// (as `plasma` was, card 178) this says so rather than quietly handing
+    /// back the patch that just failed.
     #[test]
     fn the_fallback_is_never_the_patch_that_just_failed() {
-        assert_ne!(fallback_patch("plasma").id, "plasma");
         assert_ne!(fallback_patch("metaballs").id, "metaballs");
         assert_ne!(fallback_patch("clocks-numerals").id, "clocks-numerals");
+        assert_ne!(fallback_patch("clocks-dials").id, "clocks-dials");
         assert_ne!(fallback_patch("fault-panic").id, "fault-panic");
+        assert!(
+            screeny_art::patch::find(fallback_patch("metaballs").id).is_some(),
+            "the fallback has to be a patch this build really has"
+        );
     }
 
     #[test]
     fn a_player_keeps_what_it_was_configured_with() {
         let p = idle_player();
-        p.configure(&PlayerChange { patch: Some("plasma".into()), seed: Some(9), ..PlayerChange::default() })
+        p.configure(&PlayerChange { patch: Some("metaballs".into()), seed: Some(9), ..PlayerChange::default() })
             .expect("a real patch");
         let s = p.stored();
-        assert_eq!(s.patch, "plasma");
+        assert_eq!(s.patch, "metaballs");
         assert_eq!(s.seed, 9);
         assert!(!s.on, "configuring must not turn panel output on");
 
@@ -1561,7 +1573,7 @@ mod tests {
         assert!(p
             .configure(&PlayerChange { param: Some(("nope".into(), 1.0)), ..PlayerChange::default() })
             .is_err());
-        assert_eq!(p.stored().patch, "plasma", "a rejected change must change nothing");
+        assert_eq!(p.stored().patch, "metaballs", "a rejected change must change nothing");
     }
 
     #[test]
@@ -1579,7 +1591,7 @@ mod tests {
         let p = idle_player();
         assert_eq!(p.state().fps, screeny_art::FPS);
         assert_eq!(p.status().fps, screeny_art::FPS);
-        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.configure(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }).expect("metaballs");
         assert_eq!(p.state().fps, screeny_art::FPS, "nothing a player is told moves the rate");
     }
 
@@ -1589,14 +1601,14 @@ mod tests {
     #[test]
     fn the_page_state_carries_every_parameter() {
         let p = idle_player();
-        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
-        p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
-        let def = find_patch("plasma", false).expect("plasma");
+        p.configure(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }).expect("metaballs");
+        p.configure(&PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() }).expect("size");
+        let def = find_patch("metaballs", false).expect("metaballs");
         let state = p.state();
         assert_eq!(state.params.len(), def.params.len(), "one entry per parameter of the patch");
-        assert_eq!(state.params["scale"], 2.5, "the one that was moved");
+        assert_eq!(state.params["size"], 2.5, "the one that was moved");
         for spec in def.params {
-            if spec.id != "scale" {
+            if spec.id != "size" {
                 assert_eq!(state.params[spec.id], spec.default, "`{}` should still be its default", spec.id);
             }
         }
@@ -1609,9 +1621,9 @@ mod tests {
     #[test]
     fn a_parameter_change_does_not_rebuild_the_patch() {
         let p = idle_player();
-        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        p.configure(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }).expect("metaballs");
         p.take_pending();
-        p.configure(&PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() }).expect("scale");
+        p.configure(&PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() }).expect("size");
         let want = p.take_pending();
         assert!(want.params, "the running core re-reads its parameters");
         assert!(!want.rebuild, "and the patch is not built again");
@@ -1685,44 +1697,47 @@ mod tests {
     #[test]
     fn a_panel_comes_back_to_a_patch_as_it_left_it() {
         let p = idle_player();
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
-        p.configure(&change(PlayerChange { seed: Some(11), ..PlayerChange::default() })).expect("a seed");
-        p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
-
         p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
-        p.configure(&change(PlayerChange { seed: Some(22), ..PlayerChange::default() })).expect("a seed");
-        p.configure(&change(PlayerChange { param: Some(("count".into(), 8.0)), ..PlayerChange::default() })).expect("count");
-        assert_eq!(p.stored().params.get("scale"), None, "the other patch's parameters do not follow it over");
+        p.configure(&change(PlayerChange { seed: Some(11), ..PlayerChange::default() })).expect("a seed");
+        p.configure(&change(PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() })).expect("size");
 
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        // The other patch has to be one whose parameters do not overlap, or
+        // "they do not follow it over" would not be a test. `dwell` is the
+        // dials'; `size` is not.
+        p.configure(&change(PlayerChange { patch: Some("clocks-dials".into()), ..PlayerChange::default() })).expect("dials");
+        p.configure(&change(PlayerChange { seed: Some(22), ..PlayerChange::default() })).expect("a seed");
+        p.configure(&change(PlayerChange { param: Some(("dwell".into(), 90.0)), ..PlayerChange::default() })).expect("dwell");
+        assert_eq!(p.stored().params.get("size"), None, "the other patch's parameters do not follow it over");
+
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("back");
         let s = p.stored();
-        assert_eq!(s.patch, "plasma");
+        assert_eq!(s.patch, "metaballs");
         assert_eq!(s.seed, 11, "and on the seed it was left on");
-        assert_eq!(s.params["scale"], 2.5);
+        assert_eq!(s.params["size"], 2.5);
 
         // And the other one is still where it was left, too.
-        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("and back");
+        p.configure(&change(PlayerChange { patch: Some("clocks-dials".into()), ..PlayerChange::default() })).expect("and back");
         let s = p.stored();
         assert_eq!(s.seed, 22);
-        assert_eq!(s.params["count"], 8.0);
+        assert_eq!(s.params["dwell"], 90.0);
     }
 
     /// Reset means "back to the defaults and stay there".
     #[test]
     fn reset_makes_a_panel_forget_that_patch() {
         let p = idle_player();
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
-        p.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
+        p.configure(&change(PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() })).expect("size");
         p.configure(&change(PlayerChange { reset_params: true, ..PlayerChange::default() })).expect("reset");
         assert!(p.stored().params.is_empty());
 
-        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        p.configure(&change(PlayerChange { patch: Some("clocks-dials".into()), ..PlayerChange::default() })).expect("away");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("back");
         assert!(p.stored().params.is_empty(), "Reset means the old value does not come back on the next switch");
     }
 
-    /// There is **one** memory, not one per panel: "how plasma is set" is one
-    /// fact about the studio. With card 170 the page is one of the panels
+    /// There is **one** memory, not one per panel: "how metaballs is set" is
+    /// one fact about the studio. With card 170 the page is one of the panels
     /// rather than a context of its own, so this is now simply about panels.
     #[test]
     fn every_panel_shares_the_one_memory() {
@@ -1730,15 +1745,16 @@ mod tests {
         let a = player_on("a", memory.clone());
         let b = player_on("b", memory);
         for p in [&a, &b] {
-            p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+            p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }))
+                .expect("metaballs");
         }
-        a.configure(&change(PlayerChange { param: Some(("scale".into(), 2.5)), ..PlayerChange::default() })).expect("scale");
+        a.configure(&change(PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() })).expect("size");
 
-        // b is already on plasma, so it does not move until it is asked for a
-        // patch again - but when it is, it gets what a set.
-        b.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("away");
-        b.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
-        assert_eq!(b.stored().params["scale"], 2.5, "one memory, one answer");
+        // b is already on metaballs, so it does not move until it is asked for
+        // a patch again - but when it is, it gets what a set.
+        b.configure(&change(PlayerChange { patch: Some("clocks-dials".into()), ..PlayerChange::default() })).expect("away");
+        b.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("back");
+        assert_eq!(b.stored().params["size"], 2.5, "one memory, one answer");
     }
 
     /// A value a later build cannot use is corrected rather than obeyed, and it
@@ -1746,26 +1762,26 @@ mod tests {
     /// `clocks-numerals` is the live version of the middle row.
     #[test]
     fn a_remembered_value_this_build_cannot_use_is_corrected() {
-        let cfg = StoredPlayer { device: "abc".into(), on: false, patch: "metaballs".into(), ..StoredPlayer::default() };
+        let cfg = StoredPlayer { device: "abc".into(), on: false, patch: "clocks-dials".into(), ..StoredPlayer::default() };
         let memory = crate::state::SharedMemory::new(crate::state::Memory::from([(
-            "plasma".to_string(),
+            "metaballs".to_string(),
             crate::state::PatchMemory {
                 seed: Some(5),
                 params: BTreeMap::from([
-                    ("scale".to_string(), 2.5),   // fine
+                    ("size".to_string(), 2.5),    // fine
                     ("gone".to_string(), 1.0),    // a parameter this build does not have
-                    ("drift".to_string(), 999.0), // out of the range this build allows
+                    ("speed".to_string(), 999.0), // out of the range this build allows
                 ]),
                 ..crate::state::PatchMemory::default()
             },
         )]));
         let p = Player::new(cfg, false, memory, Screen::new());
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
         let s = p.stored();
         assert_eq!(s.seed, 5);
-        assert_eq!(s.params["scale"], 2.5, "the good value survived the bad ones");
+        assert_eq!(s.params["size"], 2.5, "the good value survived the bad ones");
         assert!(!s.params.contains_key("gone"));
-        assert_eq!(s.params["drift"], 2.0, "clamped to this build's range, as the slider would");
+        assert_eq!(s.params["speed"], 3.0, "clamped to this build's range, as the slider would");
     }
 
     /// Card 151: a patch the studio has never been on arrives **on Default** -
@@ -1774,11 +1790,11 @@ mod tests {
     #[test]
     fn an_untouched_patch_arrives_on_default() {
         let p = idle_player();
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
         p.configure(&change(PlayerChange { seed: Some(654_321), ..PlayerChange::default() })).expect("another");
         p.configure(&change(PlayerChange { speed: Some(0.25), ..PlayerChange::default() })).expect("slowly");
 
-        p.configure(&change(PlayerChange { patch: Some("testcard".into()), ..PlayerChange::default() })).expect("testcard");
+        p.configure(&change(PlayerChange { patch: Some("flock".into()), ..PlayerChange::default() })).expect("flock");
         let s = p.stored();
         assert_eq!(s.seed, crate::state::DEFAULT_SEED, "not the seed the last patch was on");
         assert_eq!(s.speed, 1.0, "nor its speed");
@@ -1787,7 +1803,7 @@ mod tests {
         assert!(!state.modified, "a patch nobody has touched is not modified");
 
         // ...and the patch that *was* tuned still comes back as it was left.
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("back");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("back");
         let s = p.stored();
         assert_eq!(s.seed, 654_321);
         assert_eq!(s.speed, 0.25);
@@ -1803,7 +1819,7 @@ mod tests {
             crate::state::PatchMemory { seed: Some(3), ..crate::state::PatchMemory::default() },
         )]));
         let p = Player::new(cfg, false, memory.clone(), Screen::new());
-        p.configure(&change(PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() })).expect("plasma");
+        p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
         assert!(memory.knows("from-the-future"));
     }
 
@@ -1817,7 +1833,7 @@ mod tests {
     fn a_fleet_is_a_collection_and_a_rekey_carries_the_player_over() {
         let players = fleet();
         players.load(
-            StoredPlayer { device: "pending:192.0.2.7".into(), patch: "plasma".into(), seed: 5, on: false, ..StoredPlayer::default() },
+            StoredPlayer { device: "pending:192.0.2.7".into(), patch: "metaballs".into(), seed: 5, on: false, ..StoredPlayer::default() },
             false,
         );
         assert_eq!(players.ids(), vec!["pending:192.0.2.7".to_string()]);
@@ -1826,7 +1842,7 @@ mod tests {
         assert_eq!(players.ids(), vec!["abc123".to_string()]);
         let p = players.get("abc123").expect("moved");
         assert!(Arc::ptr_eq(&before, &p), "the same player, renamed - not a replacement, or the picture would restart");
-        assert_eq!(p.stored().patch, "plasma");
+        assert_eq!(p.stored().patch, "metaballs");
         assert_eq!(p.stored().seed, 5);
         assert_eq!(p.stored().device, "abc123");
         players.remove("abc123");
@@ -1852,14 +1868,14 @@ mod tests {
     fn adopting_a_panel_keeps_the_same_player_and_the_focus() {
         let players = fleet();
         let page = players.ensure_page(false);
-        page.configure(&change(PlayerChange { patch: Some("plasma".into()), seed: Some(42), ..PlayerChange::default() }))
-            .expect("plasma");
+        page.configure(&change(PlayerChange { patch: Some("metaballs".into()), seed: Some(42), ..PlayerChange::default() }))
+            .expect("metaballs");
 
         players.rekey(UNBOUND, "4a00a4");
         let now = players.page().expect("still a page");
         assert!(Arc::ptr_eq(&page, &now));
         assert_eq!(now.device(), "4a00a4");
-        assert_eq!(now.stored().patch, "plasma", "the picture did not restart");
+        assert_eq!(now.stored().patch, "metaballs", "the picture did not restart");
         assert_eq!(now.stored().seed, 42);
         assert!(now.is_focused());
         assert_eq!(players.focus(), "4a00a4");

@@ -203,7 +203,11 @@ fn report(label: &str, sents: &[Sent], shown: &[Shown]) {
 /// `palette[index]`, as the patch drew it.
 #[test]
 fn an_indexed_patch_arrives_pixel_exact() {
-    for id in ["clocks-numerals", "plasma"] {
+    // `plasma` was the second of these until card 178. `flock` is the
+    // replacement and not a lesser one: it draws a two-dimensional palette -
+    // a sky gradient crossed with the birds - and says in its own header that
+    // the frame is indexed and exact, which is exactly the claim under test.
+    for id in ["clocks-numerals", "flock"] {
         let Run { wires, previews, measured, sents, shown } = run(id);
         report(id, &sents, &shown);
         let pairs = aligned(&sents, &shown);

@@ -822,7 +822,7 @@ async fn a_setting_is_saved_loaded_and_marked_over_the_api() {
 
     // Settings belong to the patch, not to the panel: another patch has its own
     // (none), and coming back finds them again.
-    let other = post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.json();
+    let other = post(at, "/api/v1/set_patch", r#"{"id":"clocks-dials"}"#).await.json();
     assert_eq!(other["settings"], serde_json::json!([]), "a setting belongs to its patch");
     let again = post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.json();
     assert_eq!(again["settings"], serde_json::json!(["Slow ink"]));
@@ -835,7 +835,7 @@ async fn a_setting_is_saved_loaded_and_marked_over_the_api() {
 async fn a_setting_that_cannot_be_saved_says_why_in_words() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.status, 200);
     post(at, "/api/v1/settings/save", r#"{"name":"Lava"}"#).await;
 
     let long = "x".repeat(screeny_studio::state::MAX_NAME_CHARS + 1);
@@ -891,8 +891,8 @@ async fn bootstrap_says_which_patches_are_seeded() {
     }
     // The two the card names, so that a change of heart has to be deliberate.
     let seeded = |id: &str| patches.iter().find(|p| p["id"] == id).unwrap_or_else(|| panic!("{id}"))["seeded"].clone();
-    assert_eq!(seeded("plasma"), true, "a new seed is a different plasma");
-    assert_eq!(seeded("testcard"), false, "the test card ignores its seed");
+    assert_eq!(seeded("metaballs"), true, "a new seed is a different dance of the same blobs");
+    assert_eq!(seeded("vesta"), false, "vesta's picture is the time; the number has nothing to change");
     assert_eq!(seeded("clocks-numerals"), false, "the clocks offer better words of their own");
 }
 
