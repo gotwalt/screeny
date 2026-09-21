@@ -203,3 +203,12 @@ carry any glyph, so a patch that wants letters is a change to `GLYPHS` in
 customer. And `snapshot --act` now makes the clock patches' "Compose another"
 and "Play it again" photographable for the first time, which is worth a strip
 if anyone revisits them.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `175-01-the-colon-per-face.png`: in the four pixel faces the colon is now the
+face's own - square blocks on the seam, the same hand as the digits - and the two soft
+faces keep the drawn dots. Merged `--no-ff`. Root suite: 922 passed, 1 failed - the
+Studio's `moved` test, card 156's diagnosed race (this card touches nothing in the Studio);
+alone it passes. Clippy silent. Three colours rather than the card's two is right: the
+colon is deliberately dimmer than the time.
