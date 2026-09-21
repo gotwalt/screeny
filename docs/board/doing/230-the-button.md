@@ -151,3 +151,73 @@ simulator draw the same pixels, and the tests are host tests.
   different pictures, the three screens are told apart and none is blank or
   bright, and all of them join the existing "nothing renders a full white
   frame" list. `cargo test -p screeny-provision`: 25 + 12 + 8 + 47 passed.
+
+### step 2: the firmware task (`firmware/src/button.rs`)
+
+One task on core 0, `button_task(AnyPin)`, spawned after the radio and the
+store (a wipe needs both). It owns GPIO15 and nothing else touches that pin.
+
+- **The pin, and 008 point 4.** `Input::new(pin, InputConfig::default()
+  .with_pull(Pull::Up))` - exactly what the stock firmware's `gpio_config_t`
+  says, and what card 203 confirmed on this unit. The module header carries the
+  three consequences of GPIO15 being dual-purpose: nothing may ADC-read the
+  board-ID strap while this task holds the pin (they are exclusive, and a
+  revision read would have to happen once, before the spawn, tolerating a held
+  button reading ~0 mV); the internal pull-up is belt and braces rather than
+  the only thing holding the pin up (phase B of the probe rested high with the
+  internal *pull-down* selected, so the strap network holds it); and **a held
+  button at boot silences the ROM boot log**, because GPIO15 is MTDO - harmless,
+  logged as a warning at boot so nobody spends an hour on it. It is not GPIO0,
+  so a held button at boot cannot strand the device in the ROM bootloader.
+- **What it costs the frame path** (decision 7): the task sleeps in
+  `Input::wait_for_any_edge()` - interrupt-backed; esp-hal binds a default GPIO
+  handler in `esp_hal::init`, so there is nothing to install - raced against a
+  timer: 1 s idle (a backstop, so a missed edge cannot mean a dead button until
+  the next reboot) and 50 ms while a gesture is in flight. An untouched button
+  is one wake a second. Nothing spins.
+- **Overlay composition** in `net.rs`, in rank order: **OTA > button > portal >
+  the bench pattern hold > `Intent`**. The button screens join `setup_screen_up`,
+  so a streamed frame underneath is still drained, decoded and counted and only
+  the panel is taken - exactly what the portal screen does. They sit below the
+  update screen because "updating - do not unplug" is a better answer to a
+  refused hold than the refusal screen is, and above the portal so that holding
+  the button while the portal is up still shows what is about to happen. A new
+  `button_edge` joins `ota_edge` in the redraw test, so the countdown redraws
+  the instant its number changes and the transient screens end on time.
+- **The short press is `IDENTIFY` for 10 s**, raised through the one receive
+  core as a `req_id` 0 request (spec 6.1's "no reply wanted") - the mechanism
+  the card asked me to reuse rather than a second overlay timer. So the
+  telemetry byte reads `IDENTIFY`, a press during a stream overlays it with the
+  stream still decoded underneath, and a second press restarts the ten seconds.
+  `screens::identify` gains a third line, `fw <version> <rssi>`: spec 6.3 asks
+  for "a high-contrast pattern plus the device name and IP" and that is still
+  what it is, but the owner standing at the panel with no laptop is who the
+  button is for.
+  **This cost 864 bytes of core 0's stack when it was written as a call to
+  `http::apply_control`**, which does the same thing and then awaits a flash
+  write for the opcodes that need one: awaiting that future from this task put
+  the whole settings-write call chain into the task's `.bss`. Written out (a
+  16-byte request buffer, the `CORE` lock, one `control` call) the task's future
+  is **216 bytes** instead of 1,080. Nothing large across an `await`, as the
+  design file says.
+- **The wipe** is `crate::provision::BUTTON_WIPE.signal(())`, a fourth arm on
+  `provision_task`'s `select`, which feeds `Event::ButtonWipe` to the one
+  `Provisioner` and carries out what comes back. `Action::ClearCredentials` is
+  implemented at last (it has been an unreachable `warn!` since card 223):
+  `store::clear_wifi()` - a `with_store!` write like any other, so it is counted
+  and goes through `store::guarded` (card 245) - then the in-RAM `stored` and
+  `trial` copies are dropped and `set_current_ssid` is emptied, or the next
+  `StartJoin` would cheerfully rejoin the network the owner just asked the
+  device to forget. **No flash is written from the button task, from an
+  interrupt or from an HTTP handler.**
+- **OTA decision, second half.** `wipe_allowed()` is
+  `!ota::updating() && !ota::activating() && !ota::trial_pending()`, where
+  `trial_pending()` is new in `ota.rs` and means "on trial and not yet
+  confirmed" - `boot_class()` alone would have refused every wipe until the next
+  reboot after any update. A refused hold shows "wifi reset / not while /
+  updating" for 2.5 s and is logged; during an upload the updating screen
+  outranks it and says the same thing better. Short presses still work.
+- `fw-size.sh` after this step: `.stack` **25,800** (floor 24,576; 26,200 on
+  fw 0.7.0), `.bss` 110,696, image 1,026,741. The whole card costs 400 bytes of
+  core 0's stack. `cargo clippy --release` in `firmware/`: no new warnings in
+  any file this card touches.

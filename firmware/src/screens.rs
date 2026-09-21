@@ -186,6 +186,13 @@ pub fn crashed(frame: &mut Frame, file: &str, line: u32, panics: u32) {
 /// sender holds the lock, so the frame task draws it over whatever else it
 /// would have composed. High contrast, the name, and the address, because
 /// those are the two things you are trying to match up.
+///
+/// **This is also the button's short press** (card 230): one screen, raised by
+/// one mechanism, whether the request came over the wire or off the panel's
+/// own button. Section 6.3 asks for "a high-contrast pattern plus the device
+/// name and IP" and that is still what this is; card 230 adds the firmware
+/// version and the signal on a third line, because the owner standing in front
+/// of the panel with no laptop is the person the button is for.
 pub fn identify(frame: &mut Frame, name: &str, net: Net, phase: u32) {
     // A moving chevron border: unmistakable across a room, and cheap.
     let on = (phase / 3) % 2 == 0;
@@ -214,10 +221,23 @@ pub fn identify(frame: &mut Frame, name: &str, net: Net, phase: u32) {
     // Fourteen characters fit: the text starts at x=4, the 4x6 font is four
     // pixels wide, and the right-hand chevron border begins at x=62. Card 008
     // shipped 13 and said so.
-    let _ = Text::with_baseline(cut(name, 14), Point::new(4, 9), s, Baseline::Top).draw(frame);
+    let _ = Text::with_baseline(cut(name, 14), Point::new(4, 8), s, Baseline::Top).draw(frame);
     if let Net::Address(ip) = net {
         let mut line = heapless::String::<16>::new();
         let _ = write!(line, "{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-        let _ = Text::with_baseline(&line, Point::new(4, 17), s, Baseline::Top).draw(frame);
+        let _ = Text::with_baseline(&line, Point::new(4, 15), s, Baseline::Top).draw(frame);
     }
+    // Card 230's third line: the firmware version and the signal, because the
+    // short press is also "what is this thing running?" and the panel is the
+    // one place that answers without a network. Fourteen characters fit and
+    // this is twelve; an unreported RSSI (0) prints the version alone rather
+    // than a plausible-looking "0".
+    let mut line = heapless::String::<16>::new();
+    let rssi = crate::RSSI_DBM.load(core::sync::atomic::Ordering::Relaxed);
+    let _ = if rssi == 0 {
+        write!(line, "fw {}", crate::FW_VERSION)
+    } else {
+        write!(line, "fw {} {}", crate::FW_VERSION, rssi)
+    };
+    let _ = Text::with_baseline(&line, Point::new(4, 22), s, Baseline::Top).draw(frame);
 }

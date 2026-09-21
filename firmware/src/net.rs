@@ -229,6 +229,7 @@ pub async fn frames_task(
     let mut link_was_up = true;
     let mut stuck_sends = 0u32;
     let mut ota_was = false;
+    let mut button_was: Option<crate::button::Panel> = None;
 
     loop {
         let mut keep_len = 0usize;
@@ -292,8 +293,18 @@ pub async fn frames_task(
         // the reply and the restart. One call, because they are mutually
         // exclusive and the second outranks the first.
         let ota = crate::ota::panel();
-        let setup_screen_up =
-            ota.is_some() || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
+        // Card 230. The button's countdown, its "cancelled" and its "not while
+        // updating" are overlays in the same full sense as the portal screen:
+        // a streamed frame underneath is drained, decoded and counted, and
+        // only the panel is taken. They rank **below** an update (decision 7:
+        // the updating screen owns the panel, and "updating - do not unplug"
+        // is a better answer to a refused hold than the refusal screen is) and
+        // **above** the portal, so that holding the button while the portal is
+        // up still shows what is about to happen.
+        let button = crate::button::panel();
+        let setup_screen_up = ota.is_some()
+            || button.is_some()
+            || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
         if published {
             // The cross-fade needs the frame a sender last put up, and this is
             // the only moment it is reachable: after `publish` the slot
@@ -336,8 +347,13 @@ pub async fn frames_task(
             !(matches!(s, crate::provision::PanelScreen::Connected { .. })
                 && intent == Intent::Stream)
         });
-        let portal_due = (portal.is_some() || ota.is_some())
+        let portal_due = (portal.is_some() || ota.is_some() || button.is_some())
             && now_ms.wrapping_sub(portal_at_ms) >= PORTAL_MS;
+        // The countdown changes once a second and the transient screens end on
+        // a deadline, so the edge is what redraws them; `portal_due` above is
+        // only the slow repaint.
+        let button_edge = button != button_was;
+        button_was = button;
         // An update ending has to redraw once even if nothing else is due:
         // until it does, the panel is still showing the progress bar of an
         // upload that finished.
@@ -346,6 +362,7 @@ pub async fn frames_task(
         let due = animating
             || portal_due
             || ota_edge
+            || button_edge
             || core.redraw() != redraw_seen
             || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
 
@@ -363,6 +380,12 @@ pub async fn frames_task(
                 // 50 ms stalls around each sector erase cost nothing.
                 portal_at_ms = now_ms;
                 crate::provision::render_updating(what, &mut producer.back().px);
+            } else if let Some(what) = button {
+                // Card 230, drawn by `crates/provision` like every other
+                // screen that is not a streamed frame - so the simulator shows
+                // the same pixels and the layout has host tests.
+                portal_at_ms = now_ms;
+                crate::provision::render_button(what, &mut producer.back().px);
             } else if let Some(s) = portal.as_ref() {
                 // Drawn with nothing locked: `provision::screen` copied the
                 // name out of the machine and released it, because a QR encode

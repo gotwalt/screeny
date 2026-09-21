@@ -857,6 +857,19 @@ pub fn can_activate() -> bool {
     boot_class() != Boot::Unknown
 }
 
+/// Is the running image still being tried - on trial, and not yet confirmed?
+///
+/// [`boot_class`] answers "how did this device boot", which never changes;
+/// this is the *live* question, and it stops being true the moment
+/// [`trial_task`] writes `VALID`. Card 230's button reads it: forgetting the
+/// network during a trial would take away the address and the served request
+/// the health check needs, and get the image the owner just installed rolled
+/// back at 180 s.
+#[must_use]
+pub fn trial_pending() -> bool {
+    boot_class().on_trial() && !CONFIRMED.load(Ordering::Relaxed)
+}
+
 /// What became of the last update, for `GET /api/v1/panic` (card 241).
 ///
 /// Nothing here touches flash: every value was read once at boot and put in an
