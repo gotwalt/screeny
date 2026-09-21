@@ -237,3 +237,14 @@ has cost nothing.
 `tools/fw-size.sh` on the final default build: `.data` 60,108, `.bss` 110,704,
 **`.stack` 25,792** (floor 24,576; 25,800 on 0.8.0 - eight bytes for the new atomic
 and its alignment), `.rwtext` 67,740, image 1,028,189.
+
+#### One residual, unchanged by this card and worth a later one
+
+If the stream **stops while the overlay is up** (so the state has fallen to `HOLD` and
+no frame is arriving), the identify screen stays on the panel after it expires until
+either a frame arrives or `HOLD -> IDLE` starts the cross-fade. That is exactly the
+behaviour 0.8.0 had - with no frames arriving, nothing was publishing under the overlay
+either - so this card neither causes it nor fixes it. The fix would be to republish
+`last` on the expiry edge when `intent` is `Stream`, which needs a "has a frame ever
+been shown" flag; out of scope here. The bench case the owner will look at (a live
+30 fps stream) returns within one frame, 33 ms.
