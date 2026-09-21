@@ -274,7 +274,8 @@ pub struct PatchDef {
     ///
     /// Two kinds of patch say **no**, and the second is the one worth stating:
     ///
-    /// - a patch that does not read its seed (`testcard`);
+    /// - a patch that does not read its seed (`vesta`: its picture is the
+    ///   time, and the number has nothing to change);
     /// - a patch that **composes as it goes and offers its own action**
     ///   ([`Patch::playing`]). The clocks are both of these: their seed only
     ///   shifts which choreography or mood comes up next, the picture itself

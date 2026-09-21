@@ -74,16 +74,17 @@ fn diff(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
 /// here first.
 ///
 /// Established by reading each one; see the card's Log for the per-patch note.
-const PURELY_A_FUNCTION_OF_T: &[&str] =
-    &["plasma", "metaballs", "testcard", "overland", "lattice", "knot"];
+const PURELY_A_FUNCTION_OF_T: &[&str] = &["metaballs", "overland", "lattice", "knot"];
 
 #[test]
 fn every_patch_advances_by_time_and_not_by_frame_count() {
     let gpu = screeny_art::gpu_status().available;
     let mut checked = 0;
+    let mut skipped = 0;
     for def in ALL {
         if needs_gpu(def.id) && !gpu {
             eprintln!("rate: skipping `{}`: no graphics adapter here", def.id);
+            skipped += 1;
             continue;
         }
         let seed = 7;
@@ -118,7 +119,18 @@ fn every_patch_advances_by_time_and_not_by_frame_count() {
         }
         checked += 1;
     }
-    assert!(checked >= 6, "only {checked} patches were checked; ALL has {}", ALL.len());
+    // **Every patch this machine can draw was checked**, which is the statement
+    // worth making and does not have to be re-tuned whenever the registry
+    // changes size. It was `checked >= 6` until card 178 took two patches out
+    // and left five on a bench with no adapter - a bound that would have gone
+    // red for the wrong reason.
+    assert_eq!(
+        checked + skipped,
+        ALL.len(),
+        "{checked} checked and {skipped} skipped does not account for all {} patches",
+        ALL.len()
+    );
+    assert!(checked >= 5, "only {checked} patches were checked; ALL has {}", ALL.len());
 }
 
 /// And the same statement about `screeny_art::FPS` itself: it is the one rate,

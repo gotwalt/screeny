@@ -11,15 +11,21 @@ mod lattice;
 mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
-mod plasma;
-mod testcard;
 pub(crate) mod vesta;
 
+/// Card 178 took two out of this list, at the owner's word ("let's also kill
+/// the plasma and test card patches - they're not interesting"):
+///
+/// - **`plasma`**, which is simply gone.
+/// - **`testcard`**, which was never art: it was a chart for judging banding
+///   and the panel model. What it was for survives as
+///   `crates/art/tests/dark_ramp.rs` - card 102's acceptance, with the drawing
+///   beside the tests that read it - so nothing that ships draws it and
+///   nothing a person can play is a measuring instrument.
 pub static ALL: &[PatchDef] = &[
     clocks::DEF,
     clocks::dials::DEF,
     vesta::DEF,
-    plasma::DEF,
     metaballs::DEF,
     flock::DEF,
     #[cfg(feature = "gpu")]
@@ -28,7 +34,6 @@ pub static ALL: &[PatchDef] = &[
     lattice::DEF,
     #[cfg(feature = "gpu")]
     knot::DEF,
-    testcard::DEF,
 ];
 
 /// The patches that need a graphics adapter (card 145).
@@ -96,10 +101,18 @@ mod tests {
     }
 
     /// And the one patch that ignores its seed outright really does.
+    ///
+    /// It was `testcard` until card 178; it is `vesta` now, which is a better
+    /// subject anyway because it is a patch a person plays. The two clocks
+    /// also say `seeded: false`, and for them the claim is narrower and is not
+    /// this: their seed picks the *choreography*, so two seeds draw different
+    /// pictures while a dance is running and the same one once it has landed
+    /// on the minute (`tests/pinned_time.rs` is where that is stated).
+    /// `vesta` is the one that never reads the number at all.
     #[test]
-    fn the_test_card_is_the_same_card_whatever_the_seed() {
-        let card = super::testcard::DEF;
-        assert!(!card.seeded);
-        assert_eq!(frame_of(&card, 1), frame_of(&card, 999_983));
+    fn vesta_is_the_same_face_whatever_the_seed() {
+        let def = crate::patch::find("vesta").expect("vesta is in every build");
+        assert!(!def.seeded);
+        assert_eq!(frame_of(def, 1), frame_of(def, 999_983));
     }
 }
