@@ -69,3 +69,53 @@ null|"deadline"|"aborted"|"rejected","slot":"ota_0"|"ota_1","version":"x.y.z"},
 `crates/device-api`; the spec is `docs/design/protocol-v1.md` 8.6/8.10. Read once per
 `boot_id` change, never on the poll. A wedge shows as `last_reset: "wdt"` and a climbing
 `boot_count`; an update's outcome belongs on the same line of `/panel` (see card 185).
+
+### Worker (sonnet), 2026-09-21
+
+Worktree was mis-created off an older commit (127c829); rebranched from 6bdcc1c as the
+orchestrator asked, before any other work, and confirmed the card file was still there.
+
+**Plan**, from reading `crates/device-api` (`PanicReply`/`PanicRecord`/`UpdateRecord`, the
+four goldens including the two the firmware session added, `panic_update_trial.json` /
+`panic_update_reverted.json`), `crates/sim`'s `panic_breadcrumb` (always `last_panic: null,
+last_reset: null`, `update` from `OtaModel::update_record()` - off unless a test turns it
+on with `SimHandle::model_ota`; the simulator can never produce a `wdt` reset or a real
+panic, which is a real gap for testing wording against it, noted below), `devhttp.rs`,
+`fleet.rs`'s `status_once`/`spawn_device_http`, `devices.rs`'s `DeviceFacts`/`Registry`,
+`health.rs`'s `DeviceStatus`, and `ui/panel.js`'s `showDevice`/`common.js`'s `attention`.
+
+- `devhttp.rs`: the status reader was one function, `read_status`, hard-wired to
+  `route::STATUS`. Generalised it to `read_json<T: DeserializeOwned>(path, addr, patience,
+  cost)`, kept `get_status`/`get_status_counted` as thin wrappers, and added
+  `get_panic`/`get_panic_counted` the same way. One connection-handling implementation for
+  both routes, per `CLAUDE.md`'s "one implementation of each thing" - the 404-is-absent
+  rule, the deadline and `Connection: close` were one copy already meant for `STATUS`
+  and would have become two copies of the same seventy lines otherwise.
+- Next: `devices.rs` gets a `PanicFacts` (mirrors `DeviceFacts`'s shape: `heard_unix` +
+  `#[serde(flatten)] reply: PanicReply` + one derived boolean, `repeat` =
+  `last_panic.consecutive > 1` - the one fact from here the brief says colours the chip),
+  kept on `DeviceRecord` beside `facts` as `panic: Option<PanicFacts>`, plus a live-only
+  `panic_asked_for: Option<u32>` so "once per `boot_id`" survives a failed or 404 read
+  without a second field. `health.rs`'s `DeviceStatus` gets `panic`/`panic_ago` beside
+  `facts`/`facts_ago`.
+- `fleet.rs`'s `status_once`: after a successful status read (`heard_http`), ask
+  `st.devices.want_panic(&id, boot_id)`; if true, one more sequential `spawn_blocking` on
+  the same task calls `devhttp::get_panic_counted` at the same `addr`, and
+  `Registry::heard_panic(&id, boot_id, Option<PanicReply>)` records the ask **either way** -
+  success or fault - so a 404 (older firmware) or a timeout is not retried until the
+  `boot_id` changes again. Never concurrent with the status read: it is the next line in
+  the same `await`ed sequence, so there is still exactly one HTTP connection to a device in
+  flight at a time across the whole fleet, which is the property
+  `the_studio_never_opens_a_second_connection_to_a_device` already proves and this card
+  must not break.
+- **Decision, and a discrepancy with the spec worth flagging for the orchestrator**: spec
+  8.6 says a reader "asks once per `boot_id`, **and again a minute or two later if it saw
+  `trial`**". This card's own hard rules (from the coordinating session) say the opposite in
+  plain terms: "the panic read happens once per new `boot_id` ... never on the 10 s poll"
+  and "the test that proves 'read once per boot and not again' ... [is] the heart of this
+  card." I followed the hard rule as written and tested it, since it is this card's explicit
+  contract: `want_panic` never re-asks for the same `boot_id`, even after seeing `trial`. A
+  trial that later confirms itself is therefore not picked up until the *next* reboot's
+  `boot_id` (confirm or revert do not change `boot_id`). Noted in the report; not fixed here
+  (`docs/design/protocol-v1.md` is out of scope for this card) - a new card if the owner
+  wants the re-ask-after-trial behaviour.
