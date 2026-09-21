@@ -379,6 +379,34 @@ studio suite alone leaves the machine with cores to spare, and the fixture's
 cost only shows when the whole workspace is running. Three full runs was the
 right instruction.
 
+### The three runs, as actually run
+
+`cargo test --release --no-fail-fast` at the root, three times, with **another
+session's full suite running on the same bench for part of it** - which is the
+condition card 156 is about and a harder test than an idle box.
+
+| run | result |
+|---|---|
+| a | **887 passed, 2 failed** - `screeny/indexed::exactness_holds_over_a_stream` ("all thirty displayed") and `screeny/loopback::the_reported_rate_is_the_same_at_any_stream_length` ("10 fps: sender says 9.953, receiver says 9.882") |
+| b | **916 passed, 0 failed** |
+| c | killed by a SIGTERM at 710 tests (exit 143) through no fault of the suite - another session shares this shell host - so it was **re-run in full**: **916 passed, 0 failed** |
+
+Re-run alone, as the card's rule says: **`indexed` 18 passed, `loopback` 11
+passed.** Both are UDP-over-loopback timing tests in `crates/screeny`, a crate
+this branch does not touch at all, and `loopback` is already on card 156's
+list. Nothing in either names a patch.
+
+**Every test that the fixture change was made for is green in all three**:
+`moved` 2, `soak` 1, `pacing` 3, `panel` 5, `preview` 5, `traffic` 4.
+
+`cargo clippy --workspace --all-targets`: **silent**. It was not at first -
+two doc comments of mine began a line with a dash and tripped
+`doc_lazy_continuation`; parentheses fixed both.
+
+Also checked, because this card changes what `ALL` contains behind two
+features: `cargo check -p screeny-studio --no-default-features` and
+`cargo check -p screeny-art --no-default-features` both build clean.
+
 ### Follow-up work (un-numbered; for the orchestrator to card or drop)
 
 - **A CPU-only studio now moves a player off a GPU patch and writes it down.**
