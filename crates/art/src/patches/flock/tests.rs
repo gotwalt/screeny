@@ -496,6 +496,104 @@ fn param_spec(id: &str) -> &'static ParamSpec {
 // The picture
 // ----------------------------------------------------------------------
 
+/// The filled triangle a wing's surface is made of covers the area it says it
+/// does, whichever way round its corners are given, and a wing the view has
+/// turned exactly edge-on covers nothing at all.
+#[test]
+fn a_filled_triangle_covers_its_own_area() {
+    let corners = [(10.0, 10.0), (26.0, 10.0), (10.0, 22.0)];
+    let want = 0.5 * 16.0 * 12.0;
+    for order in [[0, 1, 2], [0, 2, 1]] {
+        let mut cover = Coverage::new(SUPERSAMPLE);
+        cover.triangle(corners[order[0]], corners[order[1]], corners[order[2]], 1.0);
+        let area: f32 = (0..N).map(|i| cover.pixel(i % W, i / W)).sum();
+        eprintln!("triangle {order:?}: {area:.2} of {want} square LEDs");
+        assert!(
+            (area - want).abs() < 0.05 * want,
+            "a {want} LED triangle covered {area:.2}, whichever way round its corners are"
+        );
+    }
+
+    // Three points on a line, which is what a wing with no chord left is.
+    let mut cover = Coverage::new(SUPERSAMPLE);
+    cover.triangle((4.0, 4.0), (12.0, 8.0), (20.0, 12.0), 1.0);
+    let area: f32 = (0..N).map(|i| cover.pixel(i % W, i / W)).sum();
+    assert_eq!(area, 0.0, "a degenerate triangle put {area} LEDs of ink down");
+}
+
+/// **The wing folds on the upstroke.** The hand wing sweeps back and draws in
+/// through the quick half of the beat, so the bird is visibly narrower going
+/// up than it is coming down - the single strongest cue that this is a wing
+/// beating and not a pair of rods rocking.
+///
+/// Measured where it shows: the *drawn* tip-to-tip span, in LEDs, projected
+/// through a camera looking at the bird's planform from below. The two
+/// moments are the extremes of the wing's own vertical speed - phase 0 is
+/// mid-upstroke, phase pi mid-downstroke - so this is the worst case for the
+/// claim, not a flattering pair.
+#[test]
+fn the_wing_is_narrower_going_up_than_coming_down() {
+    let mut sim = Sim::new(3);
+    sim.resize(2);
+    let span = sim::SPAN * 2.5;
+
+    // Straight and level, flying along +x, with the camera 6 m below it.
+    let mut b = sim.flock()[0];
+    b.pos = v3(0.0, 0.0, 0.0);
+    b.vel = v3(5.0, 0.0, 0.0);
+    b.roll = 0.0;
+    b.glide = 0.0;
+    let eye = v3(0.0, -6.0, 0.0);
+    let fwd = v3(0.0, 1.0, 0.0);
+    let right = v3(1.0, 0.0, 0.0);
+    let view = View {
+        eye,
+        right,
+        up: right.cross(fwd),
+        fwd,
+        focal: 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan(),
+        sun: v3(0.0, 0.0, 0.0),
+    };
+    let drawn = |phase: f32| {
+        let mut b = b;
+        b.phase = phase;
+        let pose = bird::pose(b, span, 1.0);
+        let tip = |w: &bird::Wing| view.project(w.spar[2]).expect("a tip in front of the lens");
+        let (l, r) = (tip(&pose.wings[0]), tip(&pose.wings[1]));
+        ((l.0 - r.0).powi(2) + (l.1 - r.1).powi(2)).sqrt()
+    };
+    let (up, down) = (drawn(0.0), drawn(std::f32::consts::PI));
+    eprintln!("drawn span: {up:.1} LEDs mid-upstroke, {down:.1} mid-downstroke");
+    assert!(
+        up < 0.85 * down,
+        "the wrist is not folding: {up:.1} LEDs across mid-upstroke against {down:.1} \
+         mid-downstroke, and a real bird draws its hand wing in on the way up"
+    );
+}
+
+/// A bird too far away to have a wing's surface is the skeleton card 168 drew.
+///
+/// The level of detail is a fade of the *chord*, not a switch between two
+/// models, so this is what "no detail" means: the trailing edge sits on the
+/// leading edge and the tail fan has no width, every triangle is degenerate
+/// and draws nothing, and what is left is the strokes.
+#[test]
+fn a_distant_bird_has_no_surface_left() {
+    let mut sim = Sim::new(3);
+    sim.resize(2);
+    let pose = bird::pose(sim.flock()[0], sim::SPAN, 0.0);
+    assert_eq!(pose.tail[0].sub(pose.tail[1]).len(), 0.0, "the tail fan still has width");
+    for w in &pose.wings {
+        assert_eq!(w.trail[0].sub(w.spar[0]).len(), 0.0, "the wing root still has chord");
+        assert_eq!(w.trail[1].sub(w.spar[1]).len(), 0.0, "the wrist still has chord");
+    }
+    assert_eq!(
+        smoothstep(AREA.0, AREA.1, 4.9),
+        0.0,
+        "the surface is being faded in below the span it is meant to start at"
+    );
+}
+
 /// The same seed at the same moment is the same PNG. Everything else here
 /// leans on this.
 #[test]
@@ -515,17 +613,30 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
 /// making the palette two-dimensional; only the birds' contrast floor differs,
 /// so the counts are close rather than identical. The two backdrops without a
 /// sky cost far less, because most of the index plane is one value.
+/// **Card 123**: the big birds have filled wings now, so every backdrop is
+/// flown twice - once at the defaults and once at the picture the owner
+/// actually asked card 123 for, a handful of birds drawn as large as `size`
+/// goes. Black sky with big light birds is the case that matters for the
+/// panel: it is the most lit area this patch can put on it while the frame is
+/// still nearly all black, and the limiter has to still be the thing deciding
+/// that, not the drawing.
 #[test]
 fn every_frame_goes_out_exactly() {
-    for (backdrop, scheme, name) in [
-        (0.0, 0.0, "sky, light on dark"),
-        (0.0, 1.0, "sky, dusk silhouettes"),
-        (1.0, 0.0, "horizon line"),
-        (2.0, 0.0, "black"),
+    for (backdrop, scheme, birds, size, name) in [
+        (0.0, 0.0, 55.0, 1.0, "sky, light on dark"),
+        (0.0, 1.0, 55.0, 1.0, "sky, dusk silhouettes"),
+        (1.0, 0.0, 55.0, 1.0, "horizon line"),
+        (2.0, 0.0, 55.0, 1.0, "black"),
+        (0.0, 0.0, 6.0, 3.0, "sky, six birds as big as they go"),
+        (0.0, 1.0, 6.0, 3.0, "dusk silhouettes, six birds as big as they go"),
+        (1.0, 0.0, 6.0, 3.0, "horizon line, six birds as big as they go"),
+        (2.0, 0.0, 6.0, 3.0, "black, six big white birds"),
     ] {
         let mut params = Params::defaults(PARAMS);
         params.set(PARAMS, "backdrop", backdrop);
         params.set(PARAMS, "scheme", scheme);
+        params.set(PARAMS, "birds", birds);
+        params.set(PARAMS, "size", size);
         if scheme > 0.5 {
             // The dusk sky wants a warm horizon; see the README.
             params.set(PARAMS, "hue", 35.0);
