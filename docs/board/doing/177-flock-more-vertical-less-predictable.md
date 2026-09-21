@@ -230,3 +230,131 @@ the bank - a dive that reads as a dive with almost nothing drawn. On **black** t
 slides down the frame and the knots are unmistakable: dense clusters with real gaps and
 several visible V's, where the old strip is an even scatter. With the **sky** the horizon
 band moves the same way, more quietly.
+
+### 2026-09-20 - the numbers, old against new
+
+Three seeds x ten simulated minutes at the defaults, both columns run by me on this
+machine. "Old" is `main` before this card (commit f67ad37, which is card 168 as merged
+plus the new measurements and nothing else); where a metric did not exist in the old
+test it was taken by compiling that commit's `sim.rs` verbatim as a standalone program,
+which is how the old view tilt, steepest angle and straggler counts below were got
+without touching the working tree.
+
+```
+                          old (11 / 29 / 404)          new (11 / 29 / 404)
+spacing
+  NN mean, m              2.67  2.55  2.60            2.03  2.12  1.73
+  NN CV                   0.10  0.13  0.16            0.38  0.41  0.43
+  NN p05 / p95, m         2.15/3.01 1.91/2.97         1.18/3.35 1.13/3.66
+                          2.00/2.99                    1.02/3.11
+  furthest bird, med/p95  6.1/8.0 6.6/8.6 6.4/21.9    11.4/13.1 10.9/18.4 9.1/11.7
+  more than 20 m out      0 / 0 / 10 (worst)          0 / 3 / 0 (worst)
+vertical
+  centroid |v_y| p95      2.25  2.12  2.23            2.93  3.14  3.04
+  centroid |v_y| max      2.41  2.39  2.42            3.56  3.60  3.65
+  altitude range, m       44.5  45.3  39.2            72.0  108.1 78.6
+  steepest anything flew  25    25    25  (a clamp)   51    50    51 (a spring)
+turns
+  gap between 20-deg      3.1   2.4   2.7  s          3.7   3.5   3.2  s
+  gap CV                  1.23  1.08  1.35            1.40  1.06  1.14
+  gap p95                 8.2   6.1   7.7  s          14.1  10.6  9.8  s
+the view
+  yaw p95, deg/s          15.5  18.8  18.5            16.4  14.8  14.1
+  yaw max                 25.8  25.8  25.8            25.8  21.0  25.8
+  roll p95                1.75  2.58  2.46            2.20  2.49  1.98
+  PITCH p95, deg/s        2.63  2.85  3.19            3.88  3.96  3.67
+  PITCH max               7.73  9.18  10.54           11.60 11.97 14.63
+  points off level p05/p95 0.4/11.5 -1.5/11.5         -1.6/11.1 0.4/12.5
+                          -1.2/11.5                    1.0/11.3
+  points off level range  -6.0..11.5 -11.0..11.5      -8.4..16.7 -3.6..18.4
+                          -9.9..12.1                   -3.7..18.2
+the seat
+  birds in frame, worst   34    35    17              34    38    36
+  birds in frame, median  48    47    48              50    48    51
+  birds in frame p05      42    39    40              43    42    45
+  nearest bird, median m  6.7   6.6   6.7             6.1   6.2   6.2
+  seat p95, m             14.3  14.2  21.9            15.4  15.5  14.1
+limits
+  speed                   x1.000 everywhere           x1.000 everywhere
+  turn rate               x1.024 worst                x0.995 worst
+  blob clearance, m       10.5  14.6  4.9             19.8  17.2  21.9
+  loop, strongest r       0.53  0.39  0.40            0.39  0.54  0.58
+```
+
+Reading it honestly:
+
+- **The lattice is gone.** CV 0.10-0.16 -> 0.38-0.43, at the bottom of the 0.4-0.6 the
+  card asks for and three to four times what it was. The p05/p95 spread went from
+  2.0-3.0 m (a spike) to 1.1-3.5 m (a distribution). It is not *more* clumped than that
+  because past about 0.45 the flock starts shedding birds instead of knotting, which the
+  straggler count catches; that trade is the honest ceiling on this mechanism and it is
+  where I stopped.
+- **The flock's vertical motion is about 40% faster and its range twice as deep**, and -
+  this is the part that actually reaches the panel - **the view now pitches**. The old
+  view sat pinned at the top of an 11 degree band (p95 11.5 on all three seeds, i.e. at
+  the stop); the new one ranges over about 15-27 degrees of panel and its p05 is near
+  level. The horizon moves.
+- **The camera is a better seat than it was**, which I did not expect to be able to say:
+  worst-case birds in frame 17-35 -> 34-38 and the seat p95 21.9 -> 14.1 on the seed that
+  used to be marginal. The yaw budget did not have to grow to pay for any of it.
+- **Turns are less regular**, though modestly: the mean gap is up a second and the p95 gap
+  nearly doubled, so there are longer quiet stretches with the same number of sharp
+  changes. The `wild` control moves this a long way further if the owner wants it.
+- **The loop number is the one that did not clearly improve** (0.39-0.58 against
+  0.39-0.53, same test, same threshold). At `wild` 0.45 it was worse - 0.70, a real 130 s
+  slosh between the world's soft walls - and 0.65 is where it came back. `wild` 0.85 gives
+  0.42-0.57 and is the better number if he wants it.
+
+### 2026-09-20 - the wire, the clock, and card 169
+
+The wire, 1800 frames of each of the four pictures through the real encoder and decoder,
+seed 11, `pal8-lz` throughout, **0 lossy frames anywhere**:
+
+```
+sky, light on dark      worst 1056 of 1464 bytes, up to 41 colours, peak APL  9%
+sky, dusk silhouettes   worst 1092              , up to 41 colours, peak APL 21%
+horizon line            worst 1182              , up to 68 colours, peak APL  3%
+black                   worst 1127              , up to 14 colours, peak APL  3%
+```
+
+The limiter never bites after the opening second (x1.00). The two dark backdrops got
+**twelve ink levels instead of six** (card 177's last bullet): with no sky the bands are
+all the same black, so the palette has room, and six levels were carrying both the
+anti-aliasing and the whole depth cue. Measured, worst bytes on black: 737 at six, 1003
+at ten, 1127 at twelve, 1334 at sixteen. Twelve leaves the dark backdrops no dearer than
+the sky one. Looking at six against twelve side by side, the difference is real but
+small - the far birds grade more smoothly - and it costs 390 bytes of headroom, so it is
+listed below as the owner's to undo.
+
+Performance, patch and full pipeline together, one core, release, 1200 frames after 300
+of warm-up:
+
+```
+55 birds, samples=1              0.14 ms/frame
+55 birds, samples=3 (default)    0.30 ms/frame      [card 168: 0.39]
+55 birds, samples=3, on black    0.18 ms/frame
+150 birds, samples=3             0.44 ms/frame      [card 168: 0.57]
+55 birds, samples=6              0.82 ms/frame      [card 168: 0.98]
+```
+
+Faster than card 168 despite doing more: the topological neighbour pass keeps at most
+seven candidates instead of accumulating over everything inside a 26 m radius.
+
+**Card 169 is fixed by this card**, as far as its own acceptance goes. It exists because
+`near` could not be turned down - at 4.5 the camera scattered the flock to a 14.4 m spread,
+a 57.9 m seat and *zero* birds in frame at worst. Run at `near 3.0`, three seeds x ten
+minutes, new flight:
+
+```
+flock spread   4.8 / 5.9 / 6.0 m        (card 169 asks for under 7)
+seat p95      12.4 / 13.4 / 13.4 m      (asks for under 22)
+in frame worst  36 /  28 /  33          (asks for at least 15)
+biggest bird  7.7-8.2 LEDs median, 9.5-9.7 p95   (the 8-10 LED birds it wanted)
+```
+
+Nothing in this card was aimed at card 169; what fixed it is that the flock now holds
+together for reasons that do not depend on separation being stiff (a weak wish to fly
+the flock's course, a gather that does not switch off while dodging, and clans), while
+the camera kept the old hard wall for its own personal space. The default `near` is left
+at 6.0 - which of the two pictures he wants is the owner's call, and it is card 168's
+"Open with the owner" item 2.
