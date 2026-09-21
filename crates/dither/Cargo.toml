@@ -1,0 +1,27 @@
+[package]
+name = "screeny-dither"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The panel's sub-level arithmetic: how a duty in sixteenths of a bit-plane level becomes a level on this refresh, which order the dither walks its phases in, and how wide a sub-level plane's output-enable window is. no_std, no alloc, no float, no I/O."
+
+# `no_std`, no alloc, no float: the firmware (card 248) compiles this for
+# xtensa-esp32-none-elf and `cargo test` compiles it for the host, so the
+# device's dither and a host test cannot disagree about it. The precedent is
+# `crates/receiver` (which already holds the brightness rule this crate's
+# sub-plane widths are derived from), `crates/settings` and `crates/otastate`.
+#
+# `firmware/src/gamma.rs` keeps the 256-entry sRGB table and nothing else; the
+# arithmetic applied to it is all here.
+
+[features]
+default = []
+# Card 248 step 2: fractional bits below one duty level, i.e. the length of
+# the dither cycle. Four (16 refreshes, 9.6 Hz) is the default and what
+# shipped before this card; three and two are the comparison builds the owner
+# looks at. The three are mutually exclusive - enabling more than one is a
+# compile error - and `firmware/` forwards its own features of the same name.
+frac-bits-3 = []
+frac-bits-2 = []
+
+[dependencies]

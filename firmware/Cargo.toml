@@ -90,6 +90,24 @@ ota-test-unhealthy = []
 # never reached.
 ota-test-panic = []
 
+# **Card 248 step 2: the dark end's three builds.** Fractional bits below one
+# duty level, which is the length of the dither cycle in refreshes. The
+# default (four, 16 refreshes, 9.6 Hz) is what shipped up to fw 0.8.2; three
+# and two shorten it to 19 Hz and 38 Hz at the cost of duty resolution (1008
+# steps -> 504 -> 252, against 63 from the bit planes alone). The owner picks
+# by looking at three builds, so this has to be a build flag and not a
+# constant somebody edits:
+#
+#     cargo build --release                          # frac_bits 4
+#     cargo build --release --features frac-bits-3   # frac_bits 3
+#     cargo build --release --features frac-bits-2   # frac_bits 2
+#
+# They forward to `screeny-dither`, which holds the arithmetic and is where
+# all three are host-tested whichever one this build selects. Enabling both is
+# a compile error there.
+frac-bits-3 = ["screeny-dither/frac-bits-3"]
+frac-bits-2 = ["screeny-dither/frac-bits-2"]
+
 # Card 202's bench tool. It gates `[[bin]] gpio_probe` through
 # `required-features`, so a plain `cargo build --release` never builds it and
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
@@ -222,6 +240,13 @@ screeny-proto = { path = "../crates/proto" }
 # no_std crate crates/sim runs on, so the device and the simulator cannot drift
 # apart in behaviour the way they could while each kept its own copy.
 screeny-receiver = { path = "../crates/receiver" }
+
+# Card 248's sub-level arithmetic: the dither's phase order, the rounding and
+# the dead zone. `no_std`, no float, no I/O - the same crate `cargo test` runs
+# on the host, because `firmware/` is a separate cargo project and nothing in
+# it can be reached from a host test. `src/gamma.rs` keeps the sRGB table and
+# calls into this for everything done to it.
+screeny-dither = { path = "../crates/dither" }
 
 # --- the settings store (card 212) ----------------------------------------
 # Card 211's crate: the key set, the value encoding, the schema version, the

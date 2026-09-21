@@ -109,3 +109,109 @@ Stop after any step if the owner says the picture is right; record which steps s
 - No change to the wire protocol. If one turns out to be needed, stop and say so.
 
 ## Log
+
+### Stage A - steps 1, 2 and 4 (2026-09-21)
+
+**Where the arithmetic now lives.** `firmware/` is a separate cargo project on the
+`esp` toolchain, so nothing in it can be reached from `cargo test`; the only host
+check that existed was `crates/panel`'s fixture copy of the gamma *table*, which
+says nothing about the order the dither walks its phases in - the very thing this
+card is about. So the pure part moved into **`crates/dither` (`screeny-dither`)**:
+`no_std`, no float, no I/O, no deps, compiled for xtensa by the firmware and for the
+host by `cargo test`, exactly the way `crates/receiver`, `crates/settings` and
+`crates/otastate` already are. `firmware/src/gamma.rs` is now the 256-entry sRGB
+table and nothing else; `firmware/src/display.rs` calls into the crate.
+
+Every function there takes `frac_bits` as an argument rather than reading the
+constant, so one `cargo test` covers all three of step 2's widths whichever width
+the build selected. The firmware passes `screeny_dither::FRAC_BITS` and the
+compiler folds it.
+
+**Step 1, the bit-reversed phase.** `threshold(phase, bayer, frac_bits)` is
+`bit_reverse(phase & mask, frac_bits) ^ (bayer >> (4 - frac_bits))`. Two choices in
+that line were not obvious:
+
+- **The reversal is of the phase, not of the sum.** Reversing the phase puts the
+  phase counter's bit 0 into the threshold's *top* bit, which is the bit that
+  decides a half-level remainder, so that remainder flips every refresh.
+- **`XOR`, not addition.** Adding the Bayer offset after the reversal lets a carry
+  out of the low bits lengthen a run: with `+` the half-level pattern for bayer 1
+  is `1010101010101001` - one run of 2. With `XOR` the sixteen offsets are a
+  permutation and the top bit is untouched, so the run is always exactly 1. That
+  also makes the spatial average *exactly* constant: at every phase precisely 8 of
+  the 16 pixels in a 4x4 block are lit for a half-level remainder (`BAYER4` holds
+  each of 0..16 once, so exactly eight have bit 3 set). Card 007's "no periodic
+  structure in mean luminance" is now true by construction, not by measurement.
+
+Measured over the whole cycle, at a 154 Hz refresh:
+
+| remainder | before (counting order) | after (bit-reversed) |
+|---|---|---|
+| 8/16 | 8 refreshes lit, 8 dark - **9.6 Hz** | alternates every refresh - **77 Hz** |
+| 4/16 | 4 lit, 12 dark, 9.6 Hz | repeats every 4 refreshes - **38 Hz** |
+| 2/16 | 9.6 Hz | repeats every 8 - 19 Hz |
+| 1/16 | 9.6 Hz | 9.6 Hz (unchanged; step 4 removes it) |
+
+**Step 4a, rounding in the undithered path.** `quantise_plain` is
+`(q + FRAC/2) >> FRAC_BITS`. Truncation lit nothing below `q = 16`, i.e. below sRGB
+34; rounding lights from `q = 8`, which is **sRGB 21** (`SRGB_TO_Q[21] == 8`) - the
+card said 23, it is 21. The three codes the card named check out: sRGB 125 (`q=207`)
+12 -> 13, sRGB 149 (`q=303`) 18 -> 19, sRGB 156 (`q=335`) 20 -> 21.
+
+**Step 4b, the dead zone.** `snap_dead_zone` is defined against the **sixteenths the
+table is generated at**, not against `FRAC`: a remainder worth 1/16 of a level or
+less is snapped down, 15/16 or more is snapped up onto the next level. At
+`frac_bits` 4 that is remainders 1 and 15; at 3 and 2 it is a **no-op**, deliberately
+- there the whole cycle is already 19 Hz or 38 Hz and the smallest remainder is
+worth an eighth or a quarter of a level, which is real light. Deviation, stated: at
+most **1/16 of a level**, on 126 of the 1009 possible `q` values, and in exchange
+those 126 stop moving at all.
+
+**Step 2, the three builds.** `frac_bits` is a cargo feature on `screeny-dither`
+forwarded by the firmware. The gamma table stays generated at 1008 = 63x16 and is
+narrowed at lookup time by `narrow_q`, which **rounds** (`(q + half) >> shift`); at
+`frac_bits` 4 the shift is 0 and it compiles to nothing. Three tables would have
+been three sets of numbers to check against the sRGB EOTF instead of one.
+
+    cd firmware
+    cargo build --release                          # frac_bits 4 (default, ships today)
+    cargo build --release --features frac-bits-3   # 8-refresh cycle, 19 Hz, 504 duty steps
+    cargo build --release --features frac-bits-2   # 4-refresh cycle, 38 Hz, 252 duty steps
+
+All three built clean on the `esp` toolchain. `FW_VERSION` -> **0.9.0**.
+
+**Render cost.** `bit_reverse` is a loop, so `render` hoists it: `row_thresholds`
+runs it four times per row instead of 6,144 times per frame, and what is left in the
+pixel loop is one `XOR` where there used to be an add and a mask. The dead zone adds
+two comparisons per component. Net effect on `render` should be at or below the
+3.1 ms it costs today; not measured, no device.
+
+**Host tests** (14, all three widths, `cargo test -p screeny-dither`):
+
+- `the_mean_over_a_cycle_is_exactly_q` - for every `q` in `0..=63<<frac_bits` and
+  every one of the 16 Bayer offsets, the **sum** over one full cycle is exactly `q`,
+  so the mean is exactly `q / 2^frac_bits` levels with no rounding error. This is
+  the whole claim that the reversal is free.
+- `the_thresholds_are_a_permutation_of_the_cycle` - why the above holds.
+- `half_a_level_no_longer_blinks` - longest run of identical output for a half-level
+  remainder is **1** refresh, for every offset and every width, and asserts in the
+  same test that the order that shipped held it for `FRAC/2` refreshes.
+- `a_quarter_of_a_level_repeats_every_four_refreshes` - longest run 3, period 4.
+- `a_sixteenth_of_a_level_is_still_slow_before_the_dead_zone` - the residue, named.
+- `a_four_by_four_block_is_half_lit_at_every_phase` - the spatial claim, and that no
+  two of the 16 neighbours share a threshold.
+- `the_dead_zone_*` (three tests) - the deviation is <= 1/16 level, on exactly 126
+  values, a no-op at widths 3 and 2, and a `q` in the zone produces a run of 16
+  (it does not move).
+- `the_undithered_path_rounds` - the named codes, the new first-lit code, and that
+  no `q` is ever off by more than half a step at any width.
+- `narrowing_the_table_rounds_and_keeps_the_endpoints` - monotone, endpoints exact.
+
+**Drive-by:** `cargo clippy --workspace --all-targets` was **not** clean on `main`
+(rust-clippy 1.98: `doc_lazy_continuation` in `crates/receiver/tests/identify_overlay.rs`
+from card 247, `manual_slice_chunks` in `crates/sim/tests/arbitration.rs`). Both
+fixed here, one line each; neither is this card's code.
+
+**Not determined without the panel:** whether 77 Hz is fast enough for this owner at
+this pitch, and which of the three `frac_bits` he prefers. That is the point of the
+three builds.

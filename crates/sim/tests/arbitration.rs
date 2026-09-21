@@ -358,7 +358,7 @@ fn identify_is_an_overlay_and_not_a_state() {
     // one, by checking a panel full of the overlay and not of the frame.
     let lit = sim.render_display();
     assert!(
-        lit.chunks_exact(3).all(|px| px != &eb[..3]),
+        lit.as_chunks::<3>().0.iter().all(|px| px != &eb[..3]),
         "not one pixel of the streamed frame reaches the panel under IDENTIFY"
     );
 

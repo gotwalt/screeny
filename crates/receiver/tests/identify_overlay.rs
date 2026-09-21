@@ -5,8 +5,8 @@
 //! in any state, including while another sender holds the lock", and section
 //! 7.3 says it is an overlay rather than a stream state - "frame handling
 //! continues underneath". `docs/design/device-web.md` decision 7 is the other
-//! half: the frame path is the product, so *handling* a frame means all of it
-//! - accepted, decoded, counted, telemetry answered - and the single thing an
+//! half: the frame path is the product, so *handling* a frame means all of it -
+//! accepted, decoded, counted, telemetry answered - and the single thing an
 //! overlay takes away is the swap onto the panel.
 //!
 //! The firmware got the first half right and the second half wrong for as long
