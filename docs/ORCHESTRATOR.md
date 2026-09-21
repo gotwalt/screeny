@@ -208,6 +208,29 @@ OTA upload - the command line already does it), 119, 121, 144, 156, 157, 114, 15
 only other card in `backlog/` is the firmware session's 248. **Workers run on Sonnet
 (`model: sonnet`), three at most, since this day** - this replaces "Opus" and "at most two".
 
+**Done the same afternoon, merged, NOT YET DEPLOYED (waiting for the firmware session to say
+its 248 bench with the owner is over):** **187** (`screeny brightness 3` says "raised to the
+dimmest level the panel can show"; the Studio's policy follows a raise up and never records
+it as a cap; both brightness controls step through `brightness_stops` from
+`GET /api/v1/bootstrap` - 26 stops, top 250), **199** (`devices[i].panic` in the Studio's
+status, read from the panel's `/api/v1/panic` once per new `boot_id` on the poller's own task;
+a line in `/panel`'s Device block for a panic, a watchdog reset or an update's outcome;
+`repeat` colours the Picture chip; 404 is silence), **188** (`crates/panel`: `duty_16ths`,
+`nearest_level`, `aligned_levels`; `crates/art`: `Panel::AlignedDark` = `output.panel:
+aligned_dark`, an "Aligned dark" radio on the Picture page; the clocks have a **Dark ramp**
+choice - "as it was" is the default and byte-identical, "aligned warm" is the same look on
+exact levels, then "aligned neutral" and "aligned dim"). The 188 worker's first default
+changed the numerals' look; caught by rendering `snapshot clocks-numerals --time 21:12
+--seed 7` on main and on the branch and `cmp`-ing - do that for every clocks card. After the
+deploy: `screeny brightness 3` against the panel (wording), and **the owner looks at
+clocks-numerals with Panel = Aligned dark and Dark ramp = aligned warm, up close** - with fw
+0.9.0's bit-reversed dither on the panel the blinking may already be gone without it. New
+backlog from 199: **137** (the `/panel` line says "trial" until the next reboot; the spec wants
+one re-ask after a trial) and 138 (the sim's panic route never says `wdt`; offered to the
+firmware session). Browser tooling was not connected on 2026-09-21: nobody has seen the new
+`/panel` row or the stepped slider drawn; checked instead by `tests/ui.rs`, `node --check`
+and a local Studio against a local sim (`applied 6` for 3, `applied 120` for 255 under a cap).
+
 **Next up:** whatever the owner's eye finds in the pieces (115's hands first); 162 when
 clock renders need comparing; porting `crates/demos` into `crates/art` when wanted. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
