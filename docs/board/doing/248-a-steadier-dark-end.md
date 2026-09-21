@@ -215,3 +215,25 @@ fixed here, one line each; neither is this card's code.
 **Not determined without the panel:** whether 77 Hz is fast enough for this owner at
 this pitch, and which of the three `frac_bits` he prefers. That is the point of the
 three builds.
+
+### The bench pattern (2026-09-21)
+
+`screeny pattern dark`, in `crates/screeny/src/patterns.rs` beside the other six.
+Sixteen four-pixel steps across a 64-column panel, even in **code** (0, 5, 9, 14, 19,
+23, 28, 33, 37, 42, 47, 51, 56, 61, 65, 70) rather than even in light, because the
+question is "how many of these can you tell apart" and an even code ramp is the one
+whose answer is comparable between two builds. Top half warm monochrome
+(roughly 2700 K: `[v, 0.80v, 0.55v]`, so sRGB 70 is `[70, 56, 39]`), bottom half
+neutral grey at the same `v`. Held: `animated()` is false and `frame(t)` is the same
+bytes for every `t`, which matters because the flicker this card is about is on a
+*static* picture.
+
+The warm half exists for one reason: its three channels sit on **different**
+sub-level remainders at every step, so a dither fault that is per channel shows up
+there as a colour shimmer while the neutral half below stays steady. That
+distinguishes "the dither is wrong" from "this pixel is wrong".
+
+Four tests in `patterns::tests`: it does not move, the sixteen steps rise to exactly
+70 with no two gaps differing by more than one, each step is exactly four pixels wide
+and constant down its half, and the top half is warm (`r >= g >= b`) while the bottom
+is neutral and ramps with it. `crates/screeny/README.md`'s pattern table gained a row.

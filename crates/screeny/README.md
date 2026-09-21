@@ -405,6 +405,7 @@ Streaming commands (`pattern`, `pipe`) share:
 | `f` | a large asymmetric "F" with four different corner markers: rotation and mirroring |
 | `checker` | a 1px checkerboard inside a coarse one: ghosting, row crosstalk, and the LZ coder's worst case |
 | `sweep` | a bar moving across and down: tearing, latency, dropped frames |
+| `dark` | sixteen held four-pixel steps from black to sRGB 70, warm monochrome over neutral grey: how many shades the dark end has, and whether any of them blink (card 248) |
 
 ### Examples
 
