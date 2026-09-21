@@ -417,3 +417,25 @@ Not committed. In the worker's scratchpad,
 | `177-close-near3.png` | five frames 0.3 s apart, `near 3.0`, seed 29 | **Yes**: 8-10 LED birds with countable wings, and the flock still a flock. This is card 169's picture, now available. |
 | `177-pace-03-horizon-line.png` | `pace 0.3`, eight frames 4 s apart | **Still calm.** A surge at a third speed moves the horizon about a third of the panel over half a minute. Graceful, not busy - which is what the card asked to check. |
 | `177-ink-6-vs-12.png` | black backdrop, six ink levels above and twelve below, same five frames | The difference is **small**. Twelve grades the far birds more smoothly; six is slightly more posterised. Honestly, at 64x32 I would not have noticed without the pair side by side. |
+
+### Handover checks, as actually run
+
+Merged `main` (card 174's faces module and the playbook updates) before the final run.
+The only file both sides touched is `crates/art/README.md`, in different sections; git
+merged it and the flock entry is intact.
+
+`cargo clippy --workspace --all-targets` on the merged tree: **silent**. No `#[allow]`
+was added anywhere.
+
+`cargo test --release --no-fail-fast` at the root, on the merged tree: **894 passed, 1
+failed**. The failure is `screeny`'s `exactness_holds_over_a_stream`
+(`crates/screeny/tests/indexed.rs:174`, "all thirty displayed") - card 156's family by
+shape: an exact count of frames across loopback UDP, which a loaded kernel may drop. It
+is the sixth of that shape; card 156 lists `traffic.rs`'s datagram count as the fifth.
+It **passed** in the run before the merge on the same code (905 passed, 0 failed) with
+nothing of this card between them.
+
+**Re-run alone: `cargo test --release -p screeny --test indexed` - 18 passed, 0 failed,
+in 0.75 s.** Both results are reported; nothing was changed to make it pass.
+
+The card was moved to `review/` in the last commit on the branch.
