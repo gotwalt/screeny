@@ -6,7 +6,7 @@ hardware: orchestrator flashes; the owner looks (the worker builds and host-test
 depends: [230, 223]
 owner: opus worker (firmware session, 2026-09-21)
 branch: card/247-button-bench-findings
-status: built (fw 0.8.2), waiting for the bench
+status: done, on the device (fw 0.8.2)
 ---
 
 ## Goal
@@ -313,3 +313,23 @@ exists.
    answer - record it and stop, rather than redesigning the QR. Either way, check that
    after the portal ends (a successful join, or a reboot) the panel is back at the
    runtime brightness: the serial log says `display: back to the brightness setting`.
+
+### Orchestrator, after the merge (2026-09-21)
+
+Merged to `main`; merged tree: 985 host tests pass, `.stack` 25,792 (floor 24,576). 0.8.2
+built from `main` and put on the panel **over WiFi** (`fw-upload --activate`: back after
+16 s, `CONFIRMED` at 63 s, slot ota_0).
+- **Item 1, by the owner's eye, with the Studio streaming at 30 fps:** a 10 s network
+  `IDENTIFY` and a short button press are both **solid** - no art showing through - and
+  the picture returns afterwards. Fixed.
+- **Item 2:** the owner held the button 5 s; the iPhone camera **detected the QR**,
+  offered the network, and the setup flow brought the panel back (same address,
+  `store_errors` 0, brightness setting still 56 afterwards). So the brightness was the
+  reason: at 56 (5 of 25 slots) it did not scan, at the default (9 slots) it does. Not
+  marginal by nature.
+- `screeny-probe http` 39/0/6 with 0 connects refused; `conformance --slow` 60/0/4 with
+  the panel released; given back to the Studio, LIVE. `boot_count` 4, `panic_count` 0.
+Left as the worker wrote them, not carded (decision 10): the identify screen can outstay
+its time if the stream stops under it (pre-existing, clears on the next frame or the idle
+cross-fade), and the simulator draws identify over the portal where the firmware ranks
+the portal higher.
