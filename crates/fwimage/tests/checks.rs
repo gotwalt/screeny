@@ -371,6 +371,58 @@ fn every_offset_the_staging_loop_produces_is_inside_the_slot() {
     assert_eq!(plan_write(SLOT, off, SECTOR), Err(FirmwareError::TooLarge));
 }
 
+/// **Card 245's safety requirement for the `flash-stress` bench build**, as a
+/// test: the stress hook erases and rewrites real sectors at full speed, so
+/// every offset it can ever produce has to be one [`plan_write`] accepts -
+/// which, since the offsets are slot-relative and reach flash through a
+/// bounds-checked `FlashRegion` on a `store::InactiveSlot`, is what makes the
+/// hook structurally unable to touch the running slot, the bootloader, the
+/// partition table, `otadata` or the settings partition.
+///
+/// The firmware half of that build cannot be exercised on this bench, so this
+/// is the test that stands in for it.
+#[test]
+fn stress_sector_stays_inside_the_slot() {
+    use screeny_fwimage::stress_sector;
+
+    // A whole lap of a 2 MB slot, plus three more laps to prove the wrap does
+    // not walk off the end or off the sector grid.
+    let sectors = SLOT / SECTOR as u32;
+    assert_eq!(sectors, 512);
+    for cycle in 0..sectors * 4 {
+        let off = stress_sector(SLOT, cycle).expect("a 2 MB slot holds sectors");
+        assert_eq!(
+            plan_write(SLOT, off, SECTOR),
+            Ok(()),
+            "cycle {cycle} produced {off:#x}"
+        );
+        // Forwards, one sector at a time, wrapping at the end: erase wear is
+        // spread over the slot rather than landing on one sector.
+        assert_eq!(off, (cycle % sectors) * SECTOR as u32);
+    }
+
+    // The first cycle is the front of the slot and the last of a lap is its
+    // final whole sector - never one past it.
+    assert_eq!(stress_sector(SLOT, 0), Some(0));
+    assert_eq!(stress_sector(SLOT, sectors - 1), Some(SLOT - SECTOR as u32));
+    assert_eq!(stress_sector(SLOT, sectors), Some(0));
+
+    // A slot that is not a whole number of sectors stops at the last whole
+    // one, so the tail is never half-erased.
+    let ragged = SLOT + SECTOR as u32 / 2;
+    for cycle in 0..sectors + 2 {
+        let off = stress_sector(ragged, cycle).expect("still holds sectors");
+        assert_eq!(plan_write(ragged, off, SECTOR), Ok(()));
+        assert!(off + SECTOR as u32 <= SLOT);
+    }
+
+    // And a slot with no room for a sector has no safe answer, which is said
+    // rather than guessed.
+    assert_eq!(stress_sector(0, 0), None);
+    assert_eq!(stress_sector(SECTOR as u32 - 1, 0), None);
+    assert_eq!(stress_sector(SECTOR as u32, 7), Some(0));
+}
+
 // ---------------------------------------------------------------------------
 // The version string
 // ---------------------------------------------------------------------------

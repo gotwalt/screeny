@@ -143,6 +143,39 @@ pub fn plan_write(slot_len: u32, offset: u32, len: usize) -> Result<(), Firmware
     Ok(())
 }
 
+/// Which sector of a slot card 245's `flash-stress` bench build should hit on
+/// its `cycle`-th cycle, as a slot-relative byte offset.
+///
+/// The bench build erases and rewrites real sectors at full speed to prove the
+/// flash path cannot wedge, so "which sector" is a safety question and not a
+/// scheduling one. It lives here, in the crate a host `cargo test` covers,
+/// for the same reason [`plan_write`] does: the firmware half of that build
+/// cannot be tested on this bench, so the arithmetic it depends on is tested
+/// where it can be.
+///
+/// The guarantees, all of which `stress_sector_stays_inside_the_slot` drives:
+///
+/// - the answer is always sector aligned and `offset + SECTOR <= slot_len`, so
+///   it is always a value [`plan_write`] accepts;
+/// - it walks **forwards** and wraps, so a long run spreads its erase wear over
+///   the whole slot instead of killing one sector;
+/// - it is `None` for a slot too small to hold one sector, which is the only
+///   case with no safe answer.
+///
+/// It is deliberately slot-*relative*: the caller turns it into an absolute
+/// address through a `store::InactiveSlot`'s `FlashRegion`, which is itself
+/// bounds-checked, so there is no arithmetic anywhere on this path that can
+/// name the running slot, the bootloader, the partition table, `otadata` or
+/// the settings partition.
+#[must_use]
+pub fn stress_sector(slot_len: u32, cycle: u32) -> Option<u32> {
+    let sectors = slot_len / SECTOR as u32;
+    if sectors == 0 {
+        return None;
+    }
+    Some((cycle % sectors) * SECTOR as u32)
+}
+
 // ---------------------------------------------------------------------------
 // The app descriptor's version string
 // ---------------------------------------------------------------------------
