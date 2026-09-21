@@ -48,3 +48,14 @@ The deliberate-panic build the firmware session keeps for this shows up on `/pan
 a poll or two of the panel coming back, and never costs the panel a second connection.
 
 ## Log
+
+### Note from the orchestrator (2026-09-20, evening)
+
+From the firmware session, with fw 0.7.0 on the panel: there is now an always-on core-0
+liveness watchdog (20 s). If the firmware wedges, the panel reboots itself and
+`GET /api/v1/panic` says so - the reply has gained `"last_reset":"wdt"` and an `update`
+field for OTA outcomes. Read `crates/device-api`'s `PanicReply` and its goldens for the
+final shape before building this; a watchdog reset deserves the same line on `/panel` as a
+panic. Known firmware bug at the time of writing: a firmware *upload* wedges core 0 (the
+watchdog recovers it, nothing is activated); OTA does not work yet, and the firmware
+session asked that no Studio upload support be built against it until it says so.
