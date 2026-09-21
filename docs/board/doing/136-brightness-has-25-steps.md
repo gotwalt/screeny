@@ -94,3 +94,43 @@ the merge.
   `screeny_receiver::BRIGHTNESS_FLOOR` against `screeny_panel::oe_slots`.
   `cargo test -p screeny-receiver` and `-p screeny-panel` both green;
   `cargo build --workspace` clean.
+- Step 2: the other paths that reach the display.
+  - **Settings store load at boot** (`firmware/src/main.rs:808`, was
+    `settings.brightness.min(BRIGHTNESS_CAP)`): now
+    `screeny_receiver::clamp_brightness(settings.brightness, BRIGHTNESS_CAP)`.
+    This was the one path that bypassed `crates/receiver` entirely - it feeds
+    `BRIGHTNESS` (the atomic `display::slots_for` reads to size the
+    framebuffers' OE window) and ran before `Core::new` even existed. Before
+    this fix a stored 3 would come up with the panel dark and, because
+    `Core::new` separately seeded the receiver's own `brightness` field from
+    the same raw, unclamped `settings.brightness`, `TELEMETRY`/status would
+    have agreed it was 3 - consistent with each other, both wrong. Now both
+    read 6 (today's floor) and the panel is lit.
+  - **`Core::new`** (`firmware/src/receiver.rs:271-275`, was
+    `settings.brightness.min(crate::BRIGHTNESS_CAP)` passed into `Params`):
+    simplified to pass the raw `settings.brightness` - `Receiver::new` already
+    applies `clamp_brightness` with `p.brightness_cap`, so the pre-clamp was
+    redundant once step 1 landed and is now just the one call site.
+  - **`SET_BRIGHTNESS` over UDP control** and **`POST /api/v1/settings`**
+    (`firmware/src/http.rs`'s `post_settings` -> `apply_control` ->
+    `core.control(...)`): both already funnel through
+    `Receiver::apply`'s `Request::SetBrightness` arm - no separate clamp in
+    `http.rs` or `crates/device-api` (`SettingsRequest.brightness` is a bare
+    `Option<u8>`, no validation of its own). Unchanged, already correct once
+    step 1 landed.
+  - **Telemetry / status** (`Receiver::telemetry`, `GET /api/v1/status`,
+    `POST /api/v1/settings`'s reply): all read either `crate::BRIGHTNESS` (the
+    atomic, now only ever written with a clamped value) or
+    `core.brightness()` / `self.brightness` inside `crates/receiver` (set only
+    through `clamp_brightness`, in `Receiver::new` and in `apply`). Nothing
+    to change; they now report the same value the panel shows.
+  - **`crates/sim`** (`crates/sim/src/core.rs::Core::new_with`): already
+    passed `cfg.brightness` straight into `Receiver::new` with no separate
+    clamp, and read `r.brightness()` back for the panel model's own
+    brightness - it inherited the fix for free.
+  - Firmware build: `firmware/` builds clean under the Xtensa toolchain
+    (`. ~/export-esp.sh`, `cargo build --release`). `tools/fw-size.sh` on
+    `target/xtensa-esp32-none-elf/release/screeny-fw`: `.stack = 26200`
+    (floor 24576) - unchanged in shape from before this card (no new
+    statics, only a different call in an existing const-fn-sized path).
+    `FW_VERSION` left untouched, as directed.
