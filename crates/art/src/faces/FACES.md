@@ -8,21 +8,31 @@ and copied below, not assumed. A face that is "free for personal use" only, as
 much of dafont is, is not committed however good it looks; see *Adding a face
 locally* at the end.
 
-The bitmaps are **unmodified extracts of the digits** `0`-`9`, cropped to the
-digits' common ink box and packed one bit a cell. Nothing is redrawn, hinted,
-restyled or renamed: the choice on the page is named after the font it
+The bitmaps are **unmodified extracts** of the digits `0`-`9` and, where the
+font has one, the colon (card 175). Every glyph is sliced out of the font's own
+cell with the box the ten **digits** share, so a colon keeps the position,
+weight and baseline the font gave it relative to them. Nothing is redrawn,
+hinted, restyled or renamed: the choice on the page is named after the font it
 reproduces because it *is* that font's digits, which is the one case OFL 1.1
 clause 3 leaves alone (it restricts Reserved Font Names on **modified**
 versions).
 
-| Face on the page | Source | Native | Scale | Licence |
-|---|---|---|---|---|
-| **Vesta** | `crates/art/src/faces/stroked.rs` | stroked paths | - | this repository |
-| **Terminus Bold** | `bitmap/terminus-font-4.39/ter-u32b.bdf` | 13 x 20 | x1 | SIL OFL 1.1 |
-| **Terminus** | `bitmap/terminus-font-4.39/ter-u32n.bdf` | 12 x 20 | x1 | SIL OFL 1.1 |
-| **Spleen** | `bitmap/spleen/spleen-16x32.bdf` | 12 x 20 | x1 | BSD 2-Clause |
-| **Dina** | `bitmap/dina/Dina_r400-10.bdf` | 6 x 9 | x2 | MIT |
-| **Micro Grotesk** | `fonts/MicroGrotesk[wght].ttf`, wght 400 | outline | 4 samples/LED | SIL OFL 1.1 |
+| Face on the page | Source | Native | Scale | Glyphs | Licence |
+|---|---|---|---|---|---|
+| **Vesta** | `crates/art/src/faces/stroked.rs` | stroked paths | - | `0-9` | this repository |
+| **Terminus Bold** | `bitmap/terminus-font-4.39/ter-u32b.bdf` | 13 x 20 | x1 | `0-9 :` | SIL OFL 1.1 |
+| **Terminus** | `bitmap/terminus-font-4.39/ter-u32n.bdf` | 12 x 20 | x1 | `0-9 :` | SIL OFL 1.1 |
+| **Spleen** | `bitmap/spleen/spleen-16x32.bdf` | 12 x 20 | x1 | `0-9 :` | BSD 2-Clause |
+| **Dina** | `bitmap/dina/Dina_r400-10.bdf` | 6 x 9 | x2 | `0-9 :` | MIT |
+| **Micro Grotesk** | `fonts/MicroGrotesk[wght].ttf`, wght 400 | outline | 4 samples/LED | `0-9` | SIL OFL 1.1 |
+
+**Micro Grotesk has no colon**, and that is declared in `tools/art-faces.py`
+rather than detected: rasterising one gives the `.notdef` box, a rectangle a
+quarter taller than the digits, and asking a TTF for its cmap needs `fontTools`,
+which is not a dependency here. `Vesta` declares the ten digits for the same
+reason - the colon vesta draws beside them is the patch's own pair of dots, not
+a glyph. A patch asks a face for a glyph by `char` and gets nothing at all for
+one it has not got, which is how both of those fall back cleanly.
 
 The BDF paths are inside a clone of <https://github.com/Tecate/bitmap-fonts>
 (a catalogue; the fonts are not its maintainers' work). Micro Grotesk is

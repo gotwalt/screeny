@@ -141,3 +141,65 @@ picked the *first* numeral with nothing missing, and Terminus Bold's `3` is
 entirely inside its `8`, so a module showing 8 read as 3. It now breaks the tie
 by the most ink of its own: a subset cannot explain the LEDs the superset
 lights. It only ever bit a test, never the picture.
+
+### Step 2: how it looks, and what is open
+
+**Strips** in the session scratchpad's `vesta-faces/`, panel model on. One
+honest line each:
+
+| file | what it shows |
+|---|---|
+| `175-01-the-colon-per-face.png` | **the one to look at.** 10:08 in all six faces. Terminus Bold's colon is two solid 3 x 3 blocks, Terminus' and Spleen's 2 x 2, Dina's a pair of fat 4 x 4 ones - each unmistakably the same hand as its digits. Vesta and Micro Grotesk keep the two soft circles, and next to the others you can see why that was worth changing. |
+| `175-02-the-colon-at-three-sizes.png` | `size` 1, 0.8 and 0.55. At 1 it is exact; below it the colon is resampled along with everything else and goes soft, which is what `size` does to the whole clock and is no worse for the colon than for the numerals. |
+| `175-03-the-colon-blinking.png` | `blink` on, five frames across a second. It still blinks. The gap it leaves is a little more noticeable than the old circles' because the face's colon is tighter, which I think reads better, not worse. |
+| `175-04-flip-on-demand.png` | **Flip**, pressed at +1 with the clock twenty seconds from any minute: settled 10:08, then all four drums turn and land back on 10:08 in about 1.2 s. Nothing but the button moved it. |
+| `175-05-flip-in-changed-cards-only.png` | the same press in "changed cards only". One card at a time, no overlap, about 2.4 s - slower and far more legible, which is what that mode means and why the button turning the whole drum there is worth having rather than doing nothing. |
+
+**How it looks, in a sentence each.** The colon was the one thing on the panel
+that did not belong to the face; now `10:08` in Terminus Bold is one typeface
+all the way across, and the block colon sitting square on the seam looks much
+more like a station board than the two little circles did. The Flip button is
+the first time this patch can be *played with* rather than waited on.
+
+**The card's acceptance, honestly.** It asked for `colours=2`. It is **3**:
+black, the numerals, and the colon - which is deliberately dimmer than the
+numerals (`COLON_LEVEL`, card 155) and so is its own level. What the acceptance
+was really after is that nothing is anti-aliased any more, and that is now
+true: three exact colours and not one ramp pixel, where before there were four
+with a ramp round every colon dot. Making it two would mean lighting the
+punctuation as brightly as the time, which is the wrong trade on a night clock.
+
+**Open with the owner.**
+
+- **The colon is tighter than it was.** A font colon's dots sit closer together
+  than vesta's old ±6 LEDs. I think it looks better - it is punctuation, not a
+  third numeral - but it is a visible change to a face he has been looking at,
+  and `Vesta` and `Micro Grotesk` still show the old wide pair, so the two
+  styles are one click apart on the page if he wants to compare.
+- **Flip drops a second press rather than queueing it.** If he finds himself
+  wanting to watch two rotations back to back, queueing one press is a small
+  change.
+- **Flip turns the whole drum in "changed cards only".** That mode's own minute
+  moves one card; the button moves eleven. It is the honest reading of a button
+  marked Flip, and it doubles as a way to see what that mode looks like, but it
+  is a deliberate inconsistency and he should know it is there.
+
+**Tests, as run.** `cargo test --release --no-fail-fast` at the root: **923
+passed, 0 failed**. No load-sensitive test (cards 156/143) misfired, so nothing
+was re-run alone. `cargo clippy --workspace --all-targets`: silent.
+
+**Outside my own files.** Two, both additive, neither touched by card 178:
+`crates/art/src/snapshot.rs` gains `take_acting` (and `take` calls it with
+`None`, so every existing caller is unchanged), and `crates/art/src/bin/
+screeny-art.rs` gains `--act ID[@SECONDS]`. Without them there is no way to
+photograph a patch's response to its own button, which every strip of the Flip
+action needed - and the clock patches have offered two actions since card 160
+with no way to snapshot either. I read `crates/studio/ui/picture.js` to confirm
+the page needs no change and edited nothing under `crates/studio`.
+
+**Follow-ups** (un-numbered, for the orchestrator to place): the faces can now
+carry any glyph, so a patch that wants letters is a change to `GLYPHS` in
+`tools/art-faces.py` and nothing else - `clocks-numerals` is the obvious second
+customer. And `snapshot --act` now makes the clock patches' "Compose another"
+and "Play it again" photographable for the first time, which is worth a strip
+if anyone revisits them.
