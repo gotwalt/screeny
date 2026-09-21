@@ -4,8 +4,8 @@ title: Art - held dark shades sit on a panel level: the aligned-code table in th
 type: build
 hardware: no (the owner looks at the result on the panel through the Studio)
 depends: []
-owner:
-branch:
+owner: worker (sonnet)
+branch: card/188-held-dark-shades
 ---
 
 ## Goal
@@ -65,3 +65,32 @@ is the guidance this card implements; read it first.
   dim shades present and not blinking.
 
 ## Log
+
+### 2026-09-21 - shaping note from the firmware session (card 248), folded into Context
+
+Not new scope - a constraint on how deliverables 1-2 are built, so future firmware work
+(card 248) has exactly one place to change:
+
+1. The snap must take "the list of steady duty values" as **data** read from `crates/panel`
+   (derived from the same table the existing firmware-table check uses), rather than
+   `crates/art` assuming duties land every 16 sixteenths. 248 will probably add one or two
+   steady sub-levels below level 1 (a half level near sRGB 21-22, maybe quarters near 12 and
+   28), and that set may become a function of runtime brightness. This card does not build
+   for that - it only avoids baking `* 16` arithmetic into `crates/art`, and instead calls
+   into a `crates/panel` function (built from [`DITHER_PHASES`], not a literal `16`) that 248
+   is free to change.
+2. 248 will bit-reverse and likely shorten the dither cycle, so the threshold level (16) may
+   come down later - kept a named constant per the card's own instruction.
+3. `crates/panel/src/model.rs`'s existing constants (`DEVICE`, `DITHER_PHASES`, the steps
+   count) are not touched by this card, only added beside - 248 changes those at its own end
+   and rebases onto this merge.
+4. Fact to have right: `output.panel: bit_planes` is sender-side only choice of which codes
+   to send; the device's temporal dither stays on in both Studio modes. `bit_planes` looks
+   steady because nearest-level codes happen to have tiny remainders, not because the device
+   stopped dithering.
+
+### 2026-09-21 - worktree was behind main
+
+The worktree this card started in was at commit 127c829 (card 178, several commits before
+the board was pruned to just 188/187/199). Re-branched from `main` at 6bdcc1c per the
+coordinator's instruction; `card/188-held-dark-shades` now starts there.
