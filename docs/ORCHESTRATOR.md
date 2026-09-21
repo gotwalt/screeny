@@ -161,21 +161,21 @@ setting may ask for a panel brightness). **The owner's limit: at most TWO worker
 time, for now.** Also done and deployed that afternoon: 164 (KB/s per panel on `/panel`:
 ~10-18 KB/s out for the clocks and vesta) and **168 - `flock`** (the owner: "this is
 great"; then asked for, and got from the orchestrator directly, a `backdrop` toggle - off
-is white birds on true black - merged, not yet deployed). **Done and deployed since:** 161 (one rate, 30 fps: `screeny_art::FPS`; no rate control;
-old state and requests accepted; the Studio now offers ~1 frame per frame sent), **174**
-(vesta's numerals are a choice from `crates/art/src/faces/` - Terminus Bold default,
-Terminus, Spleen, Dina 1:1 or 2x on the LEDs, Micro Grotesk, the stroked Vesta; a blank
-leading card, default on; licences in `faces/FACES.md`), flock's `backdrop` choice (sky /
-horizon line / black). **Running (two, the limit):** **177** (`card/177-flock-flight`:
-spacing that is not a lattice, less regular turns, real vertical motion) and **184**
-(`card/184-vesta-rotation`: the owner - "the fun of a flipboard is that it flips" - wants
-every position to make a full rotation on the minute; the faces worker
-`a70c6d0baefd6f3a9` was resumed for it in its kept worktree). **Paused, worktree kept:**
-178 (`card/178-remove-plasma-testcard`, worker `aa25b6b748a076263`; nothing removed yet,
-everything worked out in its Log: `metaballs` is the fixture, `fallback_patch()` names
-plasma, a player on a removed patch needs a load-time repair) - resume it by SendMessage
-when a slot frees. **Queued after that:** 175 (vesta's colon from the face), 159, 157,
-169, 199, 156, 114.
+is white birds on true black - merged, not yet deployed). **Everything the owner asked for on 2026-09-20 is done and deployed** (last deploy
+127c829): 161 (30 fps only), 174 (vesta's faces from `crates/art/src/faces/`, blank leading
+card), 184 (every position rotates on the minute; `flips`, `spin`), 175 (the colon from the
+face; a **Flip** action), flock's `backdrop` choice and 177 (clumpy spacing, surges, a view
+that pitches; `wild`, `lift`; 169 closed on its evidence), 178 (plasma and testcard
+removed; eight patches), and a Studio fix found on the way (`Registry::unheard` reads UDP
+hearing only - a status read used to hide a panel that had moved). **Nothing of this
+session's is running.** Kept worktrees, for resuming by SendMessage while this session
+lives: the vesta worker `a70c6d0baefd6f3a9`, the flock-flight worker `a5fc02ded5123604a`;
+remove them (and their branches) once the owner has said his piece about those patches.
+**Waiting on the owner's eye:** vesta's rotation (the blank flashing past; modules landing
+apart; `spin`), flock's `wild`/`lift`/`near`. **Queued, small, none urgent:** 159, 157,
+156, 114, 119, 199; **written down, not to start without his word:** 185 (Studio OTA
+upload). The firmware session merges its own cards to `main` and does not push: the next
+deploy's push carries them (2026-09-21: 136 brightness floor, 246, 230 the button).
 **Parked by the owner's own words:** 179 - day and night modes switched by a virtual
 Matter switch from his smart home; a *mode* carries patch + setting + brightness, which
 answers vesta's open brightness question (not a patch's or a setting's to ask). Deploys:
