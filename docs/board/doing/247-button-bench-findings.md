@@ -80,3 +80,53 @@ never quote lines from `captures/`. Leave `crates/art` and `crates/studio` alone
 every change to shared crates (`receiver`, `proto`, `sim`, the spec).
 
 ## Log
+
+### 2026-09-21, worker on `card/247-button-bench-findings` (branched from `main` at 0ec0795)
+
+**Baseline before any change** (fw 0.8.1 tree, `tools/fw-size.sh`): `.data` 60,108,
+`.bss` 110,696, **`.stack` 25,800** (floor 24,576), `.rwtext` 67,740, image 1,027,829.
+
+#### Step 1 - item 1, the root cause of the identify flicker, found and named
+
+It is `firmware/src/net.rs`, the frame task, and it is a **publish race**, not a
+drawing bug. The task had this (0.8.1, `net.rs:305-316`):
+
+```rust
+let setup_screen_up = ota.is_some() || button.is_some()
+    || matches!(portal, Some(PanelScreen::Portal { .. }));
+if published {
+    last.copy_from(producer.back());
+    if !setup_screen_up { producer.publish(); }   // <-- the streamed frame goes up
+}
+...
+if due { ... Intent::Identify => screens::identify(...); producer.publish(); }
+```
+
+`setup_screen_up` lists every screen that owns the panel **except the identify
+overlay**. So while `Intent::Identify` is up and a sender is streaming, each pass of
+the loop publishes *twice*: first the decoded frame, then - a few hundred
+microseconds later, after `net_state`, `tick`, `intent` and a full
+`screens::identify` draw - the status screen. The two land in different slots of the
+lock-free triple buffer (`firmware/src/fb.rs`), and core 1 latches whatever is
+published ~154 times a second (6.5 ms refresh period). Any refresh that falls inside
+that window scans out the **art** for a whole refresh. At 30 fps that is 30 chances a
+second at roughly a 5-10% hit rate: a handful of frames of the picture punching
+through the status screen every second - exactly "the art flickers through", and
+exactly why it is invisible at idle (no frame, no first publish) and invisible for the
+countdown/cancelled/portal screens (they are in `setup_screen_up`).
+
+It is older than card 230, as the card says: the button's short press only inherits
+`IDENTIFY`, and `screeny identify --ms 10000` over the same stream reproduces it. The
+`screens::identify` screen is fully opaque (it `clear()`s and redraws every pixel), so
+nothing about the drawing lets the art through - only the extra publish does.
+
+**The rule now lives in `crates/receiver`**, where there is one of it:
+`Intent::shows_frames()` (`crates/receiver/src/lib.rs:367`) - "a frame decoded this
+instant may reach the panel" - is `false` for `Intent::Identify` and `true` for
+`Stream`, `Fade` and `Idle`. New host tests, `crates/receiver/tests/identify_overlay.rs`
+(4 tests): a frame arriving under the overlay is decoded into the caller's buffer and
+counted in `frames_shown` while `shows_frames()` is false, the stream state is
+untouched, the overlay expires on its own tick and `shows_frames()` is true again for
+the next frame, and `IDENTIFY 0` stops it.
+
+`cargo test -p screeny-receiver`: 19 tests, all green.

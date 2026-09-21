@@ -364,6 +364,34 @@ pub enum Intent {
     Idle,
 }
 
+impl Intent {
+    /// Whether a frame decoded *this instant* may reach the panel.
+    ///
+    /// The one rule behind it, and the reason it lives here rather than in
+    /// each caller: **`IDENTIFY` is an overlay that owns the panel.** Spec
+    /// section 6.3 and `docs/design/device-web.md` decision 7 between them say
+    /// what that means - a frame arriving underneath is still received,
+    /// decoded and counted, exactly as if nothing were up, and the *only*
+    /// thing that changes is that it is not swapped onto the panel until the
+    /// overlay ends. The picture comes back with the next frame after that.
+    ///
+    /// Card 247 is what this is for. The firmware's frame task published every
+    /// decoded frame and then drew the identify screen over it, microseconds
+    /// later, into a different slot of a triple buffer that core 1 latches
+    /// ~154 times a second: at 30 fps the panel caught the stream in that gap
+    /// several times a second and the owner saw "the art flickering through"
+    /// the status screen. The setup, update and button screens never did,
+    /// because they had this rule and `IDENTIFY` did not.
+    ///
+    /// [`Intent::Fade`] and [`Intent::Idle`] are not overlays and do answer
+    /// `true`: there is no sender to take the panel from, and both compose
+    /// *from* the last streamed frame.
+    #[must_use]
+    pub const fn shows_frames(self) -> bool {
+        !matches!(self, Intent::Identify)
+    }
+}
+
 /// Something the receiver did.
 ///
 /// Borrowed rather than owned so that a `no_std` device pays nothing for the
