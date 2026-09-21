@@ -209,6 +209,12 @@ eye), DDP proxy, control-channel auth, multi-device.
 
 ## How the owner likes to work
 
+- **He does not care about time per frame or network cost** (2026-09-20: "those were just
+  things I wanted to understand along the process"). Keep ms/frame, bytes, KB/s and APL
+  out of status messages and out of cards' deliverables unless one of them is why a look
+  fails (a frame no longer exact, a patch that cannot hold 30 fps). The datagram budget and
+  the panel's brightness safety still bind, silently.
+
 - Ask questions up front in one batch, with a recommended default for each, then run.
   Do not stop to ask what you can decide or verify yourself.
 - He watches the task list and notices runaway work before you do unless you check.
