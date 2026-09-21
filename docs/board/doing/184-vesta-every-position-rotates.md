@@ -4,8 +4,8 @@ title: vesta - on the minute, every position makes a full rotation
 type: build
 hardware: no
 depends: [174]
-owner:
-branch:
+owner: worker-184
+branch: card/184-vesta-rotation
 ---
 
 ## Goal
