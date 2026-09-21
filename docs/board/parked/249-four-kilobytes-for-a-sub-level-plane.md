@@ -81,3 +81,12 @@ panic.
 - Nothing the firmware does today is lost.
 
 ## Log
+
+### Parked 2026-09-21 (owner, at the panel on fw 0.9.0: "it's good enough for right now")
+
+Card 248's stage A took the visible blink out of the dark end on its own. Stage B, which this
+RAM is for, would replace the 77 / 38 Hz dither components - already invisible - with steady
+light, is weakest at the Studio's usual brightness (a 5-slot window halves to 2 and 1), and
+would make the panel's steady levels depend on brightness. Reopen only if the owner sees
+something in the dark end again and the free options (the `frac-bits-3` build, the clocks'
+aligned dark ramp) have not fixed it. The stage B design is in card 248's Log.

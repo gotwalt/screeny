@@ -61,3 +61,9 @@ on `PanicReply`, not a considered choice.
 the Panel screen's watchdog line without a hand-written stand-in server.
 
 ## Log
+
+### Parked 2026-09-21 (owner: "flag those followups for later... good enough for right now")
+
+Simulator-only: the real device reports `last_reset` correctly, and nothing the owner looks at
+reads the sim's `/api/v1/panic`. Reopen when a Studio test needs to play a watchdog reset
+through that route. Owner of the crate: the firmware session.
