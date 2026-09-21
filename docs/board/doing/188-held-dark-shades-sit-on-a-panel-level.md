@@ -321,3 +321,114 @@ screeny-art --all-targets` alone: silent - the two crates this card owns are cle
 Card stays in `doing/`; the orchestrator moves it to `done/` on merge, per this card's
 own instructions (not `docs/README.md`'s general worker protocol, which would move it to
 `review/`).
+
+### 2026-09-21 - orchestrator review: the default moved, fixed
+
+**What was wrong.** `screeny-art snapshot clocks-numerals --time 21:12 --seed 7` from
+`main` (`before-clocks-numerals.png`) against the same command on this branch
+(`after-clocks-numerals.png`) differed: the hatched rest dials went from a warm, visibly
+graded ramp (several levels) to neutral levels 1-3, barely there. Cause: deliverable 3's
+`shade = (settled >= 1.0 && rest.ink < 1.0).then(...)` applied the aligned ramp to *every*
+treatment with `ink < 1.0` - which is every treatment except `"as it was"`, including
+`DEFAULT_REST`. The card's own rule ("the default must not change any existing patch's
+pixels") is about `output.panel`'s default explicitly, but the same rule obviously applies
+to a patch's own default look, and this broke it.
+
+**Measured, before choosing anything** (`crates/art/src/color::oklch(0.93, 0.05, 80.0)` is
+both hands' default tint - `hue`/`hue2` are both 80 by default):
+
+```
+full tint, linear         = Rgb { r: 0.9542, g: 0.7831, b: 0.5457 }
+
+ink 1.0 ("as it was")     : rgb=(0.9542, 0.7831, 0.5457)  code=[250,229,195]  level(offset) = (60,+4) (49,+6) (34,+6)
+ink 0.20 (quiet/hatched/  : rgb=(0.1908, 0.1566, 0.1091)  code=[121,110,93]   level(offset) = (12,+1) (10,-3) (7,-2)
+     zigzag - three treatments)
+ink 0.10 (hatched, faint) : rgb=(0.0954, 0.0783, 0.0546)  code=[87,79,66]     level(offset) = (6,0) (5,-1) (3,+7)
+
+soft hand-edge ramp (STEPS, full tint, darkest 4 of 15):
+  k=0: code=[15,13,9]   level=(0,+5)(0,+4)(0,+3)
+  k=1: code=[28,25,19]  level=(1,-4)(1,-6)(0,+7)
+  k=2: code=[42,38,31]  level=(1,+7)(1,+4)(1,-2)
+  k=3: code=[57,51,42]  level=(3,-7)(2,+1)(1,+7)
+```
+
+(`nearest_level`/`duty_16ths` from `screeny_panel`, run once as a scratch `#[test]`,
+`--nocapture`, then deleted - not committed, same as deliverable 4's calculation.) `ink 1.0`
+is not dimmed at all and was never going to be touched. The two dimmed rungs that matter are
+`ink 0.20 -> levels (12, 10, 7)` and `ink 0.10 -> levels (6, 5, 3)` - a visibly warm,
+multi-level shade, nothing like the (1,1,1)-ish guesses the first cut used. The soft-edge
+ramp's darkest steps are already crushed to level 0-3 on their own (anti-aliasing fades to
+black), which is why `Panel::AlignedDark` (the pipeline backstop) rather than a patch-side
+fix is the right place for those - restated in the brief update below.
+
+**The fix.**
+
+- `DARK_CHOICES[0] = "as it was"`, `DEFAULT_DARK = 0`. `dark_shade(0, _)` returns `None`
+  unconditionally - never looks at `DARK_RAMPS` at all - so `RestScale.shade` stays `None`
+  for the default and `draw.rs` falls through to `tint.scale(ink)`, byte for byte what
+  card 188 found on `main`.
+- `DARK_RAMPS` (indexed by `dark - 1`, since index 0 has no ramp) now has three entries,
+  each `[ink 0.10 rung, ink 0.20 rung]` from the table above:
+  - **`"aligned warm"`**: `[[6,5,3], [12,10,7]]` - the nearest aligned triple to the
+    measured old colour, channel by channel. This is the "same look, steadied" the review
+    asked for.
+  - **`"aligned neutral"`**: `[[5,5,5], [10,10,10]]` - the same two rungs with the channels
+    equalised (rounded average of the warm triple), same overall brightness, no hue.
+  - **`"aligned dim"`**: `[[1,1,1], [2,2,2], [3,3,3]]` - this card's original, much darker
+    guess from before the review, kept as a fourth choice now that it cannot be the default.
+- `Look` gained `#[derive(Clone, Copy)]` so a test can build one `Look` per `dark` choice
+  and reuse it across many `picture()` calls.
+
+**Proof (`cmp`).** Built `screeny-art` release, ran `snapshot clocks-numerals --time 21:12
+--seed 7 --out as-it-was.png` (no `--set`, no `--panel` override - the plain default), and:
+
+```
+$ cmp as-it-was.png before-clocks-numerals.png
+$ echo $?
+0   # byte-identical
+```
+
+**New test**, `the_default_dark_choice_draws_the_old_continuous_shade`
+(`crates/art/src/patches/clocks/mod.rs`): pins `DEFAULT_DARK == 0`, `DARK_CHOICES[0] ==
+"as it was"`, `dark_shade(0, ink) == None` across five `ink` values, and that the 21:12
+default-treatment frame's palette stays 31 (never 32 - no shade entry). Existing
+`every_treatment_keeps_the_palette_exact` simplified back to asserting 31 always (true for
+every `(rest, settled, time)` combination under the default `look()` now); the 32-colour
+case it used to check moved to a new test, `aligned_dark_variants_add_the_shade_entry`,
+which runs the same matrix once per non-default `dark` choice.
+
+**Re-rendered PNGs**, `card-188-clocks-snapshots/` (still outside the repo tree, still not
+committed), all `--time 21:12 --seed 7`, replacing the earlier set:
+
+```
+as-it-was.png        # no --set, default panel - cmp-identical to before-clocks-numerals.png
+aligned-warm.png      # --set dark=1 --panel aligned-dark
+aligned-neutral.png   # --set dark=2 --panel aligned-dark
+aligned-dim.png       # --set dark=3 --panel aligned-dark
+```
+
+Looked at all four against `before-clocks-numerals.png`:
+
+- `as-it-was.png` - identical by construction (proven by `cmp`, not just by eye).
+- `aligned-warm.png` - the closest match: same warm, multi-level graded look as "before",
+  same rough brightness; steady rather than a smooth fade, which at this zoom reads as very
+  slightly more banded but is the same picture in every way that matters.
+- `aligned-neutral.png` - structurally the same graded look, cooler/greyer than "before"
+  (no hue at the bottom, as designed) - a clean, deliberately different alternative rather
+  than a regression.
+- `aligned-dim.png` - visibly much darker and flatter than "before", correctly demoted from
+  default to a fourth, distinctly dimmer choice.
+
+**Tests and clippy, the two crates named.** `cargo test -p screeny-art -p screeny-panel
+--release --no-fail-fast`: **131 passed, 0 failed** (114 `screeny-art` lib + 2 + 4 + 2 + 3
+integration files + 17 `screeny-panel` lib doc/unit; `clocks::` alone 21/21, up from 19).
+`cargo clippy -p screeny-art -p screeny-panel --all-targets`: one `needless_range_loop`
+warning in the new test (`for dark in 1..DARK_CHOICES.len()`), fixed by iterating
+`DARK_CHOICES.iter().enumerate().skip(1)` instead; now silent. No full-workspace run: only
+`crates/art` and `docs/design/generative-art-brief.md` changed, nothing outside the two
+crates already re-tested could be affected (`crates/panel`'s public API did not change in
+this fix, only `crates/art/src/patches/clocks/mod.rs`).
+
+`docs/design/generative-art-brief.md`'s "How, in this repo" paragraph updated to say the
+default is `"as it was"` and that the aligned choices are picked nearest the measured old
+levels, not the old "two short hand-picked lists" wording.
