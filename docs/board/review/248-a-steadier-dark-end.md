@@ -564,3 +564,19 @@ move added no statics.
   **is** clean.
 
 **Nothing in the wire protocol moved**, and nothing needed to.
+
+### Orchestrator, 2026-09-21: merged, three images built, 0.9.0 on the panel
+
+Stage A merged to `main` (7274567). Full host suite and clippy clean on the merge (one
+`screeny --test loopback` failure under load on the first run; passes alone and in the
+`--no-fail-fast` rerun - the card 156 family, not this card). Three upload images built
+from `main`, told apart by version string (the two variant strings are bench-only edits,
+not committed): `0.9.0` (frac_bits 4), `0.9.0-f3` (`--features frac-bits-3`), `0.9.0-f2`
+(`--features frac-bits-2`); `fw-scan` clean. **0.9.0 put on over WiFi**: upload 27.3 s,
+back after 18 s, CONFIRMED at 64 s in slot Ota1; the Studio's stream re-formed by itself,
+LIVE 30.0 fps, 0 stale / superseded / decode / reject, decode ~0.53 ms.
+
+Waiting on the owner's eye: the clocks patch as deployed before card 188 (so the firmware's
+effect is seen alone), `output.panel: dithered`, from a few feet. Then f3 / f2 only if
+0.9.0 still blinks. The software session holds its workbench deploy until he has looked.
+Stage B stays unbuilt (RAM); card 249 is the search for it.
