@@ -121,3 +121,15 @@ by the close, exactly as they were before. All three state-only refusals
 this function is inlined into the frame every request pays for.
 
 `FW_VERSION` -> `0.7.1`. `cargo test -p screeny-otastate`: 23 passed, 0 failed.
+
+**And it costs nothing.** The first shape of this cost **640 bytes of `.stack`**
+(26,200 -> 25,560), which is a lot for a nicety, and the measurement said it was
+not the 64-byte scratch and not the second reader: it was
+`let start: Result<Upload, Reply> = ...` - an `Upload` and a `Reply` held in a
+temporary the compiler kept alive across the awaits, in the future of both HTTP
+workers. Carrying a two-byte `Refused` instead, building the reply after the
+release, and building the `Upload` outside the `Result` puts `.stack` back at
+**26,200, byte for byte `main`'s** (checked by building `main`'s `firmware/src`
+in this worktree with the same toolchain). That is card 227's lesson arriving
+in a place nobody was looking: *anything* alive across an `await` here is
+`.bss`, and `.bss` is core 0's stack.

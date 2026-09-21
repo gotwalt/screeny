@@ -424,6 +424,42 @@ pub struct Upload {
     dither_was: bool,
 }
 
+/// Everything an upload can be refused for **before its first byte**, decided
+/// from the `Content-Length` and two atomics.
+///
+/// Research 006 section 5 asks for the first of these - "refuse an upload whose
+/// `Content-Length` exceeds the slot size, before a single sector is erased" -
+/// and card 241 for the second. Card 246 pulled them out of
+/// [`Upload::start`] so that `POST /api/v1/firmware` can ask *before* it makes
+/// a reader, which is what lets a refusal be written while the caller is still
+/// sending. `Upload::start` asks the same function, so there is one
+/// implementation of each rule and the claim is still the only way in.
+///
+/// **No flash, no lock, no `await`.**
+#[must_use]
+pub fn refusal(slot: &InactiveSlot, declared: Option<u32>) -> Option<FirmwareError> {
+    if declared.is_some_and(|n| n > slot.len()) {
+        return Some(FirmwareError::TooLarge);
+    }
+    // **Card 241, and this is a safety rule rather than a courtesy.** While
+    // the running image is on trial, the inactive slot holds the known-good
+    // image the device may have to roll back to; staging over it would throw
+    // the escape hatch away and leave a device with one unproven image and
+    // nowhere to go (research 006 section 6, mitigation 3). The same goes for
+    // the window between an accepted upload and the reset that boots it: the
+    // slot is spoken for.
+    //
+    // **Card 246, item 1: and confirmation lifts it.** `boot_class()` is read
+    // once at boot and never revised, so on 0.7.0 `on_trial()` was still true
+    // minutes after `ota: CONFIRMED` and every later upload was answered
+    // `busy` until the device was rebooted. The rule the predicate spells out
+    // is the honest one: the slot is spoken for while a trial is *undecided*.
+    if slot_is_spoken_for() {
+        return Some(FirmwareError::Busy);
+    }
+    None
+}
+
 impl Upload {
     /// Claim the flash and the panel, or say why not.
     ///
@@ -438,26 +474,11 @@ impl Upload {
     /// [`FirmwareError::TooLarge`] if the declared body cannot fit the slot,
     /// [`FirmwareError::Flash`] if the heap cannot spare 4 KB.
     pub async fn start(slot: InactiveSlot, declared: Option<u32>) -> Result<Self, FirmwareError> {
-        if declared.is_some_and(|n| n > slot.len()) {
-            // Nothing is claimed and nothing is erased: this one is free.
-            return Err(FirmwareError::TooLarge);
-        }
-        // **Card 241, and this is a safety rule rather than a courtesy.**
-        // While the running image is on trial, the inactive slot holds the
-        // known-good image the device may have to roll back to; staging over
-        // it would throw the escape hatch away and leave a device with one
-        // unproven image and nowhere to go (research 006 section 6,
-        // mitigation 3). The same goes for the window between an accepted
-        // upload and the reset that boots it: the slot is spoken for.
-        //
-        // **Card 246, item 1: and confirmation lifts it.** `boot_class()` is
-        // read once at boot and never revised, so on 0.7.0 `on_trial()` was
-        // still true minutes after `ota: CONFIRMED` and every later upload was
-        // answered `busy` until the device was rebooted. The rule the
-        // predicate spells out is the honest one: the slot is spoken for while
-        // a trial is *undecided*.
-        if slot_is_spoken_for() {
-            return Err(FirmwareError::Busy);
+        // Both refusals, from the same function the handler asked before it
+        // built its reader (card 246): nothing is claimed and nothing is
+        // erased for either, and there is one implementation of each rule.
+        if let Some(e) = refusal(&slot, declared) {
+            return Err(e);
         }
 
         // **Every `await` in this function happens before the claim is taken.**
