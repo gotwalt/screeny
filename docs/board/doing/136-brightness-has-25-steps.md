@@ -180,3 +180,25 @@ the merge.
   `docs/design/generative-art-brief.md` (its brightness row already says
   "25 real steps" - card 020/066 got there first, nothing to fix) and
   `docs/design/architecture.md` (no brightness-resolution claims).
+- Step 6: `timeout 1100 cargo test --workspace` - real exit code captured this
+  time (the first pass piped through `tail -150`, which reports `tail`'s exit
+  code, not `cargo test`'s - re-ran redirecting to a log instead): `EXIT:0`,
+  94 `test result: ok` blocks, no `FAILED` or `error` anywhere in the log.
+  `timeout 300 cargo clippy --workspace --all-targets`: clean, no warnings or
+  errors. Checked for stray processes with
+  `ps -axo pid,ppid,etime,command | grep -E 'sleep|until|timeout|screeny'`:
+  several `timeout`/`sleep`/`cargo test` processes are running, all under
+  other cards' worktrees (`agent-af4310f346b5294c8`,
+  `agent-a5e50f4dc1ed38b53` - cards 246/230, in flight per this card's notes),
+  none under this worktree (`agent-a1d7814c72ce76081`); left them alone.
+
+## Summary for the orchestrator
+
+Branch `card/136-brightness-steps`, 4 commits on top of `main` (8081857):
+`3ff1300`, `f720d2e`, `cfdbec8`, `835fcc7`. `FW_VERSION` untouched (still
+`0.7.0`). Firmware builds clean under the Xtensa toolchain; `.stack = 26200`
+(floor 24576), no new statics added. Nothing in `crates/art` or
+`crates/studio` was touched - card 136's own text says a future Studio
+brightness control should step in slots, which is already true of
+`screeny_panel::oe_slots`/`oe_light`; nothing to build here since the Studio
+has no brightness control yet.
