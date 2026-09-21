@@ -135,10 +135,10 @@ pub fn get_status_counted(addr: SocketAddr, patience: Duration) -> (Cost, Result
 ///
 /// Its own connection, on the same terms as [`get_status`]: blocking, one
 /// connection, `Connection: close`, bounded by `patience`. The caller
-/// ([`crate::fleet::status_once`]) makes this call at most once per `boot_id`
-/// - the answer cannot change while the device runs (spec 8.6) - and never
-/// concurrently with a status read: the two are sequential `await`s on the
-/// same task, never two connections in flight.
+/// ([`crate::fleet::status_once`]) makes this call at most once per `boot_id`,
+/// because the answer cannot change while the device runs (spec 8.6), and
+/// never concurrently with a status read: the two are sequential `await`s on
+/// the same task, never two connections in flight.
 ///
 /// Firmware older than 0.5.2 serves no such route and answers `404`, which
 /// comes back as [`Fault::absent`] - "no such route", not a fault (spec 8.6).

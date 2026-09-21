@@ -588,6 +588,11 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default();
+                // Card 199: the one fact this read needs to carry past
+                // `heard_http`, which consumes `reply` - whether the panic
+                // route is worth a second connection is decided from the
+                // `boot_id` alone.
+                let boot_id = reply.boot_id;
                 if let Some(heard) = st.devices.heard_http(&id, reply) {
                     if announce {
                         eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
@@ -609,6 +614,25 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     }
                 }
                 backoff.remove(&id);
+
+                // Card 199: the panic breadcrumb cannot change while the
+                // device runs (spec 8.6), so it is asked once per `boot_id`,
+                // on this same task, right after the status read whose
+                // `boot_id` is new - never on the poll, and never a second
+                // connection in flight: this `await` only starts once the one
+                // above has finished, so there is still exactly one HTTP
+                // connection to this device open at a time.
+                if st.devices.want_panic(&id, boot_id) {
+                    let panic_read =
+                        tokio::task::spawn_blocking(move || crate::devhttp::get_panic_counted(addr, crate::devhttp::TIMEOUT)).await;
+                    match panic_read {
+                        Ok((cost, out)) => {
+                            st.devices.metered_http(&id, cost.out, cost.inbound);
+                            st.devices.heard_panic(&id, boot_id, out.ok());
+                        }
+                        Err(_) => st.devices.heard_panic(&id, boot_id, None),
+                    }
+                }
             }
             Ok(Err(fault)) => {
                 // **Card 118: "absent" is a claim about the firmware** - this

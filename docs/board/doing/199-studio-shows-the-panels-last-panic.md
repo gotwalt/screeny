@@ -119,3 +119,28 @@ panic, which is a real gap for testing wording against it, noted below), `devhtt
   `boot_id` (confirm or revert do not change `boot_id`). Noted in the report; not fixed here
   (`docs/design/protocol-v1.md` is out of scope for this card) - a new card if the owner
   wants the re-ask-after-trial behaviour.
+
+**Built** (`devices.rs`, `fleet.rs`, `health.rs`):
+
+- `devices.rs`: `PanicFacts` (`heard_unix` + `#[serde(flatten)] reply: PanicReply` +
+  `repeat: bool` = `last_panic.consecutive > 1`), a normal `#[derive(Debug)]` this time -
+  unlike `DeviceFacts`, nothing in `PanicReply` is credential-adjacent, so no hand-written
+  redaction is needed. `DeviceRecord` gained `pub panic: Option<PanicFacts>` beside `facts`,
+  and a private, live-only `panic_asked_for: Option<u32>` for the "once per `boot_id`" rule.
+  `Registry` gained `want_panic(id, boot_id) -> bool` (true exactly when the last ask, if
+  any, was for a different `boot_id`) and `heard_panic(id, boot_id, Option<PanicReply>)`,
+  which marks the ask taken **either way** - the thing that makes a 404 or a timeout "once"
+  rather than "once, then retried every ten seconds until the reboot".
+- `fleet.rs`'s `status_once`: captures `reply.boot_id` before `heard_http` consumes the
+  reply, then - still inside the same `for record in devices_now` iteration, still awaited
+  before moving to the next device - asks `want_panic`, and if true does one more
+  `spawn_blocking(devhttp::get_panic_counted)` at the same `addr`, on the same task,
+  sequential with the status read that just finished. Its cost is metered the same way
+  (`metered_http`); its outcome, success or fault, goes straight to `heard_panic` and
+  nothing about a panic fault is logged - "404 is silence" extends to "any panic fault is
+  silence", since the panic route is supplementary and its own failure is not the device's.
+- `health.rs`'s `DeviceStatus` gained `panic: Option<PanicFacts>` and `panic_ago:
+  Option<f64>` beside `facts`/`facts_ago`, filled the same way.
+- `cargo build -p screeny-studio --lib` and `cargo clippy -p screeny-studio --all-targets`
+  both clean after this step (one doc-comment lint fixed: a stray `- ` in a `///` line read
+  as an unindented list continuation).
