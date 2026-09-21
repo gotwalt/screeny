@@ -225,6 +225,12 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             run.lost.push(lost);
         }
         if i % 60 == 0 {
+            if std::env::var_os("FLOCK_PATH").is_some() {
+                eprintln!(
+                    "PATH {seed} {:.1} {:.2} {:.2} {:.2}",
+                    sim.t, sim.centre.x, sim.centre.y, sim.centre.z
+                );
+            }
             let c = sim.centre;
             run.centroid.push([c.x, c.y, c.z]);
             run.course.push(bearing(sim.course));
