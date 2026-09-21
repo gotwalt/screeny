@@ -79,8 +79,10 @@ use crate::link::{Control, OwnedReply};
 
 pub mod client;
 mod rules;
+pub mod update;
 
 pub use client::{Client, Res};
+pub use update::{watch, Outcome as UpdateOutcome, Watch};
 
 /// Whether card 223 has landed on the device.
 ///

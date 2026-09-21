@@ -174,3 +174,55 @@ session shares that file: this is the change to tell them about.
 
 `cargo test -p screeny-otastate`: 18 unit + 23 interruption tests, 0 failed.
 `.stack` still 26,200.
+
+### Item 2 - the probe decided before the device had gone (2026-09-21)
+
+The race, named: **the device answers an activating upload about two seconds
+before it restarts** (`ota::ACTIVATE_DELAY_MS`, which exists so the reply is
+acknowledged before the connection is destroyed). So the first `GET
+/api/v1/status` after the reply reaches the **old image**, which is running,
+answering, and knows nothing about an update that has not started. The probe
+took that as "it came back" (`fw 0.7.0 ... uptime 148180 ms` - its own uptime,
+28 s after an upload) and then took `update: null` as "nothing to wait for" and
+exited zero. Two conclusions, one mistake.
+
+`crates/probe/src/http/update.rs` (new, `screeny_probe::http::watch`) waits for
+something the old image cannot say:
+
+1. `boot_id` is read **before** the upload (`update::boot_id`);
+2. phase one polls `/api/v1/status` and **ignores every answer that still
+   carries it**, saying so once ("still boot_id N - the old image, which has
+   not restarted yet");
+3. phase two polls `/api/v1/panic` until `update.outcome` leaves `trial`;
+4. `update: null` after the device is back no longer ends it: there is a
+   `no_record_grace` (20 s) for the new image to classify its own boot, and
+   only after that is it reported as "a firmware without card 241".
+
+Both phases are bounded as before (`Watch { reappear: 90 s, decide: 240 s }`),
+the outcome is an enum (`Confirmed` / `Reverted` / `NeverCameBack` /
+`NoRecord` / `Undecided`) and every line it used to print goes through a `say`
+callback, so a test can read the transcript. If `boot_id` could not be read
+before the upload it says that too, rather than quietly doing the old thing.
+
+**The simulator got the clock it needed** (`crates/sim/src/ota.rs`, new, off by
+default, `SimHandle::model_ota(Some(OtaTiming))`): an activating upload plays
+old image -> **away** (connections closed unanswered, `http::no_answer()`) ->
+trial with a new `boot_id` and the uploaded version -> confirmed. With the
+model off, `POST /api/v1/firmware` still answers `activating: false` exactly as
+card 224 decided, so no existing test or probe rule changes.
+
+`crates/sim/tests/ota_watch.rs` (new, 3 tests, 1.5 s): the wait follows the
+update through a reboot it did not see and reports `Confirmed` - having first
+asserted that the old image *is* still answering with the old `boot_id` and no
+record, which is the exact state 0.7.0's probe declared victory in; a device
+that never restarts is `NeverCameBack` inside `reappear`; a device that
+restarts with no `update` object is `NoRecord`, and only after the grace.
+
+One bug found in my own model on the way: `running_image()` took the state lock
+and then asked `phase()`, which takes it again. `std::sync::Mutex` is not
+reentrant, so the first status read during a trial deadlocked the HTTP thread
+and everything behind it - the test hung for the whole 900 s bound. Phase
+first, lock once.
+
+`cargo test -p screeny-sim`: 31 + 5 unit, and every integration file green,
+including the 36 s conformance run - 0 failed.

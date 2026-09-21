@@ -66,6 +66,8 @@ pub mod event;
 pub mod font;
 pub mod mdns;
 pub mod net;
+// Card 246: a paper firmware update, off unless a test asks for it.
+pub mod ota;
 pub mod panel;
 pub mod screens;
 pub mod stats;
@@ -80,6 +82,7 @@ pub use config::{Config, Faults, Health, PanelModel, Timing, DEFAULT_HTTP_PORT};
 pub use core::{Core, FrameMeta, Outbox};
 pub use device::{FrameSink, SimDevice, SimHandle, Snapshot};
 pub use event::{DropCause, Event, ReleaseReason, State, WifiAction, WifiPhase};
+pub use ota::{OtaTiming, Phase as OtaPhase};
 pub use stats::Stats;
 pub use wifi::{Posted, WifiModel, WifiOutcome, WifiTiming};
 

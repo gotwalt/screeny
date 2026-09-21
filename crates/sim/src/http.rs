@@ -73,6 +73,28 @@ pub struct Head {
     pub chunked: bool,
 }
 
+/// The status of a [`Response`] that is not a response at all: close the
+/// connection and say nothing (card 246).
+///
+/// Not a status code - zero is not one - which is the point: it cannot be
+/// confused with an answer, and the one place that produces it
+/// ([`no_answer`]) and the one place that acts on it ([`serve_one`]) are eight
+/// lines apart. A device that is rebooting does not send a 503, it sends
+/// nothing, and a client that retries until something answers is the thing
+/// being tested.
+pub const NO_ANSWER: u16 = 0;
+
+/// A "response" that closes the connection without writing anything.
+#[must_use]
+pub fn no_answer() -> Response {
+    Response {
+        status: NO_ANSWER,
+        content_type: "application/json",
+        body: Vec::new(),
+        headers: Vec::new(),
+    }
+}
+
 /// What to answer with.
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -314,6 +336,12 @@ fn serve_one(
         }
     };
 
+    if response.status == NO_ANSWER {
+        // The device is not there. Dropping `writer` and `reader` closes the
+        // socket with nothing written, which is what a client sees when it
+        // knocks on a rebooting panel.
+        return Ok(());
+    }
     write_response(&mut writer, &response)
 }
 

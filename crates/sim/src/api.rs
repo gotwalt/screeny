@@ -292,6 +292,13 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         };
     }
 
+    // Card 246: a device that is rebooting into a new image answers nothing
+    // at all. `NO_ANSWER` is the transport's "close it without a reply", which
+    // is as close to unplugged as a loopback server gets.
+    if shared.ota().phase() == crate::ota::Phase::Away {
+        return crate::http::no_answer();
+    }
+
     if head.path == "/" || head.path == "/index.html" {
         return match head.method.as_str() {
             "GET" => Response::html(200, &index_html()),
@@ -327,12 +334,12 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
     match (method, head.path.as_str()) {
         (route::Method::Get, route::STATUS) => status(shared),
         (route::Method::Get, route::TELEMETRY) => telemetry(shared),
-        (route::Method::Get, route::PANIC) => panic_breadcrumb(),
+        (route::Method::Get, route::PANIC) => panic_breadcrumb(shared),
         (route::Method::Get, route::NETWORKS) => networks(shared, state),
         (route::Method::Get, route::WIFI) => get_wifi(shared),
         (route::Method::Post, route::WIFI) => post_wifi(shared, head, body),
         (route::Method::Post, route::SETTINGS) => post_settings(shared, head, body),
-        (route::Method::Post, route::FIRMWARE) => post_firmware(head, body),
+        (route::Method::Post, route::FIRMWARE) => post_firmware(shared, head, body),
         (route::Method::Post, route::REBOOT) => post_reboot(shared, head, body),
         (route::Method::Post, route::IDENTIFY) => post_identify(shared, head, body),
         // Unreachable: the table walk above proved the pair is in `ROUTES`.
@@ -346,6 +353,10 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
 
 fn status(shared: &Shared) -> Response {
     let now = shared.now_us();
+    // Card 246: while a modelled update is on trial, the three fields that
+    // describe the running image are the *new* image's. Read before the core
+    // lock is taken, because it has a lock of its own.
+    let running = shared.ota().running_image();
     let core = shared.core().lock().unwrap();
     let t = core.telemetry(now);
     let ident = core.ident();
@@ -354,8 +365,11 @@ fn status(shared: &Shared) -> Response {
         api: route::API_VERSION,
         id: screeny_device_api::text::text(&ident.id).unwrap_or_default(),
         name: screeny_device_api::text::text(core.name()).unwrap_or_default(),
-        fw: screeny_device_api::text::text(&ident.fw).unwrap_or_default(),
-        boot_id: ident.boot_id,
+        fw: screeny_device_api::text::text(
+            running.as_ref().map_or(ident.fw.as_str(), |r| r.version.as_str()),
+        )
+        .unwrap_or_default(),
+        boot_id: running.as_ref().map_or(ident.boot_id, |r| r.boot_id),
         uptime_ms: t.uptime_ms,
         heap_used: ident.heap_used,
         heap_size: ident.heap_size,
@@ -381,8 +395,8 @@ fn status(shared: &Shared) -> Response {
         // and `SimHandle::set_health` choose them, so the unhappy rows of a
         // status page can be seen. Reported and nothing more: no behaviour
         // anywhere in the simulator reads them back. See `crate::Health`.
-        fw_slot: ident.fw_slot,
-        fw_state: ident.fw_state,
+        fw_slot: running.as_ref().map_or(ident.fw_slot, |r| r.slot),
+        fw_state: running.as_ref().map_or(ident.fw_state, |r| r.state),
         reset_reason: ident.reset_reason,
         store_errors: ident.store_errors,
     };
@@ -396,15 +410,17 @@ fn status(shared: &Shared) -> Response {
 /// the honest answer is "this is my first boot and nothing has crashed".
 /// Nothing in the simulator reads it back; the route exists so that a client
 /// written against the sim meets the same shape the device sends.
-fn panic_breadcrumb() -> Response {
+fn panic_breadcrumb(shared: &Shared) -> Response {
     ok_json(&screeny_device_api::reply::PanicReply {
         boot_count: 1,
         panic_count: 0,
         last_panic: None,
-        // Card 241, and `null` for the same reason as `last_panic`: this
-        // simulator has no `otadata` and no slots, so it has never activated a
-        // firmware image and saying otherwise would be inventing one.
-        update: None,
+        // Card 241, and `null` unless card 246's model is playing one out:
+        // this simulator has no `otadata` and no slots, so it has never
+        // activated a firmware image and saying otherwise would be inventing
+        // one. `SimHandle::model_ota` is a test asking for exactly that
+        // invention, with a clock attached.
+        update: shared.ota().update_record(),
         // Card 241b: a simulator is a process. If it stops, the operating
         // system is what says so, and there is no reset register to read.
         last_reset: None,
@@ -681,7 +697,7 @@ fn post_identify(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
 /// The other half it cannot: there is no `otadata` here, no second slot and no
 /// bootloader to hand over to, so an accepted image always answers
 /// `activating: false` and nothing restarts.
-fn post_firmware(head: &Head, body: Body<'_>) -> Response {
+fn post_firmware(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
     let activate = match route::parse_activate(Some(&head.query)) {
         Ok(a) => a,
         Err(e) => return error_response(ErrorCode::OutOfRange, &e.to_string()),
@@ -752,9 +768,19 @@ fn post_firmware(head: &Head, body: Body<'_>) -> Response {
         // something a caller acts on. `FirmwareReply` carries the flag for
         // exactly this: the caller learns the image was accepted *and* that
         // nothing is restarting, from the reply it already parses.
-        Ok(_) => {
-            let _ = activate;
-            ok_json(&FirmwareReply::ok(written32))
+        Ok(image) => {
+            // Card 246: with the model on, an activating upload really does
+            // start something - a clock, and a device that goes away and comes
+            // back on trial. With it off (the default) nothing has changed:
+            // `activating: false`, because this process has one slot and it is
+            // the running binary.
+            let running = shared.core().lock().unwrap().ident().fw_slot;
+            let version = image.version.as_str().unwrap_or("");
+            if activate && shared.ota().activate(version, running) {
+                ok_json(&FirmwareReply::activating(written32))
+            } else {
+                ok_json(&FirmwareReply::ok(written32))
+            }
         }
         Err(e) => ok_json(&FirmwareReply::failed(written32, e)),
     }
