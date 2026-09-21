@@ -202,3 +202,15 @@ Branch `card/136-brightness-steps`, 4 commits on top of `main` (8081857):
 brightness control should step in slots, which is already true of
 `screeny_panel::oe_slots`/`oe_light`; nothing to build here since the Studio
 has no brightness control yet.
+
+### Orchestrator, after the merge (2026-09-21)
+
+Merged to `main` ahead of 246 and 230 (it was ready first and touches neither's files).
+Reviewed `clamp_brightness` / `BRIGHTNESS_FLOOR`: the cap-below-floor case (cap wins) is
+the right reading of spec 6.3. Receiver and panel tests green on `main` after the merge;
+the worker's full `cargo test --workspace` and clippy were clean on the branch. No flash of
+its own: the change rides in the next firmware build that goes on the device (card 246's
+0.7.1 bench), where the check is `screeny brightness 3` -> `applied` 6 and a lit panel,
+then the previous level restored. The `software` session was told before the work started
+(shared `crates/receiver`, spec 6.3/8.6). Note for readers: the card says "section 6.6";
+the normative `SET_BRIGHTNESS` text is 6.3, and that is where the paragraph went.
