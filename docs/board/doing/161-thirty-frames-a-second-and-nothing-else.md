@@ -273,3 +273,32 @@ the canvas stayed black - the same limitation cards 120, 170 and 198 recorded. S
 Rate readout was read from the frame packet the page decodes rather than off the screen,
 and the picture itself is the owner's glance. No hardware, no LAN, no serial port, no
 camera were touched.
+
+### The suite, and one known flake
+
+`cargo test --release --no-fail-fast` at the root, run three times:
+
+- **859 passed, 0 failed, 1 ignored** (90 suites) - twice.
+- One earlier run: 858 passed, **1 failed**.
+
+The failure is card 156's list, not this card. Chasing it: `screeny-studio`'s
+`moved::the_status_poll_follows_a_panel_that_moved` failed once while three test binaries
+were running side by side on a busy machine, and **passed 3 of 3 alone** (7.9 s, 9.4 s,
+9.4 s). It is a race the test has by construction - the "has it moved?" probe only fires
+while the panel counts as unheard, and the HTTP status poll, which reaches the replacement
+on the same port, refreshes that the moment it succeeds - so under load the probe tick can
+lose. Not touched; card 156 says to re-run and report, which is this.
+
+`cargo clippy --workspace --all-targets`: **silent**.
+
+Nothing outside `crates/art` and `crates/studio` changed except `docs/`. `crates/screeny`,
+`crates/proto`, `crates/receiver`, `crates/sim`, `firmware/` and `docs/design/protocol-v1.md`
+were not touched, and neither was `crates/art/src/patches/` beyond reading it - no patch
+file changed at all.
+
+### Background processes
+
+`ps` clean: no `screeny-studio`, no `screeny-sim`, nothing of this card's left running.
+Every server was started under `timeout`, the browser tab was closed, and the scratch
+build of `main` used for the before/after pair lives in the session scratchpad, outside
+the repo.

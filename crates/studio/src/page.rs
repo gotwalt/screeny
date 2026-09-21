@@ -72,8 +72,8 @@ pub fn blank_packet() -> Vec<u8> {
 ///
 /// Card 120: "open a socket" and "want frames" came apart, because a tab that
 /// has been switched away from asks for none. A hidden tab is therefore *not* a
-/// watcher - it must not hold a panel-less studio at 60 fps for a phone in a
-/// pocket - so the count is kept here by [`Viewer`] rather than read off the
+/// watcher - it must not hold a panel-less studio at the full rate for a phone
+/// in a pocket - so the count is kept here by [`Viewer`] rather than read off the
 /// `watch` channel's receiver count.
 pub struct Screen {
     frames: watch::Sender<Arc<Vec<u8>>>,
