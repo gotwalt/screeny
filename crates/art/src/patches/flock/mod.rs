@@ -25,7 +25,7 @@ pub(crate) mod sim;
 use crate::color::{oklch, smoothstep, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
-use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use sim::{v3, Sim, Tuning, V3, STEP};
 use std::f32::consts::TAU;
 
@@ -48,7 +48,7 @@ const PARAMS: &[ParamSpec] = &[
     param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.90),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
-    toggle("backdrop", "Sky and horizon (off = white birds on black)", true),
+    choice("backdrop", "Backdrop", BACKDROPS, 0.0),
     choice("scheme", "Tones", SCHEMES, 0.0),
     param("hue", "Hue", 0.0, 360.0, 1.0, 250.0),
     param("spread", "Hue spread, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
@@ -58,6 +58,12 @@ const PARAMS: &[ParamSpec] = &[
     param("beat", "Wingbeat (Hz)", 0.5, 6.0, 0.1, 2.4),
     param("samples", "Samples per axis", 1.0, 6.0, 1.0, 3.0),
 ];
+
+/// What is behind the birds (the owner, 2026-09-20): the whole sky; nothing
+/// at all - white birds on true black; or black with only a faint line where
+/// the horizon is, which is the least that still shows the camera banking and
+/// climbing.
+const BACKDROPS: &[&str] = &["sky", "horizon line", "black"];
 
 /// The two pictures the card asks for, in the patch's own words.
 const SCHEMES: &[&str] = &["light on dark", "dusk silhouettes"];
@@ -373,20 +379,30 @@ impl Patch for Flock {
         self.advance(ctx, &tune);
 
         let wheel = ctx.get("wheel") * (ctx.t / 60.0) as f32;
-        // The owner's option (2026-09-20): no backdrop at all - white birds on
-        // true black, nothing else. The sky, the horizon and the sun all go,
-        // and with them the only thing that shows the camera's own banking;
-        // what is left is the flock, which is the point of asking for it.
-        let backdrop = ctx.get("backdrop") >= 0.5;
-        let which = if backdrop { ctx.get("scheme") as usize } else { 0 };
+        // The owner's options (2026-09-20). Without the sky the birds are
+        // white on true black whatever `scheme` says - a silhouette needs
+        // something to be cut out of - and the sun goes too, so nothing but
+        // the flock (and, if asked for, one faint line) is ever lit.
+        let backdrop = ctx.get("backdrop") as usize;
+        let which = if backdrop == 0 { ctx.get("scheme") as usize } else { 0 };
         let (mut bands, mut bird) = scheme(which, ctx.get("hue") + wheel, ctx.get("spread"), ctx.get("sky"));
-        if !backdrop {
+        if backdrop != 0 {
+            let horizon = bands[SKY - 1];
             bands = [(0.0, 0.0, 0.0); BANDS];
+            if backdrop == 1 {
+                // The sky's bands become the line at rising strength (for its
+                // anti-aliased edge): dim, and in the horizon's own hue.
+                let line = (0.42, horizon.1 * 0.5, horizon.2);
+                for (b, band) in bands.iter_mut().enumerate().take(SKY) {
+                    *band = mix((0.0, 0.0, 0.0), line, b as f32 / (SKY - 1) as f32);
+                }
+            }
             bird = (0.97, 0.0, 0.0);
         }
         let colours = palette(&bands, bird);
 
-        let view = View::of(&self.sim, self.sun);
+        // No sun without a sky: a zero vector has no direction to glow in.
+        let view = View::of(&self.sim, if backdrop == 0 { self.sun } else { v3(0.0, 0.0, 0.0) });
         let ss = (ctx.get("samples") as usize).clamp(1, 6);
         let mut cover = Coverage::new(ss);
         let dusk = which == 1;
@@ -408,16 +424,37 @@ impl Patch for Flock {
                 let (x, y) = (i % W, i / W);
                 let bias = ink_dither.threshold(x, y);
                 let sky_bias = sky_dither.threshold(x, y);
-                let mut band = 0.0;
-                for j in 0..ss {
-                    for k in 0..ss {
-                        let fx = x as f32 + (k as f32 + 0.5) / ss as f32;
-                        let fy = y as f32 + (j as f32 + 0.5) / ss as f32;
-                        band += view.band_at(view.ray(fx, fy));
+                let b = if backdrop == 0 {
+                    let mut band = 0.0;
+                    for j in 0..ss {
+                        for k in 0..ss {
+                            let fx = x as f32 + (k as f32 + 0.5) / ss as f32;
+                            let fy = y as f32 + (j as f32 + 0.5) / ss as f32;
+                            band += view.band_at(view.ray(fx, fy));
+                        }
                     }
-                }
-                band /= (ss * ss) as f32;
-                let b = (band + sky_bias).round().clamp(0.0, (BANDS - 1) as f32) as usize;
+                    band /= (ss * ss) as f32;
+                    (band + sky_bias).round().clamp(0.0, (BANDS - 1) as f32) as usize
+                } else if backdrop == 1 {
+                    // The horizon as a line and nothing else: one LED thick at
+                    // any bank, never dithered, so it is a steady hint and not
+                    // a sparkle.
+                    // Anti-aliased down the sky ramp's own bands, which in
+                    // this mode are the line's colour at rising strength, so a
+                    // banked horizon is a smooth slope and not a staircase.
+                    let (up, down) = (view.ray(x as f32 + 0.5, y as f32).y, view.ray(x as f32 + 0.5, y as f32 + 1.0).y);
+                    let fall = up - down;
+                    if fall.abs() < 1e-6 {
+                        0
+                    } else {
+                        // Where the horizon crosses this column, in LEDs from
+                        // this LED's top edge; one LED thick around that.
+                        let cover = (1.0 - (0.5 - up / fall).abs()).clamp(0.0, 1.0);
+                        (cover * (SKY - 1) as f32).round() as usize
+                    }
+                } else {
+                    0
+                };
                 let ink = cover.pixel(x, y) * (INK - 1) as f32;
                 let k = (ink + bias).round().clamp(0.0, (INK - 1) as f32) as usize;
                 (b * INK + k) as u8
