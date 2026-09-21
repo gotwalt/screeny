@@ -909,9 +909,13 @@ impl Player {
         job
     }
 
-    /// Record what the device actually applied, which may be below what was
-    /// asked for: the firmware caps brightness and says so, and that is the
-    /// only way there is of learning where its ceiling is.
+    /// Record what the device actually applied, which may differ from what
+    /// was asked for in either direction: below because the firmware cap is
+    /// lower, or above because a nonzero request landed under the floor and
+    /// was raised to the dimmest level the panel can show (card 136, card
+    /// 187). Only the cap is a ceiling worth remembering - the floor is a
+    /// property of the panel's whole scale, not something asking again could
+    /// avoid, so it is never recorded as one.
     pub fn brightness_applied(&self, asked: u8, applied: u8) {
         {
             let mut h = self.health_mut();
@@ -922,9 +926,10 @@ impl Player {
         }
         // Do not keep asking for something this panel will not give: the
         // policy becomes what it actually does, so the state file and the
-        // page both say the true number.
+        // page both say the true number - true whether the device pulled it
+        // down to a cap or pushed it up to the floor.
         let mut cfg = self.cfg();
-        if cfg.brightness == Some(asked) && applied < asked {
+        if cfg.brightness == Some(asked) && applied != asked {
             cfg.brightness = Some(applied);
         }
     }
@@ -1581,6 +1586,33 @@ mod tests {
         let p = idle_player();
         p.configure(&PlayerChange { speed: Some(99.0), ..PlayerChange::default() }).expect("clamped");
         assert_eq!(p.stored().speed, MAX_SPEED, "card 105's speed clamp, now the player's");
+    }
+
+    /// Card 187: `applied` can now come back *above* what was asked (card
+    /// 136's floor), not only below it (the cap). A raise must move the
+    /// policy the same honest way a cap does, but must never be mistaken for
+    /// one - there is nothing to learn from it, the floor is the same for
+    /// every panel.
+    #[test]
+    fn brightness_applied_raises_the_policy_without_learning_a_cap() {
+        let p = idle_player();
+        p.configure(&PlayerChange { brightness: Some(Some(3)), ..PlayerChange::default() }).expect("brightness");
+        p.brightness_applied(3, 6);
+        assert_eq!(p.stored().brightness, Some(6), "the policy should say what the panel really shows");
+        assert_eq!(p.brightness_policy(), (Some(6), Some(6)));
+        assert_eq!(p.health_mut().brightness_cap, None, "a raise is not a cap");
+    }
+
+    /// The unchanged half of the same function: a cap still pulls the policy
+    /// down and is still learned as one.
+    #[test]
+    fn brightness_applied_still_learns_a_cap_pulling_the_policy_down() {
+        let p = idle_player();
+        p.configure(&PlayerChange { brightness: Some(Some(200)), ..PlayerChange::default() }).expect("brightness");
+        p.brightness_applied(200, 120);
+        assert_eq!(p.stored().brightness, Some(120));
+        assert_eq!(p.brightness_policy(), (Some(120), Some(120)));
+        assert_eq!(p.health_mut().brightness_cap, Some(120));
     }
 
     /// Card 161: there is one rate and no way to ask for another. What the

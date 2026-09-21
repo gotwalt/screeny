@@ -97,4 +97,7 @@ cmd_brightness`, `crates/studio/src/player.rs brightness_applied`, `crates/studi
 Finding 2 fixed first (`crates/studio/src/player.rs`, `brightness_applied`): the
 `brightness_cap` learning stays keyed to `applied < asked` only (a raise must never be
 recorded as a cap), but the policy rewrite that keeps `cfg.brightness` truthful now
-fires on `applied != asked` in either direction, not just `applied < asked`.
+fires on `applied != asked` in either direction, not just `applied < asked`. Added two
+unit tests in `player.rs`'s own `mod tests`: a raise (asked 3, applied 6) moves the
+policy to 6 and learns no cap; the unchanged cap case (asked 200, applied 120) still
+moves the policy to 120 and learns the cap.
