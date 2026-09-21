@@ -482,8 +482,34 @@ letters without touching a caller.
 ## Flock (`patches/flock/`, id `flock`)
 
 Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
-3D steering round invisible geometry, on the CPU, at 0.39 ms a frame. Card 168.
+3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards 168
+and 177.
 
+- **The flock is knots and gaps, not a lattice** (card 177). Separation and
+  alignment are **topological** - the seven nearest birds whatever their
+  distance, which is what Ballerini et al. measured in starlings - so a dense
+  patch is not pushed apart by the twenty birds behind it. Separation is soft
+  except inside about a wingspan, so the spacing a bird keeps is a preference
+  and not a wall. Every bird has its own preferred room and airspeed, and the
+  flock is drawn into nine **clans** that fly closer to one another than to
+  strangers, each clan with its own taste for room: some knots are tight and
+  some are loose, which is what a broad distribution of gaps actually is.
+  Nearest-neighbour distance has a coefficient of variation of 0.38-0.43, where
+  the metric-radius flock of card 168 measured 0.10-0.16 - a crystal.
+- **The flight goes up and down** (card 177). There is no standing spring to a
+  cruise altitude any more: a bird is pulled towards the *flock's* height, so
+  the flock stays one flat body that may take itself anywhere in a world 140 m
+  tall. Climb and dive angles are asymmetric and open with `lift`, a dive buys
+  airspeed and a climb pays for it, the wings beat harder going up, and at
+  unpredictable intervals the whole flock is taken by a **surge** - a dive and
+  its recovery, sometimes a climb, sometimes with a swirl through it. Both
+  limits are held by a spring rather than a clamp, because a clamp on the
+  velocity rotates the heading past the turn-rate limit.
+- **Two controls for all of it**: `wild` (how often and how hard the flight
+  changes its mind: the restlessness, the attractor's clock, how often a surge
+  comes) and `lift` (how much of the motion is vertical: the climb angles, the
+  height of the next attractor, the size of a surge, and how far the view may
+  pitch to show it).
 - **The camera is `birds[0]`.** Same rules, same speed band, same kind of turn
   limit, in every other bird's neighbour list and they in its. What it has on
   top is only what it takes to be a good seat, and each piece of it was put
@@ -504,13 +530,29 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
     leash is on the look, not on the look's target - a low pass 50 degrees
     behind its target still shows an empty panel.
   - the view's angular rate has a **hard ceiling** (26 deg/s) that even the
-    leash may not break, and the horizon is held within 11 degrees of level so
-    it is always in shot.
+    leash may not break. Vertically the leash is tighter than sideways (10
+    degrees against 16), because the panel is 21 degrees tall and 38 wide.
+  - it sits **ahead of the flock's vertical motion**, may climb and dive a
+    quarter steeper than a bird and pays a third of what a bird pays in speed
+    for a climb. A chaser held to the limits of the thing it chases arrives
+    late every time, and late is the flock leaving the frame.
+  - **birds before horizon** (card 177). The last three corrections to the view
+    are composition, then the leash, then the rate ceiling - in that order, so
+    the leash may push the horizon out of its band to keep the flock in shot,
+    with an outer wall at 19 degrees so some horizon is always on the panel.
+    Card 168 had composition last, which was right when nothing in the flight
+    could move the horizon and wrong once something could.
 - **Invisible geometry**: five blobs laid out from the seed, drifting on
   independently drawn 90-260 s periods (nothing faster, or they chase birds
   rather than being scenery), a floor, a ceiling, a soft horizontal boundary
-  and a slow attractor. `terrain` says how many blobs are *real*, so moving it
-  does not re-roll the world. A bird avoiding one may turn up to 2.2x harder
+  and a slow attractor - now picked in 3D with real height differences, on a
+  clock whose *spread* is what `wild` opens up (a cubed uniform: mostly short,
+  with a long tail, so there are runs of quick changes of mind and then a long
+  quiet cruise). `terrain` says how many blobs are *real*, so moving it does
+  not re-roll the world. The sideways part of a bird's avoidance is taken
+  across the **flock's** course rather than its own heading - worked out per
+  bird it sends neighbours round opposite sides of the same blob and takes the
+  flock apart. A bird avoiding one may turn up to 2.2x harder
   than it cruises, as a real one does - without that the avoidance force is
   simply clipped away by the cruise turn limit and birds fly straight through.
 - **Drawing a bird with almost nothing**: a body dash and two wing strokes
@@ -520,7 +562,9 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   contrast far more than as size** at 64x32: 16 m of air halves how much a bird
   stands out, and that is what stops fifty of them reading as fog.
 - **The frame is indexed and exact**, through a **two-dimensional palette**: 14
-  sky bands x 6 ink levels. The sky band comes from the view ray's elevation
+  sky bands x 6 ink levels - or x 12 when the backdrop is not the sky, where
+  every band is the same black and so costs nothing, and those levels are
+  carrying the anti-aliasing and the whole depth cue at once. The sky band comes from the view ray's elevation
   plus the sun's glow, the ink level from the coverage buffer, and each is
   quantised through its own ordered dither (Bayer 4x4 for the sky, which
   compresses; blue noise for the ink). One consequence worth knowing: **the
@@ -547,6 +591,12 @@ cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 163.8 --warm
 cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 \
   --set scheme=1 --set hue=35 --set spread=95 --out dusk.png
 cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 --set near=2.5 --out close.png
+# a dive and its recovery (card 177), with the sky, with only a horizon line,
+# and on black. `--at` is wall-clock seconds and `pace` is 0.7, so this is the
+# surge at simulated t = 45 s. Step --at by 2 for a strip of ten.
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 62 --warmup 62 --out dive.png
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 62 --warmup 62 --set backdrop=1 --out dive-line.png
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 62 --warmup 62 --set backdrop=2 --out dive-black.png
 ```
 
 **`--warmup` must equal `--at`.** The flight is state: a snapshot that does not
@@ -555,13 +605,20 @@ render the whole run from zero is a different flight.
 Wingbeats and camera motion only read in *sequences*, so judge it from
 consecutive frames (`--at` stepped by 1/30 s or a tenth), never from a still.
 
-Measured over three seeds x ten simulated minutes at the defaults: 17-35 birds
-in frame at worst and 48 of 55 at the median, nearest bird 6.7 m and the
-biggest 6.0 LEDs across, the camera 12 m from the flock's middle, view yaw p95
-15.5-18.8 deg/s, roll p95 1.8-2.6 deg/s, every speed and turn rate inside its
-limit, and at worst 4.9 m of clearance from the invisible geometry. Over 1800
-frames of each scheme, **not one frame went out lossy** (worst 1194 of 1464
-bytes). The flight is identical at 30 and 60 fps, to the pixel.
+Measured over three seeds x ten simulated minutes at the defaults (card 177's
+numbers; card 168's in brackets where they differ): **34-38 birds in frame at
+worst** [17-35] and 50 of 55 at the median, nearest bird 6.0-6.5 m and the
+biggest 6.5 LEDs across, the camera 12.6-13.5 m from the flock's middle and
+14.1-15.5 m at p95 [up to 21.9], nearest-neighbour distance CV **0.38-0.43**
+[0.10-0.16], the flock's climb rate 2.9-3.2 m/s at p95 [2.1-2.3] over an
+altitude range of 80-90 m [40], view yaw p95 14.0-15.7 deg/s [15.5-18.8], roll
+p95 1.8-2.3, **pitch p95 4.0-4.9 deg/s** [2.6-3.2] with the horizon sweeping
+about 15 degrees of panel where it used to sit pinned at the top of an 11
+degree band, every speed and turn rate inside its limit, nothing steeper than
+55 degrees, and at worst 17 m of clearance from the invisible geometry. Over
+1800 frames, **not one frame of any backdrop went out lossy**: worst 1056
+bytes of 1464 for the sky (light on dark), 1092 (dusk), 1182 (horizon line) and
+1127 (black). The flight is identical at 30 and 60 fps, to the pixel.
 
 ## GPU and 3D patches
 

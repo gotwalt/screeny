@@ -203,8 +203,12 @@ pub fn stage_chunk(
         .find_partition(PartitionType::App(slot))?
         .ok_or(PartError::Invalid)?;
     let mut region = entry.as_flash_region(flash);
-    region.erase(offset, offset + CHUNK as u32)?;
+    // Card 245's guard, here too. This module is never built into anything
+    // that is flashed, but it is the file somebody reads to find out how
+    // staging works, and an unguarded erase in it is a pattern waiting to be
+    // copied. See `crate::store::guarded`.
+    crate::store::guarded(|| region.erase(offset, offset + CHUNK as u32))?;
     let mut nor = region.as_nor_flash()?;
     use embedded_storage::nor_flash::NorFlash;
-    nor.write(offset, chunk).map_err(|_| PartError::StorageError)
+    crate::store::guarded(|| nor.write(offset, chunk)).map_err(|_| PartError::StorageError)
 }

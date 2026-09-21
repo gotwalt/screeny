@@ -46,6 +46,8 @@ const PARAMS: &[ParamSpec] = &[
     param("birds", "Birds", 30.0, 150.0, 1.0, 55.0),
     param("pace", "Pace", 0.15, 2.0, 0.05, 0.7),
     param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.90),
+    param("wild", "How often it changes its mind", 0.0, 1.0, 0.01, 0.65),
+    param("lift", "How much of the motion is vertical", 0.0, 1.0, 0.01, 0.50),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
     choice("backdrop", "Backdrop", BACKDROPS, 0.0),
@@ -77,7 +79,25 @@ pub const SKY: usize = 12;
 /// Sky bands plus the sun's halo and its disc.
 pub const BANDS: usize = SKY + 2;
 /// Levels of bird over sky, `0` being no bird at all.
+///
+/// With a sky behind them the palette is [`BANDS`] x [`INK`] and six is what
+/// there is room for. With the sky **off** every band is the same black (or,
+/// for the horizon line, the line's own ramp), so the bands cost nothing and
+/// the ink may have as many levels as the index byte allows - which matters,
+/// because on black these six levels are carrying both the anti-aliasing and
+/// the whole of the depth cue, and the steps show as birds come and go.
+/// Sixteen x fourteen bands is 224 entries, inside the 256 an index byte has.
 pub const INK: usize = 6;
+pub const INK_DARK: usize = 12;
+
+/// How many ink levels this backdrop gets.
+pub fn ink_levels(backdrop: usize) -> usize {
+    if backdrop == 0 {
+        INK
+    } else {
+        INK_DARK
+    }
+}
 
 /// A colour as (lightness, chroma, hue in degrees), the way this file thinks
 /// about one. Mixing happens here, not in RGB, so a fade through half a bird
@@ -148,12 +168,12 @@ fn scheme(which: usize, hue: f32, spread: f32, level: f32) -> ([Lch; BANDS], Lch
     (bands, bird)
 }
 
-/// `BANDS` x `INK` colours: sky band `b` with `k`/`INK-1` of a bird over it.
-fn palette(bands: &[Lch; BANDS], bird: Lch) -> Vec<Rgb> {
-    let mut out = Vec::with_capacity(BANDS * INK);
+/// `BANDS` x `ink` colours: sky band `b` with `k`/`ink-1` of a bird over it.
+fn palette(bands: &[Lch; BANDS], bird: Lch, ink: usize) -> Vec<Rgb> {
+    let mut out = Vec::with_capacity(BANDS * ink);
     for band in bands {
-        for k in 0..INK {
-            out.push(paint(mix(*band, bird, k as f32 / (INK - 1) as f32)));
+        for k in 0..ink {
+            out.push(paint(mix(*band, bird, k as f32 / (ink - 1) as f32)));
         }
     }
     out
@@ -341,6 +361,8 @@ impl Flock {
     fn tuning(ctx: &Ctx) -> Tuning {
         Tuning {
             blobs: (ctx.get("terrain") * sim::BLOBS as f32).round() as usize,
+            wild: ctx.get("wild"),
+            lift: ctx.get("lift"),
             ..Tuning::of(ctx.get("calm"), ctx.get("near"), ctx.get("bank"), ctx.get("beat"))
         }
     }
@@ -399,7 +421,8 @@ impl Patch for Flock {
             }
             bird = (0.97, 0.0, 0.0);
         }
-        let colours = palette(&bands, bird);
+        let levels = ink_levels(backdrop);
+        let colours = palette(&bands, bird, levels);
 
         // No sun without a sky: a zero vector has no direction to glow in.
         let view = View::of(&self.sim, if backdrop == 0 { self.sun } else { v3(0.0, 0.0, 0.0) });
@@ -455,9 +478,9 @@ impl Patch for Flock {
                 } else {
                     0
                 };
-                let ink = cover.pixel(x, y) * (INK - 1) as f32;
-                let k = (ink + bias).round().clamp(0.0, (INK - 1) as f32) as usize;
-                (b * INK + k) as u8
+                let ink = cover.pixel(x, y) * (levels - 1) as f32;
+                let k = (ink + bias).round().clamp(0.0, (levels - 1) as f32) as usize;
+                (b * levels + k) as u8
             })
             .collect();
 
