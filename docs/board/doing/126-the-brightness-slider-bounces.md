@@ -53,3 +53,71 @@ the page does and watch the state stream - no state message after the change mak
 control show the old value. The owner moves the slider on the deployed page and it stays.
 
 ## Log
+
+Read order: `CLAUDE.md`, `docs/README.md`, this card, `docs/board/done/187-senders-and-the-brightness-floor.md`
+(built the control and its Log explains the stops), `crates/studio/ui/common.js`
+(`bindBrightness`, `bindSlider`, `busy`, `connect`), `picture.js`/`panel.js`'s calls into
+`bindBrightness`, `crates/studio/tests/ui.rs`, and how state reaches the page
+(`crates/studio/src/api.rs`, `devices.rs`'s `Telem`, `player.rs`'s `brightness_applied`/
+`brightness_policy`, `fleet.rs`'s `supervise`/`apply_brightness` - card 196's pacing).
+`bindSlider` (the rate/speed/APL/rise sliders) has no hold rule at all beyond `busy()` -
+those controls are pure policy with no device round trip to go stale, so there was no
+house pattern to reuse; brightness is the only control whose displayed value depends on
+the *device's* confirmation.
+
+**Cause, confirmed against `screeny-sim` and a local Studio** (both `screeny-sim
+--headless --no-mdns --bind 127.0.0.1 --frame-port 54074 --control-port 54075
+--http-port 61386` and `screeny-studio --listen 127.0.0.1:61387 --state-dir <tmp>
+--no-discover --device-http-port 61386` under `timeout 180`, attached with
+`POST /api/v1/set_panel {"on":true,"to":"127.0.0.1:54074"}`, then a brightness change
+via `POST /api/v1/device/brightness {"device":"<id>","level":80}` and `GET
+/api/v1/status` polled every 0.3 s): the card's guess was right. Sequence observed
+(seconds since the poll started, change fired at t≈3.3):
+
+```
+t=3.08  telemetry.brightness=30  health.brightness_applied=30
+t=3.38  telemetry.brightness=30  health.brightness_applied=80   <- POST resolved: health already true
+t=3.68  telemetry.brightness=30  health.brightness_applied=80
+...
+t=4.61  telemetry.brightness=30  health.brightness_applied=80   <- still stale telemetry, 1.6s after the change
+t=4.92  telemetry.brightness=80  health.brightness_applied=80   <- telemetry finally caught up
+```
+
+`player.health.brightness_applied` is written synchronously inside the API handler the
+moment `POST /api/v1/device/brightness` resolves (`player.rs`'s `brightness_applied`,
+called from `api.rs:711`), so it is already correct at t=3.38. But `bindBrightness`'s
+`show(d)` did `t ? t.brightness : (health.brightness_applied ?? player.brightness)` -
+it always preferred telemetry when telemetry existed *at all*, stale or not, so for the
+1.6 s between t=3.38 and t=4.92 it painted the slider back to 30 (the old value) the
+moment the input stopped being `busy`, then forward to 80 once fresh telemetry arrived -
+exactly the bounce the owner saw. (Studio's default `telemetry_every` is 5 s, so the
+worst case is close to a full poll interval, not "a second or so" as the card guessed -
+noted for the record, changes nothing about the fix.)
+
+**Fix**, `crates/studio/ui/common.js` only: `bindBrightness` now holds the true applied
+value (`done.applied` from the POST's reply, not the raw ask - the floor and the cap are
+real) for `BRIGHTNESS_HOLD_MS` (5000 ms, comfortably bracketing one telemetry poll)
+after a `change`, and releases the hold the moment a fresher reading agrees with it or
+the hold's clock runs out, whichever comes first - then `show()` goes back to painting
+whatever telemetry (or, absent telemetry, `health.brightness_applied`/`player.brightness`)
+says, same as before. The decision is a small pure function, `brightnessHoldWins(now,
+until, held, reading)`, exported so it can be pinned without a DOM. No change to
+`player.rs`, `fleet.rs`, `api.rs`, or the wire: `health.brightness_applied` was already
+true the instant it mattered, so no "applied at" field had to be added to the state
+message - the honest fix is the client trusting the fact it was already being handed,
+for a bounded while, instead of always preferring a periodic reading over it.
+
+Cross-browser/CLI case: any change through `/api/v1/device/brightness` updates the one
+shared `player.health.brightness_applied` server-side, which every connected browser's
+next state message carries - so a second browser or another API caller shows up for a
+browser that made no change of its own well inside the 5 s hold window (it is not itself
+holding anything, so `reading` alone decides what it paints).
+
+Test: `brightnessHoldWins` exercised with `node` in `crates/studio/tests/ui.rs`
+(`node --input-type=module`) when `node` is on the `PATH`; the test is skipped (with a
+printed reason, not a silent no-op) when it is not, so a machine with no Node toolchain
+still gets a clean `cargo test`. Cases pinned: released immediately once the reading
+agrees with the hold, still holding just before `until`, released at/after `until` even
+though the reading still disagrees (the "elsewhere" case), and holding when there is no
+reading yet (`null`/`undefined`).
+
