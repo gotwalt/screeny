@@ -221,3 +221,32 @@ store (a wipe needs both). It owns GPIO15 and nothing else touches that pin.
   fw 0.7.0), `.bss` 110,696, image 1,026,741. The whole card costs 400 bytes of
   core 0's stack. `cargo clippy --release` in `firmware/`: no new warnings in
   any file this card touches.
+
+### step 3: the button on a host (`crates/sim`)
+
+`crates/sim/src/button.rs` (new, 120 lines) drives **the firmware's
+recogniser** with synthetic timestamps, and `SimHandle::press_button(hold_ms)`
+plays a whole press: down, held, released, debounced. The clock is the
+recogniser's own and is advanced only by a press, so `press_button(5_000)`
+costs a test microseconds instead of five seconds; the screens it raises do
+expire on the simulator's real clock, because a window may be showing them.
+
+- `Core::press_button` carries the gestures out the way the firmware does: a
+  short press is an `IDENTIFY` through the same control path (`req_id` 0), five
+  seconds is `WifiModel::wipe`, which is the `Event::ButtonWipe` the machine
+  has had since card 221. The screens go into the scene **above** the portal's,
+  as they do in `net.rs`.
+- The diff is deliberately small and local: one new file, one field and two
+  methods on `Core`, one method on `SimHandle`, one line in `render_display`.
+  Card 246 is in `crates/sim` at the same time.
+- `wipe_allowed` is `true` in the simulator: its `POST /api/v1/firmware` does
+  not claim the device the way the firmware's does, and card 246 is changing
+  that area. The gate itself is host-tested in `crates/provision/tests/button.rs`.
+- `crates/sim/tests/button.rs` (new, 7 tests): a 5 s hold ends at the portal
+  with the credentials cleared and `GET_WIFI` reading `disconnected` (a wipe is
+  not a failure); a 4 s hold and a 4.95 s hold change nothing at all; a short
+  press raises the overlay (telemetry byte `IDENTIFY`) and moves nothing else;
+  four presses in a row keep it up; a cancelled hold leaves *the* "cancelled"
+  screen on the panel, compared pixel for pixel against
+  `screeny_provision::render`; a wipe leaves the portal screen with its QR.
+  `cargo test -p screeny-sim`: **all suites green**, 7 new.

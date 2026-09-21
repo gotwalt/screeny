@@ -30,6 +30,8 @@ use screeny_proto::control::{IdleMode, SetWifi, Telemetry};
 use screeny_proto::{Rgb888Frame, MAX_UDP_PAYLOAD, NBYTES};
 use screeny_receiver as rx;
 
+use screeny_provision::button::ButtonEvent;
+
 use crate::config::{Config, Health, PanelModel};
 use crate::net::display_addr;
 use crate::event::Event;
@@ -236,6 +238,8 @@ pub struct Core {
     survivor: Option<Vec<u8>>,
     /// The scripted radio and the provisioning machine (card 224).
     wifi: WifiModel,
+    /// The button and whatever it has put on the panel (card 230).
+    button: crate::button::ButtonModel,
     /// What the device would report about itself over HTTP but cannot measure
     /// on a host.
     ident: Ident,
@@ -346,6 +350,7 @@ impl Core {
             back: Box::new([0u8; NBYTES]),
             survivor: None,
             wifi: WifiModel::new(cfg, display_addr(cfg.bind), events),
+            button: crate::button::ButtonModel::new(),
             ident: Ident {
                 id: cfg.id.clone(),
                 boot_id: draw_boot_id(),
@@ -614,6 +619,51 @@ impl Core {
     /// button wipe, a station arriving on the soft-AP.
     pub fn wifi_mut(&mut self) -> &mut WifiModel {
         &mut self.wifi
+    }
+
+    // -----------------------------------------------------------------
+    // The button (card 230)
+    // -----------------------------------------------------------------
+
+    /// Press the button, hold it for `hold_ms`, and let it go.
+    ///
+    /// The gestures come from the recogniser the firmware runs, and what
+    /// happens then is the firmware's behaviour spelled out once more in the
+    /// two places that can differ: a short press raises the `IDENTIFY`
+    /// overlay, and five seconds raises `Event::ButtonWipe` in the
+    /// provisioning machine. Everything in between is a screen.
+    pub fn press_button(&mut self, hold_ms: u32, now_us: u64, out: &mut Outbox) {
+        // There is no firmware upload in flight to refuse for: the
+        // simulator's `POST /api/v1/firmware` lives in the HTTP layer and does
+        // not claim the device the way the firmware's does. The gate itself is
+        // host-tested in `crates/provision/tests/button.rs`.
+        for ev in self.button.press(hold_ms, now_us, true) {
+            match ev {
+                ButtonEvent::ShortPress => self.identify(now_us, out),
+                ButtonEvent::WipeWifi => self.wifi.wipe(now_us, &mut out.events),
+                _ => {}
+            }
+        }
+    }
+
+    /// What the button has put on the panel, if anything.
+    #[must_use]
+    pub fn button_screen(&self, now_us: u64) -> Option<screeny_provision::Screen<'static>> {
+        self.button.screen(now_us)
+    }
+
+    /// The short press: `IDENTIFY` for [`screeny_provision::button::STATUS_MS`],
+    /// through the same control path a request off the wire takes.
+    fn identify(&mut self, now_us: u64, out: &mut Outbox) {
+        let duration_ms = screeny_provision::button::STATUS_MS.min(u16::MAX as u32) as u16;
+        let mut buf = [0u8; 16];
+        // `req_id` 0 is section 6.1's "no reply wanted", so nothing is sent.
+        let Ok(n) = screeny_proto::control::Request::Identify { duration_ms }.write(0, &mut buf)
+        else {
+            return;
+        };
+        let from = SocketAddr::from(([127, 0, 0, 1], 0));
+        self.control(now_us, from, &buf[..n], out);
     }
 
     // -----------------------------------------------------------------

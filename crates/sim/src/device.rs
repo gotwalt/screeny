@@ -277,6 +277,30 @@ impl SimHandle {
         self.shared.bus.publish(&events);
     }
 
+    /// Press the button on the back of the device and hold it for `hold_ms`
+    /// (card 230).
+    ///
+    /// The whole gesture, through the recogniser the firmware runs: under a
+    /// second is a short press and raises the status overlay for ten seconds,
+    /// past one second the countdown appears on the panel, letting go before
+    /// five seconds changes nothing, and five seconds forgets the network and
+    /// raises the setup portal.
+    ///
+    /// **It returns immediately.** The hold is played out against the
+    /// recogniser's own clock, so `press_button(5_000)` costs a test
+    /// microseconds rather than five seconds; see [`crate::button`].
+    pub fn press_button(&self, hold_ms: u32) {
+        let now = self.shared.now_us();
+        let mut out = Outbox::default();
+        self.shared
+            .core
+            .lock()
+            .unwrap()
+            .press_button(hold_ms, now, &mut out);
+        self.shared.bus.publish(&out.events);
+        out.clear();
+    }
+
     /// Tell the machine a phone did or did not join the soft-AP, which is
     /// what gates the portal's ten-minute retry.
     pub fn set_ap_client(&self, present: bool) {
@@ -399,7 +423,12 @@ impl SimHandle {
             // Card 224: in `Portal` and `Trial` the panel is the provisioning
             // crate's, so the window and the `--dump-dir` PNGs show what the
             // device will show, pixel for pixel.
-            provisioning: c.wifi().screen(now),
+            //
+            // Card 230: and the button's screens outrank the portal's, exactly
+            // as they do in `firmware/src/net.rs` - somebody holding the
+            // button while the portal is up still has to see what is about to
+            // happen.
+            provisioning: c.button_screen(now).or_else(|| c.wifi().screen(now)),
             network_down: !c.wifi().online(),
         };
         screens::render(&scene, &mut out);
