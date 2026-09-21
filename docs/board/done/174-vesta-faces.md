@@ -316,3 +316,13 @@ outside `crates/art/src/faces/`, `crates/art/src/patches/vesta/`,
 **Follow-up**: `docs/board/backlog/175-vesta-the-colon-is-not-a-face.md` - the
 colon is still a pair of drawn circles and is the only anti-aliased thing left
 in a crisp frame (it is what turns a 2-colour picture into a 4-colour one).
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `07-all-faces-0456.png` before merging: the four pixel faces are exactly what was
+hoped for - every LED full or black - and Terminus Bold's 5 is a flat bar over a full bowl;
+the blank leading card reads as a real board does. Merged `--no-ff`; root suite 912 passed,
+0 failed; clippy silent. `FACES.md` read: each embedded face's licence is stated from its
+own source, and the faces with no stated licence were left out. Deployed with card 161.
+The worker's worktree is kept for now (a follow-up on faces from the owner is likely, and
+a worker can only be resumed while its worktree exists); remove it when 175 is settled.
