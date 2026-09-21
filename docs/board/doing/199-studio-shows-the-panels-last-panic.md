@@ -227,3 +227,23 @@ after the fix): all green, no flake.
 
 This is the only test outside the files the card names that needed a change, and the reason
 is explained above rather than left as a silent edit.
+
+### Finish
+
+**Root `cargo test --release --no-fail-fast`, after the fix above**: 98 test-result blocks,
+**988 passed, 0 failed**, no panics, no `FAILED` anywhere in the log.
+
+**Root `cargo clippy --workspace --all-targets`**: exit 0, two warnings, both **pre-existing
+and in files this card never touched or was allowed to touch** - `crates/receiver/tests/identify_overlay.rs`
+(a doc-comment lint, `doc_lazy_continuation`) and `crates/sim/tests/arbitration.rs`
+(`chunks_exact_to_as_chunks`). Confirmed with `git log` that both files last changed on card
+247, well before this branch, and `git diff 6bdcc1c --` against them is empty - nothing here
+introduced or touched either. `screeny-studio` and `screeny-device-api` (read, not written)
+produce zero clippy output. Flagging these two for the orchestrator since `docs/README.md`
+says clippy is expected to say nothing; likely a toolchain/lint-version drift since card 247
+landed, not this card's concern.
+
+`ps` after the full run: nothing of mine left running.
+
+Card stays in `doing/`; the orchestrator moves it to `done/` on merge, per the coordinator's
+instructions for this run (rather than `docs/README.md`'s usual `review/` step).
