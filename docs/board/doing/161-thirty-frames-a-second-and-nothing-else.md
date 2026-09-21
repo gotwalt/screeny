@@ -302,3 +302,36 @@ file changed at all.
 Every server was started under `timeout`, the browser tab was closed, and the scratch
 build of `main` used for the before/after pair lives in the session scratchpad, outside
 the repo.
+
+### Acceptance, against the card
+
+| the card asked for | where it is |
+|---|---|
+| `frames_offered` about equal to `frames_sent`, nothing coalesced in steady state | measured twice: 29.97 offered / 29.97 sent / 0.00 coalesced per second over 30 s on three patches, and 1071 / 1071 / 0 on the browser run |
+| no control on the page mentions a frame rate | `no_control_offers_a_frame_rate` in `tests/ui.rs`, over both screens' HTML and both scripts; and checked in Chrome on `/` and `/panel` |
+| an old state file loads | `a_retired_fps_loads_and_is_reported`, `a_retired_fps_is_said_once_for_the_whole_file`, and a live studio started on a v5 file with `fps: 60` |
+| one constant in one place | `screeny_art::FPS`. Read by the studio's render loop, `PlayerStatus`/`StudioState`/`PreviewStatus`, `ws::DEFAULT_FPS` and the socket's ceiling, `screeny-art play` and `pipe`, `snapshot::FPS` (a re-export), the state file's retired-key sentence, and the page - through `state.fps`, so there is no second copy in the JavaScript |
+| `--fps` decided | accepted and ignored with one line on stderr, said above |
+| the Rate readout decided | kept: it is the measured rate, not a setting, and the only place a machine that cannot hold 30 says so |
+| a schema bump decided | no: card 102's reason, written into `note_retired_fps`, and proved by the live run leaving no backup file and `recovered: null` |
+| every patch, time or frames | `crates/art/tests/rate.rs` and the table above. Nothing needed fixing |
+| render cost before and after | the table above |
+| what stays, said to the owner | below |
+
+### What stays, and why - for the owner
+
+**The sender's cadence ladder in `crates/screeny` is untouched.** Spec 6.9: a sender that
+is losing frames steps its rate down and back up by itself. That is protocol behaviour,
+it is normative, it is shared with the `screeny` CLI and the conformance suite, and it is
+invisible unless the network is losing frames. "No variability" reads as *no rate for a
+person to choose*, not *delete the sender's response to a bad link* - if that went, a
+panel on a weak signal would keep being sent 30 fps it cannot take and the picture would
+get worse, not steadier. `crates/proto`, `crates/receiver`, `crates/sim`, `firmware/`,
+`docs/design/protocol-v1.md` and `screeny stream --fps` were not touched either.
+
+`IDLE_FPS` stays: the 5 fps a player drops to with no panel connected and nobody
+watching. Nobody sees it and nobody chooses it; it is what a forgotten panel costs.
+
+The WebSocket's `fps` query stays, because **0** is how a hidden tab says "send me
+nothing". Its default and its ceiling are now the render rate, so a socket that asks for
+nothing, and one that asks for 60, both get every frame there is.
