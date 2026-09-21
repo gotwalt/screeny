@@ -3,8 +3,9 @@
 //!
 //! This is the whole of the network side of the art system, and it is thin on
 //! purpose: `screeny::Link` (card 011) was shaped for this trait. It never
-//! sleeps, so the art system keeps its own 60 fps clock; it drops frames that
-//! arrive before the panel's next slot and says so (`Sent::Coalesced`); and it
+//! sleeps, so the art system keeps its own clock (`screeny_art::FPS`, 30); it
+//! drops frames that arrive before the panel's next slot and says so
+//! (`Sent::Coalesced`) - which since card 161 should be nothing at all; and it
 //! cannot fail because of the network, so a panel that reboots, moves address
 //! or is simply off is a counter here rather than an `io::Error` a render loop
 //! has to decide what to do about.
@@ -62,8 +63,10 @@ pub struct PanelStatus {
     pub frames_offered: u64,
     /// Frames that reached the wire.
     pub frames_sent: u64,
-    /// Frames folded away by the cadence ceiling. Not a problem: a 60 fps
-    /// patch into a 30 fps panel coalesces half of them by design.
+    /// Frames folded away by the cadence ceiling. Card 161 made this **zero in
+    /// steady state**: a patch is rendered at the panel's own rate, so there is
+    /// nothing to fold. It moves again only when the sender steps its rate down
+    /// under sustained loss (spec 6.9).
     pub frames_coalesced: u64,
     /// Frames lost because the link was down.
     pub frames_dropped: u64,

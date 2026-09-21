@@ -34,9 +34,10 @@
 //! Nothing here grows without bound. One core thread per player, one link, one
 //! control request in flight, a one-slot pending mailbox, a fixed fallback
 //! ladder, and every fault logged once rather than per frame. A player renders
-//! at its configured rate while its panel is connected **or** a browser is
-//! watching, and at [`IDLE_FPS`] otherwise: a panel that is unplugged for a
-//! month, with nobody looking, should not cost a core for a month.
+//! at [`screeny_art::FPS`] - **the** rate, card 161; there is nothing to
+//! configure - while its panel is connected **or** a browser is watching, and at
+//! [`IDLE_FPS`] otherwise: a panel that is unplugged for a month, with nobody
+//! looking, should not cost a core for a month.
 
 // The frame-sink trait, in scope only so `SenderOutput::send` resolves. It is
 // renamed here because card 150 gave `Output` to the settings block below.
@@ -91,10 +92,11 @@ pub const MAX_FAULTS: u32 = 3;
 /// The rate a player renders at when its panel is not connected **and** no
 /// browser is watching. Enough to drive reconnection and to be ready the
 /// instant either of those changes.
+///
+/// Card 161 left this alone on purpose: it is not a rate anybody chooses or
+/// sees, it is what a forgotten panel costs. Everything else is
+/// [`screeny_art::FPS`].
 pub const IDLE_FPS: f64 = 5.0;
-/// Frames per second a player may be asked for.
-pub const MIN_FPS: f64 = 1.0;
-pub const MAX_FPS: f64 = 60.0;
 /// How fast a patch may be played. Card 105's clamp, unchanged.
 pub const MAX_SPEED: f64 = 8.0;
 
@@ -256,6 +258,9 @@ pub struct PlayerStatus {
     pub seed: u32,
     /// Only what has been set away from the patch's defaults.
     pub params: BTreeMap<String, f32>,
+    /// The rate this is rendered at. Always [`screeny_art::FPS`] since card
+    /// 161: reported, never chosen. Kept on the status so a script need not
+    /// write 30 down itself.
     pub fps: f64,
     pub paused: bool,
     pub speed: f64,
@@ -607,7 +612,9 @@ impl Player {
             output: cfg.output,
             paused: cfg.paused,
             speed: cfg.speed,
-            fps: cfg.fps,
+            // Card 161: the one rate, reported so the page and any script can
+            // read it instead of writing 30 down again.
+            fps: screeny_art::FPS,
             on: cfg.on,
             device: cfg.device,
             setting,
@@ -694,16 +701,6 @@ impl Player {
                 self.memory.forget_params(&cfg.patch);
                 want.params = true;
             }
-            if let Some(fps) = change.fps {
-                // A rate that is not a number at all is refused rather than
-                // clamped: `f64::clamp` hands a NaN straight back, and
-                // `Duration::from_secs_f64(NaN)` in the render loop panics.
-                // Card 172 made this reachable - `set_playback` used to drop
-                // anything that was not 30 or 60, NaN included.
-                if fps.is_finite() {
-                    cfg.fps = fps.clamp(MIN_FPS, MAX_FPS);
-                }
-            }
             if let Some(paused) = change.paused {
                 cfg.paused = paused;
             }
@@ -711,8 +708,9 @@ impl Player {
                 cfg.speed = speed.clamp(0.0, MAX_SPEED);
                 // Card 151: speed is part of a setting, so it is part of what
                 // is remembered about the patch rather than only of the
-                // player. `fps` and `paused` are not - they are about
-                // playback, not about the patch.
+                // player. `paused` is not - it is about playback, not about
+                // the patch. (`fps` used to be listed here too; card 161
+                // removed it as a setting of anything.)
                 remember_current(&cfg, &self.memory, self.faults);
             }
             if let Some(s) = change.output {
@@ -980,7 +978,7 @@ impl Player {
             patch_name: name,
             seed: cfg.seed,
             params: cfg.params,
-            fps: cfg.fps,
+            fps: screeny_art::FPS,
             paused: cfg.paused,
             speed: cfg.speed,
             brightness: cfg.brightness,
@@ -1145,7 +1143,6 @@ pub struct PlayerChange {
     /// Card 151: put the working copy on this named setting of the current
     /// patch - or on `Default`. One change, whatever it moves.
     pub load_setting: Option<String>,
-    pub fps: Option<f64>,
     pub paused: Option<bool>,
     pub speed: Option<f64>,
     pub output: Option<Output>,
@@ -1172,9 +1169,9 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
     while !handle.stop.load(Ordering::Relaxed) && !player.stop.load(Ordering::Relaxed) {
         handle.beat.store(unix_millis(), Ordering::Relaxed);
 
-        let (fps, paused, speed) = {
+        let (paused, speed) = {
             let cfg = player.cfg();
-            (cfg.fps, cfg.paused, cfg.speed)
+            (cfg.paused, cfg.speed)
         };
 
         // Apply whatever has been asked for since the last frame, then render.
@@ -1275,9 +1272,13 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         // away from asks for no frames and gives up its claim, so a studio with
         // no panel and only hidden tabs open idles here too - and picks up
         // again within one idle frame when somebody looks.
+        // Card 161: the full rate is `screeny_art::FPS` and nothing else. It
+        // is the panel's own rate, so the link's cadence ceiling has nothing
+        // to fold away - before this card the player rendered at 60 and half
+        // of it was coalesced.
         let watched = player.is_focused() && player.screen.watchers() > 0;
-        let rate = if connected || watched { fps } else { IDLE_FPS };
-        next += Duration::from_secs_f64(1.0 / rate.clamp(MIN_FPS, MAX_FPS));
+        let rate = if connected || watched { screeny_art::FPS } else { IDLE_FPS };
+        next += Duration::from_secs_f64(1.0 / rate);
         let now = Instant::now();
         if next > now {
             std::thread::sleep((next - now).min(Duration::from_secs(1)));
@@ -1564,14 +1565,22 @@ mod tests {
     }
 
     #[test]
-    fn an_fps_outside_the_range_is_clamped_not_refused() {
+    fn a_speed_outside_the_range_is_clamped_not_refused() {
         let p = idle_player();
-        p.configure(&PlayerChange { fps: Some(1000.0), ..PlayerChange::default() }).expect("clamped");
-        assert_eq!(p.stored().fps, MAX_FPS);
-        p.configure(&PlayerChange { fps: Some(0.0), ..PlayerChange::default() }).expect("clamped");
-        assert_eq!(p.stored().fps, MIN_FPS);
         p.configure(&PlayerChange { speed: Some(99.0), ..PlayerChange::default() }).expect("clamped");
         assert_eq!(p.stored().speed, MAX_SPEED, "card 105's speed clamp, now the player's");
+    }
+
+    /// Card 161: there is one rate and no way to ask for another. What the
+    /// page and `/api/v1/status` report is that rate, whatever the player has
+    /// been told to do.
+    #[test]
+    fn the_only_rate_is_the_one_rate() {
+        let p = idle_player();
+        assert_eq!(p.state().fps, screeny_art::FPS);
+        assert_eq!(p.status().fps, screeny_art::FPS);
+        p.configure(&PlayerChange { patch: Some("plasma".into()), ..PlayerChange::default() }).expect("plasma");
+        assert_eq!(p.state().fps, screeny_art::FPS, "nothing a player is told moves the rate");
     }
 
     /// Card 170: the page draws its sliders from `state()`, so it must carry

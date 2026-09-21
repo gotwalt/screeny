@@ -569,9 +569,9 @@ curl -s -X POST http://workbench.local:8787/api/v1/player/set \
 | file | `esp_app_desc.version` | bytes | what |
 |---|---|---|---|
 | `screeny-fw-0.7.0-default.elf` | `0.7.0` | - | **the build to serial-flash** |
-| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,013,904 | a good update: must confirm |
-| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,013,696 | never reports healthy: must revert at 180 s |
-| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,014,400 | panics at 20 s: must be rolled back by the bootloader |
+| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,014,288 | a good update: must confirm |
+| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,014,160 | never reports healthy: must revert at 180 s |
+| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,014,768 | panics at 20 s: must be rolled back by the bootloader |
 | `screeny-fw-0.7.1-good.elf`, `-unhealthy.elf`, `-panic.elf` | | | the ELFs, for symbolising a backtrace |
 
 The three `.bin`s were made from those ELFs with, from the repository root and
@@ -650,7 +650,7 @@ restarting"** for two seconds, then the boot.
 
 ```
 HTTP 200 in 25.x s (39 KB/s)
-  ok true written 1013904 error None activating true
+  ok true written 1014288 error None activating true
   waiting for the device to come back (up to 90 s)...
   back after ~45 s: fw 0.7.1 slot Ota1 state PendingVerify boot_id N uptime ~20000 ms
   waiting for the trial to end (up to 240 s)...
@@ -663,7 +663,7 @@ HTTP 200 in 25.x s (39 KB/s)
 are this card's whole deliverable:
 
 ```
-ota: staged image accepted - 1013904 bytes, 5 segments, version "0.7.1"
+ota: staged image accepted - 1014288 bytes, 5 segments, version "0.7.1"
 ota: ACTIVATED 0x210000 - restarting into it on trial. If it does not prove itself within 180 s, or resets before it does, the bootloader brings fw 0.7.0 back.
 <the ROM banner and the bootloader>
 boot: #1 since power-on, reset reason software (...)
@@ -938,3 +938,165 @@ support from this list):
    deliberately opposite, for the reason in the code, but it is the sort of
    asymmetry somebody trips over once. Worth a sentence in `README.md` if the
    owner uses the command directly.
+
+### 5. fw 0.7.0 wedges during an upload - what I found, and the watchdog (worker-241, 2026-09-20, branch `card/241-upload-hang`)
+
+The orchestrator merged 0.7.0 (80d61d7) and ran the bench. Step 0 was exactly as
+predicted. **Step 1 never reached activation: fw 0.7.0 hangs hard about fifteen
+seconds into *staging*, three runs out of three** - core 0 silent, no panic
+banner, no `rst:` line, no telemetry, no HTTP, no UDP, until a manual reset. It
+is the build and not the image: `?activate=0` hangs the same way, and card 240's
+own 0.6.0 upload image hangs on 0.7.0 while fw 0.6.0 staged that same file in
+25.4 s.
+
+#### What I ruled out, and how
+
+Every one of these is a measurement or a reading, not an opinion.
+
+| suspected | ruled out by |
+|---|---|
+| **the activation path** | `?activate=0` hangs identically; `request_activation`, `activate_task` and every `otadata` write are downstream of `Upload::finish`, which is never reached |
+| **changed upload logic** | `git diff 0ecb3b6..80d61d7 -- firmware/src/ota.rs \| grep '^-'` removes **four lines, all `use` statements**. `Upload::start`, `took`, `flush`, `stage_sector`, `read_back`, `verify_flash` and `finish` are byte-for-byte 0.6.0's. The `busy`-while-on-trial check is two atomic loads before the first `await`, and card 240's await-before-the-claim ordering is untouched |
+| **stack depth** | built 0.6.0 from `git archive 0ecb3b6` and diffed every `entry a1, N` frame. On the staging chain **nothing changed**: `NorFlashRegion::write` 4,160 in both, `read` 4,144 in both, `stage_sector` 144, `route_request`'s poll actually *shrank* 2,304 -> 2,128. `.stack` is 704 bytes lower and the device measured 13,040 of 26,240 used during the hang |
+| **IRAM** | +384 bytes, and fully explained: `esp_storage::chip_specific::spiflash_write_encrypted` (256) and `esp_rom_spiflash_write_encrypted` (84) are newly linked because 0.7.0 is the first build that calls `FlashRegion::write` at all (for `otadata`). Nothing on the staging path moved into or out of IRAM |
+| **the staging buffer landing in reclaimed ROM DRAM the ROM scribbles on** | `esp-hal-1.2.2/ld/esp32/memory.x` lines 31-42 reserve `reserved_rom_data_pro/app` and `reserved_rom_stack_pro/app` explicitly; `dram2_seg` starts at 0x3ffe7e30, after all of them |
+| **the RTC watchdog armed or fed on a non-trial boot** | on a Settled boot `ota_trial_armed()` is false (the breadcrumb is zeroed by the flash), `on_trial` is false, and `disarm_watchdog` returns on `ARMED.swap(false)` before touching a register. **No RWDT register is written at all**, which is also why no watchdog reset appeared |
+| **a new core-1 or interrupt-level user** | core 1 runs one task and `display_task` is unchanged; nothing this card added is `#[ram]` or runs on core 1 |
+
+#### What that leaves, honestly
+
+**I could not find the cause by reading, and I am not going to invent one.**
+What 0.7.0 does differently on a normal boot, during an upload, is exactly four
+things: two relaxed atomic operations (`http::REQUESTS`, `ota::panel`), one extra
+embassy task parked forever on a `Signal`, and - the only one that touches
+hardware - **`esp_hal::rtc_cntl::Rtc::new(peripherals.RTC_TIMER)` held in a
+`static Mutex` for the life of the device, `await`ed before `esp_rtos::start`
+has run**. That is the suspect, it is the thing this branch removes, and I want
+to be clear that removing it is **a suspect eliminated, not a diagnosis
+confirmed**. The other possibility I cannot exclude is that the latent deadlock
+research 006 section 4 predicted - core 1 stalled by `multicore_auto_park` while
+it holds a lock core 0 then waits on - has always been there and 0.7.0's layout
+made it likely rather than rare.
+
+Either way the honest answer to "why did it go quiet" was: **nothing on this
+device could say.** So the rest of this section is about making that impossible.
+
+#### The core-0 liveness watchdog
+
+This is the second silent wedge on this device that left no evidence (card 234
+was the first), and it is the one failure the owner's bar - "pretty crash proof"
+- does not tolerate: a panel that needs somebody to walk over and unplug it.
+The orchestrator asked whether a liveness watchdog is cheap enough to just
+include. **It is, and it should replace card 241's trial-only one outright.**
+
+* **MWDT0** (`esp_hal::timer::timg::Wdt<TIMG0>`), not the RTC watchdog, for a
+  reason that matters here: `Wdt::new()` takes **no peripheral token** - it is
+  what `esp_hal::init` itself uses to disable them - so nothing is held in a
+  static, nothing is moved out of `Peripherals`, and `feed()` is a free
+  synchronous call from any task. That is what lets the suspect above be deleted
+  rather than worked around.
+* **Armed on every boot**, synchronously, as the first statement after
+  `esp_hal::init` - which has just disabled every watchdog this chip has.
+  No `.await` before `esp_rtos::start`; that was card 241's mistake.
+* **`LIVENESS_WDT_S` = 20 s**, fed by `telemetry_task`'s five-second loop. One
+  feeder, one meaning: *core 0's executor scheduled a task in the last twenty
+  seconds*. Four missed ticks is the trip. The longest window in which core 0
+  legitimately cannot run a task is one ROM flash erase with interrupts masked -
+  40 ms measured, 400 ms by the data sheet - which is fifty times under the
+  margin. The staging loop feeds it too (`stage_sector` and `read_back`), purely
+  so a pathological erase can never be mistaken for a wedge.
+* **Turned off in exactly one place**: card 243's crashed screen, which parks the
+  device on purpose with no tasks running. A watchdog there would turn the
+  crash-loop guard's deliberate stop into the boot loop it exists to end.
+* **It supersedes the trial watchdog.** An image on trial that hangs now resets
+  in 20 s instead of 240, and the bootloader rolls it back on that reset exactly
+  as before - so the trial is *better* covered and `F_OTA_TRIAL`, `set_ota_trial`
+  and `ota_trial_armed` are gone with the RTC handle.
+
+**What it costs:** `.stack` 26,240 -> **26,200** (-40), `.bss` 110,464 ->
+110,440 (-24: the `Rtc` mutex was bigger than the `AtomicBool` that replaced it),
+4 bytes of `.rtc_slow.persistent`, and three register writes every five seconds.
+`Wdt` is a zero-sized marker, so there is no handle anywhere.
+
+#### Making the next one impossible to miss
+
+A watchdog that reboots a wedged device is worth little if the next boot cannot
+say what it was doing. So the breadcrumb gains two things:
+
+* **`F_IN_UPLOAD`**, one bit, set by `Upload::start` and cleared by its `Drop`
+  (it reuses the bit `F_OTA_TRIAL` vacated, so the flags word costs nothing).
+* **`W_SECTOR`**, one word, written once per sector by `Upload::flush`. This is
+  the word that answers the question the orchestrator asked me to work out from
+  the code and could not be answered from it: **is the hang a time or an
+  offset?** Two volatile writes and a fourteen-word XOR against a sector that
+  costs a hundred milliseconds, so it is free.
+
+`MAGIC` goes to `0x53434202` because the layout grew; an older record reads as
+"not ours" and is wiped, which loses one boot counter across the update that
+installs this and nothing else. `.rtc_slow.persistent` 52 -> 56 bytes, still
+**zero `.bss`**.
+
+The boot after a reset during an upload now says, before anything else:
+
+```
+boot: #2 since power-on, reset reason timer_wdt (the boot before it started with power_on)
+boot: the previous boot was reset while a FIRMWARE UPLOAD was in flight - reset reason timer_wdt, after 147 sector(s), i.e. 602112 bytes in (offset 0x93000 of the staged slot). otadata is untouched, so this is the image that was running before.
+```
+
+and `GET /api/v1/panic` gains `last_reset` (`"wdt"` when the liveness watchdog
+fired), beside `boot_count`, so a reader who was not on the serial port sees the
+same thing.
+
+#### What the orchestrator should see on the bench
+
+Flash `screeny-fw-0.7.0-default.elf` (rebuilt from this branch) and run the card's
+step 1 again. **Two outcomes, and both are useful:**
+
+1. **It works.** The upload completes in ~25 s, activates, boots on trial,
+   confirms at 60-120 s. The suspect was the cause; the watchdog is a net win
+   the device keeps.
+2. **It wedges again.** The device **reboots itself within 20 s** instead of
+   going quiet, comes back on the network, and its first two lines name the
+   reset reason and **the exact sector the upload had reached**. Repeat it
+   twice: if the sector number is the same every time it is an offset and I will
+   go and look at that address; if it drifts it is a time or a race, which
+   points at the `multicore_auto_park` deadlock research 006 section 4 predicted
+   and at a very different fix. Either way `otadata` is untouched, the device is
+   reachable, and nobody has to power-cycle anything.
+
+The stop condition is unchanged: `tools/fw-run.sh` always wins. Nothing in this
+branch can write outside the inactive slot and `otadata`, and the watchdog's
+reset is a system reset that leaves both alone.
+
+#### Numbers, and the artefacts
+
+`tools/fw-size.sh`, floor 24,576, **every artefact in the scratchpad rebuilt
+from this branch** with the same names as before:
+
+| build | `.stack` 0.7.0 | `.stack` 0.7.0b | `.bss` |
+|---|---|---|---|
+| default | 26,240 | **26,200** | 110,440 |
+| `panic-test` | 26,176 | **26,120** | 110,504 |
+| `http-selftest` | 25,824 | **25,768** | 110,824 |
+| `start-in-portal` | 26,240 | **26,200** | 110,440 |
+| `ota-test-unhealthy` | 26,240 | **26,200** | 110,440 |
+| `ota-test-panic` | 26,176 | **26,120** | 110,504 |
+
+`.rtc_slow.persistent` 52 -> 56 bytes; `.rwtext` unchanged at 66,932; heap
+unchanged (still one 4 KB allocation per upload and nothing else).
+
+`timeout 1200 cargo test`: **843 passed, 0 failed** - including the
+`screeny-studio` wall-clock test that flaked on the previous run.
+`cargo clippy --workspace --all-targets`: silent. Firmware clippy: the same
+pre-existing warnings as `main`, none new. `screeny-probe http` against the
+simulator: **41 passed, 0 failed, 4 skipped, 0 connects refused**.
+
+| file | `esp_app_desc.version` | bytes |
+|---|---|---|
+| `screeny-fw-0.7.0-default.elf` | `0.7.0` | - |
+| `screeny-fw-0.7.1-good.{bin,elf}` | `0.7.1` | 1,014,288 |
+| `screeny-fw-0.7.1-unhealthy.{bin,elf}` | `0.7.2-unhealthy` | 1,014,160 |
+| `screeny-fw-0.7.1-panic.{bin,elf}` | `0.7.3-panic` | 1,014,768 |
+
+All three pass `screeny-probe fw-scan`. `FW_VERSION` is back at `0.7.0` and the
+tree is clean.

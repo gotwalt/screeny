@@ -29,6 +29,27 @@ pub mod rng;
 pub mod snapshot;
 pub mod variety;
 
+/// **The frame rate. There is one** (card 161).
+///
+/// The owner, 2026-09-20: "i think we can remove 60fps support, as the display
+/// really can't do much with it. let's just make everything target 30 with no
+/// variability for now." So 30 is what a patch is rendered at, what a player
+/// paces itself by, what `screeny-art play|pipe` puts out, what the snapshot
+/// tool steps at, and what a browser is shown. Nothing offers a choice.
+///
+/// It matches the panel: `CLAUDE.md`'s "Target: 30 fps", which is also the
+/// cadence ceiling [`output::SenderOutput`]'s link applies. Rendering above it
+/// only fed the link frames it folded away - before this card, half of them.
+///
+/// Every rate on the art and studio side reads this constant. Three things are
+/// deliberately **not** it: `screeny_studio::player::IDLE_FPS`, the 5 fps a
+/// player drops to when no panel is connected and nobody is watching; the
+/// sender's own loss ladder in `crates/screeny` (spec 6.9), which is protocol
+/// behaviour and invisible unless the network is losing frames; and
+/// `screeny stream --fps`, the bench tool that measures the device at other
+/// rates on purpose.
+pub const FPS: f64 = 30.0;
+
 /// Whether this process can render the GPU patches, and why not when it cannot
 /// (card 145).
 ///

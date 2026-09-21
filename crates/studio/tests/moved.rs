@@ -152,8 +152,8 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
 
     // Something specific on each, so "it kept what it was playing" is a thing
     // a test can check rather than a hope.
-    post(at, "/api/v1/player/set", r#"{"device":"mov001","patch":"metaballs","seed":4242,"fps":30}"#).await;
-    post(at, "/api/v1/player/set", r#"{"device":"sta002","patch":"plasma","seed":1717,"fps":30}"#).await;
+    post(at, "/api/v1/player/set", r#"{"device":"mov001","patch":"metaballs","seed":4242}"#).await;
+    post(at, "/api/v1/player/set", r#"{"device":"sta002","patch":"plasma","seed":1717}"#).await;
     let before = until_json(at, PATIENCE, "both panels to take their patch", "/api/v1/status", |s| {
         device(s, "mov001")["player"]["patch"] == "metaballs" && device(s, "sta002")["player"]["patch"] == "plasma"
     })
@@ -191,7 +191,6 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
     assert_eq!(d["label"], "wanderer", "and it is still the panel that was added: {d}");
     assert_eq!(d["player"]["patch"], "metaballs", "it lost what it was playing: {d}");
     assert_eq!(d["player"]["seed"], 4242, "it lost its seed: {d}");
-    assert_eq!(d["player"]["fps"], 30.0);
     assert_eq!(after["devices"].as_array().map(Vec::len), Some(2), "a move must never make a third device");
     assert_eq!(
         after["preview"]["device"], attached_before,

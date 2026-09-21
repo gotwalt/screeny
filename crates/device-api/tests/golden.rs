@@ -72,6 +72,7 @@ fn the_panic_breadcrumb() {
                 consecutive: 1,
             }),
             update: None,
+            last_reset: Some(ResetReason::PowerOn),
         },
     );
 }
@@ -86,6 +87,7 @@ fn the_panic_breadcrumb_of_a_device_that_has_not_panicked() {
             panic_count: 0,
             last_panic: None,
             update: None,
+            last_reset: Some(ResetReason::PowerOn),
         },
     );
 }
@@ -108,6 +110,7 @@ fn an_update_on_trial() {
                 slot: FwSlot::Ota1,
                 version: Some(text("0.7.1").unwrap()),
             }),
+            last_reset: Some(ResetReason::Software),
         },
     );
 }
@@ -135,6 +138,7 @@ fn an_update_that_was_rolled_back() {
                 slot: FwSlot::Ota1,
                 version: Some(text("0.7.1").unwrap()),
             }),
+            last_reset: Some(ResetReason::Software),
         },
     );
 }

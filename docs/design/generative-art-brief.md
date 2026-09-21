@@ -29,7 +29,7 @@ If this brief disagrees with those, they win; tell your user so this file gets f
 | Black | LED off. True black, effectively infinite contrast | measured |
 | Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** across the 154 Hz refresh: darkest visible level is about sRGB 6 (it was 34 without dithering) | measured |
 | Brightness | runtime 0-255 via LED on-time, **does not cost colour depth**; 25 real steps; firmware cap 160, default 96 | measured |
-| Frame rate | **30 fps is the design rate**: every codec ran 60 s with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so 60 fps is plausible, but WiFi loss and jitter, not the device, set the ceiling | measured |
+| Frame rate | **30 fps, and nothing else** (card 161): every codec ran 60 s at 30 with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so faster is *possible* - but WiFi loss and jitter set the ceiling, the picture gains nothing, and the owner asked for one rate with no variability. `screeny_art::FPS` is it | measured, then decided |
 | Transport | one frame = one UDP datagram, **1464 bytes** for all 2048 pixels (~5.7 bits/pixel) | decided |
 | Delivery | unreliable, newest frame wins, a lost frame is simply skipped; the panel holds the last frame | decided |
 | Latency | ping RTT median 5 ms, p99 21 ms, max 37 ms; decode 0.2-0.8 ms; inter-arrival jitter 2-5 ms | measured |
@@ -297,15 +297,20 @@ Seven things about it that should change how you build the output stage.
    decoder - so the studio's frame size, codec and **preview picture** are what the
    panel will really do, with or without a panel present. `budget.rs` is deleted.
    **[done, card 101]**
-5. **Keep your 60 fps loop.** Pacing is yours - the link never sleeps - and by
-   default it drops frames that arrive before the panel's next slot rather than
-   sending them, on an absolute schedule. A 60 fps producer into a 30 fps panel puts
-   30 fps on the wire and the device's superseded counter stays at zero.
-   **[measured]** Do *not* solve this by rendering at 30: render at whatever suits
-   the patch and let the link decimate. `Link::fps()` is the rate the panel is
-   actually keeping up with, which moves - the firmware is clean to 120 fps
-   **[measured]**, the owner's target is 30, and sustained packet loss steps it down
-   and back up by itself.
+5. **Render at `screeny_art::FPS`, which is 30.** Pacing is still yours - the link
+   never sleeps - and by default it drops frames that arrive before the panel's
+   next slot rather than sending them, on an absolute schedule. At the panel's own
+   rate there is nothing to drop: the device's superseded counter stays at zero and
+   so does `frames_coalesced`. **[measured]**
+
+   This paragraph used to say the opposite - "keep your 60 fps loop, do *not* solve
+   this by rendering at 30, let the link decimate" - and card 161 reversed it on
+   the owner's instruction: the display can do nothing with the extra frames, so
+   half the rendering was being thrown away and a patch's motion was sampled at 60
+   and shown at 30. **Step your patch by `ctx.dt`, not by a frame count**, and the
+   rate is then something the system can change without changing your patch.
+   `Link::fps()` is still the rate the panel is actually keeping up with, which
+   moves: sustained packet loss steps it down and back up by itself (spec 6.9).
 6. **The panel going away is not your problem.** `Link::send` cannot fail because of
    the network. A device that reboots, drops off WiFi or changes address is a run of
    `Sent::Dropped` and a counter; the link re-resolves (by mDNS name, so it follows a

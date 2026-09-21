@@ -8,5 +8,6 @@
     "line": 321,
     "consecutive": 1
   },
-  "update": null
+  "update": null,
+  "last_reset": "power_on"
 }

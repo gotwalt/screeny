@@ -27,7 +27,7 @@
 //!
 //! # What a browser may ask for (card 120)
 //!
-//! One frame packet is 6196 bytes. At 60 fps that is 372 KB/s per tab, sent
+//! One frame packet is 6196 bytes. At 30 fps that is 186 KB/s per tab, sent
 //! whether or not the tab is visible and whether or not it can draw that fast,
 //! which over a tailnet or to a phone is a lot for a 64x32 picture. So a socket
 //! carries a **pace**, set by the query string when it opens
@@ -37,7 +37,10 @@
 //! {"type":"preview","fps":30,"repeat":false}
 //! ```
 //!
-//! - `fps`: the most frame packets a second this socket wants. **`0` means
+//! - `fps`: the most frame packets a second this socket wants. It is a cap on
+//!   what this socket is *sent*, not a rate anything renders at: card 161 left
+//!   it alone because **`0`** is how a hidden tab asks for nothing.
+//!   **`0` means
 //!   none** - what the page asks for when its tab is hidden. The status
 //!   heartbeat and state changes carry on either way, so a hidden tab stays up
 //!   to date for about a kilobyte a second and is right the moment it is
@@ -56,7 +59,7 @@
 //! **A hidden tab is not a watcher.** `fps: 0` gives up this socket's claim on
 //! [`crate::page::Screen::watchers`], which is what a player reads to decide
 //! whether anybody is looking - so a studio whose panel is away and whose only
-//! tabs are hidden idles at `player::IDLE_FPS` instead of rendering 60 fps for
+//! tabs are hidden idles at `player::IDLE_FPS` instead of rendering for
 //! nobody.
 //!
 //! # And the state is paced too (card 196)
@@ -97,18 +100,20 @@ use crate::AppState;
 
 /// How long one message may take to reach a browser before the connection is
 /// treated as dead. A client that cannot take 6 KB in this long is not
-/// watching a 60 fps preview.
+/// watching a preview at all.
 const STALL: Duration = Duration::from_secs(3);
 
-/// Frame packets a second for a socket that does not say what it wants.
+/// Frame packets a second for a socket that does not say what it wants: every
+/// frame there is.
 ///
-/// The panel's target is 30 fps (`CLAUDE.md`), a 64x32 picture at 30 is smooth
-/// by any measure, and a client that really does want every frame of a 60 fps
-/// player only has to say `?fps=60`.
-pub const DEFAULT_FPS: f64 = 30.0;
-/// The most a socket may ask for: the player's own ceiling, because there is
-/// nothing faster to send.
-const MAX_FPS: f64 = crate::player::MAX_FPS;
+/// This used to be "30 of a 60 fps player's frames, because 30 is smooth and
+/// the rest is bandwidth". Since card 161 a player renders at 30, so the
+/// default pace and the render rate are the same number and a socket that says
+/// nothing is sent everything.
+pub const DEFAULT_FPS: f64 = screeny_art::FPS;
+/// The most a socket may ask for. Nothing is rendered faster than
+/// [`screeny_art::FPS`], so asking for more can only mean "everything".
+const MAX_FPS: f64 = screeny_art::FPS;
 /// And the slowest that is still a rate rather than "stop": one frame every
 /// ten seconds. Only a guard - `Duration::from_secs_f64` panics on an absurd
 /// one - since `0` is how a browser says "none".
@@ -194,7 +199,7 @@ impl Pace {
     /// slow to read one.
     ///
     /// The frame **nearest** the deadline is the one that goes, not the first
-    /// one past it: a 30 fps cap on a 60 fps player whose frames land a
+    /// one past it: a 10 fps cap on a 30 fps player whose frames land a
     /// fraction early would otherwise take every third frame and deliver 20.
     /// So a frame counts as due once the next one would be further from the
     /// deadline than this one is - half a source frame early, in other words,

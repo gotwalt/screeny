@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "sender")]
 const PLAY_USAGE: &str = "\
-  screeny-art play <patch> --to NAME|ADDR [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--wait] [--set id=value]...
+  screeny-art play <patch> --to NAME|ADDR [--seed N] [--seconds S] [--panel MODEL] [--wait] [--set id=value]...
 ";
 #[cfg(not(feature = "sender"))]
 const PLAY_USAGE: &str = "\
@@ -26,14 +26,16 @@ usage:
   screeny-art list
 ";
 const USAGE_TAIL: &str = "\
-  screeny-art pipe <patch> [--seed N] [--fps 60] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+  screeny-art pipe <patch> [--seed N] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
   screeny-art snapshot <patch> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+
+Everything here runs at 30 frames a second: the panel's rate, and the only one
+(card 161). There is no flag for it.
 
 `play` streams to a panel: `--to` takes an mDNS instance name (preferred - the
 link re-resolves it, so it follows the device across a DHCP lease) or an
-`IP[:PORT]`. It renders at `--fps` and lets the link decimate to whatever the
-panel is keeping up with. `--wait` starts without a panel and picks one up when
-it appears instead of failing.
+`IP[:PORT]`. `--wait` starts without a panel and picks one up when it appears
+instead of failing.
 
 `pipe` writes 6144-byte sRGB frames (64x32, row-major R,G,B) to stdout, paced by
 the wall clock. The seed is logged to stderr so a good run can be reproduced.
@@ -66,7 +68,6 @@ struct Args {
     patch: &'static patch::PatchDef,
     params: Params,
     seed: u64,
-    fps: f64,
     seconds: Option<f64>,
     at: f64,
     warmup: f64,
@@ -120,7 +121,6 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         patch,
         params: Params::defaults(patch.params),
         seed: SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.subsec_nanos() as u64),
-        fps: 60.0,
         seconds: None,
         at: 5.0,
         warmup: 2.0,
@@ -143,7 +143,11 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         let num = || value.parse::<f64>().map_err(|_| format!("{flag}: `{value}` is not a number"));
         match flag.as_str() {
             "--seed" => a.seed = value.parse().map_err(|_| format!("--seed: `{value}` is not an integer"))?,
-            "--fps" => a.fps = num()?.clamp(1.0, 60.0),
+            // Card 161 retired this. Taken and ignored rather than refused:
+            // there is one rate now, and a command line somebody has in a
+            // shell history or a note should still run - it just says so once,
+            // here, instead of quietly doing something different.
+            "--fps" => eprintln!("screeny-art: --fps is gone; everything runs at {} fps (card 161)", screeny_art::FPS),
             "--seconds" => a.seconds = Some(num()?),
             "--at" => {
                 a.at = num()?;
@@ -207,7 +211,7 @@ fn pipe(a: Args) -> Result<(), String> {
     let mut patch = (a.patch.make)(a.seed);
     let mut pipeline = Pipeline::new(a.output);
     let mut out = PipeOutput(std::io::stdout().lock());
-    let period = Duration::from_secs_f64(1.0 / a.fps);
+    let period = Duration::from_secs_f64(1.0 / screeny_art::FPS);
     let start = Instant::now();
     let mut next = start;
     let mut last_t = 0.0;
@@ -237,10 +241,11 @@ fn pipe(a: Args) -> Result<(), String> {
 
 /// Stream a patch to a panel.
 ///
-/// The loop is `pipe`'s, unchanged: render at `--fps` off the wall clock and
-/// hand every frame over. The link owns the cadence and folds away the frames
-/// the panel has no slot for, so rendering at 60 into a 30 fps panel puts 30 on
-/// the wire and the device's superseded counter stays at zero.
+/// The loop is `pipe`'s, unchanged: render at [`screeny_art::FPS`] off the wall
+/// clock and hand every frame over. That is the panel's own rate, so the link's
+/// cadence ceiling has nothing to fold away and the device's superseded counter
+/// stays at zero (card 161; before it this rendered at 60 and the link threw
+/// half of it away).
 #[cfg(feature = "sender")]
 fn play(a: Args) -> Result<(), String> {
     use screeny_art::output::{target_for, SenderOutput};
@@ -266,7 +271,7 @@ fn play(a: Args) -> Result<(), String> {
 
     let mut patch = (a.patch.make)(a.seed);
     let mut pipeline = Pipeline::new(a.output);
-    let period = Duration::from_secs_f64(1.0 / a.fps);
+    let period = Duration::from_secs_f64(1.0 / screeny_art::FPS);
     let start = Instant::now();
     let mut next = start;
     let mut last_t = 0.0;

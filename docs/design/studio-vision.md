@@ -45,11 +45,11 @@ a heavy dependency, and the real deployment is a server nobody looks at.
 
 This is cheap because of how the Studio was built: the 11 commands become 11 routes,
 the UI's single `invoke()` wrapper becomes `fetch()`, and frame polling becomes a
-WebSocket that pushes preview frames (6 KB RGB at 30-60 fps is ~200-370 KB/s).
+WebSocket that pushes preview frames (6 KB RGB at 30 fps is ~190 KB/s).
 
 ```
                        ┌──────────────── screeny-studio (one process) ────────────────┐
- browser(s) ──HTTP/WS──┤ api ── Players: one per panel ── patch + params + seed + fps  │
+ browser(s) ──HTTP/WS──┤ api ── Players: one per panel ── patch + params + seed       │
                        │          │  render (screeny-art pipeline)                    │
                        │          ├─> screeny::Sender (exact indexed, reconnects) ────┼──UDP──> panel(s)
                        │          └─> the page's frame cell ──WS──> browsers          │

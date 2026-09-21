@@ -100,9 +100,10 @@ struct Run {
 /// Render `frames` frames of `id` through the pipeline and send every one of
 /// them to a simulator, then collect what the device displayed.
 ///
-/// `Cadence::Free` on purpose. The default ceiling would fold a 60 fps
-/// producer down to the panel's rate, which is right in a real run and wrong
-/// here: the meter and the sender each keep their own encoder, and the
+/// `Cadence::Free` on purpose. This test feeds frames as fast as it can render
+/// them, and the default ceiling would fold that down to the panel's rate -
+/// right in a real run and wrong here: the meter and the sender each keep their
+/// own encoder, and the
 /// chooser's hysteresis means two encoders only agree if they are shown the
 /// same frames. One in, one out is what makes "the preview is what the panel
 /// shows" a checkable statement rather than a usually-true one.

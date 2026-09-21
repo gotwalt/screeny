@@ -54,10 +54,12 @@ Three things are worth knowing before building on it:
 - **Indexed frames go on the wire exactly.** Up to 32 colours whatever the
   indices, up to 256 when they compress. Pixel-exactness is checked end to end
   against `screeny-sim` in [`tests/sender.rs`](tests/sender.rs).
-- **Render at whatever suits the patch.** The link never sleeps and never
-  bursts: it applies the device's cadence ceiling itself, so a 60 fps patch into
-  a 30 fps panel puts 30 on the wire and the device supersedes nothing. Half the
-  frames come back `Coalesced`, which is the system working.
+- **One rate: 30 fps** (`screeny_art::FPS`, card 161). It is the panel's rate,
+  it is what `play`, `pipe` and the studio's players render at, and there is no
+  flag or control that offers another. The link still applies the device's
+  cadence ceiling itself - it never sleeps and never bursts - but a patch handed
+  to it at 30 has nothing to fold away, so `Coalesced` sits at zero instead of
+  taking half the frames.
 - **The network cannot fail a send.** A panel that reboots, moves or is off is a
   run of counters in `PanelStatus`, not an error in the render loop.
 
@@ -477,6 +479,90 @@ upstream repositories, and `--preview` prints every face as ASCII, which is how
 they were chosen. Faces are looked up by `char`, so a later card can add
 letters without touching a caller.
 
+## Flock (`patches/flock/`, id `flock`)
+
+Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
+3D steering round invisible geometry, on the CPU, at 0.39 ms a frame. Card 168.
+
+- **The camera is `birds[0]`.** Same rules, same speed band, same kind of turn
+  limit, in every other bird's neighbour list and they in its. What it has on
+  top is only what it takes to be a good seat, and each piece of it was put
+  there by a measurement that failed without it:
+  - it rides at the **trailing edge**, along the flock's *ground track* rather
+    than its course (follow a diving flock down its own vector and the camera
+    is parked above it), a little **below** the flock so the view is nose-up
+    and the horizon sits low with the birds against the sky;
+  - it is **more agile than a bird**, not less - a camera whose turn radius is
+    larger than the flock's circle is thrown off it every time they wheel -
+    and it may fly **slower**, because one that cannot fly slower than the
+    flock can never drop back once it has drifted ahead;
+  - it gets extra turn budget when its altitude is off the flock's, which is
+    the only way to follow a dive;
+  - where it **looks** is its own (smoothed) heading blended towards the
+    flock, low-passed over ~0.9 s, rate-limited, and then held on a **leash**:
+    the flock's middle is never more than 16 degrees off the view axis. The
+    leash is on the look, not on the look's target - a low pass 50 degrees
+    behind its target still shows an empty panel.
+  - the view's angular rate has a **hard ceiling** (26 deg/s) that even the
+    leash may not break, and the horizon is held within 11 degrees of level so
+    it is always in shot.
+- **Invisible geometry**: five blobs laid out from the seed, drifting on
+  independently drawn 90-260 s periods (nothing faster, or they chase birds
+  rather than being scenery), a floor, a ceiling, a soft horizontal boundary
+  and a slow attractor. `terrain` says how many blobs are *real*, so moving it
+  does not re-roll the world. A bird avoiding one may turn up to 2.2x harder
+  than it cruises, as a real one does - without that the avoidance force is
+  simply clipped away by the cruise turn limit and birds fly straight through.
+- **Drawing a bird with almost nothing**: a body dash and two wing strokes
+  whose dihedral beats, down quicker than up, each bird on its own phase, with
+  a glide when it descends. Strokes go into a supersampled coverage buffer by
+  bounding box, so nothing is tested against every sample. **Depth reads as
+  contrast far more than as size** at 64x32: 16 m of air halves how much a bird
+  stands out, and that is what stops fifty of them reading as fog.
+- **The frame is indexed and exact**, through a **two-dimensional palette**: 14
+  sky bands x 6 ink levels. The sky band comes from the view ray's elevation
+  plus the sun's glow, the ink level from the coverage buffer, and each is
+  quantised through its own ordered dither (Bayer 4x4 for the sky, which
+  compresses; blue noise for the ink). One consequence worth knowing: **the
+  two tonal schemes are the same index image with different colours in front
+  of it**, so they cost the same on the wire.
+- **The sky is one ramp, brightest at the horizon**, falling off both upwards
+  and downwards with a small step at the horizon itself so it is a line and not
+  just the top of a gradient. The sun is the top two entries of that same ramp
+  and sits low, where the sky is already at the top of it - a high sun would
+  make the glow sweep through every intermediate band and draw a rainbow ring.
+- **Colour rotates** (`wheel`, deg/min, 0 is off) in OKLCH at held lightness,
+  so sky and birds keep their relationship and nothing flashes or goes muddy.
+
+Two tonal schemes, and **light on dark is the one for this panel**: a white
+bird two LEDs across on a near-black sky has the contrast that size cannot
+give it, and it runs at 7-9% APL where dusk runs at 24%. The dusk silhouettes
+are the more atmospheric picture and the horizon band is lovely, but a dark
+shape on a lit sky is the weaker read at this size. Dusk wants a warm horizon:
+`--set scheme=1 --set hue=35 --set spread=95`.
+
+```bash
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 --out level.png --scale 12
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 163.8 --warmup 163.8 --out banked.png
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 \
+  --set scheme=1 --set hue=35 --set spread=95 --out dusk.png
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 --set near=2.5 --out close.png
+```
+
+**`--warmup` must equal `--at`.** The flight is state: a snapshot that does not
+render the whole run from zero is a different flight.
+
+Wingbeats and camera motion only read in *sequences*, so judge it from
+consecutive frames (`--at` stepped by 1/30 s or a tenth), never from a still.
+
+Measured over three seeds x ten simulated minutes at the defaults: 17-35 birds
+in frame at worst and 48 of 55 at the median, nearest bird 6.7 m and the
+biggest 6.0 LEDs across, the camera 12 m from the flock's middle, view yaw p95
+15.5-18.8 deg/s, roll p95 1.8-2.6 deg/s, every speed and turn rate inside its
+limit, and at worst 4.9 m of clearance from the invisible geometry. Over 1800
+frames of each scheme, **not one frame went out lossy** (worst 1194 of 1464
+bytes). The flight is identical at 30 and 60 fps, to the pixel.
+
 ## GPU and 3D patches
 
 GPU patches render through [wgpu](https://wgpu.rs) (`crates/art/src/gpu/`). It
@@ -561,7 +647,7 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 | Assumption | Where |
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
-| The panel takes 60 fps (the brief measured ~30; the owner says to assume 60). Players and `pipe` default to 60; the studio's page offers the whole 1..60 range (card 172) | `crates/studio/src/player.rs`: `MIN_FPS`/`MAX_FPS`; `screeny-art pipe --fps` |
+| The panel takes 30 fps. This stopped being an assumption in card 161: the brief measured ~30, the device's cadence ceiling is 30, and the owner asked for one rate with no variability. `screeny_art::FPS` is it, and nothing offers a choice | `crates/art/src/lib.rs`: `FPS` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 
@@ -615,8 +701,9 @@ fits where a 40-colour field of confetti does not.
 One thing to know about the meter rather than assume: it and the sender each
 hold their own `Encoder`, and the chooser gives the previous frame's codec a
 small advantage. Fed the same frames they answer identically (there is a test);
-under the link's default cadence ceiling a 60 fps patch sends every other frame,
-so the two histories differ and a *marginal* frame can take a different codec.
+if the link's cadence ceiling ever does fold a frame away - under spec 6.9 a
+sender that is losing frames steps its rate down - the two histories differ and
+a *marginal* frame can take a different codec.
 Never a different exactness. Point the meter at the connected device with
 `pipeline.meter().set_limits(lim.budget, lim.codecs)` so it is at least
 measuring against the right budget.

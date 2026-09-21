@@ -18,12 +18,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-// Card 172 removed `RATES`, the two rates the page used to offer. A player may
-// be at any rate in `player::MIN_FPS..=player::MAX_FPS` - the soak uses 10, 15
-// and 24 - and a control that can only say 30 or 60 cannot show where a panel
-// actually is. The page's control is now a slider over the player's whole
-// range, with detents at the rates worth reaching for, and `set_playback`
-// clamps instead of ignoring.
+// Card 105 offered two rates here, card 172 replaced them with a slider over
+// the player's whole range, and **card 161 removed the control altogether**:
+// there is one rate, `screeny_art::FPS`, the panel's own. Nothing on the page
+// offers a frame rate and nothing accepts one. What is left is
+// [`StudioState::fps`], which reports it.
 
 /// Frame packet header size; see [`pack`] and `ui/picture.js`.
 pub const HEADER: usize = 52;
@@ -73,8 +72,8 @@ pub fn blank_packet() -> Vec<u8> {
 ///
 /// Card 120: "open a socket" and "want frames" came apart, because a tab that
 /// has been switched away from asks for none. A hidden tab is therefore *not* a
-/// watcher - it must not hold a panel-less studio at 60 fps for a phone in a
-/// pocket - so the count is kept here by [`Viewer`] rather than read off the
+/// watcher - it must not hold a panel-less studio at the full rate for a phone
+/// in a pocket - so the count is kept here by [`Viewer`] rather than read off the
 /// `watch` channel's receiver count.
 pub struct Screen {
     frames: watch::Sender<Arc<Vec<u8>>>,
@@ -267,6 +266,12 @@ pub struct StudioState {
     pub output: Output,
     pub paused: bool,
     pub speed: f64,
+    /// The rate everything runs at: `screeny_art::FPS`, always (card 161).
+    ///
+    /// **Reported, never set.** It is still here so the page and any script
+    /// can read the rate rather than writing 30 down for themselves - the
+    /// limiter meter's per-frame tick is drawn from it - and so that a reader
+    /// of `/api/v1/bootstrap` written before this card still finds the field.
     pub fps: f64,
     /// Card 170: whether the panel is being driven. False means the link is
     /// released and the panel is on its own idle screen; the page carries on

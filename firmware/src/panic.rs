@@ -107,7 +107,10 @@ const SETTLE_CYCLES: u32 = 240_000 * SETTLE_MS;
 
 /// `"SCB"` and a layout version. Anything else in word 0 means the region has
 /// never been written by this firmware (or has been written by another one).
-const MAGIC: u32 = 0x5343_4201;
+/// Bumped to `02` by card 241b, which added [`W_SECTOR`]. An older record is
+/// then simply "not ours" and is wiped, which loses one boot counter across the
+/// update that installs this and nothing else.
+const MAGIC: u32 = 0x5343_4202;
 
 /// Mixed into the checksum so that an all-zero or all-ones region cannot pass.
 const CHECK_SALT: u32 = 0x9e37_79b9;
@@ -125,18 +128,19 @@ const F_HALT: u32 = 1 << 1;
 /// reflash between them.
 #[cfg_attr(not(feature = "panic-test"), allow(dead_code))]
 const F_TEST_FIRED: u32 = 1 << 2;
-/// **A firmware update was activated and the next boot is its trial** (card
-/// 241).
+/// **A firmware upload was in flight when the chip last reset** (card 241b).
 ///
-/// One bit rather than the new words the card's first sketch wanted, because
-/// everything else about a trial lives in `otadata`, where it survives a power
-/// cut. What this bit is for is the one question that has to be answered
-/// *before* flash is up: whether to arm the RTC watchdog as the first thing
-/// after `esp_hal::init`, so that an image that hangs before it can read
-/// `otadata` is still replaced. Losing it on a power cycle is harmless and is
-/// the reason it can live here at all: a power cycle is itself a reset, and
-/// the bootloader has already aborted the trial by the time `main` runs.
-const F_OTA_TRIAL: u32 = 1 << 3;
+/// Card 241 used this bit to say "the next boot is a trial", so that the RTC
+/// watchdog could be armed before flash was up. The watchdog is always on now
+/// (`ota::arm_liveness_watchdog`), so nothing has to be remembered for that -
+/// and the bit is worth more spent on the question the bench actually had to
+/// ask: **the device went quiet, and was it in the middle of an upload?**
+///
+/// Set by `ota::Upload::start`, cleared by its `Drop`, and reported by
+/// [`boot`] on the next boot. It is one bit in a word that is already written,
+/// so it costs nothing, and it is exactly the fact a serial log nobody was
+/// attached to would otherwise have taken with it.
+const F_IN_UPLOAD: u32 = 1 << 3;
 
 const W_MAGIC: usize = 0;
 /// Boots since the last power-on, including this one.
@@ -157,9 +161,17 @@ const W_PANIC_BOOT: usize = 9;
 const W_FLAGS: usize = 10;
 /// The reset reason the *previous* boot started with.
 const W_PREV_RESET: usize = 11;
+/// **How far a firmware upload had got, in sectors** (card 241b).
+///
+/// Meaningful only with [`F_IN_UPLOAD`] set. The one word this card added, and
+/// it earns its place: fw 0.7.0 wedged "about fifteen seconds" into staging on
+/// three runs out of three, and nobody could say whether that was a *time* or
+/// an *offset* - which is the difference between a race and a bad address.
+/// With this, the boot after a reset answers it without anyone guessing.
+const W_SECTOR: usize = 12;
 /// XOR of every word above, plus [`CHECK_SALT`].
-const W_CHECK: usize = 12;
-const WORDS: usize = 13;
+const W_CHECK: usize = 13;
+const WORDS: usize = 14;
 
 /// 52 bytes of RTC slow memory, and **not one byte of `.bss`**.
 ///
@@ -338,6 +350,23 @@ pub fn boot() -> bool {
             r.panics,
         ),
     }
+    // Card 241b: **the line that would have saved an evening.** If the bit is
+    // still set, the boot before this one was reset while a firmware upload
+    // was in flight, and this boot is the watchdog (or a brownout, or a panic)
+    // having ended it. Cleared here, so it means the *last* reset and never an
+    // older one.
+    if get(W_FLAGS) & F_IN_UPLOAD != 0 {
+        let sectors = get(W_SECTOR);
+        warn!(
+            "boot: the previous boot was reset while a FIRMWARE UPLOAD was in flight - reset reason {}, after {} sector(s), i.e. {} bytes in (offset {:#x} of the staged slot). otadata is untouched, so this is the image that was running before.",
+            reason_word(reason),
+            sectors,
+            sectors * 4096,
+            sectors * 4096,
+        );
+        put(W_FLAGS, get(W_FLAGS) & !F_IN_UPLOAD);
+        seal();
+    }
     if r.halt {
         warn!(
             "boot: CRASH LOOP - {} panics in a row, each within {} s of a boot. Not starting: the panel says so. Power-cycle the device to clear the breadcrumb.",
@@ -354,42 +383,66 @@ pub fn boot() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// The one bit card 241 keeps here
+// The one bit card 241b keeps here
 // ---------------------------------------------------------------------------
 
-/// Remember that the next boot is a firmware update's trial, or forget it.
+/// Note that a firmware upload is in flight, or that it has finished.
 ///
-/// Called by [`crate::ota`] from either side of a trial: set before the reboot
-/// that activates an image, cleared the moment the boot classification says
-/// this boot is not one. It is a plain flag with no counter beside it: "how
-/// many times has this been tried" is a question `otadata` answers, and answers
-/// across a power cut, which this region does not.
-pub fn set_ota_trial(armed: bool) {
+/// Called by `ota::Upload` from both ends. See [`F_IN_UPLOAD`]: it is what
+/// makes the boot after a silent wedge say *what the device was doing*, which
+/// is the fact card 241b spent an evening not having.
+pub fn set_in_upload(busy: bool) {
     if !intact() {
         wipe();
     }
     let flags = get(W_FLAGS);
-    let next = if armed {
-        flags | F_OTA_TRIAL
+    let next = if busy {
+        flags | F_IN_UPLOAD
     } else {
-        flags & !F_OTA_TRIAL
+        flags & !F_IN_UPLOAD
     };
     if next != flags {
+        put(W_SECTOR, 0);
         put(W_FLAGS, next);
         seal();
     }
 }
 
-/// Is the boot that is starting now a firmware update's trial, as far as RTC
-/// memory knows?
+/// How many sectors of the staged image have been written, so far.
 ///
-/// **Read before `esp_hal::init` has done anything but come up**, and therefore
-/// before the partition table, `otadata` or the store. `false` here does not
-/// mean "not a trial" - a power cycle clears the region - it means "no reason to
-/// arm the watchdog", which is the only decision this answer feeds.
+/// Called once per sector from the staging loop. Two volatile writes and a
+/// fourteen-word XOR against a sector that costs a hundred milliseconds, so it
+/// is free; and if the chip resets mid-upload it is the difference between
+/// "about fifteen seconds in" and "at sector 147, offset 0x93000".
+pub fn note_upload_sector(sectors: u32) {
+    if !intact() {
+        return;
+    }
+    put(W_SECTOR, sectors);
+    seal();
+}
+
+/// The reset reason this boot started with, as [`crate::screeny_device_api`]'s
+/// [`ResetReason`] spells it.
+///
+/// The same register [`crate::http`] reads, exposed here so that
+/// `GET /api/v1/panic` can carry it beside the boot counter: card 241b's
+/// question is "did this device reset itself, and why", and a reader of the
+/// breadcrumb route should not have to poll `status` to find out.
+///
+/// [`ResetReason`]: screeny_device_api::ResetReason
 #[must_use]
-pub fn ota_trial_armed() -> bool {
-    intact() && get(W_FLAGS) & F_OTA_TRIAL != 0
+pub fn reset_reason() -> screeny_device_api::ResetReason {
+    use screeny_device_api::ResetReason as R;
+    match get(W_PREV_RESET) {
+        1 => R::PowerOn,
+        2 | 3 => R::Software,
+        4 => R::DeepSleep,
+        5 => R::Sdio,
+        6 => R::Brownout,
+        7 | 8 => R::Wdt,
+        _ => R::Unknown,
+    }
 }
 
 /// The `panic-test` build's one-shot latch: `true` the first time it is called

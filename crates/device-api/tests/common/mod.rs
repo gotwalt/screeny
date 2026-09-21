@@ -190,6 +190,7 @@ pub fn worst_panic_reply() -> PanicReply {
         // record, since that is the longest one that can exist.
         last_panic: Some(worst_panic()),
         update: Some(worst_update()),
+        last_reset: Some(ResetReason::DeepSleep),
     }
 }
 

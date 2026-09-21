@@ -88,6 +88,7 @@ pub struct Status {
 pub struct PreviewStatus {
     pub patch: String,
     pub seed: u32,
+    /// The one rate, `screeny_art::FPS` (card 161). Reported, never set.
     pub fps: f64,
     pub paused: bool,
     pub ticks: u64,

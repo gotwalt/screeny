@@ -405,6 +405,9 @@ fn panic_breadcrumb() -> Response {
         // simulator has no `otadata` and no slots, so it has never activated a
         // firmware image and saying otherwise would be inventing one.
         update: None,
+        // Card 241b: a simulator is a process. If it stops, the operating
+        // system is what says so, and there is no reset register to read.
+        last_reset: None,
     })
 }
 
