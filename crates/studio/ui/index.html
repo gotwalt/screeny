@@ -158,11 +158,15 @@
           <input type="radio" name="panel" value="dithered"><span>Dithered</span></label>
         <label title="The same panel without its temporal dither: 64 levels, nothing below sRGB 34">
           <input type="radio" name="panel" value="bit_planes"><span>Bit planes</span></label>
+        <label title="Dithered above level 16; below it every held shade sits exactly on a level, so the dark end holds still">
+          <input type="radio" name="panel" value="aligned_dark"><span>Aligned dark</span></label>
       </fieldset>
       <p class="hint">The firmware spreads each colour's sub-level remainder over sixteen panel
         refreshes, so a held colour resolves 1008 duty steps and only sRGB 0 and 1 are black.
         <em>Bit planes</em> is the same panel without that - 64 levels, nothing under sRGB 34 -
-        which is how the darks behave for anything that does not hold still for about 100 ms.</p>
+        which is how the darks behave for anything that does not hold still for about 100 ms.
+        <em>Aligned dark</em> keeps the dithered panel above level 16 and puts every darker
+        shade exactly on a level, so held dark shades do not blink up close (card 188).</p>
       <fieldset class="seg" id="dither">
         <legend>Dither</legend>
         <label><input type="radio" name="dither" value="none"><span>None</span></label>

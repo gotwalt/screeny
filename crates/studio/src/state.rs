@@ -1001,7 +1001,7 @@ fn clean_settings(patch: &str, raw: Option<&serde_json::Value>, repaired: &mut V
 /// 32 and 16 were "the panel when it is dimmed", which this device has not
 /// done since card 020 - it dims the output-enable window and keeps every duty
 /// step - and 64 was the panel before its temporal dither. The setting is now
-/// `output.panel`, one of `dithered` or `bit_planes`.
+/// `output.panel`, one of `dithered`, `bit_planes` or `aligned_dark`.
 ///
 /// A file that still names `levels` **loads**: serde ignores the key and the
 /// panel comes up at its default, which is the device. This is only how the
