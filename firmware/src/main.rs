@@ -209,7 +209,21 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// seconds forgets the WiFi credentials and raises the setup portal. Letting go
 /// during the countdown changes nothing, and the hold is refused - with a
 /// screen that says why - while a firmware update is in flight or on trial.
-pub const FW_VERSION: &str = "0.8.0";
+///
+/// **0.8.2 is the two things the card 230 bench found** (card 247; 0.8.1 was
+/// spent as a bench upload image and is skipped). The status screen no longer
+/// lets the art flicker through: the `IDENTIFY` overlay owns the panel the way
+/// the setup, update and button screens always have, so a frame arriving under
+/// it is received, decoded and counted and simply does not reach the panel
+/// until it ends (`screeny_receiver::Intent::shows_frames`). Its chevron
+/// border also runs off a wall clock now instead of counting redraws, which
+/// had it alternating at 8-13 Hz and faster with a stream arriving than
+/// without. And the setup portal's QR is shown at a fixed, known-good
+/// brightness - the default, which is the level decision 1 measured the
+/// owner's phone scanning - whatever the runtime brightness is, because the
+/// panel dims by shortening the output-enable window and a dim code a phone
+/// cannot read looks perfectly fine to an eye.
+pub const FW_VERSION: &str = "0.8.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -340,6 +354,36 @@ pub static OE_OVERRIDE_DEADLINE_MS: AtomicU32 = AtomicU32::new(0);
 /// because there are two framebuffers and the setting lives in the buffer.
 pub static BRIGHTNESS_DIRTY: AtomicU8 = AtomicU8::new(2);
 
+/// [`SCREEN_BRIGHTNESS`]'s "no, use the runtime setting" value.
+///
+/// `u8::MAX` the same way [`OE_OVERRIDE`] uses it, and it cannot collide with
+/// a real value: the only level ever stored here is
+/// [`display::DEFAULT_BRIGHTNESS`], and 255 is above [`BRIGHTNESS_CAP`]
+/// anyway.
+pub const SCREEN_BRIGHTNESS_NONE: u8 = u8::MAX;
+
+/// A brightness the **screen on the panel** demands, overriding the runtime
+/// setting for as long as it is up (card 247, item 2).
+///
+/// Exactly one screen uses it: the setup portal's QR
+/// (`screeny_provision::wants_fixed_brightness`). The QR is the only thing
+/// this device draws for a *camera* rather than for an eye, and this panel
+/// dims by shortening the output-enable window - runtime brightness 56 lights
+/// 5 of 25 slots where the default lights 9, which a rolling shutter reads as
+/// banding across a 25-module code at one LED per module.
+/// `docs/design/device-web.md` decision 1 measured the owner's phone scanning
+/// this exact bitmap "easily" at the **default** brightness; on the card 230
+/// bench, at 56, it would not scan.
+///
+/// It is a *presentation* override and not a setting: nothing is written to
+/// flash, `BRIGHTNESS` is untouched, `GET_INFO` and `/api/v1/status` keep
+/// reporting what the owner set, and clearing this back to
+/// [`SCREEN_BRIGHTNESS_NONE`] when the portal screen goes away is the whole of
+/// "restore the setting". `crate::net::frames_task` is the only writer, on the
+/// edge, and it bumps [`BRIGHTNESS_DIRTY`] so core 1 rewrites both
+/// framebuffers' OE windows.
+pub static SCREEN_BRIGHTNESS: AtomicU8 = AtomicU8::new(SCREEN_BRIGHTNESS_NONE);
+
 /// First pixel-clock slot of the scan row that the panel is allowed to be
 /// lit for. **This is the anti-ghosting control.** Card 007 swept it on the
 /// bench and found nothing to fix; it stays at the `trail-blank-8` default.
@@ -392,6 +436,14 @@ fn target_oe_slots() -> usize {
         } else {
             return raw as usize;
         }
+    }
+    // Card 247: a screen that has to be readable by a camera rather than by an
+    // eye. Below the bench override, which is explicit and time-boxed, and
+    // through the same `clamp_brightness` every other path uses, so this can
+    // never light the panel past `BRIGHTNESS_CAP` however it is set.
+    let fixed = SCREEN_BRIGHTNESS.load(Ordering::Relaxed);
+    if fixed != SCREEN_BRIGHTNESS_NONE {
+        return display::slots_for(screeny_receiver::clamp_brightness(fixed, BRIGHTNESS_CAP));
     }
     display::slots_for(BRIGHTNESS.load(Ordering::Relaxed))
 }

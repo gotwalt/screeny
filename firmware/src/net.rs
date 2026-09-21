@@ -230,6 +230,7 @@ pub async fn frames_task(
     let mut stuck_sends = 0u32;
     let mut ota_was = false;
     let mut button_was: Option<crate::button::Panel> = None;
+    let mut screen_brightness_was = crate::SCREEN_BRIGHTNESS_NONE;
 
     loop {
         let mut keep_len = 0usize;
@@ -276,11 +277,30 @@ pub async fn frames_task(
         // --- steps 2 and 3: decode the survivor, then swap --------------
         let survivor = have_keep.then(|| &keep[..keep_len]);
         let published = core.flush_frames(now_us(), survivor, &mut producer.back().px, &mut out);
+
+        // --- timers -----------------------------------------------------
+        //
+        // Ahead of the swap below, and that ordering is card 247: the answer
+        // to "may this frame reach the panel?" is `intent`, and an `intent`
+        // read before `tick` would be one tick stale about an overlay that has
+        // just run out. Nothing here touches the producer, so moving it up
+        // costs the frame nothing: `tick` cannot release a lock a frame has
+        // just renewed, and `link_down` only ever turns `Live` into `Hold`,
+        // which shows frames either way.
+        let now = now_us();
+        let link_up = stack.is_link_up();
+        if link_was_up && !link_up {
+            core.link_down(now);
+        }
+        link_was_up = link_up;
+        core.tick(now);
+        let intent = core.intent(now);
+
         // Card 223's screens (see "compose" below). Asked for here because the
         // setup screen is an overlay in the full sense: while it is up a
         // decoded frame is counted and kept for the cross-fade but does **not**
         // reach the panel.
-        let portal = crate::provision::screen((now_us() / 1_000) as u32);
+        let portal = crate::provision::screen((now / 1_000) as u32);
         // Card 240. A firmware update outranks everything, including a live
         // stream: `docs/design/device-web.md` decision 7 says the frame path
         // is the product and nothing may take the panel from a sender -
@@ -302,31 +322,40 @@ pub async fn frames_task(
         // **above** the portal, so that holding the button while the portal is
         // up still shows what is about to happen.
         let button = crate::button::panel();
-        let setup_screen_up = ota.is_some()
+        // **Every** screen that owns the panel, the `IDENTIFY` overlay
+        // included - and that last one is card 247.
+        //
+        // It was missing here for as long as the overlay has existed, and the
+        // owner saw what that costs on the card 230 bench: with a stream live,
+        // this loop published the decoded frame *and then* published the
+        // status screen a few hundred microseconds later, into a different
+        // slot of a triple buffer core 1 latches every 6.5 ms (`crate::fb`).
+        // Any refresh landing in that gap scanned out the art for a whole
+        // refresh - "the art flickers through", several times a second at 30
+        // fps, and invisible at idle because there was no first publish to
+        // catch. `screens::identify` is fully opaque, so nothing about the
+        // drawing let the picture through; the extra publish did.
+        //
+        // `Intent::shows_frames` is where that rule lives now
+        // (`crates/receiver`), so the simulator and the device answer it the
+        // same way. The picture comes back on the first frame published after
+        // the overlay ends, which at 30 fps is within 33 ms.
+        let overlay_owns_panel = ota.is_some()
             || button.is_some()
-            || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }));
+            || matches!(portal, Some(crate::provision::PanelScreen::Portal { .. }))
+            || !intent.shows_frames();
         if published {
             // The cross-fade needs the frame a sender last put up, and this is
             // the only moment it is reachable: after `publish` the slot
             // belongs to the consumer. 6 KB at 30 fps is 0.05% of a core.
             last.copy_from(producer.back());
-            if !setup_screen_up {
+            if !overlay_owns_panel {
                 producer.publish();
             }
         }
 
-        // --- timers -----------------------------------------------------
-        let now = now_us();
-        let link_up = stack.is_link_up();
-        if link_was_up && !link_up {
-            core.link_down(now);
-        }
-        link_was_up = link_up;
-        core.tick(now);
-
         // --- compose whatever is not a streamed frame -------------------
         let net = net_state(stack, &mut had_address);
-        let intent = core.intent(now);
         let now_ms = now / 1_000;
         let animating = matches!(intent, Intent::Identify | Intent::Fade { .. });
         // Card 223: the portal screen and the "connected, I am at x.y.z.w"
@@ -354,6 +383,34 @@ pub async fn frames_task(
         // only the slow repaint.
         let button_edge = button != button_was;
         button_was = button;
+        // Card 247, item 2: the QR is drawn for a phone camera, not for an
+        // eye, so it is shown at the one brightness decision 1 measured the
+        // owner's phone scanning rather than at whatever the runtime setting
+        // is (it was 56 on the card 230 bench, five of twenty-five
+        // output-enable slots where the default lights nine, and the phone
+        // would not read it). Computed in the same rank order the drawing
+        // below uses - an update or a button screen covers the portal, and a
+        // covered QR is not being scanned by anybody - and written on the edge
+        // only, because `BRIGHTNESS_DIRTY` is what makes core 1 rewrite both
+        // framebuffers' OE windows. Clearing it back to
+        // `SCREEN_BRIGHTNESS_NONE` when the screen goes away is the whole of
+        // "restore the setting afterwards": nothing was ever stored.
+        let fixed = if ota.is_some() || button.is_some() {
+            None
+        } else {
+            portal.as_ref().and_then(crate::provision::fixed_brightness)
+        };
+        let fixed = fixed.unwrap_or(crate::SCREEN_BRIGHTNESS_NONE);
+        if fixed != screen_brightness_was {
+            screen_brightness_was = fixed;
+            crate::SCREEN_BRIGHTNESS.store(fixed, Ordering::Relaxed);
+            crate::BRIGHTNESS_DIRTY.store(2, Ordering::Relaxed);
+            if fixed == crate::SCREEN_BRIGHTNESS_NONE {
+                info!("display: back to the brightness setting");
+            } else {
+                info!("display: the qr screen is shown at brightness {}", fixed);
+            }
+        }
         // An update ending has to redraw once even if nothing else is due:
         // until it does, the panel is still showing the progress bar of an
         // upload that finished.
@@ -404,8 +461,10 @@ pub async fn frames_task(
             } else {
                 match intent {
                     Intent::Stream => drew = false,
+                    // A wall clock, not `phase`: the chevron's rate must not
+                    // depend on how often this loop happens to run (card 247).
                     Intent::Identify => {
-                        screens::identify(producer.back(), core.name(), net, phase)
+                        screens::identify(producer.back(), core.name(), net, now_ms)
                     }
                     Intent::Idle => core.draw_idle(producer.back(), last, hostname, net, phase),
                     Intent::Fade { t } => {

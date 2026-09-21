@@ -377,16 +377,39 @@ pub fn render_button(what: crate::button::Panel, frame: &mut Rgb888Frame) {
     }
 }
 
+impl PanelScreen {
+    /// The borrowed [`Screen`] this is a copy of.
+    fn as_screen(&self) -> Screen<'_> {
+        match self {
+            PanelScreen::Portal { ssid, layout, form } => Screen::Portal {
+                ssid: ssid.as_str(),
+                layout: *layout,
+                form: *form,
+            },
+            PanelScreen::Connected { ip } => Screen::Connected { ip: *ip },
+        }
+    }
+}
+
+/// The brightness this screen must be shown at, or `None` for "whatever the
+/// runtime setting says", like every other screen on the device (card 247).
+///
+/// The rule itself is `screeny_provision::wants_fixed_brightness`, host-tested
+/// beside the QR's golden bitmap; what the firmware adds is the number, which
+/// belongs to the settings store rather than to that crate. It is
+/// [`crate::display::DEFAULT_BRIGHTNESS`] because that is the level
+/// `docs/design/device-web.md` decision 1 actually measured the owner's phone
+/// scanning - a fixed level, not a bright one, and never above what has been
+/// looked at.
+#[must_use]
+pub fn fixed_brightness(s: &PanelScreen) -> Option<u8> {
+    screeny_provision::wants_fixed_brightness(&s.as_screen())
+        .then_some(crate::display::DEFAULT_BRIGHTNESS)
+}
+
 /// Draw one of those into the frame, through `crates/provision`'s renderer.
 pub fn render(s: &PanelScreen, frame: &mut Rgb888Frame) {
-    let screen = match s {
-        PanelScreen::Portal { ssid, layout, form } => Screen::Portal {
-            ssid: ssid.as_str(),
-            layout: *layout,
-            form: *form,
-        },
-        PanelScreen::Connected { ip } => Screen::Connected { ip: *ip },
-    };
+    let screen = s.as_screen();
     if let Err(e) = screeny_provision::render(&screen, frame) {
         // The machine never asks for a layout `render` cannot draw, so this is
         // the backstop rather than a case: leave the frame as it is.

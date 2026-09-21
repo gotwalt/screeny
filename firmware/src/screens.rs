@@ -193,9 +193,22 @@ pub fn crashed(frame: &mut Frame, file: &str, line: u32, panics: u32) {
 /// name and IP" and that is still what this is; card 230 adds the firmware
 /// version and the signal on a third line, because the owner standing in front
 /// of the panel with no laptop is the person the button is for.
-pub fn identify(frame: &mut Frame, name: &str, net: Net, phase: u32) {
+/// The chevron border alternates on this period, and it is a **wall clock**
+/// rather than a redraw count (card 247).
+///
+/// It used to be `phase / 3`, where `phase` advances once per redraw of the
+/// frame task - which is 50 redraws a second at idle and up to 80 with a
+/// stream arriving. That made the border alternate somewhere between 8 and
+/// 13 Hz *and* made the screen look different depending on whether anything
+/// was being sent to the panel, which is half of what the owner was looking at
+/// when he reported the flicker. CLAUDE.md allows nothing flashing above 3 Hz
+/// on this USB-powered panel; 400 ms is 1.25 Hz, it does not change when a
+/// stream starts or stops, and it is still unmistakable across a room.
+const CHEVRON_MS: u64 = 400;
+
+pub fn identify(frame: &mut Frame, name: &str, net: Net, now_ms: u64) {
     // A moving chevron border: unmistakable across a room, and cheap.
-    let on = (phase / 3) % 2 == 0;
+    let on = (now_ms / CHEVRON_MS) % 2 == 0;
     let (a, b) = if on {
         ([0xff, 0xff, 0x00], [0x00, 0x00, 0x00])
     } else {
