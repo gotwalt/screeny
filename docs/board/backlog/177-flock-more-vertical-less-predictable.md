@@ -1,6 +1,6 @@
 ---
 id: 177
-title: flock - less predictable turns, and real vertical motion
+title: flock - less predictable turns, real vertical motion, and spacing that is not a lattice
 type: build
 hardware: no
 depends: [168]
@@ -15,6 +15,9 @@ randomize the bird direction changes a bit more - i'd love to see some more vert
 change." (His other ask in the same message - a toggle for the whole backdrop, white birds
 on entirely black - is done: the `backdrop` toggle, by the orchestrator on `main`.)
 
+A few minutes later, still watching it: "oh also: the boids seem to be very evenly
+separated from each other, which is not lifelike."
+
 The flock should surprise more: direction changes that are less regular in when and how
 hard they come, and climbs, dives and swoops that are part of the flight rather than a
 wobble about one cruising height.
@@ -27,6 +30,20 @@ wobble about one cruising height.
   spring to the cruise band**; five drifting blobs; a slow attractor re-picked every
   40-110 s. The spring and the pitch limit are why the flight is mostly horizontal; the
   long attractor period and the slow blob drift are why turns feel regular.
+- **Even spacing is the separation rule winning.** Today every bird has the same
+  separation radius (3.6 m) at a high weight (3.4) against a weak cohesion (0.28 over
+  26 m), so the flock relaxes into something close to a crystal: equal gaps in every
+  direction. Real flocks are clumpy and anisotropic. Things to try, and keep what reads:
+  a *topological* neighbourhood (each bird attends to its nearest six or seven, whatever
+  their distance - Ballerini et al. 2008, the starling result - rather than everything
+  inside a radius), which by itself produces dense knots and thin streamers; a soft
+  separation that only bites at about a wingspan, so birds can pass close; per-bird
+  preferred spacing and speed drawn from the RNG (individuals, not clones); pairs and
+  small sub-groups with stronger mutual cohesion that drift within the flock; a flattened
+  shape (flocks are wider than they are tall, and denser at the edges than the middle).
+  Measure it: the distribution of nearest-neighbour distances should be broad and skewed,
+  not a spike - report its coefficient of variation before and after (a lattice is near
+  0; aim for something like 0.4-0.6) - and look at strips: knots, gaps, stragglers.
 - Ideas, not orders - try them and keep what reads: a taller world with the spring much
   weaker or replaced by soft floor/ceiling only; the attractor picked in 3D with real
   height differences, on a shorter and more varied clock; occasional **events** drawn from
