@@ -224,6 +224,15 @@ esp-storage = { version = "=0.10.0", default-features = false, features = [
   "critical-section",
   "embedded-storage",
 ] }
+# **Card 245.** `critical_section::with` is not a third-party lock here: on this
+# chip esp-hal *is* the `critical_section` implementation, and it is one global
+# `esp_sync::RawMutex` shared by both cores (`esp-hal-1.2.2/src/sync.rs` line
+# 99). `store::guarded` holds it across `esp-storage`'s park -> ROM call ->
+# un-park so that core 0 runs no interrupt handler - and therefore waits on no
+# lock - while core 1 is hardware-stalled. The crate is already in the tree at
+# this version as esp-hal's own dependency; it is named here because
+# `src/store.rs` calls it directly.
+critical-section = { version = "=1.2.0" }
 # `sequential-storage` is async-only, hence embassy-embedded-hal's BlockingAsync
 # around the blocking NorFlash that esp-bootloader-esp-idf hands us. It arrives
 # through `screeny-settings`; the direct dependency here is for the version pin
