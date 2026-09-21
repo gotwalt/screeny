@@ -440,6 +440,58 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     );
 }
 
+/// Card 122: the owner wants a handful of birds, not thirty. `birds` now goes
+/// down to 3 - so a flock that small has to still be a flock, not three
+/// strangers that happen to share a sky. Ten minutes, three seeds, the
+/// shipped default `near` (the personal-space wall that keeps the camera from
+/// scattering a small flock does not depend on how many birds there are).
+///
+/// The 55-bird test's own thresholds (`in_med >= 35`, `nn_cv >= 0.30`, ...)
+/// are sized for a flock that big and do not apply here - three birds cannot
+/// have a broad nearest-neighbour distribution, and "median 35 in frame" is
+/// meaningless when there are only 3 to begin with. What has to hold at any
+/// size is the physics (speed and turn stay inside their bands, nobody flies
+/// into the invisible geometry) and the picture (most of the flock stays on
+/// the panel, and it does not balloon into a scattered mess).
+#[test]
+fn the_smallest_flock_still_flocks() {
+    let birds = 3;
+    assert_eq!(
+        param_spec("birds").min,
+        birds as f32,
+        "this test assumes `birds`'s minimum is what it is measuring"
+    );
+    let tune = Tuning::of(0.90, 6.0, 0.8, 2.4); // the shipped default `near`
+    for seed in [11u64, 29, 404] {
+        let run = fly(seed, 600.0, &tune, birds);
+        let in_min = *run.in_frame.iter().min().expect("samples");
+        let in_med = median_usize(&run.in_frame);
+        let spread = percentile(&run.spread, 0.5);
+        eprintln!(
+            "flock, 10 min, {birds} birds (the minimum), seed {seed}: \
+             in frame min {in_min} median {in_med}, seat p95 {:.1} m, spread {spread:.1} m, \
+             speed x{:.3}, turn rate x{:.3}, clearance {:.1} m (camera {:.1} m)",
+            percentile(&run.seat, 0.95),
+            run.speed_ratio,
+            run.turn_ratio,
+            run.clearance,
+            run.cam_clearance,
+        );
+
+        assert!(in_min >= 1, "the whole flock left the panel at once");
+        assert!(in_med >= birds - 1, "median {in_med} of {birds} in frame is not much of a flock");
+        assert!(run.clearance >= 0.0, "a bird was {:.2} m inside a blob", -run.clearance);
+        assert!(run.cam_clearance >= 0.0, "the camera was {:.2} m inside a blob", -run.cam_clearance);
+        assert!(run.speed_ratio <= 1.02, "speed went x{:.3} outside its band", run.speed_ratio);
+        assert!(run.turn_ratio <= 1.02, "a bird turned at x{:.3} of its limit", run.turn_ratio);
+        assert!(spread <= 10.0, "three birds spread {spread:.1} m apart - that is scattered, not a flock");
+    }
+}
+
+fn param_spec(id: &str) -> &'static ParamSpec {
+    PARAMS.iter().find(|s| s.id == id).unwrap_or_else(|| panic!("no such param `{id}`"))
+}
+
 // ----------------------------------------------------------------------
 // The picture
 // ----------------------------------------------------------------------

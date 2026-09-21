@@ -577,9 +577,33 @@ letters without touching a caller.
 ## Flock (`patches/flock/`, id `flock`)
 
 Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
-3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards 168
-and 177.
+3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards
+168, 177 and 122.
 
+- **`birds` goes down to 3** (card 122, the owner: "too many birds, too far
+  away - the resolution of the screen means that a lot of the detail gets
+  lost"). A flock that small is measured over ten simulated minutes the same
+  way the 55-bird default is (`the_smallest_flock_still_flocks`): it keeps its
+  speed and turn limits, stays clear of the invisible geometry, and does not
+  scatter.
+- **`size` draws the birds bigger without moving the camera.** Card 169 found
+  that a closer `near` can scatter the flock; card 122 found a second,
+  separate problem trying to fix "too far away" by lowering `near` at a
+  *small* bird count instead - a few birds seen from close up subtend an
+  angle the lens does not hold, and the flock can fall out of frame rather
+  than scatter. `size` (0.5-3.0, default 1) is a pure draw-time scale on the
+  wingspan `draw_birds` draws with; nothing in `sim.rs` reads it, so the
+  flight, the seat and every limit are exactly what they are at `size` 1.
+  It is the "longer lens" the flight already has a camera in, not a shorter
+  standoff distance. `near`'s own range and default are unchanged - card
+  169's `near 3.0` with the full flock is still there for anyone who wants a
+  closer camera rather than a bigger lens.
+- **`samples` ("Samples per axis") is gone** (the owner: "super confusing").
+  It was always anti-aliasing quality, never a look, and never a cost that
+  bound anything (0.14-0.98 ms/frame across its old range against a 33 ms
+  budget) - fixed at 3 (`SUPERSAMPLE`) rather than left on the page. An old
+  saved `samples` value is simply ignored, the same way any parameter this
+  build does not have is (`crates/studio/src/state.rs`'s `usable_params`).
 - **The flock is knots and gaps, not a lattice** (card 177). Separation and
   alignment are **topological** - the seven nearest birds whatever their
   distance, which is what Ballerini et al. measured in starlings - so a dense
@@ -686,6 +710,10 @@ cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 163.8 --warm
 cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 \
   --set scheme=1 --set hue=35 --set spread=95 --out dusk.png
 cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 --set near=2.5 --out close.png
+# a small flock, drawn big (card 122): the camera stays at its well-tested
+# default seat, `size` does the enlarging.
+cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 \
+  --set birds=6 --set size=2.5 --out big-birds.png
 # a dive and its recovery (card 177), with the sky, with only a horizon line,
 # and on black. `--at` is wall-clock seconds and `pace` is 0.7, so this is the
 # surge at simulated t = 45 s. Step --at by 2 for a strip of ten.
