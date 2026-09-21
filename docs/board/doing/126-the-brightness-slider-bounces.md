@@ -143,3 +143,53 @@ the pure hold function) and the DOM-touching half of `show()` (`input.value =`,
 `busy()`) was not driven through an actual `<input type="range">` in a browser. The
 Acceptance line "the owner moves the slider on the deployed page and it stays" is for
 the orchestrator to check after this is merged and deployed.
+
+### Review round 2 (coordinator): two gaps, both in `busy()`
+
+The coordinator's review named the real remaining bug: `busy(el)` is `el ===
+document.activeElement`, and **Safari - desktop and iOS both - does not focus an
+`<input type="range">` on a click or a touch, only on Tab.** So on Safari,
+`busy(input)` was `false` for the *entire* drag, not just the gap after it: `show()`
+would rewrite `input.value` from telemetry under the person's mouse or finger every time
+it ran, which is very likely the "I move the slider and it bounces around" half of the
+owner's complaint, separate from and worse than the post-`change` staleness window this
+card started with. The second gap was narrower: between the `change` event firing and
+the POST resolving, `held` was still `null` (it was only ever set once `done` came back),
+so on Safari specifically - where nothing else was holding the value either - `show()`
+could paint a reading from before the change during that gap too.
+
+Fix, same file, same function: a `holding` flag, tracked directly rather than through
+focus. Set on `pointerdown`, `touchstart` (`{ passive: true }`), `keydown` and `input`
+itself (a backstop for a gesture none of the other three caught); cleared on `change`
+(the gesture landed) and, as a backstop for a gesture that ends without ever firing
+`change`, on `pointerup`/`pointercancel`/`blur`. `show()` now skips the paint on
+`!busy(input) && !holding` rather than `!busy(input)` alone - `busy` is kept too, since
+it is still correct for keyboard focus and costs nothing to keep. `held` is now set at
+`change` itself, with the *asked* level (`held = { value: level, until: now + HOLD }`),
+and only replaced with `done.applied` once the POST resolves - closing the second gap
+without waiting on the network for anything to be held at all. A POST that throws (not
+just one that resolves with nothing) now also clears `held`, wrapped in `try`/`catch`
+inside the `attempt` callback and rethrown so `attempt`'s own notice/finally still runs -
+this was a gap the first round left too: an optimistic `held` with nothing ever
+correcting it if the request itself failed outright.
+
+Kept as-is per the coordinator's instruction: `brightnessHoldWins` and its node test -
+the release rule itself (agree, or the clock runs out) did not change, only when `held`
+starts and what else can suppress a paint alongside it.
+
+**Checked `bindSlider` (`common.js` ~line 380) for the same defect, per the coordinator's
+ask - it has it.** `refresh() { if (!busy(input)) { input.value = get(); } show(); }` -
+same `busy()`-only guard, same Safari gap. It binds every patch parameter slider, the
+rate slider (183), the speed slider (197), and the limiter's APL/rise sliders.
+`refresh()` runs on `sync(next)` in `picture.js` whenever a `state` message arrives that
+is not this browser's own edit (the server already excludes a browser's own changes by
+`CLIENT` id), so the trigger is a second browser, a second tab or the CLI changing the
+same parameter while this one is mid-drag on Safari - the same shape of bug, on a wider
+set of controls. **Not fixed here**, per the coordinator: filed as
+`docs/board/backlog/127-bindslider-bounces-mid-drag-on-safari.md`, pointing back at this
+card's Log for the confirmed cause and the fix pattern to reuse.
+
+Re-ran: `cargo test -p screeny-studio --release --test ui` - 29 passed (same count; no
+test changed, since the release rule the test pins did not change), `cargo clippy -p
+screeny-studio --all-targets` - clean. `ps` clean, nothing left running (no sim/studio
+was started for this round - the change and its test are both client-side / node-only).

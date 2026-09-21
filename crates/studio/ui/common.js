@@ -486,21 +486,58 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
    *  `brightnessHoldWins` - `null` when nothing is being held. */
   let held = null;
 
-  input.addEventListener('input', () => { out.textContent = String(levelAt(input.value)); });
+  /** Card 126, second half: `busy(input)` is "is this the focused element",
+   *  and Safari - desktop and iOS both - never focuses an
+   *  `<input type="range">` on a click or a touch, only on Tab. So on Safari
+   *  `busy(input)` is false for the whole of a drag, and `show()` would
+   *  rewrite `input.value` out from under the person's mouse or finger every
+   *  time a fresh reading arrived - up to several times a second - which
+   *  reads exactly as "I move the slider and it bounces around". `holding` is
+   *  the same idea `busy` is reaching for, tracked directly instead of
+   *  through focus: set the moment a gesture starts (`pointerdown`,
+   *  `touchstart` - a touch that never becomes a pointer event on an older
+   *  browser, `keydown`, and `input` itself, a backstop for whatever starts
+   *  a change no earlier event caught), cleared once `change` says the
+   *  gesture landed. `pointerup`/`pointercancel`/`blur` clear it too, as a
+   *  backstop for a gesture that ends without ever firing `change` (a touch
+   *  cancelled by a system gesture, a pointer that leaves the window). */
+  let holding = false;
+  const grab = () => { holding = true; };
+  const release = () => { holding = false; };
+  input.addEventListener('pointerdown', grab);
+  input.addEventListener('touchstart', grab, { passive: true });
+  input.addEventListener('keydown', grab);
+  input.addEventListener('pointerup', release);
+  input.addEventListener('pointercancel', release);
+  input.addEventListener('blur', release);
+
+  input.addEventListener('input', () => { grab(); out.textContent = String(levelAt(input.value)); });
   input.addEventListener('change', () => {
+    release();
     const device = attached();
     if (!device) { notice('No panel is attached, so there is no brightness to set.', 'say'); return; }
     const level = levelAt(input.value);
+    // Hold what was asked from the moment the gesture lands, not from
+    // whenever the POST happens to resolve - the gap between them is exactly
+    // the window in which nothing used to be held at all (`held` was still
+    // `null`, or `busy` had already gone false on Safari), and `show()` could
+    // paint a reading from before the change.
+    held = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
     attempt(`Brightness ${level}`, async () => {
-      const done = await invoke('device/brightness', { device, level });
-      if (!done) { held = null; return ''; }
-      // Hold the true applied value, not what was asked - the floor and the
-      // cap are real, and this is what stops the slider bouncing back to
-      // them the instant it stops being busy.
-      held = { value: done.applied, until: Date.now() + BRIGHTNESS_HOLD_MS };
-      if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
-      if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
-      return `Brightness ${done.applied}`;
+      try {
+        const done = await invoke('device/brightness', { device, level });
+        if (!done) { held = null; return ''; }
+        // Replace the held value with the true applied one, not what was
+        // asked - the floor and the cap are real, and this is what stops the
+        // slider bouncing back to them once telemetry catches up.
+        held = { value: done.applied, until: Date.now() + BRIGHTNESS_HOLD_MS };
+        if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
+        if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
+        return `Brightness ${done.applied}`;
+      } catch (e) {
+        held = null; // the ask never landed; nothing to hold
+        throw e;
+      }
     });
   });
   return {
@@ -517,7 +554,7 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
       if (!d) held = null; // no panel to hold anything against
       if (held && !brightnessHoldWins(Date.now(), held.until, held.value, reading)) held = null;
       const shown = held ? held.value : reading;
-      if (!busy(input) && shown !== null && shown !== undefined) {
+      if (!busy(input) && !holding && shown !== null && shown !== undefined) {
         input.value = String(indexOf(Math.min(shown, learnedCap || 255)));
         out.textContent = String(levelAt(input.value));
       }
