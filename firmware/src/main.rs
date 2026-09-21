@@ -805,7 +805,13 @@ async fn main(spawner: Spawner) {
     // better than the trial-only one did (20 s against 240) - so all this is
     // now is the answer to "does this boot need the confirm/revert task".
     let on_trial = ota::boot_class().on_trial();
-    let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
+    // Card 136: the same rule `SET_BRIGHTNESS` applies, not a bare `.min` - a
+    // stored value that would light zero output-enable slots must not leave
+    // the panel dark while telemetry reports it unchanged. This is the one
+    // other place a brightness reaches the display outside `crates/receiver`
+    // (the receiver itself applies the same function to `settings.brightness`
+    // again, harmlessly, when `Core::new` builds it below).
+    let boot_brightness = screeny_receiver::clamp_brightness(settings.brightness, BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
 
     // --- panel ------------------------------------------------------------

@@ -67,3 +67,138 @@ This is the last firmware card of this cycle (owner, 2026-09-21). Do **not** bum
 the merge.
 
 ## Log
+
+- Branched `card/136-brightness-steps` from `main` at 8081857.
+- Step 1: `crates/receiver/src/lib.rs` gets a "Brightness (card 136)" section
+  (after `Timing`, before `Vocabulary`): a private `oe_slots` (the same
+  arithmetic as `firmware::display::slots_for` / `screeny_panel::oe_slots`),
+  a derived `pub const BRIGHTNESS_FLOOR: u8` (a `const fn`-computed loop over
+  `oe_slots`, not a literal - today it evaluates to 6), and
+  `pub const fn clamp_brightness(level: u8, cap: u8) -> u8`: clamps to `cap`,
+  then snaps a nonzero, sub-floor result up to `BRIGHTNESS_FLOOR`; 0 stays 0.
+  **Decision recorded here:** if `cap` itself is below the floor, the cap
+  wins - `clamp_brightness(200, 3) == 3`, still possibly black, because
+  `SET_BRIGHTNESS` must never report `applied` above the cap it was just
+  given (spec 6.3).
+  `Receiver::apply`'s `Request::SetBrightness` arm (was
+  `level.min(self.brightness_cap)`, ~line 1269) and `Receiver::new` (was
+  `p.brightness.min(p.brightness_cap)`, ~line 631) both now call
+  `clamp_brightness` - the one place the rule lives.
+  `crates/receiver` stayed `no_std`/heapless-only; `screeny_panel` (std,
+  `f32`) and `firmware` (a separate cargo project) are unreachable from it, so
+  the arithmetic is a third copy on purpose, tied down by
+  `crates/receiver`'s own `brightness_tests` module and by a new test in
+  `crates/panel/src/model.rs` (`receivers_brightness_floor_matches_this_crates_oe_slots`,
+  with `screeny-receiver` added as a `[dev-dependencies]`-only edge in
+  `crates/panel/Cargo.toml` - never built for the firmware) that pins
+  `screeny_receiver::BRIGHTNESS_FLOOR` against `screeny_panel::oe_slots`.
+  `cargo test -p screeny-receiver` and `-p screeny-panel` both green;
+  `cargo build --workspace` clean.
+- Step 2: the other paths that reach the display.
+  - **Settings store load at boot** (`firmware/src/main.rs:808`, was
+    `settings.brightness.min(BRIGHTNESS_CAP)`): now
+    `screeny_receiver::clamp_brightness(settings.brightness, BRIGHTNESS_CAP)`.
+    This was the one path that bypassed `crates/receiver` entirely - it feeds
+    `BRIGHTNESS` (the atomic `display::slots_for` reads to size the
+    framebuffers' OE window) and ran before `Core::new` even existed. Before
+    this fix a stored 3 would come up with the panel dark and, because
+    `Core::new` separately seeded the receiver's own `brightness` field from
+    the same raw, unclamped `settings.brightness`, `TELEMETRY`/status would
+    have agreed it was 3 - consistent with each other, both wrong. Now both
+    read 6 (today's floor) and the panel is lit.
+  - **`Core::new`** (`firmware/src/receiver.rs:271-275`, was
+    `settings.brightness.min(crate::BRIGHTNESS_CAP)` passed into `Params`):
+    simplified to pass the raw `settings.brightness` - `Receiver::new` already
+    applies `clamp_brightness` with `p.brightness_cap`, so the pre-clamp was
+    redundant once step 1 landed and is now just the one call site.
+  - **`SET_BRIGHTNESS` over UDP control** and **`POST /api/v1/settings`**
+    (`firmware/src/http.rs`'s `post_settings` -> `apply_control` ->
+    `core.control(...)`): both already funnel through
+    `Receiver::apply`'s `Request::SetBrightness` arm - no separate clamp in
+    `http.rs` or `crates/device-api` (`SettingsRequest.brightness` is a bare
+    `Option<u8>`, no validation of its own). Unchanged, already correct once
+    step 1 landed.
+  - **Telemetry / status** (`Receiver::telemetry`, `GET /api/v1/status`,
+    `POST /api/v1/settings`'s reply): all read either `crate::BRIGHTNESS` (the
+    atomic, now only ever written with a clamped value) or
+    `core.brightness()` / `self.brightness` inside `crates/receiver` (set only
+    through `clamp_brightness`, in `Receiver::new` and in `apply`). Nothing
+    to change; they now report the same value the panel shows.
+  - **`crates/sim`** (`crates/sim/src/core.rs::Core::new_with`): already
+    passed `cfg.brightness` straight into `Receiver::new` with no separate
+    clamp, and read `r.brightness()` back for the panel model's own
+    brightness - it inherited the fix for free.
+  - Firmware build: `firmware/` builds clean under the Xtensa toolchain
+    (`. ~/export-esp.sh`, `cargo build --release`). `tools/fw-size.sh` on
+    `target/xtensa-esp32-none-elf/release/screeny-fw`: `.stack = 26200`
+    (floor 24576) - unchanged in shape from before this card (no new
+    statics, only a different call in an existing const-fn-sized path).
+    `FW_VERSION` left untouched, as directed.
+- Step 3: tests.
+  - New tests live in `crates/receiver/src/lib.rs`'s `brightness_tests`
+    module (pinned in step 1's commit): `zero_stays_off`,
+    `one_to_five_snap_to_the_floor`, `the_floor_itself_is_unchanged`,
+    `above_the_floor_nothing_changes` (129, 130), `the_cap_still_applies_above_the_floor`,
+    `a_cap_at_or_above_the_floor_still_snaps_up`, `a_cap_below_the_floor_wins`,
+    plus `floor_is_six` pinning `BRIGHTNESS_FLOOR` and the underlying
+    `oe_slots(5)==0` / `oe_slots(6)==1` it is derived from.
+  - `crates/panel/src/model.rs`:
+    `receivers_brightness_floor_matches_this_crates_oe_slots` (new,
+    `crates/panel/Cargo.toml` gained `screeny-receiver` as a
+    `[dev-dependencies]`-only edge for this one test).
+  - Checked `crates/sim/tests/{control,telemetry,health,http_routes,http_conformance,core_rules}.rs`
+    for `SET_BRIGHTNESS`/settings values below today's floor (6): none found -
+    every fixture uses 0, 30, 40, 77, 88, 96, 100, 120, 255, or a cap of 100/120,
+    all either 0 or comfortably above the floor. No sim test needed updating.
+  - `crates/probe/src/suite/control.rs`'s `brightness_applies` conformance
+    rule *did* assume an exact echo of `found / 2`, which breaks once `found`
+    is small enough that half of it lands below the floor (this rule runs
+    against a real device or the simulator via `screeny-probe`, not under
+    `cargo test`, so it would not have failed a CI run - it would have failed
+    on the bench). Fixed to predict the expected reply with
+    `screeny_receiver::clamp_brightness(low, 255)` instead of asserting
+    `applied == low` (`crates/probe/Cargo.toml` gained a `screeny-receiver`
+    dependency). `brightness_cap` (SET_BRIGHTNESS 255, expect `< 255`) needed
+    no change.
+  - `timeout 300 cargo test -p screeny-probe -p screeny-sim`: all green
+    (probe: 15 unit tests + fixtures; sim: every integration test file,
+    including `http_routes.rs`'s `settings_are_clamped_by_the_same_code_udp_clamps_with`).
+- Step 4: spec. The card says "section 6.6"; in the spec as it stands today
+  `SET_BRIGHTNESS`'s own text is a bullet under **§6.3** (Opcodes) - §6.6 is
+  `GET_INFO`'s reply body and has no brightness prose of its own (only the
+  telemetry byte's one-line table entry). Wrote the new paragraph into §6.3,
+  after the existing "`SET_BRIGHTNESS`... `applied`... how a sender learns the
+  cap" bullet: the 25-real-steps fact, the `1..=5` off-by-duty floor, the
+  snap-up-to-the-lowest-lit-level rule, 0 always off, and the cap-wins case
+  when the cap itself sits below the floor.
+  §8.6 (`POST /api/v1/settings`)'s bullet already said the reply is "the whole
+  settings state after clamping, not an echo" - extended one clause to say a
+  caller whose brightness was raised to the dimmest lit level learns that
+  value too, same as a caller whose brightness was capped.
+  Checked `docs/design/device-web.md` (no brightness-resolution prose there,
+  just the `POST /api/v1/settings` route-table row - unchanged) and
+  `docs/design/generative-art-brief.md` (its brightness row already says
+  "25 real steps" - card 020/066 got there first, nothing to fix) and
+  `docs/design/architecture.md` (no brightness-resolution claims).
+- Step 6: `timeout 1100 cargo test --workspace` - real exit code captured this
+  time (the first pass piped through `tail -150`, which reports `tail`'s exit
+  code, not `cargo test`'s - re-ran redirecting to a log instead): `EXIT:0`,
+  94 `test result: ok` blocks, no `FAILED` or `error` anywhere in the log.
+  `timeout 300 cargo clippy --workspace --all-targets`: clean, no warnings or
+  errors. Checked for stray processes with
+  `ps -axo pid,ppid,etime,command | grep -E 'sleep|until|timeout|screeny'`:
+  several `timeout`/`sleep`/`cargo test` processes are running, all under
+  other cards' worktrees (`agent-af4310f346b5294c8`,
+  `agent-a5e50f4dc1ed38b53` - cards 246/230, in flight per this card's notes),
+  none under this worktree (`agent-a1d7814c72ce76081`); left them alone.
+
+## Summary for the orchestrator
+
+Branch `card/136-brightness-steps`, 4 commits on top of `main` (8081857):
+`3ff1300`, `f720d2e`, `cfdbec8`, `835fcc7`. `FW_VERSION` untouched (still
+`0.7.0`). Firmware builds clean under the Xtensa toolchain; `.stack = 26200`
+(floor 24576), no new statics added. Nothing in `crates/art` or
+`crates/studio` was touched - card 136's own text says a future Studio
+brightness control should step in slots, which is already true of
+`screeny_panel::oe_slots`/`oe_light`; nothing to build here since the Studio
+has no brightness control yet.

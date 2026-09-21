@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use screeny_proto::control::{op, ErrorCode, IdleMode, Request};
 use screeny_proto::txt;
+use screeny_receiver::clamp_brightness;
 
 use super::{control_dgram, describe, verdict, Ctx, Outcome, Rule, CAP_PROBE, LOOPBACK_ONLY};
 use crate::link::OwnedReply;
@@ -466,6 +467,13 @@ fn brightness_applies(cx: &mut Ctx) -> Result<Outcome, String> {
         )));
     }
     let low = found / 2;
+    // Card 136: `low` is not necessarily what comes back. `SET_BRIGHTNESS`
+    // snaps a nonzero request that would light zero output-enable slots up
+    // to the lowest one that lights one; `low` here has no cap of its own
+    // below 255 (it is already <= whatever the device's real cap is, since
+    // `found` came from the device), so 255 predicts the same floor snap
+    // without this suite needing to know the device's brightness cap.
+    let expected = clamp_brightness(low, 255);
     let applied = match cx.ctrl.request(Request::SetBrightness(low))? {
         OwnedReply::Brightness { applied } => applied,
         other => return verdict(false, format!("expected a brightness reply, got {other:?}")),
@@ -476,8 +484,10 @@ fn brightness_applies(cx: &mut Ctx) -> Result<Outcome, String> {
         other => return verdict(false, format!("expected a brightness reply, got {other:?}")),
     };
     verdict(
-        applied == low && reported == low && back == found,
-        format!("{found} -> {low}: applied {applied}, telemetry {reported}, back to {back}"),
+        applied == expected && reported == expected && back == found,
+        format!(
+            "{found} -> {low}: applied {applied} (expected {expected}), telemetry {reported}, back to {back}"
+        ),
     )
 }
 

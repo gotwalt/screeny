@@ -9,3 +9,11 @@ description = "What the LED panel does to a colour: the sRGB and Oklab transform
 # ships to the ESP32 (the firmware's equivalent is its integer gamma LUT).
 [dependencies]
 screeny-proto = { path = "../proto" }
+
+# Test-only: crates/receiver is `no_std` and cannot depend on this crate (it
+# ships to the ESP32; this one does not), so `oe_slots` here and the floor
+# arithmetic there are a second copy of the same rule (card 136). This
+# dev-dependency exists only to let a test pin the two against each other; it
+# is never built for the firmware.
+[dev-dependencies]
+screeny-receiver = { path = "../receiver" }

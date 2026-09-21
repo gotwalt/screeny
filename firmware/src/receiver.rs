@@ -270,7 +270,10 @@ impl Core {
                 fw: crate::FW_VERSION,
                 name: &name,
                 control_port: crate::CONTROL_PORT,
-                brightness: settings.brightness.min(crate::BRIGHTNESS_CAP),
+                // Card 136: `Receiver::new` applies `clamp_brightness` itself
+                // (cap, then snap a nonzero sub-floor result up to the
+                // floor), so the raw stored value goes in unclamped.
+                brightness: settings.brightness,
                 brightness_cap: crate::BRIGHTNESS_CAP,
                 rssi_dbm: 0,
                 idle_mode: settings.idle_mode,

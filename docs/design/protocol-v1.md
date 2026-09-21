@@ -633,6 +633,17 @@ Notes:
   `SET_BRIGHTNESS` is always clamped by the compile-time firmware cap (the panel
   runs off laptop USB); `applied` in the reply is the value actually in effect,
   which is how a sender learns the cap.
+- `SET_BRIGHTNESS`'s `level` has 25 real steps, not 256 (card 136). The device
+  dims by shortening the output-enable window rather than scaling pixel values:
+  a brightness maps to `(level * 25 + 127) / 255` lit slots out of 25, so
+  neighbouring values are frequently the same picture (129 and 130 both land on
+  13 slots) and `level` in `1..=5` lights none at all. A **nonzero** `level`
+  that would light zero slots is raised to the lowest level that lights one
+  (today, 6); `applied` reports that raised value, never a silent zero for a
+  nonzero request. `level == 0` always means off. The firmware cap still
+  applies first, and if the cap itself sits below that floor, the cap wins -
+  `applied` cannot exceed the cap it was just given, even if that leaves the
+  panel dark.
 - An unknown opcode gets `ERR_UNKNOWN_OP`, not silence, so a sender can probe.
 - `GET_WIFI`'s `state` byte is the join state: 0 `DISCONNECTED` (not associated
   and not trying), 1 `CONNECTING`, 2 `CONNECTED`, 3 `FAILED` (the last join
@@ -1235,9 +1246,9 @@ shape here bumps it and moves the prefix, a new optional field does not.
   means "leave it alone" and an empty request is a no-op, not an error. The
   reply is the whole settings state after clamping, not an echo, so a caller
   that moved only the brightness still learns the name and a caller whose
-  brightness was capped learns the cap. `name: ""` means "go back to
-  `screeny-<id>`" - a rule of this route only; `SET_NAME` (§6.3) takes the
-  string literally.
+  brightness was capped, or raised to the dimmest lit level (§6.3), learns
+  that value. `name: ""` means "go back to `screeny-<id>`" - a rule of this
+  route only; `SET_NAME` (§6.3) takes the string literally.
 - **`reboot`** takes the same four bytes as §6.3's `REBOOT` magic, spelled
   `"RBOO"`, so that a crawler, a prefetcher or a captive probe cannot restart
   the panel. A body that parses with the wrong word is `out_of_range`, not
