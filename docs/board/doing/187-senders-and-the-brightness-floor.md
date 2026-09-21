@@ -223,3 +223,18 @@ in both halves of the test, matching `embed.rs`'s house style rather than invent
 new one. Re-ran `cargo test -p screeny --test cli --release` (14 passed) and `cargo
 clippy -p screeny --all-targets` (one `doc_lazy_continuation` warning from the new doc
 comment's dash-led continuation line, reworded, then clean) after the fix.
+
+**Final full run**, from a clean tree with the port-race fix in: `cargo clippy
+--workspace --all-targets` clean bar the same two pre-existing warnings named above
+(exit 0). `cargo test --release --no-fail-fast` at the root: one failure,
+`crates/studio/tests/ssid.rs`'s `the_ssid_never_reaches_the_log_or_the_state_file` -
+"connect to the studio: Connection refused" from `tests/common/mod.rs:138`, a test this
+card never touched. Re-ran alone: `cargo test -p screeny-studio --test ssid --release`,
+2 passed, 0 failed. Same shape as the port race above (three sibling worktrees on this
+bench can all be running `cargo test` at once) - a server the harness had just spawned
+not yet accepting connections within the fixture's window, not a real regression. Every
+other binary in the same run was green: 97 `test result: ok` blocks, only this one
+`FAILED`, summing to 992 tests passed outside it. Both full-run failures were each
+distinct, each reproduced exactly once, and each cleared on an isolated re-run - the
+first (`cli.rs`) was mine to fix and is fixed; the second (`ssid.rs`) is unrelated and
+is reported as the card's Finish step asks, not changed.
