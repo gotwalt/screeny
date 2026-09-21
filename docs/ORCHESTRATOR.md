@@ -158,13 +158,25 @@ night clock (14x30 modules, red on black, cards falling under gravity with a lit
 a shadow; APL ~1%, ~0.5 KB exact frames; its PNGs are in the scratchpad's `vesta/`; eleven
 "Open with the owner" items in the card, first among them whether a night patch or a
 setting may ask for a panel brightness). **The owner's limit: at most TWO workers at a
-time, for now.** Running (both resumed after a pause, by SendMessage to the same agents):
-164 (`card/164-network-per-panel`, nearly done) and **168** (`card/168-flock`, the owner's
-second new patch: a slow 3D flock seen by a camera that is itself a boid; strips land in
-the scratchpad's `flock/`). After a context reset, start a new worker from the branch and
-its card Log. **Queued, in order:** 161 (30 fps and nothing else; the sender's spec 6.9
-loss ladder stays and the card says why), 159 (the Panel screen's `prompt()`/`confirm()`
-become inline), 157 (two things called `Output`), 199 (last panic on `/panel`), 156, 114.
+time, for now.** Also done and deployed that afternoon: 164 (KB/s per panel on `/panel`:
+~10-18 KB/s out for the clocks and vesta) and **168 - `flock`** (the owner: "this is
+great"; then asked for, and got from the orchestrator directly, a `backdrop` toggle - off
+is white birds on true black - merged, not yet deployed). **Running:** 161
+(`card/161-thirty-fps`) and **174** (`card/174-vesta-faces`: the owner disliked vesta's
+numerals - "the 5 has a super long descender" - and asked for pixel fonts and a font
+option; Terminus 32 bold lands 1:1 on the LEDs; the worker was also told to add a **blank
+card for the leading zero**, default on; sheets land in the scratchpad's `vesta-faces/`;
+an interim redraw of 5/6/9 is already on `main` and deployed). **Queued, in order:**
+**177** (flock: less predictable turns, real vertical motion, and spacing that is not a
+lattice - the owner's three notes; resume the flock worker `ad49acff83c4850b9` by
+SendMessage if this session still has it, else a new worker from the card), **178** (remove
+the `plasma` and `testcard` patches - "not interesting"; plasma is the Studio tests'
+fixture patch, so it is a careful card, after 161), 159, 157, 169, 199, 156, 114.
+**Parked by the owner's own words:** 179 - day and night modes switched by a virtual
+Matter switch from his smart home; a *mode* carries patch + setting + brightness, which
+answers vesta's open brightness question (not a patch's or a setting's to ask). Deploys:
+warn the firmware session first; it is mid-way through OTA work (cards 240/241) and will
+say before its next bench - do not deploy inside one.
 The owner
 said the edit-to-panel loop is low
 priority: for local designing he will run the Studio locally (card 110, macOS Local Network
