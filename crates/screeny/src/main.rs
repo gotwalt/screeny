@@ -406,6 +406,12 @@ fn cmd_brightness(cli: &Cli, level: u8) -> Result<()> {
     let applied = ctl.set_brightness(level).hinted()?;
     if applied == level {
         println!("brightness {applied}");
+    } else if applied > level {
+        // Card 136: a nonzero request that would light zero output-enable
+        // slots is raised to the dimmest level the panel can show. `applied`
+        // is that level - taken from the reply, not written down as a
+        // literal, since the firmware owns the number.
+        println!("brightness {applied} (asked for {level}; raised to the dimmest level the panel can show)");
     } else {
         println!("brightness {applied} (asked for {level}; the firmware cap is lower)");
     }

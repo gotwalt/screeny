@@ -101,3 +101,18 @@ fires on `applied != asked` in either direction, not just `applied < asked`. Add
 unit tests in `player.rs`'s own `mod tests`: a raise (asked 3, applied 6) moves the
 policy to 6 and learns no cap; the unchanged cap case (asked 200, applied 120) still
 moves the policy to 120 and learns the cap.
+
+Finding 1 (`crates/screeny/src/main.rs`, `cmd_brightness`): added an `applied > level`
+arm alongside the existing `applied < level` one. Wording: `"brightness {applied}
+(asked for {level}; raised to the dimmest level the panel can show)"` - `applied` comes
+from the reply, never a literal 6, so the wording stays true if the floor ever moves.
+Tested against `screeny-sim` (not the crate's own in-process fake receiver in
+`tests/common`, which only implements a flat `min(60)` cap and knows nothing of the
+floor): new test `brightness_wording_tells_a_raise_from_a_cap` in
+`crates/screeny/tests/cli.rs`, covering both `screeny brightness 3` (raised to 6) and
+`screeny brightness 255` against a `brightness_cap: 120` sim (still says the cap is
+lower). Needed a helper for a free **consecutive** port pair (`--addr` guesses the
+control port as frame + 1) - copied `embed.rs`'s `free_port_pair` rather than sharing
+it, since the two test binaries do not share code today and this is a two-line
+function. `cargo test -p screeny --test cli` and `cargo clippy -p screeny --all-targets`
+both clean.

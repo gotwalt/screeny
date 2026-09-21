@@ -12,9 +12,26 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::{Receiver, RxConfig};
+use screeny_sim::{Config as SimConfig, SimDevice};
 
 fn screeny() -> Command {
     Command::new(env!("CARGO_BIN_EXE_screeny"))
+}
+
+/// A free, **consecutive** UDP port pair: `--addr HOST:PORT` guesses the
+/// control port as frame + 1, the way a device address typed by a human does
+/// (`Device::from_addr`), so the pair has to really be adjacent - mirroring
+/// `embed.rs`'s `free_port_pair`.
+fn free_port_pair() -> u16 {
+    use std::net::UdpSocket;
+    loop {
+        let a = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let p = a.local_addr().expect("addr").port();
+        drop(a);
+        if UdpSocket::bind(("127.0.0.1", p + 1)).is_ok() && p < u16::MAX - 1 {
+            return p;
+        }
+    }
 }
 
 fn run(args: &[&str]) -> (bool, String, String) {
@@ -152,6 +169,42 @@ fn ping_and_brightness_and_identify_work_over_the_control_port() {
     assert!(stdout.contains("uptime"), "{stdout}");
 
     rx.shutdown();
+}
+
+/// Card 187: `applied` can differ from what was asked for two different
+/// reasons now - a cap pulling it down, or the floor (card 136) pushing it
+/// up - and the CLI has to say which. Against `screeny-sim`, the second
+/// implementation of the wire protocol (card 006), not the in-process fake
+/// above: only `screeny-sim` shares `screeny_receiver::clamp_brightness` with
+/// the firmware, so it is the one place on this host that actually applies
+/// the floor.
+#[test]
+fn brightness_wording_tells_a_raise_from_a_cap() {
+    // 1..=5 light no output-enable slots at all (25 slots, spec 6.3): raised
+    // to the floor, which the wording takes from the reply (6 today), not
+    // from a literal.
+    let port = free_port_pair();
+    let dev = SimDevice::start(SimConfig { frame_port: port, control_port: port + 1, ..SimConfig::for_test() }).expect("sim starts");
+    let addr = format!("127.0.0.1:{port}");
+    let (ok, stdout, stderr) = run(&["brightness", "3", "--addr", &addr]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stdout.contains("brightness 6") && stdout.contains("raised to the dimmest level the panel can show"),
+        "{stdout}"
+    );
+    drop(dev);
+
+    // A device capped below 255 still reports the cap, not the floor - the
+    // cap always wins, per spec 6.3's last clause.
+    let port = free_port_pair();
+    let dev =
+        SimDevice::start(SimConfig { frame_port: port, control_port: port + 1, brightness_cap: 120, ..SimConfig::for_test() })
+            .expect("sim starts");
+    let addr = format!("127.0.0.1:{port}");
+    let (ok, stdout, stderr) = run(&["brightness", "255", "--addr", &addr]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("brightness 120") && stdout.contains("the firmware cap is lower"), "{stdout}");
+    drop(dev);
 }
 
 /// Rebooting is the one control op that is not idempotent, so it needs the
