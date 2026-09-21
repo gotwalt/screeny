@@ -6,6 +6,7 @@ hardware: orchestrator flashes; the owner looks (the worker builds and host-test
 depends: [230, 223]
 owner: opus worker (firmware session, 2026-09-21)
 branch: card/247-button-bench-findings
+status: built (fw 0.8.2), waiting for the bench
 ---
 
 ## Goal
@@ -248,3 +249,67 @@ either - so this card neither causes it nor fixes it. The fix would be to republ
 `last` on the expiry edge when `intent` is `Stream`, which needs a "has a frame ever
 been shown" flag; out of scope here. The bench case the owner will look at (a live
 30 fps stream) returns within one frame, 33 ms.
+
+#### Step 4 - the numbers, the artefacts and the bench procedure
+
+`timeout 1200 cargo test` (whole workspace, `crates/studio` included): **262 passed,
+0 failed, 1 ignored**, 38 suites. New this card: 4 in
+`crates/receiver/tests/identify_overlay.rs`, 2 in `crates/provision/tests/render.rs`,
+2 extra assertions inside `crates/sim/tests/arbitration.rs`'s existing identify test.
+
+`tools/fw-size.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw`, default
+build, no features:
+
+| | 0.8.0/0.8.1 baseline | 0.8.2 |
+|---|---|---|
+| `.data` | 60,108 | 60,108 |
+| `.bss` | 110,696 | 110,704 |
+| **`.stack`** | **25,800** | **25,792** (floor 24,576) |
+| `.rwtext` | 67,740 | 67,740 |
+| image | 1,027,829 | 1,028,189 |
+
+Eight bytes of `.stack`, for `SCREEN_BRIGHTNESS` and its alignment. Nothing new is held
+across an `await`, no field was added to `StatusReply`, and no new task or buffer
+exists.
+
+**Artefacts** (orchestrator's scratchpad,
+`.../3e658d49-1dd7-428e-933d-a29735a60119/scratchpad/card247/`):
+
+* `screeny-fw-0.8.2-default.elf` - the flash image for `tools/fw-run.sh`.
+* `screeny-fw-0.8.2-default.bin` - the OTA upload image
+  (`espflash save-image --chip esp32 --flash-size 8mb --partition-table
+  firmware/partitions.csv <elf> <out>.bin`). `screeny-probe fw-scan` on it:
+  1,028,240 bytes, 5 segments, `esp_app_desc.version "0.8.2"`, 49.0% of a slot,
+  **"every check passed: the device would answer ok"**.
+
+**Bench procedure** (orchestrator flashes or uploads; the owner looks):
+
+1. Release the source lock first -
+   `POST http://workbench.local:8787/api/v1/player/set {"device":"4a00a4","on":false}` -
+   or leave the Studio streaming, which is the more interesting case for step 3. Either
+   way, put it back afterwards.
+2. Install: `cargo run --release -p screeny-probe -- --addr 192.168.7.221 fw-upload
+   screeny-fw-0.8.2-default.bin --activate`, or `tools/fw-run.sh` with the ELF. Confirm
+   `screeny-probe --addr 192.168.7.221 http` and the 64-rule `conformance --slow` are
+   unchanged.
+3. **Item 1, with the Studio streaming to the panel.** Run
+   `screeny identify --addr 192.168.7.221 --ms 10000` and look at the panel for the
+   whole ten seconds. Expected: a solid status screen - name, address, `fw 0.8.2` and
+   the signal - with **no glimpse of the art at any point**, and a chevron border that
+   alternates about once a second and at the *same* rate whether or not the stream is
+   running. When the ten seconds end the picture comes back within a frame. Then the
+   same thing from the button: a short press, still with the stream live. Device-side
+   evidence that the frames never stopped arriving: `screeny stats` across the ten
+   seconds should read LIVE at 30 fps with dropped and rejected unchanged, exactly as
+   it did on the 0.8.0 bench.
+4. **Item 2, the QR.** Hold the button five seconds (or flash a `start-in-portal`
+   build). The QR screen should come up visibly brighter than the rest of the UI has
+   been running - that is the fix, and the serial log says
+   `display: the qr screen is shown at brightness 96`. Point the iPhone camera at it
+   from the same distance as on 2026-09-20. If it scans, the brightness was the
+   difference. **If it still does not scan, that is a real result**: the bitmap is
+   provably the same one decision 1 measured, so the code is marginal for this panel
+   and the owner's reading ("at the limit of what a 64x32 panel can carry") is the
+   answer - record it and stop, rather than redesigning the QR. Either way, check that
+   after the portal ends (a successful join, or a reboot) the panel is back at the
+   runtime brightness: the serial log says `display: back to the brightness setting`.
