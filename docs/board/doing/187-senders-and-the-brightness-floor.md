@@ -4,7 +4,7 @@ title: Senders - brightness has a floor and 25 real steps now, and the CLI and t
 type: build
 hardware: no (the orchestrator checks the wording against the real panel afterwards)
 depends: [136]
-owner:
+owner: worker (sonnet)
 branch: card/187-senders-brightness-floor
 ---
 
@@ -81,3 +81,20 @@ processes left behind. Never write a real SSID or password (dummies `Example-Wif
 `password9`). List every change to shared crates.
 
 ## Log
+
+Worktree started at 127c829 (stale) rather than `main`'s 6bdcc1c; the coordinator
+confirmed the fix - `git checkout -b card/187-senders-brightness-floor 6bdcc1c` - which
+is what this branch is built on.
+
+Read order followed: `CLAUDE.md`, `docs/README.md`, this card, `docs/design/protocol-v1.md`
+6.3 (already updated by card 136: the floor rule and the 8.6 settings clause are both
+there), `crates/receiver` (`clamp_brightness`, `BRIGHTNESS_FLOOR = 6`, derived from
+`oe_slots` rather than written as a literal), `crates/panel::model` (`MAX_OE_SLOTS = 25`,
+`oe_slots`, `oe_light` - read-only, no edits), then `crates/screeny/src/main.rs
+cmd_brightness`, `crates/studio/src/player.rs brightness_applied`, `crates/studio/src/fleet.rs`
+(the re-assert loop at `supervise`, ~line 154, and `apply_brightness`).
+
+Finding 2 fixed first (`crates/studio/src/player.rs`, `brightness_applied`): the
+`brightness_cap` learning stays keyed to `applied < asked` only (a raise must never be
+recorded as a cap), but the policy rewrite that keeps `cfg.brightness` truthful now
+fires on `applied != asked` in either direction, not just `applied < asked`.
