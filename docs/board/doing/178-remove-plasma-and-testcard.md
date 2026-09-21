@@ -91,3 +91,78 @@ this card (see the closing entry).
 `plasma` was indexed and `metaballs` is not, so the one assertion that leaned on
 *indexedness* rather than on cheapness is handled separately (see the panel.rs
 entry).
+
+### Paused by the orchestrator
+
+Paused at the orchestrator's request so a `vesta` card could take the slot.
+**Nothing of the removal has been written**: the tree compiles, the suite is
+untouched, and the only committed change besides this card is the throwaway
+`crates/art/examples/cost_tmp.rs`, which produced the table above and is to be
+deleted before review.
+
+Where I had got to: the whole scope had been read (every hit of `plasma` and
+`testcard` in `crates/art`, `crates/studio` and `docs/`), the fixture had been
+chosen and measured, and the next keystroke was going to be deleting
+`crates/art/src/patches/plasma.rs` and moving the test card out of the registry.
+A baseline `cargo test --release --no-fail-fast` was running for the "suite time
+before" number; it was killed at the pause and never finished, so that number
+still has to be taken on resume.
+
+**What has been worked out and is not obvious from the card** - all of it
+decided by reading, so resuming does not mean re-deciding:
+
+- **The fixture is `metaballs`**, for the properties and the cost above. No
+  test-only patch is needed.
+- **`default_patch()` is safe**: it is `screeny_art::patches::ALL[0]`, which is
+  `clocks-numerals`. Neither of the two.
+- **`fallback_patch()` in `crates/studio/src/player.rs` is production code that
+  names `plasma` first** (`["plasma", "metaballs", "clocks-numerals"]`). It has
+  to lose it.
+- **What happens today to a player on a removed patch**: `Player::make_core`
+  calls `fallback_patch`, logs `no patch called ...; playing ...` on stderr once
+  and sets `health.fell_back_from`. It says **nothing** in `repaired`, and the
+  player's *stored* patch id stays as the file had it, so the page names a patch
+  that is not what is playing. The card's ask - load, play the default patch,
+  say so once in `repaired` - therefore needs a repair at load time in
+  `state.rs`, and a test. Memory entries for an unknown patch are already kept
+  deliberately (`clean_memory`, `MAX_UNKNOWN_PATCHES`), so nothing there needs
+  changing.
+- **`seeded: false` after the removal**: `vesta`, `clocks-numerals`,
+  `clocks-dials`. Measured: **only `vesta` really ignores its seed** (identical
+  frames on seeds 1 and 999983, at t = 2 s and 20 s, with the clock at 0 and at
+  a real moment). Both clocks *do* vary with the seed mid-dance - the seed picks
+  the choreography - so `vesta` is the replacement example in `patch.rs`'s
+  `seeded` doc and the subject of `patches/mod.rs`'s
+  `the_test_card_is_the_same_card_whatever_the_seed`.
+- **`Core::tick` passes `now: local_now()` whatever `paused` says.** So a
+  *paused* clock patch does **not** hold still - it turns over with the minute.
+  Any test that needs a still picture (`tests/panel.rs`'s three `hold_still`
+  calls, `tests/traffic.rs`'s constant frame size) must use a patch with no
+  clock: `metaballs` with `speed = 0` is the direct replacement for the test
+  card with `speed = 0` in `traffic.rs`.
+- **The one assertion that needs an *indexed* patch** is
+  `tests/panel.rs:108`, `indexed_fallback == 0`. With `metaballs` (continuous)
+  it becomes vacuous. The remaining indexed patches are `flock` (card 177 is in
+  it), `vesta` and the clocks (all clock-driven, so not still). Plan: leave
+  panel.rs on `metaballs` and assert what is then true and not vacuous - that
+  *neither* indexed counter moves, because metaballs is continuous - and keep
+  the real statement where it is already made properly over the same simulator,
+  `crates/art/tests/sender.rs::an_indexed_patch_arrives_pixel_exact`.
+- **Param renaming is by hand, not by pattern.** `tests/memory.rs` leans on
+  plasma's `scale`/`drift`/`cycle`/`bands`/`colours`/`hue` and on `metaballs`
+  being the *other* patch. Worked-out mapping: primary `metaballs`
+  (`size` for `scale`, `hue` for `hue`, `speed` for the untouched default, and
+  `speed`/`spread`/`count`/`samples` for the out-of-range / string / null /
+  array garbage values); the *other* patch becomes `clocks-dials`, whose `dwell`
+  is a parameter `metaballs` has not got, which is what
+  `away["params"].get(...).is_none()` needs.
+- **Out of scope and confirmed untouched**: `crates/demos` (its own older test
+  card), `crates/proto/tests/vectors/`, `crates/screeny/benches`, `firmware/`,
+  `lab/`, `tools/gen-vectors`, and the done/parked cards and research.
+  `crates/art/src/palette.rs:14` and `generative-art-brief.md:127,372` say "a
+  plasma" about the *lab's* content of 2026, not about the patch, and stay.
+
+Next step on resume: delete `crates/art/src/patches/plasma.rs`, move the test
+card's drawing and card 102's two dark-ramp tests into
+`crates/art/tests/dark_ramp.rs`, take both out of `ALL`, and commit that before
+touching the studio.
