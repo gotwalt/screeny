@@ -342,9 +342,10 @@ black - 32 colours, so every frame is exact on the wire.
 panel's own centre line (row 16, which is a pixel boundary, so a seam of 2 is
 exactly two black rows). The four centres are at x 8, 23, 41 and 56: one LED of
 true black inside each pair, a 4-LED colon in the middle, columns 1..63. A
-numeral is 12 x 22 LEDs of ink inside that - bowls are true circles of radius 5
-so two stack exactly, and `1` is given a foot so it does not stand alone in its
-module. A falling card needs rows to foreshorten through: a 15-row half-card
+numeral is 12-13 LEDs of ink wide and 18-22 tall inside that, depending on the
+face (`font`, below); the house face's bowls are true circles of radius 5 so
+two stack exactly, and its `1` is given a foot so it does not stand alone in
+its module. A falling card needs rows to foreshorten through: a 15-row half-card
 passes 15, 14, 12, 9, 5 and 1 rows on its way down, where a 6-row one would be
 a blink.
 
@@ -386,6 +387,8 @@ frames are 460-620 bytes, `pal8-lz`, exact.
 ```bash
 # settled on 21:12
 cargo run --release -p screeny-art -- snapshot vesta --time 21:12 --out settled.png
+# the same in another face (the `font` stops are the table below, in order)
+cargo run --release -p screeny-art -- snapshot vesta --time 04:56 --set font=3 --out spleen.png
 # the turn of four modules at once, four frames in: 09:59:59 -> 10:00:00
 cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1333 --out flipping.png
 ```
@@ -415,12 +418,66 @@ needs; no `--seed`, because there is no randomness in the patch at all.
 
 ### Parameters
 
-`light` (numeral level as an sRGB code, default 120 - card 102's sparkle floor
-is 38), `hue` (0 is pure red), `size`, `weight` (stroke, LEDs), `seam`, `flip`
-(a card's fall in seconds), `cascade` (flip through the numerals between, as a
-real module does - on), `tilt`, `fill` (halftone, off; 0.5 halves the light
-without shrinking anything), `pace`, `blink` (off: nothing in a bedroom should
-blink), `hours24`, `offset`.
+`font` (the numerals' face, below - Terminus Bold), `light` (numeral level as
+an sRGB code, default 120 - card 102's sparkle floor is 38), `hue` (0 is pure
+red), `size`, `weight` (stroke in LEDs - the `Vesta` face only, the others have
+the weight they were cut at), `seam`, `flip` (a card's fall in seconds),
+`cascade` (flip through the numerals between, as a real module does - on),
+`tilt`, `fill` (halftone, off; 0.5 halves the light without shrinking
+anything), `pace`, `blink` (off: nothing in a bedroom should blink), `hours24`,
+`zero` (off: the hours' tens is a blank card, below), `offset`.
+
+### The blank card
+
+A real board's hours-tens drum carries a **blank** where a leading zero would
+be, and shows it most of the day - the owner asked for it and that is what the
+default is: ` 9:05`, not `09:05`. It is a card like any other, on a drum of
+three (blank, 1, 2), so `09:59 -> 10:00` falls from blank to 1 and
+`23:59 -> 00:00` falls from 2 to blank in **one** card rather than cascading
+through 3..9. `zero` puts the numeral back. It needs nothing of a face: a face
+draws nothing for a glyph it has not got, and the blank card has no glyph.
+
+### The face is a choice (`font`)
+
+Six faces, from `crates/art/src/faces/` - a crate-wide module, not one of
+vesta's files, because the faces are worth having in more than one patch. Card
+174: the owner did not love the drawn numerals ("in particular the 5 has a
+super long descender that's not symmetrical") and asked for pixel fonts.
+
+| `font` | What it is | Ink box | Crisp |
+|---|---|---|---|
+| Vesta | the house face, stroked paths; `weight` moves it | 12 x 22 | no |
+| **Terminus Bold** (default) | Terminus 32 bold, 1:1 | 13 x 20 | yes |
+| Terminus | Terminus 32 regular, 1:1 - the same face, lighter | 12 x 20 | yes |
+| Spleen | Spleen 16x32, 1:1 - squarer, a square-shouldered 4 | 12 x 20 | yes |
+| Dina | Dina 10 at x2 - 2 x 2-LED pixels, deliberately retro | 12 x 18 | yes |
+| Micro Grotesk | an outline face at 4 samples per LED, condensed to fit | 12 x 22 | no |
+
+**Why a pixel font is right here.** At rest a module is axis-aligned and the
+panel is a grid of discrete LEDs. A bitmap whose cells *are* LEDs is exactly
+crisp - `a_pixel_face_is_exactly_crisp_at_size_one` renders sixteen settled
+numerals and finds exactly **two** colours inside the modules, full ink and
+true black, where `Vesta` and `Micro Grotesk` leave a dozen and more. On the
+wire that is the difference between a 4-colour frame and a 19-colour one. Mid
+-flip everything is resampled for six frames whatever the face is, which is
+what `Frame::supersample` is for.
+
+**The half-LED rule**, which lives in `faces/mod.rs` because every patch will
+need it: a cell boundary only lands on an LED boundary if the glyph box's
+corner is a whole number of LEDs from the glyph's centre. Module centres
+(x = 8, 23, 41, 56) and the axle (row 16) are pixel boundaries, so a 12-wide
+face centres exactly - and a **13**-wide face cannot, and sits half an LED off
+centre instead. Centring it would put every column across two LEDs and turn the
+face to mush.
+
+`crates/art/src/faces/FACES.md` says where every face came from and under what
+licence; only redistributable faces are embedded, and several good ones were
+left out because the BDF states no licence at all.
+`tools/art-faces.py --bitmap-fonts DIR --micro-grotesk DIR --out
+crates/art/src/faces/data.rs` regenerates the data from clones of the two
+upstream repositories, and `--preview` prints every face as ASCII, which is how
+they were chosen. Faces are looked up by `char`, so a later card can add
+letters without touching a caller.
 
 ## Flock (`patches/flock/`, id `flock`)
 

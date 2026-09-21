@@ -1,21 +1,20 @@
-//! The ten numerals, drawn as stroked paths rather than as a bitmap.
+//! `Vesta`: the house face, drawn as stroked paths rather than as a bitmap.
 //!
-//! A split-flap module shows half a character at a time and, while a flap
-//! falls, that half is foreshortened by a factor that changes every frame. A
-//! 1-bit bitmap sampled through that would crawl and shimmer; a path stroked
-//! with one round pen is a distance field, so the same glyph resampled at 0.93
-//! of its height is simply a slightly shorter glyph with its own anti-aliased
-//! edge. [`distance`] is that field, and the patch thresholds it inside
-//! `Frame::supersample`.
+//! A path stroked with one round pen is a distance field, so the same glyph
+//! resampled at 0.93 of its height is simply a slightly shorter glyph with its
+//! own anti-aliased edge - which is what a split-flap module does to it six
+//! frames out of every flip. [`distance`] is that field; a patch thresholds it
+//! at half the stroke width inside `Frame::supersample`, and `weight` moves
+//! that threshold, so this is the one face in the list a person can fatten.
 //!
-//! **The box.** A glyph is drawn in LEDs, centred on its module's axle, y
-//! downwards: half-width 5, half-height 10, so bowls are true circles of
-//! radius 5 centred at `(0, -5)` and `(0, 5)` and two of them stack exactly.
-//! Stroked at the default weight that is 12 x 22 LEDs of ink in a 14 x 30
-//! module - a condensed, slightly rounded grotesque, about as large as `HH:MM`
-//! can be on a 64 x 32 panel.
+//! **The box.** A glyph is drawn in LEDs, centred, y downwards: half-width 5,
+//! half-height 10, so bowls are true circles of radius 5 centred at `(0, -5)`
+//! and `(0, 5)` and two of them stack exactly. Stroked at the default weight
+//! that is 12 x 22 LEDs of ink in vesta's 14 x 30 module - a condensed,
+//! slightly rounded grotesque, about as large as `HH:MM` can be on a 64 x 32
+//! panel. It is not crisp and cannot be: every edge of it is a ramp.
 
-/// Half-width and half-height of the glyph box, in LEDs.
+/// Half-width and half-height of the stroked glyph box, in LEDs.
 pub const A: f32 = 5.0;
 pub const B: f32 = 10.0;
 
