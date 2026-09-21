@@ -40,6 +40,12 @@ screeny-fwimage = { path = "../fwimage" }
 screeny-receiver = { path = "../receiver" }
 serde = { version = "1", default-features = false }
 serde_json = "1"
-# So that ctrl-c during a conformance run still restores the device's
-# brightness and idle mode. `Drop` covers every other exit path.
-ctrlc = "3.5.2"
+# So that an interrupted conformance run still restores the device's name,
+# brightness and idle mode. **`termination` is not optional** (card 246, item
+# 4): without it `set_handler` covers SIGINT alone, and the run that left the
+# panel named `probe-228` at brightness 49 for an hour did not end on ctrl-c -
+# it ended on a signal, which is how every bounded bench command ends when it
+# runs long. With the feature the same handler covers SIGINT, SIGTERM and
+# SIGHUP. `Drop` covers a normal return and a panic; nothing covers SIGKILL,
+# and nothing can.
+ctrlc = { version = "3.5.2", features = ["termination"] }

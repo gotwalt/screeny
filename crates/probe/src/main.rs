@@ -968,6 +968,18 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     // Far longer than the client's ordinary timeout: an upload is tens of
     // seconds of flash writes and the reply only comes at the end of them.
     let client = Client::new(addr, host.clone()).with_timeout(Duration::from_secs(240));
+    // **Read before the upload, because afterwards it is too late.** The
+    // device answers ~2 s before it restarts, so "has it rebooted yet" can
+    // only be answered against the `boot_id` it had beforehand (card 246,
+    // item 2). A short-timeout client of its own: this is one small GET and
+    // the upload client waits four minutes.
+    let before = screeny_probe::http::update::boot_id(
+        &Client::new(addr, host.clone()).with_timeout(Duration::from_secs(3)),
+    );
+    match before {
+        Some(b) => println!("the device is running boot_id {b}"),
+        None => println!("the device did not answer GET {} before the upload", route::STATUS),
+    }
     println!("uploading {} bytes to http://{addr}{path}", bytes.len());
     let t0 = Instant::now();
     let res = client.post_bytes(&path, &bytes)?;
@@ -997,107 +1009,12 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
         );
         return Ok(true);
     }
-    Ok(watch_the_update(addr, &host, t0))
+    // The waiting is `screeny_probe::http::update`, so that a test can drive
+    // it against the simulator rather than against the one panel on the bench.
+    let watch = screeny_probe::http::Watch::default();
+    let outcome = screeny_probe::http::watch(&client.clone().with_timeout(Duration::from_secs(3)), before, &watch, &mut |line| {
+        println!("{line}");
+    });
+    Ok(outcome.ok())
 }
 
-/// After an activating upload: wait for the device to come back, and say what
-/// it decided.
-///
-/// **Bounded twice and it never loops for ever**: [`REAPPEAR_S`] for the reboot
-/// and [`DECIDE_S`] for the trial, both of which are comfortably longer than
-/// the firmware's own numbers (a boot-to-join is ~20 s; the trial confirms
-/// between 60 and 120 s and reverts at 180 s). It polls once a second and
-/// prints one line per state change, not one per poll.
-fn watch_the_update(addr: SocketAddr, host: &str, t0: Instant) -> bool {
-    use screeny_device_api::reply::{PanicReply, StatusReply};
-    use screeny_device_api::UpdateOutcome;
-    use screeny_probe::http::client::Client;
-
-    /// How long to wait for the device to answer again after the reboot.
-    const REAPPEAR_S: u64 = 90;
-    /// How long to wait after that for the trial to end, one way or the other.
-    /// The firmware reverts at 180 s and needs ~20 s to boot the old image.
-    const DECIDE_S: u64 = 240;
-
-    // A short per-request timeout: while the device is rebooting every one of
-    // these fails, and the point is to retry rather than to wait.
-    let client = Client::new(addr, host.to_owned()).with_timeout(Duration::from_secs(3));
-    println!("  waiting for the device to come back (up to {REAPPEAR_S} s)...");
-    let mut back = None;
-    let deadline = Instant::now() + Duration::from_secs(REAPPEAR_S);
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_secs(1));
-        let Ok(res) = client.get(screeny_device_api::route::STATUS) else {
-            continue;
-        };
-        let Ok(s) = res.parse::<StatusReply>() else {
-            continue;
-        };
-        println!(
-            "  back after {:.0} s: fw {} slot {:?} state {:?} boot_id {} uptime {} ms",
-            t0.elapsed().as_secs_f64(),
-            s.fw,
-            s.fw_slot,
-            s.fw_state,
-            s.boot_id,
-            s.uptime_ms,
-        );
-        back = Some(s);
-        break;
-    }
-    let Some(_) = back else {
-        println!(
-            "  the device did not answer within {REAPPEAR_S} s. It may still be rebooting, or \
-             the update may be panicking and being rolled back; try `screeny-probe status` in a \
-             minute, and `tools/fw-run.sh` if it never comes back."
-        );
-        return false;
-    };
-
-    println!("  waiting for the trial to end (up to {DECIDE_S} s)...");
-    let deadline = Instant::now() + Duration::from_secs(DECIDE_S);
-    let mut last = String::new();
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_secs(1));
-        let Ok(res) = client.get(screeny_device_api::route::PANIC) else {
-            continue;
-        };
-        let Ok(p) = res.parse::<PanicReply>() else {
-            continue;
-        };
-        let Some(u) = p.update else {
-            // No record at all: this firmware does not have card 241, or the
-            // device is running something that was never activated.
-            println!("  the device reports no update record - nothing to wait for");
-            return true;
-        };
-        let now = format!("{:?}", u.outcome);
-        if now != last {
-            println!(
-                "  at {:.0} s: {:?} slot {:?} version {:?} reason {:?}",
-                t0.elapsed().as_secs_f64(),
-                u.outcome,
-                u.slot,
-                u.version.as_deref(),
-                u.reason,
-            );
-            last = now;
-        }
-        match u.outcome {
-            UpdateOutcome::Trial => {}
-            UpdateOutcome::Confirmed => {
-                println!("  CONFIRMED: the update stuck.");
-                return true;
-            }
-            UpdateOutcome::Reverted => {
-                println!(
-                    "  REVERTED: the update did not stick and the previous image is running. \
-                     GET /api/v1/panic has the panic record, if there is one."
-                );
-                return false;
-            }
-        }
-    }
-    println!("  the trial had not ended after {DECIDE_S} s - report that, it should not happen");
-    false
-}

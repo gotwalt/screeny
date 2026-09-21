@@ -207,6 +207,14 @@ impl FwSlot {
 
 /// The running slot's `otadata` state. The names are ESP-IDF's
 /// `esp_ota_img_states_t`, lower-cased.
+///
+/// **The *running* slot's**, and since firmware 0.7.1 that is true after a
+/// rollback too (card 246, item 3; spec §8.6 and §8.10 step 5). `otadata`'s
+/// highest-sequence entry then belongs to the slot that was rolled back
+/// *from*, and reporting it made a healthy device read `aborted` beside an
+/// `fw_slot` that was fine. `screeny_otastate::running_state` is the one
+/// implementation of that correction, and `panic.update` is where the
+/// rejected image is described.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FwState {

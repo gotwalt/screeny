@@ -43,10 +43,17 @@
 //!   unless [`Opts::cap_probe`] is set - the same flag, and the same reason,
 //!   as the UDP suite's `--cap-probe`.
 //! * Everything it changes (name, brightness, idle mode, the identify overlay)
-//!   is put back on **every** exit path: a normal return, a failure, a panic
-//!   and ctrl-c. The last line says what it restored to. On the device those
-//!   three settings live in the settings partition, so a run is a handful of
-//!   small store writes and their undo - nothing near the firmware slots.
+//!   is put back on **every exit path the process can survive**: a normal
+//!   return, a failure, a panic ([`RestoreGuard`]'s `Drop`), and ctrl-c,
+//!   SIGTERM or SIGHUP (the handler, and the `termination` feature of `ctrlc`
+//!   that makes the last two reach it - card 246, item 4). `SIGKILL` cannot be
+//!   covered by anything, so the *next* run notices instead: a device it finds
+//!   already named `probe-*` is a previous run that died, and it says so
+//!   loudly rather than carefully restoring that name at the end
+//!   ([`name_is_a_leftover`]). The last line says what it restored to. On the
+//!   device those three settings live in the settings partition, so a run is a
+//!   handful of small store writes and their undo - nothing near the firmware
+//!   slots.
 //!
 //! # The two servers, and the differences that are known
 //!
@@ -79,8 +86,10 @@ use crate::link::{Control, OwnedReply};
 
 pub mod client;
 mod rules;
+pub mod update;
 
 pub use client::{Client, Res};
+pub use update::{watch, Outcome as UpdateOutcome, Watch};
 
 /// Whether card 223 has landed on the device.
 ///
@@ -113,6 +122,37 @@ pub const NEEDS_UDP: u8 = 1 << 3;
 /// Rules firmware 0.4.0 is known to fail, fixed by card 223. See
 /// [`CARD_223_LANDED`].
 pub const KNOWN_223: u8 = 1 << 4;
+
+// ---------------------------------------------------------------------------
+// The name this suite sets, and what it means to find one
+// ---------------------------------------------------------------------------
+
+/// The prefix of every friendly name this suite ever sets.
+///
+/// One prefix, so that "is this device still wearing a name we gave it" is a
+/// question with an answer rather than a list to keep up to date.
+pub const PROBE_NAME_PREFIX: &str = "probe-";
+
+/// The name rule 44 sets while it checks that `POST /api/v1/settings` applies
+/// one. Always put back; see [`name_is_a_leftover`] for what it means to find
+/// it at the start of a run.
+pub const PROBE_NAME: &str = "probe-228";
+
+/// Is this name one **this suite** left behind?
+///
+/// Card 246, item 4. A run that is killed outright - `SIGKILL`, a power cut,
+/// the laptop closing - cannot restore anything, and the evidence is a panel
+/// still called `probe-228` an hour later. The next run is the one that can
+/// notice, and it must not do the obliging thing: adopting the leftover as
+/// "what the device was called" would write it back at the end and make it
+/// permanent.
+///
+/// A friendly name a person chose does not begin with `probe-`; the suite's
+/// always does.
+#[must_use]
+pub fn name_is_a_leftover(name: &str) -> bool {
+    name.starts_with(PROBE_NAME_PREFIX)
+}
 
 // ---------------------------------------------------------------------------
 // Rules
@@ -388,10 +428,14 @@ pub fn idle_name(m: IdleMode) -> &'static str {
 
 /// Everything the suite changes, and how to put it back.
 ///
-/// [`RestoreGuard`] covers a normal return and a panic; the ctrl-c handler
-/// installed by [`run`] covers the third case. Both go through
-/// [`Restore::apply`], which opens its own connection because the handler runs
-/// on another thread.
+/// **Every exit path the process can survive** (card 246, item 4):
+/// [`RestoreGuard`]'s `Drop` covers a normal return, an error return and a
+/// panic; the signal handler [`run`] installs covers ctrl-c, `SIGTERM` and
+/// `SIGHUP` - the last two because `ctrlc`'s `termination` feature is on, and
+/// `SIGTERM` is how a bench command bounded with `timeout` ends. `SIGKILL`
+/// cannot be covered; [`name_is_a_leftover`] is how the next run notices one.
+/// Both paths go through [`Restore::apply`], which opens its own connection
+/// because the handler runs on another thread.
 #[derive(Debug, Clone)]
 pub struct Restore {
     /// Where to send the settings.
@@ -448,8 +492,8 @@ fn json_string(s: &str) -> String {
 }
 
 /// Applies a [`Restore`] when it goes out of scope, however it goes out of
-/// scope. Disarmed once the runner has applied it explicitly and reported what
-/// came back.
+/// scope - a return, a `?`, a panic unwinding through [`run`]. Disarmed once
+/// the runner has applied it explicitly and reported what came back.
 pub struct RestoreGuard {
     /// What to put back.
     pub inner: Restore,
@@ -570,8 +614,19 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         ));
     }
     let found: StatusReply = first.parse()?;
+    // **Card 246, item 4.** A device still wearing one of this suite's names
+    // is a previous run that was killed before it could restore, and the worst
+    // thing this run could do is treat it as the name to put back - that is
+    // how `probe-228` becomes a panel's name for good. Say so, loudly, and
+    // take the device's **default** name as the baseline instead: an empty
+    // name means `screeny-<id>`, which is what it was before that run.
+    let leftover = name_is_a_leftover(found.name.as_str());
     let found = Found {
-        name: found.name.as_str().to_string(),
+        name: if leftover {
+            String::new()
+        } else {
+            found.name.as_str().to_string()
+        },
         brightness: found.brightness,
         idle_mode: found.idle_mode,
         fw: found.fw.as_str().to_string(),
@@ -619,6 +674,18 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         Some(c) => println!("  UDP control at {} answers", c.addr()),
         None => println!("  no UDP control port: the rules that compare the two are skipped"),
     }
+    if leftover {
+        println!();
+        println!("  *** THIS DEVICE IS STILL CALLED {PROBE_NAME:?} ***");
+        println!(
+            "  That is a name this suite sets and always puts back, so a previous run died
+               before it could - killed, or the machine went away. This run will NOT restore
+               that name: it will leave the device with its default name (screeny-<id>).
+               Brightness cannot be recovered the same way - it reads {} now, and if that is
+               not what it should be, set it by hand.",
+            found.brightness
+        );
+    }
     if opts.allow_wifi_trial {
         println!(
             "  --allow-wifi-trial: posts the dummy pair Example-Wifi1 / password9 and waits for\n     \
@@ -660,8 +727,11 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     };
     if opts.ctrlc {
         let on_interrupt = restore;
+        // SIGINT, SIGTERM and SIGHUP, the last two through the crate's
+        // `termination` feature: a run ended by `timeout` restores the device
+        // exactly as ctrl-c does.
         if let Err(e) = ctrlc::set_handler(move || {
-            eprintln!("\ninterrupted: restoring the device");
+            eprintln!("\ninterrupted (signal): restoring the device");
             match on_interrupt.apply() {
                 Ok(s) => eprintln!("  name {:?} brightness {} restored", s.name.as_str(), s.brightness),
                 Err(e) => eprintln!("  RESTORE FAILED: {e}"),
@@ -743,7 +813,11 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             idle_name(v.idle_mode)
         ),
         Err(e) => {
-            println!("RESTORE FAILED: {e}");
+            println!(
+                "RESTORE FAILED: {e}\n  The device may still be called {PROBE_NAME:?} and be at \
+                 this suite's brightness. Put it back by hand, or run the suite again - it \
+                 says so when it finds that name."
+            );
             s.failed += 1;
         }
     }
@@ -848,6 +922,39 @@ mod tests {
         // A path fragment works too, which is how `--only /api/v1/wifi` reads.
         assert!(one("/api/v1/wifi") >= 3, "a route is several");
         assert_eq!(one("zzz"), 0);
+    }
+
+    #[test]
+    fn the_name_this_suite_sets_is_one_the_next_run_recognises() {
+        // Two constants, one meaning: if rule 44's name ever stops matching
+        // the prefix, a killed run stops being noticed and this fails instead.
+        assert!(name_is_a_leftover(PROBE_NAME));
+        assert!(name_is_a_leftover("probe-228"));
+        assert!(name_is_a_leftover("probe-anything"));
+    }
+
+    #[test]
+    fn a_name_a_person_chose_is_never_mistaken_for_one_of_ours() {
+        for name in ["", "desk", "kitchen", "Probe", "my probe", "screeny-4a00a4"] {
+            assert!(!name_is_a_leftover(name), "{name:?} is somebody's name");
+        }
+    }
+
+    #[test]
+    fn a_leftover_name_is_not_what_the_run_restores_to() {
+        // What `run` does with the answer, as the two lines it is: a device
+        // found wearing one of our names is restored to the *default* name
+        // (empty), not to the leftover.
+        let baseline = |found: &str| {
+            if name_is_a_leftover(found) {
+                String::new()
+            } else {
+                found.to_string()
+            }
+        };
+        assert_eq!(baseline("probe-228"), "");
+        assert_eq!(baseline("desk"), "desk");
+        assert_eq!(baseline(""), "");
     }
 
     #[test]

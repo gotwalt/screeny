@@ -392,8 +392,19 @@ impl Client {
         s.set_read_timeout(Some(self.io_timeout))
             .and_then(|()| s.set_write_timeout(Some(self.io_timeout)))
             .map_err(|e| format!("timeouts: {e}"))?;
-        s.write_all(wire).map_err(|e| format!("write: {e}"))?;
-        s.flush().map_err(|e| format!("flush: {e}"))?;
+        // **A write that fails is a reason to go and read, not to give up**
+        // (card 246). A server that has decided from the request head alone -
+        // `POST /api/v1/firmware` answering `busy`, since firmware 0.7.1 -
+        // writes its reply and closes while the body is still being sent, so
+        // this end gets `EPIPE` on a socket whose receive buffer already holds
+        // the answer. Reporting "write: Broken pipe" and throwing that away is
+        // what the bench saw and it hid the reason. The error is kept and only
+        // used if nothing came back.
+        let write_err = s
+            .write_all(wire)
+            .and_then(|()| s.flush())
+            .err()
+            .map(|e| format!("write: {e}"));
 
         // Read the head, then exactly as much body as `Content-Length` says -
         // or, when there is none, to EOF. Reading to EOF unconditionally would
@@ -412,7 +423,9 @@ impl Client {
                 Ok(n) => n,
                 Err(e) => {
                     if buf.is_empty() {
-                        return Err(format!("read: {e}"));
+                        // The write error, if there was one, is the better
+                        // explanation of an empty read.
+                        return Err(write_err.unwrap_or_else(|| format!("read: {e}")));
                     }
                     // Something came back; let the parser say what is wrong
                     // with it rather than reporting the timeout.
@@ -427,6 +440,11 @@ impl Client {
                 if let Some(end) = head_end(&buf) {
                     want = content_length(&buf[..end]).map(|len| end + len);
                 }
+            }
+        }
+        if buf.is_empty() {
+            if let Some(e) = write_err {
+                return Err(e);
             }
         }
         Ok((buf, t0.elapsed()))
@@ -487,6 +505,46 @@ pub fn parse(wire: &[u8]) -> Result<Res, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Card 246: a server that answers from the request head and closes while
+    /// the body is still going out - which is what firmware 0.7.1 does for a
+    /// refusal it can decide from state alone - must still have its reply
+    /// read, not lost behind "write: Broken pipe".
+    #[test]
+    fn a_reply_that_arrives_before_the_body_is_finished_is_still_read() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // Read just enough to have seen the head, then answer and hang up
+            // with the rest of the body still in flight.
+            let mut head = [0u8; 512];
+            let _ = sock.read(&mut head);
+            let body = br#"{"ok":false,"written":0,"error":"busy","activating":false}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(body);
+            let _ = sock.flush();
+            let _ = sock.shutdown(std::net::Shutdown::Write);
+        });
+
+        // Big enough that the write cannot all fit in the socket buffers, so
+        // it really does fail part way through.
+        let image = vec![0xE9u8; 4 * 1024 * 1024];
+        let client = Client::new(addr, addr.to_string()).with_timeout(Duration::from_secs(5));
+        let res = client
+            .post_bytes("/api/v1/firmware", &image)
+            .expect("the reply was there to be read");
+        assert_eq!(res.status, 200);
+        assert!(res.text().contains("busy"), "{}", res.snippet(120));
+        let _ = server.join();
+    }
 
     #[test]
     fn a_response_is_a_status_lowercased_headers_and_the_bytes_after_the_head() {

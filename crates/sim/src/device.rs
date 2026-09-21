@@ -110,6 +110,9 @@ pub(crate) struct Shared {
     fade_ms: u32,
     panel_model: crate::config::PanelModel,
     rssi_dbm: i8,
+    /// Card 246's paper firmware update. Off - and costing one unlocked
+    /// `Option` per request - unless a test turns it on.
+    ota: crate::ota::OtaModel,
 }
 
 impl Shared {
@@ -131,6 +134,12 @@ impl Shared {
     /// `Host` rule accepts as this device's own.
     pub(crate) fn instance(&self) -> &str {
         &self.instance
+    }
+
+    /// Card 246's firmware-update model, which the API routes read and
+    /// [`SimHandle::model_ota`] turns on.
+    pub(crate) fn ota(&self) -> &crate::ota::OtaModel {
+        &self.ota
     }
 }
 
@@ -297,6 +306,26 @@ impl SimHandle {
     #[must_use]
     pub fn boot_id(&self) -> u32 {
         self.shared.core.lock().unwrap().ident().boot_id
+    }
+
+    /// Play out a firmware update when an upload asks to activate, with these
+    /// timings; `None` turns it off again (card 246).
+    ///
+    /// **Off by default, and it changes what `POST /api/v1/firmware` answers**,
+    /// so it is a thing a test asks for and never a default: with it off an
+    /// accepted image still answers `activating: false`, because this process
+    /// has one slot and it is the running binary. With it on, the simulator
+    /// plays the one sequence a client has to get right - the old image still
+    /// answering, then nothing answering, then a new `boot_id` on trial, then
+    /// confirmed. See [`crate::ota`].
+    pub fn model_ota(&self, timing: Option<crate::OtaTiming>) {
+        self.shared.ota().set(timing);
+    }
+
+    /// Where the modelled update has got to.
+    #[must_use]
+    pub fn ota_phase(&self) -> crate::OtaPhase {
+        self.shared.ota().phase()
     }
 
     /// Where the provisioning machine is.
@@ -587,6 +616,7 @@ impl SimDevice {
             fade_ms: cfg.timing.fade_ms,
             panel_model: cfg.panel,
             rssi_dbm: cfg.rssi_dbm,
+            ota: crate::ota::OtaModel::new(),
         });
         shared.bus.publish(&boot_events);
 

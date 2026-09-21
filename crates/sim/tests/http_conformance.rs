@@ -142,6 +142,40 @@ fn only_runs_what_it_was_asked_for() {
     dev.shutdown();
 }
 
+/// Card 246, item 4: a device found still wearing one of the suite's own names
+/// is a **previous run that was killed**, and this run must say so and leave
+/// it with its default name rather than politely writing `probe-228` back.
+#[test]
+fn a_device_left_named_by_a_killed_run_is_not_restored_to_that_name() {
+    let dev = SimDevice::start(Config {
+        name: http::PROBE_NAME.to_string(),
+        ..Config::for_test()
+    })
+    .expect("bind loopback");
+    let http_addr = dev.http_addr().expect("the HTTP API is on");
+    assert!(
+        http::name_is_a_leftover(&dev.handle().snapshot().name),
+        "the device starts out wearing the leftover"
+    );
+
+    let opts = http::Opts {
+        // One rule: this is about what the *runner* does at either end, and
+        // the suite's own settings rules are `only_runs_what_it_was_asked_for`.
+        only: Some("1".into()),
+        ctrlc: false,
+        ..http::Opts::new(http_addr, http_addr.to_string())
+    };
+    let s = http::run(&opts).expect("the suite ran");
+    assert_eq!(s.failed, 0);
+
+    assert_eq!(
+        dev.handle().snapshot().name,
+        "",
+        "the run restored the default name (screeny-<id>), not the leftover"
+    );
+    dev.shutdown();
+}
+
 /// Pointed at a port with nothing on it, the suite says so once instead of
 /// failing forty rules.
 #[test]

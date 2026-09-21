@@ -171,6 +171,27 @@ impl Boot {
     }
 }
 
+/// Is the **inactive** slot spoken for, so that a new upload must be refused?
+///
+/// Card 246, item 1. The inactive slot is the escape hatch of an image that is
+/// still on trial - it holds the known-good image the bootloader would roll
+/// back to - so staging over it while the trial is undecided would leave a
+/// device with one unproven image and nowhere to go (research 006 section 6,
+/// mitigation 3). The same goes for the window between an accepted upload and
+/// the reset that boots it: the slot is already spoken for.
+///
+/// **What the bench found is the third argument.** Firmware 0.7.0 asked only
+/// `boot.on_trial()`, which stays true for the whole life of the boot - the
+/// classification is read once from `otadata` and never revised - so once an
+/// image had confirmed itself the refusal was still there, and every upload
+/// answered `busy` until somebody rebooted the device. **Confirmation is what
+/// lifts it**: a confirmed image is no longer rolling anywhere back, and the
+/// other slot is free.
+#[must_use]
+pub fn slot_is_spoken_for(boot: Boot, confirmed: bool, activating: bool) -> bool {
+    activating || (boot.on_trial() && !confirmed)
+}
+
 /// Decide what kind of boot this is.
 ///
 /// `booted` is the MMU's answer (`PartitionTable::booted_partition`), `selected`
@@ -214,6 +235,45 @@ pub fn classify(booted: FwSlot, selected: FwSlot, state: FwState) -> Boot {
         // last update did not stick.
         FwState::Invalid => Boot::Reverted(RevertReason::Deadline),
         FwState::Aborted => Boot::Reverted(RevertReason::Aborted),
+    }
+}
+
+/// The `otadata` state to report for the slot that is **running**.
+///
+/// Card 246, item 3. `Ota::current_ota_state` reads the entry with the highest
+/// sequence number, and after a rollback that entry belongs to the slot the
+/// bootloader rolled back *from* - so a device running perfectly well on the
+/// previous image reported `fw_state: invalid` or `aborted`, which is true of
+/// `otadata` and wrong to anybody reading it. `status.fw_slot` has always been
+/// the slot really running (the MMU's answer), and `fw_state` beside it must
+/// describe the same slot. What was rejected, and why, is `panic.update`'s job
+/// and it says it in words.
+///
+/// The arithmetic is the same disagreement [`classify`] works from:
+///
+/// * `booted == selected` - the entry that was read **is** the running slot's,
+///   so it is reported unchanged. That includes the ugly case where it says
+///   `invalid` or `aborted` (`otadata` is in a mess and the bootloader fell
+///   back to `ota_0`): the running slot really is marked that way and saying
+///   so is the honest answer.
+/// * `booted != selected` - a rollback. The bootloader will not hand over to a
+///   slot whose entry is `invalid` or `aborted`, so the one it chose is a slot
+///   it considers good, and the image now running is the one that confirmed
+///   itself the last time it ran: **`valid`**.
+/// * either slot unknown - nothing is known, so the state that was read is
+///   passed through unchanged.
+#[must_use]
+pub fn running_state(booted: FwSlot, selected: FwSlot, selected_state: FwState) -> FwState {
+    let (FwSlot::Ota0 | FwSlot::Ota1) = booted else {
+        return selected_state;
+    };
+    let (FwSlot::Ota0 | FwSlot::Ota1) = selected else {
+        return selected_state;
+    };
+    if booted == selected {
+        selected_state
+    } else {
+        FwState::Valid
     }
 }
 
@@ -292,6 +352,98 @@ mod tests {
             assert_eq!(classify(FwSlot::Ota0, FwSlot::Unknown, state), Boot::Unknown);
         }
         assert!(!Boot::Unknown.on_trial());
+    }
+
+    // --- whose state is it (card 246, item 3) -----------------------------
+
+    #[test]
+    fn after_a_rollback_fw_state_describes_the_image_that_is_running() {
+        // The bench read: `fw 0.7.1, fw_slot ota_1, fw_state invalid` with a
+        // perfectly healthy 0.7.1 running. The rejected image's state belongs
+        // to `panic.update`, not here.
+        for rejected in [FwState::Invalid, FwState::Aborted, FwState::Valid] {
+            assert_eq!(
+                running_state(FwSlot::Ota1, FwSlot::Ota0, rejected),
+                FwState::Valid,
+                "rolled back from a slot marked {rejected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn without_a_rollback_the_entry_that_was_read_is_the_running_slots_own() {
+        for state in [
+            FwState::Valid,
+            FwState::PendingVerify,
+            FwState::New,
+            FwState::Undefined,
+            // `otadata` in a mess: the bootloader fell back to the slot the
+            // sequence also points at. It really is marked this way.
+            FwState::Invalid,
+            FwState::Aborted,
+        ] {
+            assert_eq!(running_state(FwSlot::Ota0, FwSlot::Ota0, state), state);
+        }
+    }
+
+    #[test]
+    fn a_device_that_cannot_say_which_slot_it_runs_reports_what_it_read() {
+        assert_eq!(
+            running_state(FwSlot::Unknown, FwSlot::Ota0, FwState::Aborted),
+            FwState::Aborted
+        );
+        assert_eq!(
+            running_state(FwSlot::Ota0, FwSlot::Unknown, FwState::Undefined),
+            FwState::Undefined
+        );
+    }
+
+    #[test]
+    fn a_trial_still_reads_pending_verify_for_the_whole_of_it() {
+        // Spec 8.10 step 2, and the one reading a client acts on.
+        assert_eq!(
+            running_state(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify),
+            FwState::PendingVerify
+        );
+    }
+
+    // --- the inactive slot (card 246, item 1) -----------------------------
+
+    #[test]
+    fn a_trial_holds_the_inactive_slot_and_confirming_lets_it_go() {
+        // The whole of card 246's first bug, as three lines. Firmware 0.7.0
+        // had only the first of them and stayed there until a reboot.
+        assert!(slot_is_spoken_for(Boot::Trial, false, false), "on trial");
+        assert!(
+            !slot_is_spoken_for(Boot::Trial, true, false),
+            "confirmed: the rollback image is not needed any more"
+        );
+        assert!(
+            slot_is_spoken_for(Boot::Settled, false, true),
+            "an accepted upload is on its way to being booted"
+        );
+    }
+
+    #[test]
+    fn an_activation_interrupted_between_its_two_writes_also_holds_the_slot() {
+        assert!(slot_is_spoken_for(Boot::Unproven, false, false));
+        assert!(!slot_is_spoken_for(Boot::Unproven, true, false));
+    }
+
+    #[test]
+    fn an_ordinary_boot_never_refuses_an_upload() {
+        for boot in [
+            Boot::Settled,
+            Boot::Reverted(RevertReason::Deadline),
+            Boot::Reverted(RevertReason::Aborted),
+            Boot::Reverted(RevertReason::Rejected),
+            Boot::Unknown,
+        ] {
+            assert!(
+                !slot_is_spoken_for(boot, false, false),
+                "{boot:?} has nothing on trial"
+            );
+        }
     }
 
     // --- decide -----------------------------------------------------------

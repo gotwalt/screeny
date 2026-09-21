@@ -287,10 +287,12 @@ pub fn shown(cx: &mut Ctx, codec: u8, flags: u8, payload: &[u8]) -> Result<(bool
 
 /// Everything the suite changes, and how to put it back.
 ///
-/// [`RestoreGuard`] covers a normal return and a panic; the ctrl-c handler
-/// installed by [`run`] covers the third case. Both go through
-/// [`Restore::apply`], which opens its own socket because the handler runs on
-/// another thread.
+/// [`RestoreGuard`] covers a normal return, an error return and a panic; the
+/// signal handler installed by [`run`] covers ctrl-c, `SIGTERM` and `SIGHUP`
+/// (card 246, item 4: `ctrlc`'s `termination` feature, so a run ended by
+/// `timeout` restores the device too). `SIGKILL` cannot be covered by
+/// anything. Both paths go through [`Restore::apply`], which opens its own
+/// socket because the handler runs on another thread.
 #[derive(Clone, Copy)]
 pub struct Restore {
     pub ctrl_addr: SocketAddr,
@@ -424,7 +426,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     };
     let on_interrupt = restore;
     if let Err(e) = ctrlc::set_handler(move || {
-        eprintln!("\ninterrupted: restoring the device");
+        eprintln!("\ninterrupted (signal): restoring the device");
         match on_interrupt.apply() {
             Ok(t) => eprintln!("  brightness {} restored", t.brightness),
             Err(e) => eprintln!("  RESTORE FAILED: {e}"),
