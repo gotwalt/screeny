@@ -212,6 +212,19 @@ pub struct PanicReply {
     /// firmware 0.6.x, which does not send it.
     #[serde(default)]
     pub update: Option<UpdateRecord>,
+    /// Why **this** boot started, the same value as
+    /// [`StatusReply::reset_reason`] (card 241b).
+    ///
+    /// It is here as well as there because this is the route for "why am I
+    /// running", and a reader that has just seen `boot_count` go up should not
+    /// have to poll a second route to learn whether the device chose to
+    /// restart or was made to. `wdt` here means the firmware's liveness
+    /// watchdog fired: core 0 stopped scheduling tasks and the chip reset
+    /// itself rather than going quiet until somebody unplugged it.
+    ///
+    /// `null` on a device that does not keep the record.
+    #[serde(default)]
+    pub last_reset: Option<ResetReason>,
 }
 
 impl PanicReply {
@@ -220,7 +233,8 @@ impl PanicReply {
         + field("boot_count", MAX_U32_LEN)
         + field("panic_count", MAX_U32_LEN)
         + field("last_panic", PanicRecord::MAX_JSON_LEN)
-        + field("update", UpdateRecord::MAX_JSON_LEN);
+        + field("update", UpdateRecord::MAX_JSON_LEN)
+        + field("last_reset", ResetReason::MAX_JSON_LEN);
 }
 
 /// What became of the last firmware update this device activated (card 241).
