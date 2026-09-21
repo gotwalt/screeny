@@ -695,16 +695,14 @@ only near-black codes and dead-zone neighbours of a level moved):
   only if the studio's engine and the browser really are looking at the same picture
   through the same model, which is what the test is for.
 
-**`cargo test --workspace`**: every crate green except `crates/studio`'s soak test, which
-runs a nested `cargo test --release` under its own 900 s timeout and was still running when
-this report was written (bench discipline: a full pass was not repeated once green - see the
-orchestrator if it needs re-checking). Every other target - all of `crates/panel`,
-`crates/dither`, `crates/art` (lib and every integration test), `crates/sim`,
-`crates/studio` (every test file except the soak's own long run), `crates/screeny`,
-`crates/encode`, `crates/demos` - passed on this branch, including the three that were
-failing before this session's fixes (`screeny-art --test dark_ramp`, `screeny-sim --lib`,
-`screeny-studio --test panel`). No `screeny --test loopback` flake seen in either full run.
-`cargo clippy --workspace --all-targets`: **clean**, nothing printed.
+**`cargo test --workspace --no-fail-fast`**: full green, every crate, including
+`crates/studio`'s soak test (`the_server_survives_a_bounded_soak`, its own nested
+`cargo test --release` under a 900 s timeout - let it run to completion once rather than
+guessing, per bench discipline; not repeated). This includes the three that were failing
+before this session's downstream fixes (`screeny-art --test dark_ramp`, `screeny-sim --lib`,
+`screeny-studio --test panel`) and `screeny --test loopback`, which did not flake in either
+of the two full runs this session did. `cargo clippy --workspace --all-targets`: **clean**,
+nothing printed.
 
 **No hardware touched**: no serial port, no camera, no packets to 192.168.7.221. Did not
 touch `firmware/` or change `crates/dither`'s behaviour (only depended on it from
