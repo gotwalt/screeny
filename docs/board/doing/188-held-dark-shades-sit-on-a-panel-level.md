@@ -252,3 +252,27 @@ division of labour the two deliverables were always going to need.
 19/19, up from 15). Every other patch's tests (`vesta`, `flock`, `overland`, `metaballs`,
 `knot`, `lattice`) untouched and still green - `clocks-dials` passes `rest: &[]` and is
 provably unaffected. `cargo clippy -p screeny-art --all-targets`: clean.
+
+### 2026-09-21 - deliverable 4 (optional): the brightness trade, worked for clocks
+
+Computed with a scratch `#[test]` (run once with `--nocapture`, then deleted - not
+committed, per the card: "a note in the Log is enough, do not build a mechanism").
+
+Both hands' default tint is identical: `hue 80, chroma 0.05, light 0.93`. In linear light
+that is `Rgb { r: 0.954, g: 0.783, b: 0.546 }` - peak channel (red) 0.954. Against `NOMINAL`'s
+63 levels that is **level 60.1 of 63**: clocks' hands are already at about 95% of the panel's
+top level by default. The scale factor to reach exactly level 63 is `63 / 60.1 = 1.048`, and
+the brightness that would compensate is `1 / 1.048 = 0.954` of whatever brightness is in
+force - at the bench default (`DEFAULT_BRIGHTNESS = 96`, 9/25 OE slots), that is about
+`96 * 0.954 = 92`, four steps down; at full (255) it is about 243.
+
+**So the trade barely exists for this patch today.** The brief's illustrative example ("a
+clock whose lit dots are sRGB ~175 is only using 27 of 63 levels") does not describe this
+clock: card 188's own default tint is already warm and bright (red-dominant, close to white),
+not the mid-tone example the brief pictures. A 1.048x scale and a four-slot brightness drop
+buys almost nothing - nowhere near card 136's floor (`BRIGHTNESS_FLOOR = 6`, one OE slot) or
+card 187's policy (which only engages when a *request* is below the floor; 92 and 243 are
+both far above it). Not worth building a mechanism for, which is exactly what the card
+predicted by making this deliverable optional. If a future tint choice (or the `dark`
+parameter's variants, which are much dimmer) changes the picture, the same three-line
+calculation applies to whatever the new peak is.
