@@ -23,17 +23,30 @@
 use super::sim::{Bird, V3};
 use crate::color::smoothstep;
 
-/// The body's landmarks, as fractions of the full wingspan, measured forward
-/// from the bird's position. A bird is roughly as long as it is wide; these
-/// are a generic passerine-to-gull silhouette and not any one species.
-const NOSE: f32 = 0.30;
-const CHEST: f32 = 0.06;
-const HIP: f32 = -0.16;
-const TAIL_TIP: f32 = -0.40;
+/// The spine, as fractions of the full wingspan measured forward from the
+/// bird's position: nose, head, chest, hip, tail tip. **A dart when the bird
+/// is small and a bird when it is big**, blended on the same level-of-detail
+/// number the wing's chord uses.
+///
+/// Card 168's bird is 0.70 of a wingspan from beak to tail. A real gull is
+/// nearer 0.46, and at this resolution that difference is the whole
+/// silhouette. At two or three LEDs the long dart is what says *flying*: it is
+/// the only thing left once the wings are a single pixel each, and the owner
+/// said of that picture "this is great". At sixteen it is what made the bird
+/// read as a paper dart instead of a bird - the commonest view in this patch
+/// is from behind or ahead, where the body carries the whole shape and a body
+/// two thirds of a wingspan long simply is not a bird's.
+///
+/// So the far side of the flock keeps card 168's proportions exactly, and a
+/// bird near enough for its wings to have any shape gets a body short enough
+/// to belong to them. Nothing is switched: the spine slides.
+///                        nose  head  chest    hip    tail
+const DART: [f32; 5] = [0.30, 0.22, 0.05, -0.16, -0.40];
+const BIRD: [f32; 5] = [0.21, 0.15, 0.04, -0.12, -0.27];
 
 /// Where the wings are hinged: a little forward of the middle and barely off
 /// the centre line, because at this size the two shoulders are the same pixel.
-const SHOULDER_FWD: f32 = 0.11;
+const SHOULDER_FWD: f32 = 0.12;
 const SHOULDER_OUT: f32 = 0.05;
 
 /// How the semi-span is divided at the wrist. The hand wing is the longer
@@ -44,8 +57,18 @@ const HAND: f32 = 0.55;
 /// Chord at the root and at the wrist, as fractions of the span; the tip has
 /// none, so the wing tapers to a point. The spar the chord hangs behind is the
 /// leading edge, which is where a wing's bones really are.
-const ROOT_CHORD: f32 = 0.19;
-const WRIST_CHORD: f32 = 0.115;
+///
+/// **Nearly constant from the body out to the wrist, and then all of the
+/// taper is in the hand.** The first version made the wing widest where it met
+/// the body, which is what turned a bird seen from below into a cross: the
+/// root chord reached back past the hip and the wing, the body and the tail
+/// were one mass with no waist anywhere in it. Held to 0.145 the root's
+/// trailing edge lands well forward of the hip, so there is a **notch**
+/// between the back of the wing and the tail - which is the outline that says
+/// "bird" from below and from behind, and the one thing the old silhouette
+/// never had.
+const ROOT_CHORD: f32 = 0.145;
+const WRIST_CHORD: f32 = 0.135;
 
 /// How far the wrist sits behind the shoulder, spread and folded. Spread it
 /// is very slightly *ahead* of it - a bird reaches forward into the
@@ -63,6 +86,20 @@ const LAG: f32 = 0.55;
 /// swings than the wrist does.
 const DIHEDRAL: f32 = 0.62;
 const TIP_GAIN: f32 = 1.30;
+
+/// How far the hand wing bends *away* from the way it is travelling, at full
+/// speed, in radians. A wing is not a rod: the air loads it and the tip
+/// trails - up through the downstroke, down through the upstroke.
+///
+/// It earns its place at one moment in particular. Half way through either
+/// stroke the inner wing is level and the lag alone leaves the hand nearly
+/// level with it, so seen head-on - which, with the camera flying inside the
+/// flock, is half of what you ever see - the bird is a straight bar, and a
+/// straight bar is the one thing a flying bird never looks like. This is
+/// largest exactly there and vanishes at the top and bottom of the stroke,
+/// where the beat's own angles are already doing the work, so it deepens the
+/// flat moments without touching the extremes.
+const CAMBER: f32 = 0.40;
 
 /// A glide: wings held slightly raised with the hand wing dropped a touch
 /// below them - the gull "M" - and the wrist half folded.
@@ -85,8 +122,11 @@ pub(crate) struct Wing {
 
 /// A whole bird, in world coordinates.
 pub(crate) struct Pose {
-    /// The spine, nose first: nose, chest, hip, tail tip.
-    pub spine: [V3; 4],
+    /// The spine, nose first: nose, head, chest, hip, tail tip. The chest is
+    /// the fattest point and sits just behind the shoulder; ahead of it the
+    /// neck and the head are short and thin, which is the difference between
+    /// a bird and a dart with a long nose.
+    pub spine: [V3; 5],
     /// The two back corners of the tail fan.
     pub tail: [V3; 2],
     /// Left wing, right wing.
@@ -113,11 +153,13 @@ fn beat(b: Bird) -> Beat {
     let lagged = b.phase - LAG;
 
     let amp = DIHEDRAL * (1.0 - 0.75 * b.glide);
+    let travel = rate(lagged);
     let inner = amp * warp(b.phase) + GLIDE_INNER * b.glide;
-    let hand = amp * TIP_GAIN * warp(lagged) + GLIDE_HAND * b.glide;
+    let hand = amp * TIP_GAIN * warp(lagged) - CAMBER * travel * (1.0 - b.glide)
+        + GLIDE_HAND * b.glide;
     // Folded through the upstroke, spread through the downstroke, and the
     // change between them is quick: a wing does not ease into its own fold.
-    let fold = smoothstep(-0.35, 0.75, rate(lagged));
+    let fold = smoothstep(-0.35, 0.75, travel);
     Beat { inner, hand, fold: fold * (1.0 - b.glide) + GLIDE_FOLD * b.glide }
 }
 
@@ -133,12 +175,19 @@ pub(crate) fn pose(b: Bird, span: f32, area: f32) -> Pose {
     let along = |k: f32| b.pos.add(fwd.scale(k * span));
     let Beat { inner, hand, fold } = beat(b);
 
+    // The spine slides from the dart to the bird with the same number that
+    // grows the wings' surface, so a bird never has one without the other.
+    let mut spine = [b.pos; 5];
+    for (i, p) in spine.iter_mut().enumerate() {
+        *p = along(DART[i] + (BIRD[i] - DART[i]) * area);
+    }
+
     // The tail fans in a glide and through a hard turn, and is folded shut the
     // rest of the time. Both of those the bird already carries; neither needs
     // anything new in `sim`.
     let spread = b.glide.max((b.roll.abs() / 0.45).min(1.0));
     let fan = span * (0.090 + 0.060 * spread) * area;
-    let tail_tip = along(TAIL_TIP);
+    let tail_tip = spine[4];
 
     let half = 0.5 * span;
     let wing = |sgn: f32| {
@@ -171,7 +220,7 @@ pub(crate) fn pose(b: Bird, span: f32, area: f32) -> Pose {
     };
 
     Pose {
-        spine: [along(NOSE), along(CHEST), along(HIP), tail_tip],
+        spine,
         tail: [tail_tip.sub(right.scale(fan)), tail_tip.add(right.scale(fan))],
         wings: [wing(-1.0), wing(1.0)],
     }

@@ -691,10 +691,19 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   `the_wing_is_narrower_going_up_than_coming_down`). The fold is driven by the
   *derivative* of the beat, not by the wing's height: height alone folds and
   unfolds symmetrically, and it is the asymmetry that reads as flapping rather
-  than rocking. Each wing also carries **chord** - a filled surface from a
-  leading-edge spar back to a trailing edge, broad at the root and nothing at
-  the tip - so it is an area and not a line. A tapered body (chest, neck, tail
-  boom) and a small **tail fan** that spreads with `glide` and `|roll|` finish
+  than rocking. On top of that the hand wing bends *away from the way it is
+  travelling* (`CAMBER`), because a wing is not a rod and the air loads it:
+  that is largest half way through either stroke, where the lag alone leaves
+  the hand level with the arm and the bird head-on would otherwise be a
+  straight bar, and it vanishes at the top and bottom where the beat's own
+  angles already do the work. Each wing also carries **chord** - a filled
+  surface from a leading-edge spar back to a trailing edge, near enough
+  constant out to the wrist with all the taper in the hand, which is a real
+  wing's planform - so it is an area and not a line. The root chord stops well
+  forward of the hip, leaving a **notch between the back of the wing and the
+  tail**: without it the wing, the body and the tail are one mass with no
+  waist, and a bird seen from below is a cross. A tapered body and a small
+  **tail fan** that spreads with `glide` and `|roll|` finish
   it. All of it is built in the bird's own frame and projected, so a wing the
   view has turned edge-on thins to nothing and a banking one is at its
   broadest, with no special case for either, and the underside is drawn a
@@ -706,6 +715,16 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   is; the surface fades in over the next four LEDs, so a bird coming towards
   the camera grows a wing rather than popping one on. That is why card 123
   barely moves the default picture while giving `size` 2.5-3 a real bird.
+- **The body is level of detail too**, on the same number. Card 168's bird is
+  **0.70 of a wingspan** from beak to tail; a real gull is nearer 0.46, and the
+  spine slides between them - 0.70 far, **0.48** near. Both are right where
+  they are used. At two LEDs the wings are a pixel each and the long dart is
+  the only thing left saying "flying"; at sixteen, seen from behind or ahead -
+  which is most of what this patch ever shows, with the camera inside the
+  flock - the body carries the whole silhouette, and a dart's body makes a
+  dart. The near end also has the chest as its fattest point, just behind the
+  shoulder, with a short neck and a shorter head ahead of it rather than one
+  long nose stroke.
 - **The wing wanted one new primitive**: `Coverage::triangle`, an anti-aliased
   filled triangle whose coverage is the signed distance to its nearest edge, so
   its edges match the strokes' and a degenerate one - a wing edge-on, or one

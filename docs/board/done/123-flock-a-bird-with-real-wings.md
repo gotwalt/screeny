@@ -257,3 +257,70 @@ itself, one bird from six directions through eight phases, rows side / 45 below 
   head at any size the panel offers.
 - At 3-5 LEDs the bird is a dash or a shallow V, exactly as before. That is the design,
   not a gap - but it means most of the default picture gets nothing from this card.
+
+### 2026-09-21 - round two: the first two items on that list
+
+Merged as it stood; the orchestrator sent it back for the top two, because from behind
+and ahead - most of what this patch ever shows - the bird still read as a wide dart.
+
+**1. The body is level of detail too now.** The spine (five points, not four) slides on
+the same number that grows the wings' surface: card 168's `[0.30, 0.22, 0.05, -0.16,
+-0.40]` far, `[0.21, 0.15, 0.04, -0.12, -0.27]` near - **0.70 of a wingspan beak to tail
+against 0.48**. Both are right where they are used, which is why this is a blend and not
+a correction: at two LEDs the wings are a pixel each and the long dart is the only thing
+left saying "flying" (it is the picture the owner called great), and at sixteen the body
+carries the whole silhouette and a dart's body makes a dart. Five points also means the
+chest is the fattest part and sits just behind the shoulder, with a short neck and a
+shorter head ahead of it instead of one long nose stroke.
+
+**2. The wing root no longer reaches back past the hip.** Chord 0.145 S at the root
+against 0.135 at the wrist - near enough constant out to the wrist with all the taper in
+the hand, which is a real wing's planform - and the shoulder moved forward from 0.11 S to
+0.12. The root's trailing edge now lands at `-0.025 S`, well forward of the hip at
+`-0.12`, so there is a **notch** between the back of the wing and the tail. That was the
+whole of the "cross" problem: widest where it met the body, the wing, the body and the
+tail were one mass with no waist anywhere in it.
+
+**3. Camber.** With 1 and 2 done the head-on row of the turntable was still a straight
+bar at both mid-strokes - the one moment a flying bird never looks like a line - because
+half way through a stroke the inner wing is level and the lag alone leaves the hand level
+with it. Added `CAMBER = 0.40`: the hand wing bends *away from the way it is travelling*,
+which is what the air does to a wing that is not a rod (up through the downstroke, down
+through the upstroke). It is proportional to the wing's own vertical speed, so it is
+largest exactly at the flat moments and vanishes at the top and bottom of the stroke
+where the beat's angles already do the work. Every phase is an arc now except the one
+where the wing is fully folded - and a folded wing flicking up really is close to a line.
+
+**The default picture barely moved again**: against the original card-168 picture, 128,
+131, 173 and 211 of 2048 LEDs differ at t = 12/20/28/36 s (round one was 113, 118, 161,
+199); against round one itself only **25-53 LEDs**. The body blend only has anything to
+do above 5 LEDs of span, and at the default the biggest bird is a median 6.4.
+
+Numbers that moved: the drawn span is 11.7 LEDs mid-upstroke against 15.1 mid-downstroke
+(was 12.3 / 16.0 - the same quarter). `every_frame_goes_out_exactly`: worst frame 1033 of
+1464 across all eight configurations (was 1042), black with six big white birds peaks at
+**3% APL** with the limiter never below x1.00. `a_distant_bird_has_no_surface_left` now
+also holds both ends of the body blend and prints them: **0.700 of a span far, 0.480
+near**.
+
+`cargo test -p screeny-art --release`: 118 passed. `cargo clippy -p screeny-art
+--all-targets`: silent. Still nothing outside `crates/art/src/patches/flock/` and
+`crates/art/README.md`; `sim.rs` untouched.
+
+**What still looks wrong after round two** - the list is shorter:
+
+- **The wrist kink still only reads in the planform and head-on.** Unchanged, and
+  probably unchangeable at this resolution; the flap is carried by the span shortening,
+  the tip lag and now the camber.
+- **The underside flash still almost never fires** - the flock barely rolls. Card 124.
+- **Still no head as such.** The front end is short and thin now, which is enough to
+  say "this end is the front", but there is no head shape at any size the panel offers.
+- **Level wings, seen nearly edge-on from a little below, are still a horizontal slab.**
+  That is what a wing actually looks like from there, but it is the one pose in
+  `compare-flapbig` that does not read as a bird.
+- Below 5 LEDs nothing has changed and nothing will: that is the design.
+
+**Pictures, round two** (before = card 168, after = this): `compare-flapbig.png`,
+`turntable-beat.png`, `turntable-glide.png`, `turntable-bank.png`, `compare-default.png`,
+`after/bigsheet.png` against `before/bigsheet.png`, and `compare-glide.png`,
+`compare-bank.png`, `compare-flap.png` for the rest.
