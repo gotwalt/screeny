@@ -13,6 +13,13 @@
 //! coverage buffer, so a distant bird fades in coverage instead of popping
 //! between LEDs, and nothing is tested against every sample.
 //!
+//! **Drawn big it is more than that** ([`bird`], card 123): a wing with a
+//! wrist in it, carrying chord, over a tapered body with a tail that fans. How
+//! much of that a bird gets is decided by its *projected span* and never by
+//! `size` - see [`AREA`] - so the far side of a default flock is still the two
+//! LEDs above, and only the birds that are big enough for it to read are given
+//! a surface.
+//!
 //! **The frame is indexed and exact.** Its palette is two-dimensional: a sky
 //! band (where the view ray points, plus the sun's glow) crossed with an ink
 //! level (how much bird is over it). Both are quantised through the ordered
