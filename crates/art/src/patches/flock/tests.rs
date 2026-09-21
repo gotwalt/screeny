@@ -571,22 +571,44 @@ fn the_wing_is_narrower_going_up_than_coming_down() {
     );
 }
 
-/// A bird too far away to have a wing's surface is the skeleton card 168 drew.
+/// A bird too far away to have a wing's surface is the bird card 168 drew,
+/// and a near one has a body that belongs to its wings.
 ///
-/// The level of detail is a fade of the *chord*, not a switch between two
-/// models, so this is what "no detail" means: the trailing edge sits on the
-/// leading edge and the tail fan has no width, every triangle is degenerate
-/// and draws nothing, and what is left is the strokes.
+/// The level of detail is a fade, not a switch between two models, so this is
+/// what its two ends mean. Far: the trailing edge sits on the leading edge and
+/// the tail fan has no width, every triangle is degenerate and draws nothing,
+/// and the spine is card 168's **0.70 of a wingspan** from beak to tail - the
+/// long dart that is the only thing left saying "flying" once the wings are a
+/// pixel each. Near: the same spine has drawn in to a real bird's proportion,
+/// because at sixteen LEDs seen from behind - the commonest view there is,
+/// with the camera inside the flock - the body carries the whole silhouette
+/// and a dart's body makes a dart.
 #[test]
 fn a_distant_bird_has_no_surface_left() {
     let mut sim = Sim::new(3);
     sim.resize(2);
-    let pose = bird::pose(sim.flock()[0], sim::SPAN, 0.0);
-    assert_eq!(pose.tail[0].sub(pose.tail[1]).len(), 0.0, "the tail fan still has width");
-    for w in &pose.wings {
+    let length = |p: &bird::Pose| p.spine[0].sub(p.spine[4]).len() / sim::SPAN;
+
+    let far = bird::pose(sim.flock()[0], sim::SPAN, 0.0);
+    assert_eq!(far.tail[0].sub(far.tail[1]).len(), 0.0, "the tail fan still has width");
+    for w in &far.wings {
         assert_eq!(w.trail[0].sub(w.spar[0]).len(), 0.0, "the wing root still has chord");
         assert_eq!(w.trail[1].sub(w.spar[1]).len(), 0.0, "the wrist still has chord");
     }
+    assert!(
+        (length(&far) - 0.70).abs() < 1e-4,
+        "a distant bird is {:.3} of a wingspan long; card 168's dart is 0.70",
+        length(&far)
+    );
+
+    let near = bird::pose(sim.flock()[0], sim::SPAN, 1.0);
+    eprintln!("body: {:.3} of a span far, {:.3} near", length(&far), length(&near));
+    assert!(
+        (0.44..=0.52).contains(&length(&near)),
+        "a near bird is {:.3} of a wingspan long, and a gull is about 0.46",
+        length(&near)
+    );
+
     assert_eq!(
         smoothstep(AREA.0, AREA.1, 4.9),
         0.0,
@@ -707,3 +729,4 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
     // patterns: the same steps happen, so the same picture comes out.
     assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }
+

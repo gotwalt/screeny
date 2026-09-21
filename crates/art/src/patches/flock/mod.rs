@@ -605,11 +605,14 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f3
         // it stands out from the sky.
         let span = span_m * view.focal / z;
         let pose = bird::pose(bird, span_m, smoothstep(AREA.0, AREA.1, span));
-        // The body tapers: a chest, a thinner neck out to the beak, a thinner
-        // boom back to the tail. All three floor at about the same sub-pixel
-        // width, so a distant bird is the single even dash it was before.
+        // The body tapers away from the chest, which is the fattest part and
+        // sits just behind the shoulder: a thinner neck forward of it, a
+        // thinner head and beak again, and a thin boom back to the tail. All
+        // four floor at about the same sub-pixel width, so a distant bird is
+        // the single even dash it has been since card 168.
         let body = (span * 0.17).clamp(0.42, 1.30);
-        let neck = (0.60 * body).max(0.40);
+        let neck = (0.62 * body).max(0.40);
+        let beak = (0.38 * body).max(0.36);
         let boom = (0.42 * body).max(0.38);
         let wing = (span * 0.13).clamp(0.38, 1.05);
         // The spar is the leading edge, and a wing's leading edge is thicker
@@ -635,7 +638,7 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f3
 
         // On the panel, or near enough to it to be worth drawing. Measured at
         // the chest, which is the one landmark a wing cannot swing away from.
-        let Some(chest) = view.project(pose.spine[1]) else { continue };
+        let Some(chest) = view.project(pose.spine[2]) else { continue };
         let margin = span + 3.0;
         if chest.0 < -margin
             || chest.0 > W as f32 + margin
@@ -658,8 +661,8 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f3
 
         // The surfaces first and the bones over them, so a wing's own
         // leading edge is never dimmed by the membrane behind it.
-        cover.triangle(spine[2], tail[0], tail[1], ink);
-        let to_bird = pose.spine[1].sub(view.eye);
+        cover.triangle(spine[3], tail[0], tail[1], ink);
+        let to_bird = pose.spine[2].sub(view.eye);
         let away = 1.0 / to_bird.len().max(1e-6);
         for w in &pose.wings {
             let Some(spar) = w.spar.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else {
@@ -678,9 +681,10 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f3
             cover.stroke(spar[0], spar[1], wing, lit);
             cover.stroke(spar[1], spar[2], hand, lit);
         }
-        cover.stroke(spine[3], spine[2], boom, ink);
-        cover.stroke(spine[2], spine[1], body, ink);
-        cover.stroke(spine[1], spine[0], neck, ink);
+        cover.stroke(spine[4], spine[3], boom, ink);
+        cover.stroke(spine[3], spine[2], body, ink);
+        cover.stroke(spine[2], spine[1], neck, ink);
+        cover.stroke(spine[1], spine[0], beak, ink);
     }
     seen
 }
