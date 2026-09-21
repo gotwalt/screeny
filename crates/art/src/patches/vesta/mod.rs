@@ -33,16 +33,18 @@
 //! anything.
 //!
 //! Everything else is `flap.rs` (how a card falls and what it looks like from
-//! where we sit) and `glyphs.rs` (ten numerals drawn for this size).
+//! where we sit). The numerals are `crates/art/src/faces`, which is a choice
+//! of faces - the house one drawn for this size, and real pixel fonts whose
+//! cells land 1:1 on the LEDs (card 174).
 
 pub(crate) mod flap;
-pub(crate) mod glyphs;
 
 use crate::color::{oklch, smoothstep, srgb8_to_linear, Rgb};
 use crate::dither::Dither;
+use crate::faces::{self, Face};
 use crate::frame::{Frame, H, W};
 use crate::palette::Palette;
-use crate::patch::{param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use flap::Fall;
 
 pub const DEF: PatchDef = PatchDef {
@@ -57,10 +59,11 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
+    choice("font", "Numerals", faces::NAMES, faces::DEFAULT),
     param("light", "Numeral level (sRGB code)", 40.0, 255.0, 1.0, 120.0),
     param("hue", "Hue (0 = pure red)", 0.0, 360.0, 1.0, 0.0),
     param("size", "Size", 0.55, 1.0, 0.01, 1.0),
-    param("weight", "Stroke weight (LEDs)", 1.2, 3.0, 0.1, 2.0),
+    param("weight", "Stroke weight, the Vesta face only (LEDs)", 1.2, 3.0, 0.1, 2.0),
     param("seam", "Seam (LEDs)", 0.0, 3.0, 0.5, 2.0),
     param("flip", "A card's fall (seconds)", 0.08, 0.6, 0.01, 0.2),
     toggle("cascade", "Flip through the numerals between", true),
@@ -69,6 +72,7 @@ const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     toggle("blink", "Colon blinks", false),
     toggle("hours24", "24-hour", true),
+    toggle("zero", "Leading zero (off = a blank card)", false),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
 ];
 
@@ -175,10 +179,50 @@ enum State {
     Settling,
 }
 
+/// The blank card.
+///
+/// A real board's hours-tens drum carries a blank where a leading zero would
+/// be, and shows it for most of the day (the owner, 2026-09-20: "let's add a
+/// blank card for leading zero, it's a thing the real thing does"). It is a
+/// card like any other: it falls, it is fallen onto, and the module keeps its
+/// seam and its black body while it is up.
+const BLANK: u8 = 10;
+
+/// The glyph a card carries. The blank has none, and a face draws nothing at
+/// all for a glyph it has not got - which is exactly what a blank card is.
+fn glyph(card: u8) -> char {
+    char::from_digit(u32::from(card), 10).unwrap_or(' ')
+}
+
+/// What each module's drum carries, in the order it carries it.
+///
+/// The hours' tens only ever needs three cards, and a real drum only has
+/// three, so `23:59 -> 00:00` is one card falling from `2` to the blank and
+/// not eight flipping through `3..9`. The other three drums are the ten
+/// numerals in order, as before.
+const DRUM_TENS_BLANK: [u8; 3] = [BLANK, 1, 2];
+const DRUM_TENS_ZERO: [u8; 3] = [0, 1, 2];
+const DRUM_TEN: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+fn drum(module: usize, zero: bool) -> &'static [u8] {
+    match (module, zero) {
+        (0, false) => &DRUM_TENS_BLANK,
+        (0, true) => &DRUM_TENS_ZERO,
+        _ => &DRUM_TEN,
+    }
+}
+
 impl Module {
     /// Advance to engine time `t`, heading for `target`.
-    fn step(&mut self, t: f64, target: u8, fall: f64, cascade: bool) {
-        let next = |shown: u8| if cascade { (shown + 1) % 10 } else { target };
+    fn step(&mut self, t: f64, target: u8, fall: f64, cascade: bool, drum: &[u8]) {
+        // The card after this one on the drum. A module showing a card its
+        // drum does not carry - the moment after `zero` is switched - goes
+        // straight to the target rather than hunting for a position it has
+        // not got.
+        let next = |shown: u8| match (cascade, drum.iter().position(|d| *d == shown)) {
+            (true, Some(k)) => drum[(k + 1) % drum.len()],
+            _ => target,
+        };
         // Retire every card that has landed since the last frame, each one
         // handing the clock to the next at the moment it should have landed
         // rather than at `t`. A card lands between frames, so starting the
@@ -258,16 +302,28 @@ fn make(_seed: u64) -> Box<dyn Patch> {
     Box::new(Vesta { born: None, modules: [Module { shown: 0, to: 0, began: 0.0, state: State::Still }; 4], doing: String::new() })
 }
 
-/// The hours and minutes a minute-of-day shows. Leading zeros are kept: a flap
-/// board has a card for every position and `09:05` is `0905`.
+/// The hours and minutes a minute-of-day shows.
 fn digits(minute: i64, hours24: bool) -> (u32, u32) {
     let (h, m) = ((minute.div_euclid(60).rem_euclid(24)) as u32, minute.rem_euclid(60) as u32);
     (if hours24 { h } else { (h + 11) % 12 + 1 }, m)
 }
 
+/// The four cards a minute-of-day asks for.
+///
+/// Every position has a card - that is what a flap board is - but the hours'
+/// tens carries a *blank* one where the leading zero would be, so `09:05` is
+/// ` 9:05` and `00:00` is `12:00` on the 12-hour setting and ` 0:00` on the
+/// 24-hour one. `zero` puts the numeral back.
+fn cards(minute: i64, hours24: bool, zero: bool) -> [u8; 4] {
+    let (h, m) = digits(minute, hours24);
+    let tens = (h / 10) as u8;
+    [if tens == 0 && !zero { BLANK } else { tens }, (h % 10) as u8, (m / 10) as u8, (m % 10) as u8]
+}
+
 impl Patch for Vesta {
     fn playing(&self) -> Option<Playing> {
-        let face: String = self.modules.iter().enumerate().map(|(i, m)| if i == 2 { format!(":{}", m.shown) } else { m.shown.to_string() }).collect();
+        let card = |d: u8| if d == BLANK { " ".to_string() } else { d.to_string() };
+        let face: String = self.modules.iter().enumerate().map(|(i, m)| if i == 2 { format!(":{}", card(m.shown)) } else { card(m.shown) }).collect();
         Some(Playing { title: face, detail: self.doing.clone(), actions: vec![], notes: vec![] })
     }
 
@@ -280,17 +336,17 @@ impl Patch for Vesta {
         let born = *self.born.get_or_insert(ctx.now - ctx.t);
         let clock = if pace >= 59.5 { ctx.now } else { born + ctx.t * rate } + f64::from(ctx.get("offset")) * 60.0;
         let minute = (clock / 60.0).floor() as i64;
-        let (hh, mm) = digits(minute, ctx.get("hours24") >= 0.5);
-        let target = [hh / 10, hh % 10, mm / 10, mm % 10].map(|d| d as u8);
+        let zero = ctx.get("zero") >= 0.5;
+        let target = cards(minute, ctx.get("hours24") >= 0.5, zero);
 
         let fall = f64::from(ctx.get("flip"));
         let cascade = ctx.get("cascade") >= 0.5;
-        for (m, want) in self.modules.iter_mut().zip(target) {
+        for (i, (m, want)) in self.modules.iter_mut().zip(target).enumerate() {
             if born_now {
                 // Born reading the time, not flipping its way up to it.
                 *m = Module { shown: want, to: want, began: ctx.t, state: State::Still };
             } else {
-                m.step(ctx.t, want, fall, cascade);
+                m.step(ctx.t, want, fall, cascade, drum(i, zero));
             }
         }
         let moving = self.modules.iter().filter(|m| m.state == State::Falling).count();
@@ -317,9 +373,11 @@ struct Geom {
     size: f32,
     /// Half the seam's width, in LEDs.
     seam: f32,
-    /// Half a stroke's width, in glyph units.
-    half: f32,
+    /// A stroke's width, in LEDs. The stroked face only.
+    weight: f32,
     tilt: f32,
+    /// The numerals' face.
+    face: &'static Face,
 }
 
 impl Geom {
@@ -327,6 +385,7 @@ impl Geom {
         let size = ctx.get("size");
         let (cx, cy) = (W as f32 * 0.5, H as f32 * 0.5);
         Geom {
+            face: faces::face(ctx.get("font")),
             w: MODULE_W * size,
             h: MODULE_H * size,
             centres: CENTRES.map(|c| cx + (c - cx) * size),
@@ -339,7 +398,7 @@ impl Geom {
             // boundary (row 16 of 32), so a seam of 2 is exactly two black
             // rows however large the clock is.
             seam: ctx.get("seam") * 0.5,
-            half: ctx.get("weight") * 0.5,
+            weight: ctx.get("weight"),
             tilt: ctx.get("tilt"),
         }
     }
@@ -424,7 +483,7 @@ fn sample(x: f32, y: f32, poses: &[Pose; 4], g: &Geom, levels: &Levels) -> f32 {
 /// Light at one point inside a module, `(u, v)` from its axle.
 fn module(u: f32, v: f32, pose: &Pose, g: &Geom, levels: &Levels) -> f32 {
     let fall = Fall::new(pose.theta, g.tilt, g.h);
-    let on = |d: u8, gx: f32, gy: f32| glyphs::distance(d as usize, gx / g.size, gy / g.size) <= g.half;
+    let on = |d: u8, gx: f32, gy: f32| g.face.ink(glyph(d), gx / g.size, gy / g.size, g.weight);
 
     // The falling card is in front of everything else, so it is asked first.
     if let Some(r) = fall.along(v) {
@@ -505,27 +564,34 @@ mod tests {
         frame
     }
 
-    /// Which numeral each module is showing, read back off the panel by
-    /// matching the lit LEDs against every numeral drawn in the same place.
-    /// A stronger check than asking the patch: it is the picture that has to
-    /// be right.
+    /// Which card each module is showing, read back off the panel by matching
+    /// the lit LEDs against every numeral drawn in the same place. A stronger
+    /// check than asking the patch: it is the picture that has to be right.
+    ///
+    /// A module with nothing lit in it at all is the blank card, which is the
+    /// only way a blank can be told from a numeral: it has no ink of its own.
     fn reads(frame: &Frame, g: &Geom) -> Option<[usize; 4]> {
         let lit: Vec<bool> = (0..N).map(|i| frame.pixel(i).luma() > 1e-4).collect();
         let mut out = [0; 4];
         for (i, slot) in out.iter_mut().enumerate() {
+            let inside = |x: usize, y: usize| {
+                let (u, v) = (x as f32 + 0.5 - g.centres[i], y as f32 + 0.5 - g.axle);
+                (u.abs() <= g.w * 0.5 && v.abs() <= g.h * 0.5).then_some((u, v))
+            };
+            if !(0..H).any(|y| (0..W).any(|x| inside(x, y).is_some() && lit[y * W + x])) {
+                *slot = BLANK as usize;
+                continue;
+            }
             // How many LEDs a numeral would light here that are dark.
             let missing = |d: usize| {
                 let mut wrong = 0;
                 for y in 0..H {
                     for x in 0..W {
-                        let (u, v) = (x as f32 + 0.5 - g.centres[i], y as f32 + 0.5 - g.axle);
-                        if u.abs() > g.w * 0.5 || v.abs() > g.h * 0.5 {
-                            continue;
-                        }
-                        // Well inside the stroke and clear of the seam, so a
+                        let Some((u, v)) = inside(x, y) else { continue };
+                        // Well inside the ink and clear of the seam, so a
                         // pixel that is dark here is the numeral not being
                         // drawn rather than an anti-aliased edge.
-                        if v.abs() >= g.seam + 0.5 && glyphs::distance(d, u / g.size, v / g.size) <= g.half - 0.4 && !lit[y * W + x] {
+                        if v.abs() >= g.seam + 0.5 && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight) && !lit[y * W + x] {
                             wrong += 1;
                         }
                     }
@@ -542,8 +608,10 @@ mod tests {
     }
 
     fn read_back(frame: &Frame, g: &Geom) -> [usize; 4] {
-        reads(frame, g).expect("the modules are not showing four numerals")
+        reads(frame, g).expect("the modules are not showing four cards")
     }
+
+    const B: usize = BLANK as usize;
 
     fn geom(set: &[(&str, f32)]) -> Geom {
         let mut p = params();
@@ -553,24 +621,64 @@ mod tests {
         Geom::of(&Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &p })
     }
 
-    /// The clock tells the time: the four modules are the four digits of
-    /// `Ctx::now`, 24-hour by default, leading zeros kept.
+    /// The clock tells the time: the four modules are the four cards of
+    /// `Ctx::now`, 24-hour by default, the hours' tens blank where a leading
+    /// zero would be.
     #[test]
     fn the_modules_show_the_time_of_day() {
-        for (when, want) in [("21:12", [2, 1, 1, 2]), ("00:00", [0, 0, 0, 0]), ("09:05", [0, 9, 0, 5]), ("14:47", [1, 4, 4, 7])] {
+        for (when, want) in [("21:12", [2, 1, 1, 2]), ("00:00", [B, 0, 0, 0]), ("09:05", [B, 9, 0, 5]), ("14:47", [1, 4, 4, 7])] {
             assert_eq!(read_back(&run(when, 3.0, &[]), &geom(&[])), want, "{when}");
         }
-        // 12-hour is the same four modules: 13:11 is 01:11, 00:00 is 12:00.
+        // And `zero` puts the numeral back on that one module.
+        assert_eq!(read_back(&run("09:05", 3.0, &[("zero", 1.0)]), &geom(&[("zero", 1.0)])), [0, 9, 0, 5]);
+        // 12-hour is the same four modules: 13:11 is 1:11, 00:00 is 12:00.
         assert_eq!(digits(13 * 60 + 11, false), (1, 11));
         assert_eq!(digits(0, false), (12, 0));
         assert_eq!(digits(0, true), (0, 0));
-        assert_eq!(read_back(&run("13:11", 3.0, &[("hours24", 0.0)]), &geom(&[])), [0, 1, 1, 1]);
+        assert_eq!(cards(0, false, false), [1, 2, 0, 0], "noon and midnight are 12, not a blank");
+        assert_eq!(cards(0, true, false), [BLANK, 0, 0, 0]);
+        assert_eq!(read_back(&run("13:11", 3.0, &[("hours24", 0.0)]), &geom(&[])), [B, 1, 1, 1]);
+        assert_eq!(read_back(&run("12:34", 3.0, &[("hours24", 0.0)]), &geom(&[])), [1, 2, 3, 4]);
+    }
+
+    /// The blank is a card on the hours-tens drum: it falls to and from its
+    /// neighbours in one card's fall, as `1` and `2` do, rather than being
+    /// switched on and off.
+    #[test]
+    fn the_blank_card_flips_like_any_other() {
+        let g = geom(&[]);
+        // 09:59 -> 10:00 is the blank falling away and 1 arriving.
+        assert_eq!(read_back(&run("09:59:59", 0.5, &[]), &g)[0], B);
+        assert_eq!(read_back(&run("09:59:59", 3.0, &[]), &g)[0], 1);
+        // 23:59 -> 00:00 is 2 falling away and the blank arriving: one card,
+        // because the drum carries blank, 1 and 2 and nothing else.
+        assert_eq!(read_back(&run("23:59:59", 0.5, &[]), &g)[0], 2);
+        assert_eq!(read_back(&run("23:59:59", 3.0, &[]), &g)[0], B);
+        assert_eq!(drum(0, false), [BLANK, 1, 2], "the hours' tens carries three cards");
+        assert_eq!(drum(0, true), [0, 1, 2]);
+        assert_eq!(drum(3, false).len(), 10);
+        // One card, not a cascade: the module is settled within a fall (plus
+        // its settle) of the minute turning.
+        let fall = f64::from(params().get("flip"));
+        let dt = 1.0 / crate::snapshot::FPS;
+        for when in ["09:59:59", "23:59:59"] {
+            let want = if when.starts_with("09") { 1 } else { B };
+            let mut landed = None;
+            for k in 30..=(4.0 / dt) as i64 {
+                if reads(&run(when, k as f64 * dt, &[]), &g).map(|r| r[0]) == Some(want) && k as f64 * dt > 1.02 {
+                    landed = Some(k as f64 * dt);
+                    break;
+                }
+            }
+            let landed = landed.unwrap_or_else(|| panic!("{when}: the hours' tens never landed"));
+            assert!(landed - 1.0 <= fall + 2.0 * dt, "{when}: the hours' tens took {:.2} s, more than one card", landed - 1.0);
+        }
     }
 
     /// A flip starts when the minute turns and is over within `flip` seconds
     /// times the number of numerals it has to pass through. Pinned at
-    /// 09:59:59, one second in is the turn of four modules at once - 0 to 1,
-    /// 9 to 0, 5 to 0 and 9 to 0 - which is the worst moment the clock has.
+    /// 09:59:59, one second in is the turn of four modules at once - blank to
+    /// 1, 9 to 0, 5 to 0 and 9 to 0 - which is the worst moment the clock has.
     #[test]
     fn a_flip_begins_on_the_minute_and_ends_when_it_should() {
         let mut patch = (DEF.make)(1);
@@ -589,7 +697,7 @@ mod tests {
             if began.is_none() {
                 // Before the minute turns the clock reads 09:59 and does not
                 // move an LED - where a clock that flipped early is caught.
-                assert_eq!(reads(&frame, &g), Some([0, 9, 5, 9]), "at t={t} the clock is not holding 09:59");
+                assert_eq!(reads(&frame, &g), Some([B, 9, 5, 9]), "at t={t} the clock is not holding 9:59");
                 if *still != pixels {
                     began = Some(t);
                 }
@@ -717,14 +825,59 @@ mod tests {
         assert_eq!(shot("21:12", 3.0), take(&DEF, &params(), &other).preview);
     }
 
+    /// **The crispness proof.** A pixel face at `size` 1 is *exactly* crisp:
+    /// inside a module there are two colours and no others, full ink and true
+    /// black, with nothing in between. That is the whole reason to embed a
+    /// pixel font rather than draw one - module centres and the axle are pixel
+    /// boundaries, so a face whose cells are whole LEDs has every cell
+    /// boundary on an LED boundary and `Frame::supersample`'s 36 samples
+    /// inside an LED all land in the same cell.
+    ///
+    /// The faces that are not crisp are checked too, the other way round: if
+    /// they came out with two colours as well, this test would be measuring
+    /// nothing.
+    #[test]
+    fn a_pixel_face_is_exactly_crisp_at_size_one() {
+        for (i, face) in faces::FACES.iter().enumerate() {
+            let set: &[(&str, f32)] = &[("font", i as f32), ("zero", 1.0)];
+            let g = geom(set);
+            let (mut colours, mut lit) = (std::collections::BTreeSet::new(), 0);
+            // Every numeral, and the four times of the contact sheets.
+            for when in ["01:23", "04:56", "07:08", "09:59"] {
+                let frame = run(when, 3.0, set);
+                for y in 0..H {
+                    for x in 0..W {
+                        let v = y as f32 + 0.5 - g.axle;
+                        if !g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) || v.abs() > g.h * 0.5 {
+                            continue;
+                        }
+                        let p = frame.pixel(y * W + x);
+                        colours.insert(p.to_srgb8());
+                        lit += usize::from(p.luma() > 1e-4);
+                    }
+                }
+            }
+            // Sixteen numerals, each around a hundred LEDs minus the seam.
+            assert!(lit > 1000, "{}: only {lit} lit LEDs over four times", face.name);
+            if face.crisp() {
+                assert_eq!(colours.len(), 2, "{}: a crisp face drew {:?}", face.name, colours);
+                assert!(colours.contains(&[0, 0, 0]), "{}: no black card", face.name);
+            } else {
+                assert!(colours.len() > 4, "{}: {} colours - is this face crisp after all?", face.name, colours.len());
+            }
+        }
+    }
+
     /// The seam is the signature, so it is really there: the row of LEDs on
     /// the axle is black all the way across every module.
     #[test]
     fn the_seam_cuts_every_module() {
         let g = geom(&[]);
         // 08:38 puts a numeral with ink right across the waist (8, 3) in
-        // every module, so nothing but the seam can be making the gap.
-        let frame = run("08:38", 3.0, &[]);
+        // every module, so nothing but the seam can be making the gap - with
+        // `zero` on, because the hours' tens is otherwise a blank card and a
+        // blank module has no seam to see.
+        let frame = run("08:38", 3.0, &[("zero", 1.0)]);
         for (i, cx) in g.centres.iter().enumerate() {
             for y in [15, 16] {
                 let lit = (0..W).filter(|x| (*x as f32 + 0.5 - cx).abs() <= g.w * 0.5 && frame.pixel(y * W + x).luma() > 1e-4).count();
@@ -773,7 +926,7 @@ mod tests {
         assert!(lit_edge > 5, "the falling card's edge is never lit: {lit_edge} of 31 frames");
     }
 
-    /// The angle a single-card module - the hours' tens, 0 to 1 - is at on
+    /// The angle a single-card module - the hours' tens, blank to 1 - is at on
     /// frame `frame` of a run pinned to 09:59:59, driven through the same
     /// `step` and the same clock as the renderer. Nothing here interpolates
     /// the fall curve by hand, which is how the README's table came to be
@@ -781,11 +934,11 @@ mod tests {
     fn theta_at(flip: f64, frame: i32) -> f32 {
         let clock = at("09:59:59");
         let dt = 1.0 / crate::snapshot::FPS;
-        let mut m = Module { shown: 0, to: 0, began: 0.0, state: State::Still };
+        let mut m = Module { shown: BLANK, to: BLANK, began: 0.0, state: State::Still };
         for i in 0..=frame {
             let t = f64::from(i) * dt;
             let minute = (clock.now(t) / 60.0).floor() as i64;
-            m.step(t, (digits(minute, true).0 / 10) as u8, flip, true);
+            m.step(t, cards(minute, true, false)[0], flip, true, drum(0, false));
         }
         m.pose(f64::from(frame) * dt, flip).theta
     }
@@ -838,6 +991,7 @@ mod tests {
     #[test]
     fn the_parameters_are_the_ones_the_card_asked_for() {
         let want: &[(&str, f32, f32, f32)] = &[
+            ("font", 0.0, (faces::NAMES.len() - 1) as f32, faces::DEFAULT),
             ("light", 40.0, 255.0, 120.0),
             ("hue", 0.0, 360.0, 0.0),
             ("size", 0.55, 1.0, 1.0),
@@ -850,6 +1004,7 @@ mod tests {
             ("pace", 5.0, 60.0, 60.0),
             ("blink", 0.0, 1.0, 0.0),
             ("hours24", 0.0, 1.0, 1.0),
+            ("zero", 0.0, 1.0, 0.0),
             ("offset", 0.0, 1439.0, 0.0),
         ];
         assert_eq!(DEF.params.len(), want.len(), "a parameter came or went");
