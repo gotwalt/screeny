@@ -2376,7 +2376,7 @@ mod tests {
     }
 
     /// **Card 178.** A file whose player is on a patch this build has not got
-    /// - `plasma`, which this is the first build without - loads, plays the
+    /// (`plasma`, which this is the first build without) loads, plays the
     /// default patch, and says so **once**, in `repaired`.
     ///
     /// The three things asserted beyond that are the ones that make it safe to

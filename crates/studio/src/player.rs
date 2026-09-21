@@ -1545,7 +1545,7 @@ mod tests {
     }
 
     /// Every id the list itself names, so that the day one of them is removed
-    /// - as `plasma` was, card 178 - this says so rather than quietly handing
+    /// (as `plasma` was, card 178) this says so rather than quietly handing
     /// back the patch that just failed.
     #[test]
     fn the_fallback_is_never_the_patch_that_just_failed() {
