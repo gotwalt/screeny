@@ -194,3 +194,61 @@ whatever radios are there. This was checked, not guessed: read `picture.js:549` 
 `cargo test -p screeny-art --release`: 10/10 in `panel::`, up from 6. `cargo clippy -p
 screeny-art --all-targets`: two `clippy::doc_lazy_continuation` warnings from a `-` that
 read as a markdown list start mid-paragraph; reworded, no code change, now silent.
+
+### 2026-09-21 - deliverable 3: the clocks patch's dark ramp
+
+`crates/art/src/patches/clocks/draw.rs`: `RestScale { ink, reach, shade: Option<Rgb> }`
+replaces the old `[ink, reach]` tuple `Dials::rest` carried. `shade`, when `Some`, overrides
+`tint.scale(ink)` outright for that dial's hands and is added to the built palette verbatim
+(`if !colours.contains(&shade) { colours.push(shade) }`) - it is its own exact entry, not
+something left to `Palette::map`'s nearest-match to land on by luck. `rest: &[]` (every other
+caller, and `clocks-dials`) is unaffected: `.get(i).copied().unwrap_or(RestScale::FULL)` is
+the same "not present -> full strength" behaviour the old code had.
+
+`crates/art/src/patches/clocks/mod.rs`:
+
+- `DARK_RAMPS: &[&[[u32;3]]]` - two hand-picked variants. `"neutral"`:
+  `[[1,1,1],[2,2,2],[3,3,3]]`, equal levels, the grey the ramp already fades towards.
+  `"amber"`: `[[1,1,0],[2,1,1],[3,2,1]]`, leaning warm per the brief's own example
+  ("(2,1,1) and (2,2,1)"). Chosen by reading the numbers, not by rendering and looking - the
+  owner judges the panel, not this worker; both variants and the "before" picture are in the
+  snapshot set below for that judgement.
+- `choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32)` - a new patch parameter,
+  declared the same way card 163's other named choices are (`rest`, `dance`). No Studio
+  change needed: `crates/studio/ui/picture.js` already renders any `ParamSpec` with
+  `choices` generically (segmented control at <=3 stops), unlike `output.panel`'s
+  hand-authored radios.
+- `dark_shade(variant, ink) -> Rgb` picks a rung of the chosen ramp and converts it with
+  `screeny_art::panel::level_triple` - deliverable 2's "the new snap" the card asks
+  deliverable 3 to use.
+- `picture()`: `shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(...))`. Only
+  once truly landed, never mid-fade - the 0.6 s settle is moving content (brief: "leave
+  everything else to the dither"), so it keeps the old continuous `tint.scale` the whole way
+  and only the final, held colour is aligned. `RESTS[0]` ("as it was", `ink == 1.0`) never
+  gets a shade at all - it is kept undimmed on purpose, for comparison, exactly as its
+  existing test comment already said.
+
+**Tests.** `every_treatment_keeps_the_palette_exact` now expects 32 colours, not 31, once a
+treatment that actually dims (`ink < 1.0`) has landed (`settled >= 1.0`) on a time that
+actually leaves a dial resting - found by running it first and reading the failure: two of
+the seven `AWKWARD` times (`9:05`, `0:00`) draw digits with no rest cells at all (`0`, `5`,
+`9` have none), so `want` has to check `resting(hh, mm)` too, not just the treatment. Still
+`<= GUARANTEED_PALETTE` (32 == 32), still exact.
+
+New test `held_dark_shades_land_within_two_sixteenths_of_a_level` (the card's acceptance
+line) renders a clocks frame at 21:12 for every `RESTS` treatment, runs it through the real
+`Pipeline` with `Output { panel: Panel::AlignedDark, .. }`, and checks every wire byte: if
+its nearest level is below `DARK_ALIGN_LEVEL`, the offset is within 2/16. First write used
+`Pipeline::default()` (plain `Dithered`) and failed on `"as it was"` at level 15, offset -7 -
+correctly, because that treatment is undimmed on purpose and its hand edges are ordinary
+anti-aliasing, never snapped by deliverable 3's patch-side fix. Re-read the acceptance line
+("a clocks frame, after **the snap**") and switched to `Panel::AlignedDark`: deliverable 3's
+hand-picked ramp is the better-looking fix for the common case (resting ink, the default
+`Dithered` path), deliverable 2's pipeline-level snap is the backstop that catches everything
+else (hand edges, a treatment that is deliberately left undimmed) - which is exactly the
+division of labour the two deliverables were always going to need.
+
+`cargo test -p screeny-art --release`: 123/123 (was 117 before this card; `clocks::` alone is
+19/19, up from 15). Every other patch's tests (`vesta`, `flock`, `overland`, `metaballs`,
+`knot`, `lattice`) untouched and still green - `clocks-dials` passes `rest: &[]` and is
+provably unaffected. `cargo clippy -p screeny-art --all-targets`: clean.
