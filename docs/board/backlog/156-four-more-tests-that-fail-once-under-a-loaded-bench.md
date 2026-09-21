@@ -69,3 +69,15 @@ The sender-side equalities in that test are exact by construction and should sta
 the receiver-side one wants a bound, or a retry of the whole stream.
 (Card 161's worker also left a diagnosis of `moved` above: a race between the probe tick
 and the first HTTP status read refreshing `seen_unix`.)
+
+### `moved` is fixed; more for the list (orchestrator, 2026-09-20 evening)
+
+`moved` was not a load flake: see card 178's closing note - `Registry::unheard` now reads
+`udp_seen_unix`, which a status read does not refresh. 12 of 12 since. Still open, from
+card 178's worker: `studio/tests/api.rs::a_watching_browser_gets_the_full_rate` and
+`the_socket_delivers_frames` assert `n > 18` frames and got 17 under load;
+`screeny/tests/indexed.rs::exactness_holds_over_a_stream` ("all thirty displayed") is an
+exact loopback UDP count like `traffic.rs`'s; and the Studio's 5 s render watchdog is
+wall-clock, so an oversubscribed bench can make it refuse a patch that was merely
+descheduled (it took `soak` and `moved` down when the fixture was `metaballs`; they are on
+the cheaper `flock` now, which dodges it rather than fixing it).

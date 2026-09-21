@@ -68,6 +68,15 @@ pub struct DeviceRecord {
     pub resolved: Option<Device>,
     /// When it was last seen, by discovery or by answering a control request.
     pub seen_unix: Option<u64>,
+    /// When it was last heard **over UDP at the address the link streams to**:
+    /// by discovery or by answering a control request - not by its HTTP API.
+    /// This is what [`Registry::unheard`] reads. `seen_unix` also counts a
+    /// status read, which is right for "is it alive" and wrong for "has it
+    /// moved": a status read that still succeeds (a panel behind a forwarded
+    /// port; two simulators sharing loopback) kept refreshing it, so a panel
+    /// whose frames were going nowhere was never looked for (card 156's
+    /// diagnosis of the `moved` test, which failed about one run in six).
+    pub udp_seen_unix: Option<u64>,
     /// The last telemetry heard, and when.
     pub telemetry: Option<Telem>,
     /// The last control request that failed, if the last one did.
@@ -912,6 +921,7 @@ impl Registry {
         }
         record.resolved = Some(dev.clone());
         record.seen_unix = Some(unix_now());
+        record.udp_seen_unix = Some(unix_now());
         record.last_error = None;
         devices.insert(key.clone(), record);
 
@@ -937,6 +947,7 @@ impl Registry {
             }
             d.telemetry = Some(fresh);
             d.seen_unix = Some(unix_now());
+            d.udp_seen_unix = Some(unix_now());
             d.last_error = None;
         }
     }
@@ -1197,7 +1208,7 @@ impl Registry {
         self.lock()
             .iter()
             .filter(|(id, d)| {
-                !id.starts_with(PENDING) && d.seen_unix.map_or(u64::MAX, |s| now.saturating_sub(s)) > limit
+                !id.starts_with(PENDING) && d.udp_seen_unix.map_or(u64::MAX, |s| now.saturating_sub(s)) > limit
             })
             .map(|(id, _)| id.clone())
             .collect()

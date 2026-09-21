@@ -430,3 +430,20 @@ features: `cargo check -p screeny-studio --no-default-features` and
   the indexed example, which is a directory of six files rather than the one
   file `plasma.rs` was. A small single-file indexed patch would be a kinder
   thing to copy, if one ever wants writing.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Merged `--no-ff` onto a `main` that had gained cards 184 and 175 since this branch last
+merged it: no conflicts. `screeny-art list` shows eight patches. Root suite: 925 passed, 1
+failed - the Studio's `moved` test again, and this time it also failed 1 run in 6 **alone**,
+so it was not load. Card 156 already held the diagnosis (card 161's worker): a status read
+refreshes `seen_unix`, and on loopback the replacement simulator answers on the same HTTP
+port, so the device never counts as unheard and the probe never runs. Fixed in the product,
+not the test, because the same thing would happen to a real panel behind a forwarded HTTP
+port: `DeviceRecord::udp_seen_unix` is refreshed by discovery and by control replies and
+NOT by a status read, and `Registry::unheard` reads that. `moved`: 12 of 12 afterwards;
+the Studio's tests all pass; clippy silent.
+The worker's follow-ups are noted on card 156 (two `api.rs` rate tests; the wall-clock
+render watchdog) - and one is worth the owner's eye some day, not now: a CPU-only Studio
+now moves a player off a GPU patch at load and says so, instead of quietly playing a
+fallback.
