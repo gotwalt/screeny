@@ -12,6 +12,7 @@
 
 pub mod color;
 pub mod dither;
+pub mod faces;
 pub mod frame;
 #[cfg(feature = "gpu")]
 pub mod gpu;

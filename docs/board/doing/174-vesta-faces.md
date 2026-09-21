@@ -104,3 +104,101 @@ most of them pixel fonts that land 1:1 on the LEDs.
 The owner picks a face on the page and likes his 5.
 
 ## Log
+
+### Amendment 1 (the owner, relayed by the orchestrator, 2026-09-20)
+
+> "re vesta: let's add a blank card for leading zero. it's a thing the real
+> thing does."
+
+So: when the hours' tens is 0 the first module shows a **blank card** - no
+numeral, the seam and the black card as usual - in 24-hour mode (` 9:05`) and
+in 12-hour mode, where that is most of the day. Blank is a real card on that
+module's drum and flips to and from its neighbours like any other
+(`09:59 -> 10:00` falls from blank to 1; `23:59 -> 00:00` falls from 2 to
+blank). With `cascade` on, say where blank sits in that drum's order - a real
+hours-tens drum only carries blank, 1, 2. Make it the **default**, with a
+toggle (`zero`, "Leading zero", off) to bring the numeral back. It must work
+for every face. Tests: the module is empty at 09:05 and shows 1 at 10:05; a
+flip to and from blank takes one card's fall; the read-back helper understands
+blank. Add a settled 09:05 to the contact sheets.
+
+### Amendment 2 (the owner, relayed by the orchestrator, 2026-09-20)
+
+> "we'll probably want to use our font selections in other patches, so we might
+> generalize a bit someday or build in a way that makes that easier."
+
+Build it so that is easy, without building the general thing: the faces live in
+a shared module of the art crate (`crates/art/src/faces/`: `mod.rs` with the
+small API, `data.rs` generated, `FACES.md` beside them; the script becomes
+`tools/art-faces.py`), and `vesta` consumes it. The API is small and not
+vesta-shaped: a face has a name, a glyph box and a scale, and answers "is there
+ink at (x, y) of glyph `c`" - looked up **by `char`**, so a later card can add
+letters without changing callers, and a missing glyph is simply empty (which is
+also the blank card). A `FACES` list plus the `NAMES` a `choice(..)` needs, so
+a second patch is one line. The half-LED alignment rule belongs in the shared
+code. No other patch is ported, no letters are added, no text-layout engine.
+
+### Step 1: the shared faces module, the `font` choice, the blank card
+
+**What I did.** Read card 155, card 163 and `crates/art/src/patches/vesta/`,
+then scanned all 335 BDFs in the Tecate clone (455 files, 179 *distinct* digit
+sets - the collection is full of forks of the same face) for digit boxes that
+fit a 14 x 30 module at x1, x2 or x3, and printed the shortlist as ASCII.
+
+**What I looked at and concluded, on the fonts.** The scan's `1:1` list is
+short and the card's research was right: `ter-u32b` (13 x 20, 3-LED strokes),
+`ter-u32n` (12 x 20, 2-LED) and `spleen-16x32` (12 x 20, 2-LED) are the only
+1:1 candidates worth having. `uw-ttyp0`'s `t0-22` looked promising in the scan
+at 9 x 20 but its digits are **oldstyle figures** - different heights, some
+with descenders - which is not a clock face; dropped. `ter-u28b/n` (11 x 18) is
+Terminus again, smaller and no better; dropped. At x2 the collection collapses:
+`Dina_r400-10`, `ctrld-fixed-16r`, `Tamzen8x16r` and `ter-u16n` are all the
+same 6 x 9/6 x 10 terminal design, and `gohufont-14b` (7 x 9 -> 14 LEDs) fills
+the module edge to edge with no black margin. `zevv-peep` has an odd 6 and 9;
+`kourier` has a descender on its 4; `mplus_h12r`, `cherry-13-b` and `creep`
+leave the `1` as a bare stem. **Licences settled it**: `cherry`, `haxor`,
+`gohufont`, `boxxy` and `sq` carry no COPYRIGHT or NOTICE property in the BDF
+and the Tecate clone ships no licence files, so none of them can be embedded in
+a repo that is going public. `Dina` states "Copyright 2013 Joergen Ibsen, MIT
+license" in the BDF itself, `Terminus` states OFL 1.1, `Spleen` states BSD
+2-Clause in its COMMENT block. Those three plus Micro Grotesk (OFL, `OFL.txt`
+in its own clone) are what can be shipped, and they happen to be the good ones.
+
+**Micro Grotesk.** Measured with Pillow/FreeType: its widest digit is 0.69 of
+the cap height at wght 400 (not 0.82 - the card's figure was from a different
+measurement), so at true proportions a 14-LED-wide `4` is only 19 LEDs tall and
+fills the module edge to edge. Condensed to 0.80 it fits 12.25 x 22 - full
+height, verticals still 2 LEDs - so the condensed full-height variant the card
+asked me to judge *is* the better one, and that is what is embedded.
+
+**The code.** Per amendment 2 the faces are `crates/art/src/faces/`:
+`mod.rs` (the `Face`/`Ink`/`Bitmap` API, `face(..)`, the half-LED rule and its
+tests), `stroked.rs` (`git mv` of vesta's `glyphs.rs` - the house face's paths
+and `distance`), `data.rs` (generated). Glyphs are looked up by `char`;
+`Face::ink(ch, x, y, weight)` and `Face::core(..)` are the only two entry
+points a patch needs, and a glyph a face has not got is empty everywhere -
+which is how the blank card is drawn without any face carrying a blank.
+`tools/art-faces.py` generates `data.rs` from the two clones and records each
+one's commit in the file.
+
+**The blank card** (amendment 1). `BLANK = 10`; `cards(minute, hours24, zero)`
+is the four cards a time asks for. Each module now has a **drum**: the hours'
+tens carries `[blank, 1, 2]` (or `[0, 1, 2]` with `zero` on) and the other
+three carry the ten numerals. That is where I put blank in the cascade order -
+before 1 - and it makes `23:59 -> 00:00` one card falling from 2 to blank
+rather than eight flipping through 3..9, which is what a real three-card drum
+does. A module showing a card its drum has not got (the instant after `zero` is
+switched) goes straight to the target. `Playing`'s title shows a space.
+
+**Tests.** `the_blank_card_flips_like_any_other` (blank at 09:59, 1 at 10:00,
+2 at 23:59, blank at 00:00, each within one card's fall); the read-back helper
+reads a module with nothing lit in it as blank, and now matches against the
+chosen face's `core` rather than the stroked distance field, so it works for
+every face; `the_seam_cuts_every_module` runs with `zero` on, because a blank
+module has no seam to see; the parameter list is re-pinned with `font` first
+and `zero` after `hours24`. The shared module has four tests of its own: the
+names are the faces' own names, every face has ten distinct numerals that fit
+the box, a glyph a face has not got is empty, and a crisp face's cells land on
+LED boundaries.
+
+`cargo test -p screeny-art --lib vesta`: 21 passed. `--lib faces`: 8 passed.
