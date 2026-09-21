@@ -4,6 +4,8 @@ title: The brightness control has 25 real steps and nothing says so
 type: design
 hardware: no
 depends: [020, 066]
+owner: sonnet worker (firmware session, 2026-09-21)
+branch: card/136-brightness-steps
 ---
 
 ## Goal
@@ -48,3 +50,20 @@ copy of the arithmetic; anything that wants to show steps can use them.
 
 The spec answers "what does brightness 3 do" and the two receivers do the same
 thing.
+
+## Decision (owner, 2026-09-21)
+
+**Snap up to the dimmest lit level.** A nonzero `SET_BRIGHTNESS` request below the
+off-by-duty floor (1..=5 today) becomes the lowest level that lights one slot, and
+`applied` reports that level. 0 stays off. Above the floor nothing changes: `applied` is
+the request after the cap, as now (no snapping to slot representatives). The floor is
+derived from the slot arithmetic (`MAX_OE_SLOTS`, the rounding in `slots_for` /
+`screeny_panel::oe_slots`), not written as a literal 6. The same rule applies wherever a
+stored brightness is loaded (settings store, HTTP settings) if those paths go through
+`crates/receiver`; if they do not, say so in the Log and make them agree.
+
+This is the last firmware card of this cycle (owner, 2026-09-21). Do **not** bump
+`FW_VERSION`: cards 246 and 230 are in flight and the orchestrator sets the version at
+the merge.
+
+## Log
