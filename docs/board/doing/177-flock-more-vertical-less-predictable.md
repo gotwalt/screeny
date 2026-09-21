@@ -4,8 +4,8 @@ title: flock - less predictable turns, real vertical motion, and spacing that is
 type: build
 hardware: no
 depends: [168]
-owner:
-branch:
+owner: worker (card 177)
+branch: card/177-flock-flight
 ---
 
 ## Goal
@@ -90,3 +90,38 @@ The owner's eye on the panel. Before that: strips in which a dive reads as a div
 numbers showing the view stayed smooth and the flock stayed in frame.
 
 ## Log
+
+### 2026-09-20 - claimed
+
+Branch `card/177-flock-flight`, cut from `main` at 043ad8f. Read this card twice, then
+card 168's Log end to end (the boid rules and every limit, the four ways the camera is
+not a bird and the measurement that put each one there, the two bugs that rendered
+plausibly - a flock that never moved, and tuning against one seed - and the snapshot
+recipe: `--warmup` must equal `--at`, judge from sequences), card 169 (riding close
+scatters the flock), then `patches/flock/mod.rs`, `sim.rs`, `tests.rs` and the README
+entry.
+
+What I take from the reading, before changing anything:
+
+- **The lattice is three things at once.** One separation radius for every bird (3.6 m)
+  at weight 3.4, a cohesion that reaches the whole flock (26 m) at 0.28, and no
+  individuality beyond a wingbeat trim. Identical birds with identical radii relax into
+  identical gaps. The fix has to be some mixture of *topological* neighbours, a softer
+  separation, and per-bird differences.
+- **The flight is horizontal by construction**, in two places: `CLIMB = 0.42` caps every
+  climb and dive at 25 degrees, and `a.y += (3.0 - pos.y) * 0.05` is a standing spring to
+  one cruise altitude that never lets a climb go anywhere. The floor/ceiling (-24..28 with
+  a 13 m margin) is the third.
+- **Turns are regular because the only thing that changes the flock's mind is the
+  attractor**, re-picked every 40-110 s and reached over ~16 s, plus blobs drifting on
+  90-260 s periods. Nothing else in the model has a short time constant.
+- **The camera is the constraint, and its budget is nearly spent.** View yaw p95 is
+  15.5-18.8 deg/s against a hard 26; the flock's turn rate *is* the view's pan rate,
+  geometry not taste. So "livelier" has to buy its liveliness in *vertical* and in
+  *spacing*, where the view's budget is not already committed, and any extra heading
+  change has to come out of the same 26 deg/s.
+
+Plan, in this order, so every number is comparable: (1) extend the long run with the new
+measurements the card asks for and take the **old** numbers from this unchanged code
+first; (2) spacing; (3) vertical; (4) unpredictability; (5) the camera keeping up; then
+strips, wire, ms/frame.
