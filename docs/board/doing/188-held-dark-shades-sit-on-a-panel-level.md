@@ -276,3 +276,48 @@ both far above it). Not worth building a mechanism for, which is exactly what th
 predicted by making this deliverable optional. If a future tint choice (or the `dark`
 parameter's variants, which are much dimmer) changes the picture, the same three-line
 calculation applies to whatever the new peak is.
+
+### 2026-09-21 - clocks variant snapshots (deliverable 3)
+
+Built `screeny-art` release and rendered with `screeny-art snapshot clocks-numerals --time
+21:12`, one process per file, into a directory outside the repo tree (the scratchpad, not
+committed - `.gitignore`d by construction, nothing added to git):
+
+```
+/private/tmp/claude-501/-Users-aaron-src-screeny/c840d3fa-2f8c-46b5-b7ba-cd7b694fd839/scratchpad/card-188-clocks-snapshots/
+  current-default.png   # no --set: rest=DEFAULT_REST, dark=DEFAULT_DARK (0, "neutral")
+  variant0-neutral.png  # --set dark=0 - byte-identical to current-default.png (cmp confirms):
+                        #   "neutral" IS the shipped default
+  variant1-amber.png    # --set dark=1 - the "amber" variant
+```
+
+Looked at both: resting dials (the faint diagonal dots either side of the digits) are steady
+dim dots in both, `neutral` a plain grey, `amber` a warm olive-brown. Digits themselves are
+identical in all three (full ink is untouched by this card). A true pixel-for-pixel "before
+card 188" render was not made - that would need building the crate from a commit before this
+one, and standing up a second checkout for a one-off comparison PNG was not worth the
+risk to the shared worktree/stash for what a code review already shows byte-for-byte
+(`git diff` on `draw.rs`/`mod.rs`). `current-default.png` is the fair stand-in: it is what
+`screeny-art snapshot clocks-numerals --time 21:12` gives with no flags, i.e. what the owner
+will see in the Studio without touching the new `dark` parameter.
+
+The owner picks between `variant0-neutral.png` and `variant1-amber.png` (or asks for a third)
+by eye, then `DEFAULT_DARK` in `crates/art/src/patches/clocks/mod.rs` is a one-line change if
+it should not stay `0`.
+
+### 2026-09-21 - finish: full workspace tests and clippy
+
+`timeout 1200 cargo test --release --no-fail-fast` at the root: **993 passed, 0 failed**,
+exit code 0 (run via a log file rather than piped through `tail`, so the count is the real
+one and not truncated).
+
+`cargo clippy --workspace --all-targets`: two warnings, both pre-existing and both outside
+this card's crates - `crates/receiver/tests/identify_overlay.rs` (`doc_lazy_continuation`)
+and `crates/sim/tests/arbitration.rs` (`chunks_exact_to_as_chunks`). Confirmed neither file
+was touched on this branch (`git diff main..HEAD --stat -- crates/receiver crates/sim` is
+empty; `git log` on both files stops at cards 247 and 080). `cargo clippy -p screeny-panel -p
+screeny-art --all-targets` alone: silent - the two crates this card owns are clean.
+
+Card stays in `doing/`; the orchestrator moves it to `done/` on merge, per this card's
+own instructions (not `docs/README.md`'s general worker protocol, which would move it to
+`review/`).
