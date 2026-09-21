@@ -261,3 +261,16 @@ blank, unclaimed):
   there - the spec says the two routes must agree. Out of scope here (`crates/sim` is not a
   file this card may touch), and the reason `tests/device_status.rs`'s wdt-line coverage
   went through a hand-written `PanicServer` instead of the real simulator.
+
+**Manual smoke test** (not a browser; the server's own JSON), localhost only, both processes
+started under `timeout` and killed afterwards: `screeny-sim --headless --no-mdns --reset-reason
+wdt` next to `screeny-studio --no-discover --device-http-port <sim's>`. After attaching,
+`/api/v1/status`'s `devices[0].panic` read back as
+`{"heard_unix":...,"boot_count":1,"panic_count":0,"last_panic":null,"update":null,
+"last_reset":null,"repeat":false}` - the flattened `PanicReply` plus `repeat`, exactly the
+shape `PanicFacts` promises - alongside `devices[0].facts.reset_reason: "wdt"`. That
+side-by-side is card 138's evidence: the simulator answers `"wdt"` on `GET /api/v1/status`
+but `null` on `GET /api/v1/panic`'s `last_reset` for the same process, which the spec says
+must agree. `panic_ago` was present and sensible (11.0 s after an 11 s wait). No browser was
+used; this and `tests/ui.rs`/`tests/device_status.rs` are what verified the page's data, not
+a rendered screenshot - see the report for what was not seen in a browser.
