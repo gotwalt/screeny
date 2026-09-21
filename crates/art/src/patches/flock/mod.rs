@@ -43,22 +43,22 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("birds", "Birds", 30.0, 150.0, 1.0, 55.0),
-    param("pace", "Pace", 0.15, 2.0, 0.05, 0.7),
-    param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.90),
+    param("birds", "How many birds", 3.0, 150.0, 1.0, 55.0),
+    param("pace", "How fast the flight moves (lower is slower, dreamier)", 0.15, 2.0, 0.05, 0.7),
+    param("calm", "How wide and slow the turns are", 0.0, 1.0, 0.01, 0.90),
     param("wild", "How often it changes its mind", 0.0, 1.0, 0.01, 0.65),
     param("lift", "How much of the motion is vertical", 0.0, 1.0, 0.01, 0.50),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
-    param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
-    choice("backdrop", "Backdrop", BACKDROPS, 0.0),
-    choice("scheme", "Tones", SCHEMES, 0.0),
-    param("hue", "Hue", 0.0, 360.0, 1.0, 250.0),
-    param("spread", "Hue spread, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
-    param("wheel", "Hue drift (deg/min)", 0.0, 120.0, 1.0, 5.0),
-    param("sky", "Sky level", 0.3, 1.3, 0.01, 1.0),
-    param("terrain", "Invisible geometry", 0.0, 1.0, 0.01, 0.55),
-    param("beat", "Wingbeat (Hz)", 0.5, 6.0, 0.1, 2.4),
-    param("samples", "Samples per axis", 1.0, 6.0, 1.0, 3.0),
+    param("size", "How big the birds are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.0),
+    param("bank", "How far the view leans into a turn", 0.0, 1.5, 0.05, 0.8),
+    choice("backdrop", "What is behind the birds", BACKDROPS, 0.0),
+    choice("scheme", "Light birds or dark silhouettes", SCHEMES, 0.0),
+    param("hue", "Sky colour (hue)", 0.0, 360.0, 1.0, 250.0),
+    param("spread", "How much the colour shifts, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
+    param("wheel", "How fast the colour rotates (degrees a minute)", 0.0, 120.0, 1.0, 5.0),
+    param("sky", "How bright the sky is", 0.3, 1.3, 0.01, 1.0),
+    param("terrain", "How much unseen scenery makes them swerve", 0.0, 1.0, 0.01, 0.55),
+    param("beat", "How fast the wings beat (Hz)", 0.5, 6.0, 0.1, 2.4),
 ];
 
 /// What is behind the birds (the owner, 2026-09-20): the whole sky; nothing
@@ -73,6 +73,17 @@ const SCHEMES: &[&str] = &["light on dark", "dusk silhouettes"];
 /// Horizontal field of view. Wide enough that the flock is around you rather
 /// than in front of you, narrow enough that a bird ten metres off is a bird.
 const FOV: f32 = 76.0;
+
+/// Coverage samples per panel pixel per axis, used to anti-alias the birds
+/// (card 168). This used to be a parameter ("Samples per axis") - the owner,
+/// 2026-09-21: "super confusing." Nothing here is a cost the owner asked
+/// about, and three was always the answer: 0.3 ms a frame at 55 birds, well
+/// inside the 33 ms budget (card 177's Log), so there was nothing to trade
+/// and nothing for a person to usefully turn. An old saved value for
+/// `samples` is simply ignored - `Params::set` refuses an id the current
+/// spec does not have (`crates/art/src/patch.rs`), which is exactly the
+/// behaviour a removed parameter needs.
+const SUPERSAMPLE: usize = 3;
 
 /// Sky bands, from the darkest end of the ramp to the horizon.
 pub const SKY: usize = 12;
@@ -426,10 +437,11 @@ impl Patch for Flock {
 
         // No sun without a sky: a zero vector has no direction to glow in.
         let view = View::of(&self.sim, if backdrop == 0 { self.sun } else { v3(0.0, 0.0, 0.0) });
-        let ss = (ctx.get("samples") as usize).clamp(1, 6);
+        let ss = SUPERSAMPLE;
         let mut cover = Coverage::new(ss);
         let dusk = which == 1;
-        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { HAZE_DUSK } else { HAZE_LIGHT });
+        let size = ctx.get("size");
+        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { HAZE_DUSK } else { HAZE_LIGHT }, size);
 
         // Sky and ink are quantised separately, each through its own mask,
         // because the two axes are not the same problem. The sky
@@ -490,7 +502,13 @@ impl Patch for Flock {
 
 /// Every bird, far to near, as a body dash and two wing strokes. Returns how
 /// many landed on the panel.
-fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32) -> usize {
+///
+/// `size` scales the wingspan the bird is *drawn* at - a longer lens, not a
+/// closer camera (card 122): it makes the same flight bigger on the panel
+/// without moving the camera into the flock, where card 169 found that
+/// scatters it. It touches nothing in `sim`, so the flight, the seat and the
+/// framing are exactly what they are at `size` 1.
+fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32, size: f32) -> usize {
     let mut order: Vec<(f32, usize)> = Vec::with_capacity(sim.flock().len());
     for (i, b) in sim.flock().iter().enumerate() {
         if let Some((_, _, z)) = view.project(b.pos) {
@@ -499,11 +517,12 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32) -> usize
     }
     order.sort_by(|a, b| b.0.total_cmp(&a.0));
 
+    let span_m = sim::SPAN * size;
     let mut seen = 0;
     for (z, i) in order {
         let bird = sim.flock()[i];
         let (right, up, fwd) = bird.frame();
-        let half = 0.5 * sim::SPAN;
+        let half = 0.5 * span_m;
 
         // The wingbeat. Down is quicker than up, which is what tells the eye
         // this is a wing and not an oscillation; a glide holds them level and
@@ -512,12 +531,12 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32) -> usize
         let dihedral = 0.62 * (1.0 - 0.75 * bird.glide) * s + 0.10 * bird.glide;
         let (sin_d, cos_d) = dihedral.sin_cos();
         // Tips swept back: the only thing standing in for a wing's shape.
-        let sweep = fwd.scale(-0.24 * sim::SPAN);
+        let sweep = fwd.scale(-0.24 * span_m);
         let lift = up.scale(half * sin_d);
         let out = right.scale(half * cos_d);
-        let shoulder = bird.pos.add(fwd.scale(0.04 * sim::SPAN));
-        let nose = bird.pos.add(fwd.scale(0.30 * sim::SPAN));
-        let tail = bird.pos.sub(fwd.scale(0.40 * sim::SPAN));
+        let shoulder = bird.pos.add(fwd.scale(0.04 * span_m));
+        let nose = bird.pos.add(fwd.scale(0.30 * span_m));
+        let tail = bird.pos.sub(fwd.scale(0.40 * span_m));
 
         let Some(p_shoulder) = view.project(shoulder) else { continue };
         let Some(p_nose) = view.project(nose) else { continue };
@@ -527,7 +546,7 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32) -> usize
 
         // How far the bird spans on the panel sets both its stroke weight and,
         // with the haze, how much it stands out from the sky.
-        let span = sim::SPAN * view.focal / z;
+        let span = span_m * view.focal / z;
         let wing = (span * 0.13).clamp(0.38, 1.05);
         let body = (span * 0.17).clamp(0.42, 1.30);
         // Depth reads as contrast: far birds are washed into the sky, and one
