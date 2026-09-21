@@ -63,3 +63,81 @@ which. A pinned-time render must stay byte-identical when the button is never
 pressed. It needs a test. The Studio's page should need no change for an action
 to appear - check by reading `crates/studio/ui/picture.js`, do not edit
 `crates/studio`.
+
+### Step 1: the colon is the face's own, and there is a Flip button
+
+**The colon.** `tools/art-faces.py` now extracts any glyph, not just the ten
+numerals, and the **box is still the digits'**: every glyph is sliced out of
+the font's own cell with the box the ten numerals share. That one decision is
+what makes this work - a colon keeps the position, weight and baseline the font
+gave it relative to the digits, so a patch that has placed the digits has
+placed the colon too, and the generator refuses (rather than silently clipping)
+if a glyph has ink outside that box.
+
+Terminus Bold, Terminus, Spleen and Dina all carry a real `:`. **Micro Grotesk
+does not**, and this is worth writing down: rasterising one gives the `.notdef`
+box, a rectangle a quarter taller than the digits, and without `fontTools`
+(which is not on this machine) there is no honest way to ask a TTF for its
+cmap. So its glyph set is **declared** in the face's entry rather than guessed
+at. `Vesta` declares the ten numerals too: the pair of dots it draws beside
+them is the patch's own, not a glyph.
+
+**Where a colon sits, and the one thing I changed about it.** A font's colon
+sits on the baseline, and in a box the digits fill that is near the bottom:
+Terminus Bold's dots land 4 LEDs *above* the axle and 10 below it, which on a
+split-flap reads as punctuation belonging to the lower card rather than to the
+pair. So `Face::middle(ch)` gives the middle of a glyph's ink and vesta lifts
+the colon by it. That moves the glyph; it does not redraw it - the font's dots
+keep their size, their shape and the gap between them, which is the part that
+makes it the same typeface. **`middle` rounds to a whole LED**, which is the
+half-LED rule again: a lift of half an LED would put every cell of the colon
+across two LEDs and throw away exactly the crispness the face was chosen for.
+Spleen is the face that caught it (its raw middle is a half-integer) and the
+crispness test is what caught Spleen.
+
+**The Flip button** (the amendment). `Playing` gains one `Action { id: "flip",
+label: "Flip" }` and `Patch::act` sets a flag; `render` decides whether to take
+it. Two choices the amendment asked me to make and state:
+
+- **It always turns the whole drum**, whatever `flips` says. A button marked
+  Flip that did nothing - which is what "changed cards only" would do when no
+  card has changed - would be a lie. The two slow modes turn the same eleven
+  cards at their own one-card-at-a-time pace, so pressing it also tells you
+  what that mode looks like.
+- **A press while the board is turning is dropped, not queued.** A real drum
+  that is already going round does not go round twice because somebody pressed
+  again, and a queue would let a handful of clicks clatter a bedroom for ten
+  seconds. The minute always wins: a press is refused while a run is in hand
+  and while the minute is turning, so it cannot disturb the minute's own
+  rotation.
+
+The flag starts `false` and nothing else reads it, so **a pinned time draws
+exactly what it drew before this card** - checked by the test, which renders
+three seconds at 10:08:20 and asserts not one LED moves.
+
+**The Studio needs no change.** `crates/studio/ui/picture.js` builds one button
+per entry of `playing.actions` and posts `patch_act` with its id (lines 775-781);
+it is entirely generic. I read it and edited nothing under `crates/studio`.
+
+**`screeny-art snapshot --act ID[@SECONDS]`**, so a patch whose interesting
+behaviour is a *response* can be photographed at all. `snapshot::take_acting`
+is the new entry point and `take` calls it with `None`, so nothing else moved.
+This is outside my own files (`crates/art/src/snapshot.rs`, `bin/screeny-art.rs`),
+additively, and it is what every strip below is rendered with; the clock patches
+have offered two actions since card 160 and there has never been a way to
+snapshot one.
+
+**Tests.** `a_face_that_carries_a_colon_carries_a_real_one` (two marks, not one
+and not a wall; it sits low, as a colon does; inside the box);
+`a_pixel_face_is_exactly_crisp_at_size_one` now walks **the whole panel** for a
+face that carries a colon rather than stopping at the module boxes;
+`the_flip_button_turns_every_drum_and_lands_on_the_time` (in all three modes,
+nothing moves before the press, every module moves, the board comes back to the
+time it started on); `a_flip_during_a_rotation_is_dropped` (four presses draw
+the same film as one); `the_patch_offers_one_action_and_ignores_the_rest`.
+
+**One bug the tests caught, unrelated to either job.** The read-back helper
+picked the *first* numeral with nothing missing, and Terminus Bold's `3` is
+entirely inside its `8`, so a module showing 8 read as 3. It now breaks the tie
+by the most ink of its own: a subset cannot explain the LEDs the superset
+lights. It only ever bit a test, never the picture.
