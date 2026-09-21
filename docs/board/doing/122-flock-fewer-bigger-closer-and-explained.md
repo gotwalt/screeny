@@ -4,8 +4,8 @@ title: Flock - fewer, bigger, closer birds, and parameters that explain themselv
 type: build
 hardware: no (the owner judges it on the panel through the Studio)
 depends: [168, 177]
-owner:
-branch:
+owner: worker (sonnet)
+branch: card/122-flock-fewer-bigger
 ---
 
 ## Goal
