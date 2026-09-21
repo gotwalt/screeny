@@ -247,3 +247,17 @@ landed, not this card's concern.
 
 Card stays in `doing/`; the orchestrator moves it to `done/` on merge, per the coordinator's
 instructions for this run (rather than `docs/README.md`'s usual `review/` step).
+
+**Two new cards, in my 137-140 range** (both `docs/board/backlog/`, both `owner:`/`branch:`
+blank, unclaimed):
+
+- **137**: builds the other half of spec 8.6 - re-asking the panic route once, a minute or
+  two after seeing `"trial"`, so a confirmed update is noticed without a reboot. This card
+  deliberately did not build it (see the "Decision" note above); 137 is that follow-up,
+  scoped to keep card 199's "once per `boot_id`" test guarantee intact everywhere except the
+  one deliberate extra ask.
+- **138**: `crates/sim`'s `GET /api/v1/panic` hard-codes `last_reset: None` even though
+  `Health.reset_reason` (already settable, already read by `GET /api/v1/status`) is right
+  there - the spec says the two routes must agree. Out of scope here (`crates/sim` is not a
+  file this card may touch), and the reason `tests/device_status.rs`'s wdt-line coverage
+  went through a hand-written `PanicServer` instead of the real simulator.
