@@ -226,3 +226,49 @@ first, lock once.
 
 `cargo test -p screeny-sim`: 31 + 5 unit, and every integration file green,
 including the 36 s conformance run - 0 failed.
+
+### Item 4 - the restore that did not run, and the run that would have made it permanent (2026-09-21)
+
+Two halves, and the first one had a specific cause. `RestoreGuard`'s `Drop`
+really does cover a return, a `?` and a panic (the workspace unwinds; nothing
+sets `panic = "abort"`), and the ctrl-c handler covers ctrl-c. What neither
+covers is a **signal** - and every command on this bench is bounded with
+`timeout`, which ends a run with `SIGTERM`. `ctrlc::set_handler` registers
+SIGINT alone unless the crate's `termination` feature is on. It is now on
+(`crates/probe/Cargo.toml`; the feature is `termination = []`, no new
+dependency, and it builds offline), so the same handler covers **SIGINT,
+SIGTERM and SIGHUP**, in the HTTP suite and in the UDP suite, which share it.
+`SIGKILL` cannot be covered by anything and the docs now say so rather than
+implying otherwise.
+
+Which is why the second half exists: **the next run is what notices**. The
+suite's own name has one definition (`http::PROBE_NAME`, `probe-228`) and one
+prefix (`PROBE_NAME_PREFIX`, `probe-`), `http::name_is_a_leftover` is the
+question, and `run()` asks it against the name it finds. If the device is
+wearing one, it prints a block that cannot be missed -
+
+```
+  *** THIS DEVICE IS STILL CALLED "probe-228" ***
+  That is a name this suite sets and always puts back, so a previous run died
+  before it could - killed, or the machine went away. This run will NOT restore
+  that name: it will leave the device with its default name (screeny-<id>).
+  Brightness cannot be recovered the same way - it reads 49 now, and if that is
+  not what it should be, set it by hand.
+```
+
+\- and takes the **default** name as the baseline (empty, which is
+`screeny-<id>`), so both rule 44's own restore and the final one put the device
+back to that instead of writing `probe-228` in again. Brightness is honest
+about what it cannot know: a killed run's original brightness is gone, and the
+warning says which value this one will leave behind. `RESTORE FAILED` at the
+end now says the same thing.
+
+Tests: three unit tests in `crates/probe/src/http/mod.rs` (the suite's name
+matches its own prefix; `desk`, `Probe`, `screeny-4a00a4` and `""` are nobody's
+leftovers; the baseline is the default name for a leftover and the found name
+otherwise), and one end to end in `crates/sim/tests/http_conformance.rs` - a
+simulator started **called `probe-228`**, the suite run against it, and the
+device left called `""` afterwards.
+
+`cargo test -p screeny-probe`: 20 passed. `--test http_conformance`: 6 passed
+(the new one included).
