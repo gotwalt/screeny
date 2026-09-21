@@ -4,8 +4,8 @@ title: The Panel screen says when the panel last panicked
 type: build
 hardware: no
 depends: [180, 198, 243]
-owner:
-branch:
+owner: worker (sonnet)
+branch: card/199-panel-last-panic
 ---
 
 ## Goal
