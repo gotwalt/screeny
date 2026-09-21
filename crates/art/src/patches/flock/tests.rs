@@ -38,12 +38,45 @@ struct Run {
     course: Vec<f32>,
     /// How far across the flock was, rms.
     spread: Vec<f32>,
+    /// Every bird's distance to its nearest neighbour, sampled every two
+    /// seconds, the camera left out of it. The *shape* of this distribution is
+    /// the owner's "very evenly separated ... not lifelike": a lattice is a
+    /// spike (coefficient of variation near 0), a live flock is broad and
+    /// skewed (card 177 asks for 0.4-0.6).
+    nn: Vec<f32>,
+    /// The flock centroid's altitude, and how fast it is climbing or diving
+    /// (m/s), four times a second. "Some more vertical motion change", as a
+    /// number.
+    alt: Vec<f32>,
+    climb: Vec<f32>,
+    /// Degrees a second the view *pitches* - the elevation of the look
+    /// direction, which is the horizon moving up and down the panel. Card 168
+    /// never measured it because the view was pinned level.
+    pitch: Vec<f32>,
+    /// Seconds between noticeable changes of the flock's course (20 degrees
+    /// away from wherever it was last marked). A regular flight gives a narrow
+    /// distribution; the card wants a broad one.
+    turns: Vec<f32>,
 }
 
 fn percentile(v: &[f32], p: f32) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
     let mut s = v.to_vec();
     s.sort_by(f32::total_cmp);
     s[((s.len() - 1) as f32 * p).round() as usize]
+}
+
+/// Mean, and the coefficient of variation (standard deviation over mean) -
+/// which is the shape number, independent of how big the flock happens to be.
+fn mean_cv(v: &[f32]) -> (f32, f32) {
+    if v.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mean = v.iter().sum::<f32>() / v.len() as f32;
+    let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / v.len() as f32;
+    (mean, if mean > 1e-6 { var.sqrt() / mean } else { 0.0 })
 }
 
 fn median_usize(v: &[usize]) -> usize {
@@ -70,10 +103,19 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         centroid: Vec::new(),
         course: Vec::new(),
         spread: Vec::new(),
+        nn: Vec::new(),
+        alt: Vec::new(),
+        climb: Vec::new(),
+        pitch: Vec::new(),
+        turns: Vec::new(),
     };
     let steps = (seconds / STEP) as usize;
     let mut was: Vec<V3> = sim.birds.iter().map(|b| b.heading()).collect();
     let (mut look, mut roll) = (sim.look, sim.view_roll);
+    // The last course the flight was marked at, and when: a "noticeable
+    // heading change" is 20 degrees away from that mark, and the mark then
+    // moves to where the flock now points.
+    let (mut marked, mut marked_at) = (bearing(sim.course), 0.0_f32);
     for i in 0..steps {
         sim.step(tune, STEP);
 
@@ -96,10 +138,24 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
 
         let d_yaw = sim::angle_between(look, sim.look) / STEP;
         let d_roll = (sim.view_roll - roll).abs() / STEP;
+        // Pitch on its own: the elevation of the look direction. The `yaw`
+        // above is the whole swing, pitch included, and is kept that way so it
+        // is the same number card 168 reported.
+        let elev = |d: V3| (d.y / d.len().max(1e-6)).clamp(-1.0, 1.0).asin();
+        let d_pitch = (elev(sim.look) - elev(look)).abs() / STEP;
         look = sim.look;
         roll = sim.view_roll;
         run.yaw.push(d_yaw.to_degrees());
         run.roll.push(d_roll.to_degrees());
+        run.pitch.push(d_pitch.to_degrees());
+
+        let now = i as f32 * STEP;
+        let course = bearing(sim.course);
+        if wrap(course - marked).abs() > 20.0_f32.to_radians() {
+            run.turns.push(now - marked_at);
+            marked = course;
+            marked_at = now;
+        }
 
         if i % 15 == 0 {
             let view = View::of(&sim, sun);
@@ -118,6 +174,26 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             run.nearest.push(sim.nearest());
             run.seat.push(sim.camera().pos.sub(sim.centre).len());
             run.spread.push(sim.spread);
+            run.alt.push(sim.centre.y);
+            let flock = sim.flock();
+            run.climb
+                .push(flock.iter().map(|b| b.vel.y).sum::<f32>() / flock.len().max(1) as f32);
+        }
+        if i % 120 == 0 {
+            // Nearest neighbour, every bird, every two seconds. O(n^2) at this
+            // rate is nothing, and the whole point is the distribution.
+            let flock = sim.flock();
+            for (j, b) in flock.iter().enumerate() {
+                let mut best = f32::INFINITY;
+                for (k, o) in flock.iter().enumerate() {
+                    if j != k {
+                        best = best.min(b.pos.sub(o.pos).len());
+                    }
+                }
+                if best.is_finite() {
+                    run.nn.push(best);
+                }
+            }
         }
         if i % 60 == 0 {
             let c = sim.centre;
@@ -221,6 +297,34 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
         run.turn_ratio,
         run.clearance,
         run.cam_clearance,
+    );
+
+    // Card 177's three questions, as numbers.
+    let (nn_mean, nn_cv) = mean_cv(&run.nn);
+    let (gap_mean, gap_cv) = mean_cv(&run.turns);
+    let up = run.climb.iter().map(|v| v.abs()).collect::<Vec<_>>();
+    eprintln!(
+        "  spacing   nearest neighbour mean {nn_mean:.2} m, CV {nn_cv:.2}, \
+         p05 {:.2} m, p95 {:.2} m\n  \
+         vertical  centroid altitude {:.1} .. {:.1} m (p05 {:.1}, p95 {:.1}), \
+         climb rate |v_y| median {:.2}, p95 {:.2}, max {:.2} m/s\n  \
+         turns     {} noticeable (20 deg) changes, gap mean {gap_mean:.1} s, CV {gap_cv:.2}, \
+         p05 {:.1} s, p95 {:.1} s\n  \
+         view      pitch p95 {:.2} deg/s (max {:.2})",
+        percentile(&run.nn, 0.05),
+        percentile(&run.nn, 0.95),
+        run.alt.iter().copied().fold(f32::INFINITY, f32::min),
+        run.alt.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        percentile(&run.alt, 0.05),
+        percentile(&run.alt, 0.95),
+        percentile(&up, 0.5),
+        percentile(&up, 0.95),
+        percentile(&up, 1.0),
+        run.turns.len(),
+        percentile(&run.turns, 0.05),
+        percentile(&run.turns, 0.95),
+        percentile(&run.pitch, 0.95),
+        percentile(&run.pitch, 1.0),
     );
 
     // Periodicity: the strongest the flock's motion ever resembles itself
