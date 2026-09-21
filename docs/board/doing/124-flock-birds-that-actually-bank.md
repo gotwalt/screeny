@@ -4,6 +4,8 @@ title: Flock - birds that actually bank, and a budget check at the extremes
 type: build
 hardware: no (the owner judges it on the panel through the Studio)
 depends: [123]
+owner: worker (opus)
+branch: card/124-flock-roll-and-lean
 ---
 
 ## Goal
