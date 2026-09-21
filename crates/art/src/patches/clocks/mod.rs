@@ -18,6 +18,7 @@ pub(crate) mod dance;
 pub(crate) mod dials;
 pub(crate) mod draw;
 
+use crate::color::Rgb;
 use crate::frame::Frame;
 use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
@@ -42,6 +43,7 @@ const PARAMS: &[ParamSpec] = &[
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 15.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
+    choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
@@ -140,6 +142,39 @@ const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
     }
     out[dance::DANCES + 1] = "composed";
     out
+}
+
+/// A resting dial's held, dark ink (card 188, brief 2.1.1): a short,
+/// hand-picked list of level triples rather than `tint` scaled continuously
+/// in `(l/t.light)^3` - per-channel alignment loses hue control at the
+/// bottom, so these are chosen by eye, not computed, and are the same for
+/// both hands: a resting dial reads as one quiet material, not two hues.
+/// `screeny_art::panel::level_triple` (card 188 deliverable 2) is the snap
+/// that turns a triple into the exact colour the panel shows.
+///
+/// Two treatments for the owner to compare on the panel (the `dark`
+/// parameter); each is darkest-first, so [`dark_shade`] can pick further in as
+/// a treatment's `ink` asks for more light.
+pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
+    // "neutral": equal levels on every channel - the same grey the ramp above
+    // fades towards, just aligned.
+    &[[1, 1, 1], [2, 2, 2], [3, 3, 3]],
+    // "amber": leans on the warm end (brief: "the darkest steady colours are
+    // the seven combinations of level-1 primaries, then things like (2,1,1)
+    // and (2,2,1)"), closer to the hour hand's own hue than neutral grey is.
+    &[[1, 1, 0], [2, 1, 1], [3, 2, 1]],
+];
+pub(crate) const DARK_CHOICES: &[&str] = &["neutral", "amber"];
+pub(crate) const DEFAULT_DARK: usize = 0;
+
+/// The `dark` parameter's pick, further in as `ink` calls for more light: a
+/// treatment's `ink` is small (0.10 or 0.20 today), so this mostly picks the
+/// ramp's darkest step, but stays proportional if a future treatment asks for
+/// more.
+fn dark_shade(variant: usize, ink: f32) -> Rgb {
+    let ramp = DARK_RAMPS[variant.min(DARK_RAMPS.len() - 1)];
+    let idx = ((ink * ramp.len() as f32).ceil() as usize).clamp(1, ramp.len()) - 1;
+    crate::panel::level_triple(ramp[idx])
 }
 
 impl Rest {
@@ -484,6 +519,7 @@ impl Patch for Clocks {
             tip: ctx.get("tip"),
             tints: [tint("hue", "chroma"), tint("hue2", "chroma2")],
             ring: ctx.get("dials"),
+            dark: (ctx.get("dark") as usize).min(DARK_RAMPS.len() - 1),
         };
         // Which dials are not part of the time, so are drawn as being at rest.
         // Only while there is a time to read: during a dance every hand is a
@@ -500,20 +536,37 @@ impl Patch for Clocks {
 }
 
 /// Everything about the picture that is not the hands: hand thickness, the two
-/// hands' colours, and the dial rings.
+/// hands' colours, the dial rings, and the dark ramp a resting dial lands on.
 struct Look {
     half: f32,
     /// The hands' taper while they dance: `draw::Dials::tip`.
     tip: f32,
     tints: [draw::Tint; 2],
     ring: f32,
+    /// Index into [`DARK_RAMPS`]: the `dark` parameter.
+    dark: usize,
 }
 
 /// Draw the grid. `idle` marks the dials that are not part of a digit; they are
 /// drawn back towards `rest` as the picture settles onto the time.
 fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
     let scale = rest.scale(settled);
-    let scales: Vec<[f32; 2]> = idle.iter().map(|at_rest| if *at_rest { scale } else { [1.0, 1.0] }).collect();
+    // Card 188: only once a resting dial has actually landed - not while it
+    // is still fading towards rest - does its ink become the hand-picked,
+    // aligned shade. The fade itself is moving content (brief 2.1.1: "leave
+    // everything else to the dither"), so it stays the cheap continuous ramp
+    // the whole way; only the held, dark end of it needs steadying.
+    let shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink));
+    let scales: Vec<draw::RestScale> = idle
+        .iter()
+        .map(|at_rest| {
+            if *at_rest {
+                draw::RestScale { ink: scale[0], reach: scale[1], shade }
+            } else {
+                draw::RestScale::FULL
+            }
+        })
+        .collect();
     draw::Dials {
         angles,
         cols: COLS,
@@ -556,7 +609,7 @@ mod tests {
 
     fn look() -> Look {
         let tint = |hue| draw::Tint { hue, chroma: 0.05, light: 0.93 };
-        Look { half: 1.0, tip: 0.45, tints: [tint(80.0), tint(80.0)], ring: 0.0 }
+        Look { half: 1.0, tip: 0.45, tints: [tint(80.0), tint(80.0)], ring: 0.0, dark: DEFAULT_DARK }
     }
 
     /// What one cell of a glyph asks of its dial, so a pose can be read back.
@@ -666,7 +719,9 @@ mod tests {
     /// Every treatment leaves the frame an exact one: a dimmed hand is its own
     /// ink scaled in linear light, which is what its anti-aliasing ramp already
     /// is, so it costs no palette entry. 31 colours, well under the 32 that go
-    /// on the wire exactly.
+    /// on the wire exactly - 32 once resting dials have actually landed on a
+    /// treatment that dims them (card 188): their held, aligned shade is its
+    /// own exact entry, one more than the ramp, and 32 is still exact.
     #[test]
     fn every_treatment_keeps_the_palette_exact() {
         for (v, rest) in RESTS.iter().enumerate() {
@@ -674,7 +729,9 @@ mod tests {
                 for (hh, mm, _) in AWKWARD {
                     let frame = picture(&pose(hh, mm, *rest), &resting(hh, mm), *rest, settled, look());
                     let Frame::Indexed { palette, indices } = &frame else { panic!("rest {v}: not an indexed frame") };
-                    assert_eq!(palette.len(), 31, "rest {v}: palette grew");
+                    let has_idle = resting(hh, mm).iter().any(|r| *r);
+                    let want = if settled >= 1.0 && rest.ink < 1.0 && has_idle { 32 } else { 31 };
+                    assert_eq!(palette.len(), want, "rest {v} settled {settled}: palette grew");
                     assert!(palette.len() <= GUARANTEED_PALETTE, "and exact whatever the indices do");
                     assert!(indices.iter().all(|i| (*i as usize) < palette.len()));
                 }
@@ -783,8 +840,11 @@ mod tests {
 
     #[test]
     fn the_ramp_carries_a_dimmed_hand() {
-        // A dimmed hand is on its ink's own ray, so it lands on a step of the
-        // hand's ramp rather than needing a colour of its own.
+        // A digit hand's anti-aliased, rounded tip is on its own ink's ray, so
+        // it lands on steps of the ramp rather than needing colours of its
+        // own. Card 188: a *resting* hand no longer does - it lands on its
+        // own hand-picked, aligned shade - but the numeral hands' edges still
+        // exercise several ramp steps.
         let rest = RESTS[DEFAULT_REST];
         let frame = picture(&pose(21, 12, rest), &resting(21, 12), rest, 1.0, look());
         let Frame::Indexed { palette, indices } = &frame else { panic!("not indexed") };
@@ -793,6 +853,35 @@ mod tests {
         for i in used {
             let c: Rgb = palette[i as usize];
             assert!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0);
+        }
+    }
+
+    /// Card 188's acceptance: once the resting dials have landed (`settled` =
+    /// 1, not mid-fade) and the frame has gone through the snap
+    /// (`Panel::AlignedDark`, card 188 deliverable 2), no channel below the
+    /// dark-end threshold sits more than 2/16 off its level - the same bound
+    /// the aligned table itself promises (`screeny_panel::aligned_levels`).
+    /// Every treatment, `"as it was"` included: that one does not use the
+    /// patch's own hand-picked dark ramp (it is kept undimmed, for
+    /// comparison), so it is what proves the pipeline-level snap catches
+    /// held, dark pixels a patch has not aligned itself - the hand-picked
+    /// ramp is the better-looking fix, this is the backstop.
+    #[test]
+    fn held_dark_shades_land_within_two_sixteenths_of_a_level() {
+        let output = crate::pipeline::Output { panel: crate::panel::Panel::AlignedDark, ..Default::default() };
+        for rest in RESTS {
+            let frame = picture(&pose(21, 12, *rest), &resting(21, 12), *rest, 1.0, look());
+            let out = crate::pipeline::Pipeline::new(output).process(frame, 1.0 / 30.0);
+            for &code in &out.wire.rgb {
+                let (level, offset) = screeny_panel::nearest_level(screeny_panel::duty_16ths(code));
+                if level < crate::panel::DARK_ALIGN_LEVEL {
+                    assert!(
+                        offset.abs() <= 2,
+                        "`{}`: code {code} (level {level}) is {offset} sixteenths off",
+                        rest.name
+                    );
+                }
+            }
         }
     }
 }

@@ -15,6 +15,31 @@ pub struct Tint {
     pub light: f32,
 }
 
+/// A dial's rest state: how much of its hands to draw, and - once they have
+/// stopped moving - what colour to draw them.
+#[derive(Clone, Copy, Debug)]
+pub struct RestScale {
+    /// Ink, `tint.scale(ink)`, while `shade` is `None` - dimming costs no
+    /// palette entries: a hand's ink scaled in linear light is exactly what
+    /// its anti-aliasing ramp already is, so a dimmed hand lands on a step of
+    /// its own ramp. `1.0` is a hand at full strength.
+    pub ink: f32,
+    /// Hand length as a share of full, `1.0` for a hand at full reach.
+    pub reach: f32,
+    /// Card 188: once a dial has settled and is truly *held*, its ink is this
+    /// exact colour instead of `tint.scale(ink)` - a level triple chosen off
+    /// the panel (`screeny_art::panel::level_triple`), the same for both
+    /// hands, rather than a computed value that happens to sit near one.
+    /// `None` while the dial is still moving towards rest, so a fade stays
+    /// the continuous, cheaply-dithered `tint.scale(ink)` the whole way.
+    pub shade: Option<Rgb>,
+}
+
+impl RestScale {
+    /// A dial drawn at full strength, not resting.
+    pub const FULL: RestScale = RestScale { ink: 1.0, reach: 1.0, shade: None };
+}
+
 /// The darkest step of a hand's ramp. Anything dimmer is left black.
 ///
 /// It was 0.32 while the panel was thought to have almost no levels down there;
@@ -44,14 +69,10 @@ pub struct Dials<'a> {
     pub tip: f32,
     /// Hour hand, minute hand.
     pub tints: [Tint; 2],
-    /// Per-dial `[ink, length]` scale, for dials drawn as being at rest rather
-    /// than part of the picture: `[1.0, 1.0]` draws a dial in full. An empty
-    /// slice (the usual case) draws every dial in full.
-    ///
-    /// Dimming costs no palette entries: a hand's ink scaled in linear light is
-    /// exactly what its anti-aliasing ramp already is, so a dimmed hand lands
-    /// on a step of its own ramp.
-    pub rest: &'a [[f32; 2]],
+    /// Per-dial rest state, for dials drawn as being at rest rather than part
+    /// of the picture. A dial with no entry here - an empty slice is the
+    /// usual case - draws in full, [`RestScale::FULL`].
+    pub rest: &'a [RestScale],
     /// Brightness of a ring round each dial, 0 for none.
     pub ring: f32,
     /// Brightness of a mark at 12 o'clock on each dial, in the hour hand's
@@ -61,9 +82,13 @@ pub struct Dials<'a> {
 }
 
 impl Dials<'_> {
-    /// Two ramps of fifteen steps plus black: 31 colours, so the frame is sent
-    /// exactly. Enough steps that a slowly turning hand's edge is smooth with
-    /// no dither on it. The hour hand lies over the minute hand.
+    /// Two ramps of fifteen steps plus black: 31 colours, so the frame is
+    /// sent exactly - plus, once any dial has settled onto a held, dark
+    /// shade (card 188), that shade's own colour, added once and verbatim so
+    /// it is an exact palette entry rather than getting nearest-matched to
+    /// whichever ramp step happens to sit close. Enough ramp steps that a
+    /// slowly turning hand's edge is smooth with no dither on it. The hour
+    /// hand lies over the minute hand.
     pub fn draw(&self) -> Frame {
         let inks = self.tints.map(|t| oklch(t.light, t.chroma, t.hue));
         // A partly covered pixel is the ink dimmed in linear light, so that is
@@ -76,6 +101,13 @@ impl Dials<'_> {
                 ink.scale((l / t.light).powi(3))
             }));
         }
+        for r in self.rest {
+            if let Some(shade) = r.shade {
+                if !colours.contains(&shade) {
+                    colours.push(shade);
+                }
+            }
+        }
         let palette = Palette::new(colours, 0.04);
 
         let top = (H as f32 - self.rows as f32 * self.cell) * 0.5;
@@ -86,13 +118,13 @@ impl Dials<'_> {
             }
             let i = (cy as usize).min(self.rows - 1) * self.cols + (cx as usize).min(self.cols - 1);
             let (px, py) = ((cx.fract() - 0.5) * self.cell, (cy.fract() - 0.5) * self.cell);
-            let [ink, reach] = self.rest.get(i).copied().unwrap_or([1.0, 1.0]);
+            let r = self.rest.get(i).copied().unwrap_or(RestScale::FULL);
             let tip = self.tip.clamp(0.0, 1.0);
             for (h, tint) in inks.iter().enumerate() {
-                let len = (self.lens[h] + self.half * (1.0 - tip)) * reach;
+                let len = (self.lens[h] + self.half * (1.0 - tip)) * r.reach;
                 let (distance, along) = hand_distance(px, py, self.angles[i][h], len);
                 if distance <= self.half * (1.0 - (1.0 - tip) * along) {
-                    return tint.scale(ink);
+                    return r.shade.unwrap_or_else(|| tint.scale(r.ink));
                 }
             }
             if self.mark > 0.0 {
