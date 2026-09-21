@@ -102,9 +102,6 @@ pub const DEPTH: f32 = 2.6;
 /// The geometry of one module mid-flip, for a given flap angle.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Fall {
-    /// The flap angle this was built for, in degrees: 0 standing on the axle,
-    /// 180 flat on the stack below.
-    pub theta: f32,
     /// Half the module's height: how far the flap reaches from the axle.
     pub reach: f32,
     /// Sine of the flap angle: how far out of the panel the free edge is.
@@ -161,7 +158,7 @@ impl Fall {
         let edge = (t + lam).sin().abs().min(1.0) * t.sin().max(0.0);
         // The card's shadow, cast onto the plate below by a light at LIGHT.
         let shadow = (-(t - lam).cos() / lam.cos() * reach).max(0.0);
-        Fall { theta, reach, out: t.sin().max(0.0), squash, shade, edge, shadow }
+        Fall { reach, out: t.sin().max(0.0), squash, shade, edge, shadow }
     }
 
     /// How far along the flap, from the axle, the point at `v` LEDs below the

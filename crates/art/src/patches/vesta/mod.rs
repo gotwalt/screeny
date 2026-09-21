@@ -1319,7 +1319,6 @@ mod tests {
     fn theta_at(flip: f64, frame: i32) -> f32 {
         let clock = at("09:59:59");
         let dt = 1.0 / crate::snapshot::FPS;
-        let g = geom(&[("flip", flip as f32)]);
         let tm = Timing::slow(flip);
         let mut m = Module { from: BLANK, run: Vec::new() };
         for i in 0..=frame {
@@ -1330,8 +1329,50 @@ mod tests {
                 m.plan(t, want, drum(0, false), Flips::Changed, &tm, 0.0);
             }
         }
-        let pose = m.pose(f64::from(frame) * dt, &g);
-        pose.flying().first().map_or(0.0, |f| f.fall.theta)
+        // The renderer's own formula: the card in the air if there is one,
+        // otherwise the small rebound of the one that has just landed.
+        let t = f64::from(frame) * dt;
+        if let Some(c) = m.run.iter().find(|c| c.at <= t && t < c.at + c.fall) {
+            return flap::angle(((t - c.at) / c.fall) as f32);
+        }
+        match m.run.iter().rev().find(|c| t >= c.at + c.fall) {
+            Some(c) if t - c.at - c.fall < c.fall * SETTLE => 180.0 - flap::settle(((t - c.at - c.fall) / (c.fall * SETTLE)) as f32, SETTLE_DEG),
+            _ => 0.0,
+        }
+    }
+
+    /// The README's **rotation** table, checked rather than believed: which
+    /// frame of a run pinned to 09:59:59 is worth a snapshot, and why. A
+    /// module is "turning" when its own pixels differ from the next frame's,
+    /// which is the only definition that does not need the patch's insides.
+    #[test]
+    fn the_readmes_rotation_table_lands_where_it_says() {
+        let g = geom(&[]);
+        let film = film("09:59:59", 3.2, &[]);
+        let frame = |n: i32| &film[(30 + n) as usize];
+        let turning = |n: i32| {
+            let (a, b) = (&frame(n).2, &frame(n + 1).2);
+            (0..4)
+                .filter(|i| {
+                    (0..H).any(|y| {
+                        (0..W).any(|x| {
+                            let u = x as f32 + 0.5 - g.centres[*i];
+                            u.abs() <= g.w * 0.5 && a[(y * W + x) * 3..][..3] != b[(y * W + x) * 3..][..3]
+                        })
+                    })
+                })
+                .count()
+        };
+        assert_eq!(reads(&frame(0).1, &g), Some([B, 9, 5, 9]), "+0 is not the last settled frame");
+        assert_eq!(frame(0).2, film[0].2, "+0 has already moved");
+        // The first card is let go on the minute but takes a frame or two to
+        // uncover anything, so the board is *moving* from +2.
+        assert_eq!(turning(0), 0, "+0 is already moving");
+        assert!(turning(2) >= 2, "+2 is not the board starting to move");
+        assert_eq!(turning(8), 4, "+8 is not four modules turning at once");
+        assert_eq!(turning(48), 1, "+48 is not the minutes' tens turning alone");
+        assert_eq!(turning(54), 0, "+54 is not settled");
+        assert_eq!(reads(&frame(54).1, &g), Some([1, 0, 0, 0]), "+54 does not read 10:00");
     }
 
     /// The README's table of snapshot recipes, checked rather than believed.
