@@ -52,6 +52,7 @@ async function start() {
     note: $('#bright-note'),
     attached: attachedId,
     attempt,
+    stops: boot.brightness_stops,
   });
 
   const needPanel = () => {

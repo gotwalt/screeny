@@ -128,3 +128,59 @@ one that must still retry (telemetry disagrees with `applied`). `cargo test -p
 screeny-studio --lib fleet::` and `cargo clippy -p screeny-studio --all-targets` both
 clean. Only change in `fleet.rs`: this extraction plus the test module - the HTTP status
 poller (card 199's) is untouched.
+
+Finding 3 (the brightness control): built the stops server-side, one implementation, in
+`crates/studio/src/page.rs`, `pub fn brightness_stops() -> Vec<u8>` - `0`, then the lowest
+`u8` at which `screeny_panel::model::oe_slots` first reaches each of `MAX_OE_SLOTS` (25)
+lit slots. 26 stops total; `stops[1]` is pinned against `screeny_receiver::BRIGHTNESS_FLOOR`
+rather than written down again (needed a new `screeny-panel` dependency and a test-only
+`screeny-receiver` one in `crates/studio/Cargo.toml` - the latter mirrors `crates/panel`'s
+own dev-dependency on `screeny-receiver` for the same reason). Added to `page::Bootstrap`
+as `brightness_stops`, filled in by the `bootstrap` handler in `api.rs`; the page already
+fetches `bootstrap` once on load in both screens.
+
+Surprise found while writing the test: the *top* real stop is not 255. `oe_slots` reaches
+25/25 slots at 250, and 251..=255 are five more values landing on the same picture - so
+250 is the correct top of the list, not 255. First draft of the test assumed 255 and
+failed; fixed the test, not the function.
+
+The page (`common.js`'s `bindBrightness`, shared by `index.html`'s and `panel.html`'s
+`#bright`): the control is now an **index** into the stops the page was handed
+(`boot.brightness_stops`), not the raw level - a plain `0..255` range would let a user
+drag through ~230 positions that change nothing, which is the thing this finding was
+about. `cappedStops(stops, cap)` trims the server's list to a device's own learned cap and
+appends the cap itself if it does not already land on a stop (a cap is a raw byte
+`clamp_brightness` can hand straight back, so it is not always one of the boundary
+values) - confirmed by hand: `brightness_cap: 120` in `fleet.rs`'s existing sim fixture is
+not itself a stop (118 is the boundary below it), so `cappedStops` has to append it, not
+just filter. With no learned cap yet, the raw server list is used unfiltered (so the
+default top is 250, not an artificial 255). Deleted the client-side `BRIGHTNESS_FLOOR = 6`
+/ `snapBrightness` workaround entirely - card 136's own note said to delete it once the
+firmware had the floor, and it does.
+
+Also fixed while touching this control (in scope: "the brightness control" is named
+explicitly, and this is the same host-side "applied differs only because of the cap"
+assumption as finding 1, just in the UI rather than the CLI): the change handler's
+success message always said "This panel caps brightness at N", even when N was a raise.
+Now branches on `applied > asked` / `applied < asked` / equal, same three cases as the
+CLI.
+
+`crates/studio/tests/ui.rs`: replaced `the_screens_keep_their_promises`'s
+`BRIGHTNESS_FLOOR` assertions (which pinned the very workaround this finding removes)
+with ones for the new shape - no file mentions `BRIGHTNESS_FLOOR` any more, `common.js`
+has `cappedStops`, both screens hand `bindBrightness` `boot.brightness_stops`. Added
+`bootstrap_carries_the_brightness_stops`, an end-to-end check that the route really
+serves the list (the formula itself is `page::tests`, next to the function). All 28
+tests in `tests/ui.rs` green, including the two pre-existing ones this touches most
+closely (`every_element_each_screen_reaches_for_exists`,
+`every_slider_that_declares_stops_declares_reachable_ones` - the brightness control
+does not use the `list=`/`drawStops` mechanism those check, since its stops are not
+uniform enough for a plain datalist overlay; it snaps by construction instead, unlike
+Rate and Speed, which deliberately do not snap). `cargo test -p screeny-studio --lib`
+(91 passed) and `--test fleet` (12 passed) also rerun clean after this change; `cargo
+clippy -p screeny-studio --all-targets` clean.
+
+Files touched in `crates/studio/ui`: `common.js`, `picture.js`, `panel.js`, `index.html`,
+`panel.html`. None of `panel.js`'s Device block or `panel.html`'s Device block (card
+199's) - only the brightness control markup/script, which lives in its own section on
+each page.
