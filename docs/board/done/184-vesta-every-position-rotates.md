@@ -320,3 +320,13 @@ rotation could blink it or turn it with the rest. Separately, a rotation is a
 good excuse for a "test the board" action in the studio ("turn it now" without
 waiting for a minute), which would make this much easier to look at on the
 real panel.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `184-07-an-ordinary-minute.png` (every frame of 21:12 -> 21:13) before merging:
+it reads as a flipboard refreshing - a left-to-right wave of cards, two in the air per
+module, the board resolving position by position and the last card arriving rather than
+stopping. Merged `--no-ff` on top of card 177; root suite 919 passed, 0 failed; clippy
+silent. Deploy held for the firmware session's bench. The worker's worktree is kept: the
+owner's notes on the rotation (the blank flashing past, the modules landing apart, `spin`)
+are likely, and card 175 (the colon) is the natural next card for the same hands.
