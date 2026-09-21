@@ -4,8 +4,8 @@ title: The brightness slider bounces after it is moved
 type: build
 hardware: no
 depends: [187]
-owner:
-branch:
+owner: worker (sonnet)
+branch: card/126-brightness-slider-bounces
 ---
 
 ## Goal
