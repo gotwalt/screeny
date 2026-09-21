@@ -59,3 +59,12 @@ confirmed" (or "reverted", with the reason) without the page ever claiming the p
 lost, and without a second connection to the panel at any moment.
 
 ## Log
+
+### Note (2026-09-21, from the firmware session's card 246)
+
+`status.fw_slot` and `status.fw_state` now always describe ONE image - the running one
+(spec 8.6 status bullet and 8.10 step 5 corrected; no JSON shape change). So after a
+revert the page should no longer see "invalid"/"aborted" on a healthy panel; read the
+spec before writing the trial/confirmed/reverted wording here and on card 199.
+`crates/probe` and `crates/sim` gained an OTA model (off by default): use the simulator's
+for this card's tests.
