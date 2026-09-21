@@ -59,3 +59,13 @@ final shape before building this; a watchdog reset deserves the same line on `/p
 panic. Known firmware bug at the time of writing: a firmware *upload* wedges core 0 (the
 watchdog recovers it, nothing is activated); OTA does not work yet, and the firmware
 session asked that no Studio upload support be built against it until it says so.
+
+### The final shape (from the firmware session, 2026-09-20 evening; OTA passes on fw 0.7.0)
+
+`GET /api/v1/panic` -> `{"boot_count","panic_count","last_panic":null|{uptime_ms,boot,
+file,line,consecutive},"update":null|{"outcome":"trial"|"confirmed"|"reverted","reason":
+null|"deadline"|"aborted"|"rejected","slot":"ota_0"|"ota_1","version":"x.y.z"},
+"last_reset":"power_on"|"software"|"wdt"|...}`. Types and goldens are in
+`crates/device-api`; the spec is `docs/design/protocol-v1.md` 8.6/8.10. Read once per
+`boot_id` change, never on the poll. A wedge shows as `last_reset: "wdt"` and a climbing
+`boot_count`; an update's outcome belongs on the same line of `/panel` (see card 185).
