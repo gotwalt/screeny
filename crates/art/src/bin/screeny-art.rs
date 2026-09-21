@@ -177,11 +177,14 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             // the pre-card-020 "dimmed by scaling" panel, which this device
             // has never been; 64 is the panel without its temporal dither,
             // and that is what `--panel bit-planes` is for.
+            // Card 188: the third choice, dithered above `DARK_ALIGN_LEVEL`
+            // and forced onto an aligned level below it.
             "--panel" => {
                 a.output.panel = match value.as_str() {
                     "dithered" | "device" => Panel::Dithered,
                     "bit-planes" | "bitplanes" => Panel::BitPlanes,
-                    _ => return Err(format!("--panel: `{value}` is not `dithered` or `bit-planes`")),
+                    "aligned-dark" | "aligneddark" => Panel::AlignedDark,
+                    _ => return Err(format!("--panel: `{value}` is not `dithered`, `bit-planes` or `aligned-dark`")),
                 }
             }
             "--out" => a.out = Some(value),

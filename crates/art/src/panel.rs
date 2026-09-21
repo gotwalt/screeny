@@ -24,6 +24,7 @@
 
 use crate::color::{linear_to_srgb8, srgb8_to_linear, Rgb};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 pub use screeny_panel::model::DITHER_PHASES;
 
@@ -37,10 +38,13 @@ pub const DEVICE_STEPS: u32 = (NATIVE_LEVELS - 1) * DITHER_PHASES;
 
 /// Which panel a frame is quantised to and previewed through.
 ///
-/// Two, because they are the two the brief asks to be looked at: what the
-/// device does, and the same panel without its temporal dither, "because the
-/// dark end behaves like the coarser number" (brief section 5). Anything a
-/// person might have meant by 32 or 16 levels is a brightness, not a panel.
+/// Three, because that is what brief 2.1.1 asks for: [`Panel::Dithered`] is
+/// what the device does, [`Panel::BitPlanes`] is the same panel without its
+/// temporal dither ("because the dark end behaves like the coarser number",
+/// section 5), and [`Panel::AlignedDark`] is the third choice card 188 adds -
+/// `Dithered` everywhere but the levels the eye resolves as a blink held and
+/// close up. Anything a person might have meant by 32 or 16 levels is a
+/// brightness, not a panel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Panel {
@@ -54,6 +58,14 @@ pub enum Panel {
     /// still the honest view of anything that does not hold still long enough
     /// for the phase cycle (about 104 ms, three frames at 30 fps) to average.
     BitPlanes,
+    /// [`Panel::Dithered`] above [`DARK_ALIGN_LEVEL`]; below it, a channel is
+    /// forced onto the nearest of [`screeny_panel::aligned_levels`]'s codes
+    /// instead of dithered (card 188, brief 2.1.1). `Dithered`'s dark shades
+    /// blink at 9.6 Hz held and close up; `BitPlanes` fixes that by throwing
+    /// away the bright gradients the dither handles well. This keeps the
+    /// 1008-step path everywhere but the handful of levels that need
+    /// steadying.
+    AlignedDark,
 }
 
 impl Panel {
@@ -62,7 +74,11 @@ impl Panel {
 
     fn model(self) -> screeny_panel::Panel {
         match self {
-            Panel::Dithered => screeny_panel::model::DEVICE,
+            // AlignedDark chooses codes differently below the threshold, but
+            // it is still the device the codes are chosen for: emitted light,
+            // the preview's collapse and distinct-level counts all read the
+            // same physical panel as `Dithered`.
+            Panel::Dithered | Panel::AlignedDark => screeny_panel::model::DEVICE,
             Panel::BitPlanes => screeny_panel::model::NOMINAL,
         }
     }
@@ -96,7 +112,16 @@ impl Panel {
     }
 
     /// The sRGB8 code to hand over for one linear channel.
+    ///
+    /// [`Panel::AlignedDark`] only: below [`DARK_ALIGN_LEVEL`] this ignores
+    /// `bias` and every other consideration - the whole point is that the
+    /// code does not move from frame to frame.
     pub fn code(self, v: f32, bias: f32) -> u8 {
+        if self == Panel::AlignedDark {
+            if let Some(code) = dark_aligned_code(v) {
+                return code;
+            }
+        }
         linear_to_srgb8(self.quantise(v, bias))
     }
 
@@ -135,6 +160,63 @@ impl Panel {
         let s = self.snap8(c, bias);
         Rgb::new(srgb8_to_linear(s[0]), srgb8_to_linear(s[1]), srgb8_to_linear(s[2]))
     }
+}
+
+// ---------------------------------------------------------------------------
+// The dark-end snap (card 188, brief 2.1.1)
+// ---------------------------------------------------------------------------
+
+/// Below this level, a channel that would otherwise be dithered is forced
+/// onto the nearest of [`screeny_panel::aligned_levels`]'s codes instead: a
+/// level down here is at most a few sRGB codes wide, so a *held* colour
+/// between two of them alternates them at 9.6 Hz and the eye resolves that up
+/// close (brief 2.1, 2.1.1). Above it dithering keeps the full 1008-step
+/// path, where a level is worth at most four codes and the alternation is a
+/// few percent of the light, invisible even held.
+///
+/// A named constant, not a literal, because card 248 may bring it down: a
+/// shorter, bit-reversed dither cycle needs fewer levels steadied this way.
+pub const DARK_ALIGN_LEVEL: u32 = 16;
+
+/// The sRGB8 code for `level`, from [`screeny_panel::aligned_levels`] (card
+/// 188 deliverable 1), built once. Covers every level [`NATIVE_LEVELS`] has;
+/// callers that only care about the dark end still go through this one
+/// table, which is what [`level_triple`] and the dark-end snap both read, so
+/// there is one implementation of "which code is level N" in this crate.
+#[must_use]
+pub fn level_code(level: u32) -> u8 {
+    static LUT: OnceLock<[u8; NATIVE_LEVELS as usize]> = OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        let mut t = [0u8; NATIVE_LEVELS as usize];
+        for row in screeny_panel::aligned_levels(NATIVE_LEVELS - 1) {
+            t[row.level as usize] = row.code;
+        }
+        t
+    });
+    lut[level.min(NATIVE_LEVELS - 1) as usize]
+}
+
+/// A colour built directly from three levels (brief 2.1.1's "level triples"):
+/// each channel is [`level_code`] for that level, decoded back to linear
+/// light. For a dark ramp that is hand-picked rather than computed - a
+/// patch's own held, dark shades (`crates/art/src/patches/clocks`) - not for
+/// a value that merely ends up near one.
+#[must_use]
+pub fn level_triple(levels: [u32; 3]) -> Rgb {
+    Rgb::new(
+        srgb8_to_linear(level_code(levels[0])),
+        srgb8_to_linear(level_code(levels[1])),
+        srgb8_to_linear(level_code(levels[2])),
+    )
+}
+
+/// [`Panel::AlignedDark`]'s snap: `v`'s nearest level (plain rounding, the way
+/// a target is judged before any dithering), and [`level_code`] for it if
+/// that level is below [`DARK_ALIGN_LEVEL`]. `None` above the threshold, so
+/// the caller falls through to the ordinary dithered path.
+fn dark_aligned_code(v: f32) -> Option<u8> {
+    let level = (v.clamp(0.0, 1.0) * screeny_panel::NOMINAL.max()).round() as u32;
+    (level < DARK_ALIGN_LEVEL).then(|| level_code(level))
 }
 
 #[cfg(test)]
@@ -231,5 +313,62 @@ mod tests {
         };
         assert_eq!(spread(200), 0.0, "a duty step is a tenth of a code up here");
         assert!(spread(10) >= 1.0, "down here a duty step is bigger than a code");
+    }
+
+    /// Card 188. Below the threshold, `AlignedDark` ignores the dither bias
+    /// entirely and always lands on the same code for the same target - the
+    /// point of the whole exercise. Above it, it is `Dithered`, bias and all.
+    #[test]
+    fn aligned_dark_is_steady_below_the_threshold_and_dithered_above_it() {
+        let p = Panel::AlignedDark;
+        for v in 0..=255u8 {
+            let target = crate::color::srgb8_to_linear(v);
+            let level = (target * screeny_panel::NOMINAL.max()).round() as u32;
+            let lo = p.code(target, -0.49);
+            let hi = p.code(target, 0.49);
+            if level < DARK_ALIGN_LEVEL {
+                assert_eq!(lo, hi, "code {v} (level {level}): the bias moved an aligned dark code");
+                assert_eq!(lo, level_code(level), "code {v} (level {level})");
+            } else {
+                assert_eq!(lo, Panel::Dithered.code(target, -0.49), "code {v} above the threshold");
+                assert_eq!(hi, Panel::Dithered.code(target, 0.49), "code {v} above the threshold");
+            }
+        }
+    }
+
+    /// Every aligned code, whatever level it was chosen for, is itself within
+    /// 2/16 of that level - `AlignedDark` cannot introduce a worse blink than
+    /// the one it is fixing.
+    #[test]
+    fn every_aligned_dark_code_is_close_to_its_level() {
+        for level in 0..DARK_ALIGN_LEVEL {
+            let code = level_code(level);
+            let (nearest, offset) = screeny_panel::nearest_level(screeny_panel::duty_16ths(code));
+            assert_eq!(nearest, level, "level {level}: code {code}'s nearest level moved");
+            assert!((0..=2).contains(&offset), "level {level}: code {code} is {offset} sixteenths off");
+        }
+    }
+
+    /// `level_triple` round-trips through [`level_code`]: three levels in,
+    /// the aligned codes' own linear light out, nothing in between.
+    #[test]
+    fn level_triple_is_three_aligned_codes() {
+        let c = level_triple([1, 2, 3]);
+        assert_eq!(c.r, crate::color::srgb8_to_linear(level_code(1)));
+        assert_eq!(c.g, crate::color::srgb8_to_linear(level_code(2)));
+        assert_eq!(c.b, crate::color::srgb8_to_linear(level_code(3)));
+    }
+
+    /// `Panel::DEVICE`, `distinct_levels` and the rest of the physical-panel
+    /// queries read `AlignedDark` as the same device `Dithered` does - only
+    /// code selection differs.
+    #[test]
+    fn aligned_dark_is_the_same_device_as_dithered() {
+        assert_eq!(Panel::AlignedDark.steps(), Panel::Dithered.steps());
+        assert_eq!(Panel::AlignedDark.distinct_levels(), Panel::Dithered.distinct_levels());
+        for v in 0..=255u8 {
+            assert_eq!(Panel::AlignedDark.emit(v), Panel::Dithered.emit(v), "code {v}");
+            assert_eq!(Panel::AlignedDark.shown(v), Panel::Dithered.shown(v), "code {v}");
+        }
     }
 }

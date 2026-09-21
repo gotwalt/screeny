@@ -142,16 +142,44 @@ sits**, not about how many shades you use:
   and turn the panel's brightness down by the same factor. The picture is as bright as
   before and everything dark has moved up onto about twice as many levels. Brightness
   has 25 real steps and a floor, so this is a coarse trade, made once per patch.
-- **How, in this repo.** `screeny_art::panel::Panel::BitPlanes.snap8()` is the snap, and
-  a player's `output.panel: bit_planes` applies it to the whole frame - steady, but it
-  also flattens the bright gradients the dither handles well. Better is to keep
-  `output.panel: dithered` and align only the dark palette entries and the held dim
-  pixels. Card 188 gives the panel model the aligned-code table (so nobody copies the
-  one above into code) and applies it to the clock.
+- **How, in this repo (card 188).** The table above is
+  `screeny_panel::aligned_levels(max_level)` - derived from `screeny_panel::DEVICE`
+  itself, not typed in, so a firmware change to the gamma table only has to change that
+  one model. `screeny_panel::duty_16ths(code)` and `screeny_panel::nearest_level(duty)`
+  are the two pieces it is built from: a code's duty in sixteenths of a level, and any
+  duty's nearest level with a signed offset.
+
+  `output.panel: bit_planes` (`screeny_art::panel::Panel::BitPlanes`) is still the
+  blunt tool - steady everywhere, but it also flattens the bright gradients the dither
+  handles well. The third choice is `output.panel: aligned_dark`
+  (`screeny_art::panel::Panel::AlignedDark`): dithered above
+  `screeny_art::panel::DARK_ALIGN_LEVEL` (16, a named constant - see below), forced onto
+  the nearest aligned code below it. It is the backstop: whatever a patch has not aligned
+  itself - a stray anti-aliased edge, a treatment left deliberately undimmed - still
+  cannot blink once this is the panel a frame is quantised through.
+
+  A patch that wants its *own* dark ramp - the better-looking fix, chosen by eye rather
+  than left to per-channel rounding - builds level triples with
+  `screeny_art::panel::level_triple([r_level, g_level, b_level]) -> Rgb` (each channel is
+  `screeny_art::panel::level_code(level)`, decoded back to linear light) and applies them
+  as the *last* step, after blending, exactly where "snap after you blend" above says to.
+  `crates/art/src/patches/clocks` is the worked example: `DARK_CHOICES`, a `choice("dark",
+  ...)` parameter the same way any other named choice is (card 163). Its **default is
+  `"as it was"`** - the old, unaligned `tint.scale(ink)`, untouched - because a patch's
+  default is its own pixels and this card's own rule says the default may not move them.
+  `DARK_RAMPS` holds the other entries: short, hand-picked lists of level triples chosen
+  *nearest what the old continuous colour actually measured* (`screeny_panel::nearest_level`
+  against `screeny_panel::duty_16ths`, not guessed), so picking one is "the same look,
+  steadied", not a different one. Applied only once a dial has actually landed, never
+  mid-fade, so a fade stays the cheap continuous ramp the "leave everything else to the
+  dither" bullet asks for and only the truly held colour is aligned.
 - **This table will change.** Card 248 gives the firmware steadier sub-levels below
   level 1 and a dither that does not run at 10 Hz. When it lands there are more steady
   dark values and the penalty for missing one is smaller. Read the levels from
-  `screeny_panel`, never from a constant of your own.
+  `screeny_panel`, never from a constant of your own - `duty_16ths`, `nearest_level` and
+  `aligned_levels` are built from `screeny_panel::DITHER_PHASES`, not a literal `16`, so
+  248 has exactly one place to change them. `DARK_ALIGN_LEVEL` in `crates/art` may come
+  down with the shorter cycle; it is a named constant for the same reason.
 
 ### 2.2 The primaries are not sRGB
 

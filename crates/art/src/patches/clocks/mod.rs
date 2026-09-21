@@ -18,6 +18,7 @@ pub(crate) mod dance;
 pub(crate) mod dials;
 pub(crate) mod draw;
 
+use crate::color::Rgb;
 use crate::frame::Frame;
 use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
@@ -42,6 +43,7 @@ const PARAMS: &[ParamSpec] = &[
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 15.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
+    choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
@@ -140,6 +142,56 @@ const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
     }
     out[dance::DANCES + 1] = "composed";
     out
+}
+
+/// A resting dial's held, dark ink (card 188, brief 2.1.1). Index 0, **the
+/// default**, is `"as it was"`: the old continuous `tint.scale(ink)`,
+/// untouched - the review after this card's first cut found the default
+/// picture had moved (the warm, graded rest shade the owner had already
+/// tuned became a much dimmer, nearly flat one), which the card's own rule
+/// forbids. Every other entry is a short, hand-picked list of level triples,
+/// chosen **nearest the levels the old continuous colour actually measures
+/// at** (see the Log for the numbers) rather than computed or guessed - the
+/// same look, steadied, not a different one. `screeny_art::panel::level_triple`
+/// (card 188 deliverable 2) is the snap that turns a triple into the exact
+/// colour the panel shows.
+pub(crate) const DARK_CHOICES: &[&str] = &["as it was", "aligned warm", "aligned neutral", "aligned dim"];
+pub(crate) const DEFAULT_DARK: usize = 0;
+
+/// One ramp per [`DARK_CHOICES`] entry *after* `"as it was"` - `DARK_RAMPS[0]`
+/// is `DARK_CHOICES[1]`, and so on. Each is darkest-first (ink ~0.10,
+/// `"hatched, faint"`, then ink ~0.20, the other three treatments), so
+/// [`dark_shade`] can pick further in as a treatment's `ink` asks for more
+/// light.
+pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
+    // "aligned warm": the nearest aligned triple to what the old continuous
+    // ink actually measured (card 188 log, 2026-09-21 - "measured, after the
+    // owner's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
+    // Keeps the hour hand's own warm hue as far as per-channel alignment
+    // allows - the graded look the owner had tuned, steadied rather than
+    // replaced.
+    &[[6, 5, 3], [12, 10, 7]],
+    // "aligned neutral": the same two rungs with the channels equalised
+    // (their rounded average) - no hue, same overall brightness.
+    &[[5, 5, 5], [10, 10, 10]],
+    // "aligned dim": this card's first cut, kept as a fourth, deliberately
+    // much darker choice now that it is not the default.
+    &[[1, 1, 1], [2, 2, 2], [3, 3, 3]],
+];
+
+/// The `dark` parameter's pick. `variant == 0` (`"as it was"`, the default)
+/// is `None` - the caller keeps the old continuous `tint.scale(ink)` - and
+/// every other variant indexes [`DARK_RAMPS`], further in as `ink` calls for
+/// more light: a treatment's `ink` is small (0.10 or 0.20 today), so this
+/// mostly picks the ramp's darkest step, but stays proportional if a future
+/// treatment asks for more.
+fn dark_shade(variant: usize, ink: f32) -> Option<Rgb> {
+    if variant == 0 {
+        return None;
+    }
+    let ramp = DARK_RAMPS[(variant - 1).min(DARK_RAMPS.len() - 1)];
+    let idx = ((ink * ramp.len() as f32).ceil() as usize).clamp(1, ramp.len()) - 1;
+    Some(crate::panel::level_triple(ramp[idx]))
 }
 
 impl Rest {
@@ -484,6 +536,7 @@ impl Patch for Clocks {
             tip: ctx.get("tip"),
             tints: [tint("hue", "chroma"), tint("hue2", "chroma2")],
             ring: ctx.get("dials"),
+            dark: (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1),
         };
         // Which dials are not part of the time, so are drawn as being at rest.
         // Only while there is a time to read: during a dance every hand is a
@@ -500,20 +553,39 @@ impl Patch for Clocks {
 }
 
 /// Everything about the picture that is not the hands: hand thickness, the two
-/// hands' colours, and the dial rings.
+/// hands' colours, the dial rings, and the dark ramp a resting dial lands on.
+#[derive(Clone, Copy)]
 struct Look {
     half: f32,
     /// The hands' taper while they dance: `draw::Dials::tip`.
     tip: f32,
     tints: [draw::Tint; 2],
     ring: f32,
+    /// Index into [`DARK_CHOICES`]: the `dark` parameter. `0` is `"as it
+    /// was"`; `DARK_RAMPS[dark - 1]` is every other one.
+    dark: usize,
 }
 
 /// Draw the grid. `idle` marks the dials that are not part of a digit; they are
 /// drawn back towards `rest` as the picture settles onto the time.
 fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
     let scale = rest.scale(settled);
-    let scales: Vec<[f32; 2]> = idle.iter().map(|at_rest| if *at_rest { scale } else { [1.0, 1.0] }).collect();
+    // Card 188: only once a resting dial has actually landed - not while it
+    // is still fading towards rest - does its ink become the hand-picked,
+    // aligned shade. The fade itself is moving content (brief 2.1.1: "leave
+    // everything else to the dither"), so it stays the cheap continuous ramp
+    // the whole way; only the held, dark end of it needs steadying.
+    let shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
+    let scales: Vec<draw::RestScale> = idle
+        .iter()
+        .map(|at_rest| {
+            if *at_rest {
+                draw::RestScale { ink: scale[0], reach: scale[1], shade }
+            } else {
+                draw::RestScale::FULL
+            }
+        })
+        .collect();
     draw::Dials {
         angles,
         cols: COLS,
@@ -556,7 +628,7 @@ mod tests {
 
     fn look() -> Look {
         let tint = |hue| draw::Tint { hue, chroma: 0.05, light: 0.93 };
-        Look { half: 1.0, tip: 0.45, tints: [tint(80.0), tint(80.0)], ring: 0.0 }
+        Look { half: 1.0, tip: 0.45, tints: [tint(80.0), tint(80.0)], ring: 0.0, dark: DEFAULT_DARK }
     }
 
     /// What one cell of a glyph asks of its dial, so a pose can be read back.
@@ -666,7 +738,10 @@ mod tests {
     /// Every treatment leaves the frame an exact one: a dimmed hand is its own
     /// ink scaled in linear light, which is what its anti-aliasing ramp already
     /// is, so it costs no palette entry. 31 colours, well under the 32 that go
-    /// on the wire exactly.
+    /// on the wire exactly. With the default `dark` ("as it was"), that stays
+    /// true in every case - the default draws exactly the old picture, card
+    /// 188's follow-up fix. `aligned_dark_variants_add_the_shade_entry` below
+    /// is where 32 (the held, aligned shade's own exact entry) shows up.
     #[test]
     fn every_treatment_keeps_the_palette_exact() {
         for (v, rest) in RESTS.iter().enumerate() {
@@ -674,9 +749,35 @@ mod tests {
                 for (hh, mm, _) in AWKWARD {
                     let frame = picture(&pose(hh, mm, *rest), &resting(hh, mm), *rest, settled, look());
                     let Frame::Indexed { palette, indices } = &frame else { panic!("rest {v}: not an indexed frame") };
-                    assert_eq!(palette.len(), 31, "rest {v}: palette grew");
+                    assert_eq!(palette.len(), 31, "rest {v} settled {settled}: palette grew");
                     assert!(palette.len() <= GUARANTEED_PALETTE, "and exact whatever the indices do");
                     assert!(indices.iter().all(|i| (*i as usize) < palette.len()));
+                }
+            }
+        }
+    }
+
+    /// An aligned `dark` variant (anything but `"as it was"`) adds its shade
+    /// as its own palette entry, 32 colours, once a treatment that actually
+    /// dims (`ink < 1.0`) has landed (`settled >= 1.0`) on a time that leaves
+    /// at least one dial resting - still `<= GUARANTEED_PALETTE`, still exact.
+    /// `9:05` and `0:00` draw no resting dials at all (digits `0`, `5`, `9`
+    /// have no `N` cells), so `want` has to check that too.
+    #[test]
+    fn aligned_dark_variants_add_the_shade_entry() {
+        for (dark, name) in DARK_CHOICES.iter().enumerate().skip(1) {
+            let look = Look { dark, ..look() };
+            for (v, rest) in RESTS.iter().enumerate() {
+                for settled in [0.0, 0.5, 1.0] {
+                    for (hh, mm, _) in AWKWARD {
+                        let frame = picture(&pose(hh, mm, *rest), &resting(hh, mm), *rest, settled, look);
+                        let Frame::Indexed { palette, indices } = &frame else { panic!("rest {v}: not an indexed frame") };
+                        let has_idle = resting(hh, mm).iter().any(|r| *r);
+                        let want = if settled >= 1.0 && rest.ink < 1.0 && has_idle { 32 } else { 31 };
+                        assert_eq!(palette.len(), want, "`{name}` rest {v} settled {settled}: palette grew");
+                        assert!(palette.len() <= GUARANTEED_PALETTE, "and exact whatever the indices do");
+                        assert!(indices.iter().all(|i| (*i as usize) < palette.len()));
+                    }
                 }
             }
         }
@@ -783,8 +884,12 @@ mod tests {
 
     #[test]
     fn the_ramp_carries_a_dimmed_hand() {
-        // A dimmed hand is on its ink's own ray, so it lands on a step of the
-        // hand's ramp rather than needing a colour of its own.
+        // A dimmed hand - resting (the default `dark`, "as it was") or a
+        // digit's anti-aliased, rounded tip - is on its own ink's ray, so it
+        // lands on steps of the ramp rather than needing colours of its own.
+        // An *aligned* `dark` variant is different (see
+        // `aligned_dark_variants_add_the_shade_entry`): its resting shade is
+        // its own exact palette entry, not a ramp step.
         let rest = RESTS[DEFAULT_REST];
         let frame = picture(&pose(21, 12, rest), &resting(21, 12), rest, 1.0, look());
         let Frame::Indexed { palette, indices } = &frame else { panic!("not indexed") };
@@ -793,6 +898,66 @@ mod tests {
         for i in used {
             let c: Rgb = palette[i as usize];
             assert!(c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0);
+        }
+    }
+
+    /// Card 188 follow-up (owner's review, 2026-09-21): the first cut of this
+    /// card made the aligned shade the default and moved the picture - the
+    /// warm, graded rest shade the owner had already tuned became a much
+    /// dimmer, nearly flat one - which the card's own rule ("the default must
+    /// not change any existing patch's pixels") forbids. Fixed by making
+    /// `DARK_CHOICES[0]`, `"as it was"`, the default and giving it `None`
+    /// (`dark_shade`), so `draw::RestScale.shade` stays `None` and
+    /// `draw.rs::draw()` falls through to the untouched `tint.scale(ink)` -
+    /// exactly the pre-card-188 formula. Pinned two ways so neither the
+    /// constant nor the function can drift back:
+    #[test]
+    fn the_default_dark_choice_draws_the_old_continuous_shade() {
+        assert_eq!(DEFAULT_DARK, 0, "index 0 must stay \"as it was\"");
+        assert_eq!(DARK_CHOICES[0], "as it was");
+        for ink in [1.0, 0.5, 0.20, 0.10, 0.0] {
+            assert_eq!(dark_shade(0, ink), None, "\"as it was\" must never produce a shade");
+        }
+
+        // No shade entry reaches the palette for any treatment or moment,
+        // default `look()` - `every_treatment_keeps_the_palette_exact` above
+        // already covers every `(rest, settled, time)` combination at 31; this
+        // is the same fact from the picture-building side, for the specific
+        // frame `screeny-art snapshot clocks-numerals --time 21:12 --seed 7`
+        // renders (the one the review compared byte for byte against the
+        // pre-card-188 render - see the Log).
+        let rest = RESTS[DEFAULT_REST];
+        let frame = picture(&pose(21, 12, rest), &resting(21, 12), rest, 1.0, look());
+        let Frame::Indexed { palette, .. } = &frame else { panic!("not indexed") };
+        assert_eq!(palette.len(), 31, "the default must not add a shade entry");
+    }
+
+    /// Card 188's acceptance: once the resting dials have landed (`settled` =
+    /// 1, not mid-fade) and the frame has gone through the snap
+    /// (`Panel::AlignedDark`, card 188 deliverable 2), no channel below the
+    /// dark-end threshold sits more than 2/16 off its level - the same bound
+    /// the aligned table itself promises (`screeny_panel::aligned_levels`).
+    /// Every treatment, `"as it was"` included: that one does not use the
+    /// patch's own hand-picked dark ramp (it is kept undimmed, for
+    /// comparison), so it is what proves the pipeline-level snap catches
+    /// held, dark pixels a patch has not aligned itself - the hand-picked
+    /// ramp is the better-looking fix, this is the backstop.
+    #[test]
+    fn held_dark_shades_land_within_two_sixteenths_of_a_level() {
+        let output = crate::pipeline::Output { panel: crate::panel::Panel::AlignedDark, ..Default::default() };
+        for rest in RESTS {
+            let frame = picture(&pose(21, 12, *rest), &resting(21, 12), *rest, 1.0, look());
+            let out = crate::pipeline::Pipeline::new(output).process(frame, 1.0 / 30.0);
+            for &code in &out.wire.rgb {
+                let (level, offset) = screeny_panel::nearest_level(screeny_panel::duty_16ths(code));
+                if level < crate::panel::DARK_ALIGN_LEVEL {
+                    assert!(
+                        offset.abs() <= 2,
+                        "`{}`: code {code} (level {level}) is {offset} sixteenths off",
+                        rest.name
+                    );
+                }
+            }
         }
     }
 }
