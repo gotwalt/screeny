@@ -378,3 +378,28 @@ bytes of flash).
   left for the orchestrator, same reason; the simulator's `wipe_allowed` is
   always true, because its firmware upload does not claim the device the way
   the firmware's does.
+
+### Orchestrator, after the merge (2026-09-21)
+
+Merged to `main` (246 first, then 230; the only conflict was `FW_VERSION`, both notes
+kept, 0.8.0). Merged tree: 979 host tests pass, firmware `.stack` 25,800 (floor 24,576).
+One bench for 246 + 230 + 136, on the device:
+- Serial-flashed 0.8.0 from `main`; joined from the store; boot log shows the button task
+  on GPIO15. `brightness 3` -> applied 6, panel lit (card 136); level put back.
+- `fw-upload screeny-fw-0.8.1-good.bin --activate` (0.8.0 with the version string bumped,
+  not committed): `still boot_id N - the old image`, back after 18 s as 0.8.1
+  `PendingVerify` with a new `boot_id`, `Trial` at 19 s, **`CONFIRMED` at 64 s**. Then,
+  **without a reboot**, the same image uploaded again: `ok true`, staged only - not
+  `busy`. `fw_slot ota_1`, `fw_state valid`.
+- The button, with the owner pressing: short press at idle -> status screen ~10 s; hold
+  3 s and release -> countdown, "cancelled", nothing changed, still connected; hold 5 s ->
+  portal and QR, re-provisioned from his iPhone through the portal, back on the LAN at the
+  same address; rebooted once, rejoined from the store (`boot_count` 3, `panic_count` 0).
+  Two things he saw by eye became **card 247**: the identify screen flickers over a live
+  stream (reproduced with a network `IDENTIFY`, so older than the button), and the iPhone
+  camera did not detect the QR (brightness was 56, not the default of decision 1).
+- `screeny-probe http`: 39 passed, 0 failed, 6 skipped, 0 connects refused.
+  `conformance --slow` with the panel released: 60 passed, 0 failed, 4 skipped. Panel
+  given back to the Studio, LIVE at 30 fps.
+Not benched: 246 item 3 (needs a rollback to show; host-tested) and item 4's SIGTERM
+restore (host-tested; both suites restored cleanly on a normal exit).
