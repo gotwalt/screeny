@@ -121,3 +121,25 @@ agrees with the hold, still holding just before `until`, released at/after `unti
 though the reading still disagrees (the "elsewhere" case), and holding when there is no
 reading yet (`null`/`undefined`).
 
+`crates/studio/README.md`: added a paragraph after "Brightness is a policy..." describing
+the hold-then-release rule and its bound as the answer to "how fast does a change made
+elsewhere show up"; added a clause to the `tests/ui.rs` row of the file map.
+
+No hardware, no serial, no camera, no LAN touched - `screeny-sim` and `screeny-studio`
+both ran on loopback only, both under `timeout`, both confirmed killed (`ps` clean)
+before moving on.
+
+Finish: `timeout 300 cargo clippy -p screeny-studio --all-targets` clean (no warnings).
+`timeout 900 cargo test -p screeny-studio --release`: every test binary green, including
+`tests/ui.rs`'s 29 (up from 28 - the new `brightness_hold_wins_pins_the_hold_and_release_rules`),
+`tests/soak.rs`'s bounded soak, and the doc-tests; exit code 0. Node was on this machine
+(`v24.19.0`), so the new test actually ran rather than skipping - both are exercised in
+practice, but only the run was confirmed here. No Rust outside test files changed, so the
+full-workspace run the card's Finish step reserves for that case was not needed.
+
+Not seen in a real browser: the actual slider element never stopping mid-drag or
+snapping back on the deployed page - everything above is the data path (`/api/v1/status`,
+the pure hold function) and the DOM-touching half of `show()` (`input.value =`,
+`busy()`) was not driven through an actual `<input type="range">` in a browser. The
+Acceptance line "the owner moves the slider on the deployed page and it stays" is for
+the orchestrator to check after this is merged and deployed.
