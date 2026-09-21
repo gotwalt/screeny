@@ -232,6 +232,17 @@ firmware session). Browser tooling was not connected on 2026-09-21: nobody has s
 `/panel` row or the stepped slider drawn; checked instead by `tests/ui.rs`, `node --check`
 and a local Studio against a local sim (`applied 6` for 3, `applied 120` for 255 under a cap).
 
+**Later the same day, two small asks from the owner, done and deployed (f6af53a):** **126** (the
+brightness slider bounced: the page preferred telemetry up to ~1.6 s stale over
+`brightness_applied`, and `busy()` means "focused", which Safari never makes a range input on
+click or touch - so it holds what was chosen until telemetry agrees or 5 s pass, and leaves the
+control alone while it is in hand) and **122** (flock: `birds` 3..150, a new `size` 0.5..3 that
+draws birds larger without moving the camera - lowering `near` with few birds empties the
+frame - `samples` fixed at 3 and off the page, labels rewritten; no default changed; the
+worker's pick is `birds=6 size=2.5`, renders in the scratchpad's `flock/`). Backlog: **127**
+(every other slider has the Safari mid-drag flaw, seen only when someone else edits the same
+value; parked in spirit), 137, and the firmware session's 138 and 248.
+
 **Next up:** whatever the owner's eye finds in the pieces (115's hands first); 162 when
 clock renders need comparing; porting `crates/demos` into `crates/art` when wanted. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
