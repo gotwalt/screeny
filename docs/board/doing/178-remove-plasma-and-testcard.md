@@ -4,8 +4,8 @@ title: Remove the plasma and testcard patches
 type: build
 hardware: no
 depends: [161]
-owner:
-branch:
+owner: worker (Claude)
+branch: card/178-remove-plasma-testcard
 ---
 
 ## Goal
@@ -52,3 +52,42 @@ something to play.
 file whose player was on `plasma` loads and plays the default patch, saying so once.
 
 ## Log
+
+### Claimed, and the fixture measured before anything was changed
+
+Branch `card/178-remove-plasma-testcard`, cut from `main` at `6899cca`.
+
+**The fixture question first**, because every other decision hangs off it. The
+tests that used `plasma` needed a patch that is cheap, CPU, deterministic,
+seeded and continuous-tone. `metaballs` was read (`crates/art/src/patches/metaballs.rs`):
+CPU (no `gpu` feature, no wgpu), a pure function of `ctx.t` and its parameters
+(no integration, no `ctx.now`), `seeded: true` with every body's radius, path
+and phase drawn from `Rng::new(seed)`, and `Frame::supersample` in linear light,
+which is continuous tone. All five properties hold.
+
+Cost, measured with a throwaway `crates/art/examples/cost_tmp.rs` (release, 300
+frames after 30 warm ones, this bench). "tick" is what a studio player really
+pays per frame: `patch.render` plus `Pipeline::process`, which is where the
+real encoder runs.
+
+| patch | render | + pipeline | tick | of a 33.3 ms tick |
+|---|---|---|---|---|
+| clocks-numerals | 2.674 ms | - | 1.768 ms | 5.3% |
+| clocks-dials | 2.759 ms | 1.289 ms | 4.048 ms | 12.1% |
+| vesta | 2.679 ms | 0.713 ms | 3.392 ms | 10.2% |
+| **plasma** | 0.103 ms | 0.195 ms | **0.299 ms** | 0.9% |
+| **metaballs** | 0.697 ms | 3.206 ms | **3.902 ms** | 11.7% |
+| flock | 0.499 ms | 1.136 ms | 1.635 ms | 4.9% |
+| testcard | 0.031 ms | 1.720 ms | 1.751 ms | 5.3% |
+
+So metaballs costs 3.6 ms more a tick than plasma did. That is the one real
+cost of this card, and it is worth stating plainly: it is 12% of one core per
+player, against 1%, and it is *less* than what `clocks-dials` - which the soak
+and the page already play - costs. Nothing in the studio suite runs more than
+a handful of players, the waits there are all on conditions with 20-30 s
+deadlines, and none of them is a CPU race. Measured both ways at the end of
+this card (see the closing entry).
+
+`plasma` was indexed and `metaballs` is not, so the one assertion that leaned on
+*indexedness* rather than on cheapness is handled separately (see the panel.rs
+entry).
