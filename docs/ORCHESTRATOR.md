@@ -401,6 +401,13 @@ surface - tell the other session before changing them. **If you are the firmware
 after a context reset, read `docs/design/device-web.md` next**: decisions, the working
 agreement, and where the track stands.
 
+**Commit with `git commit -m ... -- <paths>`, not `git add <paths> && git commit`** (2026-09-21):
+a bare `git commit` takes everything staged, and the other session had a `merge --no-commit`
+staged in the shared checkout - this session's card-writing commit 7f95e5e concluded its merge
+of `card/248-host-model` under the wrong message (content fine, history not rewritten). The
+path form refuses during a merge ("cannot do a partial commit"), which is the failure you want.
+Better still: merge in a separate worktree, never staged in the shared checkout.
+
 ## Working with another Claude session
 
 The art system was built by a separate session with the owner. Cross-session messages
