@@ -46,7 +46,10 @@
            `common.js`, so the two cannot drift. -->
       <div class="slider" id="bright-slider">
         <label for="bright">Brightness</label><output></output>
-        <input id="bright" type="range" min="0" max="255" step="1" value="0">
+        <!-- Card 187: an index into the server's brightness stops, not the
+             raw level - see common.js's bindBrightness, which sets the real
+             min/max/step and the value on load. -->
+        <input id="bright" type="range" min="0" max="25" step="1" value="0">
       </div>
       <p class="hint" id="bright-note"></p>
 

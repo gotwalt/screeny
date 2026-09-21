@@ -225,16 +225,22 @@ async fn every_route_the_page_calls_exists() {
 /// outside the box.
 #[test]
 fn the_screens_keep_their_promises() {
-    assert!(
-        COMMON_JS.contains("BRIGHTNESS_FLOOR = 6"),
-        "the slider's lowest non-zero stop should be the first value that lights the panel"
-    );
-    // Card 136 will delete this; it should be one constant and one helper, not
-    // a rule sprinkled through the front end. Card 198: the brightness control
-    // is bound once in `common.js`, so both screens inherit the floor and
-    // neither screen's own file mentions it.
-    assert_eq!(COMMON_JS.matches("BRIGHTNESS_FLOOR").count(), 2, "keep the 1..=5 workaround in one place");
-    assert!(!PICTURE_JS.contains("BRIGHTNESS_FLOOR") && !PANEL_JS.contains("BRIGHTNESS_FLOOR"));
+    // Card 187: the floor used to be a literal `6` copied into `common.js`
+    // (card 136's note said as much: "delete this ... when 136 fixes the
+    // firmware"). It is gone from the front end entirely now - the server
+    // computes the real stops (`page::brightness_stops`, one implementation
+    // of the output-enable slot arithmetic) and the page only ever indexes
+    // into what it was handed.
+    for (what, text) in [("common.js", COMMON_JS), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
+        assert!(!text.contains("BRIGHTNESS_FLOOR"), "{what} should not know the floor's value itself");
+    }
+    assert!(COMMON_JS.contains("function cappedStops("), "the cap still trims the server's stops, once, here");
+    // Card 198: the brightness control is bound once in `common.js`, so both
+    // screens hand it the same server list rather than each fetching or
+    // deriving one.
+    for (what, text) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
+        assert!(text.contains("stops: boot.brightness_stops"), "{what} should hand the control the server's stops");
+    }
 
     // No CDN, no web font from the network, no module import from anywhere but
     // here: this runs on a LAN box with no promise of internet.
@@ -256,6 +262,21 @@ fn the_screens_keep_their_promises() {
         let from = import.split('\'').next().unwrap_or_default();
         assert_eq!(from, "./common.js", "the front end imports nothing but the shared module");
     }
+}
+
+/// Card 187's shape: `GET /api/v1/bootstrap` really does carry the stops, not
+/// just `page::brightness_stops` in isolation - the wiring, not the formula
+/// (that is `page::tests::there_is_one_stop_per_real_picture`, next to the
+/// function itself).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_carries_the_brightness_stops() {
+    let studio = studio().await;
+    let at = studio.addr;
+    let boot = get(at, "/api/v1/bootstrap").await.json();
+    let stops: Vec<u64> = boot["brightness_stops"].as_array().expect("a list").iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(stops.first(), Some(&0), "off is always the first stop: {stops:?}");
+    assert!(stops.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {stops:?}");
+    assert!(stops.len() > 2 && stops.len() < 256, "the real resolution, not 256 raw values: {stops:?}");
 }
 
 /// Card 164: **what a panel costs the network is on the Panel screen, and the

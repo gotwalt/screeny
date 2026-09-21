@@ -582,6 +582,7 @@ async function start() {
     note: $('#bright-note'),
     attached: attachedId,
     attempt,
+    stops: boot.brightness_stops,
   });
 
   /** The status chip in the title block: the one thing on this screen that is
