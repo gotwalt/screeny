@@ -52,3 +52,5 @@ Either the spec says why not, or a conformance run can tell a rejected magic
 byte from a rejected version.
 
 ## Log
+
+- 2026-09-21, firmware orchestrator: **parked** with the owner's agreement, under decision 10 of `docs/design/device-web.md` ("not a commercial product, we don't need to overly bomb-proof it"). A read-only survey against fw 0.7.0 found it still open as written and not a crash or memory risk. Not picked up without the owner asking.

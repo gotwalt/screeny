@@ -55,3 +55,5 @@ Run the conformance suite with the device in `HOLD_FOREVER` and it is still in
 `HOLD_FOREVER` afterwards, without being told.
 
 ## Log
+
+- 2026-09-21, firmware orchestrator: **closed as done by other means**, with the owner's agreement. The goal ("a tool that changes idle mode can put it back") is met over HTTP: `GET /api/v1/status` carries `idle_mode` (card 226, `crates/device-api/src/reply.rs`) and the probe's HTTP suite reads it and restores it for real instead of guessing. The UDP paths the card names (`TELEMETRY`, `GET_INFO`, TXT) still do not carry it and will not: every byte on the status structs costs core-0 stack (card 243b).

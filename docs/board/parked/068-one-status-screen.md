@@ -47,3 +47,7 @@ types, the panel model and the dead weight, and the screens are none of those.
 
 `grep -rn "fn status" crates firmware` finds one definition, and a camera still
 of the device's idle screen matches a simulator screenshot of the same state.
+
+## Log
+
+- 2026-09-21, firmware orchestrator: **parked** with the owner's agreement, under decision 10 of `docs/design/device-web.md` ("not a commercial product, we don't need to overly bomb-proof it"). A read-only survey against fw 0.7.0 found it still open as written and not a crash or memory risk. Not picked up without the owner asking.
