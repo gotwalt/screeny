@@ -715,6 +715,76 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
     assert_eq!(a.wire.rgb, b.wire.rgb);
 }
 
+/// **The far corner of both controls**, which is not a picture but is a place
+/// the sliders go: 150 birds each drawn three times life size (card 124).
+///
+/// Card 123 left this corner two bytes inside the budget and nothing testing
+/// it. Flown properly - four backdrops, three seeds, a minute each - it is
+/// *over*: a few frames in a hundred cannot be encoded exactly and take the
+/// encoder's lossy fallback, and this card's banked wings, which show more area
+/// than an edge-on one, made that a little commoner (seed 11, dusk, 1800
+/// frames: 10 lossy before, 94 after). It is deliberately **not** in
+/// [`every_frame_goes_out_exactly`], because the honest answer is not "this is
+/// exact" - it is "at 150 birds at size 3 the panel is a wall of overlapping
+/// wings with no composition left in it at all (see the card's
+/// `corner-150-3.png`), the picture is already noise, and a frame in fifty
+/// being approximated there is the fallback doing its job".
+///
+/// What must still hold, and is what this checks: every frame **fits the
+/// datagram**, the limiter never has to pull the picture down, and the
+/// approximation stays rare rather than becoming the normal case. The corner
+/// starts at 150 birds: at 110 birds drawn the same size, and at 150 birds at
+/// `size` 2, every frame of the same runs was exact.
+#[test]
+fn the_far_corner_of_both_controls_still_fits() {
+    for (backdrop, scheme, name) in [
+        (0.0, 0.0, "sky, light on dark"),
+        (0.0, 1.0, "sky, dusk silhouettes"),
+        (1.0, 0.0, "horizon line"),
+        (2.0, 0.0, "black, a wall of big white birds"),
+    ] {
+        let mut params = Params::defaults(PARAMS);
+        params.set(PARAMS, "backdrop", backdrop);
+        params.set(PARAMS, "scheme", scheme);
+        params.set(PARAMS, "birds", param_spec("birds").max);
+        params.set(PARAMS, "size", param_spec("size").max);
+        if scheme > 0.5 {
+            params.set(PARAMS, "hue", 35.0);
+            params.set(PARAMS, "spread", 95.0);
+        }
+        let mut patch = (DEF.make)(11);
+        let mut pipeline = crate::Pipeline::new(crate::pipeline::Output::default());
+        let dt = 1.0 / 30.0;
+        let frames = 1800;
+        let (mut worst, mut lossy, mut apl, mut gain) = (0, 0, 0.0_f32, 1.0_f32);
+        for i in 0..frames {
+            let out = pipeline.process(
+                patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
+                dt,
+            );
+            worst = worst.max(out.stats.encoded_bytes);
+            apl = apl.max(out.stats.apl);
+            if i > 30 {
+                gain = gain.min(out.stats.limiter_gain);
+            }
+            lossy += u32::from(!out.stats.exact);
+        }
+        eprintln!(
+            "{name} at both extremes: {frames} frames, worst {worst} of {} bytes, \
+             peak APL {:.0}%, limiter down to x{gain:.2}, {lossy} approximated",
+            crate::meter::PAYLOAD_BYTES,
+            apl * 100.0,
+        );
+        assert!(worst <= crate::meter::PAYLOAD_BYTES, "{name}: {worst} bytes is over the datagram");
+        assert!(gain > 0.95, "{name}: the limiter had to pull the picture down to x{gain:.2}");
+        assert!(
+            lossy * 10 < frames,
+            "{name}: {lossy} of {frames} frames approximated - the fallback has become the \
+             normal case, which is a different question from this corner being tight"
+        );
+    }
+}
+
 /// A minute of each picture the patch can draw, straight through the real
 /// pipeline and measured by the real encoder: **every frame is exact**.
 ///

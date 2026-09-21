@@ -156,3 +156,98 @@ and the view's promises cannot be moved by this control.
 One thing found on the way: `Sim::new` settles the flock with `Tuning::default()`,
 so the first moment of any run carries a lean from the warm-up whatever the
 parameter says. It decays in well under a second; the tests skip two seconds.
+
+### 2026-09-21 - card 123's round two came in, and the "before" was re-taken
+
+Card 123's round two landed on `main` while this was in flight (body 0.70 -> 0.48 of a
+span with size, a five-point spine with a head, constant chord to the wrist with a notch
+before the tail, `CAMBER` on the hand wing). Brought it in as a merge, not a rebase; no
+conflict - `bird.rs` took both sides cleanly, my pose inputs sit inside round two's
+proportions and I touched none of them. The "before" pictures were then re-rendered from
+a binary built at the merge commit, so every comparison below is *round two with the
+lean* against *round two without it*, not against last week's bird.
+
+### 2026-09-21 - the default picture
+
+55 birds, `size` 1, seed 7, against the same code without the lean: **59, 125, 162 and
+146 of 2048 LEDs differ** at t = 12, 20, 28 and 36 s (2.9%, 6.1%, 7.9%, 7.1%). Same
+flock, same density, same marks - the sky is untouched and the birds are in exactly the
+same places, because the flight is bit-identical; what differs is that a bird in a turn
+is now drawn canted, and at two or three LEDs across that is a pixel of the dash moving
+up on one side and down on the other. See `compare-default.png`.
+
+### 2026-09-21 - the budget at the far corner
+
+The card's second deliverable, done after the lean because a banked wing shows more
+area. `birds 150, size 3.0`, four backdrops, three seeds, 1800 frames each. Frames that
+could not be encoded exactly, seeds 7 / 11 / 23, within each sky-light, dusk, horizon,
+black:
+
+- at the merge commit, without the lean: 0,0,0,0 / **2,10**,0,0 / **1**,0,0,0
+- with it: 0,0,0,0 / **37,94**,0,0 / **7**,0,0,0
+
+Worst encoded size is 1464 of 1464 everywhere in that corner, both before and after.
+
+So **the corner is already over**, and card 123 left it that way: at both controls at
+maximum a few frames in a hundred take the encoder's lossy fallback. The lean makes it
+commoner - worst case 94 of 1800, 5% - exactly as the card predicted, because a banked
+wing presents its surface instead of its edge.
+
+Where the edge is, same seed 11, same runs: **150 birds at `size` 1 or 2, and 110 birds
+at `size` 3, are exact for a full minute on every backdrop**; 150 at 2.5 is the first to
+slip (51 of 1800 on the dusk sky). APL peaks at 27% and the limiter never moves off
+x1.00 anywhere in that grid, black backdrop with a wall of big white birds included, so
+panel safety is not the question - this is entropy in the index plane and nothing else.
+
+**What should give: nothing.** `corner-150-3.png` is what that corner looks like - 150
+birds each drawn three times life size on a 64x32 panel is a wall of overlapping wings
+with no composition left in it. It is not a picture anyone watches; it is where two
+sliders end. A frame in fifty being approximated there is the fallback doing its job,
+and trading the look of every other picture to buy it back would be the wrong way round.
+
+So it is **not** added to `every_frame_goes_out_exactly`, which would have had to be
+weakened to hold it. It has its own test instead,
+`the_far_corner_of_both_controls_still_fits`: every frame fits the datagram, the limiter
+never pulls the picture down, fewer than one frame in ten is approximated - and it
+prints the real numbers so the next person sees them.
+
+### 2026-09-21 - what it looks like, honestly
+
+Pictures, in the order to look at them (all seed 7, `birds` 6, `size` 2.5, default
+`calm`/`wild`):
+
+1. `zoom-turn-b.png` - the clearest one. Eight consecutive frames from t = 26.6, one LED
+   per pixel blown up, before over after. Two birds gliding through a right turn: level
+   dashes before, both canted 33-34 degrees after, leaning the same way.
+2. `compare-turn-b.png` and `compare-turn-a.png` - the same two turns as whole panels,
+   16 consecutive frames each, before over after.
+3. `zoom-turn-a.png` - the sustained left turn at t = 140.3, close up.
+4. `compare-default.png` - the 55-bird default at four moments, the picture that must
+   not change.
+5. `tt-pairs.png` - the model itself on the turntable, level over 32 degrees of lean:
+   the planform row and the head-on row. Head-on, level is a shallow gull M; banked it is
+   an unmistakable diagonal.
+6. `zoom-climb.png` - the body pitch that was dropped.
+7. `corner-150-3.png` - the far corner of both controls.
+
+**What still looks wrong:**
+
+- **A banked bird in a glide is close to a straight diagonal stroke.** Gliding wings are
+  already nearly straight, and rolling them 34 degrees puts the whole bird on one line -
+  which is what a banked gull does look like from behind, but it means the two
+  best-leaning moments in this flight are also the two least bird-shaped. Beating birds
+  keep more shape through the bank.
+- **The lean is only as common as the turns are.** p50 is 5.8 degrees: most of the time
+  the flock is flying straight and the birds are level, as they should be, so the bank is
+  something you catch rather than something you watch. A lower `calm` makes it constant.
+- **The underside flash still hardly shows.** Presentation is up (0.3-0.7 against
+  0.0-0.5), so the geometry is right now, but at `UNDERSIDE` 0.16 over six ink levels on
+  a lit sky the brighter face often quantises to the same index as the darker one. That
+  is a tone question rather than a geometry one - card 128.
+- **The inside-wing tuck is hard to see in the flock** and easy to see on the turntable.
+  It is doing its job - it stops a banked bird reading as a symmetric cross drawn wonky -
+  but nobody will point at it.
+- The body pitch is gone, so a bird is still drawn exactly along its velocity vector,
+  which is not what a flying thing does. It cannot be fixed by pitching the body at this
+  resolution with this camera; if it is worth another go it wants the *wings* to carry
+  it, not the spine.
