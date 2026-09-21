@@ -6,6 +6,7 @@ hardware: yes (the orchestrator flashes or OTAs; the owner judges by eye; no cam
 depends: []
 owner: opus worker (firmware session, 2026-09-21)
 branch: card/248-a-steadier-dark-end
+status: review - steps 1, 2 and 4 shipped (fw 0.9.0); step 3 designed and stopped on RAM (card 249)
 ---
 
 ## Goal
@@ -517,3 +518,49 @@ halves instead of one.
   the sub-level steps inside a level are `quarter/lit` and `half/lit` with integer
   widths, so `DEVICE` would have had to take a brightness. It did not ship, so it does
   not. Card 249 carries that warning forward.
+
+### Handover (2026-09-21)
+
+**What shipped on this branch: steps 1, 2 and 4, plus the bench pattern. Step 3 is a
+design and a stop.** Firmware **0.9.0**.
+
+Three builds for the owner to compare, from `firmware/`:
+
+    cargo build --release                          # frac_bits 4 - 16-refresh cycle
+    cargo build --release --features frac-bits-3   # 8-refresh cycle
+    cargo build --release --features frac-bits-2   # 4-refresh cycle
+
+and the pattern to look at them with, with the device dither **on**:
+
+    screeny pattern dark --addr 192.168.7.221 --duration 60
+
+Every one of the three already has step 1 (bit-reversed phases), step 4a (rounding
+with the dither off) and, at `frac_bits` 4 only, step 4b (the dead zone). So the
+question the three builds ask is narrow: *is 77 Hz enough, or does the whole cycle
+need to be shorter?* If `frac_bits` 4 is steady, ship it - it is the one with the
+most shades (229 against 217 and 182).
+
+**What to look for on the `dark` pattern**, in order: does any step blink, breathe or
+shimmer from two feet; how many of the sixteen steps can be told apart (compare
+against `output.panel: bit_planes`, where it should be far fewer); and does the warm
+half shimmer *in colour* while the grey half below is steady - that would be a
+per-channel fault rather than a per-pixel one, and would want its own card.
+
+`screeny stats` before and after on a 30 fps stream is the orchestrator's; nothing in
+stage A changes the frame path, the swap rate or the DMA stream, so refresh rate, fps
+and drops should be identical to 0.8.2. `tools/fw-size.sh` on this build: `.data`
+60,108, `.bss` 110,704, `.stack` **25,792** (floor 24,576) - unchanged, the arithmetic
+move added no statics.
+
+**Not done, deliberately:**
+
+- `crates/panel` and `docs/design/generative-art-brief.md` 2.1/2.1.1 - card 188 is in
+  that crate. The section above says exactly what has to change to, and it depends on
+  which of the three builds the owner picks.
+- Stage B itself. Card **249** is in `backlog/`: find 4-8 KB of DRAM.
+- `firmware/`'s own `cargo clippy` has seven pre-existing warnings (`build.rs`,
+  `http.rs`, `ota.rs`, `receiver.rs`, `screens.rs`, `store.rs`); none is in the code
+  this card touched, and the project's clippy rule is about the host workspace, which
+  **is** clean.
+
+**Nothing in the wire protocol moved**, and nothing needed to.
