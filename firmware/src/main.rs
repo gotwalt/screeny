@@ -637,6 +637,11 @@ async fn telemetry_task() {
     let mut tick = 0u32;
     loop {
         Timer::after(Duration::from_secs(PERIOD_S as u64)).await;
+        // **Card 241b: this is the device's liveness proof.** One feed per
+        // five seconds, from a task that does nothing else load-bearing, so
+        // "the watchdog was fed" means exactly "core 0's executor ran
+        // something" and nothing more. `ota::LIVENESS_WDT_S` is four of these.
+        ota::feed();
         tick += 1;
         if tick == STACK_TICK
             && let Some(hw) = stack_probe::CORE0.high_water()
@@ -719,19 +724,22 @@ async fn main(spawner: Spawner) {
     let crashed = panic::boot();
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
-    // Card 241, and **the first thing after `esp_hal::init`** on purpose.
-    // `esp_hal::init` has just disabled every watchdog this chip has
-    // (`rtc.swd`, `rtc.rwdt` and both timer-group WDTs), so from here until
-    // something arms one there is nothing at all that would catch a hang. If
-    // RTC memory says the boot starting now is a firmware update's trial, arm
-    // the RTC watchdog before the heap, the store, the panel or the radio get
-    // a chance to wedge: that is the one failure the bootloader's rollback
-    // cannot see, because a device that never resets never asks it anything.
-    // Everything else about the trial needs `otadata` and waits for the store.
-    ota::hold_watchdog(esp_hal::rtc_cntl::Rtc::new(peripherals.RTC_TIMER)).await;
-    if panic::ota_trial_armed() {
-        ota::arm_watchdog().await;
-    }
+    // **Card 241b, and the first thing after `esp_hal::init`.** That call has
+    // just disabled every watchdog this chip has - `rtc.swd`, `rtc.rwdt` and
+    // both timer-group WDTs - so from here until something arms one there is
+    // nothing at all that would catch a hang, and this device has now gone
+    // silently quiet twice (cards 234 and 241b) with no panic, no reset and no
+    // evidence. So core 0 gets a liveness watchdog on **every** boot, fed by
+    // the telemetry task's five-second loop, and a device that stops
+    // scheduling tasks reboots in twenty seconds and says so in its first
+    // line instead of waiting for somebody to walk over and unplug it.
+    //
+    // Synchronous, and deliberately so: card 241 arm`ed` an RTC watchdog here
+    // through an `async fn` that `await`ed a mutex **before `esp_rtos::start`
+    // had run**, and held an `esp_hal::rtc_cntl::Rtc` in a static for the life
+    // of the device. `Wdt::<TIMG0>::new()` needs no peripheral token and no
+    // storage, so none of that is necessary - see this card's Log.
+    ota::arm_liveness_watchdog();
 
     // 64 KB of reclaimed ROM DRAM, which lives above `_stack_start_cpu0` and
     // costs nothing, plus a smaller slice of ordinary `.bss`.
@@ -786,19 +794,11 @@ async fn main(spawner: Spawner) {
     // esp-storage's own frames.
     http::read_fw_health().await;
     // Card 241: `read_fw_health` has just classified this boot from `otadata`
-    // and the MMU, which is the authoritative answer - RTC memory only ever
-    // said "arm the watchdog, just in case". If this is not a trial after all
-    // (the commonest reason being that the bootloader already rolled the
-    // update back on the reset that got us here), turn it off now, a second
-    // into a boot that has 239 to spare.
-    // A power cycle between the activation and the trial boot zeroes RTC
-    // memory, so a boot can be a trial with the bit clear: arm it here too.
+    // and the MMU. Since 241b there is nothing to arm or disarm here - the
+    // liveness watchdog is already running and covers a trial that hangs far
+    // better than the trial-only one did (20 s against 240) - so all this is
+    // now is the answer to "does this boot need the confirm/revert task".
     let on_trial = ota::boot_class().on_trial();
-    if on_trial {
-        ota::arm_watchdog().await;
-    } else {
-        ota::disarm_watchdog().await;
-    }
     let boot_brightness = settings.brightness.min(BRIGHTNESS_CAP);
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
 
@@ -971,6 +971,11 @@ async fn main(spawner: Spawner) {
             Some(p) => (p.file(), p.line),
             None => ("?", 0),
         };
+        // Card 241b: **the one place the liveness watchdog must be turned
+        // off.** This branch parks the device on purpose, with no tasks and a
+        // message on the panel, and a watchdog would turn the crash-loop
+        // guard's deliberate stop into the boot loop it exists to end.
+        ota::stop_liveness_watchdog();
         let mut producer = producer;
         screens::crashed(producer.back(), file, line, crumb.panics);
         producer.publish();

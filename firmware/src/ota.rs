@@ -77,13 +77,11 @@ use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_storage::nor_flash::NorFlash as _;
 use esp_bootloader_esp_idf::ota::{Ota, OtaImageState};
 use esp_bootloader_esp_idf::partitions::{AppPartitionSubType, FlashStorage, PartitionEntry};
-use esp_hal::rtc_cntl::{Rtc, RwdtStage};
 use log::{info, warn};
 use screeny_device_api::reply::UpdateRecord;
 use screeny_device_api::{FirmwareError, FwSlot, FwState, RevertReason, UpdateOutcome};
@@ -310,6 +308,11 @@ fn stage_sector(
     data: &[u8],
     timing: &mut Timing,
 ) -> Result<(), FirmwareError> {
+    // Card 241b: one feed per sector. The five-second telemetry feeder is the
+    // one that means "core 0 is alive"; this one is only here so that a
+    // pathologically slow erase - the data sheet allows 400 ms where the bench
+    // measures 40 - can never be mistaken for a wedge.
+    feed();
     let t0 = Instant::now();
     let mut region = entry.as_flash_region(flash);
 
@@ -371,6 +374,7 @@ fn read_back(
     buf: &mut [u8],
 ) -> Result<(), FirmwareError> {
     use embedded_storage::nor_flash::ReadNorFlash as _;
+    feed();
     let mut region = entry.as_flash_region(flash);
     let mut nor = region.as_nor_flash().map_err(|e| {
         warn!("ota: the staged slot has no NorFlash view: {:?}", e);
@@ -476,6 +480,11 @@ impl Upload {
         // core-1 stall around each erase costs nothing. Put back on the way
         // out, whatever it was.
         let dither_was = crate::DITHER_ON.swap(false, Ordering::Relaxed);
+        // Card 241b. If the chip resets between here and `Drop` - a watchdog, a
+        // brownout, a panic - the next boot says **that it happened during a
+        // firmware upload** instead of leaving somebody to work it out from a
+        // serial log they were not attached to.
+        crate::panic::set_in_upload(true);
 
         info!(
             "ota: upload started - staging into {:#x} ({} KB slot), content-length {:?}",
@@ -578,6 +587,10 @@ impl Upload {
         self.written += self.fill as u32;
         self.offset += SECTOR as u32;
         self.fill = 0;
+        // Card 241b: how far this upload has got, in RTC memory, so that a
+        // reset in the middle of one is reported at the next boot as a place
+        // and not as a vague duration.
+        crate::panic::note_upload_sector(self.offset / SECTOR as u32);
         if let Some(total) = self.expected.filter(|t| *t > 0) {
             let pct = ((u64::from(self.written) * 100) / u64::from(total)).min(100) as u8;
             PERCENT.store(pct, Ordering::Relaxed);
@@ -710,6 +723,7 @@ impl Upload {
 
 impl Drop for Upload {
     fn drop(&mut self) {
+        crate::panic::set_in_upload(false);
         crate::DITHER_ON.store(self.dither_was, Ordering::Relaxed);
         PERCENT.store(NO_PERCENT, Ordering::Relaxed);
         // The panel is the stream's again from the frame task's next tick,
@@ -737,22 +751,21 @@ impl Drop for Upload {
 // v6.1 with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` (card 242,
 // `firmware/bootloader/README.md`). The card's Log quotes the lines.
 
-/// How long the RTC watchdog gives a trial boot that has stopped answering.
+/// How long core 0 may go without proving it is alive before the chip resets.
 ///
-/// It exists for one failure and one only: an image that **hangs** - before
-/// `main`, or with interrupts off - and therefore never resets, so the
-/// bootloader's abort loop is never reached and the app-side deadline never
-/// runs. `esp_hal::init` disables every watchdog this chip has
-/// (`esp-hal-1.2.2/src/lib.rs` lines 768-778), so without this there is nothing
-/// armed on the device at all.
+/// Four missed telemetry ticks. The feeder is [`crate::telemetry_task`]'s five
+/// second loop, so a healthy device feeds this four times over; the longest
+/// window in which core 0 legitimately cannot run a task is one ROM flash erase
+/// with interrupts masked, which the bench measured at 40 ms and whose data
+/// sheet worst case is 400 ms - fifty times under the margin.
 ///
-/// Above [`screeny_otastate::REVERT_AT_MS`] on purpose, and by a minute: a
-/// healthy trial disables it at its confirm and an unhealthy one resets itself
-/// at 180 s, so the watchdog should never be what fires. When it does, it is
-/// the last resort and the reset it causes is the one the bootloader turns into
-/// a rollback. It is armed only on a trial boot and is **never fed**, so a
-/// confirmed device carries no watchdog it has to keep alive.
-const TRIAL_WDT_S: u64 = 240;
+/// Short enough that a wedged device is back on the network inside half a
+/// minute, which is the point: **the failure this exists for is a device that
+/// goes quiet and stays quiet until somebody unplugs it.** It also replaces
+/// card 241's trial-only 240 s watchdog outright - an image on trial that hangs
+/// now resets in 20 s instead of 240, and the bootloader rolls it back on that
+/// reset exactly as before.
+const LIVENESS_WDT_S: u64 = 20;
 
 /// How long after the reply the activation waits before touching `otadata`.
 ///
@@ -810,14 +823,6 @@ const SLOT_NONE: u8 = 0xff;
 /// which is the same shape (and the same type) as `http::CTX`.
 static UPDATE_VERSION: embassy_sync::once_lock::OnceLock<screeny_device_api::text::FwText> =
     embassy_sync::once_lock::OnceLock::new();
-
-/// The RTC watchdog, once it has been armed.
-///
-/// `esp_hal`'s `Rwdt` is a zero-sized handle to a global register block that
-/// only `Rtc` can hand out, so the `Rtc` is kept here rather than reconstructed
-/// where it is turned off. `None` on every boot that is not a trial, and on
-/// those the peripheral is never even taken.
-static WDT: Mutex<CriticalSectionRawMutex, Option<Rtc<'static>>> = Mutex::new(None);
 
 /// What kind of boot this is.
 #[must_use]
@@ -1062,10 +1067,6 @@ pub fn note_boot(
         ),
     }
 
-    // RTC memory's copy of "a trial is expected" has done its job - the
-    // watchdog is either armed or not by now - and it must not survive into a
-    // boot that is not one. `otadata` is the record from here on.
-    crate::panic::set_ota_trial(class.on_trial());
     state
 }
 
@@ -1073,67 +1074,75 @@ pub fn note_boot(
 // The watchdog
 // ---------------------------------------------------------------------------
 
-/// Take the RTC peripheral, without arming anything.
+/// Arm the core-0 liveness watchdog, and leave it armed for ever.
 ///
-/// Called from `main` on every boot, because the handle has to be somewhere
-/// [`arm_watchdog`] can reach and `esp_hal`'s `Rwdt` is a zero-sized token only
-/// `Rtc` can hand out. It costs a `Peripherals` field and nothing else: the
-/// watchdog `esp_hal::init` disabled stays disabled until somebody asks.
-pub async fn hold_watchdog(rtc: Rtc<'static>) {
-    *WDT.lock().await = Some(rtc);
-}
-
-/// Arm the RTC watchdog for [`TRIAL_WDT_S`].
+/// **Card 241b, after the bench found fw 0.7.0 wedging silently part way
+/// through an upload.** That is the second time this device has gone quiet with
+/// no panic, no reset and no evidence (card 234 was the first), and it is the
+/// one failure the owner's bar - "pretty crash proof" - does not tolerate: a
+/// panel that needs somebody to walk over and unplug it is worse than one that
+/// reboots and says why.
 ///
-/// Called **twice**, and both times matter:
+/// So this is not an OTA feature. It is the whole device's: **MWDT0 resets the
+/// chip if nothing on core 0's executor has run for [`LIVENESS_WDT_S`]**, and
+/// the next boot says `reset reason timer_wdt` in its first line and `"wdt"` in
+/// `GET /api/v1/status`. It supersedes card 241's trial-only RTC watchdog,
+/// which was armed for 240 s and never fed: this one is twelve times quicker
+/// and covers every boot, trial or not.
 ///
-/// 1. From `main` immediately after `esp_hal::init`, when RTC memory says the
-///    boot that is starting is a trial. That is early enough to cover
-///    `esp_hal::init`'s own work, the heap, the store and the panel - i.e.
-///    everything a newly written image could wedge in before it could read
-///    `otadata` and find out what it was.
-/// 2. From `main` again once `otadata` has been read, if that says this is a
-///    trial after all. RTC memory is zeroed by a power cycle, so a device
-///    unplugged between the activation and the trial boot arrives here with the
-///    bit clear and the trial still very much on; this is the second chance,
-///    and it covers everything after the store comes up.
+/// The timer-group watchdog rather than the RTC one, for a reason that matters
+/// here: `Wdt::<TIMG0>::new()` takes **no peripheral token** (it is what
+/// `esp_hal::init` itself uses to disable them), so nothing has to be held in a
+/// static, nothing is moved out of `Peripherals`, and [`feed`] is a free
+/// synchronous call from any task. Card 241's version held an
+/// `esp_hal::rtc_cntl::Rtc` in a `Mutex` and `await`ed it **before
+/// `esp_rtos::start`** - see this card's Log for why that is gone.
 ///
-/// Arming twice is harmless - it is two register writes - and the log line
-/// only appears the first time, because the second is the uninteresting one.
-pub async fn arm_watchdog() {
-    let mut guard = WDT.lock().await;
-    let Some(rtc) = guard.as_mut() else {
-        warn!("ota: no RTC handle - this trial has no watchdog");
-        return;
-    };
-    let first = !ARMED.swap(true, Ordering::Relaxed);
-    rtc.rwdt.set_timeout(
-        RwdtStage::Stage0,
-        esp_hal::time::Duration::from_secs(TRIAL_WDT_S),
+/// Called from `main` immediately after `esp_hal::init`, which has just
+/// disabled every watchdog this chip has. Synchronous, so it adds no
+/// suspension point to a boot path that has no executor yet.
+pub fn arm_liveness_watchdog() {
+    let mut wdt = esp_hal::timer::timg::Wdt::<esp_hal::peripherals::TIMG0<'static>>::new();
+    wdt.set_timeout(
+        esp_hal::timer::timg::MwdtStage::Stage0,
+        esp_hal::time::Duration::from_secs(LIVENESS_WDT_S),
     );
-    rtc.rwdt.enable();
-    if first {
-        warn!(
-            "ota: trial boot - RTC watchdog armed for {} s (it is never fed; confirming turns it off)",
-            TRIAL_WDT_S
-        );
-    }
+    wdt.enable();
+    WDT_ON.store(true, Ordering::Relaxed);
 }
 
-/// Turn it off again: this boot is not a trial, or the trial has confirmed.
-pub async fn disarm_watchdog() {
-    if !ARMED.swap(false, Ordering::Relaxed) {
+/// Tell the watchdog core 0 is still running.
+///
+/// Called from [`crate::telemetry_task`]'s five-second loop - one feeder, one
+/// meaning: **the executor scheduled a task within the last
+/// [`LIVENESS_WDT_S`]** - and again from the staging loop, once per sector, so
+/// that a pathologically slow erase can never trip it.
+///
+/// Synchronous, takes no lock and allocates nothing: `Wdt` is a zero-sized
+/// marker and `feed` is three register writes, which is what makes it safe to
+/// call from inside the flash path.
+pub fn feed() {
+    if !WDT_ON.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(rtc) = WDT.lock().await.as_mut() {
-        rtc.rwdt.disable();
-        info!("ota: RTC watchdog disabled");
-    }
+    esp_hal::timer::timg::Wdt::<esp_hal::peripherals::TIMG0<'static>>::new().feed();
 }
 
-/// Whether [`arm_watchdog`] has run since boot, so that arming twice says so
-/// once and disarming an unarmed watchdog says nothing at all.
-static ARMED: AtomicBool = AtomicBool::new(false);
+/// Stop it. **One caller only**: card 243's crashed screen, which deliberately
+/// parks the device with no tasks running and a message on the panel. A
+/// watchdog would turn that into the boot loop the crash-loop guard exists to
+/// end.
+pub fn stop_liveness_watchdog() {
+    if !WDT_ON.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    esp_hal::timer::timg::Wdt::<esp_hal::peripherals::TIMG0<'static>>::new().disable();
+    warn!("ota: liveness watchdog disabled - this device is parked on purpose");
+}
+
+/// Whether [`arm_liveness_watchdog`] has run. One byte, and it exists so that
+/// [`feed`] is a no-op in a build or a boot that never armed one.
+static WDT_ON: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Confirm and revert: the image on trial decides its own fate
@@ -1231,8 +1240,6 @@ async fn confirm(h: &Health) -> bool {
     }
     CONFIRMED.store(true, Ordering::Relaxed);
     crate::http::set_fw_state(FwState::Valid);
-    crate::panic::set_ota_trial(false);
-    disarm_watchdog().await;
     info!(
         "ota: CONFIRMED at {} s - fw {} is now this device's firmware (otadata says valid). ip {}, http requests {}, swaps {}.",
         h.uptime_ms / 1000,
@@ -1268,7 +1275,6 @@ async fn revert(h: &Health) -> ! {
             }
         }
     }
-    crate::panic::set_ota_trial(false);
     // Long enough for the two lines above to leave the blocking UART, and for
     // any sector erase to finish - the same reasoning as the panic path's
     // settle, at a point where there is no hurry at all.
@@ -1347,9 +1353,6 @@ pub async fn activate_task() {
         return;
     }
 
-    // RTC memory, so that the next boot can arm the watchdog before it is able
-    // to read a single byte of flash.
-    crate::panic::set_ota_trial(true);
     info!(
         "ota: ACTIVATED {:#x} - restarting into it on trial. If it does not prove itself within {} s, or resets before it does, the bootloader brings fw {} back.",
         slot.offset(),

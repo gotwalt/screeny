@@ -685,6 +685,10 @@ fn get_panic() -> Reply {
         // changes exactly once in the life of a boot - when an image on trial
         // confirms itself.
         update: crate::ota::update_record(),
+        // Card 241b: the same register `status` reports, on the route that is
+        // about why this device is running what it is running. `wdt` here is
+        // the liveness watchdog having fired.
+        last_reset: Some(crate::panic::reset_reason()),
     }))
 }
 
