@@ -100,7 +100,7 @@ pub fn settle(tau: f32, amplitude: f32) -> f32 {
 pub const DEPTH: f32 = 2.6;
 
 /// The geometry of one module mid-flip, for a given flap angle.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Fall {
     /// Half the module's height: how far the flap reaches from the axle.
     pub reach: f32,

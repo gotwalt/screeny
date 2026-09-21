@@ -365,6 +365,50 @@ as it turns out of the light; and the card's shadow, which runs 1-2 LEDs *ahead*
 of it down the plate below because the light sits below the eye - put the light
 above and the shadow hides under the card and buys nothing.
 
+**Every position rotates** (card 184). The owner, with the new faces on the
+panel: "let's do an entire rotation of every position on minute change. I think
+the fun of a flipboard is that it flips." So on the minute all four modules run
+their whole drum and land on the new time, the ones whose numeral did not
+change too.
+
+*One drum, eleven cards* - blank, then 0-9 - on every module, because a real
+board's charm is that they are identical parts turning at one rate. A drum only
+ever advances one card, so **a full rotation ending on the new numeral is
+eleven cards plus the distance to it**, eleven to twenty-one; there is no way
+to give every module the same card count without letting one skip, and skipping
+is the one thing a flap cannot do. The modules therefore *stop* at different
+moments - which is why the board resolves position by position, exactly as a
+real one does.
+
+*A module is a plan*, not a state machine: the card it started from and a run
+of cards, each with the moment it is let go and the length of its fall, worked
+out once when the minute turns and only read after that. Several cards are in
+the air at once - the next is released a period after the last, not when it
+lands - and they are drawn front to back in release order, because a card let
+go earlier is further round its swing and nearer the eye. It is also what keeps
+a pinned time byte-identical: the picture at `t` is a function of the plan, not
+of how many frames have been drawn.
+
+*The timing.* A spinning card falls in 0.1 s, three frames at 30 fps, which is
+the floor at which a fall still reads as a fall. `spin` says what a **full
+revolution** takes, first card released to last card settled, and the period is
+solved from it; the default 1.15 s was chosen by rendering every frame at 0.8,
+1.15 and 1.7 and looking - 0.8 is flicker rather than a drum, 1.7 is a slow
+counter. An ordinary minute is over in 1.37 s and the worst (09:59 -> 10:00,
+the minutes' tens going 5 to 0 the long way) in 1.76 s. The four modules let go
+35-110 ms apart and turn a per cent or two differently, fixed per module, left
+to right; the last three cards of each run ease back to the slow `flip`, so the
+drum arrives at a walk instead of stopping dead. `flips` picks "through the
+numerals between" or "changed cards only" instead, and both are exactly what
+card 155 drew - no stagger, no overlap, no easing.
+
+*It is still a night clock.* Resting APL **1.033%**, rotation mean **1.211%**,
+peak **1.518%**, whole minute **1.037%** (the flip it replaces peaked at
+1.23%). On the wire a rotation's busiest frame is **605 bytes of 1464** and 25
+colours, `pal8-lz, exact`, still one ramp plus black. The lit edge is damped
+with speed and full again for the landing - worth six per cent of the peak APL,
+which is nothing, and a great deal of flash, which is the point.
+
 **The fall is gravity.** `theta'' = k sin theta` with the drum's own speed as
 the initial condition (`flap::PUSH`), integrated once and inverted into a table.
 At the default `flip` of 0.2 s the six frames the panel gets are 0, 13, 30, 52,
@@ -379,8 +423,8 @@ picked in OKLCH and normalised to a ray, and a channel that would land under
 sRGB 7 is turned off - OKLCH's gamut search stops just inside the boundary and
 leaves a thousandth of green behind at red, which is a second die lit in every
 numeral pixel. At the default hue the panel gets `(x, 0, 0)` and nothing else.
-Resting APL is **0.95%**, peaking at **1.23%** with four modules mid-flip;
-frames are 460-620 bytes, `pal8-lz`, exact.
+Resting APL is **1.03%**, peaking at **1.52%** with four modules mid-rotation;
+frames are 367-605 bytes, `pal8-lz`, exact.
 
 ### Snapshots
 
@@ -389,18 +433,38 @@ frames are 460-620 bytes, `pal8-lz`, exact.
 cargo run --release -p screeny-art -- snapshot vesta --time 21:12 --out settled.png
 # the same in another face (the `font` stops are the table below, in order)
 cargo run --release -p screeny-art -- snapshot vesta --time 04:56 --set font=3 --out spleen.png
-# the turn of four modules at once, four frames in: 09:59:59 -> 10:00:00
-cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1333 --out flipping.png
+# four modules mid-rotation, eight frames in: 09:59:59 -> 10:00:00
+cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.2667 --out spinning.png
+# one card falling, the old behaviour, four frames in
+cargo run --release -p screeny-art -- snapshot vesta --time 09:59:59 --at 1.1333 --set flips=2 --out flipping.png
 ```
 
 With `--time 09:59:59` the snapshot steps at 30 fps from 09:59:59, so 10:00:00
-lands exactly on frame 30 and a card is `n` frames into its fall at
-`--at (30 + n) / 30`. At the default `flip` of 0.2 that is six frames - the
-whole flip is `--at 1.0` to `1.2`, at 0, 13, 30, 52, 84, 127 and 180 degrees.
-`--set flip=0.6` stretches it to eighteen, which is what makes a five-angle
-study possible at all:
+lands exactly on frame 30 and frame `n` of what follows is `--at (30 + n) / 30`.
 
-| flap at | `--at` (all with `--time 09:59:59 --set flip=0.6`) | actually |
+**The rotation**, at the default `spin` of 1.15 s and pinned to that minute:
+
+| | `--at` | frame |
+|---|---|---|
+| the last settled frame | `1.0` | +0 |
+| the board starts to move | `1.0667` | +2 |
+| all four turning at once | `1.2667` | +8 |
+| the minutes' tens turning alone | `2.6` | +48 |
+| everything settled on 10:00 | `2.8` | +54 |
+
+The first card is let go on the minute itself, but it takes a frame or two to
+fall far enough to uncover anything, which is why the board starts to move at
++2 and not at +1.
+
+A contact strip of every frame is what the timing was chosen from; the script
+that renders one is in the card's log (card 184).
+
+**One card falling**, which is `--set flips=2` now that the rotation is the
+default: at the default `flip` of 0.2 that is six frames - `--at 1.0` to `1.2`,
+at 0, 13, 30, 52, 84, 127 and 180 degrees. `--set flip=0.6` stretches it to
+eighteen, which is what makes a five-angle study possible at all:
+
+| flap at | `--at` (all with `--time 09:59:59 --set flips=2 --set flip=0.6`) | actually |
 |---|---|---|
 | ~30 deg | `--at 1.2` | 29.7 |
 | ~60 deg | `--at 1.3333` | 61.4 |
@@ -409,7 +473,7 @@ study possible at all:
 | ~150 deg | `--at 1.5333` | 144.3 |
 
 `the_snapshot_recipes_in_the_readme_land_where_they_say` drives a module
-through the patch's own `step` and checks every row of that table, including
+through the patch's own `plan` and checks every row of that table, including
 which frame the minute turns on. It was written against frame 31 first, and
 the PNGs from that mistake were a perfectly good study of the wrong angles.
 
@@ -422,7 +486,8 @@ needs; no `--seed`, because there is no randomness in the patch at all.
 an sRGB code, default 120 - card 102's sparkle floor is 38), `hue` (0 is pure
 red), `size`, `weight` (stroke in LEDs - the `Vesta` face only, the others have
 the weight they were cut at), `seam`, `flip` (a card's fall in seconds),
-`cascade` (flip through the numerals between, as a real module does - on),
+`flips` (what the minute does: **full rotation**, through the numerals
+between, changed cards only - below), `spin` (what a full rotation takes),
 `tilt`, `fill` (halftone, off; 0.5 halves the light without shrinking
 anything), `pace`, `blink` (off: nothing in a bedroom should blink), `hours24`,
 `zero` (off: the hours' tens is a blank card, below), `offset`.
