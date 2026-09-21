@@ -578,7 +578,7 @@ letters without touching a caller.
 
 Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
 3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards
-168, 177 and 122.
+168, 177, 122 and 123.
 
 - **`birds` goes down to 3** (card 122, the owner: "too many birds, too far
   away - the resolution of the screen means that a lot of the detail gets
@@ -674,12 +674,42 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   flock apart. A bird avoiding one may turn up to 2.2x harder
   than it cruises, as a real one does - without that the avoidance force is
   simply clipped away by the cruise turn limit and birds fly straight through.
-- **Drawing a bird with almost nothing**: a body dash and two wing strokes
-  whose dihedral beats, down quicker than up, each bird on its own phase, with
-  a glide when it descends. Strokes go into a supersampled coverage buffer by
-  bounding box, so nothing is tested against every sample. **Depth reads as
-  contrast far more than as size** at 64x32: 16 m of air halves how much a bird
-  stands out, and that is what stops fifty of them reading as fog.
+- **Drawing a bird with almost nothing**: at the far side of the flock a bird
+  is a body dash and two wing strokes whose dihedral beats, one half of the
+  cycle quicker than the other, each bird on its own phase, with a glide when
+  it descends. Strokes go into a supersampled coverage buffer by bounding box,
+  so nothing is tested against every sample. **Depth reads as contrast far more
+  than as size** at 64x32: 16 m of air halves how much a bird stands out, and
+  that is what stops fifty of them reading as fog.
+- **A wing with a wrist** (`bird.rs`, card 123; the owner, after card 122 let
+  him draw a handful of big ones: "the expanded bird shapes don't have natural
+  looking wings"). Each wing is two segments. The hand wing beats 1.3x further
+  than the inner one and **lags it by 0.55 rad of phase** - the wave that runs
+  out along a real wing - and it **folds back and draws in through the quick
+  half of the beat**, so the drawn span is about a quarter narrower going up
+  than it is coming down (12.3 LEDs against 16.0, measured in
+  `the_wing_is_narrower_going_up_than_coming_down`). The fold is driven by the
+  *derivative* of the beat, not by the wing's height: height alone folds and
+  unfolds symmetrically, and it is the asymmetry that reads as flapping rather
+  than rocking. Each wing also carries **chord** - a filled surface from a
+  leading-edge spar back to a trailing edge, broad at the root and nothing at
+  the tip - so it is an area and not a line. A tapered body (chest, neck, tail
+  boom) and a small **tail fan** that spreads with `glide` and `|roll|` finish
+  it. All of it is built in the bird's own frame and projected, so a wing the
+  view has turned edge-on thins to nothing and a banking one is at its
+  broadest, with no special case for either, and the underside is drawn a
+  sixth brighter than the top (inverted for the dusk scheme) so a bird rolling
+  through a turn flashes.
+- **Level of detail is decided by projected span, never by `size`.** Below 5
+  LEDs across the chord and the tail fan are zero and what is left is exactly
+  the skeleton above, which is what the far side of the default 55-bird flock
+  is; the surface fades in over the next four LEDs, so a bird coming towards
+  the camera grows a wing rather than popping one on. That is why card 123
+  barely moves the default picture while giving `size` 2.5-3 a real bird.
+- **The wing wanted one new primitive**: `Coverage::triangle`, an anti-aliased
+  filled triangle whose coverage is the signed distance to its nearest edge, so
+  its edges match the strokes' and a degenerate one - a wing edge-on, or one
+  the level of detail has taken the chord off - draws nothing at all.
 - **The frame is indexed and exact**, through a **two-dimensional palette**: 14
   sky bands x 6 ink levels - or x 12 when the backdrop is not the sky, where
   every band is the same black and so costs nothing, and those levels are
@@ -714,6 +744,13 @@ cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 
 # default seat, `size` does the enlarging.
 cargo run --release -p screeny-art -- snapshot flock --seed 11 --at 75 --warmup 75 \
   --set birds=6 --set size=2.5 --out big-birds.png
+# one wingbeat of a big bird (card 123), frame by frame: --at and --warmup step
+# together by 1/30 s. Seed 7 has a bird beating across the panel around t = 44,
+# and gliding at t = 58.
+cargo run --release -p screeny-art -- snapshot flock --seed 7 --at 44.0000 --warmup 44.0000 \
+  --set birds=6 --set size=2.5 --out flap-00.png
+cargo run --release -p screeny-art -- snapshot flock --seed 7 --at 44.0333 --warmup 44.0333 \
+  --set birds=6 --set size=2.5 --out flap-01.png
 # a dive and its recovery (card 177), with the sky, with only a horizon line,
 # and on black. `--at` is wall-clock seconds and `pace` is 0.7, so this is the
 # surge at simulated t = 45 s. Step --at by 2 for a strip of ten.

@@ -13,6 +13,13 @@
 //! coverage buffer, so a distant bird fades in coverage instead of popping
 //! between LEDs, and nothing is tested against every sample.
 //!
+//! **Drawn big it is more than that** ([`bird`], card 123): a wing with a
+//! wrist in it, carrying chord, over a tapered body with a tail that fans. How
+//! much of that a bird gets is decided by its *projected span* and never by
+//! `size` - see [`AREA`] - so the far side of a default flock is still the two
+//! LEDs above, and only the birds that are big enough for it to read are given
+//! a surface.
+//!
 //! **The frame is indexed and exact.** Its palette is two-dimensional: a sky
 //! band (where the view ray points, plus the sun's glow) crossed with an ink
 //! level (how much bird is over it). Both are quantised through the ordered
@@ -20,6 +27,7 @@
 //! frame of at most [`BANDS`] x [`INK`] colours. Nothing here is a continuous
 //! gradient the codec has to guess at.
 
+pub(crate) mod bird;
 pub(crate) mod sim;
 
 use crate::color::{oklch, smoothstep, Rgb};
@@ -316,6 +324,54 @@ impl Coverage {
         }
     }
 
+    /// An anti-aliased filled triangle, laid over what is already there.
+    ///
+    /// A wing's surface, which a stroke cannot be: a stroke is one width all
+    /// the way along, and a wing is broad at the root and nothing at all at
+    /// the tip. Coverage comes from the signed distance to the nearest edge,
+    /// so the edges anti-alias exactly as the strokes' do and a wing that the
+    /// view has turned edge-on thins away instead of flickering.
+    fn triangle(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), ink: f32) {
+        let ss = self.ss as f32;
+        let aa = 0.5 / ss;
+        // Twice the signed area: which way round the corners are given, and
+        // whether there is a triangle here at all. A wing seen exactly
+        // edge-on, or one whose chord the level of detail has taken to zero,
+        // is a line and has nothing to fill.
+        let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+        if area.abs() < 1e-6 {
+            return;
+        }
+        let wind = area.signum();
+        let (min_x, max_x) = (a.0.min(b.0).min(c.0), a.0.max(b.0).max(c.0));
+        let (min_y, max_y) = (a.1.min(b.1).min(c.1), a.1.max(b.1).max(c.1));
+        let lo_x = (((min_x - aa) * ss).floor().max(0.0)) as usize;
+        let hi_x = (((max_x + aa) * ss).ceil().max(0.0) as usize).min(self.w);
+        let lo_y = (((min_y - aa) * ss).floor().max(0.0)) as usize;
+        let hi_y = (((max_y + aa) * ss).ceil().max(0.0) as usize).min(self.h);
+        if lo_x >= hi_x || lo_y >= hi_y {
+            return;
+        }
+        let edges = [(a, b), (b, c), (c, a)];
+        for j in lo_y..hi_y {
+            let py = (j as f32 + 0.5) / ss;
+            for i in lo_x..hi_x {
+                let px = (i as f32 + 0.5) / ss;
+                let mut d = f32::INFINITY;
+                for (p, q) in edges {
+                    let (ex, ey) = (q.0 - p.0, q.1 - p.1);
+                    let len = (ex * ex + ey * ey).sqrt().max(1e-6);
+                    d = d.min(wind * (ex * (py - p.1) - ey * (px - p.0)) / len);
+                }
+                let cover = smoothstep(-aa, aa, d);
+                if cover > 0.0 {
+                    let cell = &mut self.buf[j * self.w + i];
+                    *cell += (ink - *cell) * cover;
+                }
+            }
+        }
+    }
+
     /// Mean coverage over one panel pixel.
     fn pixel(&self, x: usize, y: usize) -> f32 {
         let mut sum = 0.0;
@@ -441,7 +497,7 @@ impl Patch for Flock {
         let mut cover = Coverage::new(ss);
         let dusk = which == 1;
         let size = ctx.get("size");
-        self.seen = draw_birds(&self.sim, &view, &mut cover, if dusk { HAZE_DUSK } else { HAZE_LIGHT }, size);
+        self.seen = draw_birds(&self.sim, &view, &mut cover, dusk, size);
 
         // Sky and ink are quantised separately, each through its own mask,
         // because the two axes are not the same problem. The sky
@@ -500,15 +556,35 @@ impl Patch for Flock {
     }
 }
 
-/// Every bird, far to near, as a body dash and two wing strokes. Returns how
-/// many landed on the panel.
+/// How wide a bird has to be drawn, in LEDs, before it is given a wing's
+/// surface rather than a wing's line, and how wide before it has all of it.
+///
+/// **The level of detail is decided by projected span, never by `size`.** At
+/// the default 55 birds the far side of the flock is two or three pixels
+/// across and the nearest is seven or eight: below [`AREA.0`] the model is
+/// exactly card 168's skeleton, so the picture the owner said "this is great"
+/// about is the picture that still comes out. The surface grows in over the
+/// next few LEDs rather than switching on, so a bird coming towards the camera
+/// does not pop.
+const AREA: (f32, f32) = (5.0, 9.0);
+
+/// How much brighter a wing's underside is than its top, as a fraction of the
+/// bird's ink. Small on purpose: it is there so a bird rolling through a turn
+/// flashes, not so the two sides read as different colours. Inverted for the
+/// dusk scheme, where more ink is *darker* and a lit underside means less of
+/// it.
+const UNDERSIDE: f32 = 0.16;
+
+/// Every bird, far to near: a tapered body, a tail that fans, and two wings
+/// with a wrist. Returns how many landed on the panel.
 ///
 /// `size` scales the wingspan the bird is *drawn* at - a longer lens, not a
 /// closer camera (card 122): it makes the same flight bigger on the panel
 /// without moving the camera into the flock, where card 169 found that
 /// scatters it. It touches nothing in `sim`, so the flight, the seat and the
 /// framing are exactly what they are at `size` 1.
-fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32, size: f32) -> usize {
+fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f32) -> usize {
+    let floor = if dusk { HAZE_DUSK } else { HAZE_LIGHT };
     let mut order: Vec<(f32, usize)> = Vec::with_capacity(sim.flock().len());
     for (i, b) in sim.flock().iter().enumerate() {
         if let Some((_, _, z)) = view.project(b.pos) {
@@ -521,34 +597,22 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32, size: f3
     let mut seen = 0;
     for (z, i) in order {
         let bird = sim.flock()[i];
-        let (right, up, fwd) = bird.frame();
-        let half = 0.5 * span_m;
 
-        // The wingbeat. Down is quicker than up, which is what tells the eye
-        // this is a wing and not an oscillation; a glide holds them level and
-        // very slightly raised.
-        let s = (bird.phase + 0.35 * bird.phase.sin()).sin();
-        let dihedral = 0.62 * (1.0 - 0.75 * bird.glide) * s + 0.10 * bird.glide;
-        let (sin_d, cos_d) = dihedral.sin_cos();
-        // Tips swept back: the only thing standing in for a wing's shape.
-        let sweep = fwd.scale(-0.24 * span_m);
-        let lift = up.scale(half * sin_d);
-        let out = right.scale(half * cos_d);
-        let shoulder = bird.pos.add(fwd.scale(0.04 * span_m));
-        let nose = bird.pos.add(fwd.scale(0.30 * span_m));
-        let tail = bird.pos.sub(fwd.scale(0.40 * span_m));
-
-        let Some(p_shoulder) = view.project(shoulder) else { continue };
-        let Some(p_nose) = view.project(nose) else { continue };
-        let Some(p_tail) = view.project(tail) else { continue };
-        let Some(p_left) = view.project(shoulder.sub(out).add(lift).add(sweep)) else { continue };
-        let Some(p_right) = view.project(shoulder.add(out).add(lift).add(sweep)) else { continue };
-
-        // How far the bird spans on the panel sets both its stroke weight and,
-        // with the haze, how much it stands out from the sky.
+        // How far the bird spans on the panel sets its stroke weights, how
+        // much of a wing's surface it is given, and - with the haze - how much
+        // it stands out from the sky.
         let span = span_m * view.focal / z;
-        let wing = (span * 0.13).clamp(0.38, 1.05);
+        let pose = bird::pose(bird, span_m, smoothstep(AREA.0, AREA.1, span));
+        // The body tapers: a chest, a thinner neck out to the beak, a thinner
+        // boom back to the tail. All three floor at about the same sub-pixel
+        // width, so a distant bird is the single even dash it was before.
         let body = (span * 0.17).clamp(0.42, 1.30);
+        let neck = (0.60 * body).max(0.40);
+        let boom = (0.42 * body).max(0.38);
+        let wing = (span * 0.13).clamp(0.38, 1.05);
+        // The spar is the leading edge, and a wing's leading edge is thicker
+        // at the shoulder than at the tip.
+        let hand = (0.70 * wing).max(0.36);
         // Depth reads as contrast: far birds are washed into the sky, and one
         // that comes closer than the camera's own personal space fades out
         // rather than filling the panel.
@@ -567,20 +631,54 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, floor: f32, size: f3
             continue;
         }
 
+        // On the panel, or near enough to it to be worth drawing. Measured at
+        // the chest, which is the one landmark a wing cannot swing away from.
+        let Some(chest) = view.project(pose.spine[1]) else { continue };
         let margin = span + 3.0;
-        if p_shoulder.0 < -margin
-            || p_shoulder.0 > W as f32 + margin
-            || p_shoulder.1 < -margin
-            || p_shoulder.1 > H as f32 + margin
+        if chest.0 < -margin
+            || chest.0 > W as f32 + margin
+            || chest.1 < -margin
+            || chest.1 > H as f32 + margin
         {
             continue;
         }
+
+        // A bird that has put any one of its corners behind the lens is one
+        // the camera is inside; it has already faded to nothing by then.
+        let flat = |p: V3| view.project(p).map(|(x, y, _)| (x, y));
+        let Some(spine) = pose.spine.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let Some(tail) = pose.tail.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else {
+            continue;
+        };
         seen += 1;
 
-        let flat = |p: (f32, f32, f32)| (p.0, p.1);
-        cover.stroke(flat(p_tail), flat(p_nose), body, ink);
-        cover.stroke(flat(p_shoulder), flat(p_left), wing, ink);
-        cover.stroke(flat(p_shoulder), flat(p_right), wing, ink);
+        // The surfaces first and the bones over them, so a wing's own
+        // leading edge is never dimmed by the membrane behind it.
+        cover.triangle(spine[2], tail[0], tail[1], ink);
+        let to_bird = pose.spine[1].sub(view.eye);
+        let away = 1.0 / to_bird.len().max(1e-6);
+        for w in &pose.wings {
+            let Some(spar) = w.spar.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else {
+                continue;
+            };
+            let Some(trail) = w.trail.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else {
+                continue;
+            };
+            // Which face of this wing the camera is on. Positive is the
+            // underside: the wing's own up points away from the eye.
+            let facing = (to_bird.dot(w.normal) * away).clamp(-1.0, 1.0);
+            let lit = (ink * (1.0 + if dusk { -UNDERSIDE } else { UNDERSIDE } * facing)).min(1.0);
+            cover.triangle(spar[0], spar[1], trail[1], lit);
+            cover.triangle(spar[0], trail[1], trail[0], lit);
+            cover.triangle(spar[1], spar[2], trail[1], lit);
+            cover.stroke(spar[0], spar[1], wing, lit);
+            cover.stroke(spar[1], spar[2], hand, lit);
+        }
+        cover.stroke(spine[3], spine[2], boom, ink);
+        cover.stroke(spine[2], spine[1], body, ink);
+        cover.stroke(spine[1], spine[0], neck, ink);
     }
     seen
 }
