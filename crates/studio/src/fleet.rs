@@ -156,8 +156,9 @@ async fn supervise(st: &AppState) {
                         .devices
                         .get(&device)
                         .and_then(|d| d.telemetry)
-                        .filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30);
-                    if heard.is_some_and(|t| t.brightness != applied) {
+                        .filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30)
+                        .map(|t| t.brightness);
+                    if brightness_drifted(applied, heard) {
                         jobs.push(BrightnessJob { device, level: want });
                     }
                 }
@@ -659,4 +660,34 @@ fn fail(backoff: &mut BTreeMap<String, (u32, u32)>, id: &str) {
     // generator this crate does not otherwise need.
     let jitter = u32::from(crate::player::unix_millis().is_multiple_of(2));
     entry.1 = entry.0 + jitter;
+}
+
+/// Whether the supervisor's re-assert loop should ask the device to set
+/// brightness again: telemetry disagrees with what it last *said it
+/// applied*. Deliberately never told `want` - the policy's own target -
+/// because a value the floor (card 136) raised above `want` is not a
+/// disagreement, and asking again would only ask for the same raise for
+/// ever. Only a `heard` that contradicts `applied` is a reason to retry.
+fn brightness_drifted(applied: u8, heard: Option<u8>) -> bool {
+    heard.is_some_and(|b| b != applied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::brightness_drifted;
+
+    /// Card 187's pin: a policy of 3 raised by the firmware's floor to 6
+    /// (card 136) must not retry for ever just because 6 != 3 - the loop
+    /// never sees `want` at all, only `applied` (6) against telemetry.
+    #[test]
+    fn a_value_the_floor_raised_does_not_retry_for_ever() {
+        // asked 3, applied 6, telemetry says 6: no drift, no new job.
+        assert!(!brightness_drifted(6, Some(6)));
+    }
+
+    #[test]
+    fn a_real_disagreement_still_retries() {
+        assert!(brightness_drifted(6, Some(5)), "telemetry says something else: retry");
+        assert!(!brightness_drifted(6, None), "no recent telemetry: nothing to compare against");
+    }
 }

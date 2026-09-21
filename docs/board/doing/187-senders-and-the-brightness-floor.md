@@ -116,3 +116,15 @@ control port as frame + 1) - copied `embed.rs`'s `free_port_pair` rather than sh
 it, since the two test binaries do not share code today and this is a two-line
 function. `cargo test -p screeny --test cli` and `cargo clippy -p screeny --all-targets`
 both clean.
+
+Finding 2's other half (`crates/studio/src/fleet.rs`, the re-assert loop in `supervise`,
+~line 154): confirmed already safe, as the card said - it compares telemetry against
+`applied` (what the device said it did), never `want`, so a raise does not retry for
+ever. Pinned it: pulled the one-line decision out to a private `brightness_drifted(applied,
+heard)` so it is unit-testable without the whole `AppState` machinery (the minimum the
+card allowed touching `fleet.rs` for beyond the test itself), and added `mod tests` with
+the card's own scenario (asked 3, applied 6, telemetry 6 -> no drift, no job) plus the
+one that must still retry (telemetry disagrees with `applied`). `cargo test -p
+screeny-studio --lib fleet::` and `cargo clippy -p screeny-studio --all-targets` both
+clean. Only change in `fleet.rs`: this extraction plus the test module - the HTTP status
+poller (card 199's) is untouched.
