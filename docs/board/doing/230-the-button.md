@@ -323,3 +323,18 @@ suite is going to follow.
 If step 6 does nothing at all, the first thing to check is the boot line in
 step 1 (is the task there?) and then whether the owner's press is reaching
 GPIO15 - `firmware/src/bin/gpio_probe.rs` is still the instrument for that.
+
+### review, on re-reading the diff: a wipe must interrupt a join
+
+Self-review found one real wart. `BUTTON_WIPE` was only awaited in
+`provision_task`'s **idle** arm, so a wipe raised while a join attempt was in
+flight would sit unheard for up to 15 s (`ATTEMPT_WAIT`) or 20 s (`DHCP_WAIT`)
+- and "it cannot get on the network" is exactly the moment somebody reaches for
+the button. A button that appears dead for twenty seconds is the version of
+this feature that gets reported as broken.
+
+So the signal now joins the two `select`s inside `run_join` and
+`await_address`, the same way a posted credential pair already interrupted
+them, and the machine's `StopJoin` is what abandons the attempt whose future
+has just been dropped. `.stack` is unchanged at 25,800 (the image grew 224
+bytes of flash).

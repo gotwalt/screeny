@@ -61,7 +61,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use edge_nal::UdpBind;
 use edge_nal_embassy::{Udp, UdpBuffers};
-use embassy_futures::select::{select, select4, Either, Either4};
+use embassy_futures::select::{select, select3, select4, Either, Either3, Either4};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -1000,14 +1000,23 @@ impl Driver {
         // A post that arrives mid-attempt is the user correcting a typo: the
         // machine turns it into `StopJoin` + a new `StartJoin`, so it has to be
         // able to interrupt this.
+        //
+        // **And so does the button** (card 230). A boot-time join is three
+        // attempts and 45 s, and "it cannot get on the network" is exactly the
+        // moment somebody reaches for the button: a wipe that waited for the
+        // attempt in flight would look like a button that does not work.
         let outcome = with_timeout(
             ATTEMPT_WAIT,
-            select(controller.connect_async(), crate::NEW_WIFI.wait()),
+            select3(
+                controller.connect_async(),
+                crate::NEW_WIFI.wait(),
+                BUTTON_WIPE.wait(),
+            ),
         )
         .await;
 
         let ev = match outcome {
-            Ok(Either::First(Ok(info))) => {
+            Ok(Either3::First(Ok(info))) => {
                 // The one line in this firmware that says a station SSID out
                 // loud, moved here from `station_loop` unchanged.
                 info!(
@@ -1021,7 +1030,7 @@ impl Driver {
                 }
                 return self.await_address(controller).await;
             }
-            Ok(Either::First(Err(ConnectionError::Failed(info)))) => {
+            Ok(Either3::First(Err(ConnectionError::Failed(info)))) => {
                 // Only the reason: it is the diagnostic, and it keeps one more
                 // copy of the SSID out of the bench log.
                 warn!("wifi: join failed: {:?}", info.reason);
@@ -1029,7 +1038,7 @@ impl Driver {
                     reason: fail_reason(info.reason),
                 }
             }
-            Ok(Either::First(Err(e))) => {
+            Ok(Either3::First(Err(e))) => {
                 warn!("wifi: join failed: {:?}", e);
                 Event::JoinFailed {
                     reason: FailReason::Other,
@@ -1038,7 +1047,12 @@ impl Driver {
             // The machine turns this into `StopJoin` + a new `StartJoin`
             // itself. Nothing else is fed in between - a `Tick` here could
             // expire the attempt first and start a different join.
-            Ok(Either::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Second(n)) => return self.posted(n, controller).await,
+            // The button, mid-attempt (card 230). Same rule as a post: one
+            // event, and the machine decides - it answers `StopJoin` first,
+            // which is what abandons the attempt whose future has just been
+            // dropped.
+            Ok(Either3::Third(())) => return self.wiped(controller).await,
             Err(_) => {
                 warn!("wifi: the radio did not answer the attempt in {} s", ATTEMPT_WAIT.as_secs());
                 let _ = controller.disconnect_async().await;
@@ -1057,11 +1071,17 @@ impl Driver {
         let stack = self.sta_stack;
         let got = with_timeout(
             DHCP_WAIT,
-            select(stack.wait_config_up(), crate::NEW_WIFI.wait()),
+            select3(
+                stack.wait_config_up(),
+                crate::NEW_WIFI.wait(),
+                // Twenty seconds of waiting for DHCP is the other place a
+                // wipe could sit unheard (card 230).
+                BUTTON_WIPE.wait(),
+            ),
         )
         .await;
         let ev = match got {
-            Ok(Either::First(())) => match stack.config_v4() {
+            Ok(Either3::First(())) => match stack.config_v4() {
                 Some(c) => {
                     self.link_was_up = true;
                     Event::Joined {
@@ -1072,7 +1092,8 @@ impl Driver {
                     reason: FailReason::Other,
                 },
             },
-            Ok(Either::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Third(())) => return self.wiped(controller).await,
             Err(_) => {
                 warn!("wifi: associated, but DHCP did not answer in {} s", DHCP_WAIT.as_secs());
                 Event::JoinFailed {
