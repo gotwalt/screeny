@@ -303,6 +303,35 @@ pub struct Bootstrap {
     /// Card 145: whether this process has a graphics adapter, so the page can
     /// say why the GPU patches are not available instead of showing black.
     pub gpu: screeny_art::GpuStatus,
+    /// Card 187: the brightness control's real stops - `0` for off, then one
+    /// value per output-enable slot the panel can light. Built from
+    /// [`brightness_stops`] so the page never writes the slot arithmetic
+    /// itself; a device's own cap trims the top of this list client-side,
+    /// since the stops here know nothing about any one panel.
+    pub brightness_stops: Vec<u8>,
+}
+
+/// The brightness control's real stops (card 187): `0`, then the lowest
+/// `u8` that lights each of [`screeny_panel::MAX_OE_SLOTS`] output-enable
+/// slots. The device dims by shortening that window, not by scaling pixel
+/// values (`screeny_receiver::clamp_brightness`, spec 6.3), so most of
+/// `0..=255` is a value that lands on a picture a neighbour already showed -
+/// `oe_slots(129) == oe_slots(130)`. A stepped control should only ever land
+/// on a value that changes something, and this is the one place that
+/// arithmetic is written for the host side (card 066 has the device's copy,
+/// `screeny_panel::oe_slots`).
+#[must_use]
+pub fn brightness_stops() -> Vec<u8> {
+    let mut stops = vec![0u8];
+    let mut last_slots = 0;
+    for level in 1..=u8::MAX {
+        let slots = screeny_panel::model::oe_slots(level);
+        if slots > last_slots {
+            stops.push(level);
+            last_slots = slots;
+        }
+    }
+    stops
 }
 
 /// Every patch this build offers, with its parameters.
@@ -334,4 +363,33 @@ pub fn patches(faults: bool) -> Vec<PatchInfo> {
                 .collect(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::brightness_stops;
+
+    /// One stop for off, one for each of `MAX_OE_SLOTS` (25) lit slots - the
+    /// full real resolution of the control, never 256.
+    #[test]
+    fn there_is_one_stop_per_real_picture() {
+        let stops = brightness_stops();
+        assert_eq!(stops.len(), 1 + screeny_panel::model::MAX_OE_SLOTS as usize, "{stops:?}");
+        assert_eq!(stops[0], 0, "off is always the first stop");
+        assert!(stops.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {stops:?}");
+        // The top stop is not necessarily 255: it is the *lowest* level that
+        // lights every slot, and 255 itself would only be one more value
+        // landing on the same picture (card 187's whole point).
+        let top = *stops.last().expect("at least one stop");
+        assert_eq!(screeny_panel::model::oe_slots(top), screeny_panel::model::MAX_OE_SLOTS);
+        assert!(screeny_panel::model::oe_slots(top - 1) < screeny_panel::model::MAX_OE_SLOTS, "not the lowest: {top}");
+    }
+
+    /// The lowest nonzero stop is the floor `screeny_receiver` raises a
+    /// nonzero request to (card 136) - pinned against the device's own
+    /// constant rather than written down again here.
+    #[test]
+    fn the_lowest_nonzero_stop_is_the_floor() {
+        assert_eq!(brightness_stops()[1], screeny_receiver::BRIGHTNESS_FLOOR);
+    }
 }

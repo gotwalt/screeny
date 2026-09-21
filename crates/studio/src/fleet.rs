@@ -156,8 +156,9 @@ async fn supervise(st: &AppState) {
                         .devices
                         .get(&device)
                         .and_then(|d| d.telemetry)
-                        .filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30);
-                    if heard.is_some_and(|t| t.brightness != applied) {
+                        .filter(|t| unix_now().saturating_sub(t.heard_unix) <= 30)
+                        .map(|t| t.brightness);
+                    if brightness_drifted(applied, heard) {
                         jobs.push(BrightnessJob { device, level: want });
                     }
                 }
@@ -588,6 +589,11 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default();
+                // Card 199: the one fact this read needs to carry past
+                // `heard_http`, which consumes `reply` - whether the panic
+                // route is worth a second connection is decided from the
+                // `boot_id` alone.
+                let boot_id = reply.boot_id;
                 if let Some(heard) = st.devices.heard_http(&id, reply) {
                     if announce {
                         eprintln!("studio: `{}` serves its own status API: firmware {fw}, slot {slot}", record.label());
@@ -609,6 +615,25 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     }
                 }
                 backoff.remove(&id);
+
+                // Card 199: the panic breadcrumb cannot change while the
+                // device runs (spec 8.6), so it is asked once per `boot_id`,
+                // on this same task, right after the status read whose
+                // `boot_id` is new - never on the poll, and never a second
+                // connection in flight: this `await` only starts once the one
+                // above has finished, so there is still exactly one HTTP
+                // connection to this device open at a time.
+                if st.devices.want_panic(&id, boot_id) {
+                    let panic_read =
+                        tokio::task::spawn_blocking(move || crate::devhttp::get_panic_counted(addr, crate::devhttp::TIMEOUT)).await;
+                    match panic_read {
+                        Ok((cost, out)) => {
+                            st.devices.metered_http(&id, cost.out, cost.inbound);
+                            st.devices.heard_panic(&id, boot_id, out.ok());
+                        }
+                        Err(_) => st.devices.heard_panic(&id, boot_id, None),
+                    }
+                }
             }
             Ok(Err(fault)) => {
                 // **Card 118: "absent" is a claim about the firmware** - this
@@ -659,4 +684,34 @@ fn fail(backoff: &mut BTreeMap<String, (u32, u32)>, id: &str) {
     // generator this crate does not otherwise need.
     let jitter = u32::from(crate::player::unix_millis().is_multiple_of(2));
     entry.1 = entry.0 + jitter;
+}
+
+/// Whether the supervisor's re-assert loop should ask the device to set
+/// brightness again: telemetry disagrees with what it last *said it
+/// applied*. Deliberately never told `want` - the policy's own target -
+/// because a value the floor (card 136) raised above `want` is not a
+/// disagreement, and asking again would only ask for the same raise for
+/// ever. Only a `heard` that contradicts `applied` is a reason to retry.
+fn brightness_drifted(applied: u8, heard: Option<u8>) -> bool {
+    heard.is_some_and(|b| b != applied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::brightness_drifted;
+
+    /// Card 187's pin: a policy of 3 raised by the firmware's floor to 6
+    /// (card 136) must not retry for ever just because 6 != 3 - the loop
+    /// never sees `want` at all, only `applied` (6) against telemetry.
+    #[test]
+    fn a_value_the_floor_raised_does_not_retry_for_ever() {
+        // asked 3, applied 6, telemetry says 6: no drift, no new job.
+        assert!(!brightness_drifted(6, Some(6)));
+    }
+
+    #[test]
+    fn a_real_disagreement_still_retries() {
+        assert!(brightness_drifted(6, Some(5)), "telemetry says something else: retry");
+        assert!(!brightness_drifted(6, None), "no recent telemetry: nothing to compare against");
+    }
 }

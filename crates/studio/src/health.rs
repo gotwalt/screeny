@@ -43,7 +43,7 @@ use axum::Json;
 use screeny_art::output::PanelStatus;
 use serde::Serialize;
 
-use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, Telem, Traffic};
+use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, PanicFacts, Telem, Traffic};
 
 use crate::player::{PlayerStatus, WATCHDOG};
 use crate::state::{unix_now, StoreHealth};
@@ -143,6 +143,13 @@ pub struct DeviceStatus {
     /// state file (`CLAUDE.md`).
     pub facts: Option<DeviceFacts>,
     pub facts_ago: Option<f64>,
+    /// Card 199: `GET /api/v1/panic`'s last answer - the panic breadcrumb, the
+    /// last firmware update's outcome, why this boot started. `None` on
+    /// firmware older than 0.5.2, which serves no such route, and that is
+    /// silence rather than a fault. Read once per `boot_id`, so this can be
+    /// older than `facts` by design and not only by poll timing.
+    pub panic: Option<PanicFacts>,
+    pub panic_ago: Option<f64>,
     /// How reading it is going. Never a reason for a 503.
     pub http: HttpHealth,
     /// **Card 164: what this panel has cost the network since the studio
@@ -263,6 +270,8 @@ pub fn collect(st: &AppState) -> Status {
                 telemetry: d.telemetry.clone(),
                 facts_ago: d.facts.as_ref().map(|f| now.saturating_sub(f.heard_unix) as f64),
                 facts: d.facts.clone(),
+                panic_ago: d.panic.as_ref().map(|p| now.saturating_sub(p.heard_unix) as f64),
+                panic: d.panic.clone(),
                 http: d.http.clone(),
                 traffic: d.traffic.reported(),
                 last_error: d.last_error.clone(),

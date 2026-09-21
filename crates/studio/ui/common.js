@@ -21,13 +21,6 @@
 /** How often to re-read the panel's own facts. */
 export const STATUS_MS = 2000;
 
-/* Card 136: the firmware has 25 real brightness steps and values 1..=5 light
- * nothing at all while `applied` cheerfully echoes them back. So the slider's
- * lowest non-zero stop is the first value that lights the panel. Delete this
- * constant and the one snap() call below when 136 fixes the firmware. */
-const BRIGHTNESS_FLOOR = 6;
-export const snapBrightness = (v) => (v > 0 ? Math.max(v, BRIGHTNESS_FLOOR) : 0);
-
 export const $ = (sel, root = document) => root.querySelector(sel);
 
 /** Never fight an input somebody is using. */
@@ -315,11 +308,18 @@ export function panelState({ attached, device, on, link }) {
  *  **server** decided (`devices.rs`, beside the reasoning for its thresholds);
  *  a number here would be a second opinion. Only the fault-level ones are
  *  attention: a margin going (`stack_warn`) is said on the Panel screen in the
- *  warning tone and is not a reason to colour the other screen. */
+ *  warning tone and is not a reason to colour the other screen.
+ *
+ *  Card 199: `device.panic.repeat` - several panics in a row, each within a
+ *  minute of a boot - is the one fact from `GET /api/v1/panic` that belongs
+ *  here. An isolated panic, a watchdog reset or an update's outcome are said
+ *  on the Panel screen but do not by themselves colour this chip: a panel
+ *  that panicked once and came back is not what "go and look at it" means. */
 export function attention(device) {
   if (!device) return '';
   const player = device.player;
   if (player && player.health.gave_up) return 'stopped';
+  if (device.panic && device.panic.repeat) return 'repeated panics';
   const f = device.facts;
   if (f) {
     if (f.store_errors) return 'store errors';
@@ -402,30 +402,66 @@ export function bindSwitch(input, { get, set }) {
   return { refresh };
 }
 
-/** Brightness: the same control on both screens (card 198).
+/** Card 187: the stops a device's own cap actually allows - the server's
+ *  static list (`boot.brightness_stops`, `page::brightness_stops` on the
+ *  server, one implementation of the output-enable slot arithmetic) trimmed
+ *  to `cap`, with `cap` itself appended if it is not already one of them. A
+ *  cap is a raw byte the device reported once (`clamp_brightness` can hand
+ *  one straight back whatever it is), so it does not always land exactly on
+ *  a stop; appending it is what makes the top of the slider the device's
+ *  real ceiling rather than the stop just under it. */
+function cappedStops(stops, cap) {
+  const kept = stops.filter((v) => v <= cap);
+  if (kept.length === 0 || kept[kept.length - 1] !== cap) kept.push(cap);
+  return kept;
+}
+
+/** Brightness: the same control on both screens (card 198), stepping
+ *  through the panel's real resolution rather than `0..255` (card 187) - most
+ *  of that range lands on a picture a neighbouring value already showed
+ *  (`oe_slots(129) == oe_slots(130)`), so the slider is an **index** into
+ *  `stops`, not the level itself. `0` is off, the lowest nonzero stop is
+ *  the floor the firmware raises a too-dim request to, and the top stop is
+ *  the device's own learned cap once there is one - all three come from the
+ *  server, never written down again here.
  *
  *  It is on the Picture screen because it changes how the picture looks on the
  *  LEDs and is part of judging a patch, and on the Panel screen because that is
- *  where the panel's controls are. One binding, so the two cannot drift: the
- *  maximum is the device's own ceiling once it has said what that is, the
- *  lowest non-zero stop is 6 (card 136), and what is shown is what the device
- *  says it applied.
+ *  where the panel's controls are. One binding, so the two cannot drift, and
+ *  what is shown is what the device says it applied.
  *
- *  `attached()` gives the id to act on, or `''`; `attempt` is the screen's. */
-export function bindBrightness({ input, out, note, attached, attempt }) {
-  input.addEventListener('input', () => {
-    input.value = String(snapBrightness(Number(input.value)));
-    out.textContent = input.value;
-  });
+ *  `attached()` gives the id to act on, or `''`; `attempt` is the screen's;
+ *  `stops` is `boot.brightness_stops`, the full list before any cap. */
+export function bindBrightness({ input, out, note, attached, attempt, stops }) {
+  /** The stops actually reachable right now - `stops` until a cap is learned. */
+  let live = stops;
+  const levelAt = (i) => live[Math.min(Math.max(Math.round(i), 0), live.length - 1)];
+  /** The index of the highest stop at or below `level` - so a level this
+   *  slider is handed always maps to something the panel could really be
+   *  showing, never one it would silently round up past. */
+  const indexOf = (level) => {
+    let idx = 0;
+    for (let i = 0; i < live.length; i += 1) {
+      if (live[i] <= level) idx = i; else break;
+    }
+    return idx;
+  };
+
+  input.step = '1';
+  input.min = '0';
+  input.max = String(live.length - 1);
+
+  input.addEventListener('input', () => { out.textContent = String(levelAt(input.value)); });
   input.addEventListener('change', () => {
     const device = attached();
     if (!device) { notice('No panel is attached, so there is no brightness to set.', 'say'); return; }
-    const level = snapBrightness(Number(input.value));
+    const level = levelAt(input.value);
     attempt(`Brightness ${level}`, async () => {
       const done = await invoke('device/brightness', { device, level });
-      return done && done.applied !== done.asked
-        ? `This panel caps brightness at ${done.applied}.`
-        : `Brightness ${done.applied}`;
+      if (!done) return '';
+      if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
+      if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
+      return `Brightness ${done.applied}`;
     });
   });
   return {
@@ -433,13 +469,15 @@ export function bindBrightness({ input, out, note, attached, attempt }) {
      *  be a moment behind, so nothing here assumes it is there. */
     show(d) {
       const player = d && d.player;
-      const cap = (player && player.health.brightness_cap) || 255;
-      if (input.max !== String(cap)) input.max = String(cap);
+      const learnedCap = player && player.health.brightness_cap;
+      live = learnedCap ? cappedStops(stops, learnedCap) : stops;
+      const maxIndex = String(live.length - 1);
+      if (input.max !== maxIndex) input.max = maxIndex;
       const t = d && d.telemetry;
       const shown = t ? t.brightness : player && (player.health.brightness_applied ?? player.brightness);
       if (!busy(input) && shown !== null && shown !== undefined) {
-        input.value = String(Math.min(shown, cap));
-        out.textContent = input.value;
+        input.value = String(indexOf(Math.min(shown, learnedCap || 255)));
+        out.textContent = String(levelAt(input.value));
       }
       note.textContent = !d
         ? 'No panel is attached, so this sets nothing yet.'

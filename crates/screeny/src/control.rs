@@ -212,7 +212,9 @@ impl ControlClient {
     }
 
     /// `SET_BRIGHTNESS`; returns the level actually applied, which is how a
-    /// sender learns the firmware's cap.
+    /// sender learns the firmware's cap - and, for a nonzero request too dim
+    /// to light anything, that it was raised to the dimmest level the panel
+    /// can show (spec 6.3, card 136).
     ///
     /// # Errors
     ///

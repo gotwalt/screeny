@@ -12,10 +12,10 @@
 
 mod common;
 
-use common::{get, post, until_json};
+use common::{get, post, until, until_json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -447,6 +447,117 @@ async fn an_endless_reply_is_refused_rather_than_read() {
     flood.stop();
 }
 
+// -------------------------------------------- card 199: the panic route ----
+//
+// `screeny-sim`'s `GET /api/v1/panic` always answers `last_panic: null,
+// last_reset: null` and never a `404` - the simulator has no crash path and
+// card 243 landed the route in it - so these three behaviours need a server
+// that can be told what to do on command, the same reason `CountingServer`
+// and `Flood` above are hand-written rather than borrowed from `screeny-sim`.
+// `PanicServer` below is that server: `GET /api/v1/status` with a movable
+// `boot_id`, `GET /api/v1/panic` with a canned reply or a `404`, and a count
+// of how many times each path was asked for.
+
+/// **The heart of the card**: the panic route is asked exactly once while
+/// `boot_id` stays put, however many times the status route is polled - and
+/// what it said reaches `/api/v1/status` in the shape `crates/device-api`
+/// defines, flattened, plus the one derived flag (`repeat`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_panic_route_is_read_once_per_boot_id_and_not_again() {
+    let server = PanicServer::start(11);
+    let port = server.addr.port();
+    let (dev, mut ports) = start_sim("simulated", false);
+    ports.http = port;
+    let studio = studio_reading(port, Duration::from_millis(100)).await;
+    let at = studio.addr;
+    attach(at, ports).await;
+
+    let seen = until_json(at, PATIENCE, "several status reads and one panic read", "/api/v1/status", |v| {
+        v["devices"][0]["http"]["reads"].as_u64().unwrap_or(0) >= 5 && !v["devices"][0]["panic"].is_null()
+    })
+    .await;
+
+    let p = &seen["devices"][0]["panic"];
+    assert_eq!(p["boot_count"], 4, "{p}");
+    assert_eq!(p["panic_count"], 2, "{p}");
+    assert_eq!(p["last_panic"]["file"], "net.rs", "{p}");
+    assert_eq!(p["last_panic"]["line"], 321, "{p}");
+    assert_eq!(p["last_panic"]["consecutive"], 2, "{p}");
+    assert_eq!(p["repeat"], true, "consecutive > 1 sets the flag the chip reads: {p}");
+    assert!(seen["devices"][0]["panic_ago"].as_f64().expect("an age") < 10.0, "{}", seen["devices"][0]);
+
+    assert!(server.status_hits() >= 5, "the studio only read status {} times", server.status_hits());
+    assert_eq!(server.panic_hits(), 1, "the panic route must be asked exactly once while boot_id stays put");
+
+    drop(dev);
+    studio.stop().await;
+    server.stop();
+}
+
+/// A `boot_id` change - the panel rebooted - is asked for its panic again;
+/// a second one without a further reboot is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_boot_id_is_asked_for_its_panic_again() {
+    let server = PanicServer::start(1);
+    let port = server.addr.port();
+    let (dev, mut ports) = start_sim("simulated", false);
+    ports.http = port;
+    let studio = studio_reading(port, Duration::from_millis(100)).await;
+    let at = studio.addr;
+    attach(at, ports).await;
+
+    until_json(at, PATIENCE, "the first panic read", "/api/v1/status", |v| !v["devices"][0]["panic"].is_null()).await;
+    assert_eq!(server.panic_hits(), 1, "the first boot_id is asked for once");
+
+    server.set_boot_id(2);
+    until_json(at, PATIENCE, "the studio to notice the new boot_id", "/api/v1/status", |v| {
+        v["devices"][0]["facts"]["boot_id"] == 2
+    })
+    .await;
+    until(PATIENCE, "a second panic read, for the new boot_id", || async { server.panic_hits() >= 2 }).await;
+    assert_eq!(server.panic_hits(), 2, "a new boot_id is asked once, and only once, in its turn");
+
+    drop(dev);
+    studio.stop().await;
+    server.stop();
+}
+
+/// **A 404 is silence, not a fault** (spec 8.6): firmware older than 0.5.2
+/// serves no `PANIC` route, the page simply has nothing from it, and the
+/// server is not asked again until the device reboots.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_404_from_the_panic_route_is_silence() {
+    let server = PanicServer::start(1);
+    server.set_panic_404(true);
+    let port = server.addr.port();
+    let (dev, mut ports) = start_sim("simulated", false);
+    ports.http = port;
+    let studio = studio_reading(port, Duration::from_millis(100)).await;
+    let at = studio.addr;
+    attach(at, ports).await;
+
+    let seen = until_json(at, PATIENCE, "several status reads with the panic route 404ing", "/api/v1/status", |v| {
+        v["devices"][0]["http"]["reads"].as_u64().unwrap_or(0) >= 5
+    })
+    .await;
+
+    assert!(seen["devices"][0]["panic"].is_null(), "a 404 is silence, not data: {}", seen["devices"][0]);
+    assert!(seen["devices"][0]["panic_ago"].is_null(), "{}", seen["devices"][0]);
+    assert_eq!(
+        seen["devices"][0]["http"]["last_error"],
+        serde_json::Value::Null,
+        "the status route itself is unaffected by the panic route's 404: {}",
+        seen["devices"][0]["http"]
+    );
+    assert_eq!(seen["ok"], true, "a 404 on the panic route is not a server fault: {}", seen["problems"]);
+    assert!(seen["problems"].as_array().expect("problems").is_empty(), "{}", seen["problems"]);
+    assert_eq!(server.panic_hits(), 1, "a 404 is asked once, not retried every poll");
+
+    drop(dev);
+    studio.stop().await;
+    server.stop();
+}
+
 // ---------------------------------------------------------------- servers ----
 
 /// A tiny HTTP server that answers a valid status reply, slowly, and counts
@@ -651,3 +762,142 @@ impl Drop for Flood {
         }
     }
 }
+
+/// A tiny HTTP server that answers `GET /api/v1/status` with a **movable**
+/// `boot_id` and `GET /api/v1/panic` with a canned reply or a `404`, counting
+/// how many times each path was asked for. See the "card 199" comment above
+/// for why this exists rather than a real `screeny-sim`.
+struct PanicServer {
+    addr: SocketAddr,
+    state: Arc<PanicState>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct PanicState {
+    status_hits: AtomicUsize,
+    panic_hits: AtomicUsize,
+    boot_id: AtomicU32,
+    panic_404: AtomicBool,
+    stop: AtomicBool,
+}
+
+impl PanicServer {
+    fn start(boot_id: u32) -> PanicServer {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        listener.set_nonblocking(true).expect("non-blocking");
+        let state = Arc::new(PanicState { boot_id: AtomicU32::new(boot_id), ..PanicState::default() });
+        let thread = {
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                let mut workers = Vec::new();
+                while !state.stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let state = Arc::clone(&state);
+                            workers.push(std::thread::spawn(move || serve_panic(stream, &state)));
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                    }
+                }
+                for w in workers {
+                    let _ = w.join();
+                }
+            })
+        };
+        PanicServer { addr, state, thread: Some(thread) }
+    }
+
+    fn set_boot_id(&self, id: u32) {
+        self.state.boot_id.store(id, Ordering::SeqCst);
+    }
+
+    fn set_panic_404(&self, on: bool) {
+        self.state.panic_404.store(on, Ordering::SeqCst);
+    }
+
+    fn status_hits(&self) -> usize {
+        self.state.status_hits.load(Ordering::SeqCst)
+    }
+
+    fn panic_hits(&self) -> usize {
+        self.state.panic_hits.load(Ordering::SeqCst)
+    }
+
+    fn stop(mut self) {
+        self.state.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for PanicServer {
+    fn drop(&mut self) {
+        self.state.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn serve_panic(stream: std::net::TcpStream, state: &Arc<PanicState>) {
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut writer = stream.try_clone().expect("a writer");
+    let mut reader = BufReader::new(stream);
+
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+        return;
+    }
+    // Drain the rest of the head; nothing in it matters here.
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) if line.trim().is_empty() => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    let path = request_line.split_whitespace().nth(1).unwrap_or("");
+
+    let (status, reason, body): (u16, &str, String) = if path == screeny_device_api::route::STATUS {
+        state.status_hits.fetch_add(1, Ordering::SeqCst);
+        (200, "OK", status_json(state.boot_id.load(Ordering::SeqCst)))
+    } else if path == screeny_device_api::route::PANIC {
+        state.panic_hits.fetch_add(1, Ordering::SeqCst);
+        if state.panic_404.load(Ordering::SeqCst) {
+            (404, "Not Found", String::new())
+        } else {
+            (200, "OK", PANIC_JSON.to_string())
+        }
+    } else {
+        (404, "Not Found", String::new())
+    };
+
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = writer.write_all(head.as_bytes());
+    let _ = writer.write_all(body.as_bytes());
+    let _ = writer.flush();
+}
+
+/// `STATUS_JSON`, near enough, with a `boot_id` a test can move.
+fn status_json(boot_id: u32) -> String {
+    format!(
+        r#"{{"api":1,"id":"515151","name":"panicked","fw":"0.5.2","boot_id":{boot_id},"uptime_ms":1000,
+"heap_used":46112,"heap_size":98304,"stack_free":14016,"rssi_dbm":-54,"brightness":96,"idle_mode":"status",
+"wifi_state":"connected","ssid":"Example-Wifi1","ip":"127.0.0.1","state":"idle","portal":false,"fw_slot":"ota_0",
+"fw_state":"valid","reset_reason":"power_on","store_errors":0}}"#
+    )
+}
+
+/// `crates/device-api/tests/golden/panic.json`, near enough, but with
+/// `consecutive: 2` so the tests exercise the `repeat` flag the chip reads.
+const PANIC_JSON: &str = r#"{"boot_count":4,"panic_count":2,"last_panic":{"uptime_ms":94312,"boot":3,
+"file":"net.rs","line":321,"consecutive":2},"update":null,"last_reset":"power_on"}"#;

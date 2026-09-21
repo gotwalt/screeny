@@ -1,4 +1,5 @@
-//! One `GET /api/v1/status` on one device, over TCP, with a deadline.
+//! One `GET /api/v1/status` - or, once per `boot_id`, one `GET /api/v1/panic`
+//! (card 199) - on one device, over TCP, with a deadline.
 //!
 //! # Why this is hand-written
 //!
@@ -37,7 +38,10 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use screeny_device_api::reply::StatusReply;
+use serde::de::DeserializeOwned;
+
+use screeny_device_api::reply::{PanicReply, StatusReply};
+use screeny_device_api::route;
 
 /// The port the device serves its HTTP API on (`docs/design/device-web.md`).
 /// Overridable per device and per studio, which is how a simulator - which
@@ -123,11 +127,41 @@ pub fn get_status(addr: SocketAddr, patience: Duration) -> Result<StatusReply, F
 /// case somebody is looking at the page about.
 pub fn get_status_counted(addr: SocketAddr, patience: Duration) -> (Cost, Result<StatusReply, Fault>) {
     let mut cost = Cost::default();
-    let out = read_status(addr, patience, &mut cost);
+    let out = read_json(route::STATUS, addr, patience, &mut cost);
     (cost, out)
 }
 
-fn read_status(addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<StatusReply, Fault> {
+/// Read `GET /api/v1/panic` from the device at `addr` (card 199).
+///
+/// Its own connection, on the same terms as [`get_status`]: blocking, one
+/// connection, `Connection: close`, bounded by `patience`. The caller
+/// ([`crate::fleet::status_once`]) makes this call at most once per `boot_id`,
+/// because the answer cannot change while the device runs (spec 8.6), and
+/// never concurrently with a status read: the two are sequential `await`s on
+/// the same task, never two connections in flight.
+///
+/// Firmware older than 0.5.2 serves no such route and answers `404`, which
+/// comes back as [`Fault::absent`] - "no such route", not a fault (spec 8.6).
+///
+/// # Errors
+///
+/// [`Fault`], which says whether the device simply has no such route.
+pub fn get_panic(addr: SocketAddr, patience: Duration) -> Result<PanicReply, Fault> {
+    get_panic_counted(addr, patience).1
+}
+
+/// [`get_panic`], saying what it cost on the wire (card 164).
+pub fn get_panic_counted(addr: SocketAddr, patience: Duration) -> (Cost, Result<PanicReply, Fault>) {
+    let mut cost = Cost::default();
+    let out = read_json(route::PANIC, addr, patience, &mut cost);
+    (cost, out)
+}
+
+/// `GET path` from `addr`, decoded as `T`. What [`get_status`] and
+/// [`get_panic`] both are, parameterised on the route and the reply shape -
+/// the connection handling, the deadline and the 404-is-absent rule are one
+/// implementation rather than two that happen to agree.
+fn read_json<T: DeserializeOwned>(path: &str, addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<T, Fault> {
     let started = Instant::now();
     let left = || patience.checked_sub(started.elapsed()).filter(|d| !d.is_zero());
 
@@ -145,7 +179,6 @@ fn read_status(addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<
     let head = format!(
         "GET {path} HTTP/1.1\r\nHost: {addr}\r\nAccept: application/json\r\n\
          User-Agent: screeny-studio/{version}\r\nConnection: close\r\n\r\n",
-        path = screeny_device_api::route::STATUS,
         version = env!("CARGO_PKG_VERSION"),
     );
     let deadline = left().ok_or_else(|| Fault::reached("ran out of time connecting"))?;
@@ -154,22 +187,24 @@ fn read_status(addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<
     // still went halfway out, and the honest figure is the one that does not
     // depend on the far end having been polite about it.
     cost.out += head.len() as u64;
-    stream.write_all(head.as_bytes()).map_err(|e| Fault::reached(format!("asking for its status: {e}")))?;
+    stream.write_all(head.as_bytes()).map_err(|e| Fault::reached(format!("asking for {path}: {e}")))?;
 
     let raw = read_reply(&mut stream, &left, cost)?;
     let (status, body) = split_reply(&raw)?;
     if status != 200 {
-        // A 404 is something else's web server on that address; anything else
-        // is a device that is unhappy rather than absent.
+        // A 404 is either something else's web server on that address, or -
+        // for `PANIC` - firmware older than 0.5.2, which serves no such route.
+        // Either way it is silence, not a fault; anything else is a device
+        // that is unhappy rather than absent.
         return Err(if status == 404 {
-            Fault::absent(format!("its HTTP port answered {status} for {}", screeny_device_api::route::STATUS))
+            Fault::absent(format!("its HTTP port answered {status} for {path}"))
         } else {
-            Fault::reached(format!("its status route answered {status}"))
+            Fault::reached(format!("{path} answered {status}"))
         });
     }
     // The error is serde's, which names a field and an offset - never a value,
     // so no SSID can reach a log line through here.
-    serde_json::from_slice(body).map_err(|e| Fault::absent(format!("its status route did not answer this API: {e}")))
+    serde_json::from_slice(body).map_err(|e| Fault::absent(format!("{path} did not answer this API: {e}")))
 }
 
 /// Read until the server closes, or until `Content-Length` is satisfied, or

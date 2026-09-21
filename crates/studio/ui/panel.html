@@ -46,7 +46,10 @@
            `common.js`, so the two cannot drift. -->
       <div class="slider" id="bright-slider">
         <label for="bright">Brightness</label><output></output>
-        <input id="bright" type="range" min="0" max="255" step="1" value="0">
+        <!-- Card 187: an index into the server's brightness stops, not the
+             raw level - see common.js's bindBrightness, which sets the real
+             min/max/step and the value on load. -->
+        <input id="bright" type="range" min="0" max="25" step="1" value="0">
       </div>
       <p class="hint" id="bright-note"></p>
 
@@ -81,7 +84,13 @@
            slot, WiFi, why it last restarted. It comes from the panel's own
            GET /api/v1/status, which firmware older than 0.4.0 does not serve;
            then this block is not here at all and what is above it is exactly
-           what it always was. -->
+           what it always was.
+
+           Card 199 adds the Panic row from a second route, GET /api/v1/panic:
+           the last panic, a watchdog reset, and a firmware update's outcome,
+           read once per boot rather than on every poll. Firmware older than
+           0.5.2 answers 404 for it, which is silence and not a fault, and the
+           row is simply not there. -->
       <div class="device-block" id="device-block" hidden>
         <h3>Device</h3>
         <dl class="facts" id="device-facts"></dl>

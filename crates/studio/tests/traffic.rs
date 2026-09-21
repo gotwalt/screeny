@@ -218,17 +218,26 @@ async fn the_http_and_control_paths_are_counted_separately() {
     attach_and_play(at, ports).await;
 
     // The status poll: bytes written and bytes read, and it keeps happening.
-    let first = until_json(at, PATIENCE, "a status read", "/api/v1/status", |v| {
-        u(&device(v)["traffic"]["http"]["in"]["packets"]) >= 1
+    //
+    // Card 199: the studio also asks `GET /api/v1/panic` once, the first time
+    // it sees a given `boot_id`, on the same HTTP path - so `http.out.packets`
+    // is one more than `http.reads` (which counts *status* reads only) from
+    // then on, not equal to it. Waiting for `devices[0].panic` to be present
+    // - the simulator's panic route always answers, never `404`s - puts this
+    // read safely past that one-time ask, so the extra packet is a fixed `+1`
+    // rather than a race between "before" and "after" it landed.
+    let first = until_json(at, PATIENCE, "a status read and its one-time panic ask", "/api/v1/status", |v| {
+        u(&device(v)["traffic"]["http"]["in"]["packets"]) >= 1 && !device(v)["panic"].is_null()
     })
     .await;
     let http_a = device(&first)["traffic"]["http"].clone();
     assert!(u(&http_a["out"]["bytes"]) > 0, "the request went out: {http_a}");
     assert!(u(&http_a["in"]["bytes"]) > u(&http_a["out"]["bytes"]), "the reply is the bigger half: {http_a}");
+    let reads_a = u(&device(&first)["http"]["reads"]);
     assert_eq!(
         u(&http_a["out"]["packets"]),
-        u(&device(&first)["http"]["reads"]),
-        "one request counted per read that worked: {http_a}"
+        reads_a + 1,
+        "one request per read that worked, plus the one-time panic ask (card 199): {http_a} vs {reads_a} reads"
     );
 
     let later = until_json(at, PATIENCE, "a second status read", "/api/v1/status", |v| {
@@ -238,6 +247,14 @@ async fn the_http_and_control_paths_are_counted_separately() {
     let http_b = device(&later)["traffic"]["http"].clone();
     assert!(u(&http_b["out"]["bytes"]) > u(&http_a["out"]["bytes"]), "both ways, every poll");
     assert!(u(&http_b["in"]["bytes"]) > u(&http_a["in"]["bytes"]));
+    // No more panic asks after the first: from here the packet count grows
+    // exactly with the number of status reads, one to one.
+    let reads_b = u(&device(&later)["http"]["reads"]);
+    assert_eq!(
+        u(&http_b["out"]["packets"]) - u(&http_a["out"]["packets"]),
+        reads_b - reads_a,
+        "after the one-time panic ask, packets and reads grow together: {http_a} -> {http_b}"
+    );
 
     // The control path. The telemetry poll is already moving it; a human
     // pressing Identify and moving the brightness slider has to move it too.
