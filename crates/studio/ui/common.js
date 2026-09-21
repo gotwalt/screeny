@@ -315,11 +315,18 @@ export function panelState({ attached, device, on, link }) {
  *  **server** decided (`devices.rs`, beside the reasoning for its thresholds);
  *  a number here would be a second opinion. Only the fault-level ones are
  *  attention: a margin going (`stack_warn`) is said on the Panel screen in the
- *  warning tone and is not a reason to colour the other screen. */
+ *  warning tone and is not a reason to colour the other screen.
+ *
+ *  Card 199: `device.panic.repeat` - several panics in a row, each within a
+ *  minute of a boot - is the one fact from `GET /api/v1/panic` that belongs
+ *  here. An isolated panic, a watchdog reset or an update's outcome are said
+ *  on the Panel screen but do not by themselves colour this chip: a panel
+ *  that panicked once and came back is not what "go and look at it" means. */
 export function attention(device) {
   if (!device) return '';
   const player = device.player;
   if (player && player.health.gave_up) return 'stopped';
+  if (device.panic && device.panic.repeat) return 'repeated panics';
   const f = device.facts;
   if (f) {
     if (f.store_errors) return 'store errors';

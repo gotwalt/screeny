@@ -144,3 +144,36 @@ panic, which is a real gap for testing wording against it, noted below), `devhtt
 - `cargo build -p screeny-studio --lib` and `cargo clippy -p screeny-studio --all-targets`
   both clean after this step (one doc-comment lint fixed: a stray `- ` in a `///` line read
   as an unindented list continuation).
+
+**The page** (`panel.js`, `panel.html`, `common.js`):
+
+- `panel.js`'s `showDevice` gained one row, `['Panic', panic.text, panic.tone]`, from a new
+  helper `panicLine(p)` placed between `showDevice` and `rebootLine`. One line, not three,
+  because the brief asks for the panic, the watchdog reset and the update's outcome
+  "covered" together - they are three symptoms of the same kind of event, said in the
+  wording style of card 195 ("say what is known"): `panicked at net.rs:321, 1 boot ago`,
+  `, 3 times in a row` appended when `consecutive > 1`, `the watchdog reset it` for
+  `last_reset: "wdt"`, and `firmware 0.7.1 trial` / `confirmed` / `reverted (aborted)` for
+  `update`, joined with ` · ` when more than one applies. The row is omitted entirely when
+  there is nothing to say (no panic on record, no wdt reset, no update) - the ordinary case,
+  matching how `Store errors` is only pushed when non-zero.
+- Tone: `bad` for `p.repeat` (`consecutive > 1`) or a watchdog reset, `warn` for an isolated
+  panic or a reverted update, nothing at all for a plain trial/confirmed - only the server's
+  own `p.repeat` decides the fault case, the page never computes a threshold. This added two
+  `'bad'` literals to `showDevice`'s block, so `tests/ui.rs`'s
+  `the_page_can_show_what_only_the_device_knows` now expects six fault tones instead of four,
+  and gained `p.repeat` in the "read, not decided" list.
+- `common.js`'s `attention()` gained `if (device.panic && device.panic.repeat) return
+  'repeated panics';`, right after the "stopped" check - `consecutive > 1` is the one fact
+  from the panic route the brief says should colour the Picture screen's chip; an isolated
+  panic, a wdt reset or an unconfirmed update stay on the Panel screen only, in line with the
+  existing rule that only fault-level facts reach the chip.
+- `panel.html`: no new elements (the row lives in the existing `#device-facts` `<dl>`, filled
+  by `facts()` like every other row); the doc comment above `#device-block` now mentions the
+  Panic row and the second route it comes from.
+
+`node --check panel.js` and `node --check common.js`: clean. `cargo test -p screeny-studio
+--test ui`: 27 passed, 0 failed (was 26 before the assertion-count fix above).
+`cargo test -p screeny-studio --test device_status`: 7 passed, 0 failed, including
+`the_studio_never_opens_a_second_connection_to_a_device` - the second, sequential connection
+this card adds does not change the "one at a time" property that test proves.
