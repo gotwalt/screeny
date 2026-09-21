@@ -492,9 +492,13 @@ struct Vesta {
     /// on from here, exactly as the other clock patches do.
     born: Option<f64>,
     modules: [Module; 4],
-    /// The cards the runs in hand were planned for. A run is replanned when
-    /// and only when this changes.
+    /// The cards the runs in hand were planned for, and the minute they were
+    /// planned for. A run is replanned when the minute turns - **on every
+    /// module, including the ones whose card did not change**, which is the
+    /// whole of card 184 - or when a parameter moves a module's target
+    /// between minutes.
     want: [u8; 4],
+    minute: Option<i64>,
     /// What the four modules were showing on the last frame, for `playing`.
     face: [u8; 4],
     /// For the studio's "now playing".
@@ -502,7 +506,7 @@ struct Vesta {
 }
 
 fn make(_seed: u64) -> Box<dyn Patch> {
-    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], face: [0; 4], doing: String::new() })
+    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], minute: None, face: [0; 4], doing: String::new() })
 }
 
 /// The hours and minutes a minute-of-day shows.
@@ -549,17 +553,24 @@ impl Patch for Vesta {
         // step - so a person who picks one of them gets what they remember.
         let spinning = flips == Flips::Rotation;
         let base = if spinning { Timing::rotation(f64::from(ctx.get("spin")), flip) } else { Timing::slow(flip) };
-        // **A run is planned once** - when the card a module is asked for
-        // changes - and only read after that. Replanning every frame would
-        // re-time the tail of a rotation against the clock each time and the
-        // drum would never stop turning; it is also what lets a plan hold
-        // several cards in the air at once, which the old one-card-at-a-time
-        // model could not express at all.
+        // **A run is planned once** - when the minute turns - and only read
+        // after that. Replanning every frame would re-time the tail of a
+        // rotation against the clock each time and the drum would never stop
+        // turning; it is also what lets a plan hold several cards in the air
+        // at once, which the old one-card-at-a-time model could not express.
+        //
+        // The trigger is **the minute**, not the module's own card: card 184
+        // asks every position to rotate, "the ones whose numeral did not
+        // change too". In the two older modes a module whose card did not
+        // change plans an empty run, which is the same as standing still, so
+        // one trigger serves all three.
+        let turned = self.minute.is_some_and(|was| was != minute);
+        self.minute = Some(minute);
         for (i, (m, want)) in self.modules.iter_mut().zip(target).enumerate() {
             if born_now {
                 // Born reading the time, not flipping its way up to it.
                 m.still(want);
-            } else if self.want[i] != want {
+            } else if turned || self.want[i] != want {
                 let (tm, skew) = if spinning { (base.at_rate(RATE[i]), SKEW[i]) } else { (base, 0.0) };
                 m.plan(ctx.t, want, drum(i, zero), flips, &tm, skew);
             } else if !m.run.is_empty() && ctx.t >= m.ends() {
@@ -947,6 +958,48 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// **The point of card 184.** On an ordinary minute only one numeral
+    /// changes, and all four modules rotate anyway - the owner asked for "an
+    /// entire rotation of every position on minute change". A module whose
+    /// card did not change turns its whole drum and comes back to it.
+    #[test]
+    fn every_position_rotates_even_when_its_card_does_not_change() {
+        let g = geom(&[]);
+        // 21:12 -> 21:13: only the minutes' units is a different card.
+        let film = film("21:12:59", 2.6, &[]);
+        let still = film[0].2.clone();
+        let moved = |i: usize| {
+            film.iter().any(|(_, _, px)| {
+                (0..H).any(|y| {
+                    (0..W).any(|x| {
+                        let u = x as f32 + 0.5 - g.centres[i];
+                        u.abs() <= g.w * 0.5 && px[(y * W + x) * 3..][..3] != still[(y * W + x) * 3..][..3]
+                    })
+                })
+            })
+        };
+        for i in 0..4 {
+            assert!(moved(i), "module {i} never moved on an ordinary minute");
+        }
+        // And every one of them is back on the time at the end.
+        assert_eq!(reads(&film.last().unwrap().1, &g), Some([2, 1, 1, 3]));
+        // A module whose card does not change turns a whole revolution: as
+        // many cards as the drum has, ending where it started.
+        let tm = Timing::rotation(1.15, 0.2);
+        let mut m = Module::default();
+        m.still(1);
+        m.plan(0.0, 1, &DRUM, Flips::Rotation, &tm, 0.0);
+        assert_eq!(m.run.len(), DRUM.len(), "a standing module did not turn one whole revolution");
+        assert_eq!(m.run.last().unwrap().to, 1);
+        // The two older modes leave it alone, as they always did.
+        for flips in [Flips::Between, Flips::Changed] {
+            let mut m = Module::default();
+            m.still(1);
+            m.plan(0.0, 1, &DRUM, flips, &Timing::slow(0.2), 0.0);
+            assert!(m.run.is_empty(), "{flips:?} moved a module whose card did not change");
         }
     }
 

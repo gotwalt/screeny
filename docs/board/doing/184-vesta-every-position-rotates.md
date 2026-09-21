@@ -203,3 +203,29 @@ change; mid-rotation there are two numerals and a card between them, and the
 module may go dark for up to three frames because **the blank card is passing**
 - that is a real card, not a hole. `cargo test -p screeny-art --lib vesta`: 26
 passed.
+
+### Step 2: the ordinary minute caught a real bug
+
+Rendering **21:12 -> 21:13** - the minute the owner sees fifty-nine times an
+hour - showed only the minutes' units turning and the other three standing
+still. The run was being planned when *a module's own card* changed, and on an
+ordinary minute three of the four are asked for the same card they are already
+showing. That is exactly the thing card 184 is about: "an entire rotation of
+every position on minute change ... the ones whose numeral did not change too".
+
+The trigger is now **the minute**, not the card. Every module replans when the
+minute turns; a module whose card did not change turns its whole drum - eleven
+cards - and comes back to it. The two older modes need no special case, because
+`route` gives them an empty run when there is nothing to change, which is the
+same as standing still.
+
+`every_position_rotates_even_when_its_card_does_not_change` is that bug as a
+test: on 21:12 -> 21:13 every one of the four modules must have moved at least
+one LED, the board must read 21:13 at the end, a standing module's planned run
+must be exactly `DRUM.len()` cards long and end where it started, and both
+older modes must leave it alone.
+
+The restrike (`184-07-an-ordinary-minute.png`) is the picture the card asked
+for: `21:12` -> `31:12` -> `42:22` -> `53:23` -> ... -> `10:01` -> `21:02` ->
+`21:13`, four drums turning in a left-to-right wave and the whole board settled
+in 1.37 s.
