@@ -253,3 +253,358 @@ of the locks core 0 takes *implicitly, in an interrupt handler, in the window
 esp-storage leaves open between the ROM call and the un-park*. That is the
 sentence this card fixes, and it is a bug in the research note as much as in the
 code.
+
+### 2. The fix: `store::guarded`
+
+One function, `firmware/src/store.rs`:
+
+```rust
+pub fn guarded<R>(f: impl FnOnce() -> R) -> R {
+    critical_section::with(|_| f())
+}
+```
+
+`critical_section::with` on this chip is not a third-party abstraction: esp-hal
+**is** the `critical_section` implementation, and it is one global
+`esp_sync::RawMutex` shared by both cores (`esp-hal-1.2.2/src/sync.rs` lines
+92-111). Holding it across the whole of a flash erase or program - which means
+across `pre_write`, the ROM call and `post_write` - does two things:
+
+1. **Core 0 runs no interrupt handler while core 1 is parked.** `rsil 5` is held
+   by the outer lock and the inner `wsr.ps` in esp-storage's wrapper restores it
+   to level 5, not to zero, so the window at t3 above never opens. Core 0
+   therefore cannot be made to wait on anything: inside the window it executes
+   only esp-storage's `#[ram]` wrapper and the ROM, whose one lock is
+   esp-storage's private `LOCK`, which core 1 can never hold because **nothing
+   on core 1 touches flash** - `store.rs`'s rule 1, now load-bearing rather than
+   decorative. That is an enumeration of the whole window's lock demand, not an
+   argument from unlikelihood.
+2. **Core 1 provably is not inside a `critical_section` when it is parked**,
+   because core 0 is holding it. Every `CriticalSectionRawMutex` in this
+   firmware and in embassy, and every embassy-time queue operation, goes through
+   that one lock, so the set of places core 1 can be frozen shrinks a long way
+   further than step 1 strictly needs. That is a free narrowing, not the
+   argument.
+
+The direction that would be a new deadlock - core 0 blocking *before* the park,
+on a lock core 1 holds while core 1 waits for core 0 - cannot arise: core 1 runs
+one task, `display_task`, which reads the triple buffer through atomics and
+waits on a signal and a timer. It takes the global lock and the scheduler lock
+and gives them straight back; it never waits for core 0 while holding either.
+
+**Applied per flash operation, not per sector.** An erase and its program stay
+two separate ~40 ms and ~9 ms masked windows with core 0's interrupt backlog
+drained in between, which is exactly the shape card 240 measured the radio
+surviving (244 erases, `link downs +0`). One guard around a whole sector would
+have doubled the longest window for no benefit.
+
+**Reads are not guarded.** `internal_read` (`common.rs` line 149) is the one
+`FlashStorage` entry point that does not go through `MultiCoreStrategy` at all:
+it never parks core 1, so there is no window to protect, and masking core 0 for
+the ~200 us of a 4 KB read would be pure added latency on `verify_flash`'s 248
+of them. The guard is for erases and programs.
+
+#### The six call sites - and why settings commits are covered by the same words
+
+| where | what |
+|---|---|
+| `store.rs`, `Counted::erase` / `Counted::write` | every settings commit |
+| `ota.rs` `stage_sector` | the staging erase and the staging program |
+| `ota.rs` `write_state` | the `otadata` confirm and revert writes |
+| `ota.rs` `write_selection` | the `otadata` activation, both writes |
+| `spike_ota.rs` `stage_chunk` | never built; it is the file somebody reads |
+
+The settings store was the interesting one, because `sequential-storage` is
+async and a critical section cannot be held across an `.await`. It did not have
+to be: `Counted` already wraps the **blocking** `NorFlashRegion` to count erases
+and page writes, and `BlockingAsync` calls straight through to those methods and
+never suspends inside one, so the section is entered and left inside a single
+poll. Putting the guard there means the settings path and the OTA path are the
+same path again, and there is no spelling of a settings write - debounced,
+immediate, `SET_WIFI`, `erase_all`, `sequential-storage`'s own repair pass -
+that can route around it.
+
+The `otadata` writes are three per update rather than five hundred, but they are
+the three worst moments on the device to wedge at: activating, confirming and
+reverting. Each is a read-modify-erase-write inside `esp-bootloader-esp-idf`,
+and each parks core 1 twice. `Ota::new` is left outside the guard because it
+only reads. The two writes in `write_selection` get a guard each and not one
+between them, because the gap between them is research 006's interruption 5b - a
+place the device must be resettable, not a 100 ms critical section.
+
+### 3. What the fix costs, and what it does not close
+
+**Cost.** Nothing that was not already being paid. The ROM call masked core 0's
+interrupts for ~40 ms of that window anyway; the guard adds `pre_write`,
+`post_write` and a handful of cache misses - microseconds. The one genuinely new
+cost is on core 1: between core 0 taking the lock and parking it, and between
+un-parking it and core 0 releasing, core 1 may spin on the global lock for a few
+microseconds per operation where before it would have run. It is parked for the
+other ~40 ms either way.
+
+**Certainty, honestly.** The mechanism in section 1 is *certain from the
+sources*: every step is a line of code, and there is no step that needs a fact
+about the silicon. That the fix closes *that* mechanism is also certain, by the
+enumeration in section 2. What I cannot claim from sources is that it is the
+**only** mechanism. One other hazard is inherent to a hardware stall and the fix
+only narrows it rather than removing it: core 1 frozen mid cache-line-fill,
+holding the SPI0/SPI1 arbiter against core 0's SPI1 erase. I could not confirm
+or refute that from any source in the tree, it is not needed to explain a single
+observation on this card, and the two things in the tree that document the
+hazards of `park_core` - `esp-rtos`'s `sleep.rs` FIXME and research 006 section
+4 - both name locks and neither names the bus. So: **one mechanism, proved; one
+residual hypothesis, unproved and unneeded.** The `flash-stress` build in
+section 5 is the instrument that separates them, and it separates them in a
+minute: 1,500 guarded cycles with no wedge leaves the residual hypothesis with
+nothing to explain.
+
+The proper fix for the residual - a cooperative rendezvous, where core 0 raises
+a software interrupt on core 1 and core 1 acknowledges from an IRAM handler with
+its own interrupts masked, which is what ESP-IDF does instead of
+`esp_cpu_stall` - is ~150 lines including a spare `FROM_CPU_INTR`, an IRAM ISR
+and a timeout policy for "core 1 never acknowledged". **It is not what this card
+should ship.** It is more machinery than the proved mechanism needs, a worker
+cannot run a line of it, and a rendezvous that mis-handles its timeout turns
+"the device sometimes wedges during an update" into "the device cannot write its
+settings at all". If the stress build wedges anyway, that is the next card and
+the evidence for it will be in hand.
+
+One boundary worth writing down: `rsil 5` does not mask level 6 (debug) or level
+7 (NMI). Nothing in this firmware registers a handler at either, and
+`critical_section` itself has exactly the same boundary, so the guard is as
+strong as every other critical section on the device and no stronger.
+
+### 4. What the panel does during a sector operation
+
+Unchanged, and that is the point - decision 7 says only a firmware update may
+disturb the panel, and this card must not become one that does.
+
+The HUB75 DMA is circular and the refresh runs from descriptors it already
+holds, with no CPU (`firmware/Cargo.toml`, `circular-dma` + `iram`). Core 1
+being clock-stalled stops the *rewrite* that spends the dither remainder, not
+the scan: the panel keeps its picture at full refresh and full brightness for
+the ~40 ms, and the dither phase freezes. During an upload dither is off
+anyway (`ota.rs` `Upload::start`), so the display task is asleep and the stall
+costs literally nothing; during a settings commit the freeze is one sector long
+and invisible. Nothing is ever half-written to the panel, because core 1 is
+frozen between instructions and the DMA is reading a buffer core 1 is not
+writing. On un-park core 1 resumes at the instruction it was stopped at, its
+coalesced timer and DMA interrupts fire, and the next swap publishes.
+
+The new part is only that core 1 now also spends a few microseconds per
+operation spinning for the global lock instead of running. At 154 Hz refresh
+that is far below one refresh period and cannot skip a swap.
+
+And the failure mode is gone rather than hidden: before this card the panel
+stayed lit and moving on a wedge (core 1 unparked and running) or lit and frozen
+(core 1 parked for ever), with no way to tell from the front which - which is
+why the card could not say what the panel did. After it, the sector operation
+ends, core 1 is un-parked by code that is guaranteed to run, and the panel
+carries on.
+
+### 5. The numbers
+
+`tools/fw-size.sh`, every build the card names. The floor is 24,576.
+
+| build | `.stack` | `.bss` | `.rwtext` (IRAM) | image |
+|---|---|---|---|---|
+| default | **26,200** | 110,440 | 66,932 | 1,014,469 |
+| panic-test | **26,120** | 110,504 | 66,932 | 1,015,329 |
+| http-selftest | **25,768** | 110,824 | 66,932 | 1,049,021 |
+| start-in-portal | **26,200** | 110,440 | 66,932 | 1,014,157 |
+| ota-test-unhealthy | **26,200** | 110,440 | 66,932 | 1,014,565 |
+| ota-test-panic | **26,120** | 110,504 | 66,932 | 1,014,997 |
+| flash-stress | **26,024** | 110,616 | 66,932 | 1,018,973 |
+
+`spike-ota` and `store-selftest` also still build (both touched: `spike_ota.rs`
+took a guard, `store-selftest` goes through `Counted`).
+
+- **The fix is free.** The default build's `.stack`, `.bss` and `.rwtext` are
+  byte-for-byte what `main` has: 26,200 / 110,440 / 66,932. `critical_section`
+  was already linked in - esp-hal is its implementation - so the guard adds no
+  static, no allocation and nothing to IRAM.
+- **IRAM is unchanged at 66,932** on every build, including `flash-stress`.
+  Nothing moved into RAM; the guard runs from `.text` and the code it protects
+  was already `#[ram]` inside esp-storage.
+- **`flash-stress` costs 176 bytes of `.stack`**, which is the stress task's
+  future, and nothing else. The 4 KB sector buffer is on the heap, exactly as
+  the upload's is, so nothing large lives across an `await`.
+- **Stack chain**: on the fixed default build, `stage_sector`'s frame is **128
+  bytes** and `read_back`'s is **112** (`entry a1, N`, from the disassembly).
+  Card 241's Log recorded 144 for `stage_sector` on both 0.6.0 and 0.7.0, so the
+  guard has not grown the chain - the closure inlines into the call site. The
+  deep frames on this path are still `esp-bootloader-esp-idf`'s
+  `NorFlashRegion::read`/`write` at 4,144 / 4,160, which the guard does not
+  touch. Nothing on the settings chain grew either: the largest frame under
+  `save_*` is `Flash::save_wifi`'s 224 bytes, and `Counted::erase`/`write` do
+  not appear at all - they inline.
+
+Workspace tests: `timeout 1200 cargo test` from the repo root, **906 passed, 0
+failed, 1 ignored**. One run of it before that had
+`screeny-studio --test moved::the_status_poll_follows_a_panel_that_moved` fail;
+it passes alone (`cargo test -p screeny-studio --test moved`, 2 passed) and it
+is the known wall-clock/port-binding flake under load. 33 of the passes are
+`crates/fwimage`, one of them new (`stress_sector_stays_inside_the_slot`).
+
+### 6. The bench procedure
+
+Three phases, in this order, and **phase A gates the rest**: if the stress build
+wedges, the fix is wrong and running uploads only re-measures it more slowly.
+Total: about fifteen minutes including flashes.
+
+Artefacts are in
+`/private/tmp/claude-501/-Users-aaron-src-screeny/81d1cc11-75c9-4f5f-a521-784097e6406f/scratchpad/`.
+
+#### Phase A - the stress build (three runs, ~90 s of device time)
+
+Start the stream first, so core 1 is busy - that is what makes this the hard
+case:
+
+```bash
+curl -s -X POST http://workbench.local:8787/api/v1/player/set \
+     -H 'content-type: application/json' -d '{"device":"4a00a4","on":true}'
+```
+
+Then, for each of three runs (the task runs **once per boot**, so each run needs
+its own boot - re-flashing is the simplest way, and a `screeny-probe reboot` or
+a USB re-plug does as well):
+
+```bash
+tools/fw-run.sh \
+  /private/tmp/claude-501/-Users-aaron-src-screeny/81d1cc11-75c9-4f5f-a521-784097e6406f/scratchpad/screeny-fw-0.7.0-flash-stress.elf \
+  fw-0.7.0-stress-1 90
+```
+
+The run starts 30 s after boot and takes ~25-30 s, so 90 s of monitor covers it
+with margin. Expect, in `captures/fw-0.7.0-stress-1.log`:
+
+```
+flash-stress: BENCH BUILD - 500 erase+write+read cycles into the INACTIVE slot at 0x210000 (2048 KB), one sector each, stream and dither left running
+flash-stress: 100 of 500 cycles, 0 mismatches, longest masked window NNNNN us, longest cycle NNNNN us
+flash-stress: 200 of 500 cycles, 0 mismatches, ...
+flash-stress: 300 of 500 cycles, 0 mismatches, ...
+flash-stress: 400 of 500 cycles, 0 mismatches, ...
+flash-stress: 500 of 500 cycles, 0 mismatches, ...
+flash-stress: done - 500 cycles, 0 mismatches, ~28000 ms wall | erase us min/mean/max ~34000/~40000/~55000 | write us ~7000/~9500/~11000 | read us mean ~200 | longest masked window ~55000 us | longest cycle ~65000 us | core 1 swaps +NNNN
+```
+
+The erase and write numbers should match card 240's upload (34/40/55 ms and
+7/9.5/11 ms) - they are the same ROM calls. `core 1 swaps +NNNN` should be in
+the thousands: that is the proof core 1 refreshed the panel all the way through
+rather than sitting parked.
+
+**Pass**: three runs reach `done` with `mismatches 0`. That is 1,500 flash
+operations against the 248 that wedged three times out of three, and it settles
+the card.
+
+**Stop conditions.**
+- *Silence after the BENCH BUILD line, then `rst:0x7 (TG0WDT_SYS_RESET)` ~20 s
+  later.* The fix did not work. **Stop; do not run phase B or C.** Record the
+  last progress line (it gives the cycle count the wedge happened after) and
+  which run it was, and put the log in `captures/`. The next card is the
+  cooperative rendezvous in section 3.
+- *`mismatches` greater than 0, or any `flash-stress: ... failed` warning.* A
+  flash correctness problem, which is a different bug from the wedge. Stop and
+  report the offset in the warning.
+- *`flash-stress: this is a trial boot` / `an upload owns the slot` / `no
+  inactive app slot`.* The build refused to run, and none of those should be
+  true after a serial flash. `tools/fw-run.sh` passes `--erase-data-parts ota`,
+  which clears `otadata`, so a trial boot here means something else is wrong -
+  check the boot classification line before re-running.
+
+**Recovery.** A wedge recovers itself: MWDT0 resets the device in 20 s and it
+comes back on the same image. If it does not come back, unplug and re-plug the
+USB. Nothing the stress build does can stop the device booting - it writes only
+the inactive slot and never `otadata` - so a serial flash of the default build
+always gets it back.
+
+**What phase A leaves behind.** The inactive slot is full of the stress
+pattern. That is harmless: `otadata` is untouched, so nothing will ever boot it,
+and phase B's first upload overwrites it. Flash the default build before phase
+B either way:
+
+```bash
+tools/fw-run.sh \
+  /private/tmp/claude-501/-Users-aaron-src-screeny/81d1cc11-75c9-4f5f-a521-784097e6406f/scratchpad/screeny-fw-0.7.0-default.elf \
+  fw-0.7.0-default 30
+```
+
+#### Phase B - three stage-only uploads (~2 minutes)
+
+The same upload that wedged three times out of three, with the activation
+suppressed, three times:
+
+```bash
+cargo run --release -p screeny-probe -- --addr 192.168.7.221 \
+  fw-upload /private/tmp/claude-501/-Users-aaron-src-screeny/81d1cc11-75c9-4f5f-a521-784097e6406f/scratchpad/screeny-fw-0.7.1-good.bin
+```
+
+(no `--activate`; the probe sends `?activate=0` by default). Expect each to
+finish in ~25 s with the probe reporting `ok` and 1,014,528 bytes written, and
+one line per upload on the serial log:
+
+```
+ota: upload started - staging into 0x210000 (2048 KB slot), content-length Some(1014528)
+ota: upload accepted - 1014528 bytes in 248 sectors, ~25000 ms wall, ~12000 ms flash-busy (~47%) | erase us min/mean/max ... | write us ... | slowest sector ... us
+```
+
+**Pass**: three uploads accepted, `link downs +0` on the radio line each time.
+**Stop condition**: a `write: Broken pipe` from the probe and serial silence is
+the old wedge - stop and report, exactly as in phase A.
+
+#### Phase C - card 241's steps 1 to 3, unchanged
+
+Only after B passes. They are in `docs/board/review/241-*.md` and this card
+changes nothing about them:
+
+1. **The good update.** `fw-upload screeny-fw-0.7.1-good.bin --activate`, after
+   the player is on and a 10 s settle. Panel: "updating" ~25 s, "installing"
+   ~2 s, reboot. Confirm expected at 60-120 s.
+2. **The never-healthy image.** `fw-upload screeny-fw-0.7.1-unhealthy.bin
+   --activate`. Expect the app-side revert at ~180 s.
+3. **The panicking image.** `fw-upload screeny-fw-0.7.1-panic.bin --activate`.
+   Expect one panic and the bootloader's rollback, `state Aborted` - one panic,
+   not five, so the crash-loop guard is never reached.
+
+#### The artefacts
+
+Rebuilt from this branch, `FW_VERSION` unchanged at `0.7.0` for the device build
+(nothing a client can see changed, so card step 5 is met). All three `.bin`s
+pass `screeny-probe fw-scan`.
+
+| file | `esp_app_desc.version` | bytes |
+|---|---|---|
+| `screeny-fw-0.7.0-default.elf` | `0.7.0` - the build to serial-flash | - |
+| `screeny-fw-0.7.0-flash-stress.elf` | `0.7.0` - phase A only, never shipped | - |
+| `screeny-fw-0.7.1-good.bin` / `.elf` | `0.7.1` | 1,014,528 |
+| `screeny-fw-0.7.1-unhealthy.bin` / `.elf` | `0.7.2-unhealthy` | 1,014,416 |
+| `screeny-fw-0.7.1-panic.bin` / `.elf` | `0.7.3-panic` | 1,015,056 |
+
+Built with card 240's command, which is not optional in any of its parts:
+
+```bash
+espflash save-image --chip esp32 --flash-size 8mb \
+  --partition-table firmware/partitions.csv \
+  firmware/target/xtensa-esp32-none-elf/release/screeny-fw <out>.bin
+```
+
+### 7. What I am not sure about
+
+- **Whether the residual hardware hypothesis exists at all** (section 3): core 1
+  frozen mid cache-line-fill holding the flash arbiter. Unprovable from sources
+  either way, unneeded to explain anything on this card, and phase A settles it
+  empirically in ninety seconds.
+- **The exact per-sector probability.** "Order 0.5%" is arithmetic from three
+  observed wedges and one clean run, not a measurement of core 1's critical
+  section duty cycle. It is the right order - it predicts the observed spread -
+  but do not quote it as a number.
+- **Nothing here has run on hardware.** This worker touched no serial port, no
+  LAN and no camera. Every number in section 5 is from `fw-size.sh` and the
+  disassembly; every number in section 6 is a prediction, marked with `~`.
+- **The stack-chain baseline.** `stage_sector` measures 128 bytes now and card
+  241's Log records 144 for the same function on `main`. I could not rebuild
+  `main` in this worktree to diff it directly, so that comparison is against a
+  written record rather than a build I made. It is the safe direction either
+  way.
+- **`spike_ota.rs` was guarded but is never compiled into anything flashed**, so
+  that change is style rather than evidence.

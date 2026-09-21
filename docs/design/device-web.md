@@ -95,12 +95,21 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
 - **`espflash` never touches `otadata`.** With no `factory` partition a serial flash
   writes `ota_0` while a stale `otadata` may still select `ota_1`. `tools/fw-run.sh`
   must always pass `--partition-table firmware/partitions.csv --erase-data-parts ota`.
-- **Every flash write must park core 1**: `esp-storage`'s default returns
-  `OtherCoreRunning` while the display owns core 1. Use `multicore_auto_park()` and
-  the `critical-section` feature; never `multicore_ignore()`; only core 0 touches
-  flash. The park is per 4 KB sector (~50 ms): the circular DMA keeps the panel lit,
-  only the dither phase freezes. Small config writes need no special handling; an OTA
-  shows a static "updating" screen with dither off.
+- **Every flash write must park core 1, *and* go through `store::guarded`**:
+  `esp-storage`'s default returns `OtherCoreRunning` while the display owns core 1.
+  Use `multicore_auto_park()` and the `critical-section` feature; never
+  `multicore_ignore()`; only core 0 touches flash. The park is per 4 KB sector
+  (~50 ms): the circular DMA keeps the panel lit, only the dither phase freezes.
+  Small config writes need no special handling; an OTA shows a static "updating"
+  screen with dither off.
+  The `guarded` half is **card 245**, and it is not optional. The park is a
+  hardware clock stall that freezes core 1 wherever it is, and `esp-storage`
+  re-enables core 0's interrupts *before* it un-parks: an interrupt handler
+  firing into that window and wanting a lock the frozen core 1 holds deadlocks
+  both cores, silently, with only the liveness watchdog left to recover it. That
+  was the wedge that blocked OTA for a day. `store::guarded` holds the one global
+  `critical_section` across park -> ROM call -> un-park, so core 0 runs nothing
+  in the window. Erases and programs only; reads never park and need no guard.
 - **Open risk, bench only**: core 0 has interrupts masked for the same ~50 ms per
   sector erase. Whether esp-radio's WiFi survives that during an upload is the first
   thing to measure on hardware. Card 240 builds the instrument - one log line

@@ -257,11 +257,31 @@ be 400 ms), 64 KB block erase ~300-500 ms, 4 KB program ~8 ms. So:
 
 1. **Only core 0 ever touches flash.** `pre_write` parks core 1 *before* core 0 takes
    `esp-storage`'s lock. If core 1 were ever stalled while holding that same lock, core 0
-   would spin on it forever. Because `RawMutex` is per-instance and not a global critical
-   section, core 1 holding *any other* lock is harmless — but flash from core 1 is a hard
+   would spin on it forever. ~~Because `RawMutex` is per-instance and not a global critical
+   section, core 1 holding *any other* lock is harmless~~ — but flash from core 1 is a hard
    deadlock.
 2. **Never `multicore_ignore()`.** Core 1 fetches instructions from flash constantly; the
    safety contract of that call is exactly the thing we cannot promise.
+
+> **Correction, card 245 (2026-09-20). The struck-out clause in rule 1 is wrong, and it
+> cost a day of bench time.** It is true of the lock core 0 takes *explicitly* and false
+> of the ones it takes *implicitly, in an interrupt handler*. `MultiCoreStrategy::with`
+> (`common.rs` 339-349) is park → `f()` → un-park, and the interrupt masking lives inside
+> `f()`: the guard on `esp-storage`'s own lock is dropped when the `#[ram]` ROM wrapper
+> returns (`hardware.rs` 17, `lib.rs` 74), so core 0 takes interrupts again **while core 1
+> is still parked**, with ~40 ms of backlog queued. The first handler in is `esp-rtos`'s
+> `timer_tick_handler` (`esp-rtos-0.4.0/src/timer/mod.rs` 232), which takes the cross-core
+> scheduler lock (`scheduler.rs` 639) that core 1's executor holds on every wake. Frozen
+> core 1 owns it; core 0 spins for ever; `post_write` is never reached, so core 1 is never
+> un-parked. Both cores dead, no panic, no log — and only TIMG0's watchdog left. `esp-rtos`
+> writes the same hazard down as a FIXME on its own light-sleep hook (`sleep.rs` 118-126).
+>
+> **Rule 3, therefore: every erase and every program goes through `store::guarded`**,
+> which holds the one global `critical_section` — on this chip a single `esp_sync::RawMutex`
+> shared by both cores (`esp-hal-1.2.2/src/sync.rs` 99) — across park → ROM call → un-park,
+> so core 0 runs no interrupt handler while core 1 is frozen and can therefore wait on
+> nothing. Reads are exempt: `internal_read` (`common.rs` 149) never parks core 1.
+> Card 245's Log has the interleaving and the argument.
 
 ### The open risk
 
