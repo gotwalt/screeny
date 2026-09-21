@@ -265,6 +265,12 @@ async function start() {
       ['Last reset', words(f.reset_reason), f.odd_reset ? 'bad' : null],
     ];
     if (f.store_errors) rows.push(['Store errors', nf.format(f.store_errors), 'bad']);
+    // Card 199: GET /api/v1/panic, read once per boot rather than on every
+    // poll, so this can legitimately be older than the rest of the block -
+    // `d.panic_ago` says how much. `null` when there is nothing to say, which
+    // is the ordinary case: no panic on record, no watchdog reset, no update.
+    const panic = d.panic && panicLine(d.panic);
+    if (panic) rows.push(['Panic', panic.text, panic.tone]);
     rows.push(['When idle', IDLE[f.idle_mode] || words(f.idle_mode)]);
     facts($('#device-facts'), rows);
 
@@ -283,6 +289,52 @@ async function start() {
     if (d.facts_ago > 120) notes.push(`This is what it last said about itself, ${ago(d.facts_ago)}.`);
     $('#device-note').textContent = notes.join(' ');
     $('#device-note').hidden = notes.length === 0;
+  }
+
+  /** Card 199: the Panic row - what `GET /api/v1/panic` says that
+   *  `GET /api/v1/status` cannot, because it cannot change while the device
+   *  runs and so is read once per boot rather than on every poll
+   *  (`devices.rs`'s `PanicFacts`). One line rather than three: a panic, a
+   *  watchdog reset and a firmware update's outcome are three symptoms of the
+   *  same kind of event, and the brief asks for them together.
+   *
+   *  Card 195's wording rule, applied here too: this says what is known -
+   *  "panicked at net.rs:321, 1 boot ago" - never what it might mean. Only
+   *  repeated panics (`p.repeat`, `consecutive > 1`) reach the fault tone,
+   *  which is also what colours the Picture screen's chip
+   *  (`common.js`'s `attention`); a panic that did not repeat, a watchdog
+   *  reset, or an update that has not been confirmed are said in the warning
+   *  tone at most - a panel that panicked once and came back, or that is on
+   *  trial with a new build, is not (yet) trouble.
+   *
+   *  Returns `null` when there is nothing worth a line - no panic on record,
+   *  no watchdog reset, no update - which is the ordinary case. */
+  function panicLine(p) {
+    const r = p.reply;
+    const parts = [];
+    let tone = null;
+    if (r.last_panic) {
+      const lp = r.last_panic;
+      const boots = r.boot_count - lp.boot;
+      const agoText = boots === 1 ? '1 boot ago' : `${nf.format(boots)} boots ago`;
+      const repeatText = lp.consecutive > 1 ? `, ${nf.format(lp.consecutive)} times in a row` : '';
+      parts.push(`panicked at ${lp.file}:${lp.line}, ${agoText}${repeatText}`);
+      tone = p.repeat ? 'bad' : 'warn';
+    }
+    if (r.last_reset === 'wdt') {
+      parts.push('the watchdog reset it');
+      tone = 'bad';
+    }
+    if (r.update) {
+      const version = r.update.version ? ` ${r.update.version}` : '';
+      if (r.update.outcome === 'reverted') {
+        parts.push(`firmware${version} reverted${r.update.reason ? ` (${words(r.update.reason)})` : ''}`);
+        tone = tone || 'warn';
+      } else {
+        parts.push(`firmware${version} ${r.update.outcome}`);
+      }
+    }
+    return parts.length ? { text: parts.join(' · '), tone } : null;
   }
 
   /** Card 195: the Reboots row.

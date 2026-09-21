@@ -26,7 +26,7 @@
 
 use screeny::proto::control::{state as dev_state, Telemetry};
 use screeny::{ControlClient, Device, Target};
-use screeny_device_api::reply::StatusReply;
+use screeny_device_api::reply::{PanicReply, StatusReply};
 use screeny_device_api::{FwState, ResetReason, WifiState};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -84,6 +84,16 @@ pub struct DeviceRecord {
     /// Card 180: what the device's own HTTP API last said about itself.
     /// `None` on firmware that does not serve one, which is normal.
     pub facts: Option<DeviceFacts>,
+    /// Card 199: `GET /api/v1/panic`'s last answer - the panic breadcrumb, the
+    /// last firmware update's outcome, why this boot started. `None` on
+    /// firmware that serves no such route (older than 0.5.2) and on a device
+    /// that has not been read yet; both are normal.
+    pub panic: Option<PanicFacts>,
+    /// The `boot_id` a panic read has already been asked for, whether or not
+    /// it answered - so [`Registry::want_panic`] does not ask again until the
+    /// device reboots. Live only, never persisted and never on the wire: it is
+    /// about this process's own last poll, not a fact about the device.
+    panic_asked_for: Option<u32>,
     /// How reading that is going. Never a fault in `/healthz`.
     pub http: HttpHealth,
     /// Which port its HTTP API is on, when it is not
@@ -625,6 +635,42 @@ impl std::fmt::Debug for DeviceFacts {
     }
 }
 
+/// `GET /api/v1/panic`'s last answer (card 199): the panel's RTC panic
+/// breadcrumb, the last firmware update's outcome and why this boot started -
+/// the facts that cannot change while the device runs, and so are read once
+/// per `boot_id` on a route of their own rather than on every status poll
+/// (see [`screeny_device_api::reply::PanicReply`]'s docs, and
+/// `crate::fleet::status_once`, which asks for it).
+///
+/// Its own type beside [`DeviceFacts`] rather than folded into it, the same
+/// way [`PanicReply`] is its own route beside `StatusReply`: it is read at a
+/// different rate and can be absent - older firmware, and a device that has
+/// not rebooted since the studio started asking - independently of whether
+/// `facts` is there.
+///
+/// `#[derive(Debug)]` is safe here, unlike `DeviceFacts`: nothing in
+/// [`PanicReply`] carries the SSID or anything else credential-adjacent.
+#[derive(Clone, Debug, Serialize)]
+pub struct PanicFacts {
+    /// When this was read.
+    pub heard_unix: u64,
+    /// Everything the device said, in the shared shape.
+    #[serde(flatten)]
+    pub reply: PanicReply,
+    /// `last_panic.consecutive > 1`: the one fact here that colours the
+    /// Picture screen's status chip (`common.js`'s `attention`). Decided once,
+    /// here, so the page reads a flag rather than a threshold of its own.
+    pub repeat: bool,
+}
+
+impl PanicFacts {
+    #[must_use]
+    fn of(reply: PanicReply) -> Self {
+        let repeat = reply.last_panic.as_ref().is_some_and(|p| p.consecutive > 1);
+        PanicFacts { heard_unix: unix_now(), reply, repeat }
+    }
+}
+
 /// What one status read changed, for the caller's log line.
 ///
 /// Deliberately only counters and flags: the reply itself carries the SSID and
@@ -1103,6 +1149,42 @@ impl Registry {
         // one more line when it does.
         d.http.said = false;
         Some(Heard { reboots, unasked_reboots, rebooted, unasked })
+    }
+
+    // -------------------------------------------- card 199: the panic route ----
+
+    /// **Should the poller ask this device for `GET /api/v1/panic`?**
+    ///
+    /// True exactly once per `boot_id`: this is the first status read at
+    /// `boot_id` whose last panic ask, if any, was for a different one (or
+    /// there has never been one). The caller decides the answer with
+    /// [`Registry::heard_panic`], which marks the ask taken whether the read
+    /// worked or not - that is what keeps this "once", not a retry loop.
+    ///
+    /// False for a device this registry does not know, which a reboot in the
+    /// moment between the status read and this call would otherwise turn into
+    /// a panic read against nowhere.
+    #[must_use]
+    pub fn want_panic(&self, id: &str, boot_id: u32) -> bool {
+        self.lock().get(id).is_some_and(|d| d.panic_asked_for != Some(boot_id))
+    }
+
+    /// Record that `GET /api/v1/panic` was asked for `boot_id`, and what it
+    /// said - `None` for a fault, a 404 included.
+    ///
+    /// The ask is marked taken **either way**: a 404 (firmware older than
+    /// 0.5.2) or a read that timed out must not be retried every ten seconds
+    /// until the device reboots again, which is the same "once per `boot_id`"
+    /// rule the read itself is bound by. A fault leaves [`DeviceRecord::panic`]
+    /// where it was, the same way [`Registry::http_failed`] leaves `facts`:
+    /// the last thing the device said about itself stays readable.
+    pub fn heard_panic(&self, id: &str, boot_id: u32, reply: Option<PanicReply>) {
+        if let Some(d) = self.lock().get_mut(id) {
+            d.panic_asked_for = Some(boot_id);
+            if let Some(reply) = reply {
+                d.panic = Some(PanicFacts::of(reply));
+            }
+        }
     }
 
     /// **The studio has just asked this panel to reboot.**

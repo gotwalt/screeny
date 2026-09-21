@@ -386,6 +386,8 @@ fn the_page_can_show_what_only_the_device_knows() {
     // Every flag the block draws a tone from is the server's judgement, read
     // by name. A number here would be a second opinion about a threshold.
     // Card 195: two levels for the stack, and the reboot nobody asked for.
+    // Card 199: `p.repeat` (`last_panic.consecutive > 1`) is the panic
+    // breadcrumb's own one.
     for decided in [
         "f.stack_warn",
         "f.stack_fault",
@@ -394,6 +396,7 @@ fn the_page_can_show_what_only_the_device_knows() {
         "f.odd_reset",
         "f.store_errors",
         "f.unasked_reboots",
+        "p.repeat",
     ] {
         assert!(PANEL_JS.contains(decided), "the page reads {decided} rather than deciding it");
     }
@@ -403,10 +406,11 @@ fn the_page_can_show_what_only_the_device_knows() {
     for invented in ["2048", "4096", "8192", "0.85", "< 4312", "98304"] {
         assert!(!body.contains(invented), "the page must not carry its own copy of a threshold: {invented}");
     }
-    // The four that are meant to be loud are loud, and nothing else is: a
+    // The six that are meant to be loud are loud, and nothing else is: a
     // reset that should not have happened, a store error, a stack past the
-    // fault line and a heap past it (card 195 made both of those faults).
-    assert_eq!(body.matches("'bad'").count(), 4, "the four fault tones, and only those: {body}");
+    // fault line and a heap past it (card 195 made both of those faults), and
+    // - card 199 - repeated panics and a watchdog reset.
+    assert_eq!(body.matches("'bad'").count(), 6, "the six fault tones, and only those: {body}");
     // ...and the reboot the studio did not ask for is *not* one of them.
     let reboots = body.find("['Reboots'").expect("the reboots row");
     let row = &body[reboots..body[reboots..].find('\n').map_or(body.len(), |n| reboots + n)];
