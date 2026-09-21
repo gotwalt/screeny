@@ -162,3 +162,85 @@ bird broadside, so the planform could only be judged on a rig.
 The glide "M" needed doubling to be visible at all: at 0.12/-0.18 rad it was under a LED
 of deflection across the semi-span and head-on the bird was a flat line. At 0.24/-0.30 it
 is the gull M the card asks for.
+
+### 2026-09-21 - what is drawn now
+
+A bird, in fractions of its drawn wingspan `S`:
+
+| part | where |
+| --- | --- |
+| nose / chest / hip / tail tip | `+0.30 / +0.06 / -0.16 / -0.40` along the heading |
+| shoulder | `+0.11` forward, `0.05` off the centre line |
+| wrist | `0.45` of the semi-span out, `-0.02 .. +0.10 S` behind the shoulder with the fold |
+| tip | a further `0.55` of the semi-span, swept back `0.34 .. 1.05` rad with the fold and drawn in a tenth |
+| wing chord | `0.19 S` at the root, `0.115 S` at the wrist, nothing at the tip |
+| tail fan | `0.090 .. 0.150 S` half-width, with `glide` and `|roll|` |
+
+Angles: inner dihedral `0.62 * warp(phase)`, hand dihedral `1.3x` that on `phase - 0.55`,
+fold `smoothstep(-0.35, 0.75, d/dphase warp(phase - 0.55))`. Glide holds the inner wing
+at `+0.24` rad and the hand at `-0.30`, and the fold at `0.34`.
+
+Stroke weights: the chest keeps card 168's `(span * 0.17).clamp(0.42, 1.30)` exactly, and
+the neck (`0.60x`, floor 0.40) and the tail boom (`0.42x`, floor 0.38) are fractions of
+it that floor at about the same sub-pixel width - so a distant bird is the same even dash
+it was. The wing spar keeps `(span * 0.13).clamp(0.38, 1.05)` and the hand is `0.70x` of
+that (floor 0.36), because a wing's leading edge is thicker at the shoulder.
+
+**Level of detail**: `AREA = (5.0, 9.0)` LEDs of projected span, smoothstepped, scaling
+the chord and the tail fan. The default flock's biggest bird runs a median of 6.4 LEDs
+and 7.7 at p95 (`ten_minutes_of_flight`), so at the default only the nearest few birds
+have any surface at all and the rest are exactly card 168's skeleton.
+
+**The default picture**: 5-10% of the 2048 LEDs differ from before (113, 118, 161 and 199
+LEDs at t = 12, 20, 28 and 36 s, seed 7), which is most of a bird pixel here and there
+and nothing else - the sky is untouched. The flock reads exactly as it did: same density,
+same marks, same character. What changed is that a near bird is slightly narrower through
+its upstroke and has a hint of wing behind its leading edge. See `compare-default.png`.
+
+**Panel safety.** Black backdrop with six big white birds, 1800 frames: peak APL **3%**,
+the limiter never below x1.00, worst frame 966 of 1464 bytes, 0 lossy. A lit sky with the
+same six peaks at 24% for the dusk scheme, which is what the dusk sky alone already costs.
+Filled wings gave the panel nothing to worry about - if anything less, because the fold
+shortens the span through half of every beat. At the far corner of both controls
+(`birds 150, size 3.0`) the sky picture peaks at **1462 of 1464 bytes** against 1433 for
+the same sweep before this card; still exact, but there is no headroom left there. That
+and the flock's tiny roll are **card 124**.
+
+**Tests.** `a_filled_triangle_covers_its_own_area` (96.00 of 96 square LEDs either
+winding; a degenerate triangle draws exactly 0),
+`the_wing_is_narrower_going_up_than_coming_down` (**12.3 LEDs mid-upstroke against 16.0
+mid-downstroke**, projected through a camera below the bird, at the two extremes of the
+wing's own vertical speed), `a_distant_bird_has_no_surface_left`, and
+`every_frame_goes_out_exactly` now flying every backdrop twice - at the defaults and at
+six birds drawn as big as `size` goes.
+
+`cargo test -p screeny-art --release`: 118 passed. `cargo clippy -p screeny-art
+--all-targets`: silent, no `#[allow]` added. No golden of any other patch was touched;
+nothing outside `crates/art/src/patches/flock/` and `crates/art/README.md` changed, and
+`sim.rs` is byte-identical.
+
+**Pictures** in the session scratchpad under `flock-wings/`, before over after in each
+pair: `compare-default.png` (the 55-bird default, four moments), `compare-glide.png`,
+`compare-flapbig.png`, `compare-flap.png`, `compare-bank.png`, and the size-3 singles
+`before/bigsheet.png` / `after/bigsheet.png`.
+
+**What still looks wrong**, honestly:
+
+- **The body is still too long for the wings.** Real gulls are 0.44 of a wingspan nose to
+  tail; this bird is 0.70, because that is what card 168 chose and it is what makes a
+  three-pixel bird read as a dart. Seen nearly head-on - which is the commonest view,
+  because the camera flies with the flock - the body carries the shape and the bird reads
+  a little like a paper dart.
+- **The wing root runs into the body.** The root chord reaches back to about the hip, so
+  there is no gap between the wing's trailing edge and the body and the whole thing is
+  one mass. At 16 LEDs there is no room for a gap, but it is why a spread bird seen from
+  below is closer to a cross than to a bird.
+- **The wrist kink barely reads in the common views.** It is unmistakable in the planform
+  and head-on (the "smile" and "frown" of a beating wing), and nearly invisible from the
+  side. What actually carries the flap in most frames is the span shortening and the tip
+  lagging, not the bend.
+- **The underside flash almost never fires**, because the flock barely rolls. Card 124.
+- **No head.** The neck is a thinner stroke and that is all; there is no distinguishable
+  head at any size the panel offers.
+- At 3-5 LEDs the bird is a dash or a shallow V, exactly as before. That is the design,
+  not a gap - but it means most of the default picture gets nothing from this card.
