@@ -202,3 +202,65 @@ the box, a glyph a face has not got is empty, and a crisp face's cells land on
 LED boundaries.
 
 `cargo test -p screeny-art --lib vesta`: 21 passed. `--lib faces`: 8 passed.
+
+### Step 2: looked at all seven candidates, kept six; the crispness proof
+
+**What I looked at.** Rendered one contact sheet per face (01:23 / 04:56 /
+07:08 / 09:59 / 09:05, settled, scale 12) and an all-faces sheet at 04:56, then
+read every one.
+
+- **Terminus Bold** is the best face in the set by a distance and is the
+  **default**: 13 x 20, 3-LED strokes, the largest and most confident thing the
+  module will hold. Its 5 is a flat bar over a full bowl - exactly the
+  complaint the owner made about the drawn one - its 4 is open-topped, its 7
+  has no crossbar, its 1 has a foot and its 0 is slashed, so 0/8 and 1/7 are
+  never in doubt across a dark room.
+- **Terminus** (regular) is the same design a weight lighter; worth its slot on
+  a *night* clock, where less ink is a feature.
+- **Spleen** is the second voice: square shoulders, a flat-topped 3, a 4 built
+  from right angles and a 9 with a closed tail. Crisp, and not a Terminus.
+- **Dina at x2** is the chunky retro one: 2 x 2-LED pixels, 12 x 18, so it
+  leaves more black card above and below, which reads well as a flap. Its 1 has
+  a full-width foot.
+- **Micro Grotesk** is the odd one out and I nearly dropped it: it is an
+  outline, so it is soft at every edge (19 colours in a settled frame against a
+  crisp face's 4) and its 1 is a bare stem. It stays because it is the only
+  face in the list with a **round, unslashed 0** and true circular bowls - a
+  different voice, not a worse Terminus - and because a soft face next to five
+  hard ones is a real choice. If one has to go, this is the one.
+
+**Rejected, with reasons.** `Dina Bold` at x2 was generated and looked at side
+by side with Dina: 4-LED strokes close the counters - the 0 becomes a slot, the
+5 and the 6 are hard to tell apart - and it doubles the ink on a clock whose
+whole point is few lit pixels. Dropped. `cherry-13-b` was the best-looking
+second chunky face but its BDF states no licence (see FACES.md); same for
+`gohufont`, `haxor`, `boxxy`, `sq`, `ctrld-font`, `zevv-peep` and `kourier`.
+`ter-u28b/n` and `ter-u16n` are Terminus again at other sizes and add nothing.
+`uw-ttyp0 t0-22` has oldstyle figures. `zevv-peep`, `kourier`, `mplus_h12r` and
+`creep` each fail on a glyph (an odd 6, a descender on the 4, a bare 1).
+
+**The crispness proof.** `a_pixel_face_is_exactly_crisp_at_size_one` renders
+sixteen settled numerals per face and collects every distinct colour *inside
+the module boxes*: a crisp face gives exactly **two** - full ink and true black
+- and nothing between. The non-crisp faces are asserted to give more than four,
+so the test cannot pass by measuring nothing. The same thing shows on the wire:
+`snapshot --time 04:56` logs `colours=4` for every pixel face and `colours=18`
+/ `19` for `Vesta` / `Micro Grotesk`. I also looked at Dina zoomed 2x and every
+lit dot is the same brightness.
+
+**Micro Grotesk's geometry, measured** rather than assumed: its widest digit is
+0.69 of the cap height at wght 400, so at true proportions a full-height `4` is
+14 LEDs wide and fills the module edge to edge with no black margin. Condensed
+to 0.80 it is 12.25 x 22 - full height, verticals still 2 LEDs - so the
+condensed variant the card told me to judge by looking is the better one and is
+what is embedded.
+
+`crates/art/src/faces/FACES.md` written: the table, each face's own
+COPYRIGHT/NOTICE as it appears in the file, the full OFL 1.1, BSD 2-Clause and
+MIT texts, a note on the Reserved Font Name "Terminus Font" (these are
+unmodified extracts, so the choice may carry the name), the faces that were
+left out for want of a licence, and how to add a non-redistributable face
+locally without committing it. `crates/art/README.md`'s vesta section gains the
+face table, the half-LED rule and the blank card.
+
+`cargo test -p screeny-art`: 95 + 4 + 3 passed, 0 failed.

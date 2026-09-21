@@ -825,6 +825,49 @@ mod tests {
         assert_eq!(shot("21:12", 3.0), take(&DEF, &params(), &other).preview);
     }
 
+    /// **The crispness proof.** A pixel face at `size` 1 is *exactly* crisp:
+    /// inside a module there are two colours and no others, full ink and true
+    /// black, with nothing in between. That is the whole reason to embed a
+    /// pixel font rather than draw one - module centres and the axle are pixel
+    /// boundaries, so a face whose cells are whole LEDs has every cell
+    /// boundary on an LED boundary and `Frame::supersample`'s 36 samples
+    /// inside an LED all land in the same cell.
+    ///
+    /// The faces that are not crisp are checked too, the other way round: if
+    /// they came out with two colours as well, this test would be measuring
+    /// nothing.
+    #[test]
+    fn a_pixel_face_is_exactly_crisp_at_size_one() {
+        for (i, face) in faces::FACES.iter().enumerate() {
+            let set: &[(&str, f32)] = &[("font", i as f32), ("zero", 1.0)];
+            let g = geom(set);
+            let (mut colours, mut lit) = (std::collections::BTreeSet::new(), 0);
+            // Every numeral, and the four times of the contact sheets.
+            for when in ["01:23", "04:56", "07:08", "09:59"] {
+                let frame = run(when, 3.0, set);
+                for y in 0..H {
+                    for x in 0..W {
+                        let v = y as f32 + 0.5 - g.axle;
+                        if !g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) || v.abs() > g.h * 0.5 {
+                            continue;
+                        }
+                        let p = frame.pixel(y * W + x);
+                        colours.insert(p.to_srgb8());
+                        lit += usize::from(p.luma() > 1e-4);
+                    }
+                }
+            }
+            // Sixteen numerals, each around a hundred LEDs minus the seam.
+            assert!(lit > 1000, "{}: only {lit} lit LEDs over four times", face.name);
+            if face.crisp() {
+                assert_eq!(colours.len(), 2, "{}: a crisp face drew {:?}", face.name, colours);
+                assert!(colours.contains(&[0, 0, 0]), "{}: no black card", face.name);
+            } else {
+                assert!(colours.len() > 4, "{}: {} colours - is this face crisp after all?", face.name, colours.len());
+            }
+        }
+    }
+
     /// The seam is the signature, so it is really there: the row of LEDs on
     /// the axle is black all the way across every module.
     #[test]
