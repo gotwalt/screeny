@@ -950,6 +950,16 @@ phone (iOS 18.7, card 223): it does not send DHCP option 114, because RFC
 redirect a captive probe. The catch-all answers with the setup page itself
 (§8.9). The DNS catch-all and the HTTP catch-all carry the whole weight.
 
+**The button is how a person reaches this portal on purpose.** A device with a
+button (Gen 1: GPIO15, active low, internal pull-up) MUST treat a press shorter
+than one second as §6.3's `IDENTIFY` for ten seconds, and a hold past one second
+MUST put a countdown on the panel and, at **five seconds held**, forget the
+stored credentials and raise this portal - releasing before five seconds cancels
+and changes nothing, which is what makes the destructive half safe. A wipe is
+not a failure, so `GET_WIFI` afterwards reads `DISCONNECTED` and not `FAILED`
+(§6.3), and a device MAY refuse the hold while a firmware update (§8.10) is in
+flight or on trial, provided it says so on the panel.
+
 **The serial console this section used to specify does not exist and will not
 be built.** There is no line reader on the UART: `wifi set` / `wifi get` /
 `wifi clear` / `info` / `stats` / `reboot` were never implemented, and neither

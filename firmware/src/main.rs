@@ -30,6 +30,7 @@
 //! | 0 | `control` | UDP 49375: every opcode in spec section 6.3 |
 //! | 0 | `mdns` | `_screeny._udp` and `_http._tcp`, TXT from the `GET_INFO` bytes |
 //! | 0 | `http` x2 | TCP 80: the status page and the `screeny-device-api` JSON |
+//! | 0 | `button` | GPIO15: a short press identifies, five seconds wipes the WiFi |
 //! | 0 | `telemetry` | the serial-log numbers a camera cannot measure |
 
 #![no_std]
@@ -44,6 +45,8 @@ extern crate alloc;
 /// Card 220's `apsta-probe` build: what APSTA costs in heap. Off by default.
 #[cfg(feature = "apsta-probe")]
 mod apsta_probe;
+/// Card 230: GPIO15, the gesture ladder and the three screens that go with it.
+mod button;
 mod display;
 mod fb;
 /// Card 245's bench build: erase, write and read back inactive-slot sectors at
@@ -198,7 +201,15 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// and `fw_state` describes the **running** slot - after a rollback it reads
 /// `valid` for the image that is running, not `invalid` for the one that was
 /// rejected, which `GET /api/v1/panic`'s `update` already describes in words.
-pub const FW_VERSION: &str = "0.7.1";
+///
+/// **0.8.0 is card 230: the button does something.** GPIO15 is an input with
+/// the internal pull-up at last; a press shorter than a second shows the status
+/// screen for ten seconds (as `IDENTIFY`, so a stream underneath keeps being
+/// decoded), a hold past a second puts a countdown on the panel, and five
+/// seconds forgets the WiFi credentials and raises the setup portal. Letting go
+/// during the countdown changes nothing, and the hold is refused - with a
+/// screen that says why - while a firmware update is in flight or on trial.
+pub const FW_VERSION: &str = "0.8.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -1129,6 +1140,15 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     spawner.spawn(telemetry_task().unwrap());
+    // Card 230: the button. **After the radio and the store**, because a five
+    // second hold hands `Event::ButtonWipe` to the provisioning task and asks
+    // the store to forget the credentials, and neither should be raised before
+    // there is anything to raise it with. GPIO15 is also the board-ID ADC
+    // strap and the MTDO pin: `src/button.rs` has the whole of 008's point 4,
+    // and nothing else in this firmware may read that pin while this task
+    // holds it.
+    assert_pin(&peripherals.GPIO15, tidbyt::BUTTON_GPIO.unwrap_or(0));
+    spawner.spawn(button::button_task(peripherals.GPIO15.degrade()).unwrap());
     // Card 227: says when a stack goes deeper than it ever has, at 4 Hz, so
     // the line lands next to whatever caused it. See `stack_probe`.
     spawner.spawn(stack_probe::watch_task().unwrap());

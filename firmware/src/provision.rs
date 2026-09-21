@@ -61,10 +61,11 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use edge_nal::UdpBind;
 use edge_nal_embassy::{Udp, UdpBuffers};
-use embassy_futures::select::{select, select3, Either, Either3};
+use embassy_futures::select::{select, select3, select4, Either, Either3, Either4};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use esp_radio::wifi::ap::AccessPointConfig;
 use esp_radio::wifi::sta::StationConfig;
@@ -156,6 +157,16 @@ static MACHINE: BlockingMutex<CriticalSectionRawMutex, RefCell<Option<Provisione
 /// dispatch's captive-portal hook, which is on the request path and must not
 /// take a lock to decide a 404.
 static AP_UP: AtomicBool = AtomicBool::new(false);
+
+/// The button held for five seconds (card 230).
+///
+/// A [`Signal`] and not a call, for the same reason [`crate::NEW_WIFI`] is
+/// one: the actions a `ButtonWipe` produces (`StopJoin`, `ClearCredentials`,
+/// `RaiseAp`) need the `WifiController` and the flash store, and both of those
+/// belong to [`provision_task`]. The button task raises this and goes back to
+/// watching the pin; nothing is written from the task that owns the GPIO
+/// interrupt, and only the newest request matters.
+pub static BUTTON_WIPE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Station link-down edges since boot.
 ///
@@ -346,6 +357,23 @@ pub fn render_updating(what: crate::ota::Panel, frame: &mut Rgb888Frame) {
     };
     if let Err(e) = screeny_provision::render(&screen, frame) {
         warn!("ota: the updating screen could not be drawn: {:?}", e);
+    }
+}
+
+/// Card 230's three button screens, through the same renderer again.
+///
+/// Not a [`PanelScreen`] for the same reason [`render_updating`] is not: the
+/// provisioning machine knows nothing about a button and should not learn. It
+/// knows about `Event::ButtonWipe`, which is the only part of this that is its
+/// business.
+pub fn render_button(what: crate::button::Panel, frame: &mut Rgb888Frame) {
+    let screen = match what {
+        crate::button::Panel::Countdown(seconds_left) => Screen::WipeCountdown { seconds_left },
+        crate::button::Panel::Cancelled => Screen::WipeCancelled,
+        crate::button::Panel::Refused => Screen::WipeUnavailable,
+    };
+    if let Err(e) = screeny_provision::render(&screen, frame) {
+        warn!("button: the screen could not be drawn: {:?}", e);
     }
 }
 
@@ -870,13 +898,22 @@ impl Driver {
             Action::RaiseAp => self.raise_ap(controller).await,
             Action::DropAp => self.drop_ap(controller).await,
             Action::CommitCredentials { which } => self.commit(which).await,
+            // Card 230, and **the only path in this firmware that erases
+            // stored credentials**. It is reached from exactly one event -
+            // `Event::ButtonWipe`, raised by five seconds of the button and by
+            // nothing else - and it runs here, in the task that owns the
+            // radio, rather than in the button task: the write goes through
+            // the store's guarded path (card 245) and nothing about it happens
+            // inside an interrupt or an HTTP handler.
             Action::ClearCredentials => {
-                // Nothing in this firmware can produce `Event::ButtonWipe`
-                // yet - the button is cards 230/231 - so this is unreachable,
-                // and card 223 was told in as many words not to write a path
-                // that erases the store. When the button lands, the erase goes
-                // here and nowhere else.
-                warn!("provision: ClearCredentials: no event in this build can ask for it (cards 230/231)");
+                crate::store::clear_wifi().await;
+                // The in-RAM copies go with it, or the next `StartJoin` would
+                // cheerfully rejoin the network the owner just asked this
+                // device to forget - and `GET_WIFI` would still name it.
+                self.held.stored = None;
+                self.held.trial = None;
+                self.held.trial_persist = true;
+                crate::set_current_ssid(b"");
             }
             Action::Announce => crate::net::INFO_CHANGED.signal(()),
             // `Action` is `#[non_exhaustive]`.
@@ -904,6 +941,19 @@ impl Driver {
         // only ever uses this string to report back what was tried.
         let name = core::str::from_utf8(ssid.as_bytes()).unwrap_or("");
         let acts = step(Event::CredentialsPosted { ssid: name }, crate::now_ms());
+        self.apply_actions(acts, controller).await;
+    }
+
+    /// The button was held for five seconds (card 230).
+    ///
+    /// One event in, and the machine decides the rest: `StopJoin` for whatever
+    /// was in flight, `ClearCredentials`, `RaiseAp`. It is deliberately the
+    /// same path from every state - online, joining, mid-trial - because
+    /// `crates/provision` has a test for each of them and the firmware should
+    /// not add a sixth opinion.
+    async fn wiped(&mut self, controller: &mut WifiController<'static>) {
+        warn!("provision: the button asked for a wifi wipe");
+        let acts = step(Event::ButtonWipe, crate::now_ms());
         self.apply_actions(acts, controller).await;
     }
 
@@ -950,14 +1000,23 @@ impl Driver {
         // A post that arrives mid-attempt is the user correcting a typo: the
         // machine turns it into `StopJoin` + a new `StartJoin`, so it has to be
         // able to interrupt this.
+        //
+        // **And so does the button** (card 230). A boot-time join is three
+        // attempts and 45 s, and "it cannot get on the network" is exactly the
+        // moment somebody reaches for the button: a wipe that waited for the
+        // attempt in flight would look like a button that does not work.
         let outcome = with_timeout(
             ATTEMPT_WAIT,
-            select(controller.connect_async(), crate::NEW_WIFI.wait()),
+            select3(
+                controller.connect_async(),
+                crate::NEW_WIFI.wait(),
+                BUTTON_WIPE.wait(),
+            ),
         )
         .await;
 
         let ev = match outcome {
-            Ok(Either::First(Ok(info))) => {
+            Ok(Either3::First(Ok(info))) => {
                 // The one line in this firmware that says a station SSID out
                 // loud, moved here from `station_loop` unchanged.
                 info!(
@@ -971,7 +1030,7 @@ impl Driver {
                 }
                 return self.await_address(controller).await;
             }
-            Ok(Either::First(Err(ConnectionError::Failed(info)))) => {
+            Ok(Either3::First(Err(ConnectionError::Failed(info)))) => {
                 // Only the reason: it is the diagnostic, and it keeps one more
                 // copy of the SSID out of the bench log.
                 warn!("wifi: join failed: {:?}", info.reason);
@@ -979,7 +1038,7 @@ impl Driver {
                     reason: fail_reason(info.reason),
                 }
             }
-            Ok(Either::First(Err(e))) => {
+            Ok(Either3::First(Err(e))) => {
                 warn!("wifi: join failed: {:?}", e);
                 Event::JoinFailed {
                     reason: FailReason::Other,
@@ -988,7 +1047,12 @@ impl Driver {
             // The machine turns this into `StopJoin` + a new `StartJoin`
             // itself. Nothing else is fed in between - a `Tick` here could
             // expire the attempt first and start a different join.
-            Ok(Either::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Second(n)) => return self.posted(n, controller).await,
+            // The button, mid-attempt (card 230). Same rule as a post: one
+            // event, and the machine decides - it answers `StopJoin` first,
+            // which is what abandons the attempt whose future has just been
+            // dropped.
+            Ok(Either3::Third(())) => return self.wiped(controller).await,
             Err(_) => {
                 warn!("wifi: the radio did not answer the attempt in {} s", ATTEMPT_WAIT.as_secs());
                 let _ = controller.disconnect_async().await;
@@ -1007,11 +1071,17 @@ impl Driver {
         let stack = self.sta_stack;
         let got = with_timeout(
             DHCP_WAIT,
-            select(stack.wait_config_up(), crate::NEW_WIFI.wait()),
+            select3(
+                stack.wait_config_up(),
+                crate::NEW_WIFI.wait(),
+                // Twenty seconds of waiting for DHCP is the other place a
+                // wipe could sit unheard (card 230).
+                BUTTON_WIPE.wait(),
+            ),
         )
         .await;
         let ev = match got {
-            Ok(Either::First(())) => match stack.config_v4() {
+            Ok(Either3::First(())) => match stack.config_v4() {
                 Some(c) => {
                     self.link_was_up = true;
                     Event::Joined {
@@ -1022,7 +1092,8 @@ impl Driver {
                     reason: FailReason::Other,
                 },
             },
-            Ok(Either::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Second(n)) => return self.posted(n, controller).await,
+            Ok(Either3::Third(())) => return self.wiped(controller).await,
             Err(_) => {
                 warn!("wifi: associated, but DHCP did not answer in {} s", DHCP_WAIT.as_secs());
                 Event::JoinFailed {
@@ -1135,14 +1206,15 @@ pub async fn provision_task(
         // Idle. All three of these borrow the controller immutably or not at
         // all, which is what lets them be awaited together; see the module
         // docs for the one event that cannot join them.
-        match select3(
+        match select4(
             controller.wait_for_access_point_connected_event_async(),
             crate::NEW_WIFI.wait(),
+            BUTTON_WIPE.wait(),
             Timer::after(Duration::from_secs(1)),
         )
         .await
         {
-            Either3::First(Ok(ev)) => {
+            Either4::First(Ok(ev)) => {
                 use esp_radio::wifi::ap::EventInfo;
                 // The MAC is not logged: it identifies the owner's phone, and
                 // the count is what the machine's retry rule reads.
@@ -1158,12 +1230,17 @@ pub async fn provision_task(
                     with(Provisioner::ap_clients).unwrap_or(0)
                 );
             }
-            Either3::First(Err(e)) => {
+            Either4::First(Err(e)) => {
                 warn!("provision: ap event subscription failed {:?}", e);
                 Timer::after(Duration::from_secs(1)).await;
             }
-            Either3::Second(n) => d.posted(n, &mut controller).await,
-            Either3::Third(()) => d.tick(&mut controller).await,
+            Either4::Second(n) => d.posted(n, &mut controller).await,
+            // Card 230. The machine has had `Event::ButtonWipe` since card 221
+            // and has been host-tested from every state, including during an
+            // online-origin trial; all that was missing was something that
+            // could raise it.
+            Either4::Third(()) => d.wiped(&mut controller).await,
+            Either4::Fourth(()) => d.tick(&mut controller).await,
         }
     }
 }

@@ -58,6 +58,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod button;
 pub mod config;
 pub mod core;
 pub mod device;

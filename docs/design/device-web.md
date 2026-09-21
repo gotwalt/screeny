@@ -343,6 +343,26 @@ Five lines, and the fifth is the one that matters.
    was rejected and why. No cable is needed. A cable (`tools/fw-run.sh`) is
    still the thing that always wins, because it erases `otadata`.
 
+## The button on the back (card 230)
+
+The Tidbyt has one button, and it now does two things. **Press it and let go**
+and the panel shows you which device this is for ten seconds - the name, the
+address, the firmware version and the signal - over the top of whatever it was
+showing, and the picture underneath keeps arriving the whole time. **Hold it**
+and after a second the panel starts counting down from four with "wipe wifi" on
+it: let go at any point in that countdown and nothing at all happens (it says
+"cancelled" for a second, so you know you got away with it), keep holding and at
+five seconds the device forgets the network it was on and comes up in the setup
+portal with the QR code, ready to be given a new one.
+
+Two things worth knowing. The wipe is **not** a factory reset: the name, the
+brightness and everything else are untouched, only the WiFi credentials go, and
+the device is off the LAN until somebody gives it a network again - so have the
+phone ready before you hold the button. And while a firmware update is being
+uploaded or is still on trial, the hold is refused and the panel says why:
+forgetting the network mid-update would orphan the upload, or take away the
+address the new firmware needs to prove itself and get it rolled back.
+
 ## Build order
 
 | card | what | hardware |
@@ -364,7 +384,7 @@ Five lines, and the fifth is the one that matters.
 | 225 | **done** - spec 8.1 is the setup portal (serial console struck), 8.3 the real join sequence, 8.5-8.9 the HTTP API; nine code/spec disagreements listed and disposed of in the card's Log | no |
 | 235 | **done** - the simulator answers a captive probe with a `200` page like fw 0.5.1, not a `302` | no |
 | 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
-| 230 | the button, **one card** (decision 10): debounce, short press = status/identify for 10 s, hold 5 s with an on-panel countdown (release cancels) = wipe WiFi -> portal. 231 (15 s factory reset, held-at-boot) is dropped | yes |
+| 230 | **built (fw 0.8.0), waiting for the bench**: the button - GPIO15 with the internal pull-up, the gesture recogniser in `crates/provision::button` (12 host tests), a short press = `IDENTIFY` for 10 s through the mechanism that already existed, hold 5 s with the on-panel countdown = wipe WiFi -> portal, and the hold refused while an update is in flight or on trial. `crates/sim` can press it (`SimHandle::press_button`); 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
 | 240 | **done, on the device (fw 0.6.0)** - `POST /api/v1/firmware` streams an image sector by sector into the inactive slot (`crates/fwimage`: 006's checks as a scanner; wrong chip/project refused before the first erase; SHA checked on arrival and read back from flash); `otadata` untouched, so nothing it does can change what boots. Bench: 998 KB in 25 s under a live stream, erases ~40 ms (55 worst), **link downs 0**, ~21% of stream frames lost during the upload, the updating screen on the panel | yes |
 | 241 | **done, on the device (fw 0.7.0)** - OTA activate / confirm / revert (`crates/otastate`): an upload activates by default (`?activate=0` stages only), boots on trial, confirms itself when healthy (never before 60 s), reverts at 180 s, and the bootloader rolls back any image that resets during its trial. Proved on the bench with a good, a never-healthy and a panicking image; always-on 20 s MWDT0 liveness watchdog (241b); `GET /api/v1/panic` reports `update` and `last_reset` | yes |

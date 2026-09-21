@@ -442,6 +442,20 @@ impl Flash {
         timed!(with_store!(self, s, buf, s.save_wifi(buf, wifi).await))
     }
 
+    /// Forget the stored credentials (card 230's button).
+    ///
+    /// A write like any other - through [`with_store`], so it is counted and
+    /// it goes through [`guarded`] - and it writes a zero-length SSID rather
+    /// than removing the item, because the ESP32's internal flash is not a
+    /// `MultiwriteNorFlash`. `crates/settings` has the whole story, including
+    /// what that means for the old PSK bytes.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn clear_wifi(&mut self) -> Result<Timing, StoreError> {
+        timed!(with_store!(self, s, buf, s.clear_wifi(buf).await))
+    }
+
     /// Erase the whole partition: a factory reset, and the **only** thing that
     /// ever erases settings.
     ///
@@ -748,6 +762,35 @@ pub async fn seed_wifi(wifi: &Wifi) {
             t.write, t.us, t.erases
         ),
         Err(e) => warn!("store: seeding failed: {:?}", e),
+    }
+}
+
+/// Forget the stored credentials, for `Action::ClearCredentials` (card 230).
+///
+/// The mirror of [`seed_wifi`], and it is called from exactly one place:
+/// `crate::provision`'s action handler, which is reached from
+/// `Event::ButtonWipe` and from nothing else. A failure is counted and logged
+/// (there is no reply to downgrade to `ERR_STORAGE` here, because the thing
+/// that asked for it was a button) and the device still raises the portal,
+/// which is the behaviour the owner standing in front of the panel expects. It
+/// would then rejoin the old network on the next reboot, and `store_errors` in
+/// `GET /api/v1/status` is where that shows up.
+pub async fn clear_wifi() {
+    let mut guard = STORE.lock().await;
+    let Some(f) = guard.as_mut() else {
+        warn!("store: no store to clear the credentials from");
+        FAILURES.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    match f.clear_wifi().await {
+        Ok(t) => info!(
+            "store: the wifi credentials were forgotten ({:?}, {} us, {} erases)",
+            t.write, t.us, t.erases
+        ),
+        Err(e) => {
+            FAILURES.fetch_add(1, Ordering::Relaxed);
+            warn!("store: clearing the credentials failed: {:?}", e);
+        }
     }
 }
 
