@@ -81,7 +81,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     let (_dev, port, rx) = start_sim();
     let studio = studio().await;
     let at = studio.addr;
-    hold_still(at, "plasma").await;
+    hold_still(at, "flock").await;
 
     // The switch, as the UI turns it on: a name or an address, deferred.
     let body = format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#);
@@ -89,7 +89,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(first.status, 200, "{}", String::from_utf8_lossy(&first.body));
     assert_eq!(first.json()["on"], true, "the answer says what happened: {}", first.json());
     assert_eq!(first.json()["panel"]["target"], format!("127.0.0.1:{port}"));
-    assert_eq!(first.json()["state"]["patch"], "plasma", "and what the page is showing");
+    assert_eq!(first.json()["state"]["patch"], "flock", "and what the page is showing");
 
     // The link is deferred, so it comes up on its own; the status route is
     // what the UI's status line reads.
@@ -105,7 +105,8 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(status["state"], "up");
     assert!(status["device"].is_string(), "the link says which device it settled on: {status}");
     assert!(status["frames_sent"].as_u64().unwrap() > 5, "nothing reached the wire: {status}");
-    assert_eq!(status["indexed_fallback"], 0, "plasma is an indexed patch: {status}");
+    assert!(status["indexed_exact"].as_u64().unwrap_or(0) > 0, "flock is an indexed patch: {status}");
+    assert_eq!(status["indexed_fallback"], 0, "and it goes out exactly: {status}");
     // Frames the engine offered while the deferred link was still finding the
     // device are counted as dropped, by design. Once it is up, nothing is.
     let dropped_while_connecting = status["frames_dropped"].as_u64().expect("a count");
@@ -164,7 +165,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     assert_eq!(get(at, "/api/v1/panel_status").await.json(), serde_json::Value::Null);
     // ...and the page carries on showing the patch, which is the half of this
     // that card 170 added.
-    assert_eq!(off.json()["state"]["patch"], "plasma");
+    assert_eq!(off.json()["state"]["patch"], "flock");
 }
 
 /// **`set_panel`, as another session drives it**, with the two exact bodies a
@@ -249,7 +250,7 @@ async fn a_stalled_browser_does_not_hold_up_the_engine_or_the_panel() {
     let (_dev, port, _rx) = start_sim();
     let studio = studio().await;
     let at = studio.addr;
-    hold_still(at, "plasma").await;
+    hold_still(at, "flock").await;
     post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -334,7 +335,7 @@ async fn a_panel_that_comes_back_twice_says_two() {
     let (first, port, _rx) = start_sim();
     let studio = studio().await;
     let at = studio.addr;
-    hold_still(at, "plasma").await;
+    hold_still(at, "flock").await;
 
     let body = format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#);
     assert_eq!(post(at, "/api/v1/set_panel", &body).await.status, 200);

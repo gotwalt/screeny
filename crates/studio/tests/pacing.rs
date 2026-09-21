@@ -102,7 +102,7 @@ async fn drag(at: SocketAddr, who: &'static str, how_long: Duration) -> (usize, 
 async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.status, 200);
 
     // Two tabs, neither of them asking for pictures: this weighs state only.
     let mut dragger = Ws::connect_asking(at, "client=dragger&fps=0").await;
@@ -176,7 +176,7 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
 async fn a_single_change_still_arrives_at_once() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.status, 200);
     let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
     watcher.event("state").await; // the hello
 
@@ -218,7 +218,7 @@ async fn a_single_change_still_arrives_at_once() {
 async fn the_value_a_drag_ended_on_always_arrives() {
     let studio = studio().await;
     let at = studio.addr;
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await.status, 200);
     let mut watcher = Ws::connect_asking(at, "client=watcher&fps=0").await;
     watcher.event("state").await; // the hello
 

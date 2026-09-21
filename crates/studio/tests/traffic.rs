@@ -124,11 +124,16 @@ async fn the_rate_out_is_the_frames_times_their_size_plus_the_header() {
     attach_and_play(at, ports).await;
 
     // **A patch that holds still**, so "mean frame bytes" is a fact rather
-    // than an average over scenes of different sizes. The test card with its
-    // line stopped renders the same pixels for ever, which encodes to the same
-    // number of bytes for ever - and that is what makes a rate and an average
-    // comparable to within a few per cent at all.
-    let done = post(at, "/api/v1/set_patch", r#"{"id":"testcard"}"#).await;
+    // than an average over scenes of different sizes: the same pixels for
+    // ever encode to the same number of bytes for ever, and that is what makes
+    // a rate and an average comparable to within a few per cent at all.
+    //
+    // It was the test card with its line stopped until card 178 removed it.
+    // `metaballs` at `speed` 0 is the same trick on a patch that is still
+    // here: its whole picture is a function of `ctx.t * speed`, so with the
+    // speed at zero every frame is the frame at t = 0. It reads no clock, so
+    // unlike the clock patches it really does hold.
+    let done = post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));
     let done = post(at, "/api/v1/set_param", r#"{"id":"speed","value":0.0}"#).await;
     assert_eq!(done.status, 200, "{}", String::from_utf8_lossy(&done.body));

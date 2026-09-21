@@ -153,9 +153,9 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
     // Something specific on each, so "it kept what it was playing" is a thing
     // a test can check rather than a hope.
     post(at, "/api/v1/player/set", r#"{"device":"mov001","patch":"metaballs","seed":4242}"#).await;
-    post(at, "/api/v1/player/set", r#"{"device":"sta002","patch":"plasma","seed":1717}"#).await;
+    post(at, "/api/v1/player/set", r#"{"device":"sta002","patch":"clocks-dials","seed":1717}"#).await;
     let before = until_json(at, PATIENCE, "both panels to take their patch", "/api/v1/status", |s| {
-        device(s, "mov001")["player"]["patch"] == "metaballs" && device(s, "sta002")["player"]["patch"] == "plasma"
+        device(s, "mov001")["player"]["patch"] == "metaballs" && device(s, "sta002")["player"]["patch"] == "clocks-dials"
     })
     .await;
     let stayer_before = device(&before, "sta002");
@@ -208,7 +208,7 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
     assert_eq!(stayer["address"], format!("127.0.0.1:{stays_at}"), "{stayer}");
     assert_eq!(stayer["control_addr"], format!("127.0.0.1:{}", stays_at + 1), "{stayer}");
     assert_eq!(stayer["resolved"], true, "its resolution was thrown away: {stayer}");
-    assert_eq!(stayer["player"]["patch"], "plasma", "{stayer}");
+    assert_eq!(stayer["player"]["patch"], "clocks-dials", "{stayer}");
     assert_eq!(stayer["player"]["seed"], 1717, "{stayer}");
     assert_eq!(stayer["player"]["panel"]["connected"], true, "its link was dropped: {stayer}");
     let frames_after = stayer["player"]["panel"]["frames_sent"].as_u64().unwrap_or(0);
