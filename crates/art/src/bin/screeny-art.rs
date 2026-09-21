@@ -27,7 +27,7 @@ usage:
 ";
 const USAGE_TAIL: &str = "\
   screeny-art pipe <patch> [--seed N] [--seconds S] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
-  screeny-art snapshot <patch> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--set id=value]...
+  screeny-art snapshot <patch> --out FILE.png [--at SECONDS] [--warmup 2] [--scale 12] [--seed N] [--panel MODEL] [--time HH:MM[:SS]] [--act ID[@SECONDS]] [--set id=value]...
 
 Everything here runs at 30 frames a second: the panel's rate, and the only one
 (card 161). There is no flag for it.
@@ -76,6 +76,8 @@ struct Args {
     at_given: bool,
     warmup_given: bool,
     clock: Clock,
+    /// One of the patch's own actions, and when to press it.
+    act: Option<(String, f64)>,
     scale: usize,
     out: Option<String>,
     to: Option<String>,
@@ -127,6 +129,7 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
         at_given: false,
         warmup_given: false,
         clock: Clock::Live,
+        act: None,
         scale: 12,
         out: None,
         to: None,
@@ -159,6 +162,16 @@ fn parse(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             // Card 162: what time it is, for the patches that tell the time.
             "--time" => a.clock = Clock::parse(&value).map_err(|e| format!("--time: {e}"))?,
+            // `--act flip` presses it as the run starts; `--act flip@3` three
+            // seconds in, on the same axis as `--at`.
+            "--act" => {
+                let (id, when) = value.split_once('@').unwrap_or((value.as_str(), "0"));
+                let when = when.parse::<f64>().map_err(|_| format!("--act: `{when}` is not a number of seconds"))?;
+                if id.is_empty() {
+                    return Err("--act needs an action id".to_string());
+                }
+                a.act = Some((id.to_string(), when));
+            }
             "--scale" => a.scale = (num()? as usize).clamp(1, 64),
             // Card 102: the old `--levels 64|32|16` is gone. 32 and 16 were
             // the pre-card-020 "dimmed by scaling" panel, which this device
@@ -354,7 +367,8 @@ fn snapshot(a: Args) -> Result<(), String> {
     // through too, so a pinned picture is checked by the same code the command
     // runs (card 162).
     let shot = Shot { seed: a.seed, at: a.at, warmup: a.warmup, clock: a.clock, output: a.output };
-    let result = snapshot::take(a.patch, &a.params, &shot);
+    let act = a.act.as_ref().map(|(id, when)| (id.as_str(), *when));
+    let result = snapshot::take_acting(a.patch, &a.params, &shot, act);
     let (w, h, rgba) = preview::render_dots(&result.preview, a.scale);
 
     let file = std::fs::File::create(&path).map_err(|e| format!("{path}: {e}"))?;

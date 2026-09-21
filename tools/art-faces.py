@@ -38,8 +38,16 @@ import sys
 
 # --------------------------------------------------------------- the faces
 
-# The glyphs every face carries, in the order the data holds them.
-GLYPHS = "0123456789"
+# The glyphs a face may carry, in the order the data holds them. The **box is
+# the digits'**: every glyph is sliced out of the font's own cell with the box
+# the ten numerals share, so a colon keeps the position, weight and baseline
+# the font gave it relative to them, and a patch that has placed the digits has
+# placed the colon too. A face whose font has not got one of these does not
+# carry it, and a face that does not carry a glyph draws nothing for it
+# (card 175).
+GLYPHS = "0123456789:"
+# The glyphs that set the box. Everything else is placed against them.
+BOXED_BY = "0123456789"
 
 # `scale` is LEDs per font pixel. A module is 14 x 30 LEDs and the numerals
 # sit in about 13 x 22 of it, so a 1:1 face wants digits near 12-13 x 20 and a
@@ -49,6 +57,9 @@ FACES = [
         name="Vesta",
         kind="stroked",
         source="crates/art/src/faces/stroked.rs",
+        # Ten numerals and nothing else: the colon vesta draws beside them is
+        # the patch's own pair of dots, not a glyph.
+        glyphs="0123456789",
         note="the house face: stroked paths, so `weight` moves its stroke",
     ),
     dict(
@@ -92,7 +103,13 @@ FACES = [
         height=22,
         condense=0.80,
         samples=4,
-        note="an outline face, 4 samples per LED",
+        # Micro Grotesk has no colon. Rasterising one gives the .notdef box,
+        # which is a rectangle a quarter taller than the digits, and there is
+        # no way to ask a TTF for its cmap without fontTools - so it is
+        # declared here rather than guessed at. vesta draws its own dots for a
+        # face with no `:`.
+        glyphs="0123456789",
+        note="an outline face, 4 samples per LED; no colon of its own",
     ),
 ]
 
@@ -106,8 +123,8 @@ REPOS = {
 # --------------------------------------------------------------- BDF digits
 
 
-def bdf_digits(path):
-    """The ten numerals of a BDF as rows of 0/1, cropped to their common ink box."""
+def bdf_glyphs(path, wanted):
+    """`wanted`'s glyphs as rows of 0/1, every one sliced with the digits' box."""
     cells = {}
     fbb = None
     enc = None
@@ -128,7 +145,8 @@ def bdf_digits(path):
             while lines[i] != "ENDCHAR":
                 rows.append(lines[i])
                 i += 1
-            if 48 <= enc <= 57:
+            ch = chr(enc) if 0 <= enc < 0x110000 else None
+            if ch in wanted and ch not in cells:
                 gw, gh, xo, yo = bbx
                 fw, fh, fx, fy = fbb
                 cell = [[0] * fw for _ in range(fh)]
@@ -138,21 +156,31 @@ def bdf_digits(path):
                     for x in range(gw):
                         if bits[x] == "1" and 0 <= y < fh and 0 <= x + xo - fx < fw:
                             cell[y][x + xo - fx] = 1
-                cells[enc - 48] = cell
+                cells[ch] = cell
         i += 1
-    if len(cells) != 10:
-        raise SystemExit("%s: found %d digits, not 10" % (path, len(cells)))
-    ys = [y for c in cells.values() for y, row in enumerate(c) if any(row)]
-    xs = [x for c in cells.values() for row in c for x, v in enumerate(row) if v]
+    missing = [c for c in wanted if c not in cells]
+    if missing:
+        raise SystemExit("%s: has no %s" % (path, ", ".join(repr(c) for c in missing)))
+    box = [cells[c] for c in BOXED_BY]
+    ys = [y for c in box for y, row in enumerate(c) if any(row)]
+    xs = [x for c in box for row in c for x, v in enumerate(row) if v]
     y0, y1, x0, x1 = min(ys), max(ys), min(xs), max(xs)
-    return [[row[x0 : x1 + 1] for row in cells[d][y0 : y1 + 1]] for d in range(10)]
+
+    def slice_(ch):
+        cell = cells[ch]
+        lost = sum(v for y, row in enumerate(cell) for x, v in enumerate(row) if v and not (y0 <= y <= y1 and x0 <= x <= x1))
+        if lost:
+            raise SystemExit("%s: %r has %d cells of ink outside the digits' box" % (path, ch, lost))
+        return [row[x0 : x1 + 1] for row in cell[y0 : y1 + 1]]
+
+    return [slice_(c) for c in wanted]
 
 
 # ------------------------------------------------------- Micro Grotesk mask
 
 
-def ttf_digits(path, weight, height, condense, samples):
-    """The ten numerals of a variable TTF as a `samples`-per-LED coverage mask.
+def ttf_glyphs(path, weight, height, condense, samples, wanted):
+    """`wanted`'s glyphs of a variable TTF as a `samples`-per-LED coverage mask.
 
     The box is the digits' own cap box (the `0`'s, so every digit shares a
     baseline), `height` LEDs tall; `condense` squeezes it horizontally, which
@@ -175,7 +203,7 @@ def ttf_digits(path, weight, height, condense, samples):
     out = []
     widths = []
     glyphs = []
-    for d in "0123456789":
+    for d in wanted:
         img = draw(size, d)
         box = img.getbbox()
         g = img.crop((box[0], zero[1], box[2], zero[3]))
@@ -231,6 +259,13 @@ def ident(name):
     return "".join(c if c.isalnum() else "_" for c in name).upper()
 
 
+def glyph_ident(chars):
+    """A name for a glyph set: what it has beyond the digits, or `DIGITS`."""
+    extra = "".join(c for c in chars if c not in BOXED_BY)
+    names = {":": "COLON"}
+    return "DIGITS" if not extra else "DIGITS_" + "_".join(names.get(c, "U%04X" % ord(c)) for c in extra)
+
+
 def revision(root):
     try:
         out = subprocess.run(
@@ -270,8 +305,9 @@ def preview(face, packed, digits):
             row = g[y] if y < len(g) else []
             line.append("".join("#" if x < len(row) and row[x] else "." for x in range(packed["w"])))
         print("  " + "  ".join(line))
-    ink = sum(bin(r).count("1") for r in packed["rows"]) / 10.0
-    print("  ink: %.1f cells a digit, %.1f LEDs" % (ink, ink * packed["scale"] ** 2))
+    n = len(packed["rows"]) // packed["h"]
+    ink = sum(bin(r).count("1") for r in packed["rows"]) / n
+    print("  ink: %.1f cells a glyph, %.1f LEDs" % (ink, ink * packed["scale"] ** 2))
 
 
 def emit(faces, revs, out):
@@ -295,8 +331,11 @@ def emit(faces, revs, out):
     w.append("")
     w.append("use super::{Bitmap, Face, Ink};")
     w.append("")
-    w.append("/// The glyphs every face here carries. Only numerals, so far.")
-    w.append("const GLYPHS: &[char] = &[%s];" % ", ".join("'%s'" % c for c in GLYPHS))
+    for chars in sorted({f.get("glyphs", GLYPHS) for f in faces if f["kind"] != "stroked"} | {GLYPHS}):
+        w.append("/// `%s`." % chars)
+        w.append("const %s: &[char] = &[%s];" % (glyph_ident(chars), ", ".join("'%s'" % c for c in chars)))
+        w.append("")
+    w.pop()
     w.append("")
     w.append("/// The named stops of a `font` parameter, in order. Hand this straight to")
     w.append("/// `choice(..)`: `choice(\"font\", \"Numerals\", faces::NAMES, faces::DEFAULT)`.")
@@ -315,7 +354,7 @@ def emit(faces, revs, out):
         w.append('        name: "%s",' % f["name"])
         w.append('        source: "%s",' % f["source"])
         w.append('        note: "%s",' % f["note"])
-        w.append("        glyphs: GLYPHS,")
+        w.append("        glyphs: %s," % glyph_ident(f.get("glyphs", GLYPHS)))
         if f["kind"] == "stroked":
             w.append("        ink: Ink::Stroked,")
         else:
@@ -340,8 +379,8 @@ def emit(faces, revs, out):
         w.append("#[rustfmt::skip]")
         w.append("static %s: [u64; %d] = [" % (ident(f["name"]), len(p["rows"])))
         digits_wide = 4 if p["w"] <= 16 else 16
-        for d in range(10):
-            w.append("    // %d" % d)
+        for d, ch in enumerate(f.get("glyphs", GLYPHS)):
+            w.append("    // %s" % ch)
             rows = p["rows"][d * p["h"] : (d + 1) * p["h"]]
             per = max(1, 64 // (digits_wide + 4))
             for i in range(0, len(rows), per):
@@ -372,13 +411,13 @@ def main():
         if not os.path.exists(path):
             raise SystemExit("missing: %s" % path)
         if face["kind"] == "bdf":
-            digits = bdf_digits(path)
+            glyphs = bdf_glyphs(path, face.get("glyphs", GLYPHS))
         else:
-            digits = ttf_digits(path, face["weight"], face["height"], face["condense"], face["samples"])
-        face["packed"] = pack(face, digits)
+            glyphs = ttf_glyphs(path, face["weight"], face["height"], face["condense"], face["samples"], face.get("glyphs", GLYPHS))
+        face["packed"] = pack(face, glyphs)
         face["source"] = "%s %s %s" % (REPOS[face["repo"]], revs[face["repo"]], face["file"])
         if args.preview:
-            preview(face, face["packed"], digits)
+            preview(face, face["packed"], glyphs)
             print()
 
     if args.preview:

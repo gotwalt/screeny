@@ -14,8 +14,11 @@
 
 use super::{Bitmap, Face, Ink};
 
-/// The glyphs every face here carries. Only numerals, so far.
-const GLYPHS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+/// `0123456789`.
+const DIGITS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+/// `0123456789:`.
+const DIGITS_COLON: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':'];
 
 /// The named stops of a `font` parameter, in order. Hand this straight to
 /// `choice(..)`: `choice("font", "Numerals", faces::NAMES, faces::DEFAULT)`.
@@ -37,14 +40,14 @@ pub static FACES: &[Face] = &[
         name: "Vesta",
         source: "crates/art/src/faces/stroked.rs",
         note: "the house face: stroked paths, so `weight` moves its stroke",
-        glyphs: GLYPHS,
+        glyphs: DIGITS,
         ink: Ink::Stroked,
     },
     Face {
         name: "Terminus Bold",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/terminus-font-4.39/ter-u32b.bdf",
         note: "13 x 20 at 1:1, 3-LED strokes",
-        glyphs: GLYPHS,
+        glyphs: DIGITS_COLON,
         ink: Ink::Bits(Bitmap {
             w: 13,
             h: 20,
@@ -59,7 +62,7 @@ pub static FACES: &[Face] = &[
         name: "Terminus",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/terminus-font-4.39/ter-u32n.bdf",
         note: "12 x 20 at 1:1, 2-LED strokes",
-        glyphs: GLYPHS,
+        glyphs: DIGITS_COLON,
         ink: Ink::Bits(Bitmap {
             w: 12,
             h: 20,
@@ -74,7 +77,7 @@ pub static FACES: &[Face] = &[
         name: "Spleen",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/spleen/spleen-16x32.bdf",
         note: "12 x 20 at 1:1, 2-LED strokes, squarer",
-        glyphs: GLYPHS,
+        glyphs: DIGITS_COLON,
         ink: Ink::Bits(Bitmap {
             w: 12,
             h: 20,
@@ -89,7 +92,7 @@ pub static FACES: &[Face] = &[
         name: "Dina",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/dina/Dina_r400-10.bdf",
         note: "6 x 9 at x2: 2 x 2-LED pixels",
-        glyphs: GLYPHS,
+        glyphs: DIGITS_COLON,
         ink: Ink::Bits(Bitmap {
             w: 6,
             h: 9,
@@ -103,8 +106,8 @@ pub static FACES: &[Face] = &[
     Face {
         name: "Micro Grotesk",
         source: "github.com/eliheuer/micro-grotesk 86a679272a fonts/MicroGrotesk[wght].ttf",
-        note: "an outline face, 4 samples per LED",
-        glyphs: GLYPHS,
+        note: "an outline face, 4 samples per LED; no colon of its own",
+        glyphs: DIGITS,
         ink: Ink::Bits(Bitmap {
             w: 49,
             h: 88,
@@ -119,7 +122,7 @@ pub static FACES: &[Face] = &[
 
 /// `Terminus Bold`: 20 rows a glyph, bit `x` of a row is cell `x` from the left.
 #[rustfmt::skip]
-static TERMINUS_BOLD: [u64; 200] = [
+static TERMINUS_BOLD: [u64; 220] = [
     // 0
     0x07fc, 0x0ffe, 0x1e0f, 0x1c07, 0x1c07, 0x1e07, 0x1f07, 0x1f87,
     0x1dc7, 0x1ce7, 0x1c77, 0x1c3f, 0x1c1f, 0x1c0f, 0x1c07, 0x1c07,
@@ -160,11 +163,15 @@ static TERMINUS_BOLD: [u64; 200] = [
     0x07fc, 0x0ffe, 0x1e0f, 0x1c07, 0x1c07, 0x1c07, 0x1c07, 0x1c07,
     0x1c07, 0x1c0f, 0x1ffe, 0x1ffc, 0x1c00, 0x1c00, 0x1c00, 0x1c00,
     0x1c00, 0x1e00, 0x0ffe, 0x07fe,
+    // :
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x00e0, 0x00e0,
+    0x00e0, 0x00e0, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x00e0, 0x00e0, 0x00e0, 0x00e0,
 ];
 
 /// `Terminus`: 20 rows a glyph, bit `x` of a row is cell `x` from the left.
 #[rustfmt::skip]
-static TERMINUS: [u64; 200] = [
+static TERMINUS: [u64; 220] = [
     // 0
     0x03fc, 0x07fe, 0x0e07, 0x0c03, 0x0c03, 0x0e03, 0x0f03, 0x0f83,
     0x0dc3, 0x0ce3, 0x0c73, 0x0c3b, 0x0c1f, 0x0c0f, 0x0c07, 0x0c03,
@@ -205,11 +212,15 @@ static TERMINUS: [u64; 200] = [
     0x03fc, 0x07fe, 0x0e07, 0x0c03, 0x0c03, 0x0c03, 0x0c03, 0x0c03,
     0x0c03, 0x0c07, 0x0ffe, 0x0ffc, 0x0c00, 0x0c00, 0x0c00, 0x0c00,
     0x0c00, 0x0e00, 0x07fe, 0x03fe,
+    // :
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0060, 0x0060,
+    0x0060, 0x0060, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0060, 0x0060, 0x0060, 0x0060,
 ];
 
 /// `Spleen`: 20 rows a glyph, bit `x` of a row is cell `x` from the left.
 #[rustfmt::skip]
-static SPLEEN: [u64; 200] = [
+static SPLEEN: [u64; 220] = [
     // 0
     0x03fc, 0x07fe, 0x0e07, 0x0c03, 0x0c03, 0x0e03, 0x0f03, 0x0f83,
     0x0dc3, 0x0ce3, 0x0c73, 0x0c3b, 0x0c1f, 0x0c0f, 0x0c07, 0x0c03,
@@ -250,11 +261,15 @@ static SPLEEN: [u64; 200] = [
     0x03fc, 0x07fe, 0x0e07, 0x0c03, 0x0c03, 0x0c03, 0x0c03, 0x0c03,
     0x0c03, 0x0c07, 0x0ffe, 0x0ffc, 0x0c00, 0x0c00, 0x0c00, 0x0c00,
     0x0c03, 0x0e07, 0x07fe, 0x03fc,
+    // :
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0060,
+    0x0060, 0x0060, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0060, 0x0060, 0x0060,
 ];
 
 /// `Dina`: 9 rows a glyph, bit `x` of a row is cell `x` from the left.
 #[rustfmt::skip]
-static DINA: [u64; 90] = [
+static DINA: [u64; 99] = [
     // 0
     0x001e, 0x0021, 0x0031, 0x0029, 0x0025, 0x0023, 0x0021, 0x0021,
     0x001e,
@@ -285,6 +300,9 @@ static DINA: [u64; 90] = [
     // 9
     0x001e, 0x0021, 0x0021, 0x0021, 0x003e, 0x0020, 0x0020, 0x0010,
     0x000e,
+    // :
+    0x0000, 0x0000, 0x000c, 0x000c, 0x0000, 0x0000, 0x0000, 0x000c,
+    0x000c,
 ];
 
 /// `Micro Grotesk`: 88 rows a glyph, bit `x` of a row is cell `x` from the left.

@@ -118,6 +118,27 @@ impl Face {
         }
     }
 
+    /// The middle of a glyph's ink, in LEDs from the box's centre, down
+    /// positive - and `None` for a glyph this face has not got.
+    ///
+    /// A font's colon sits on its baseline, which is near the bottom of a box
+    /// the digits fill, so a patch that wants the colon *between* two things
+    /// rather than under them has to know where its ink actually is. Cheap
+    /// enough to call once a frame; do not call it once a sample.
+    ///
+    /// **Rounded to a whole LED**, because this is the half-LED rule again:
+    /// a patch that lifts a glyph by half an LED puts every one of its cells
+    /// across two LEDs and the crispness the face was chosen for is gone.
+    #[must_use]
+    pub fn middle(&self, ch: char) -> Option<f32> {
+        let g = self.index(ch)?;
+        let Ink::Bits(b) = &self.ink else { return Some(0.0) };
+        let rows = &b.rows[g * b.h as usize..][..b.h as usize];
+        let first = rows.iter().position(|r| *r != 0)?;
+        let last = rows.iter().rposition(|r| *r != 0)?;
+        Some((b.y0 + (first + last + 1) as f32 * 0.5 * b.scale).round())
+    }
+
     /// Is there ink at `(x, y)`, in LEDs from the glyph's centre?
     ///
     /// `weight` is the stroke width in LEDs, and only a stroked face listens
@@ -227,11 +248,42 @@ mod tests {
                 assert!(!face.ink('A', v, v, 2.0), "{}: ink at ({v}, {v}) of a glyph it has not got", face.name);
                 assert!(!face.core('A', v, v, 2.0), "{}: core at ({v}, {v})", face.name);
             }
-            assert_eq!(face.glyphs, &"0123456789".chars().collect::<Vec<_>>()[..], "{}", face.name);
+            for d in "0123456789".chars() {
+                assert!(face.index(d).is_some(), "{}: no {d}", face.name);
+            }
+            assert!(face.glyphs.len() <= 11, "{}: an unexpected glyph", face.name);
         }
     }
 
-    /// `face` never panics and never picks something that is not a face.
+    /// The colon (card 175). A face that carries one carries a real pair of
+    /// marks inside its own box, and [`Face::middle`] says where they sit -
+    /// which for a font colon is **below** the middle of a box the digits
+    /// fill, because a colon sits on the baseline. A face without one says
+    /// so, and draws nothing.
+    #[test]
+    fn a_face_that_carries_a_colon_carries_a_real_one() {
+        let mut carried = 0;
+        for face in FACES {
+            let Some(mid) = face.middle(':') else {
+                assert!(face.index(':').is_none(), "{}: a colon with no middle", face.name);
+                continue;
+            };
+            carried += 1;
+            let (_, bh) = face.size(2.0);
+            // Two marks, not one and not a wall: ink on some rows and none on
+            // the rows between them.
+            let lit = |y: f32| (-8..=8).any(|i| face.ink(':', i as f32 * 0.5, y, 2.0));
+            let rows: Vec<bool> = (0..(bh * 2.0) as i32).map(|k| lit(-bh * 0.5 + k as f32 * 0.5 + 0.25)).collect();
+            let marks = rows.iter().enumerate().filter(|(i, on)| **on && (*i == 0 || !rows[i - 1])).count();
+            assert_eq!(marks, 2, "{}: a colon of {marks} marks", face.name);
+            // It sits low, as a colon does, and inside the box.
+            assert!(mid > 0.0, "{}: its colon is not on the baseline ({mid})", face.name);
+            assert!(mid.abs() < bh * 0.5, "{}: its colon is outside the box ({mid})", face.name);
+        }
+        assert!(carried >= 3, "only {carried} faces carry a colon");
+    }
+
+    /// `face` never panics and never picks something that is not a face.    /// `face` never panics and never picks something that is not a face.
     #[test]
     fn the_face_a_parameter_picks_is_always_one_of_them() {
         for v in [-1e9, -1.0, -0.4, 0.0, 0.5, 1.0, 2.4, 1e9, f32::NAN, f32::INFINITY] {

@@ -44,7 +44,7 @@ use crate::dither::Dither;
 use crate::faces::{self, Face};
 use crate::frame::{Frame, H, W};
 use crate::palette::Palette;
-use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use flap::Fall;
 
 pub const DEF: PatchDef = PatchDef {
@@ -99,7 +99,10 @@ const CENTRES: [f32; 4] = [
     W as f32 * 0.5 + COLON_W * 0.5 + MODULE_W * 1.5 + PAIR_GAP,
 ];
 
-/// Half the colon dots' spacing either side of the axle, and their radius.
+/// Half the colon dots' spacing either side of the axle, and their radius -
+/// for a face that has no colon of its own. A face that has one draws it
+/// instead (card 175), and then the punctuation is the numerals' punctuation
+/// rather than two circles that happen to sit beside them.
 const COLON_AT: f32 = 6.0;
 const COLON_R: f32 = 1.15;
 
@@ -168,6 +171,10 @@ fn ray(hue: f32) -> Rgb {
 /// card like any other: it falls, it is fallen onto, and the module keeps its
 /// seam and its black body while it is up.
 const BLANK: u8 = 10;
+
+/// The colon, as a glyph. A face that carries one draws the clock's
+/// punctuation; a face that does not gets the two circles card 155 drew.
+const COLON: char = ':';
 
 /// The glyph a card carries. The blank has none, and a face draws nothing at
 /// all for a glyph it has not got - which is exactly what a blank card is.
@@ -501,12 +508,21 @@ struct Vesta {
     minute: Option<i64>,
     /// What the four modules were showing on the last frame, for `playing`.
     face: [u8; 4],
+    /// The **Flip** button has been pressed and not yet acted on.
+    ///
+    /// A minute is the only thing that turns this board, which makes it hard
+    /// to look at: card 184's rotation can be watched once, and then there is
+    /// a minute to wait. So the patch offers one action. It is a request, not
+    /// a command - `render` decides whether the board is free to take it -
+    /// and it is `false` until somebody presses the button, so a pinned time
+    /// draws exactly what it drew before this card.
+    asked: bool,
     /// For the studio's "now playing".
     doing: String,
 }
 
 fn make(_seed: u64) -> Box<dyn Patch> {
-    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], minute: None, face: [0; 4], doing: String::new() })
+    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], minute: None, face: [0; 4], asked: false, doing: String::new() })
 }
 
 /// The hours and minutes a minute-of-day shows.
@@ -531,7 +547,25 @@ impl Patch for Vesta {
     fn playing(&self) -> Option<Playing> {
         let card = |d: u8| if d == BLANK { " ".to_string() } else { d.to_string() };
         let face: String = self.face.iter().enumerate().map(|(i, c)| if i == 2 { format!(":{}", card(*c)) } else { card(*c) }).collect();
-        Some(Playing { title: face, detail: self.doing.clone(), actions: vec![], notes: vec![] })
+        Some(Playing { title: face, detail: self.doing.clone(), actions: vec![Action { id: "flip", label: "Flip" }], notes: vec![] })
+    }
+
+    /// **Flip**: turn every drum once, now, and land back on the time.
+    ///
+    /// Whatever `flips` is set to, the button turns the *whole* drum: a
+    /// button marked Flip that did nothing - which is what "changed cards
+    /// only" would do when no card has changed - would be a lie, and the two
+    /// slow modes still turn it at their own one-card-at-a-time pace, so
+    /// pressing it tells you what that mode looks like too.
+    ///
+    /// It is a request. If the board is already turning it is **dropped**,
+    /// not queued: a real drum that is already going round does not go round
+    /// twice because somebody pressed the button again, and a queue would let
+    /// a handful of clicks clatter the bedroom for ten seconds.
+    fn act(&mut self, action: &str) {
+        if action == "flip" {
+            self.asked = true;
+        }
     }
 
     fn render(&mut self, ctx: &Ctx) -> Frame {
@@ -566,13 +600,20 @@ impl Patch for Vesta {
         // one trigger serves all three.
         let turned = self.minute.is_some_and(|was| was != minute);
         self.minute = Some(minute);
+        // The Flip button, taken at most once and only when the board is
+        // free. The minute always wins: a press during a rotation is dropped,
+        // and a press a moment before one is overtaken by it.
+        let busy = self.modules.iter().any(|m| !m.run.is_empty() && ctx.t < m.ends());
+        let asked = std::mem::take(&mut self.asked) && !busy && !turned && !born_now;
         for (i, (m, want)) in self.modules.iter_mut().zip(target).enumerate() {
             if born_now {
                 // Born reading the time, not flipping its way up to it.
                 m.still(want);
-            } else if turned || self.want[i] != want {
+            } else if turned || self.want[i] != want || asked {
                 let (tm, skew) = if spinning { (base.at_rate(RATE[i]), SKEW[i]) } else { (base, 0.0) };
-                m.plan(ctx.t, want, drum(i, zero), flips, &tm, skew);
+                // A press turns the whole drum whatever the mode is.
+                let how = if asked { Flips::Rotation } else { flips };
+                m.plan(ctx.t, want, drum(i, zero), how, &tm, skew);
             } else if !m.run.is_empty() && ctx.t >= m.ends() {
                 // Retire a finished run so the plan does not grow all night.
                 m.still(want);
@@ -600,7 +641,8 @@ struct Geom {
     w: f32,
     h: f32,
     centres: [f32; 4],
-    colon: f32,
+    /// The middle of the panel, where the colon goes.
+    middle: f32,
     axle: f32,
     size: f32,
     /// Half the seam's width, in LEDs.
@@ -612,18 +654,31 @@ struct Geom {
     flip: f64,
     /// The numerals' face.
     face: &'static Face,
+    /// How far the face's own colon has to be lifted to straddle the axle, in
+    /// glyph units - `None` for a face that has not got one, which is drawn
+    /// as two circles instead.
+    ///
+    /// A font's colon sits on the baseline, and in a box the digits fill that
+    /// is near the bottom: Terminus Bold's dots land 4 LEDs *above* the axle
+    /// and 10 below it, which reads as punctuation belonging to the lower
+    /// card rather than to the pair. Lifting the glyph by the middle of its
+    /// own ink keeps the font's dots - their size, their shape, the gap
+    /// between them - and puts them where a clock wants them. It moves the
+    /// glyph, it does not redraw it.
+    colon: Option<f32>,
 }
 
 impl Geom {
     fn of(ctx: &Ctx) -> Geom {
         let size = ctx.get("size");
         let (cx, cy) = (W as f32 * 0.5, H as f32 * 0.5);
+        let face = faces::face(ctx.get("font"));
         Geom {
-            face: faces::face(ctx.get("font")),
+            face,
             w: MODULE_W * size,
             h: MODULE_H * size,
             centres: CENTRES.map(|c| cx + (c - cx) * size),
-            colon: cx,
+            middle: cx,
             axle: cy,
             size,
             // Not scaled by `size`: the seam, the lit edge and the shadow's
@@ -635,6 +690,7 @@ impl Geom {
             weight: ctx.get("weight"),
             tilt: ctx.get("tilt"),
             flip: f64::from(ctx.get("flip")),
+            colon: face.middle(COLON),
         }
     }
 }
@@ -698,8 +754,16 @@ fn picture(poses: &[Pose; 4], g: &Geom, levels: &Levels, hue: f32, fill: f32) ->
 fn sample(x: f32, y: f32, poses: &[Pose; 4], g: &Geom, levels: &Levels) -> f32 {
     let v = y - g.axle;
     if levels.colon > 0.0 {
-        let (dx, dy) = (x - g.colon, v.abs() - COLON_AT * g.size);
-        if dx * dx + dy * dy <= (COLON_R * g.size).powi(2) {
+        let lit = match g.colon {
+            // The face's own punctuation, lifted to straddle the axle.
+            Some(mid) => g.face.ink(COLON, (x - g.middle) / g.size, v / g.size + mid, g.weight),
+            // No colon in this face: two circles, as card 155 drew them.
+            None => {
+                let (dx, dy) = (x - g.middle, v.abs() - COLON_AT * g.size);
+                dx * dx + dy * dy <= (COLON_R * g.size).powi(2)
+            }
+        };
+        if lit {
             return levels.colon;
         }
     }
@@ -839,7 +903,21 @@ mod tests {
                 }
                 wrong
             };
-            *slot = (0..10).min_by_key(|d| missing(*d))?;
+            // The ink of one numeral can sit entirely inside another's -
+            // Terminus Bold's `3` is inside its `8` - so "nothing missing" is
+            // not enough to tell them apart. Among the numerals that are
+            // fully lit, the one with the most ink of its own is the one
+            // being shown; a subset would leave LEDs lit that it cannot
+            // explain.
+            let core = |d: usize| {
+                (0..H)
+                    .flat_map(|y| (0..W).map(move |x| (x, y)))
+                    .filter(|(x, y)| {
+                        inside(*x, *y).is_some_and(|(u, v)| v.abs() >= g.seam + 0.5 && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight))
+                    })
+                    .count()
+            };
+            *slot = (0..10).min_by_key(|d| (missing(*d), std::cmp::Reverse(core(*d))))?;
             if missing(*slot) > 0 {
                 // Mid-flip: the module is not showing any whole numeral.
                 return None;
@@ -1055,6 +1133,13 @@ mod tests {
     /// The picture at every 30 fps frame of a run pinned to `when`, as
     /// srgb8, with the rendered frames beside them.
     fn film(when: &str, secs: f64, set: &[(&str, f32)]) -> Vec<(f64, Frame, Vec<u8>)> {
+        film_pressing(when, secs, set, &[])
+    }
+
+    /// The same, with an action pressed at the start of the first frame at or
+    /// after each moment in `press` - exactly what `screeny-art snapshot
+    /// --act` does, and more than once.
+    fn film_pressing(when: &str, secs: f64, set: &[(&str, f32)], press: &[(&str, f64)]) -> Vec<(f64, Frame, Vec<u8>)> {
         let mut p = params();
         for (k, v) in set {
             assert!(p.set(DEF.params, k, *v), "no parameter `{k}`");
@@ -1062,14 +1147,103 @@ mod tests {
         let mut patch = (DEF.make)(1);
         let clock = at(when);
         let dt = 1.0 / crate::snapshot::FPS;
+        let mut done = vec![false; press.len()];
         (0..=(secs / dt) as usize)
             .map(|i| {
                 let t = i as f64 * dt;
+                for (k, (id, when)) in press.iter().enumerate() {
+                    if !done[k] && t >= *when {
+                        patch.act(id);
+                        done[k] = true;
+                    }
+                }
                 let frame = patch.render(&Ctx { t, dt, now: clock.now(t), params: &p });
                 let px: Vec<u8> = (0..N).flat_map(|k| frame.pixel(k).to_srgb8()).collect();
                 (t, frame, px)
             })
             .collect()
+    }
+
+    /// Which modules moved at any point in a film.
+    fn stirred(film: &[(f64, Frame, Vec<u8>)], g: &Geom) -> [bool; 4] {
+        let first = &film[0].2;
+        std::array::from_fn(|i| {
+            film.iter().any(|(_, _, px)| {
+                (0..H).any(|y| {
+                    (0..W).any(|x| {
+                        let u = x as f32 + 0.5 - g.centres[i];
+                        u.abs() <= g.w * 0.5 && px[(y * W + x) * 3..][..3] != first[(y * W + x) * 3..][..3]
+                    })
+                })
+            })
+        })
+    }
+
+    /// **The Flip button** (card 175): one action, and pressing it turns every
+    /// drum once, now, landing back on the time it was already showing. A
+    /// board that only moves on the minute can be watched once and then there
+    /// is a minute to wait.
+    #[test]
+    fn the_flip_button_turns_every_drum_and_lands_on_the_time() {
+        let g = geom(&[]);
+        // 10:08:20 is twenty seconds from any minute, so nothing but the
+        // button can be moving anything.
+        let quiet = film("10:08:20", 3.0, &[]);
+        assert_eq!(stirred(&quiet, &g), [false; 4], "the board moved without being asked");
+        assert_eq!(reads(&quiet.last().unwrap().1, &g), Some([1, 0, 0, 8]));
+
+        for (mode, name) in [(0.0, "full rotation"), (1.0, "between"), (2.0, "changed only")] {
+            let film = film_pressing("10:08:20", 4.0, &[("flips", mode)], &[("flip", 1.0)]);
+            assert_eq!(stirred(&film, &g), [true; 4], "{name}: Flip left a module standing");
+            // It lands back on the time, and stays there.
+            let last = film.last().unwrap();
+            assert_eq!(reads(&last.1, &g), Some([1, 0, 0, 8]), "{name}: Flip did not land on the time");
+            assert_eq!(last.2, quiet[0].2, "{name}: the board is not where it started");
+            // Nothing moves before the press.
+            for (t, _, px) in film.iter().take_while(|(t, _, _)| *t < 1.0) {
+                assert_eq!(*px, quiet[0].2, "{name}: the board moved at t={t}, before the button");
+            }
+        }
+    }
+
+    /// A press while the board is turning is **dropped**, not queued: a drum
+    /// that is already going round does not go round twice, and a handful of
+    /// clicks must not clatter the bedroom for ten seconds.
+    #[test]
+    fn a_flip_during_a_rotation_is_dropped() {
+        let once = film_pressing("10:08:20", 4.0, &[], &[("flip", 1.0)]);
+        // The same, with three more presses while the drums are turning.
+        let twice = film_pressing("10:08:20", 4.0, &[], &[("flip", 1.0), ("flip", 1.2), ("flip", 1.5), ("flip", 2.0)]);
+        let settled = |f: &Vec<(f64, Frame, Vec<u8>)>| f.iter().rposition(|(_, _, px)| *px != f.last().unwrap().2).map(|i| f[i].0).unwrap();
+        assert!((settled(&once) - settled(&twice)).abs() < 1e-9, "the second press changed the run");
+        // And the picture is the same all the way through: the press was not
+        // taken at all.
+        for ((t, _, a), (_, _, b)) in once.iter().zip(&twice) {
+            assert_eq!(a, b, "the second press changed the picture at t={t}");
+        }
+    }
+
+    /// The action is offered, it is the only one, and an id the patch does
+    /// not know does nothing at all.
+    #[test]
+    fn the_patch_offers_one_action_and_ignores_the_rest() {
+        let mut patch = (DEF.make)(1);
+        let p = params();
+        let dt = 1.0 / crate::snapshot::FPS;
+        let clock = at("10:08:20");
+        let mut frame = patch.render(&Ctx { t: 0.0, dt, now: clock.now(0.0), params: &p });
+        let playing = patch.playing().expect("vesta says what it is playing");
+        assert_eq!(playing.actions.len(), 1);
+        assert_eq!(playing.actions[0].id, "flip");
+        assert_eq!(playing.actions[0].label, "Flip");
+        assert_eq!(playing.title, "10:08");
+        patch.act("nonesuch");
+        let before: Vec<u8> = (0..N).flat_map(|k| frame.pixel(k).to_srgb8()).collect();
+        for i in 1..=60 {
+            frame = patch.render(&Ctx { t: f64::from(i) * dt, dt, now: clock.now(f64::from(i) * dt), params: &p });
+            let px: Vec<u8> = (0..N).flat_map(|k| frame.pixel(k).to_srgb8()).collect();
+            assert_eq!(px, before, "an unknown action moved the board");
+        }
     }
 
     /// Nothing moves before the minute; the rotation starts on it and is over
@@ -1275,13 +1449,18 @@ mod tests {
             let set: &[(&str, f32)] = &[("font", i as f32), ("zero", 1.0)];
             let g = geom(set);
             let (mut colours, mut lit) = (std::collections::BTreeSet::new(), 0);
-            // Every numeral, and the four times of the contact sheets.
+            // Every numeral, and the four times of the contact sheets. Card
+            // 175: **the whole panel**, colon included, for a face that
+            // carries one - the colon was the last anti-aliased thing in an
+            // otherwise exact picture.
+            let whole = g.face.index(COLON).is_some();
             for when in ["01:23", "04:56", "07:08", "09:59"] {
                 let frame = run(when, 3.0, set);
                 for y in 0..H {
                     for x in 0..W {
                         let v = y as f32 + 0.5 - g.axle;
-                        if !g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) || v.abs() > g.h * 0.5 {
+                        let in_module = g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) && v.abs() <= g.h * 0.5;
+                        if !(in_module || whole) {
                             continue;
                         }
                         let p = frame.pixel(y * W + x);
@@ -1293,7 +1472,10 @@ mod tests {
             // Sixteen numerals, each around a hundred LEDs minus the seam.
             assert!(lit > 1000, "{}: only {lit} lit LEDs over four times", face.name);
             if face.crisp() {
-                assert_eq!(colours.len(), 2, "{}: a crisp face drew {:?}", face.name, colours);
+                // Black, the numerals, and - once the colon is the face's own
+                // glyph rather than two circles - the colon's one level.
+                let want = if face.index(COLON).is_some() { 3 } else { 2 };
+                assert_eq!(colours.len(), want, "{}: a crisp face drew {:?}", face.name, colours);
                 assert!(colours.contains(&[0, 0, 0]), "{}: no black card", face.name);
             } else {
                 assert!(colours.len() > 4, "{}: {} colours - is this face crisp after all?", face.name, colours.len());
@@ -1465,8 +1647,8 @@ mod tests {
                 assert!(pair[1] - pair[0] >= g.w + PAIR_GAP * size - 1e-4, "size {size}: modules touch");
             }
             // The colon has the middle to itself.
-            assert!(g.centres[1] + g.w * 0.5 <= g.colon - COLON_R * size);
-            assert!(g.centres[2] - g.w * 0.5 >= g.colon + COLON_R * size);
+            assert!(g.centres[1] + g.w * 0.5 <= g.middle - COLON_R * size);
+            assert!(g.centres[2] - g.w * 0.5 >= g.middle + COLON_R * size);
         }
         assert_eq!(CENTRES, [8.0, 23.0, 41.0, 56.0], "the layout the card was judged on");
     }

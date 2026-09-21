@@ -535,6 +535,36 @@ face centres exactly - and a **13**-wide face cannot, and sits half an LED off
 centre instead. Centring it would put every column across two LEDs and turn the
 face to mush.
 
+**The colon is a glyph too** (card 175). Terminus, Terminus Bold, Spleen and
+Dina all carry a real `:`, so the clock's punctuation is the numerals' own
+punctuation rather than two circles that happen to sit beside them - and it is
+as crisp as they are, which makes a settled picture exactly three colours with
+no ramp anywhere in it. A font's colon sits on the baseline, which in a box the
+digits fill is near the bottom, so vesta lifts it by `Face::middle(':')` to
+straddle the axle: that moves the glyph, it does not redraw it, and the lift is
+rounded to a whole LED because half an LED would put every cell across two.
+`Vesta` and `Micro Grotesk` have no colon of their own and still get the two
+drawn dots.
+
+### Flip
+
+vesta offers one action, **Flip**, which the studio draws as a button in "Now
+playing". It turns every drum once, now, and lands back on the time - because a
+board that only moves on the minute can be watched once and then there is a
+minute to wait. It turns the *whole* drum whatever `flips` says (a button
+marked Flip that did nothing would be a lie; the two slow modes turn the same
+eleven cards at their own one-card-at-a-time pace, which takes about 2.4 s and
+is worth seeing). A press while the board is already turning is **dropped**,
+not queued, and the minute always wins.
+
+`screeny-art snapshot --act ID[@SECONDS]` presses one of a patch's own actions
+part way through a run, which is the only way to photograph a response:
+
+```bash
+# the Flip button, pressed a second in, caught half a second later
+cargo run --release -p screeny-art -- snapshot vesta --time 10:08:20 --act flip@1 --at 1.5 --out flip.png
+```
+
 `crates/art/src/faces/FACES.md` says where every face came from and under what
 licence; only redistributable faces are embedded, and several good ones were
 left out because the BDF states no licence at all.
