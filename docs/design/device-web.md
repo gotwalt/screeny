@@ -7,9 +7,7 @@ rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5
 (card 223's Log: QR stays put, the page says Connected, captive probes get the setup page
 as a `200` and not a `302`, no option 114, the connected screen yields to a stream). The one silent
 stall of 0.5.1 never reproduced; card 234 fixed an unbounded UDP send and card 243 makes a
-panic reboot and say so (`GET /api/v1/panic`). Card 236 bounded the HTTP close (refused connects 9-17 per probe run -> 0). Next, in the order the owner chose on 2026-09-20 (decision 10): 234 (the stall), 243 + the
-boot-path stack lever, 240/241 (OTA, the full plan), 230 (the button), with
-225 (spec sections 8.1/8.3) and the simulator's captive answer on the side.**
+panic reboot and say so (`GET /api/v1/panic`). Card 236 bounded the HTTP close (refused connects 9-17 per probe run -> 0). Cards 240/241 are OTA on the full plan of research 006, proved on the device with a good, a never-healthy and a panicking image; card 245 found and fixed the two-core deadlock in the flash-write path that OTA exposed (`store::guarded`); an always-on 20 s liveness watchdog means a wedge reboots and reports itself. To update the panel over WiFi: `screeny-probe --addr 192.168.7.221 fw-upload <image.bin> --activate`. Next: **246** (four OTA bench follow-ups) and **230** (the button, one card) - both written, in `docs/board/backlog/`; after them the track the owner asked for is complete.**
 This file is the source of truth for the device-web track (cards 200-249, coordinated by
 the `firmware` Claude session): decisions, what the research settled, and the build
 order at the end.
