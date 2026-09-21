@@ -358,3 +358,62 @@ the flock's course, a gather that does not switch off while dodging, and clans),
 the camera kept the old hard wall for its own personal space. The default `near` is left
 at 6.0 - which of the two pictures he wants is the owner's call, and it is card 168's
 "Open with the owner" item 2.
+
+### Open with the owner
+
+Everything here is taste, or a trade I made and could unmake.
+
+1. **`wild`, default 0.65.** How often and how hard the flight changes its mind. This is
+   the one number I am least sure of. 0.45 was the first default and it was *not enough*:
+   the flock settled into a 130 s slosh between the world's soft walls (self-similarity
+   r=0.70). 0.65 breaks that. **0.85 is better still on every number** - the loop measure
+   drops to 0.42-0.57 and the spacing spreads further - and it did not look busy in the
+   strips, so if he wants more life, this is the knob and it has headroom. At 0 the flock
+   is very nearly the old one: the horizon barely moves across five frames (see
+   `177-controls.png`, top row).
+2. **`lift`, default 0.50.** How much of the motion is vertical. At 1 the climb and dive
+   limits open to 31 and 53 degrees, the attractor may be 54 m above or below, surges are
+   twice the size and the view may pitch 17 degrees. It is legible in the strips and it
+   was not nauseating, but 1.0 with `wild` 1.0 together is the busiest this patch gets
+   and is worth a look on the panel before anyone calls it calm.
+3. **Birds before horizon.** The view may now push the horizon out of its band to keep
+   the flock in shot, with an outer wall at 19 degrees (the panel is 21). Card 168 had it
+   the other way round. In practice the horizon leaves the panel for a second or two in
+   the steepest recoveries. If he would rather never lose it, that priority is one swap
+   of two blocks in `Sim::aim`, and the cost is measured: birds in frame at worst went
+   from 10 to 34 when I made the swap.
+4. **Twelve ink levels on black and on the horizon line**, against six. The far birds
+   grade more smoothly; it costs 390 bytes of the 1464 (737 -> 1127 worst). Both strips
+   are in `177-ink-6-vs-12.png` and I could not call the difference large. If he ever
+   wants that headroom, `INK_DARK` is where it is.
+5. **How steep a dive gets.** The climb limit is a spring now rather than a clamp, so
+   `lift` 0.5 nominally allows 37 degrees down and the flight actually reaches 50-51 when
+   a surge and a blob push the same way. It is the most dramatic thing in the patch. The
+   spring's stiffness (`PITCH_SPRING`) is the dial: at the first value I tried it reached
+   72 degrees, which I thought was too much for "gentle and poetic".
+6. **How clumpy is clumpy enough.** Nearest-neighbour CV is 0.38-0.43; the card asked for
+   0.4-0.6. I stopped there because past about 0.45 the flock starts shedding birds
+   rather than knotting - the clumping and the coming-apart are the same mechanism seen
+   from two ends, and the straggler count is what tells them apart.
+7. **`near` 3.0 is now available** (see above). At 3.0 the foreground birds are 8-10 LEDs
+   and unmistakable, which is the picture card 168's strips said was the best of all.
+   The default is still 6.0.
+
+### The pictures
+
+Not committed. In the worker's scratchpad,
+`.../4b35e91d-.../scratchpad/flock/`, all beginning `177-`. Every one is a
+*sequence*: nothing in this card exists in a still.
+
+| file | what it is | does it read? |
+|---|---|---|
+| `177-centroid-path-old-vs-new.png` | the flock's path, old against new, seed 11: a minute in plan view above, ten minutes of altitude below, same metres per pixel on both sides | **The clearest thing I made.** Old, a minute in plan view is a *closed loop* - the flock circles and comes back to where it started inside sixty seconds. New, it is an open S that never closes. And the altitude: old is a regular narrow ripple of about 12 m about one height, which is exactly "a wobble about one cruising height"; new is an irregular 70 m wander with slow climbs, sharp drops and plateaus. |
+| `177-old-even-spacing.png` | the **old** flight, sky, eight frames 0.4 s apart | The lattice, for comparison: birds spread across the panel at almost equal gaps, no knots, no empty air. |
+| `177-dive-horizon-line.png` | a dive and its recovery, horizon-line backdrop, ten frames 2 s apart | **Yes, best of the three.** The line sweeps from the upper third down past the middle across the strip and tilts with the bank. A dive that reads as a dive with one anti-aliased line drawn. |
+| `177-dive-black.png` | the same moment on black | **Yes.** No horizon at all, so the dive reads from the birds: the whole flock slides down the frame and the knots are unmistakable - dense clusters with real gaps, several clear V's. |
+| `177-dive-sky.png` | the same moment with the sky | **Yes**, more quietly - the bright horizon band moves the same way but a graded sky is a softer reference than a line. |
+| `177-controls.png` | `wild 0 lift 0` above, `wild 1 lift 1` below, five frames 2 s apart, horizon line | Both legible and clearly different. At 0/0 the line sits still and level; at 1/1 it climbs the panel and banks hard, and the flock is looser. |
+| `177-wingbeat-near3.png` | eight frames a *tenth* of a second apart, `near 3.0` | **Yes.** Wing shapes change frame to frame - V, dash, inverted V - which is the thing that makes two LEDs a bird. |
+| `177-close-near3.png` | five frames 0.3 s apart, `near 3.0`, seed 29 | **Yes**: 8-10 LED birds with countable wings, and the flock still a flock. This is card 169's picture, now available. |
+| `177-pace-03-horizon-line.png` | `pace 0.3`, eight frames 4 s apart | **Still calm.** A surge at a third speed moves the horizon about a third of the panel over half a minute. Graceful, not busy - which is what the card asked to check. |
+| `177-ink-6-vs-12.png` | black backdrop, six ink levels above and twelve below, same five frames | The difference is **small**. Twelve grades the far birds more smoothly; six is slightly more posterised. Honestly, at 64x32 I would not have noticed without the pair side by side. |
