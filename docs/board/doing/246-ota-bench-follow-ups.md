@@ -272,3 +272,18 @@ device left called `""` afterwards.
 
 `cargo test -p screeny-probe`: 20 passed. `--test http_conformance`: 6 passed
 (the new one included).
+
+### The half of item 1 that lives in the probe (2026-09-21)
+
+Making the device answer sooner would have made the tool report *less*.
+`Client::exchange` did `write_all(...)?`, so a reply that arrives while the
+body is still going out - which is exactly what the new refusal does - is
+thrown away and the caller sees `write: Broken pipe`. That is the line the
+bench saw; the `{"error":"busy"}` beside it in the card came from somewhere
+else, not from the probe. A write error is now **kept and only used if nothing
+came back**: the read runs either way, and on Darwin and Linux the data already
+in the receive buffer is handed over before the RST is reported (the same
+behaviour card 236 relied on). One unit test, with a server that answers from
+the head and hangs up on a 4 MB body: it fails with
+`write: Connection reset by peer` against the old code and passes against this
+one - checked, by putting the old three lines back.

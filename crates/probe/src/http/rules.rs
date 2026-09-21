@@ -18,6 +18,9 @@ use screeny_device_api::{
     route, Accepted, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState,
 };
 
+// The name the settings rules set, and take back off. **One definition**
+// (card 246, item 4): the next run recognises it by `PROBE_NAME_PREFIX`, and a
+// second spelling here is how that would quietly stop working.
 use super::PROBE_NAME;
 use super::{
     idle_name, verdict, Ctx, Outcome, Res, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE,
@@ -29,11 +32,6 @@ use super::{
 const DUMMY_SSID: &str = "Example-Wifi1";
 /// The dummy PSK. Also what rule 38 greps every reply for.
 const DUMMY_PSK: &str = "password9";
-
-/// The name the settings rules set, and take back off. **One definition**
-/// (card 246, item 4): the next run recognises it by
-/// [`super::PROBE_NAME_PREFIX`], and a second spelling here is how that would
-/// quietly stop working.
 
 /// How long to wait for a device that has been taken off its network or
 /// restarted. A trial is three attempts of 15 s plus the fallback join; a
