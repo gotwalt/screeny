@@ -92,3 +92,40 @@ Never write a real SSID or password (dummies `Example-Wifi1` / `password9`). Lea
 `crates/art` and `crates/studio` alone; list every change to shared crates.
 
 ## Log
+
+### 2026-09-21 - step 1: the recogniser (`crates/provision::button`)
+
+Branch `card/230-the-button` from `main` at 4bc39c2.
+
+- The recogniser is `crates/provision/src/button.rs`: `Recognizer::poll(level,
+  now_ms, wipe_allowed) -> ButtonEvent`, plus `active()` so the firmware task can
+  sleep on the pin's interrupt when nothing is in flight. No clock, no I/O, no
+  allocation; every comparison wrapping. Constants: `DEBOUNCE_MS` 30, `HOLD_MS`
+  1,000, `WIPE_MS` 5,000, `STATUS_MS` 10,000.
+- **Durations are timed from the edge, not from the poll that noticed it.** The
+  first version timed from the settled poll, which put the debounce window and
+  the scheduler's latency inside every threshold - a 1,000 ms press read as
+  900 ms. `raw_since` (the instant the pin moved) is the timestamp now, so
+  "999 ms or 1,000 ms?" is answered by the button.
+- **A pin low at boot is ignored until it has been released** (`Phase::WaitRelease`,
+  and it takes *both* readings high to leave it). A jammed switch cannot wipe
+  anything, and the release that follows it is not a short press either.
+- **The countdown reads 4, 3, 2, 1** - the hold starts at 1 s and fires at 5 s,
+  so there are four seconds to show. `seconds_left` is whole seconds remaining,
+  rounded up.
+- **A late poll still shows the countdown before it wipes**: a poll that crosses
+  both thresholds at once starts the countdown and lets the next poll fire, so
+  the panel has always said what was about to happen.
+- **One press, one wipe.** After `WipeWifi` the recogniser waits for a release;
+  leaning on the button does not wipe twice.
+- **OTA decision (the card's open question), first half:** `poll` takes
+  `wipe_allowed`, read *both* when the countdown would start and again when the
+  wipe would fire. False -> `HoldRefused`, no countdown, no wipe, and the
+  gesture is over until the button comes up. So an upload that starts during a
+  countdown still stops the wipe. A short press is unaffected: showing a status
+  screen costs an update nothing.
+- Tests: `crates/provision/tests/button.rs`, 12 of them, every case the card
+  names (bounce incl. the 11 ms release glitch card 203 photographed, 999 vs
+  1,000 ms, 4.9 s vs 5.0 s, the u32 wrap, stuck-low at boot, four presses inside
+  one status screen) plus the two OTA cases and the late poll.
+  `cargo test -p screeny-provision`: **47 passed, 0 failed**, 2 doc-tests.

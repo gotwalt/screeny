@@ -18,6 +18,7 @@
 //! | module | what |
 //! |---|---|
 //! | [`machine`] | [`Provisioner`]: `Boot`/`Joining`/`Online`/`Portal`/`Trial`, events in, [`Action`]s out |
+//! | [`button`] | the button's gesture recogniser (card 230): levels and milliseconds in, `ShortPress`/`HoldTick`/`WipeWifi` out |
 //! | [`uri`] | the `WIFI:` URI, its ZXing escaping, and the 14-character SSID limit a version 2-L QR imposes |
 //! | [`qr`], [`screen`] | the version 2-L encoder and the two portal layouts, drawn into a [`screeny_proto::Rgb888Frame`] |
 //!
@@ -77,6 +78,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod button;
 pub mod machine;
 pub mod qr;
 pub mod screen;
