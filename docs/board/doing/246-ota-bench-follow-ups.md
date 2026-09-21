@@ -287,3 +287,82 @@ behaviour card 236 relied on). One unit test, with a server that answers from
 the head and hangs up on a 4 MB body: it fails with
 `write: Connection reset by peer` against the old code and passes against this
 one - checked, by putting the old three lines back.
+
+### Numbers, artefacts and the bench procedure (2026-09-21) - **REVIEW**
+
+**Rebased onto `main` at `38082f7`** (card 136 landed while this was being
+written, and its own note says "the device check rides in card 246's bench
+build" - so it has to be *in* the artefacts). The rebase was clean: no
+conflicts, including in `docs/design/protocol-v1.md`, where 136 edited §6.3 and
+the §8.6 brightness bullet and this card edited the §8.6 `status` bullet and
+§8.10 step 5. Both are in the file. **The 0.7.1 artefacts below therefore carry
+card 136's brightness floor**, and `screeny brightness 3` -> `applied 6` with a
+lit panel is part of this bench run.
+
+`tools/fw-size.sh`, floor 24,576, rebuilt from the rebased branch:
+
+| build | `.stack` 0.7.0b | `.stack` **0.7.1** | `.bss` |
+|---|---|---|---|
+| default | 26,200 | **26,200** | 110,440 |
+| `panic-test` | 26,120 | **26,120** | 110,504 |
+| `http-selftest` | 25,768 | **25,768** | 110,824 |
+| `start-in-portal` | 26,200 | **26,200** | 110,440 |
+| `ota-test-unhealthy` | 26,200 | **26,200** | 110,440 |
+| `ota-test-panic` | 26,120 | **26,120** | 110,504 |
+
+**Not one byte of `.stack` moved.** The default image is 1,015,325 bytes
+(0.7.0: 1,014,288), so the whole card is ~1 KB of flash and no RAM.
+
+`timeout 1200 cargo test`: **957 passed, 0 failed, 1 ignored** (0 on 0.7.0's
+843 + this card's new tests + card 136's).
+`cargo clippy --workspace --all-targets`: silent.
+Firmware clippy: 13 warnings, all pre-existing (`build.rs`, `gamma.rs`,
+`store.rs`, ...) - **none in `src/ota.rs` or `src/http.rs`**, checked by
+grepping the locations.
+
+Artefacts, in the orchestrator's scratchpad
+`.../3e658d49-1dd7-428e-933d-a29735a60119/scratchpad/card246/`:
+
+| file | what |
+|---|---|
+| `screeny-fw-0.7.1-default.elf` | the serial-flash build, `esp_app_desc.version` `0.7.1` |
+| `screeny-fw-0.7.2-good.bin` | the upload image, 1,015,376 bytes, version `0.7.2`, sha256 `96fdaaf8...` |
+| `screeny-fw-0.7.2-good.elf` | the same build's ELF |
+
+`screeny-probe fw-scan` on the `.bin`: every check passed, 5 segments, 248
+sectors to stage. **The 0.7.2 version bump is not committed**: the branch reads
+`0.7.1` and the tree is clean.
+
+#### Bench procedure for the orchestrator
+
+1. `tools/fw-run.sh` the 0.7.1 ELF (it erases `otadata`, so the device comes up
+   `ota_0 / valid / Settled`). Check `screeny-probe status`: `fw 0.7.1`,
+   `fw_state valid`.
+2. Card 136 rides along: `screeny brightness 3` -> `applied 6`, panel lit, then
+   put the level back.
+3. `cargo run --release -p screeny-probe -- --addr 192.168.7.221 fw-upload
+   <scratchpad>/screeny-fw-0.7.2-good.bin --activate`. Watch for, in order:
+   `the device is running boot_id N`; `HTTP 200 in ~26 s`, `activating true`;
+   **`at ~3 s: still boot_id N - the old image, which has not restarted yet`**
+   (this line is the fix for item 2 - 0.7.0 exited here); `back after ~25 s:
+   fw 0.7.2 ... boot_id M (was Some(N))`; `at ~30 s: Trial`; **`CONFIRMED`** at
+   60-65 s.
+4. **Without rebooting**, upload again, staged only:
+   `fw-upload <the same .bin> --activate=0`... i.e. plain `fw-upload <bin>`
+   (the tool stages by default). It must answer `ok true written ~1015376` and
+   **not** `busy` - that is item 1. On 0.7.0 this was `busy` until a reboot.
+5. `screeny-probe status`: `fw 0.7.2`, `fw_slot ota_1`, **`fw_state valid`**.
+6. Optional, for item 3: the reverted reading only appears after a rollback, so
+   it is only checkable with a deliberately bad image. If a rollback happens at
+   all, `fw_state` must read `valid` for the slot that is running and
+   `GET /api/v1/panic`'s `update` must be the thing that says what was
+   rejected.
+7. Item 4, with no hardware at risk: run `screeny-probe --addr 192.168.7.221
+   http`, kill it mid-run with `kill <pid>` (a plain `SIGTERM`), and check the
+   panel's name and brightness come back anyway. Then, to see the other half,
+   set the name to `probe-228` by hand and start the suite: it prints the
+   `*** THIS DEVICE IS STILL CALLED "probe-228" ***` block and leaves the
+   device with its default name.
+
+**Card state: REVIEW.** Branch `card/246-ota-follow-ups`, six commits on
+`38082f7`, nothing merged and nothing pushed.
