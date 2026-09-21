@@ -223,7 +223,22 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// owner's phone scanning - whatever the runtime brightness is, because the
 /// panel dims by shortening the output-enable window and a dim code a phone
 /// cannot read looks perfectly fine to an eye.
-pub const FW_VERSION: &str = "0.8.2";
+///
+/// **0.9.0 is card 248 stage A: the dark end holds still.** The temporal
+/// dither still spends the same light over the same sixteen refreshes, but it
+/// walks its thresholds **bit-reversed** (0, 8, 4, 12, 2, 10, ...) instead of
+/// in counting order, so a pixel wanting half a level alternates every single
+/// refresh at 77 Hz rather than sitting lit for eight refreshes and dark for
+/// eight at 9.6 Hz - which is what the owner was seeing blink from a few feet
+/// away. A remainder worth a sixteenth of a level or less, the only component
+/// the reversal cannot speed up, is snapped onto the level instead of spent as
+/// one flash per 104 ms. With the dither off, `q >> 4` now **rounds** rather
+/// than truncating, which stops sRGB 21..=33 being black and stops 22 of the
+/// 64 level codes landing a level low. The arithmetic moved out of
+/// `src/display.rs` into `screeny-dither`, a host-tested workspace crate; the
+/// cargo features `frac-bits-3` and `frac-bits-2` build the shorter dither
+/// cycles (19 Hz and 38 Hz) the owner compares this against.
+pub const FW_VERSION: &str = "0.9.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

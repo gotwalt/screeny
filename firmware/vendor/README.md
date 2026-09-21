@@ -66,6 +66,39 @@ Nothing was removed or altered, so upstream behaviour for anyone not calling
 the new functions is byte-identical. The `benches/` directory was dropped
 because it pulls in `criterion` and we never run it on this target.
 
+### The sub-level plane that is not here (card 248)
+
+Card 248 asked for planes *below* plane 0, shown once per refresh with a
+narrowed output-enable window: a real half-level at the full refresh rate,
+instead of the temporal dither making half-levels by skipping whole refreshes.
+The mechanism fits this crate cleanly and **is not implemented**, for a reason
+that has nothing to do with this crate. In case somebody comes back to it:
+
+- `bcm_sequence` streams contiguous plane *suffixes* and a plane's coverage is
+  the sum of the reps of every segment starting at or before it. Put `SUB`
+  sub-planes at the **front** of `planes` and the wanted coverage
+  (`1, …, 1, 1, 2, 4, …`) has first differences `r[0] = 1`, `r[1..=SUB] = 0`,
+  `r[SUB+1] = 1`, `r[SUB+k] = 2^(k-1)`. Omit the zero-rep segments and the
+  sequence is `PLANES - SUB` entries - six for `SUB = 2, PLANES = 8`, the same
+  count as today - with only the first segment spanning the sub-planes, so each
+  is displayed exactly once per refresh. `SUB = 0` reproduces today's sequence,
+  so the change is additive.
+- The only structural obstacle is that `bcm_segment_ptr(i)` assumes segment
+  index *is* plane index. It would need a `SEG_START` table beside
+  `BCM_SEQUENCE`.
+- `write_row` needs no new signature: the value becomes the level in
+  quarter-levels (`0..=252`, still a `u8`) and plane `k` still carries bit `k`.
+- `set_oe_slots` would gain a per-plane width (`lit >> 1`, `lit >> 2`; floor,
+  because floor is the only rounding that keeps `half + quarter < lit` at every
+  brightness step) and would stay the one place bit 8 is written.
+
+What stopped it: **RAM**. A plane is 2,052 bytes here and there are two
+framebuffers, so a sub-plane costs 4,104 bytes of `.data`, and on this chip
+`.data` comes straight off core 0's stack. `tools/fw-size.sh` reported `.stack`
+at 25,792 against its own 24,576 floor - 1,216 bytes of headroom. Card 248's
+log has the full design and the arithmetic; card 249 is the lever that would
+pay for it.
+
 ### Upstreaming
 
 `set_oe_slots` is worth offering upstream — every USB-powered panel wants it,

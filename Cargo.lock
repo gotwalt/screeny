@@ -1858,6 +1858,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "screeny-dither"
+version = "0.1.0"
+
+[[package]]
 name = "screeny-encode"
 version = "0.1.0"
 dependencies = [

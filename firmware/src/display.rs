@@ -9,7 +9,7 @@
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::{DrawTarget, OriginDimensions, RgbColor, Size};
 
-use crate::gamma::{self, FRAC, FRAC_BITS, LEVELS};
+use crate::gamma::{self, FRAC_BITS};
 use crate::{FrameBuffer, COLS, ROWS};
 
 pub const NPIX: usize = COLS * ROWS;
@@ -124,20 +124,6 @@ pub const DEFAULT_BRIGHTNESS: u8 = screeny_settings::DEFAULT_BRIGHTNESS;
 // sRGB frame -> DMA framebuffer
 // ---------------------------------------------------------------------------
 
-/// 4x4 ordered (Bayer) matrix scaled to the 16 dither phases.
-///
-/// Used as a per-pixel *phase offset*, not as a spatial dither: without it
-/// every pixel with the same remainder would toggle on the same refresh and
-/// the whole panel would beat at `refresh/16` — about 10 Hz, which is very
-/// visible. Offsetting by pixel spreads that across the panel so it averages
-/// out spatially as well as temporally.
-const BAYER4: [[u16; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Mode {
     /// sRGB EOTF on the way to panel levels. Off is the spike's behaviour and
@@ -160,11 +146,27 @@ impl Mode {
 /// Cost is measured in the card 007 log. The shape that matters: one pass,
 /// row at a time, no `erase()` beforehand (every entry is written), and the
 /// per-row `planes[p].rows[r]` lookup hoisted into `write_row`.
+/// Card 248: the four thresholds a row can use, hoisted out of the pixel
+/// loop. `screeny_dither::threshold` reverses the bits of the phase counter,
+/// which is a loop, and `phase` does not change within a frame — so it runs
+/// four times per frame rather than 6,144 times. The per-pixel work left is
+/// one `XOR`, which is less than the add-and-mask it replaces.
+#[inline(always)]
+fn row_thresholds(phase: u16, y: usize) -> [u16; 4] {
+    let mut t = [0u16; 4];
+    let mut x = 0;
+    while x < 4 {
+        t[x] = screeny_dither::threshold(phase, screeny_dither::bayer(x, y), FRAC_BITS);
+        x += 1;
+    }
+    t
+}
+
 pub fn render(frame: &Frame, fb: &mut FrameBuffer, mode: Mode, phase: u16) {
     let mut row = [[0u8; 3]; COLS];
     for y in 0..ROWS {
         let src = &frame.px[y * COLS * 3..(y + 1) * COLS * 3];
-        let bayer = &BAYER4[y & 3];
+        let th = row_thresholds(phase, y);
         for x in 0..COLS {
             let (r, g, b) = (src[x * 3], src[x * 3 + 1], src[x * 3 + 2]);
             let (qr, qg, qb) = if mode.gamma {
@@ -173,22 +175,20 @@ pub fn render(frame: &Frame, fb: &mut FrameBuffer, mode: Mode, phase: u16) {
                 (gamma::linear_q(r), gamma::linear_q(g), gamma::linear_q(b))
             };
             row[x] = if mode.dither {
-                let t = (phase + bayer[x & 3]) & (FRAC - 1);
-                [quantise_dither(qr, t), quantise_dither(qg, t), quantise_dither(qb, t)]
+                let t = th[x & 3];
+                [
+                    screeny_dither::quantise_dither(qr, t, FRAC_BITS),
+                    screeny_dither::quantise_dither(qg, t, FRAC_BITS),
+                    screeny_dither::quantise_dither(qb, t, FRAC_BITS),
+                ]
             } else {
-                [(qr >> FRAC_BITS) as u8, (qg >> FRAC_BITS) as u8, (qb >> FRAC_BITS) as u8]
+                [
+                    screeny_dither::quantise_plain(qr, FRAC_BITS),
+                    screeny_dither::quantise_plain(qg, FRAC_BITS),
+                    screeny_dither::quantise_plain(qb, FRAC_BITS),
+                ]
             };
         }
         fb.write_row(y, &row);
     }
-}
-
-/// `q` is duty in 1/16ths of a level. Emit the level below or above it so
-/// that over a full phase cycle the mean is `q/16`.
-#[inline(always)]
-fn quantise_dither(q: u16, threshold: u16) -> u8 {
-    let level = q >> FRAC_BITS;
-    let frac = q & (FRAC - 1);
-    let bumped = level + (frac > threshold) as u16;
-    if bumped > LEVELS { LEVELS as u8 } else { bumped as u8 }
 }

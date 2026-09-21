@@ -1947,6 +1947,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "screeny-dither"
+version = "0.1.0"
+
+[[package]]
 name = "screeny-fw"
 version = "0.1.0"
 dependencies = [
@@ -1979,6 +1983,7 @@ dependencies = [
  "picoserve",
  "rand_core 0.10.1",
  "screeny-device-api",
+ "screeny-dither",
  "screeny-fwimage",
  "screeny-otastate",
  "screeny-proto",

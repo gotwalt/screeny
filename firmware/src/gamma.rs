@@ -36,14 +36,20 @@
 //! Brightness is deliberately **not** in this table. It is output-enable duty
 //! in the framebuffer (see `vendor/README.md`), so dimming the panel does not
 //! move a single entry here and costs no colour depth.
+//!
+//! # What is here and what is not (card 248)
+//!
+//! This file is the **table** and nothing else. Every piece of arithmetic that
+//! used to sit beside it — how many fractional bits this build spends, which
+//! order the dither walks its phases in, where the rounding goes — is
+//! `screeny-dither`, a `no_std` workspace crate the firmware compiles for
+//! xtensa and `cargo test` compiles for the host. `firmware/` cannot be
+//! depended on from a host test, so anything left in here is untestable by
+//! construction; the table can live with that (it is a constant, and
+//! `crates/panel` holds a fixture copy checked against the sRGB EOTF), and the
+//! dither could not.
 
-/// Bit-planes per channel, and therefore duty levels: `0..=63`.
-pub const PLANES: usize = 6;
-pub const LEVELS: u16 = (1 << PLANES) - 1; // 63
-
-/// Fractional bits carried below one duty level.
-pub const FRAC_BITS: u16 = 4;
-pub const FRAC: u16 = 1 << FRAC_BITS; // 16
+pub use screeny_dither::{FRAC, FRAC_BITS, PLANES};
 
 /// sRGB code -> panel duty in 1/16ths of a level, i.e. `0 ..= 63*16`.
 ///
@@ -82,10 +88,17 @@ pub fn linear_q(srgb: u8) -> u16 {
     (srgb as u16 >> (8 - PLANES as u16)) * FRAC
 }
 
+/// The table entry for `srgb`, narrowed to this build's [`FRAC_BITS`].
+///
+/// At the default four fractional bits this is the table entry unchanged and
+/// the narrowing compiles to nothing. The `frac-bits-3` and `frac-bits-2`
+/// builds round it down a bit — `screeny_dither::narrow_q`, rounding and not
+/// truncating — rather than keeping three copies of a table that only ever
+/// had one set of numbers checked against the sRGB EOTF.
 #[inline(always)]
 pub fn gamma_q(srgb: u8) -> u16 {
-    SRGB_TO_Q[srgb as usize]
+    screeny_dither::narrow_q(SRGB_TO_Q[srgb as usize], FRAC_BITS)
 }
 
-const _: () = assert!(SRGB_TO_Q[255] as u16 == LEVELS * FRAC);
+const _: () = assert!(SRGB_TO_Q[255] == screeny_dither::Q_SCALE);
 const _: () = assert!(SRGB_TO_Q[0] == 0);
