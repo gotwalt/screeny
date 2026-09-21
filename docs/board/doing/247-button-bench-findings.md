@@ -130,3 +130,41 @@ untouched, the overlay expires on its own tick and `shows_frames()` is true agai
 the next frame, and `IDENTIFY 0` stops it.
 
 `cargo test -p screeny-receiver`: 19 tests, all green.
+
+#### Step 2 - item 1 in the firmware
+
+`firmware/src/net.rs`:
+
+* the timers (`link_down`, `tick`) and `core.intent(now)` move **above** the swap.
+  They have to: the answer to "may this frame reach the panel?" is `intent`, and an
+  `intent` read before `tick` is one tick stale about an overlay that has just run
+  out. Nothing there touches the producer, so it costs the frame path nothing -
+  `tick` cannot release a lock a frame has just renewed, and `link_down` only turns
+  `Live` into `Hold`, which shows frames either way.
+* `setup_screen_up` becomes `overlay_owns_panel` and gains `|| !intent.shows_frames()`
+  (`net.rs:339-343`). That one clause is the fix.
+* `screens::identify` now takes `now_ms` instead of `phase`
+  (`firmware/src/screens.rs:190-203`). Its chevron border was `(phase / 3) % 2`, and
+  `phase` advances once per redraw of the frame task: 50 a second at idle and up to 80
+  with a stream arriving, so the border was alternating at **8-13 Hz** - over
+  CLAUDE.md's 3 Hz panel limit, and at a *different rate* depending on whether
+  anything was streaming, which is the other half of "it flickers over a stream and is
+  solid at idle". It is now a 400 ms wall clock (1.25 Hz) that does not change when a
+  stream starts or stops.
+
+`crates/sim`: the simulator composes the whole scene on every render rather than
+swapping buffers, so it never had the gap the firmware had - it was already right.
+`crates/sim/tests/arbitration.rs::identify_is_an_overlay_and_not_a_state` now pins
+that it stays right: not one pixel of the streamed frame reaches the panel while the
+overlay is up, and the picture is the panel's again the moment it ends.
+
+**One firmware/simulator divergence found and deliberately left alone**: in the
+simulator `identify_overlay` draws *over* the portal screen (`crates/sim/src/screens.rs:146`),
+while in the firmware the portal branch outranks `Intent::Identify` and identify never
+draws over a QR. The firmware's order is the one card 247 item 2 wants ("nothing else
+draws over or alternates with it"), and nothing on the device can raise identify while
+the portal is up anyway - the portal means no LAN, and the button's short press is the
+only other route. Noted for a later card rather than changed here.
+
+Build after this step: `.stack` **25,800** (unchanged from the 0.8.1 baseline; floor
+24,576), image 1,027,841. `cargo test -p screeny-sim --test arbitration`: 9 green.

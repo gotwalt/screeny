@@ -348,6 +348,20 @@ fn identify_is_an_overlay_and_not_a_state() {
         "but the overlay is what is lit"
     );
 
+    // Card 247, item 1: **none** of those frames reaches the panel while the
+    // overlay is up. `screeny_receiver::Intent::shows_frames()` is the rule,
+    // and this is the simulator half of it - the firmware's frame task used to
+    // publish the decoded frame *and* the overlay on every pass, and the panel
+    // caught the picture in between several times a second. The simulator
+    // composes the whole scene on every render instead of swapping buffers, so
+    // it has never had that gap; what is pinned here is that it never grows
+    // one, by checking a panel full of the overlay and not of the frame.
+    let lit = sim.render_display();
+    assert!(
+        lit.chunks_exact(3).all(|px| px != &eb[..3]),
+        "not one pixel of the streamed frame reaches the panel under IDENTIFY"
+    );
+
     // And it expires on its own, back to whatever the stream state has
     // become in the meantime.
     let s = sim
@@ -357,5 +371,13 @@ fn identify_is_an_overlay_and_not_a_state() {
         .expect("the overlay to expire");
     assert_eq!(s.state_byte, s.state.as_u8());
     assert_frames_eq(&s.decoded[..], &eb, "the frame underneath survived");
+    // ...and the picture is back: the last frame that arrived *during* the
+    // overlay is what the panel shows the moment it ends, which is card 247's
+    // "the picture returns on the next frame after it".
+    assert_frames_eq(
+        &sim.render_display()[..],
+        &s.panel[..],
+        "the picture is the panel's again the moment the overlay ends",
+    );
 }
 
