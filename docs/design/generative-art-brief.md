@@ -163,12 +163,16 @@ sits**, not about how many shades you use:
   `screeny_art::panel::level_triple([r_level, g_level, b_level]) -> Rgb` (each channel is
   `screeny_art::panel::level_code(level)`, decoded back to linear light) and applies them
   as the *last* step, after blending, exactly where "snap after you blend" above says to.
-  `crates/art/src/patches/clocks` is the worked example: `DARK_RAMPS`, two short,
-  hand-picked lists of level triples for the resting dials' held ink, selectable in the
-  studio via a `choice("dark", ...)` parameter the same way any other named choice is
-  (card 163) - applied only once a dial has actually landed, never mid-fade, so a fade
-  stays the cheap continuous ramp the "leave everything else to the dither" bullet asks
-  for and only the truly held colour is aligned.
+  `crates/art/src/patches/clocks` is the worked example: `DARK_CHOICES`, a `choice("dark",
+  ...)` parameter the same way any other named choice is (card 163). Its **default is
+  `"as it was"`** - the old, unaligned `tint.scale(ink)`, untouched - because a patch's
+  default is its own pixels and this card's own rule says the default may not move them.
+  `DARK_RAMPS` holds the other entries: short, hand-picked lists of level triples chosen
+  *nearest what the old continuous colour actually measured* (`screeny_panel::nearest_level`
+  against `screeny_panel::duty_16ths`, not guessed), so picking one is "the same look,
+  steadied", not a different one. Applied only once a dial has actually landed, never
+  mid-fade, so a fade stays the cheap continuous ramp the "leave everything else to the
+  dither" bullet asks for and only the truly held colour is aligned.
 - **This table will change.** Card 248 gives the firmware steadier sub-levels below
   level 1 and a dither that does not run at 10 Hz. When it lands there are more steady
   dark values and the penalty for missing one is smaller. Read the levels from
