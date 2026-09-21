@@ -3,7 +3,7 @@ id: 230
 title: Firmware - the button: a short press shows the status screen, holding 5 s wipes WiFi and opens the setup portal
 type: build
 hardware: orchestrator flashes; the owner presses (the worker builds and host-tests only)
-depends: [203, 223, 243]
+depends: [202, 223, 243]
 owner:
 branch: card/230-the-button
 ---
@@ -24,9 +24,11 @@ specifically resetting WiFi"), in the one-card shape he chose on 2026-09-20 (dec
 
 ## Context (read first)
 
-- `docs/research/008-button.md` and the done card `docs/board/done/203-*.md`: the button is
-  **GPIO15**, confirmed on the bench with the owner pressing; polarity, pull and the bounce
-  it showed are recorded there. `firmware/src/bin/gpio_probe.rs` is the probe that found it.
+- `docs/research/008-button.md` and the done card `docs/board/done/202-research-button-gpio.md`
+  (the bench confirmation, "card 203" in `docs/design/device-web.md`'s table, is recorded in
+  those two): the button is **GPIO15, active low**, confirmed with the owner pressing; note
+  008's point 4 - **GPIO15 is dual-purpose on this board** (it is also an ADC input for the
+  light sensor path): read it before configuring the pin. `firmware/src/bin/gpio_probe.rs` is the probe that found it.
 - `crates/provision`: the machine already has `Event::ButtonWipe` (-> `StopJoin`,
   `ClearCredentials`, `RaiseAp`; host-tested from every state, including during an
   online-origin trial). Wire the real button to it; do not invent a second path. Credentials
