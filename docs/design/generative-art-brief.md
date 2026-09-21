@@ -61,7 +61,11 @@ sRGB is only 14 levels. **The firmware now fills those gaps by temporal ditherin
 it carries the sub-level remainder across panel refreshes (154 Hz, about 5 per 30 fps
 frame), so in-between values are shown as a time average. **[measured, card 007]**:
 the darkest visible value moved from sRGB 34 to about 6, mean luminance wobble is
-1.7% with no periodic structure, and nothing is visible as flicker to the eye.
+1.7% with no periodic structure, and nothing is visible as flicker to the eye **from
+across a room**. **[owner, by eye, 2026-09-21]**: within a few feet, held colours close
+to black visibly blink at several hertz - that 1.7% is an average over the panel, and
+up close the eye resolves single pixels. Section 2.1.1 is what to do about it from the
+sender's side; card 248 is the firmware's side.
 
 **How much resolution that is, exactly [measured, card 102]**: the firmware keeps four
 fractional bits below a duty level and spends the remainder over a **16-phase** cycle,
@@ -91,6 +95,63 @@ What that changes for you, and what it does not:
 - A camera cannot photograph the dithered panel honestly (a 1/30 s exposure against
   a ~100 ms dither cycle), and the bench camera's colour response is unknown. Judge
   by eye on the device; do not tune art to camera captures.
+
+### 2.1.1 Held dark shades: put them on a panel level
+
+A colour that sits exactly on one of the 64 hardware levels is lit the same way on every
+refresh. It cannot blink, with the device's dither on or off. A colour between two levels
+is made by alternating them over a 16-refresh cycle, 9.6 Hz, and near black the two
+levels are "off" and "on": that is the blinking. So the rule is about **where a shade
+sits**, not about how many shades you use:
+
+- **Align what is held and dark.** Unlit clock segments, ghost dots, dim backgrounds,
+  rules, the bottom entries of a palette: anything that stays on screen for more than a
+  few frames with a channel under about sRGB 140. Leave everything else to the dither -
+  moving content, quick fades, and anything brighter, where a level is at most four
+  codes wide and the alternation is a few percent of the light.
+- **The aligned codes, dark end** (the lowest sRGB code that lands on each level, from
+  the firmware's own gamma table; every one is within 2/16 of a level, and correct
+  whether the device dither is on or off):
+
+  ```
+  level   0   1   2   3   4   5   6   7    8    9   10   11   12   13   14   15   16
+  sRGB    0  34  50  62  71  80  87  94  100  106  111  116  121  126  130  134  138
+  ```
+
+  That is the whole budget: **nine steady values per channel at or under sRGB 100.**
+  (The table in 2.1 is the *nearest* code to each level's light, which is the right
+  question for a preview; twenty-two of its entries sit a hair under their level - 125,
+  149, 156 and others - and fall to the level below if the device is not dithering. For
+  choosing a code to send, use this rule instead: the lowest code that reaches the level.)
+- **Alignment is per channel, so the darkest shades lose their hue.** A warm grey is
+  three channels on three different levels, and at the bottom the only choices are 0 and
+  1: the darkest steady colours are the seven combinations of level-1 primaries, then
+  things like (2,1,1) and (2,2,1). Design a dark ramp as a short list of **level
+  triples**, look at each one on the panel, and keep the ones that read as the same
+  material. Four deliberate dark shades beat twelve computed ones.
+- **Snap after you blend, not before.** Anti-aliasing, glow falloff, cross-fades and
+  linear-light blending all manufacture in-between values. Bright edges are fine. A
+  *held* dim edge or halo is exactly the pixel that blinks: for any channel that ends up
+  below level ~16, move it to the nearest level as the last step.
+- **Need a shade between two dark levels? Mix them in space, not in time.** A fixed
+  ordered pattern of the two adjacent aligned levels (2.4) is perfectly steady. It reads
+  as texture up close, which suits a dot-matrix picture better than a blink does.
+- **Buy levels with brightness.** Light is level x brightness, and brightness costs no
+  depth (above). If a patch's brightest value is well under full - a clock whose lit dots
+  are sRGB ~175 is only using 27 of the 63 levels - scale the patch up in linear light
+  and turn the panel's brightness down by the same factor. The picture is as bright as
+  before and everything dark has moved up onto about twice as many levels. Brightness
+  has 25 real steps and a floor, so this is a coarse trade, made once per patch.
+- **How, in this repo.** `screeny_art::panel::Panel::BitPlanes.snap8()` is the snap, and
+  a player's `output.panel: bit_planes` applies it to the whole frame - steady, but it
+  also flattens the bright gradients the dither handles well. Better is to keep
+  `output.panel: dithered` and align only the dark palette entries and the held dim
+  pixels. Card 188 gives the panel model the aligned-code table (so nobody copies the
+  one above into code) and applies it to the clock.
+- **This table will change.** Card 248 gives the firmware steadier sub-levels below
+  level 1 and a dither that does not run at 10 Hz. When it lands there are more steady
+  dark values and the penalty for missing one is smaller. Read the levels from
+  `screeny_panel`, never from a constant of your own.
 
 ### 2.2 The primaries are not sRGB
 
