@@ -206,3 +206,20 @@ every host crate:
 
 `timeout 1200 cargo test --release --no-fail-fast` and `cargo clippy --workspace
 --all-targets` at the root are next (the card's Finish step); results below.
+
+First full run: `cargo clippy --workspace --all-targets` clean except two pre-existing
+warnings this card did not touch (`crates/receiver/tests/identify_overlay.rs:10`,
+`crates/sim/tests/arbitration.rs:361`, both `clippy::doc_lazy_continuation`/
+`chunks_exact_to_as_chunks` - confirmed present at `6bdcc1c` with `git show`, so not
+this card's to fix). `cargo test --release --no-fail-fast` at the root: one failure,
+`brightness_wording_tells_a_raise_from_a_cap` (a test this card added) - `sim starts:
+Os { code: 48, kind: AddrInUse, ... }`. Re-ran alone: passed. This is the race
+`embed.rs`'s `sim_at`/`sim_anywhere` already name and guard against (card 117: another
+worktree's `cargo test` can hold the port pair for a moment between `free_port_pair`
+choosing it and the sim binding it) - my test picked a port and bound it in two
+separate steps with no retry, unlike the established pattern. Fixed by adding the same
+`sim_anywhere` retry (up to 20 free pairs) to `crates/screeny/tests/cli.rs` and using it
+in both halves of the test, matching `embed.rs`'s house style rather than inventing a
+new one. Re-ran `cargo test -p screeny --test cli --release` (14 passed) and `cargo
+clippy -p screeny --all-targets` (one `doc_lazy_continuation` warning from the new doc
+comment's dash-led continuation line, reworded, then clean) after the fix.

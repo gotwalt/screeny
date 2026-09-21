@@ -34,6 +34,24 @@ fn free_port_pair() -> u16 {
     }
 }
 
+/// A simulator on *some* free consecutive port pair, retrying if another
+/// test, in this process or in another worktree's `cargo test` running at
+/// the same time (`embed.rs`'s `sim_anywhere`, card 117), grabbed the pair
+/// between `free_port_pair` choosing it and this binding it. Seen once in
+/// this file: `brightness_wording_tells_a_raise_from_a_cap` failed alone
+/// with nothing but "sim starts: AddrInUse" under a loaded `cargo test
+/// --release` (card 187).
+fn sim_anywhere(cfg: SimConfig) -> (SimDevice, u16) {
+    for _ in 0..20 {
+        let port = free_port_pair();
+        let attempt = SimConfig { frame_port: port, control_port: port + 1, ..cfg.clone() };
+        if let Ok(dev) = SimDevice::start(attempt) {
+            return (dev, port);
+        }
+    }
+    panic!("could not find a free frame/control port pair on loopback");
+}
+
 fn run(args: &[&str]) -> (bool, String, String) {
     let out = screeny().args(args).output().expect("run screeny");
     (
@@ -183,8 +201,7 @@ fn brightness_wording_tells_a_raise_from_a_cap() {
     // 1..=5 light no output-enable slots at all (25 slots, spec 6.3): raised
     // to the floor, which the wording takes from the reply (6 today), not
     // from a literal.
-    let port = free_port_pair();
-    let dev = SimDevice::start(SimConfig { frame_port: port, control_port: port + 1, ..SimConfig::for_test() }).expect("sim starts");
+    let (dev, port) = sim_anywhere(SimConfig::for_test());
     let addr = format!("127.0.0.1:{port}");
     let (ok, stdout, stderr) = run(&["brightness", "3", "--addr", &addr]);
     assert!(ok, "{stderr}");
@@ -196,10 +213,7 @@ fn brightness_wording_tells_a_raise_from_a_cap() {
 
     // A device capped below 255 still reports the cap, not the floor - the
     // cap always wins, per spec 6.3's last clause.
-    let port = free_port_pair();
-    let dev =
-        SimDevice::start(SimConfig { frame_port: port, control_port: port + 1, brightness_cap: 120, ..SimConfig::for_test() })
-            .expect("sim starts");
+    let (dev, port) = sim_anywhere(SimConfig { brightness_cap: 120, ..SimConfig::for_test() });
     let addr = format!("127.0.0.1:{port}");
     let (ok, stdout, stderr) = run(&["brightness", "255", "--addr", &addr]);
     assert!(ok, "{stderr}");
