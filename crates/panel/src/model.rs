@@ -20,12 +20,49 @@ use screeny_proto::{Rgb888Frame, NBYTES};
 
 use crate::color::{lin_to_srgb8, SRGB_TO_LIN};
 
+/// How a [`Panel`] turns one sRGB8 code into emitted light.
+///
+/// Every panel except [`DEVICE`] and [`NOMINAL`] is a hypothetical - "what if
+/// the panel had this many steps" - and [`Rounded`](Quantiser::Rounded) models
+/// that the same way it always has: round the linear value to the nearest of
+/// `steps` evenly spaced increments. `DEVICE` and `NOMINAL` are not
+/// hypothetical, they are what the firmware actually does to the 256 sRGB
+/// codes, so they go through `screeny_dither` - the firmware's own arithmetic
+/// - on the firmware's own table value ([`raw_q`]) instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Quantiser {
+    /// `(SRGB_TO_LIN[v] * steps).round() / steps`. Fine for a panel that is
+    /// not literally this device (`TEMPORAL`'s subframe count is a rough
+    /// within-frame estimate, not a hardware fact; `DIM`/`DIMMED`/`DEEP` are
+    /// named losses, not readings).
+    Rounded,
+    /// [`screeny_dither::snap_dead_zone`] then divide: [`DEVICE`], the only
+    /// panel that reproduces `display::render`'s dark end, dead zone
+    /// included.
+    DeviceDithered,
+    /// [`screeny_dither::quantise_plain`]: [`NOMINAL`], which agrees with the
+    /// firmware's undithered path (`output.panel: bit_planes`) at all 256
+    /// codes instead of double-rounding (card 248's "one real disagreement").
+    DeviceUndithered,
+}
+
 /// A model of the panel's sRGB8 -> emitted-light transfer function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Panel {
     /// Duty increments per channel, counting temporal dithering: one less
     /// than the number of distinct levels, because one of them is off.
     pub steps: u32,
+    quantiser: Quantiser,
+}
+
+/// An sRGB8 code's duty on the device, in sixteenths of a bit-plane level -
+/// the firmware's own `SRGB_TO_Q` table value, **before** the dead zone.
+/// `round(SRGB_TO_LIN[v] * `[`screeny_dither::Q_SCALE`]`)`, which is the same
+/// computation the firmware's build script does, checked entry by entry
+/// against a copy of the table in this module's tests.
+#[inline]
+fn raw_q(v: u8) -> u16 {
+    (SRGB_TO_LIN[v as usize] * f32::from(screeny_dither::Q_SCALE)).round() as u16
 }
 
 impl Panel {
@@ -34,6 +71,7 @@ impl Panel {
     pub const fn new(bits: u32) -> Self {
         Panel {
             steps: (1u32 << bits) - 1,
+            quantiser: Quantiser::Rounded,
         }
     }
 
@@ -42,6 +80,7 @@ impl Panel {
     pub const fn dithered(bits: u32, subframes: u32) -> Self {
         Panel {
             steps: ((1u32 << bits) - 1) * subframes,
+            quantiser: Quantiser::Rounded,
         }
     }
 
@@ -51,6 +90,7 @@ impl Panel {
     pub const fn levels(levels: u32) -> Self {
         Panel {
             steps: if levels > 1 { levels - 1 } else { 1 },
+            quantiser: Quantiser::Rounded,
         }
     }
 
@@ -66,8 +106,20 @@ impl Panel {
     #[inline]
     #[must_use]
     pub fn emit1(&self, v: u8) -> f32 {
-        let max = self.max();
-        (SRGB_TO_LIN[v as usize] * max).round() / max
+        match self.quantiser {
+            Quantiser::Rounded => {
+                let max = self.max();
+                (SRGB_TO_LIN[v as usize] * max).round() / max
+            }
+            Quantiser::DeviceDithered => {
+                let snapped = screeny_dither::snap_dead_zone(raw_q(v), screeny_dither::TABLE_FRAC_BITS);
+                f32::from(snapped) / f32::from(screeny_dither::Q_SCALE)
+            }
+            Quantiser::DeviceUndithered => {
+                let level = screeny_dither::quantise_plain(raw_q(v), screeny_dither::TABLE_FRAC_BITS);
+                f32::from(level) / f32::from(screeny_dither::LEVELS)
+            }
+        }
     }
 
     /// [`Panel::emit1`] on all three channels.
@@ -130,13 +182,17 @@ impl Panel {
 
     /// `(distinct output levels reachable from the 256 sRGB codes, how many
     /// sRGB codes land on the single lowest level)`.
+    ///
+    /// Goes through [`Panel::emit1`] rather than recomputing the rounding, so
+    /// this agrees with [`Panel::code`] for every `Quantiser` - in
+    /// particular so [`DEVICE`]'s count reflects the dead zone.
     #[must_use]
     pub fn distinct_levels(&self) -> (usize, usize) {
         let max = self.max();
         let mut seen = std::collections::BTreeSet::new();
         let mut crushed = 0usize;
         for v in 0..=255u8 {
-            let d = (SRGB_TO_LIN[v as usize] * max).round() as u32;
+            let d = (self.emit1(v) * max).round() as u32;
             if d == 0 {
                 crushed += 1;
             }
@@ -147,8 +203,21 @@ impl Panel {
 }
 
 /// What card 001 measured: 6 bitplanes at ~154 Hz, no temporal dither. Also
-/// the art side's "64 levels".
-pub const NOMINAL: Panel = Panel::new(6);
+/// the art side's "64 levels" (`output.panel: bit_planes`).
+///
+/// Same `steps` as `Panel::new(6)`, but **not** the same panel: this one's
+/// [`Panel::emit1`] is [`screeny_dither::quantise_plain`] on the firmware's
+/// own table value, so it agrees with the firmware's undithered path at all
+/// 256 codes. `Panel::new(6)`'s generic rounding double-rounds - it rounds
+/// the sRGB EOTF to a level directly, where the firmware rounds it to a
+/// sixteenth of a level first (its gamma table) and then rounds *that* to a
+/// level - and the two disagree at 7 codes (card 248): sRGB 21, 56, 123, 151,
+/// 182, 212, 223, all by one level. sRGB 21 is the one anyone would notice:
+/// `Panel::new(6)` says it is black, the firmware lights it.
+pub const NOMINAL: Panel = Panel {
+    quantiser: Quantiser::DeviceUndithered,
+    ..Panel::new(6)
+};
 /// The same panel with the driver dithering across the ~5 refreshes it gets
 /// per received frame. **Codec selection scores against this** (card 002,
 /// `enc/hybrid.rs`), and since card 030 it is also what the device does.
@@ -156,7 +225,7 @@ pub const NOMINAL: Panel = Panel::new(6);
 /// This is the *within one frame* view: a colour that is only on screen for
 /// one 30 fps frame gets about five of the firmware's sixteen dither phases,
 /// so it resolves about 195 of the 256 sRGB codes. A colour that is **held**
-/// gets the whole cycle and resolves 237 - that is [`DEVICE`]. Scoring a codec
+/// gets the whole cycle and resolves 229 - that is [`DEVICE`]. Scoring a codec
 /// is a per-frame question, so the encoder keeps this one.
 pub const TEMPORAL: Panel = Panel::dithered(6, 5);
 
@@ -172,20 +241,33 @@ pub const DITHER_PHASES: u32 = 16;
 /// previews against.
 ///
 /// The full phase cycle is 16 refreshes, about 104 ms at the measured 154 Hz,
-/// so this is the picture from three 30 fps frames onwards. Numbers, all
-/// checked in this module's tests against the firmware's own table:
+/// so this is the picture from three 30 fps frames onwards. Since card 248
+/// the firmware also walks those 16 phases bit-reversed rather than in
+/// counting order - half a level now alternates every refresh (77 Hz) instead
+/// of blinking at 9.6 Hz - and snaps a remainder of 1/16 or 15/16 of a level
+/// onto the level (`snap_dead_zone`): a 9.6 Hz blip too small to read as light
+/// is gone, at the cost of the three darkest codes and eight of the distinct
+/// shades below. `emit1` is [`screeny_dither::snap_dead_zone`] on the
+/// firmware's own table value, then divided down. Numbers, all checked in
+/// this module's tests against the firmware's own table:
 ///
 /// | | [`NOMINAL`] | [`TEMPORAL`] | `DEVICE` |
 /// |---|---|---|---|
 /// | duty steps | 63 | 315 | 1008 |
-/// | distinct levels out of 256 sRGB codes | 64 | 195 | 237 |
-/// | codes that come out black | 22 | 6 | 2 |
-/// | darkest lit code | 22 | 6 | 2 |
+/// | distinct levels out of 256 sRGB codes | 64 | 195 | 229 |
+/// | codes that come out black | 21 | 6 | 5 |
+/// | darkest lit code | sRGB 21 | sRGB 6 | sRGB 5 |
 ///
-/// The brief's "the darkest visible level is about sRGB 6, it was 34 without
-/// dithering" is the same fact seen by eye: sRGB 2 is one duty step in sixteen
-/// refreshes and is not something you could call visible.
-pub const DEVICE: Panel = Panel::dithered(6, DITHER_PHASES);
+/// The bit-reversal itself changes none of these - it is a reordering of the
+/// same 16 phases, so the mean for every code is exactly unchanged
+/// (`crates/dither`'s `the_mean_over_a_cycle_is_exactly_q`). Only the dead
+/// zone moves numbers, and it moves them by construction: the darkest visible
+/// code was sRGB 2 (one duty step in sixteen refreshes, a 9.6 Hz blip); it is
+/// now sRGB 5, and what it replaced was never light you could call visible.
+pub const DEVICE: Panel = Panel {
+    quantiser: Quantiser::DeviceDithered,
+    ..Panel::dithered(6, DITHER_PHASES)
+};
 /// What dimming used to cost, before card 020: brightness scaled the pixel
 /// values, so a 30/255 cap left a 6-bit channel using values 0-7. **The device
 /// has not behaved like this since card 020** - it dims the output-enable
@@ -210,24 +292,31 @@ pub const DEEP: Panel = Panel::new(8);
 // A code is *steady* when its duty is a whole level: the firmware never has a
 // sub-level remainder to spend, so a held colour is lit the same way on every
 // refresh and cannot blink, dither on or off. Brief section 2.1.1 is the
-// reasoning; this is that section's table, derived from [`DEVICE`] rather
-// than typed in, so a firmware change to the gamma table only has to change
-// [`DEVICE`] and the constants above - see `device_is_the_firmwares_gamma_table`
-// below, which is what pins them to the firmware in the first place.
+// reasoning; this is that section's table, derived from the firmware's own
+// gamma table (via [`raw_q`]) rather than typed in, so a firmware change to
+// the table only has to change one function - see
+// `device_is_the_firmwares_gamma_table` below, which is what pins it to the
+// firmware in the first place.
 //
-// Deliberately built from [`DITHER_PHASES`], never a literal `16`: card 248
-// plans to give the firmware finer steady points below level 1 and a shorter
-// dither cycle, and this is the one place that has to change for every reader
-// of it - `crates/art`'s dark-end snap included - to pick the new table up.
+// Deliberately built from [`DITHER_PHASES`], never a literal `16`.
+//
+// [`duty_16ths`] reads the raw table value, **not** `DEVICE::emit1`: since
+// card 248 the two differ by the dead zone, and an aligned code is chosen by
+// comparing duties against a level - a *static* fact about the table - not
+// against the device's *dither* behaviour. Levels stay exact multiples of
+// [`DITHER_PHASES`] either way. Some aligned codes' own duty does fall inside
+// the dead zone (offset 1, sixteenths of a level): that is not a problem, on
+// the device they already snap to the level they were chosen for, which is
+// the point of aligning them (`aligned_codes_inside_the_dead_zone_still_land_on_their_level`
+// below).
 
 /// An sRGB8 code's duty, in sixteenths of a level - the firmware's own
-/// fixed-point unit (`firmware::gamma::SRGB_TO_Q`). Recovered from [`DEVICE`]
-/// rather than typed in: `DEVICE.emit1(v) * DEVICE.max()` is exactly that
-/// table's entry, to the fraction of a step floating point rounding costs
-/// (checked to 1e-6 by `device_is_the_firmwares_gamma_table`).
+/// fixed-point unit (`firmware::gamma::SRGB_TO_Q`), before the dead zone.
+/// `raw_q` widened; see the module note above for why this is not
+/// `DEVICE::emit1`.
 #[must_use]
 pub fn duty_16ths(v: u8) -> u32 {
-    (DEVICE.emit1(v) * DEVICE.max()).round() as u32
+    u32::from(raw_q(v))
 }
 
 /// The nearest whole level to a duty (sixteenths), and the signed distance to
@@ -576,22 +665,71 @@ mod tests {
     /// **[`DEVICE`] is the firmware, to the last duty step.**
     ///
     /// The firmware keeps `FRAC_BITS = 4` fractional bits below a duty level
-    /// (`SRGB_TO_Q[v] = round(63 * 16 * lin(v))`) and `quantise_dither` spends
-    /// the remainder across the 16 phases, so over a full cycle a held colour
-    /// averages exactly `SRGB_TO_Q[v] / 16` levels out of 63. That is
-    /// `Panel::dithered(6, 16)`, and this is the proof rather than the claim.
+    /// (`SRGB_TO_Q[v] = round(63 * 16 * lin(v))`), snaps a remainder of 1/16
+    /// or 15/16 onto the level (card 248's dead zone, `snap_dead_zone`), and
+    /// `quantise_dither` spends what is left across the 16 (bit-reversed)
+    /// phases - so over a full cycle a held colour averages exactly
+    /// `snap_dead_zone(SRGB_TO_Q[v], 4) / 16` levels out of 63. That is
+    /// [`DEVICE`], and this is the proof rather than the claim. The
+    /// bit-reversal itself does not appear here: it reorders the 16 phases
+    /// without changing their sum (`crates/dither`'s
+    /// `the_mean_over_a_cycle_is_exactly_q`), so it cannot move this mean.
     #[test]
     fn device_is_the_firmwares_gamma_table() {
         for v in 0..=255usize {
-            let want = f64::from(FIRMWARE_SRGB_TO_Q[v]) / 1008.0;
+            let snapped = screeny_dither::snap_dead_zone(FIRMWARE_SRGB_TO_Q[v], screeny_dither::TABLE_FRAC_BITS);
+            let want = f64::from(snapped) / 1008.0;
             let got = f64::from(DEVICE.emit1(v as u8));
             assert!((want - got).abs() < 1e-6, "code {v}: firmware emits {want}, DEVICE says {got}");
         }
         assert_eq!(DEVICE.steps, 1008, "63 levels x 16 dither phases");
     }
 
+    /// **[`NOMINAL`] is the firmware's undithered path, to the last level.**
+    ///
+    /// `output.panel: bit_planes` sends `SRGB_TO_Q[v] >> 4` before card 248,
+    /// and `quantise_plain` (round to nearest) since. Defining `NOMINAL` from
+    /// the same table value the firmware rounds, instead of rounding the sRGB
+    /// EOTF to a level directly, is what makes the two agree at all 256
+    /// codes - see `the_one_real_disagreement_is_gone` for the 7 codes where
+    /// the two ways of rounding used to differ.
+    #[test]
+    fn nominal_is_the_firmwares_undithered_path() {
+        for v in 0..=255usize {
+            let want = screeny_dither::quantise_plain(FIRMWARE_SRGB_TO_Q[v], screeny_dither::TABLE_FRAC_BITS);
+            let got = (NOMINAL.emit1(v as u8) * 63.0).round() as u8;
+            assert_eq!(got, want, "code {v}");
+        }
+        assert_eq!(NOMINAL.steps, 63);
+    }
+
+    /// Card 248's "one real disagreement": before this card, `NOMINAL`
+    /// rounded the sRGB EOTF straight to a level
+    /// (`Panel::new(6)`'s generic [`Quantiser::Rounded`]) while the firmware
+    /// rounded it to a sixteenth of a level first and then rounded *that* to
+    /// a level - double rounding that disagreed at 7 codes. `NOMINAL` is now
+    /// built the firmware's way, so it and the generic model it used to be
+    /// diverge at exactly those 7 - all by one level, all rounding up where
+    /// the generic model rounds down.
+    #[test]
+    fn the_one_real_disagreement_is_gone() {
+        const DISAGREES_WITH_GENERIC_ROUNDING: [u8; 7] = [21, 56, 123, 151, 182, 212, 223];
+        let generic = Panel::new(6);
+        let disagree: Vec<u8> = (0..=255u8).filter(|&v| NOMINAL.emit1(v) != generic.emit1(v)).collect();
+        assert_eq!(disagree, DISAGREES_WITH_GENERIC_ROUNDING);
+        for v in disagree {
+            let nominal_level = (NOMINAL.emit1(v) * 63.0).round() as i32;
+            let generic_level = (generic.emit1(v) * 63.0).round() as i32;
+            assert_eq!(nominal_level - generic_level, 1, "code {v}: NOMINAL rounds up where the generic model rounds down");
+        }
+        // sRGB 21 is the one anyone would notice by eye: the generic model
+        // called it black.
+        assert_eq!(generic.emit1(21), 0.0);
+        assert!(NOMINAL.emit1(21) > 0.0);
+    }
+
     /// Card 188. [`duty_16ths`] has to be the firmware's own `SRGB_TO_Q` to the
-    /// integer, not just close to 1e-6 the way [`DEVICE::emit1`] is: an aligned
+    /// integer, not just close to 1e-6 the way `DEVICE::emit1` is: an aligned
     /// code is chosen by comparing duties, and a rounding wobble there would
     /// pick the wrong one at a boundary.
     #[test]
@@ -637,36 +775,83 @@ mod tests {
         assert_eq!(nearest_level(33), (2, 1));
     }
 
-    /// The dark end, as numbers rather than adjectives. The firmware's own doc
-    /// comment says "only sRGB 0 and 1 emit nothing"; the brief says the
-    /// darkest visible value moved from sRGB 34 to about 6.
+    /// Card 248's note to card 188: some of the aligned codes (the lowest
+    /// code reaching each level) have `offset_16ths` 1 - a duty one sixteenth
+    /// past their level, which is exactly what the dead zone snaps down. That
+    /// is fine, and this is why: on the device those codes already collapse
+    /// onto their level's own duty, which is the whole point of choosing
+    /// them - the dead zone can only make an aligned code *more* exact, never
+    /// less. 15 of the 64 aligned levels 0..=63 land in the zone this way,
+    /// six of them inside the brief's own 0..=16 dark-end table (level 3,
+    /// sRGB 62, is one) - the brief's "within 2/16" claim already covered
+    /// this, card 248 just makes it exact for these six instead of a
+    /// sixteenth short.
+    #[test]
+    fn aligned_codes_inside_the_dead_zone_still_land_on_their_level() {
+        let rows = aligned_levels(63);
+        let mut in_zone = 0usize;
+        let mut in_zone_in_brief_range = 0usize;
+        for row in &rows {
+            let duty = duty_16ths(row.code);
+            let snapped = screeny_dither::snap_dead_zone(duty as u16, screeny_dither::TABLE_FRAC_BITS);
+            if u32::from(snapped) != duty {
+                in_zone += 1;
+                if row.level <= 16 {
+                    in_zone_in_brief_range += 1;
+                }
+                assert_eq!(
+                    u32::from(snapped),
+                    row.level * DITHER_PHASES,
+                    "level {} code {}: the dead zone should snap it exactly onto its level",
+                    row.level,
+                    row.code
+                );
+            }
+        }
+        assert_eq!(in_zone, 15, "how many of the 64 aligned levels 0..=63 the dead zone touches");
+        assert_eq!(in_zone_in_brief_range, 6, "how many of those are in the brief's 0..=16 dark-end table");
+    }
+
+    /// The dark end, as numbers rather than adjectives. Card 248: the
+    /// firmware's undithered path now rounds instead of truncating (darkest
+    /// lit code sRGB 22 -> **21**), and the dithered path's dead zone trades
+    /// a 9.6 Hz blip nobody could see for three darker lit codes and eight
+    /// distinct shades (237 -> **229**, darkest lit sRGB 2 -> **5**).
     #[test]
     fn the_dark_end_is_what_the_brief_measured() {
-        assert_eq!(NOMINAL.distinct_levels(), (64, 22), "bit planes alone");
+        assert_eq!(NOMINAL.distinct_levels(), (64, 21), "bit planes alone, rounded");
         assert_eq!(TEMPORAL.distinct_levels(), (195, 6), "one frame's worth of phases");
-        assert_eq!(DEVICE.distinct_levels(), (237, 2), "a held colour, all 16 phases");
+        assert_eq!(DEVICE.distinct_levels(), (229, 5), "a held colour, all 16 phases, dead zone included");
 
         let first_lit = |p: &Panel| (0..=255u8).find(|v| p.emit1(*v) > 0.0).unwrap();
-        assert_eq!(first_lit(&NOMINAL), 22);
+        assert_eq!(first_lit(&NOMINAL), 21);
         assert_eq!(first_lit(&TEMPORAL), 6, "the brief's 'about sRGB 6'");
-        assert_eq!(first_lit(&DEVICE), 2, "the firmware's 'only sRGB 0 and 1 emit nothing'");
+        assert_eq!(first_lit(&DEVICE), 5, "the dead zone's cost: sRGB 2, 3 and 4 no longer read as light");
     }
 
     /// Where the panel is coarser than the 8-bit hand-over and where it is
-    /// finer. Above code 38 the device shows back exactly the code it was
-    /// sent; below it codes share a level - at most four of them - and that
-    /// collapse is the only thing an art pipeline has to dither around.
+    /// finer. Below sRGB 38 codes share a level - at most five of them, all
+    /// black - and that collapse is the main thing an art pipeline has to
+    /// dither around. Card 248: the dead zone also nudges a sparse scatter of
+    /// codes above there - each one sixteenth of a level from a boundary
+    /// (`snap_dead_zone`'s remainder 1 or 15) - onto the level next to it, so
+    /// "nothing above 38 moves" is no longer true; what is still true is that
+    /// nothing above 38 *piles up*, one code still gives one level.
     #[test]
     fn the_collapse_is_confined_to_the_bottom_forty_codes() {
         let collapsed: Vec<u8> = (0..=255u8).filter(|v| DEVICE.code(*v) != *v).collect();
-        assert_eq!(collapsed.len(), 19);
-        assert_eq!(*collapsed.last().unwrap(), 38, "nothing above 38 moves");
+        assert_eq!(collapsed.len(), 27);
+        assert_eq!(*collapsed.last().unwrap(), 79, "the dead zone's highest nudge");
+        assert!(
+            collapsed.iter().filter(|&&v| v <= 38).count() == 22,
+            "the dark-end pile-up (unchanged in extent) plus the dead zone's own five bottom codes"
+        );
 
         let mut per_level = std::collections::BTreeMap::new();
         for v in 0..=255u8 {
             *per_level.entry(DEVICE.code(v)).or_insert(0u32) += 1;
         }
-        assert_eq!(*per_level.values().max().unwrap(), 4, "the worst pile-up is four codes");
+        assert_eq!(*per_level.values().max().unwrap(), 5, "the worst pile-up is black itself: sRGB 0-4");
     }
 
     /// Brightness still costs light and not depth on the dithered panel, and
@@ -680,20 +865,26 @@ mod tests {
             (oe_light(96) - 9.0 / 25.0).abs() < 1e-6,
             "the firmware's DEFAULT_BRIGHTNESS is 9 of 25 slots"
         );
-        assert_eq!(DEVICE.distinct_levels().0, 237);
+        assert_eq!(DEVICE.distinct_levels().0, 229);
         assert_eq!(DIM.distinct_levels().0, 32, "the model card 066 retired");
     }
 
-    /// Six bitplanes, 64 levels and the art brief's `Panel { levels: 64 }` are
-    /// three names for one transfer function. Card 016 merged them; this is
-    /// what stops them drifting apart again.
+    /// Six bitplanes and 64 levels are the same `steps` - one transfer
+    /// function - whichever way you name the bit depth. Card 016 merged them;
+    /// this is what stops them drifting apart again.
+    ///
+    /// [`NOMINAL`] is **not** included in that identity any more: since card
+    /// 248 it is built from the firmware's own table (`Quantiser::DeviceUndithered`)
+    /// rather than the generic rounding `Panel::new`/`Panel::levels` still
+    /// use, and the two disagree at 7 codes (`the_one_real_disagreement_is_gone`).
+    /// Same `steps`, same shape, not quite the same function any more - which
+    /// is the point: `NOMINAL` now agrees with the firmware instead of with
+    /// `Panel::new(6)`.
     #[test]
     fn bitplanes_and_levels_are_the_same_panel() {
         assert_eq!(Panel::new(6), Panel::levels(64));
         assert_eq!(Panel::new(5), Panel::levels(32));
         assert_eq!(Panel::dithered(6, 1), Panel::new(6));
-        for v in 0..=255u8 {
-            assert_eq!(NOMINAL.emit1(v), Panel::levels(64).emit1(v));
-        }
+        assert_eq!(NOMINAL.steps, Panel::levels(64).steps);
     }
 }

@@ -78,21 +78,22 @@ fn dark_ramp(panel: Panel, dither: Dither) -> Vec<u8> {
 ///
 /// What the row is **for**: it is the one place the dark end is visible as a
 /// ramp rather than as an adjective, and the numbers below are what the owner
-/// should expect to see by eye. On the device it is a ramp - 43 distinct greys
-/// out of 64 columns, rising the whole way, lit from the third column. On the
-/// bit planes alone it is four bands with the first third of the row black,
-/// which is what the preview used to draw and what the panel really looked
-/// like before card 030.
+/// should expect to see by eye. On the device it is a ramp - 38 distinct greys
+/// out of 64 columns (card 248: was 43 - the dead zone trades a few of them
+/// for a dither that does not blink), rising the whole way, lit from the
+/// sixth column. On the bit planes alone it is four bands with the first
+/// third of the row black, which is what the preview used to draw and what
+/// the panel really looked like before card 030.
 #[test]
 fn the_dark_ramp_is_a_ramp_on_the_device_and_four_bands_without_it() {
     let device = dark_ramp(Panel::Dithered, Dither::None);
     let planes = dark_ramp(Panel::BitPlanes, Dither::None);
 
-    assert_eq!(device.iter().copied().collect::<BTreeSet<_>>().len(), 43, "{device:?}");
+    assert_eq!(device.iter().copied().collect::<BTreeSet<_>>().len(), 38, "{device:?}");
     assert_eq!(planes.iter().copied().collect::<BTreeSet<_>>().len(), 4, "{planes:?}");
 
-    assert_eq!(&device[..2], &[0, 0], "the two darkest columns are still black");
-    assert!(device[2] > 0, "and the device lights the third one");
+    assert_eq!(&device[..5], &[0, 0, 0, 0, 0], "the five darkest columns are still black (card 248's dead zone)");
+    assert!(device[5] > 0, "and the device lights the sixth one");
     assert_eq!(planes[..21], [0u8; 21], "the bit planes alone crush the first third of the row");
 
     for w in device.windows(2) {

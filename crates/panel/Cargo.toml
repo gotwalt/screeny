@@ -9,6 +9,12 @@ description = "What the LED panel does to a colour: the sRGB and Oklab transform
 # ships to the ESP32 (the firmware's equivalent is its integer gamma LUT).
 [dependencies]
 screeny-proto = { path = "../proto" }
+# The device's own dark-end arithmetic (card 248): `no_std`, no deps, compiled
+# both for the firmware and for the host, so `DEVICE` and `NOMINAL` use the
+# same dead-zone snap and rounding the firmware does instead of re-deriving
+# them. Default features only - this crate models the shipped `frac_bits` 4
+# build, not the comparison builds card 248 also produced.
+screeny-dither = { path = "../dither" }
 
 # Test-only: crates/receiver is `no_std` and cannot depend on this crate (it
 # ships to the ESP32; this one does not), so `oe_slots` here and the floor

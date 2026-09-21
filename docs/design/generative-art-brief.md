@@ -27,7 +27,7 @@ If this brief disagrees with those, they win; tell your user so this file gets f
 | Resolution | 64 x 32, 2048 pixels, 2:1 | measured |
 | Pixel | discrete round RGB LEDs on a black mask, roughly 3 mm pitch, dark gaps between them, no diffuser | measured |
 | Black | LED off. True black, effectively infinite contrast | measured |
-| Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** across the 154 Hz refresh: darkest visible level is about sRGB 6 (it was 34 without dithering) | measured |
+| Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** (16 phases, bit-reversed, across the 154 Hz refresh): held, a colour resolves 229 of the 256 sRGB codes and the darkest visible level is sRGB 5; undithered (`output.panel: bit_planes`) it rounds to the nearest of 64 levels, darkest visible sRGB 21 | measured |
 | Brightness | runtime 0-255 via LED on-time, **does not cost colour depth**; 25 real steps; firmware cap 160, default 96 | measured |
 | Frame rate | **30 fps, and nothing else** (card 161): every codec ran 60 s at 30 with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so faster is *possible* - but WiFi loss and jitter set the ceiling, the picture gains nothing, and the owner asked for one rate with no variability. `screeny_art::FPS` is it | measured, then decided |
 | Transport | one frame = one UDP datagram, **1464 bytes** for all 2048 pixels (~5.7 bits/pixel) | decided |
@@ -60,22 +60,38 @@ On its own that would mean anything under sRGB ~22 is off and the darker half of
 sRGB is only 14 levels. **The firmware now fills those gaps by temporal dithering**:
 it carries the sub-level remainder across panel refreshes (154 Hz, about 5 per 30 fps
 frame), so in-between values are shown as a time average. **[measured, card 007]**:
-the darkest visible value moved from sRGB 34 to about 6, mean luminance wobble is
-1.7% with no periodic structure, and nothing is visible as flicker to the eye **from
-across a room**. **[owner, by eye, 2026-09-21]**: within a few feet, held colours close
-to black visibly blink at several hertz - that 1.7% is an average over the panel, and
-up close the eye resolves single pixels. Section 2.1.1 is what to do about it from the
-sender's side; card 248 is the firmware's side.
+mean luminance wobble is 1.7% with no periodic structure, and nothing is visible as
+flicker to the eye **from across a room**. **[owner, by eye, 2026-09-21]**: within a
+few feet, held colours close to black visibly blinked at several hertz - that 1.7% is
+an average over the panel, and up close the eye resolves single pixels. **[measured,
+card 248]**: the cause was the order the dither walked its sixteen phases in - counting
+order held a half-level remainder lit for eight consecutive refreshes and dark for
+eight, a 9.6 Hz square wave. The firmware now walks the same sixteen phases
+**bit-reversed** (0, 8, 4, 12, 2, 10, ...): the same mean light, arranged so the big
+components move fast - half a level now alternates every refresh (**77 Hz**), a quarter
+every four refreshes (**38 Hz**), and only a sixteenth of a level is left at 9.6 Hz. A
+**dead zone** then snaps that last, sub-perceptible remainder (1/16 or 15/16 of a level)
+onto the level instead of dithering it, so nothing is left slow at all. **[owner, by
+eye, 2026-09-21]**: "so much better already" up close, on fw 0.9.0 (`frac_bits` 4, the
+shipped default). Section 2.1.1 is what to do from the sender's side to steady the
+handful of levels the dead zone does not reach on its own; card 248's own log is the
+firmware's side.
 
-**How much resolution that is, exactly [measured, card 102]**: the firmware keeps four
-fractional bits below a duty level and spends the remainder over a **16-phase** cycle,
-one phase per refresh, with a Bayer 4x4 offset per pixel so the panel does not beat in
-unison. So a colour that is *held* - from about 104 ms, three 30 fps frames - averages
-1008 duty steps per channel, of which the 256 sRGB codes reach 237, and only sRGB 0 and
-1 emit nothing at all. A colour on screen for a single frame gets about five of those
-sixteen phases and resolves ~195 levels, which is the number card 002 measured and what
-the codec chooser scores against. The model is `screeny_panel::DEVICE`, checked entry by
-entry against the firmware's own gamma table.
+**How much resolution that is, exactly [measured, card 102, updated card 248]**: the
+firmware keeps four fractional bits below a duty level and spends the remainder over a
+**16-phase** cycle, one phase per refresh, with a Bayer 4x4 offset per pixel so the
+panel does not beat in unison. So a colour that is *held* - from about 104 ms, three 30
+fps frames - averages 1008 duty steps per channel, of which the 256 sRGB codes reach
+**229**, and only sRGB 0-4 emit nothing at all (the dead zone's cost: three of those five
+were emitting a sixteenth of a level as a 9.6 Hz blip, carrying no light anyone could
+see anyway). A colour on screen for a single frame gets about five of those sixteen
+phases and resolves ~195 levels, which is the number card 002 measured and what the
+codec chooser scores against - unchanged by card 248, since the bit-reversal does not
+move the mean and the dead zone is a small, held-colour-only correction. The
+**undithered** path (`output.panel: bit_planes`) now **rounds** to the nearest of the 64
+levels instead of truncating: darkest lit code sRGB 21, not 34. The model is
+`screeny_panel::DEVICE` (dithered) and `screeny_panel::NOMINAL` (undithered), both
+checked entry by entry against the firmware's own gamma table.
 
 What that changes for you, and what it does not:
 
@@ -87,8 +103,9 @@ What that changes for you, and what it does not:
 - Put tonal detail in the middle and upper range, use true black as a shape, and
   prefer fades that are either reasonably quick or that also shrink/erode the shape.
 - **You do not need to dither in time yourself** to gain levels, and should not: the
-  device does it at 154 Hz, which is invisible; anything you do at 30 fps is 15 Hz
-  and visible. Spatial (ordered) dither is still yours to use as texture (2.4).
+  device does it at 154 Hz (the slowest surviving component is 77 Hz), which is
+  invisible; anything you do at 30 fps is 15 Hz and visible. Spatial (ordered) dither
+  is still yours to use as texture (2.4).
 - **Brightness no longer costs depth.** It is set by LED on-time per scan line, not
   by scaling values, so the full level structure survives at any brightness. It is a
   runtime control (`screeny brightness N`), 25 real steps, capped in firmware.
@@ -100,15 +117,22 @@ What that changes for you, and what it does not:
 
 A colour that sits exactly on one of the 64 hardware levels is lit the same way on every
 refresh. It cannot blink, with the device's dither on or off. A colour between two levels
-is made by alternating them over a 16-refresh cycle, 9.6 Hz, and near black the two
-levels are "off" and "on": that is the blinking. So the rule is about **where a shade
-sits**, not about how many shades you use:
+is made by alternating them over a 16-refresh cycle - since card 248 walked
+bit-reversed, so the alternation itself is faster than it was (half a level at 77 Hz, a
+quarter at 38 Hz) and a remainder of a sixteenth of a level snaps onto the level instead
+of alternating at all. What is left near black is a single sixteenth-of-a-level
+component moved up to 38 Hz or removed outright, not the old 9.6 Hz on/off blink - but
+alignment is still the surer fix, and it is free once a shade is chosen. So the rule is
+about **where a shade sits**, not about how many shades you use:
 
-- **Align what is held and dark.** Unlit clock segments, ghost dots, dim backgrounds,
-  rules, the bottom entries of a palette: anything that stays on screen for more than a
-  few frames with a channel under about sRGB 140. Leave everything else to the dither -
-  moving content, quick fades, and anything brighter, where a level is at most four
-  codes wide and the alternation is a few percent of the light.
+- **Align what is held and dark, when it costs you nothing to.** Unlit clock segments,
+  ghost dots, dim backgrounds, rules, the bottom entries of a palette: anything that
+  stays on screen for more than a few frames with a channel under about sRGB 140 is worth
+  a look on the panel. It matters less than it used to - card 248's dither is fast enough
+  up close that missing a level by a sixteenth is no longer the same kind of mistake it
+  was, and above the dark end a level is at most four codes wide, so the alternation was
+  always a few percent of the light. Leave everything else to the dither - moving
+  content, quick fades, and anything brighter.
 - **The aligned codes, dark end** (the lowest sRGB code that lands on each level, from
   the firmware's own gamma table; every one is within 2/16 of a level, and correct
   whether the device dither is on or off):
@@ -121,8 +145,11 @@ sits**, not about how many shades you use:
   That is the whole budget: **nine steady values per channel at or under sRGB 100.**
   (The table in 2.1 is the *nearest* code to each level's light, which is the right
   question for a preview; twenty-two of its entries sit a hair under their level - 125,
-  149, 156 and others - and fall to the level below if the device is not dithering. For
-  choosing a code to send, use this rule instead: the lowest code that reaches the level.)
+  149, 156 and others. Before card 248 the firmware's undithered path truncated, so
+  sending one of those twenty-two fell to the level below; since card 248 it rounds, so
+  the nearest code now reaches its level there too. For choosing a code to send, use
+  this rule regardless: the lowest code that reaches the level, which is exact whether
+  the device is dithering or not and does not depend on which way the firmware rounds.)
 - **Alignment is per channel, so the darkest shades lose their hue.** A warm grey is
   three channels on three different levels, and at the bottom the only choices are 0 and
   1: the darkest steady colours are the seven combinations of level-1 primaries, then
@@ -173,13 +200,19 @@ sits**, not about how many shades you use:
   steadied", not a different one. Applied only once a dial has actually landed, never
   mid-fade, so a fade stays the cheap continuous ramp the "leave everything else to the
   dither" bullet asks for and only the truly held colour is aligned.
-- **This table will change.** Card 248 gives the firmware steadier sub-levels below
-  level 1 and a dither that does not run at 10 Hz. When it lands there are more steady
-  dark values and the penalty for missing one is smaller. Read the levels from
-  `screeny_panel`, never from a constant of your own - `duty_16ths`, `nearest_level` and
-  `aligned_levels` are built from `screeny_panel::DITHER_PHASES`, not a literal `16`, so
-  248 has exactly one place to change them. `DARK_ALIGN_LEVEL` in `crates/art` may come
-  down with the shorter cycle; it is a named constant for the same reason.
+- **What card 248 shipped, and what it did not.** The dither no longer runs at 10 Hz
+  (bit-reversed phases, fw 0.9.0, `frac_bits` 4) and a sixteenth-of-a-level remainder
+  snaps onto the level instead of blinking (the dead zone) - that is why the penalty for
+  missing a level above is smaller than it was. **Sub-level bit planes - steady points
+  *between* level 0 and level 1, which would have widened this table's bottom rows -
+  were designed but not built**: the mechanism works (a plane shown once per refresh with
+  a narrower output-enable window), but the two extra planes it needs do not fit this
+  build's DMA memory. Card 249 is the search for the RAM; until it lands, level 1 (sRGB
+  34) is still the lowest steady value above black. Read the levels from `screeny_panel`,
+  never from a constant of your own - `duty_16ths`, `nearest_level` and `aligned_levels`
+  are built from `screeny_panel::DITHER_PHASES`, not a literal `16`, so a firmware change
+  has exactly one place to change them. `DARK_ALIGN_LEVEL` in `crates/art` is a named
+  constant for the same reason.
 
 ### 2.2 The primaries are not sRGB
 

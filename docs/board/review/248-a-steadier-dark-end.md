@@ -580,3 +580,130 @@ Waiting on the owner's eye: the clocks patch as deployed before card 188 (so the
 effect is seen alone), `output.panel: dithered`, from a few feet. Then f3 / f2 only if
 0.9.0 still blinks. The software session holds its workbench deploy until he has looked.
 Stage B stays unbuilt (RAM); card 249 is the search for it.
+
+### The deferred deliverable - the host model follows the device (2026-09-21)
+
+The owner has chosen what ships: **`frac_bits` 4 (the default build), bit-reversed
+phases, the rounding undithered path, and the dead zone. Stage B is not shipping.** This
+is the "What the host model has to change to" note from above, turned into code.
+`git log --oneline`: `aa0f48b` (crates/panel), `c98416c` (everything downstream and the
+brief). Branch `card/248-host-model`, based on current `main` (contains 9ec6a2a and the
+card 188 merge).
+
+**Verified the previous worker's numbers myself, against the firmware's own gamma table
+(the fixture already in `crates/panel`), not trusted on faith** - all four checked out:
+
+| | before | after |
+|---|---|---|
+| `DEVICE` distinct levels (256 codes) | 237 | **229** |
+| `DEVICE` black codes | 2 (sRGB 0-1) | **5 (sRGB 0-4)** |
+| `DEVICE` first lit code | sRGB 2 | **sRGB 5** |
+| `NOMINAL` black codes | 22 | **21** |
+| `NOMINAL` first lit code | sRGB 22 | **sRGB 21** |
+
+**`crates/panel`.** `screeny-dither` (no_std, no deps) is now a dependency of
+`screeny-panel`, and it is the one implementation of the arithmetic: `DEVICE.emit1` is
+`screeny_dither::snap_dead_zone` on the firmware's own table value
+(`round(SRGB_TO_LIN[v] * screeny_dither::Q_SCALE)`, proven to match the firmware's
+`SRGB_TO_Q` to the integer), then divided down; `NOMINAL.emit1` is
+`screeny_dither::quantise_plain` on the same table value. A `Quantiser` enum (private
+field on `Panel`) picks between that and the old generic "round the sRGB EOTF to `steps`
+evenly spaced increments" formula every other named panel (`TEMPORAL`, `DIM`, `DIMMED`,
+`DEEP`) still uses. `distinct_levels()` now reads `Panel::emit1` instead of recomputing
+the rounding independently, so it stays correct for every `Quantiser`. `DITHER_PHASES`
+stayed 16 (a literal, as before) and `DEVICE.steps` stayed 1008 - only what a code's
+duty *rounds to* changed, never the scale.
+
+`duty_16ths` (card 188's foundation) deliberately did **not** change: it still reads the
+raw, un-dead-zoned table value (`raw_q`, factored out of what `DEVICE.emit1` now also
+calls). An aligned code is chosen by comparing static duties against a level, not against
+the device's dither behaviour, and levels stay exact multiples of `DITHER_PHASES` either
+way. Checked, not just asserted: `aligned_codes_inside_the_dead_zone_still_land_on_their_level`
+walks all 64 aligned levels 0..=63 and finds **15** of them have a duty one sixteenth past
+their level (inside the dead zone) - **six of those are in the brief's own 0..=16 dark-end
+table** (level 3/sRGB 62 is one). That is fine and was worth checking rather than assuming:
+every one of the 15 snaps exactly onto its level on the device, which only strengthens the
+alignment, and `nearest_level_agrees_with_the_aligned_table` (unchanged) still holds because
+`duty_16ths` itself did not move.
+
+**The previous worker's note turned out right on every number it computed** (237->229,
+2->5, sRGB 2->5), and right about the shape of the fix (`quantise_plain` on the table
+value for `NOMINAL`, `snap_dead_zone` for `DEVICE`, `duty_16ths` staying raw). The one
+place it undersold the consequences: it said "Card 248 found none of the brief's dark-end
+aligned codes [fall in the dead zone]" was never actually claimed as checked - the note
+correctly flagged the question ("if any of its aligned codes fall inside the dead zone...")
+but did not answer it. Answered here: six do, and it does not matter.
+
+New tests in `crates/panel` pinning all of this: `nominal_is_the_firmwares_undithered_path`,
+`the_one_real_disagreement_is_gone` (the 7-code double-rounding disagreement between the old
+generic `NOMINAL` and the firmware, now gone because `NOMINAL` is built from the firmware's
+own table instead), `aligned_codes_inside_the_dead_zone_still_land_on_their_level`. Existing
+tests updated for the new numbers rather than deleted: `device_is_the_firmwares_gamma_table`
+(dead zone folded into the comparison), `the_dark_end_is_what_the_brief_measured`,
+`the_collapse_is_confined_to_the_bottom_forty_codes` (see "surprise" below),
+`a_dim_room_is_the_same_depth_at_less_light`, `bitplanes_and_levels_are_the_same_panel`
+(its assumption that `NOMINAL` behaves exactly like `Panel::new(6)` is now false by design,
+so it checks `.steps` instead of full equality, with a comment saying why).
+
+**A surprise, found by running the tests rather than assuming**: the dark-end collapse
+(`DEVICE.code(v) != v`) used to be confined to codes at or below sRGB 38 ("nothing above 38
+moves"). The dead zone touches codes throughout the whole table, not just near black, so
+five more codes above 38 now move by one sRGB code each (49, 51, 61, 72, 79) - though
+nothing above 38 *piles up* more than one code per level, only the black end does (now 5
+codes deep instead of 2). `the_collapse_is_confined_to_the_bottom_forty_codes` is renamed
+in spirit, kept in name, and pins the real numbers (27 codes move, last at sRGB 79, worst
+pile-up 5).
+
+**Downstream fixes**, every place that asserted or printed the old numbers:
+
+- `crates/art/src/panel.rs`: doc comments and tests (237->229, 22/2->21/5,
+  dark-ramp-test-card distinct 45->39). The hand-over fidelity test's threshold moved
+  4.5->5.5 duty steps: the dead zone can cost one more step when a chosen code's own
+  table entry sits a sixteenth of a level off and gets shown snapped onto the level.
+- `crates/art/src/palette.rs`, `src/patches/clocks/draw.rs`: doc comments' 237/34 updated.
+- `crates/sim/src/panel.rs`: a test comparing `Panel::levels(64)` to `NOMINAL` by full
+  equality now compares `.steps` (the only thing the knob was ever choosing) - see above.
+- `crates/studio/ui/index.html`: the Dithered/Bit-planes tooltips and hint text said
+  "sRGB 34" and "only sRGB 0 and 1"; now sRGB 21 and "sRGB 0-4".
+- `docs/design/generative-art-brief.md`: section 1's colour-depth row, 2.1 and 2.1.1
+  rewritten for fw 0.9.0 (bit-reversed phases, 77/38 Hz, the dead zone, rounding not
+  truncating). 2.1.1's alignment advice kept, its penalty language toned down, "this
+  table will change" replaced with what happened (Stage B designed, not built - RAM,
+  card 249), and a stale claim fixed: "twenty-two [nearest-code table entries] fall to
+  the level below if the device is not dithering" - checked computationally, and with
+  card 248's rounding it is no longer true for any of the 22; they all round up onto
+  their level now, the same as the aligned-code rule already recommended.
+
+**Goldens that changed, and why** (`output.panel: dithered`, the default - as predicted,
+only near-black codes and dead-zone neighbours of a level moved):
+
+- `crates/art/tests/dark_ramp.rs`: the device dark-ramp distinct-colour count for the test
+  card's darkest-quarter ramp moved 43 -> 38, first lit column index 2 -> 5. Updated with
+  the new numbers, not regenerated blindly - the printed array was read by eye first.
+- `crates/art/src/pipeline.rs` (`the_codec_preview_can_be_turned_off`): a gradient's wire
+  bytes vs. shown-preview bytes used to be asserted byte-identical; 363 of them now differ
+  by exactly one sRGB code (dead-zone neighbours), never more, because `Panel::show` on the
+  dithered panel now applies the dead zone and a continuously-chosen wire code occasionally
+  sits a sixteenth of a level off its own table entry. Rewritten to bound and pin this
+  instead of asserting exact equality.
+- `crates/studio/tests/panel.rs` (`send_to_panel_streams_the_picture_to_the_device`): same
+  phenomenon on a real "flock" patch frame, but a fixed one-code tolerance was the wrong
+  fix - one byte was wire code 3, which the dead zone crushes fully to black (0-4 all
+  collapse to level 0 now), a diff of 3, not 1. Correct fix: stop comparing raw wire bytes
+  to the preview and instead assert the preview equals the panel model applied to the wire
+  bytes directly (`Panel::DEVICE.show(&mut wire.clone())`) - true by construction if and
+  only if the studio's engine and the browser really are looking at the same picture
+  through the same model, which is what the test is for.
+
+**`cargo test --workspace --no-fail-fast`**: full green, every crate, including
+`crates/studio`'s soak test (`the_server_survives_a_bounded_soak`, its own nested
+`cargo test --release` under a 900 s timeout - let it run to completion once rather than
+guessing, per bench discipline; not repeated). This includes the three that were failing
+before this session's downstream fixes (`screeny-art --test dark_ramp`, `screeny-sim --lib`,
+`screeny-studio --test panel`) and `screeny --test loopback`, which did not flake in either
+of the two full runs this session did. `cargo clippy --workspace --all-targets`: **clean**,
+nothing printed.
+
+**No hardware touched**: no serial port, no camera, no packets to 192.168.7.221. Did not
+touch `firmware/` or change `crates/dither`'s behaviour (only depended on it from
+`crates/panel`).

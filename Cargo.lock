@@ -1888,6 +1888,7 @@ dependencies = [
 name = "screeny-panel"
 version = "0.1.0"
 dependencies = [
+ "screeny-dither",
  "screeny-proto",
  "screeny-receiver",
 ]

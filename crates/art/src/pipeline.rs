@@ -235,14 +235,32 @@ mod tests {
         assert_ne!(out.preview, out.wire.rgb);
     }
 
-    /// `codec_preview` off shows the handed-over frame instead. For an exact
-    /// frame the two are the same picture, which is the point.
+    /// `codec_preview` off shows the handed-over frame instead of the real
+    /// codec's damage: no encode, no decode between `wire` and `preview`.
+    ///
+    /// Not quite byte for byte any more, since card 248. `wire.rgb` picks a
+    /// code by rounding the continuous target to the nearest duty step
+    /// (`Panel::quantise`); `preview` then asks the device model what that
+    /// *code* displays as (`Panel::show`), which since the dead zone can
+    /// differ from the step it was rounded to by a sixteenth of a level - the
+    /// same snap the real firmware applies. So the two agree everywhere
+    /// except a sparse set of codes the dead zone touches, and never by more
+    /// than the zone's own one sRGB code.
     #[test]
     fn the_codec_preview_can_be_turned_off() {
         let f = linear_frame(|x, y| Rgb::new(x as f32 / 63.0, y as f32 / 31.0, 0.5));
         let output = Output { codec_preview: false, ..Output::default() };
         let out = Pipeline::new(output).process(f, 1.0 / 30.0);
-        assert_eq!(out.preview, out.wire.rgb);
         assert!(!out.stats.exact, "the statistics are still the real ones");
+
+        let mut moved = 0usize;
+        for (sent, shown) in out.wire.rgb.iter().zip(out.preview.iter()) {
+            let diff = sent.abs_diff(*shown);
+            assert!(diff <= 1, "sent {sent}, panel shows {shown}: more than the dead zone's one code");
+            if diff != 0 {
+                moved += 1;
+            }
+        }
+        assert_eq!(moved, 363, "how many of this gradient's bytes the dead zone touches");
     }
 }
