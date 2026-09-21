@@ -33,6 +33,11 @@ screeny-device-api = { path = "../device-api", features = ["std"] }
 # sends it, with the device's own validator, so a bad file is caught on the
 # bench Mac rather than after fifteen seconds of flash writes.
 screeny-fwimage = { path = "../fwimage" }
+# Card 136: `SET_BRIGHTNESS` snaps a nonzero, sub-floor request up to the
+# lowest level that lights an output-enable slot. `brightness_applies` needs
+# the same rule to predict what a low value comes back as, rather than
+# assuming an exact echo.
+screeny-receiver = { path = "../receiver" }
 serde = { version = "1", default-features = false }
 serde_json = "1"
 # So that ctrl-c during a conformance run still restores the device's

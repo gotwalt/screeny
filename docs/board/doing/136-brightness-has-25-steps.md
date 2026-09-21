@@ -134,3 +134,32 @@ the merge.
     (floor 24576) - unchanged in shape from before this card (no new
     statics, only a different call in an existing const-fn-sized path).
     `FW_VERSION` left untouched, as directed.
+- Step 3: tests.
+  - New tests live in `crates/receiver/src/lib.rs`'s `brightness_tests`
+    module (pinned in step 1's commit): `zero_stays_off`,
+    `one_to_five_snap_to_the_floor`, `the_floor_itself_is_unchanged`,
+    `above_the_floor_nothing_changes` (129, 130), `the_cap_still_applies_above_the_floor`,
+    `a_cap_at_or_above_the_floor_still_snaps_up`, `a_cap_below_the_floor_wins`,
+    plus `floor_is_six` pinning `BRIGHTNESS_FLOOR` and the underlying
+    `oe_slots(5)==0` / `oe_slots(6)==1` it is derived from.
+  - `crates/panel/src/model.rs`:
+    `receivers_brightness_floor_matches_this_crates_oe_slots` (new,
+    `crates/panel/Cargo.toml` gained `screeny-receiver` as a
+    `[dev-dependencies]`-only edge for this one test).
+  - Checked `crates/sim/tests/{control,telemetry,health,http_routes,http_conformance,core_rules}.rs`
+    for `SET_BRIGHTNESS`/settings values below today's floor (6): none found -
+    every fixture uses 0, 30, 40, 77, 88, 96, 100, 120, 255, or a cap of 100/120,
+    all either 0 or comfortably above the floor. No sim test needed updating.
+  - `crates/probe/src/suite/control.rs`'s `brightness_applies` conformance
+    rule *did* assume an exact echo of `found / 2`, which breaks once `found`
+    is small enough that half of it lands below the floor (this rule runs
+    against a real device or the simulator via `screeny-probe`, not under
+    `cargo test`, so it would not have failed a CI run - it would have failed
+    on the bench). Fixed to predict the expected reply with
+    `screeny_receiver::clamp_brightness(low, 255)` instead of asserting
+    `applied == low` (`crates/probe/Cargo.toml` gained a `screeny-receiver`
+    dependency). `brightness_cap` (SET_BRIGHTNESS 255, expect `< 255`) needed
+    no change.
+  - `timeout 300 cargo test -p screeny-probe -p screeny-sim`: all green
+    (probe: 15 unit tests + fixtures; sim: every integration test file,
+    including `http_routes.rs`'s `settings_are_clamped_by_the_same_code_udp_clamps_with`).

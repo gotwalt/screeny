@@ -1896,6 +1896,7 @@ dependencies = [
  "screeny-device-api",
  "screeny-fwimage",
  "screeny-proto",
+ "screeny-receiver",
  "serde",
  "serde_json",
 ]
