@@ -67,3 +67,30 @@ This is the last firmware card of this cycle (owner, 2026-09-21). Do **not** bum
 the merge.
 
 ## Log
+
+- Branched `card/136-brightness-steps` from `main` at 8081857.
+- Step 1: `crates/receiver/src/lib.rs` gets a "Brightness (card 136)" section
+  (after `Timing`, before `Vocabulary`): a private `oe_slots` (the same
+  arithmetic as `firmware::display::slots_for` / `screeny_panel::oe_slots`),
+  a derived `pub const BRIGHTNESS_FLOOR: u8` (a `const fn`-computed loop over
+  `oe_slots`, not a literal - today it evaluates to 6), and
+  `pub const fn clamp_brightness(level: u8, cap: u8) -> u8`: clamps to `cap`,
+  then snaps a nonzero, sub-floor result up to `BRIGHTNESS_FLOOR`; 0 stays 0.
+  **Decision recorded here:** if `cap` itself is below the floor, the cap
+  wins - `clamp_brightness(200, 3) == 3`, still possibly black, because
+  `SET_BRIGHTNESS` must never report `applied` above the cap it was just
+  given (spec 6.3).
+  `Receiver::apply`'s `Request::SetBrightness` arm (was
+  `level.min(self.brightness_cap)`, ~line 1269) and `Receiver::new` (was
+  `p.brightness.min(p.brightness_cap)`, ~line 631) both now call
+  `clamp_brightness` - the one place the rule lives.
+  `crates/receiver` stayed `no_std`/heapless-only; `screeny_panel` (std,
+  `f32`) and `firmware` (a separate cargo project) are unreachable from it, so
+  the arithmetic is a third copy on purpose, tied down by
+  `crates/receiver`'s own `brightness_tests` module and by a new test in
+  `crates/panel/src/model.rs` (`receivers_brightness_floor_matches_this_crates_oe_slots`,
+  with `screeny-receiver` added as a `[dev-dependencies]`-only edge in
+  `crates/panel/Cargo.toml` - never built for the firmware) that pins
+  `screeny_receiver::BRIGHTNESS_FLOOR` against `screeny_panel::oe_slots`.
+  `cargo test -p screeny-receiver` and `-p screeny-panel` both green;
+  `cargo build --workspace` clean.

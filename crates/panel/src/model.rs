@@ -436,6 +436,22 @@ mod tests {
         }
     }
 
+    /// Card 136: `crates/receiver` is `no_std` and cannot depend on this
+    /// crate, so it carries its own copy of the slot arithmetic to derive
+    /// `BRIGHTNESS_FLOOR` - the lowest brightness `SET_BRIGHTNESS` snaps a
+    /// nonzero request up to. Pin the two copies against each other rather
+    /// than trusting them to stay in sync by eye.
+    #[test]
+    fn receivers_brightness_floor_matches_this_crates_oe_slots() {
+        let floor = screeny_receiver::BRIGHTNESS_FLOOR;
+        assert!(oe_slots(floor) >= 1, "the floor must light at least one slot");
+        assert_eq!(
+            oe_slots(floor - 1),
+            0,
+            "one below the floor must light none, or the floor is not the lowest"
+        );
+    }
+
     #[test]
     fn brightness_darkens_everything_and_zero_is_black() {
         let full = Lut::new(NOMINAL, 255);

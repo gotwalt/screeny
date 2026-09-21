@@ -1885,6 +1885,7 @@ name = "screeny-panel"
 version = "0.1.0"
 dependencies = [
  "screeny-proto",
+ "screeny-receiver",
 ]
 
 [[package]]

@@ -120,6 +120,132 @@ impl Default for Timing {
 }
 
 // ---------------------------------------------------------------------------
+// Brightness (card 136)
+// ---------------------------------------------------------------------------
+//
+// The device dims by shortening the output-enable window rather than scaling
+// pixel values (card 020): `MAX_OE_SLOTS` lit slots out of a 64-slot scan
+// row, `oe_slots` is exactly `firmware::display::slots_for` and
+// `screeny_panel::oe_slots` (the test at the bottom of this section pins all
+// three together). That makes the *real* resolution of `SET_BRIGHTNESS` 25
+// steps, not 256, and it makes a handful of the lowest nonzero values fully
+// off: `oe_slots(1..=5) == 0`.
+
+/// Lit output-enable slots per 64-slot scan row, mirroring
+/// `firmware/src/display.rs::MAX_OE_SLOTS` and `screeny_panel::MAX_OE_SLOTS`.
+const MAX_OE_SLOTS: u32 = 25;
+
+/// Runtime brightness 0..=255 -> lit output-enable slots. Exactly
+/// `firmware::display::slots_for` / `screeny_panel::oe_slots`; kept as a third
+/// copy only because this crate is `no_std` and cannot depend on
+/// `screeny_panel` (std, `f32`) or on `firmware` (a separate cargo project) -
+/// the test below pins the three against each other.
+const fn oe_slots(brightness: u8) -> u32 {
+    (brightness as u32 * MAX_OE_SLOTS + 127) / 255
+}
+
+/// The lowest nonzero brightness that lights at least one output-enable slot,
+/// derived from [`oe_slots`] rather than written as a literal. Today this is
+/// 6: `oe_slots(1..=5) == 0` and `oe_slots(6) == 1`.
+pub const BRIGHTNESS_FLOOR: u8 = {
+    let mut b: u16 = 1;
+    loop {
+        if oe_slots(b as u8) >= 1 {
+            break b as u8;
+        }
+        if b >= 255 {
+            // Unreachable while MAX_OE_SLOTS > 0, but keeps this total.
+            break 255;
+        }
+        b += 1;
+    }
+};
+
+/// `SET_BRIGHTNESS`'s rule (owner decision, card 136): clamp the request to
+/// `cap`, then snap a nonzero result that would light zero slots up to
+/// [`BRIGHTNESS_FLOOR`] - the lowest level that lights one. `0` always stays
+/// off. If `cap` itself sits below the floor, the cap wins: a sender that
+/// asked for a cap under 6 asked for "as dim as this build allows", and
+/// honouring the floor there would let `SET_BRIGHTNESS` exceed a cap it just
+/// set, which section 6.3 does not allow.
+///
+/// Every place a brightness reaches the display or is reported (the control
+/// opcode, the settings store load at boot, the HTTP settings API) goes
+/// through this one function.
+#[must_use]
+pub const fn clamp_brightness(level: u8, cap: u8) -> u8 {
+    let capped = if level > cap { cap } else { level };
+    if capped == 0 {
+        0
+    } else if capped < BRIGHTNESS_FLOOR {
+        if BRIGHTNESS_FLOOR > cap {
+            cap
+        } else {
+            BRIGHTNESS_FLOOR
+        }
+    } else {
+        capped
+    }
+}
+
+#[cfg(test)]
+mod brightness_tests {
+    use super::{clamp_brightness, oe_slots, BRIGHTNESS_FLOOR};
+
+    #[test]
+    fn floor_is_six() {
+        assert_eq!(BRIGHTNESS_FLOOR, 6);
+        assert_eq!(oe_slots(5), 0);
+        assert_eq!(oe_slots(6), 1);
+    }
+
+    #[test]
+    fn zero_stays_off() {
+        assert_eq!(clamp_brightness(0, 255), 0);
+        assert_eq!(clamp_brightness(0, 3), 0);
+    }
+
+    #[test]
+    fn one_to_five_snap_to_the_floor() {
+        for level in 1..=5u8 {
+            assert_eq!(clamp_brightness(level, 255), BRIGHTNESS_FLOOR);
+        }
+    }
+
+    #[test]
+    fn the_floor_itself_is_unchanged() {
+        assert_eq!(clamp_brightness(BRIGHTNESS_FLOOR, 255), BRIGHTNESS_FLOOR);
+    }
+
+    #[test]
+    fn above_the_floor_nothing_changes() {
+        assert_eq!(clamp_brightness(129, 255), 129);
+        assert_eq!(clamp_brightness(130, 255), 130);
+        assert_eq!(clamp_brightness(7, 255), 7);
+    }
+
+    #[test]
+    fn the_cap_still_applies_above_the_floor() {
+        assert_eq!(clamp_brightness(200, 160), 160);
+    }
+
+    #[test]
+    fn a_cap_at_or_above_the_floor_still_snaps_up() {
+        assert_eq!(clamp_brightness(1, 160), BRIGHTNESS_FLOOR);
+        assert_eq!(clamp_brightness(6, 6), 6);
+    }
+
+    #[test]
+    fn a_cap_below_the_floor_wins() {
+        // Card 136 Log: if the cap itself is below the floor, the cap wins
+        // rather than SET_BRIGHTNESS being able to exceed a cap it just set.
+        assert_eq!(clamp_brightness(1, 3), 3);
+        assert_eq!(clamp_brightness(200, 3), 3);
+        assert_eq!(clamp_brightness(0, 3), 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Vocabulary
 // ---------------------------------------------------------------------------
 
@@ -628,7 +754,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             info: heapless::Vec::new(),
             ctrl_port: p.control_port,
             brightness_cap: p.brightness_cap,
-            brightness: p.brightness.min(p.brightness_cap),
+            brightness: clamp_brightness(p.brightness, p.brightness_cap),
             idle_mode: p.idle_mode,
             rssi_dbm: p.rssi_dbm,
             timing: p.timing,
@@ -1266,7 +1392,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                 Reply::Telemetry(t)
             }
             Request::SetBrightness(level) => {
-                let applied = level.min(self.brightness_cap);
+                let applied = clamp_brightness(level, self.brightness_cap);
                 self.brightness = applied;
                 h.event(Event::Brightness {
                     requested: level,
