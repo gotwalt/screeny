@@ -46,6 +46,12 @@ extern crate alloc;
 mod apsta_probe;
 mod display;
 mod fb;
+/// Card 245's bench build: erase, write and read back inactive-slot sectors at
+/// full speed, with the stream and the dither left running, so the flash
+/// path's freedom from the core-parking wedge can be shown in a minute rather
+/// than inferred from uploads. Off by default; never shipped.
+#[cfg(feature = "flash-stress")]
+mod flash_stress;
 mod gamma;
 mod http;
 mod mdns;
@@ -1152,6 +1158,11 @@ async fn main(spawner: Spawner) {
     // power-on. See the feature's comment in `Cargo.toml`.
     #[cfg(feature = "panic-test")]
     spawner.spawn(panic::panic_test_task().unwrap());
+    // Card 245's bench build: five hundred inactive-slot erase+write+read
+    // cycles starting 30 s after boot. It refuses to run on a trial boot or
+    // while an upload owns the slot. See the feature's comment in `Cargo.toml`.
+    #[cfg(feature = "flash-stress")]
+    spawner.spawn(flash_stress::stress_task().unwrap());
 
     // Card 200 spike: reachable from `main` so the linker keeps it and
     // `xtensa-esp32-elf-size` measures something real. Off by default. Its

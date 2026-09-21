@@ -323,13 +323,19 @@ fn stage_sector(
     // ~25 s of stalls before a byte arrived, and the trailing bytes it would
     // clear are never read: the bootloader takes the image length from the
     // header and the segment table.
+    // **Card 245: every erase and every program on this device goes through
+    // `store::guarded`.** It holds the one global critical section across
+    // `esp-storage`'s park -> ROM call -> un-park, which is what stops core 0
+    // taking an interrupt - and with it a lock the frozen core 1 may be
+    // holding - in the window esp-storage leaves open between the two. Two
+    // guards and not one: the erase and the program stay separate ~40 ms and
+    // ~9 ms windows with core 0's interrupt backlog drained in between, which
+    // is the shape card 240 measured the radio surviving.
     let e0 = Instant::now();
-    region
-        .erase(offset, offset + SECTOR as u32)
-        .map_err(|e| {
-            warn!("ota: erase at {:#x} failed: {:?}", offset, e);
-            FirmwareError::Flash
-        })?;
+    store::guarded(|| region.erase(offset, offset + SECTOR as u32)).map_err(|e| {
+        warn!("ota: erase at {:#x} failed: {:?}", offset, e);
+        FirmwareError::Flash
+    })?;
     let erase_us = e0.elapsed().as_micros() as u32;
 
     let w0 = Instant::now();
@@ -341,7 +347,7 @@ fn stage_sector(
     // puts a 4,096-byte sector buffer on the caller's stack and does a full
     // read-modify-erase-write, which is right for a 32-byte `otadata` entry
     // and wrong for bulk staging (research 006 section 5).
-    nor.write(offset, data).map_err(|e| {
+    store::guarded(|| nor.write(offset, data)).map_err(|e| {
         warn!("ota: write at {:#x} failed: {:?}", offset, e);
         FirmwareError::Flash
     })?;
@@ -902,7 +908,11 @@ fn write_state(
     let mut ota = Ota::new(entry.as_flash_region(flash), 2).map_err(|e| {
         warn!("ota: otadata is not usable: {:?}", e);
     })?;
-    ota.set_current_ota_state(state).map_err(|e| {
+    // Card 245's guard. `Ota::new` only reads - reads never park core 1 - so
+    // the critical section starts here, around the one read-modify-erase-write
+    // that does. `otadata` is written three times in the life of an update,
+    // but those three are the worst moments on the device to wedge at.
+    store::guarded(|| ota.set_current_ota_state(state)).map_err(|e| {
         warn!("ota: could not write otadata state {:?}: {:?}", state, e);
     })
 }
@@ -925,10 +935,13 @@ fn write_selection(
     let mut ota = Ota::new(entry.as_flash_region(flash), 2).map_err(|e| {
         warn!("ota: otadata is not usable: {:?}", e);
     })?;
-    ota.set_current_app_partition(app).map_err(|e| {
+    // Card 245's guard, one per write and not one around both: the window
+    // between them is interruption 5b and it must stay a place the device can
+    // be reset, not a 100 ms critical section.
+    store::guarded(|| ota.set_current_app_partition(app)).map_err(|e| {
         warn!("ota: could not select {:?}: {:?}", app, e);
     })?;
-    ota.set_current_ota_state(OtaImageState::New).map_err(|e| {
+    store::guarded(|| ota.set_current_ota_state(OtaImageState::New)).map_err(|e| {
         warn!("ota: selected {:?} but could not mark it NEW: {:?}", app, e);
     })
 }

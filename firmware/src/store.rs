@@ -9,13 +9,19 @@
 //!
 //! ## Three rules this module exists to keep
 //!
-//! 1. **Only core 0 ever touches flash, and it parks core 1 while it does.**
+//! 1. **Only core 0 ever touches flash, it parks core 1 while it does, and
+//!    every erase or program goes through [`guarded`].**
 //!    [`FlashStorage::multicore_auto_park`], never `multicore_ignore`. Core 1
 //!    fetches its instructions from the same flash the ROM routine is erasing;
 //!    parking it is a hardware clock stall, so the HUB75 DMA keeps scanning the
 //!    buffer it already has and only the dither phase freezes. Research 006
 //!    section 4 measured the granularity: `esp-storage` parks and unparks around
-//!    *each* sector, not around a whole update.
+//!    *each* sector, not around a whole update. The [`guarded`] half is card
+//!    245's: a hardware stall freezes core 1 wherever it is, and the window
+//!    `esp-storage` leaves between the ROM call and the un-park - a window in
+//!    which core 0 takes interrupts again while core 1 is still frozen - is a
+//!    deadlock. [`guarded`] closes it. Read its documentation before adding a
+//!    flash write anywhere in this firmware.
 //! 2. **No big buffer lives across an `await`.** An embassy task's future is a
 //!    `static`, so anything held across a suspension point is `.bss`, and on this
 //!    chip `.bss` comes straight out of core 0's main stack. The 3 KB partition
@@ -133,14 +139,88 @@ pub fn note_dirty(bits: u8) {
 }
 
 // ---------------------------------------------------------------------------
+// The guard that makes a flash write survivable on this chip (card 245)
+// ---------------------------------------------------------------------------
+
+/// Run one **blocking** flash erase or program with core 0's interrupts masked
+/// for the whole of `esp-storage`'s park -> ROM call -> un-park.
+///
+/// ## Why this exists
+///
+/// `esp-storage` parks core 1 by *hardware clock stall*
+/// (`esp-hal-1.2.2/src/soc/esp32/cpu_control.rs` line 16): core 1 freezes at
+/// whatever instruction it was on, holding whatever lock it held. Every lock in
+/// this stack is a spin lock that masks its holder's interrupts and spins
+/// unboundedly when it cannot get in (`esp-sync-0.3.0/src/lib.rs` lines
+/// 184-188), and two of them are shared by both cores: the *single* global
+/// `critical_section` mutex (`esp-hal-1.2.2/src/sync.rs` line 99) and
+/// `esp-rtos`'s scheduler (`esp-rtos-0.4.0/src/scheduler.rs` line 639), which
+/// core 1's executor takes on every wake.
+///
+/// That would still be safe if core 0 ran nothing while core 1 was frozen. It
+/// does not. `MultiCoreStrategy::with` (`esp-storage-0.10.0/src/common.rs`
+/// lines 339-349) is `park -> f() -> un-park`, and the interrupt masking lives
+/// **inside `f()`**: the guard on esp-storage's own lock is dropped when
+/// `chip_specific::spiflash_erase_sector` returns (`hardware.rs` line 17,
+/// `lib.rs` line 74), so core 0 re-enables interrupts *before* `post_write`
+/// un-parks core 1. Forty milliseconds of backlogged interrupts then fire into
+/// that window - the first of them being `esp-rtos`'s own
+/// `timer_tick_handler` (`esp-rtos-0.4.0/src/timer/mod.rs` line 232), which
+/// takes the scheduler lock. If core 1 was frozen holding it, core 0 spins for
+/// ever inside an interrupt handler and can never reach the un-park. Both cores
+/// are then dead and neither can free the other: no panic, no log line, no
+/// telemetry, and only TIMG0's watchdog - a peripheral - gets the device back.
+/// That is card 245's wedge, and it was a coin flip per sector.
+///
+/// ## Why holding the global critical section fixes it
+///
+/// `critical_section::with` on this chip *is* that one global `RawMutex`, so
+/// taking it here does two things at once:
+///
+/// - **core 0 runs no interrupt handler while core 1 is parked**, so core 0
+///   cannot be made to wait on any lock at all. Inside the window it executes
+///   only `esp-storage`'s IRAM wrapper and the ROM, whose one lock is
+///   `esp-storage`'s private `LOCK` - which core 1 can never hold, because
+///   nothing on core 1 touches flash (rule 1 above). That is the whole
+///   argument, and it is an enumeration rather than a hope.
+/// - **core 1 provably is not inside a `critical_section` when it is parked**,
+///   because core 0 is holding it. Every `CriticalSectionRawMutex` in this
+///   firmware and in embassy, and every embassy-time queue operation, goes
+///   through that lock, so the set of places core 1 can be frozen shrinks a
+///   long way beyond what the deadlock argument strictly needs.
+///
+/// It costs nothing that was not already being paid: the ROM call masked core
+/// 0's interrupts for ~40 ms of that window anyway (card 240 measured 34/40/55
+/// ms min/mean/max and the radio survived it), and this adds `pre_write`,
+/// `post_write` and a few cache misses - microseconds. It is deliberately
+/// applied **per flash operation** and not per sector, so an erase and its
+/// program are still two ~40 ms and ~9 ms windows with the backlog drained
+/// between them, exactly as they are today.
+///
+/// ## What it is not for
+///
+/// Reads. `internal_read` (`common.rs` line 149) does not go through
+/// `MultiCoreStrategy` at all - it never parks core 1 - so there is no window
+/// to protect and masking core 0 for the ~200 us of a 4 KB read would be pure
+/// latency. Wrap erases and programs; leave reads alone.
+pub fn guarded<R>(f: impl FnOnce() -> R) -> R {
+    critical_section::with(|_| f())
+}
+
+// ---------------------------------------------------------------------------
 // Counting the flash operations
 // ---------------------------------------------------------------------------
 
-/// A `NorFlash` that counts erases and writes before delegating.
+/// A `NorFlash` that counts erases and writes, and runs each of them inside
+/// [`guarded`], before delegating.
 ///
 /// Wrapping the *blocking* region (rather than timing the outside of a save and
 /// guessing) is what lets the bench say "this write cost one sector erase"
-/// instead of "this write took 54 ms, so probably".
+/// instead of "this write took 54 ms, so probably" - and, since card 245, it is
+/// also what puts every settings commit on the same guarded path as an OTA
+/// sector without `sequential-storage`'s async signature getting in the way.
+/// `BlockingAsync` calls straight through to these methods and never suspends
+/// inside one, so the critical section is entered and left in a single poll.
 struct Counted<T>(T);
 
 impl<T: ErrorType> ErrorType for Counted<T> {
@@ -166,12 +246,15 @@ impl<T: BlockingNorFlash> BlockingNorFlash for Counted<T> {
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         let sectors = (to.saturating_sub(from) as usize).div_ceil(T::ERASE_SIZE) as u32;
         ERASES.fetch_add(sectors, Ordering::Relaxed);
-        self.0.erase(from, to)
+        // One guard for the whole range: `FlashStorage::erase` parks and
+        // un-parks around *each* sector inside it, and every one of those
+        // windows needs core 0 quiet. A settings erase is one sector anyway.
+        guarded(|| self.0.erase(from, to))
     }
 
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         PAGE_WRITES.fetch_add(1, Ordering::Relaxed);
-        self.0.write(offset, bytes)
+        guarded(|| self.0.write(offset, bytes))
     }
 }
 

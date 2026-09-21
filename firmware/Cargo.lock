@@ -1950,6 +1950,7 @@ dependencies = [
 name = "screeny-fw"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
  "edge-captive",
  "edge-dhcp",
  "edge-mdns",

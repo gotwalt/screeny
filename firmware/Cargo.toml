@@ -115,6 +115,23 @@ gpio-probe = []
 # by default, and a plain `cargo build --release` must never pick it up.
 start-in-portal = []
 
+# **Card 245's bench build.** The wedge that card removes was one coin flip per
+# flash operation, so the evidence that it is gone has to be trials - and the
+# only way to run five hundred of them used to be to upload a megabyte and
+# watch. This does them directly: 30 s after boot it erases, writes and reads
+# back five hundred sectors of the **inactive app slot**, walking forwards and
+# wrapping, and reports cycles done, erase/write/read times, the longest masked
+# window and any read-back that did not match. One line per hundred cycles,
+# never one per cycle.
+#
+# It is the *hard* case on purpose: unlike an upload it leaves the stream and
+# the dither running, so core 1 is taking the scheduler lock as often as it ever
+# does and every cycle is a flip at its worst odds. It refuses to run on a trial
+# boot (the inactive slot is then the rollback image) or while an upload owns
+# the slot, and its offsets come from `screeny_fwimage::stress_sector`, which a
+# host test walks four times round a 2 MB slot. Off by default; never shipped.
+flash-stress = []
+
 # Card 222's bench self-test. A worker cannot reach the device over the LAN, so
 # this asks the device to make the request itself: 30 s after boot it opens a
 # TCP connection **to its own address** on port 80 through embassy-net and
@@ -224,6 +241,15 @@ esp-storage = { version = "=0.10.0", default-features = false, features = [
   "critical-section",
   "embedded-storage",
 ] }
+# **Card 245.** `critical_section::with` is not a third-party lock here: on this
+# chip esp-hal *is* the `critical_section` implementation, and it is one global
+# `esp_sync::RawMutex` shared by both cores (`esp-hal-1.2.2/src/sync.rs` line
+# 99). `store::guarded` holds it across `esp-storage`'s park -> ROM call ->
+# un-park so that core 0 runs no interrupt handler - and therefore waits on no
+# lock - while core 1 is hardware-stalled. The crate is already in the tree at
+# this version as esp-hal's own dependency; it is named here because
+# `src/store.rs` calls it directly.
+critical-section = { version = "=1.2.0" }
 # `sequential-storage` is async-only, hence embassy-embedded-hal's BlockingAsync
 # around the blocking NorFlash that esp-bootloader-esp-idf hands us. It arrives
 # through `screeny-settings`; the direct dependency here is for the version pin
