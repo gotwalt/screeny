@@ -241,6 +241,10 @@ One card per worker, each in its own git worktree (`isolation: worktree`). The o
 wanted workers run on Opus (2026-09-19); since 2026-09-21 he asks for Sonnet (`model: sonnet`),
 three at most. What has worked:
 
+- **A worker's worktree starts at `origin/main`, not at your `main`** (seen 2026-09-21: three
+  worktrees came up at the last pushed commit, 40-odd commits behind, with their cards not yet
+  written). Give the worker the commit to branch from (`git checkout -b card/NNN-... <sha>`)
+  and check `git worktree list` a minute after launching.
 - **A card is a contract**: Goal, Context (with file paths and what to read first),
   Deliverables (exact paths), Acceptance, Log. Put findings from earlier cards in the
   Context so the worker does not rediscover them. Number follow-up cards in a range
