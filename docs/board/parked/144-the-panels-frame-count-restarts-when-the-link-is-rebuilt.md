@@ -52,3 +52,7 @@ decision says it should, and the soak's `flowing()` re-base counter (card 117) c
 whether a rebuild still moves it.
 
 ## Log
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+A counter that restarts on a link rebuild; the owner does not watch the counters (cost metrics are not goals). If reopened, the recommendation is to carry it across the rebuild the way card 171 carried reconnects.

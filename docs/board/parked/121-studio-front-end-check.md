@@ -59,3 +59,7 @@ is doing). `crates/studio/tests/ui.rs` cross-checks ids per pair and holds `comm
 reaching for no element but `#notice`. Whatever this card builds has to check both screens;
 card 198's Log lists what its worker verified by hand in Chrome and what it could not (the
 canvas: the extension's window is a hidden tab, so no frame is ever drawn there).
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+Large and design-heavy (a headless browser driven from a Rust test), and the owner looks at the page every day. Reopen if a front-end regression ever reaches him that tests/ui.rs could not have caught.

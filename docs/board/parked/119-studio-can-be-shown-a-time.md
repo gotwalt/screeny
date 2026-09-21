@@ -47,3 +47,7 @@ offset, and the studio's slider wants it to stay one.
 
 With the clock pinned to 21:11:50 and the piece restarted, the studio shows the dance
 into 21:12 and then holds 21:12, and it shows the same thing the next time it is done.
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+`screeny-art snapshot --time HH:MM` already shows the awkward times as PNGs. Reopen if the owner wants to watch a clock patch dance into a chosen minute on the panel itself.

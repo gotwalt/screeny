@@ -81,3 +81,7 @@ exact loopback UDP count like `traffic.rs`'s; and the Studio's 5 s render watchd
 wall-clock, so an oversubscribed bench can make it refuse a patch that was merely
 descheduled (it took `soak` and `moved` down when the fixture was `metaballs`; they are on
 the cheaper `flock` now, which dodges it rather than fixing it).
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+The standing rule covers it: one failure under a loaded bench is re-run alone, both results reported, and a merge is not held for it (docs/ORCHESTRATOR.md, Merging). Reopen if one of the four starts failing alone.

@@ -68,3 +68,7 @@ revert the page should no longer see "invalid"/"aborted" on a healthy panel; rea
 spec before writing the trial/confirmed/reverted wording here and on card 199.
 `crates/probe` and `crates/sim` gained an OTA model (off by default): use the simulator's
 for this card's tests.
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+The firmware session already updates the panel over WiFi from the command line; this puts the same thing on a web page. Reopen when updating from the Mac is actually a nuisance. Card 199 (the update's outcome on /panel) goes ahead without it.

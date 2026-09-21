@@ -52,3 +52,7 @@ same picture, checked by a test that renders one frame both ways and compares
 bytes. `screeny-sim`'s own protocol tests are untouched.
 
 ## Log
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+Nobody judges the picture in the simulator's window: the Studio's preview and the panel are both right since card 102. Reopen if the sim's window or its PNGs are ever used as evidence of the dark end. Card 188 adds to crates/panel; read its result first.

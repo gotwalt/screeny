@@ -200,6 +200,14 @@ brightness control on the preview Check that the firmware session handed the pan
 back after borrowing it (`player.on` true in `/api/v1/status`) - `on:false` now survives a
 restart.
 
+**2026-09-21, the owner pruned the backlog ("I don't need to over-build this"):** the three
+that matter are **188** (held dark shades on a panel level; clocks), **187** (senders and the
+brightness floor) and **199** (the last panic / reset / update outcome on `/panel`), launched
+together as three workers. Parked the same day, each with its reason in its Log: 185 (Studio
+OTA upload - the command line already does it), 119, 121, 144, 156, 157, 114, 159, 110. The
+only other card in `backlog/` is the firmware session's 248. **Workers run on Sonnet
+(`model: sonnet`), three at most, since this day** - this replaces "Opus" and "at most two".
+
 **Next up:** whatever the owner's eye finds in the pieces (115's hands first); 162 when
 clock renders need comparing; porting `crates/demos` into `crates/art` when wanted. Small independent cards
 in `backlog/` (062, 065, 067, 068, 082, 092, 093, 110, 120, 121, 125, 130-133, 135) can run alongside. `parked/` is only
@@ -230,7 +238,8 @@ eye), DDP proxy, control-channel auth, multi-device.
 ## Running workers
 
 One card per worker, each in its own git worktree (`isolation: worktree`). The owner
-wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
+wanted workers run on Opus (2026-09-19); since 2026-09-21 he asks for Sonnet (`model: sonnet`),
+three at most. What has worked:
 
 - **A card is a contract**: Goal, Context (with file paths and what to read first),
   Deliverables (exact paths), Acceptance, Log. Put findings from earlier cards in the

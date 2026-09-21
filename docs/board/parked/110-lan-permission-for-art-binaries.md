@@ -78,3 +78,7 @@ build rather than a binary and an app.
 The Linux half of this card is unchanged and still matters: `docs/design/studio-vision.md`
 puts the studio in a container where none of the macOS machinery exists, and the
 server must not grow a macOS-shaped answer.
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+Matters only the first time the owner runs screeny-studio or screeny-art on the Mac outside a terminal. It is a check to make with him at the keyboard then, not a worker's card.

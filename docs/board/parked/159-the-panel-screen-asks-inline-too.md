@@ -50,3 +50,7 @@ driving it - which is itself the point, because today it cannot. Console clean, 
 1400 px, and a second browser sees the outcome of each.
 
 ## Log
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+Rename, reboot and forget work today; the dialogs mostly block the orchestrator's browser tooling, not the owner. Reopen with the next card that reworks /panel.

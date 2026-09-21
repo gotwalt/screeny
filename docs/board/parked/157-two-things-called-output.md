@@ -25,3 +25,7 @@ nobody else is in those crates - not while 151 or 155 is in flight.
 One `Output` in `crates/art`; tests and clippy clean; no behaviour change.
 
 ## Log
+
+### Parked 2026-09-21 (owner: "I don't need to over-build this"; the three that matter are 188, 187, 199)
+
+A rename with no change in behaviour. Do it in passing the next time a card is already rewriting those imports.
