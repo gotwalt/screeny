@@ -60,3 +60,27 @@ frame is still encoded exactly and the test suite's own big-bird case is comfort
 The owner sees a bird lean into a turn.
 
 ## Log
+
+### Note from the orchestrator (2026-09-21): the owner said yes
+
+Shown card 123's bird and told the flock barely rolls, the owner said: "yeah, let's add some
+roll & lean capabilities". So the first deliverable is not in question: build the visible
+bank. What he is asking for, in order:
+
+- Birds that visibly roll into their turns at the shipped settings with a small, big flock
+  (`birds` ~6, `size` ~2.5) - the wing plane tilting toward the camera, the underside
+  flash, the inside wing dropping. An exaggerated, drawn roll (a gain and/or a floor during
+  a turn, eased in and out so it never snaps) is the expected answer; the flight itself
+  stays as cards 168/177 tuned it.
+- "Lean" as well as roll: look at whether the body should also pitch with climbs and dives
+  more than the velocity vector alone gives, and whether wings should respond (inside wing
+  tucked a little in a hard turn, wings half-folded in a dive, spread and raised when
+  braking or climbing). Only what reads at 10-20 LEDs.
+- ONE new control is allowed if it earns its place: how far the birds lean into a turn
+  (0 = the honest roll, default = what looks right), labelled in card 122's plain style and
+  distinct from the existing `bank` ("How far the view leans into a turn" - that one is the
+  camera). No other new parameters.
+- A second worker is finishing card 123's round two in `bird.rs` and the draw code in
+  `mod.rs` (body proportions, the wing root). Own `sim.rs` and the roll/lean quantities and
+  how they reach `Bird::frame`; if wing-pose changes are needed in `bird.rs`, keep them to
+  the pose inputs (angles), not the proportions, and expect to rebase onto round two.
