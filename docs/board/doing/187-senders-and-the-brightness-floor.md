@@ -184,3 +184,25 @@ Files touched in `crates/studio/ui`: `common.js`, `picture.js`, `panel.js`, `ind
 `panel.html`. None of `panel.js`'s Device block or `panel.html`'s Device block (card
 199's) - only the brightness control markup/script, which lives in its own section on
 each page.
+
+Other host-side spots still assuming "applied differs only because of the cap" (the
+Exit's last bullet), found while grepping for `applied`, `cap`, `brightness_cap` across
+every host crate:
+
+- `crates/probe/src/suite/control.rs` - already correct, as the card said: it predicts
+  with `clamp_brightness` (card 136), not a cap-only assumption. No change.
+- `crates/screeny/src/control.rs`, `ControlClient::set_brightness`'s doc comment - said
+  only "how a sender learns the firmware's cap". Fixed (one line) to name the floor too,
+  since it is directly beside `cmd_brightness`, which this card already touches.
+- `crates/screeny/src/main.rs:177`, the `Brightness` subcommand's `--help` line ("Set the
+  panel brightness, 0-255. The firmware clamps it.") - not wrong (it never says *only*
+  clamps down), but says nothing of the floor either. Left alone: fixing `--help` text is
+  outside "wording, one inference, and the control's steps", and nobody reads `--help` to
+  learn what one particular reply meant - `cmd_brightness`'s own printed line is what a
+  user actually sees after running the command, and that one is fixed.
+- Nothing else in `crates/studio`, `crates/screeny` or `crates/probe` compares `applied`
+  to a cap without also being the floor logic itself (`screeny_receiver::clamp_brightness`)
+  or a value already fixed by this card.
+
+`timeout 1200 cargo test --release --no-fail-fast` and `cargo clippy --workspace
+--all-targets` at the root are next (the card's Finish step); results below.
