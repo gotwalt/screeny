@@ -335,3 +335,12 @@ watching. Nobody sees it and nobody chooses it; it is what a forgotten panel cos
 The WebSocket's `fps` query stays, because **0** is how a hidden tab says "send me
 nothing". Its default and its ceiling are now the render rate, so a socket that asks for
 nothing, and one that asks for 60, both get every frame there is.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Merged `--no-ff` onto a `main` that had gained `flock`, its backdrop choice and vesta's
+redrawn numerals since this branch was cut: no conflicts. Root suite on the merged tree:
+904 passed, 1 failed - `crates/screeny/tests/traffic.rs` line 54 ("the receiver saw every
+one"), card 164's exact count of loopback datagrams, while a worker was building; alone:
+4 of 4, five times. Added to card 156's list. Clippy silent. `crates/art/tests/rate.rs`
+covers `flock` as promised (it walks `patches::ALL`). Deploys with the next batch.

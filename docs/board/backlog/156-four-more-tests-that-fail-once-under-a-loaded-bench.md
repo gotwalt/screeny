@@ -58,3 +58,14 @@ It is not port re-binding. `/api/v1/status` at the timeout said `discovery.probe
 So it is a race between the probe tick and the first successful HTTP read, and under load
 the probe loses. Whatever the fix, waiting on `discovery.probes` to advance would at least
 make it say which of the two happened.
+
+### A fifth (orchestrator, 2026-09-20)
+
+`crates/screeny/tests/traffic.rs::a_stream_counts_every_datagram_it_sent_and_every_one_that_came_back`,
+line 54: `assert_eq!(state.frames.len(), s.frames.out.packets, "the receiver saw every
+one")` - an exact count of UDP datagrams across loopback, which a loaded kernel may drop.
+Failed once in a full-suite run while a worker was building; 4 of 4 alone, five times.
+The sender-side equalities in that test are exact by construction and should stay exact;
+the receiver-side one wants a bound, or a retry of the whole stream.
+(Card 161's worker also left a diagnosis of `moved` above: a race between the probe tick
+and the first HTTP status read refreshing `seen_unix`.)

@@ -283,6 +283,10 @@ wants workers run on Opus (`model: opus`), decided 2026-09-19. What has worked:
 - The pacing tests in `crates/screeny` used to fail under load; card 093 fixed the cause
   (they counted the first and `FINAL` frames and asserted on the OS scheduler). They now
   assert on the pacer's own schedule: a failure there is real until shown otherwise.
+- **A finished worker can be resumed by SendMessage only while its worktree still exists.**
+  Removing the worktree (the right thing after a merge) ends that: the next card for "the
+  worker who knows this code" is a new worker reading the card and the old card's Log. If
+  a follow-up is already likely when a worker reports, send it before cleaning up.
 - **A loaded bench fails tests that pass alone.** Two sessions and their workers build on one
   Mac; fixed-port re-binds and wall-clock bounds lose. Card 117 hardened three; card 156
   lists four more. One failure in those under load: re-run it alone, report both results,
