@@ -206,3 +206,199 @@ Seven hits in `crates/art`, one decision each:
 
 `cargo test --release -p screeny-art`: 97 lib + 2 dark_ramp + 4 pinned_time +
 2 rate + 3 sender, all green.
+
+### The studio's own source, and the state compatibility (state.rs, player.rs)
+
+**What happens today, checked before changing anything** (the card asks): a
+player on a patch this build has not got kept the missing id; `make_core`
+quietly played `fallback_patch` so there was a picture at all; the page went on
+naming a patch that was not what was playing; and the only record was one line
+on stderr at startup. Nothing in `repaired`.
+
+**The repair** is `state::repair_unknown_players`, run inside `load()` after
+`migrate()` - after, so a v1/v2 file's player, which `migrate_to_v3` builds out
+of the old `preview` block, is looked at too. It puts the player on
+`default_patch()` and pushes one sentence into `repaired`. Three deliberate
+non-actions, each written where it is done:
+
+- **The memory is not touched.** `clean_memory` already keeps entries for
+  unknown patches on purpose (card 165), and this keeps that promise: the owner
+  may have spent an evening on `plasma`, and a patch can come back.
+- **It is not `fallback_patch`.** That is for a patch that *broke while
+  running*, where "not the one that just failed" is the whole point. This is a
+  patch that was never here, and the honest answer is what a studio with no
+  file at all comes up on.
+- **The missing patch's seed, speed and parameters do not come across.** They
+  described a different picture. The default patch arrives as the studio last
+  left *it*, exactly as switching to it by hand would - which is asserted.
+
+**No schema bump**, and for card 102's and card 161's stated reason: the shape
+of the file has not changed and no key has changed meaning. A v5 file with a
+player on `plasma` is a valid v5 file; one value in it names something this
+build has not got, which is a `repaired`, not a migration. Bumping would force
+a backup copy and a "migrated" line on a file that needed neither.
+
+`default_patch()` is `screeny_art::patches::ALL[0]`, which is `clocks-numerals`
+- checked, and neither of the two. `fallback_patch`'s ladder was
+`["plasma", "metaballs", "clocks-numerals"]` and is now
+`["metaballs", "clocks-numerals", "clocks-dials"]`.
+
+Three new tests: a v5 file whose player is on `plasma` (plays the default,
+says it once, keeps the memory entry, takes the default patch's own seed and
+speed rather than plasma's); two players on removed patches making **two**
+sentences, one per panel, with a third panel on a patch that still exists left
+alone; and a v1 file whose only player was the design view on `plasma`, which
+exercises the ordering against `migrate_to_v3`.
+
+**One consequence worth the orchestrator's eye**, and it is not hypothetical:
+the condition is "this build has not got it", which a `--no-default-features`
+(CPU-only) studio also meets for `overland`, `lattice` and `knot`. Such a build
+now moves a player off a GPU patch and writes that down, where before it played
+a fallback and claimed the GPU patch. The tuning survives in the memory either
+way; what is lost is "this panel was on overland". I think this is the better
+behaviour - it is honest, and card 145 is about exactly that - but it is a
+change nobody asked for, so it is in the follow-ups.
+
+36 hits in `crates/studio/src`, each looked at. `metaballs` is the subject of
+the memory and named-settings tests, with **`hue`** as the parameter moved
+about: every value those tests use (1.0, 1.5, 2.0, 2.5, 3.0, 3.5) is inside
+0..360 and none is its default, so a clamp or a "that is already the default"
+can never pass by accident - which `size` (0.4..2.5, default 1.0) would have
+let happen twice. Where a test needs a *second* patch whose parameters do not
+overlap, that is `clocks-dials` and its `dwell`. Three fixtures keep `plasma`
+on purpose, because it is now an instance of the thing they are about: the
+memory round-trip, `LIVE_V2` and `LIVE_V3` each carry an entry for a patch this
+build has not got, and each asserts it survives.
+
+### The studio's test fixtures (10 files, ~120 hits)
+
+Each hit answered by what its test is about. `metaballs` for "some patch that
+is not the default, with a parameter to move" (api, fleet, memory, pacing,
+preview, soak); `clocks-dials` wherever a second, non-overlapping patch is
+needed; `vesta` in `fleet`'s containment test, because the undisturbed panel
+must be on something `fallback_patch` would never choose - before, "the other
+player was disturbed" could not be told from "it fell back like the other one".
+
+Two needed thought:
+
+- **`traffic.rs`** (card 164) wants a patch that **holds still**, so that mean
+  frame bytes is a fact. `metaballs` at `speed` 0 is the test card's trick on a
+  patch that is still here: its picture is a function of `ctx.t * speed`, so
+  zero speed is the frame at t = 0 for ever, and it reads no clock. The clock
+  patches cannot do this - `Core::tick` passes `local_now()` whether or not
+  playback is paused, so a *paused* clock still turns over with the minute.
+- **`panel.rs`** wants still **and indexed**, because it compares the device's
+  decoded frame with the browser's preview byte for byte. `metaballs` was
+  tried and **failed** - which is the test doing its job: a continuous patch
+  goes out lossy, and then the meter's preview and the link's encoding are two
+  runs of the chooser that need not agree to the byte (codec 0x10, 1173 B).
+  `flock` is indexed, exact, seeded and clock-free, so the test says what it
+  always said. It says it slightly better now: `indexed_exact > 0` as well as
+  `indexed_fallback == 0`, so the line cannot pass by the indexed path never
+  being taken at all - which is the trap the metaballs version would have set.
+
+`ui.rs` carried card 151's two named `seeded` examples; they are `metaballs`
+(true) and `vesta` (false) now, the second measured rather than assumed.
+
+### Docs, the CLI, and what was left alone
+
+`crates/art/README.md` (the `pipe`/`snapshot`/`play` commands and the "copy
+this one" recipe, where `flock/` is the indexed example now),
+`crates/studio/README.md`'s annotated `state.json`, `docs/design/deployment.md`
+and `docker-compose.portable.yml`'s list of what a driver-free build still has.
+
+**Two prose mentions stay**, and neither is about the patch: `palette.rs`'s
+header and section 4 of the brief both say "in the lab a plasma and a
+Mandelbrot zoom went out exactly on 98-100% of frames", which is card 002's
+measurement on `lab/src/content.rs`'s clip of that name and is still true;
+section 6 of the brief lists "plasmas" among the *kinds* of work the panel
+suits, which is a genre, not an id.
+
+The CLI, run: `screeny-art list` shows eight patches and neither of these;
+`snapshot plasma` and `pipe testcard` both give the ordinary
+``no patch called `x`; try `screeny-art list` `` error.
+
+**Out of scope, untouched, as the card says:** `crates/demos` (its own older
+test card, protocol demo content), `crates/proto/tests/vectors/` (the `plasma`
+wire vectors and their README), `crates/screeny/benches/encode/content.rs`,
+`lab/` and `tools/gen-vectors` (the lab clip those vectors were generated
+from), `firmware/`, `crates/sim`, `crates/receiver` and the spec.
+`docs/board/done/`, `parked/` and `docs/research/` are history and are left as
+they were written, as are `docs/ORCHESTRATOR.md` and card 107 in `review/`,
+which are the orchestrator's own records.
+
+`crates/art/examples/cost_tmp.rs`, the throwaway that measured the candidates,
+is deleted.
+
+### What three full-workspace runs found, and the fixture changing again
+
+The per-crate runs were all green. The **first full-workspace run was not**,
+and it was worth more than everything before it:
+
+- `studio/soak` and `studio/moved` each lost their player to the **5 s render
+  watchdog**. `health` said it plainly: `stalls: 1`, `abandoned: 1`,
+  ``last_error: "`metaballs` has not produced a frame for 5s"``,
+  `refused: ["metaballs"]`, `fell_back_from`. So "a panel that moved is still
+  playing the same thing" failed on the *fallback*, not on the move. In
+  `moved` the patch that stalled was `clocks-dials`, the second fixture I had
+  picked.
+- `studio/api`'s two rate tests (`a_watching_browser_gets_the_full_rate`,
+  `the_socket_delivers_frames`) got 17 frames in a second against a bound of
+  18. Neither test names a patch - both run on the **default**,
+  `clocks-numerals` - so neither is mine; they are the bench being
+  oversubscribed by three sequential release runs beside another session's
+  build. Worth reporting, not worth changing.
+- Run 2 failed `screeny/loopback`, which card 156 already lists as a test that
+  fails once on a busy machine.
+
+The watchdog ones **are** mine, and the card's instruction is explicit: do not
+make the load-sensitive tests slower or flakier. So the candidates were timed
+again, on an idle bench, post-merge (one tick = render + `Pipeline::process`):
+
+| flock | clocks-numerals | clocks-dials | vesta | metaballs |
+|---|---|---|---|---|
+| **0.415 ms** | 0.661 ms | 1.000 ms | 1.151 ms | 1.628 ms |
+
+**`flock` is the cheapest patch left, for the same reason `plasma` was cheap:
+it is indexed and exact**, so the encoder takes the cheap path instead of
+running the lossy chooser over a continuous frame. That is the half of
+"cheap" the card's framing did not name - most of a tick is the pipeline, not
+the patch - and it is why a continuous-tone fixture costs four times an
+indexed one however simple its maths.
+
+So the load-sensitive files - `soak`, `moved`, `pacing`, `preview`, and
+`panel`, which was already there for the indexed reason - are on **`flock`**.
+`traffic` keeps `metaballs`, because what it needs is a patch it can *freeze*
+and only metaballs has a speed that reaches zero (`flock`'s `pace` bottoms out
+at 0.15). `api`, `fleet`, `memory` and `ui` keep `metaballs`: none is
+load-sensitive, the slowest finishes in a second and a half, and it is worth
+having a continuous-tone patch among the fixtures.
+
+In hindsight the single-crate green run was the thing that misled me: the
+studio suite alone leaves the machine with cores to spare, and the fixture's
+cost only shows when the whole workspace is running. Three full runs was the
+right instruction.
+
+### Follow-up work (un-numbered; for the orchestrator to card or drop)
+
+- **A CPU-only studio now moves a player off a GPU patch and writes it down.**
+  `repair_unknown_players` asks "has this build got it", which a
+  `--no-default-features` studio also answers no to for `overland`, `lattice`
+  and `knot`. Before, such a build played a fallback while the page claimed
+  the GPU patch; now it is honest, and the file loses "this panel was on
+  overland" (the *tuning* survives in the memory either way). I think the new
+  behaviour is right and it is what card 145 is about, but nobody asked for
+  it, and if it is not wanted the fix is a way to tell "removed" from "not in
+  this build" - a list of ids the build knows it was compiled without.
+- **`studio/api`'s two rate tests belong on card 156's list.**
+  `a_watching_browser_gets_the_full_rate` and `the_socket_delivers_frames`
+  assert `n > 18` frames in a second and got 17 on a loaded bench. They are
+  not on the known-load-sensitive list and nothing in this card touches them.
+- **The 5 s render watchdog is measured against wall clock, not CPU time.** On
+  an oversubscribed machine it can refuse a patch that is merely descheduled,
+  which costs the player its patch and writes `refused` into its health.
+  Making the fixtures cheap dodges it; it does not fix it.
+- **`crates/art/README.md`'s "adding a patch" recipe points at `flock/`** for
+  the indexed example, which is a directory of six files rather than the one
+  file `plasma.rs` was. A small single-file indexed patch would be a kinder
+  thing to copy, if one ever wants writing.
