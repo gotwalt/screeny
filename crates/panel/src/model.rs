@@ -204,6 +204,83 @@ pub const DIM: Panel = Panel::levels(32);
 pub const DEEP: Panel = Panel::new(8);
 
 // ---------------------------------------------------------------------------
+// Aligned levels: where a held dark colour stops blinking (card 188)
+// ---------------------------------------------------------------------------
+//
+// A code is *steady* when its duty is a whole level: the firmware never has a
+// sub-level remainder to spend, so a held colour is lit the same way on every
+// refresh and cannot blink, dither on or off. Brief section 2.1.1 is the
+// reasoning; this is that section's table, derived from [`DEVICE`] rather
+// than typed in, so a firmware change to the gamma table only has to change
+// [`DEVICE`] and the constants above - see `device_is_the_firmwares_gamma_table`
+// below, which is what pins them to the firmware in the first place.
+//
+// Deliberately built from [`DITHER_PHASES`], never a literal `16`: card 248
+// plans to give the firmware finer steady points below level 1 and a shorter
+// dither cycle, and this is the one place that has to change for every reader
+// of it - `crates/art`'s dark-end snap included - to pick the new table up.
+
+/// An sRGB8 code's duty, in sixteenths of a level - the firmware's own
+/// fixed-point unit (`firmware::gamma::SRGB_TO_Q`). Recovered from [`DEVICE`]
+/// rather than typed in: `DEVICE.emit1(v) * DEVICE.max()` is exactly that
+/// table's entry, to the fraction of a step floating point rounding costs
+/// (checked to 1e-6 by `device_is_the_firmwares_gamma_table`).
+#[must_use]
+pub fn duty_16ths(v: u8) -> u32 {
+    (DEVICE.emit1(v) * DEVICE.max()).round() as u32
+}
+
+/// The nearest whole level to a duty (sixteenths), and the signed distance to
+/// it in sixteenths: zero sits exactly on the level, negative is short of it,
+/// positive is past it. Round-half-up, matching the firmware's own rounding of
+/// `SRGB_TO_Q`.
+#[must_use]
+pub fn nearest_level(duty_16ths: u32) -> (u32, i32) {
+    let level = (duty_16ths + DITHER_PHASES / 2) / DITHER_PHASES;
+    (level, duty_16ths as i32 - (level * DITHER_PHASES) as i32)
+}
+
+/// One row of the aligned-code table: the lowest sRGB8 code whose duty
+/// reaches `level` (brief 2.1.1's "the lowest code that lands on each level"),
+/// and how far past the level that duty actually sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlignedLevel {
+    /// Which of the panel's levels this row is for.
+    pub level: u32,
+    /// The lowest sRGB8 code whose duty reaches `level * DITHER_PHASES`.
+    pub code: u8,
+    /// `duty_16ths(code) - level * DITHER_PHASES`: 0 for a level an sRGB code
+    /// lands on exactly, up to a few sixteenths where the 256 codes are
+    /// coarser than the levels (the dark end's worst case is 2).
+    pub offset_16ths: i32,
+}
+
+/// The aligned-code table, `0..=max_level`: brief 2.1.1's dark-end list for
+/// `aligned_levels(16)`, and the same rule carried up as far as `max_level`
+/// asks. Every level up to [`NOMINAL`]'s top (63) has a row - some sRGB code
+/// always reaches it, since code 255 reaches all 1008 duty steps.
+#[must_use]
+pub fn aligned_levels(max_level: u32) -> Vec<AlignedLevel> {
+    let mut out = Vec::with_capacity(max_level as usize + 1);
+    let mut want = 0u32;
+    for v in 0..=255u8 {
+        let duty = duty_16ths(v);
+        while want <= max_level && duty >= want * DITHER_PHASES {
+            out.push(AlignedLevel {
+                level: want,
+                code: v,
+                offset_16ths: duty as i32 - (want * DITHER_PHASES) as i32,
+            });
+            want += 1;
+        }
+        if want > max_level {
+            break;
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Output-enable dimming: how the device gets darker (card 020)
 // ---------------------------------------------------------------------------
 
@@ -511,6 +588,53 @@ mod tests {
             assert!((want - got).abs() < 1e-6, "code {v}: firmware emits {want}, DEVICE says {got}");
         }
         assert_eq!(DEVICE.steps, 1008, "63 levels x 16 dither phases");
+    }
+
+    /// Card 188. [`duty_16ths`] has to be the firmware's own `SRGB_TO_Q` to the
+    /// integer, not just close to 1e-6 the way [`DEVICE::emit1`] is: an aligned
+    /// code is chosen by comparing duties, and a rounding wobble there would
+    /// pick the wrong one at a boundary.
+    #[test]
+    fn duty_16ths_is_the_firmwares_srgb_to_q() {
+        for v in 0..=255usize {
+            assert_eq!(duty_16ths(v as u8), u32::from(FIRMWARE_SRGB_TO_Q[v]), "code {v}");
+        }
+    }
+
+    /// Brief 2.1.1's dark-end table, word for word: the lowest sRGB8 code that
+    /// reaches each of levels 0-16, and every one of them within 2/16 of the
+    /// level it reaches.
+    #[test]
+    fn aligned_levels_match_the_brief() {
+        const WANT: [u8; 17] = [0, 34, 50, 62, 71, 80, 87, 94, 100, 106, 111, 116, 121, 126, 130, 134, 138];
+        let rows = aligned_levels(16);
+        assert_eq!(rows.len(), 17);
+        for (row, want) in rows.iter().zip(WANT) {
+            assert_eq!(row.code, want, "level {}", row.level);
+            assert!((0..=2).contains(&row.offset_16ths), "level {} is {} sixteenths off", row.level, row.offset_16ths);
+        }
+        // The brief calls out level 13 (sRGB 126) as the worst case in this
+        // range.
+        assert_eq!(rows[13].offset_16ths, 2);
+    }
+
+    /// [`nearest_level`] is the general question - any code's nearest level,
+    /// signed - and [`aligned_levels`] is the specific one - the smallest code
+    /// that reaches a level. They have to agree on the aligned codes
+    /// themselves: an aligned code's own nearest level is the level it was
+    /// chosen for, never the one below.
+    #[test]
+    fn nearest_level_agrees_with_the_aligned_table() {
+        for row in aligned_levels(63) {
+            let (level, offset) = nearest_level(duty_16ths(row.code));
+            assert_eq!(level, row.level, "code {} (level {})", row.code, row.level);
+            assert_eq!(offset, row.offset_16ths, "code {} (level {})", row.code, row.level);
+        }
+        // Sanity on the general function directly: exactly on a level, one
+        // sixteenth either side.
+        assert_eq!(nearest_level(32), (2, 0));
+        assert_eq!(nearest_level(31), (2, -1));
+        assert_eq!(nearest_level(33), (2, 1));
     }
 
     /// The dark end, as numbers rather than adjectives. The firmware's own doc

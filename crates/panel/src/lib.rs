@@ -30,4 +30,7 @@
 pub mod color;
 pub mod model;
 
-pub use model::{Lut, Panel, DEEP, DEVICE, DIM, DIMMED, DITHER_PHASES, NOMINAL, TEMPORAL};
+pub use model::{
+    aligned_levels, duty_16ths, nearest_level, AlignedLevel, Lut, Panel, DEEP, DEVICE, DIM, DIMMED, DITHER_PHASES,
+    NOMINAL, TEMPORAL,
+};
