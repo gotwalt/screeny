@@ -46,6 +46,8 @@ const PARAMS: &[ParamSpec] = &[
     param("birds", "Birds", 30.0, 150.0, 1.0, 55.0),
     param("pace", "Pace", 0.15, 2.0, 0.05, 0.7),
     param("calm", "Calm (wider, slower turns)", 0.0, 1.0, 0.01, 0.90),
+    param("wild", "How often it changes its mind", 0.0, 1.0, 0.01, 0.65),
+    param("lift", "How much of the motion is vertical", 0.0, 1.0, 0.01, 0.50),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("bank", "How far the view leans", 0.0, 1.5, 0.05, 0.8),
     choice("backdrop", "Backdrop", BACKDROPS, 0.0),
@@ -341,6 +343,8 @@ impl Flock {
     fn tuning(ctx: &Ctx) -> Tuning {
         Tuning {
             blobs: (ctx.get("terrain") * sim::BLOBS as f32).round() as usize,
+            wild: ctx.get("wild"),
+            lift: ctx.get("lift"),
             ..Tuning::of(ctx.get("calm"), ctx.get("near"), ctx.get("bank"), ctx.get("beat"))
         }
     }

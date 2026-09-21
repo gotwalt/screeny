@@ -31,6 +31,10 @@ struct Run {
     /// of the limit (1.0 = exactly on it).
     speed_ratio: f32,
     turn_ratio: f32,
+    /// Steepest climb and steepest dive anything flew at, degrees. The climb
+    /// limit is a spring rather than a clamp, so how far past it the flight
+    /// ever gets is a measurement and not an assumption.
+    steepest: f32,
     /// How far the camera sat from the flock's centroid.
     seat: Vec<f32>,
     /// Once a second, for the periodicity question.
@@ -49,6 +53,10 @@ struct Run {
     /// number.
     alt: Vec<f32>,
     climb: Vec<f32>,
+    /// How far off level the view actually points, degrees. The *rate* says
+    /// whether the picture is calm; this says whether the horizon ever moves
+    /// at all, which is what makes a dive read.
+    tilt: Vec<f32>,
     /// Degrees a second the view *pitches* - the elevation of the look
     /// direction, which is the horizon moving up and down the panel. Card 168
     /// never measured it because the view was pinned level.
@@ -57,6 +65,12 @@ struct Run {
     /// away from wherever it was last marked). A regular flight gives a narrow
     /// distribution; the card wants a broad one.
     turns: Vec<f32>,
+    /// How far the furthest bird was from the flock's middle, every two
+    /// seconds, and how many were more than 20 m out. A clumpy flock and a
+    /// flock that is shedding birds look the same in a mean; they do not look
+    /// the same here.
+    furthest: Vec<f32>,
+    lost: Vec<f32>,
 }
 
 fn percentile(v: &[f32], p: f32) -> f32 {
@@ -99,6 +113,7 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         cam_clearance: f32::INFINITY,
         speed_ratio: 1.0,
         turn_ratio: 0.0,
+        steepest: 0.0,
         seat: Vec::new(),
         centroid: Vec::new(),
         course: Vec::new(),
@@ -106,8 +121,11 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         nn: Vec::new(),
         alt: Vec::new(),
         climb: Vec::new(),
+        tilt: Vec::new(),
         pitch: Vec::new(),
         turns: Vec::new(),
+        furthest: Vec::new(),
+        lost: Vec::new(),
     };
     let steps = (seconds / STEP) as usize;
     let mut was: Vec<V3> = sim.birds.iter().map(|b| b.heading()).collect();
@@ -125,12 +143,18 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         for (i, (b, old)) in sim.birds.iter().zip(&was).enumerate() {
             let s = b.speed();
             let (lo, hi) = tune.speed;
-            let (lo, hi) = if i == 0 { (lo * 0.5, hi * 1.3) } else { (lo, hi) };
+            // The camera may push 30% harder to catch up; a bird flies its own
+            // band, `pep` wide of the flock's.
+            let (lo, hi) =
+                if i == 0 { (lo * 0.5, hi * 1.3) } else { (lo * sim::PEP.0, hi * sim::PEP.1) };
             run.speed_ratio = run.speed_ratio.max(s / hi).max(lo / s.max(1e-3));
             let swing = sim::angle_between(*old, b.heading()) / STEP;
             // Camera: altitude slack. Bird: the dodge allowance.
-            let limit = tune.turn * if i == 0 { 2.75 } else { 1.0 + sim::DODGE_TURN * 1.6 };
+            let limit =
+                tune.turn * if i == 0 { sim::CAM_SLACK } else { 1.0 + sim::DODGE_TURN * 1.6 };
             run.turn_ratio = run.turn_ratio.max(swing / limit);
+            let sin_g = (b.vel.y / s.max(1e-3)).clamp(-1.0, 1.0);
+            run.steepest = run.steepest.max(sin_g.asin().abs().to_degrees());
         }
         was = sim.birds.iter().map(|b| b.heading()).collect();
         run.clearance = run.clearance.min(sim.clearance(tune.blobs, false));
@@ -148,6 +172,7 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         run.yaw.push(d_yaw.to_degrees());
         run.roll.push(d_roll.to_degrees());
         run.pitch.push(d_pitch.to_degrees());
+        run.tilt.push(elev(sim.look).to_degrees());
 
         let now = i as f32 * STEP;
         let course = bearing(sim.course);
@@ -194,6 +219,10 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
                     run.nn.push(best);
                 }
             }
+            let out: Vec<f32> = flock.iter().map(|b| b.pos.sub(sim.centre).len()).collect();
+            run.furthest.push(out.iter().copied().fold(0.0, f32::max));
+            let lost = out.iter().filter(|d| **d > 20.0).count() as f32;
+            run.lost.push(lost);
         }
         if i % 60 == 0 {
             let c = sim.centre;
@@ -280,7 +309,8 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
          nearest   min {:.1} m  median {:.1} m   biggest bird median {:.1} LEDs, p95 {:.1}\n  \
          seat      median {:.1} m from the centroid, p95 {:.1} m; flock {:.1} m across\n  \
          view      yaw p95 {:.1} deg/s (max {:.1}), roll p95 {:.2} deg/s (max {:.2})\n  \
-         limits    speed x{:.3}, turn rate x{:.3}, blob clearance {:.1} m (camera {:.1} m)",
+         limits    speed x{:.3}, turn rate x{:.3}, steepest {:.0} deg, \
+         blob clearance {:.1} m (camera {:.1} m)",
         percentile(&run.in_frame.iter().map(|n| *n as f32).collect::<Vec<_>>(), 0.05),
         run.nearest.iter().copied().fold(f32::INFINITY, f32::min),
         percentile(&run.nearest, 0.5),
@@ -295,6 +325,7 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
         percentile(&run.roll, 1.0),
         run.speed_ratio,
         run.turn_ratio,
+        run.steepest,
         run.clearance,
         run.cam_clearance,
     );
@@ -305,14 +336,22 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     let up = run.climb.iter().map(|v| v.abs()).collect::<Vec<_>>();
     eprintln!(
         "  spacing   nearest neighbour mean {nn_mean:.2} m, CV {nn_cv:.2}, \
-         p05 {:.2} m, p95 {:.2} m\n  \
+         p05 {:.2} m, p95 {:.2} m, worst {:.1} m\n  \
+         stragglers furthest bird median {:.1} m, p95 {:.1} m; more than 20 m out: \
+         median {:.0}, worst {:.0}\n  \
          vertical  centroid altitude {:.1} .. {:.1} m (p05 {:.1}, p95 {:.1}), \
          climb rate |v_y| median {:.2}, p95 {:.2}, max {:.2} m/s\n  \
          turns     {} noticeable (20 deg) changes, gap mean {gap_mean:.1} s, CV {gap_cv:.2}, \
          p05 {:.1} s, p95 {:.1} s\n  \
-         view      pitch p95 {:.2} deg/s (max {:.2})",
+         view      pitch p95 {:.2} deg/s (max {:.2}); points {:.1} .. {:.1} deg off level \
+         (p05 {:.1}, p95 {:.1})",
         percentile(&run.nn, 0.05),
         percentile(&run.nn, 0.95),
+        percentile(&run.nn, 1.0),
+        percentile(&run.furthest, 0.5),
+        percentile(&run.furthest, 0.95),
+        percentile(&run.lost, 0.5),
+        percentile(&run.lost, 1.0),
         run.alt.iter().copied().fold(f32::INFINITY, f32::min),
         run.alt.iter().copied().fold(f32::NEG_INFINITY, f32::max),
         percentile(&run.alt, 0.05),
@@ -325,6 +364,10 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
         percentile(&run.turns, 0.95),
         percentile(&run.pitch, 0.95),
         percentile(&run.pitch, 1.0),
+        run.tilt.iter().copied().fold(f32::INFINITY, f32::min),
+        run.tilt.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        percentile(&run.tilt, 0.05),
+        percentile(&run.tilt, 0.95),
     );
 
     // Periodicity: the strongest the flock's motion ever resembles itself
@@ -355,6 +398,40 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     assert!(percentile(&run.yaw, 1.0) <= 26.0, "the view swung at {:.1} deg/s", percentile(&run.yaw, 1.0));
     assert!(percentile(&run.roll, 0.95) <= 6.0, "the view rolls at {:.2} deg/s", percentile(&run.roll, 0.95));
     assert!(worst.0 < 0.6, "the flight repeats itself: r={:.2} at {} s", worst.0, worst.1);
+
+    // Card 177's three, in the same order the owner said them.
+    assert!(
+        nn_cv >= 0.30,
+        "the flock is a lattice again: nearest-neighbour CV {nn_cv:.2} (it was 0.10-0.16 \
+         before card 177, and a live flock is 0.4-0.6)"
+    );
+    assert!(
+        percentile(&run.lost, 0.95) <= 3.0,
+        "the flock is coming apart rather than clumping: {:.0} birds more than 20 m out at p95",
+        percentile(&run.lost, 0.95)
+    );
+    assert!(
+        percentile(&up, 0.95) >= 2.4,
+        "there is not enough vertical motion: the flock's climb rate is only {:.2} m/s at p95 \
+         (it was 2.1-2.3 before card 177)",
+        percentile(&up, 0.95)
+    );
+    assert!(
+        run.steepest <= 70.0,
+        "something went down at {:.0} degrees - the climb spring is being overwhelmed",
+        run.steepest
+    );
+    assert!(
+        percentile(&run.pitch, 0.95) <= 8.0 && percentile(&run.pitch, 1.0) <= 20.0,
+        "the view pitches too fast to watch: p95 {:.1} deg/s, max {:.1}",
+        percentile(&run.pitch, 0.95),
+        percentile(&run.pitch, 1.0)
+    );
+    assert!(
+        gap_cv >= 0.8,
+        "the flock changes its mind on a schedule: the gaps between 20-degree course changes \
+         have a CV of only {gap_cv:.2}"
+    );
 }
 
 // ----------------------------------------------------------------------
