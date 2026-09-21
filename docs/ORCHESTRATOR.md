@@ -208,8 +208,9 @@ OTA upload - the command line already does it), 119, 121, 144, 156, 157, 114, 15
 only other card in `backlog/` is the firmware session's 248. **Workers run on Sonnet
 (`model: sonnet`), three at most, since this day** - this replaces "Opus" and "at most two".
 
-**Done the same afternoon, merged, NOT YET DEPLOYED (waiting for the firmware session to say
-its 248 bench with the owner is over):** **187** (`screeny brightness 3` says "raised to the
+**Done the same afternoon and DEPLOYED (9ec6a2a, with fw 0.9.0 on the panel; on the real panel
+`screeny brightness --addr 192.168.7.221 3` printed the raise sentence and the Studio put 160
+back within 25 s; the deployed status shows `panic.update: confirmed 0.9.0`):** **187** (`screeny brightness 3` says "raised to the
 dimmest level the panel can show"; the Studio's policy follows a raise up and never records
 it as a cap; both brightness controls step through `brightness_stops` from
 `GET /api/v1/bootstrap` - 26 stops, top 250), **199** (`devices[i].panic` in the Studio's
