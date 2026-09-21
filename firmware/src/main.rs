@@ -193,7 +193,14 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// window is handled by the bootloader instead, which turns the trial entry
 /// into `ABORTED` on any reset and boots the other slot. `GET /api/v1/panic`
 /// gains an `update` object saying which of those happened.
-pub const FW_VERSION: &str = "0.7.0";
+/// **0.8.0 is card 230: the button does something.** GPIO15 is an input with
+/// the internal pull-up at last; a press shorter than a second shows the status
+/// screen for ten seconds (as `IDENTIFY`, so a stream underneath keeps being
+/// decoded), a hold past a second puts a countdown on the panel, and five
+/// seconds forgets the WiFi credentials and raises the setup portal. Letting go
+/// during the countdown changes nothing, and the hold is refused - with a
+/// screen that says why - while a firmware update is in flight or on trial.
+pub const FW_VERSION: &str = "0.8.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

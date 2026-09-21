@@ -250,3 +250,76 @@ expire on the simulator's real clock, because a window may be showing them.
   screen on the panel, compared pixel for pixel against
   `screeny_provision::render`; a wipe leaves the portal screen with its QR.
   `cargo test -p screeny-sim`: **all suites green**, 7 new.
+
+### steps 4 and 5: the spec, the design file, the version
+
+- **`docs/design/protocol-v1.md` §8.1**, three sentences, at the end of the
+  portal section because the button is how a person reaches that portal on
+  purpose: the short press is §6.3's `IDENTIFY` for ten seconds, the hold puts
+  a countdown on the panel and wipes at five seconds with a release cancelling,
+  and a wipe leaves `GET_WIFI` reading `DISCONNECTED` (not `FAILED`) while a
+  device MAY refuse the hold during an update if it says so on the panel. That
+  is the **whole** spec change - §8 gained one paragraph and nothing else moved.
+- **`docs/design/device-web.md`**: the owner-facing section "The button on the
+  back", and the build-order row for 230. I deliberately did **not** touch the
+  status line at the top: card 246 is in flight in the same file and both of us
+  editing that one paragraph is a merge conflict for no gain. The orchestrator
+  should rewrite it when both cards land.
+- `FW_VERSION` -> **0.8.0** (card 246 has 0.7.1), with the usual paragraph in
+  `main.rs` saying what changed.
+
+### The bench procedure (for the orchestrator, with the owner at the panel)
+
+**Read this whole section before flashing: after the last step the panel is off
+the LAN until somebody gives it a network again.** Decide first which way it is
+coming back, and tell the owner:
+
+* **from his phone** (card 223's flow, the one this card exists to reach): join
+  the open network `screeny-4a00a4` the panel's QR names, the setup page opens
+  by itself, type the network and the password, wait for "connected, I am at
+  192.168.7.x". This is the path worth proving.
+* **or by cable**: flash a `--features bench-wifi` build with `tools/fw-run.sh`,
+  which seeds the store from `firmware/wifi.env`, then flash the default build
+  back. Use this if the owner does not want to type a password on a phone.
+
+Before anything: release the Studio's lock
+(`POST http://workbench.local:8787/api/v1/player/set {"device":"4a00a4","on":false}`)
+and check `screeny stats` says HOLD or IDLE; turn the Mac's WiFi off if a probe
+suite is going to follow.
+
+1. **Flash** `screeny-fw-0.8.0-default.elf` (in the orchestrator's scratchpad,
+   `card230/`) with `tools/fw-run.sh`, or upload it over the air
+   (`screeny-probe --addr 192.168.7.221 fw-upload <image.bin> --activate`) and
+   let it confirm. The boot line should say
+   `button: gpio15 input, pull-up, active low (30 ms debounce, 1000 ms hold, 5000 ms wipe)`.
+2. **Short press** (owner: press and let go quickly). The panel shows the
+   identify screen - name, address, `fw 0.8.0 <rssi>` - for ten seconds, then
+   goes back. `GET /api/v1/status` during it reads `stream_state: identify`.
+3. **Short press under a live stream.** Start the Studio or any sender, press
+   again: the screen overlays the art and `screeny stats` keeps counting frames
+   underneath (`frames_shown` keeps rising), then the art comes back by itself.
+4. **Hold three seconds and let go.** At one second "wipe wifi" appears with a
+   countdown (4, 3, 2, ...); releasing shows "cancelled" for a second and then
+   the panel goes back to what it was. **Check nothing changed**:
+   `curl -s http://192.168.7.221/api/v1/wifi` still says `connected` with the
+   SSID, and the device is still on the LAN.
+5. *(optional, worth one minute)* **Hold during an OTA trial.** Right after an
+   `fw-upload --activate`, while `fw_state` is `pending_verify`, hold the
+   button: the panel says "wifi reset / not while / updating" and nothing is
+   wiped. `curl -s http://192.168.7.221/api/v1/wifi` still says `connected`.
+6. **Hold five seconds.** The countdown runs out, the panel switches to the
+   portal screen with the QR, and the serial log says
+   `button: held 5 s - forgetting the wifi credentials...`,
+   `store: the wifi credentials were forgotten`,
+   `provision: soft-AP screeny-4a00a4 up on channel N`. The device is now off
+   the LAN: `192.168.7.221` stops answering and `screeny-4a00a4` appears in the
+   phone's WiFi list.
+7. **Re-provision** the way you chose above, and then **reboot once and see it
+   rejoin** (the standing bench rule after anything that touches credentials).
+   `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http` and the
+   64-rule `conformance --slow` should both be unchanged from fw 0.7.0.
+8. Give the Studio its lock back (`{"on":true}`).
+
+If step 6 does nothing at all, the first thing to check is the boot line in
+step 1 (is the task there?) and then whether the owner's press is reaching
+GPIO15 - `firmware/src/bin/gpio_probe.rs` is still the instrument for that.
