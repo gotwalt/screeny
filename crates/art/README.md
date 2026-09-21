@@ -578,7 +578,7 @@ letters without touching a caller.
 
 Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
 3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards
-168, 177, 122 and 123.
+168, 177, 122, 123 and 124.
 
 - **`birds` goes down to 3** (card 122, the owner: "too many birds, too far
   away - the resolution of the screen means that a lot of the detail gets
@@ -703,7 +703,7 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   forward of the hip, leaving a **notch between the back of the wing and the
   tail**: without it the wing, the body and the tail are one mass with no
   waist, and a bird seen from below is a cross. A tapered body and a small
-  **tail fan** that spreads with `glide` and `|roll|` finish
+  **tail fan** that spreads with `glide` and the drawn lean finish
   it. All of it is built in the bird's own frame and projected, so a wing the
   view has turned edge-on thins to nothing and a banking one is at its
   broadest, with no special case for either, and the underside is drawn a
@@ -725,6 +725,30 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   dart. The near end also has the chest as its fattest point, just behind the
   shoulder, with a short neck and a shorter head ahead of it rather than one
   long nose stroke.
+- **The birds lean into their turns, and the lean is a drawing** (card 124; the
+  owner, shown the wings and told the flock barely rolls: "yeah, let's add some
+  roll & lean capabilities"). A bird's `roll` is honest - `atan(lateral / g)` -
+  and at the turn rates cards 168 and 177 tuned that is **seven degrees at its
+  very worst**, which across a sixteen-LED wing is about one LED: invisible. So
+  the bird is *drawn* at `lean`, the same roll told louder: multiplied by six
+  and bent over towards 54 degrees with a tanh, so a gentle turn reads and a
+  hard one (`calm` 0, where the honest roll reaches twenty) arrives at a real
+  bird's limit rather than past it. At the shipped settings the drawn bank runs
+  to **30 degrees at p95 and 37 at its worst** where the honest roll is 5.7 and
+  7.6. It eases **quicker going over than coming back** (0.22 s against 0.45 s,
+  on top of the roll's own 0.35 s low pass), because a bird commits to a turn
+  and levels out of it in its own time; symmetrical it reads as a dial being
+  turned. The inside wing of a turn takes more fold than the outside one - drawn
+  in and swept back - and the tail fans with the lean.
+  `lean` (0-2, default 1) says how far: **0 is the honest roll and nothing
+  else**. It is read only by `Bird::frame`, which is drawing, so the flight
+  cannot move with it - `the_lean_never_touches_the_flight` flies the same seed
+  at 0 and at 2 and gets identical positions, velocities, rolls and wingbeat
+  phases. It is not `bank`, which is how far the *view* leans.
+  A body pitched nose-up out of its own flight path by its airspeed was tried
+  and removed: even at 17 degrees in a climb it moved a pixel, because the
+  camera flies with the flock and a bird seen from behind has no body length on
+  the panel to rotate.
 - **The wing wanted one new primitive**: `Coverage::triangle`, an anti-aliased
   filled triangle whose coverage is the signed distance to its nearest edge, so
   its edges match the strokes' and a degenerate one - a wing edge-on, or one
@@ -737,7 +761,13 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   quantised through its own ordered dither (Bayer 4x4 for the sky, which
   compresses; blue noise for the ink). One consequence worth knowing: **the
   two tonal schemes are the same index image with different colours in front
-  of it**, so they cost the same on the wire.
+  of it**, so they cost the same on the wire. Every picture the patch is
+  actually watched at encodes exactly. The one place it does not is the far
+  corner of both controls - **150 birds at `size` 3**, where the panel is a wall
+  of overlapping wings with no composition left in it - and there a frame in
+  fifty takes the encoder's lossy fallback. At 110 birds that size, or at 150
+  birds at `size` 2, a full minute is exact on every backdrop
+  (`the_far_corner_of_both_controls_still_fits`).
 - **The sky is one ramp, brightest at the horizon**, falling off both upwards
   and downwards with a small step at the horizon itself so it is a line and not
   just the top of a gradient. The sun is the top two entries of that same ramp

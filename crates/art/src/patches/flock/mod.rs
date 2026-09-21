@@ -58,6 +58,7 @@ const PARAMS: &[ParamSpec] = &[
     param("lift", "How much of the motion is vertical", 0.0, 1.0, 0.01, 0.50),
     param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
     param("size", "How big the birds are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.0),
+    param("lean", "How far the birds lean into a turn", 0.0, 2.0, 0.05, 1.0),
     param("bank", "How far the view leans into a turn", 0.0, 1.5, 0.05, 0.8),
     choice("backdrop", "What is behind the birds", BACKDROPS, 0.0),
     choice("scheme", "Light birds or dark silhouettes", SCHEMES, 0.0),
@@ -430,6 +431,7 @@ impl Flock {
             blobs: (ctx.get("terrain") * sim::BLOBS as f32).round() as usize,
             wild: ctx.get("wild"),
             lift: ctx.get("lift"),
+            lean: ctx.get("lean"),
             ..Tuning::of(ctx.get("calm"), ctx.get("near"), ctx.get("bank"), ctx.get("beat"))
         }
     }

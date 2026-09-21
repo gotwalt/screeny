@@ -616,6 +616,94 @@ fn a_distant_bird_has_no_surface_left() {
     );
 }
 
+/// **The birds visibly lean into their turns**, and the lean is a drawing.
+///
+/// Two claims, one flight each, at the settings the owner actually watches
+/// (card 124: six birds, the shipped `calm` and `wild`, seed 7).
+///
+/// 1. At `lean` 1 the drawn bank reaches something the eye can see. The honest
+///    roll tops out around seven degrees here - a little over one LED of
+///    difference across a sixteen-LED wing - and that is the whole reason this
+///    card exists.
+/// 2. At `lean` 0 the drawn bank *is* the honest roll, to within the easing.
+///    That is what the parameter's zero end promises.
+#[test]
+fn birds_lean_into_their_turns() {
+    let over = |lean: f32| {
+        let mut sim = Sim::new(7);
+        sim.resize(6);
+        let tune = Tuning { lean, ..Tuning::default() };
+        let (mut roll, mut drawn, mut wrong) = (0.0_f32, 0.0_f32, 0.0_f32);
+        for i in 0..(100.0 / STEP) as usize {
+            sim.step(&tune, STEP);
+            // `Sim::new` settles the flock on the default tuning, so the first
+            // moment of a run still carries the lean that warm-up left behind.
+            // Two seconds is several time constants of it.
+            if i < (2.0 / STEP) as usize {
+                continue;
+            }
+            for b in sim.flock() {
+                roll = roll.max(b.roll.abs());
+                drawn = drawn.max(b.lean.abs());
+                // A bird that leans the *other* way out of a turn is a bird
+                // falling over, so the two never disagree about the direction.
+                if b.roll * b.lean < 0.0 {
+                    wrong = wrong.max(b.lean.abs().min(b.roll.abs()));
+                }
+            }
+        }
+        eprintln!(
+            "lean {lean}: honest roll up to {:.1} deg, drawn {:.1} deg, \
+             worst disagreement {:.2} deg",
+            roll.to_degrees(),
+            drawn.to_degrees(),
+            wrong.to_degrees()
+        );
+        (roll.to_degrees(), drawn.to_degrees(), wrong.to_degrees())
+    };
+
+    let (roll, drawn, wrong) = over(1.0);
+    assert!(roll < 12.0, "the flight itself has got wilder: {roll:.1} deg of honest roll");
+    assert!(drawn > 25.0, "the birds only lean {drawn:.1} deg, which is not something you see");
+    // The ease lags the roll, so the two cross zero a little apart; a couple of
+    // degrees of that is the lag and not a bird leaning out of its own turn.
+    assert!(wrong < 3.0, "a bird leaned {wrong:.1} deg the wrong way out of a turn");
+
+    let (roll, drawn, _) = over(0.0);
+    assert!(
+        (drawn - roll).abs() < 1.0,
+        "`lean` 0 is meant to be the honest roll: {drawn:.1} deg drawn against {roll:.1}"
+    );
+}
+
+/// ...and it is a **drawing** quantity: nothing about where a bird goes can
+/// depend on it.
+///
+/// The same seed flown twice, once with the lean off and once at twice what
+/// anyone can ask for, is the same flight to the last bit - which is what makes
+/// the exaggeration safe to have at all, and why `ten_minutes_of_flight` and
+/// the view's promises cannot be moved by this control.
+#[test]
+fn the_lean_never_touches_the_flight() {
+    let fly = |lean: f32| {
+        let mut sim = Sim::new(7);
+        sim.resize(24);
+        let tune = Tuning { lean, ..Tuning::default() };
+        for _ in 0..(60.0 / STEP) as usize {
+            sim.step(&tune, STEP);
+        }
+        sim.flock().iter().map(|b| (b.pos, b.vel, b.roll, b.phase)).collect::<Vec<_>>()
+    };
+    let (off, on) = (fly(0.0), fly(2.0));
+    for (i, (a, b)) in off.iter().zip(&on).enumerate() {
+        assert_eq!(
+            (a.0.x, a.0.y, a.0.z, a.1.x, a.1.y, a.1.z, a.2, a.3),
+            (b.0.x, b.0.y, b.0.z, b.1.x, b.1.y, b.1.z, b.2, b.3),
+            "bird {i} flew somewhere else with the lean turned up"
+        );
+    }
+}
+
 /// The same seed at the same moment is the same PNG. Everything else here
 /// leans on this.
 #[test]
@@ -625,6 +713,76 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
     let a = snapshot::take(&DEF, &params, &shot);
     let b = snapshot::take(&DEF, &params, &shot);
     assert_eq!(a.wire.rgb, b.wire.rgb);
+}
+
+/// **The far corner of both controls**, which is not a picture but is a place
+/// the sliders go: 150 birds each drawn three times life size (card 124).
+///
+/// Card 123 left this corner two bytes inside the budget and nothing testing
+/// it. Flown properly - four backdrops, three seeds, a minute each - it is
+/// *over*: a few frames in a hundred cannot be encoded exactly and take the
+/// encoder's lossy fallback, and this card's banked wings, which show more area
+/// than an edge-on one, made that a little commoner (seed 11, dusk, 1800
+/// frames: 10 lossy before, 94 after). It is deliberately **not** in
+/// [`every_frame_goes_out_exactly`], because the honest answer is not "this is
+/// exact" - it is "at 150 birds at size 3 the panel is a wall of overlapping
+/// wings with no composition left in it at all (see the card's
+/// `corner-150-3.png`), the picture is already noise, and a frame in fifty
+/// being approximated there is the fallback doing its job".
+///
+/// What must still hold, and is what this checks: every frame **fits the
+/// datagram**, the limiter never has to pull the picture down, and the
+/// approximation stays rare rather than becoming the normal case. The corner
+/// starts at 150 birds: at 110 birds drawn the same size, and at 150 birds at
+/// `size` 2, every frame of the same runs was exact.
+#[test]
+fn the_far_corner_of_both_controls_still_fits() {
+    for (backdrop, scheme, name) in [
+        (0.0, 0.0, "sky, light on dark"),
+        (0.0, 1.0, "sky, dusk silhouettes"),
+        (1.0, 0.0, "horizon line"),
+        (2.0, 0.0, "black, a wall of big white birds"),
+    ] {
+        let mut params = Params::defaults(PARAMS);
+        params.set(PARAMS, "backdrop", backdrop);
+        params.set(PARAMS, "scheme", scheme);
+        params.set(PARAMS, "birds", param_spec("birds").max);
+        params.set(PARAMS, "size", param_spec("size").max);
+        if scheme > 0.5 {
+            params.set(PARAMS, "hue", 35.0);
+            params.set(PARAMS, "spread", 95.0);
+        }
+        let mut patch = (DEF.make)(11);
+        let mut pipeline = crate::Pipeline::new(crate::pipeline::Output::default());
+        let dt = 1.0 / 30.0;
+        let frames = 1800;
+        let (mut worst, mut lossy, mut apl, mut gain) = (0, 0, 0.0_f32, 1.0_f32);
+        for i in 0..frames {
+            let out = pipeline.process(
+                patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
+                dt,
+            );
+            worst = worst.max(out.stats.encoded_bytes);
+            apl = apl.max(out.stats.apl);
+            if i > 30 {
+                gain = gain.min(out.stats.limiter_gain);
+            }
+            lossy += u32::from(!out.stats.exact);
+        }
+        eprintln!(
+            "{name} at both extremes: {frames} frames, worst {worst} of {} bytes, \
+             peak APL {:.0}%, limiter down to x{gain:.2}, {lossy} approximated",
+            crate::meter::PAYLOAD_BYTES,
+            apl * 100.0,
+        );
+        assert!(worst <= crate::meter::PAYLOAD_BYTES, "{name}: {worst} bytes is over the datagram");
+        assert!(gain > 0.95, "{name}: the limiter had to pull the picture down to x{gain:.2}");
+        assert!(
+            lossy * 10 < frames,
+            "{name}: {lossy} of {frames} frames approximated - the fallback has become the \
+             normal case, which is a different question from this corner being tight"
+        );
+    }
 }
 
 /// A minute of each picture the patch can draw, straight through the real
@@ -729,4 +887,5 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
     // patterns: the same steps happen, so the same picture comes out.
     assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }
+
 
