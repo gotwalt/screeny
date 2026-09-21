@@ -4,8 +4,8 @@ title: Firmware - a steadier dark end: sub-level bit planes from a narrower outp
 type: build
 hardware: yes (the orchestrator flashes or OTAs; the owner judges by eye; no camera)
 depends: []
-owner:
-branch:
+owner: opus worker (firmware session, 2026-09-21)
+branch: card/248-a-steadier-dark-end
 ---
 
 ## Goal
