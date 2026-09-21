@@ -439,3 +439,13 @@ nothing of this card between them.
 in 0.75 s.** Both results are reported; nothing was changed to make it pass.
 
 The card was moved to `review/` in the last commit on the branch.
+
+### Orchestrator, after the merge (2026-09-20)
+
+Looked at `177-dive-black.png` and `177-centroid-path-old-vs-new.png` before merging: on
+true black the flock is knots, streamers and empty air where it was an even scatter, and
+it slides down the frame through a dive; the path plot is the argument in one picture - a
+minute of the old flight is a closed loop about one height, a minute of the new one is an
+open S over a wandering altitude. Merged `--no-ff`; `cargo test -p screeny-art`: 99 + 4 +
+2 + 3 pass; clippy silent. The worktree of this card's worker is kept for the owner's
+likely notes on `wild`/`lift`. Deploy held: the firmware session is mid-bench.

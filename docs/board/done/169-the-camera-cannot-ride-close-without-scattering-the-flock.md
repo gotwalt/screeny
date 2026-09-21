@@ -59,3 +59,11 @@ the bounds `ten_minutes_of_flight` already asserts. Plus a strip showing the 8-1
 foreground birds that motivated it.
 
 ## Log
+
+### Closed on card 177's evidence (orchestrator, 2026-09-20)
+
+Card 177 did not aim at this and fixed it: the flock now holds together for reasons that
+do not need stiff separation. At `near 3.0`, three seeds x ten minutes: spread 4.8-6.0 m
+(asked < 7), seat p95 12.4-13.4 m (asked < 22), 28-36 birds in frame at worst (asked >=
+15), foreground birds 8-10 LEDs. The default `near` stays 6.0; which picture he wants is
+the owner's.
