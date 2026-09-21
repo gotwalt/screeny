@@ -972,6 +972,56 @@ fn firmware_failed(written: u32, e: FirmwareError) -> Reply {
     Reply::ok(ApiBody::Firmware(FirmwareReply::failed(written, e)))
 }
 
+/// Answer a refusal **now**, instead of after five seconds of body.
+///
+/// **Card 246, item 1, second half.** A refusal this route can decide from its
+/// own state - `busy`, `too_large`, `unavailable` - is decided before a byte
+/// of the body is read, and always was. What the bench measured was the
+/// *reply* arriving 750 KB late, and that happens one layer up:
+/// [`Dispatch::call`] must call `RequestBodyConnection::finalize` before it can
+/// write anything, and `finalize`, faced with a body the handler did not read,
+/// **drains it** until picoserve's `read_request` timeout - 5 s here, which on
+/// this radio is about 750 KB - and only then hands the connection over.
+///
+/// Its other path is the one this function takes: when the handler has read
+/// *past the end of picoserve's own request buffer*, `finalize` knows the body
+/// is being abandoned and skips the drain entirely
+/// (`picoserve-0.20.0/src/request.rs`, `finalize`, case 1 versus case 2). One
+/// byte more than the buffer already holds is enough, so a refused upload
+/// reads at most [`HTTP_BUF`] + 64 bytes - a millisecond of socket, never the
+/// image - and the caller has its `{"ok":false,...}` while it is still
+/// writing. The connection is closed after the response either way
+/// (`close_connection_after_response`), so the bytes still in flight are
+/// discarded by the close and never parsed as a second request.
+///
+/// A client that sent nothing after its headers cannot make this wait longer
+/// than the drain would have: the reads are the request's own, and its 5 s
+/// `read_request` signal ends them.
+async fn refuse_at_once<R: picoserve::io::Read>(
+    body: &mut RequestBodyConnection<'_, R>,
+    reply: Reply,
+) -> Reply {
+    use embedded_io_async::Read as _;
+    let request_body = body.body();
+    // picoserve's buffer, from picoserve, rather than [`HTTP_BUF`] repeated
+    // here: the number that matters is how much of *this* body is already in
+    // it, and that is at most the buffer's length.
+    let want = request_body.buffer_length().saturating_add(1);
+    let mut reader = request_body.reader();
+    // 64 bytes, and they are 64 bytes of every HTTP worker's future for the
+    // sake of one refusal - which is the cheapest honest thing this could hold
+    // (card 227: nothing large across an `await`).
+    let mut scratch = [0u8; 64];
+    let mut got = 0usize;
+    while got < want {
+        match reader.read(&mut scratch).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => got += n,
+        }
+    }
+    reply
+}
+
 /// `POST /api/v1/firmware`: stream the body into the inactive slot.
 ///
 /// The bytes go socket -> [`crate::ota::Upload`]'s heap buffer -> flash, one
@@ -1015,30 +1065,38 @@ async fn post_firmware<R: picoserve::io::Read>(
     body: &mut RequestBodyConnection<'_, R>,
 ) -> Reply {
     let declared = u32::try_from(body.content_length()).ok();
-    // Decided once at boot, against the MMU (`store::read_partitions`). No
-    // slot means no safe place to write, and the honest answer to that is
-    // `unavailable` - the route exists and this device cannot serve it.
-    let Some(slot) = store::inactive_slot().await else {
-        return Reply::detail(
+    // **Everything that can be refused from state alone is refused here**, in
+    // one place, before the reader exists: no claim is taken, no sector is
+    // erased and no byte of the image is read for any of them (card 246, item
+    // 1). One `refuse_at_once` for the three of them and not three, because
+    // this function is inlined into the frame every request on this device
+    // pays for and each copy of that loop is 300 bytes of it.
+    let start = match store::inactive_slot().await {
+        // Decided once at boot, against the MMU (`store::read_partitions`).
+        // No slot means no safe place to write, and the honest answer to that
+        // is `unavailable` - the route exists and this device cannot serve it.
+        None => Err(Reply::detail(
             ErrorCode::Unavailable,
             "this device has no inactive app slot",
-        );
-    };
-    // Card 241. Refused **before** the megabyte rather than after it: a device
-    // whose `otadata` could not be read can still stage an image perfectly
-    // well and can never select it, so promising to activate one and then
-    // spending twenty-five seconds discovering otherwise is the wrong way
-    // round. Staging (`?activate=0`) is still offered, because it still works.
-    if activate && !crate::ota::can_activate() {
-        return Reply::detail(
+        )),
+        // Card 241. Refused **before** the megabyte rather than after it: a
+        // device whose `otadata` could not be read can still stage an image
+        // perfectly well and can never select it, so promising to activate one
+        // and then spending twenty-five seconds discovering otherwise is the
+        // wrong way round. Staging (`?activate=0`) is still offered, because
+        // it still works.
+        Some(_) if activate && !crate::ota::can_activate() => Err(Reply::detail(
             ErrorCode::Unavailable,
             "this device cannot select a boot slot",
-        );
-    }
-    let mut up = match crate::ota::Upload::start(slot, declared).await {
+        )),
+        // `too_large` from the `Content-Length`, `busy` from two atomics.
+        Some(slot) => crate::ota::Upload::start(slot, declared)
+            .await
+            .map_err(|e| firmware_failed(0, e)),
+    };
+    let mut up = match start {
         Ok(u) => u,
-        // No claim was taken and no sector was erased for any of these.
-        Err(e) => return firmware_failed(0, e),
+        Err(reply) => return refuse_at_once(body, reply).await,
     };
 
     let mut reader = body

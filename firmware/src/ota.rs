@@ -449,7 +449,14 @@ impl Upload {
         // unproven image and nowhere to go (research 006 section 6,
         // mitigation 3). The same goes for the window between an accepted
         // upload and the reset that boots it: the slot is spoken for.
-        if boot_class().on_trial() || activating() {
+        //
+        // **Card 246, item 1: and confirmation lifts it.** `boot_class()` is
+        // read once at boot and never revised, so on 0.7.0 `on_trial()` was
+        // still true minutes after `ota: CONFIRMED` and every later upload was
+        // answered `busy` until the device was rebooted. The rule the
+        // predicate spells out is the honest one: the slot is spoken for while
+        // a trial is *undecided*.
+        if slot_is_spoken_for() {
             return Err(FirmwareError::Busy);
         }
 
@@ -843,6 +850,23 @@ pub fn boot_class() -> Boot {
         BOOT_REVERTED_REJECTED => Boot::Reverted(RevertReason::Rejected),
         _ => Boot::Unknown,
     }
+}
+
+/// Is the inactive slot spoken for right now, so that an upload must be
+/// refused `busy`?
+///
+/// The three facts, read from atomics and nothing else, handed to
+/// [`screeny_otastate::slot_is_spoken_for`], which is where the rule lives and
+/// where a host test holds it to account (card 246, item 1). **It reads no
+/// flash and takes no lock**, which is what lets `POST /api/v1/firmware`
+/// answer from it before the first byte of the body.
+#[must_use]
+pub fn slot_is_spoken_for() -> bool {
+    screeny_otastate::slot_is_spoken_for(
+        boot_class(),
+        CONFIRMED.load(Ordering::Relaxed),
+        activating(),
+    )
 }
 
 /// Can this device activate a staged image at all?

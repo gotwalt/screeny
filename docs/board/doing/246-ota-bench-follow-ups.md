@@ -71,3 +71,53 @@ Never write a real SSID or password (dummies `Example-Wifi1` / `password9`). Lea
 (`device-api`, `sim`, `probe`).
 
 ## Log
+
+### Item 1 - why a confirmed device answered `busy` for ever (2026-09-21)
+
+**Root cause, one line: the boot classification is read once and never revised,
+and the refusal asked it and nothing else.**
+
+`Upload::start` (fw 0.7.0, `firmware/src/ota.rs`) refused with
+`FirmwareError::Busy` when `boot_class().on_trial() || activating()`.
+`boot_class()` reads the `BOOT` atomic, which `note_boot` sets **once**, in the
+boot path, from `classify(booted, selected, state)`. A trial boot sets
+`BOOT_TRIAL` and nothing ever changes it again: `confirm()` sets `CONFIRMED`,
+calls `set_fw_state(FwState::Valid)` and logs `ota: CONFIRMED at 60 s`, and
+leaves `BOOT` exactly where it was. So `on_trial()` stayed true for the whole
+life of that boot and every later upload was refused - which is what the bench
+saw, and why `screeny reboot --yes` cleared it (the next boot classifies
+`Valid` -> `Settled`).
+
+The fix keeps the safety rule and lifts it at the right moment. The rule now
+lives in `crates/otastate` as a pure function with its own tests:
+
+```rust
+pub fn slot_is_spoken_for(boot: Boot, confirmed: bool, activating: bool) -> bool {
+    activating || (boot.on_trial() && !confirmed)
+}
+```
+
+The inactive slot is the escape hatch of an *undecided* trial; a confirmed
+image is not rolling back anywhere, so the slot is free. `ota::slot_is_spoken_for()`
+feeds it the three atomics (no flash, no lock), and `Upload::start` asks that.
+`update_record()` is untouched, so `/api/v1/panic` still reports
+`outcome: confirmed` after a confirm - which is what the probe's wait (item 2)
+watches for.
+
+**The second half - "answered before reading the body".** The handler already
+decided `busy` and `too_large` before it read a byte; the delay was one layer
+up. `Dispatch::call` must call `RequestBodyConnection::finalize()` before it
+can write a reply, and picoserve's `finalize`, faced with a body the handler
+did not read, **drains it** until the `read_request` timeout - 5 s here, which
+on this radio is the ~750 KB the bench saw, and only then writes the refusal.
+Its other path (`request.rs`, `finalize`, case 1) skips the drain entirely when
+the handler has read *past the end of picoserve's request buffer*. So
+`refuse_at_once()` reads `buffer_length() + 1` bytes - at most `HTTP_BUF`
+(1,536) + 64, a millisecond of socket, never the image - and the refusal goes
+out while the caller is still writing. The connection closes after the response
+(`close_connection_after_response`), so the bytes still in flight are discarded
+by the close, exactly as they were before. All three state-only refusals
+(`unavailable` x2, `too_large`, `busy`) now go through one call site, because
+this function is inlined into the frame every request pays for.
+
+`FW_VERSION` -> `0.7.1`. `cargo test -p screeny-otastate`: 23 passed, 0 failed.

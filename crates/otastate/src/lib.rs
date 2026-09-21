@@ -171,6 +171,27 @@ impl Boot {
     }
 }
 
+/// Is the **inactive** slot spoken for, so that a new upload must be refused?
+///
+/// Card 246, item 1. The inactive slot is the escape hatch of an image that is
+/// still on trial - it holds the known-good image the bootloader would roll
+/// back to - so staging over it while the trial is undecided would leave a
+/// device with one unproven image and nowhere to go (research 006 section 6,
+/// mitigation 3). The same goes for the window between an accepted upload and
+/// the reset that boots it: the slot is already spoken for.
+///
+/// **What the bench found is the third argument.** Firmware 0.7.0 asked only
+/// `boot.on_trial()`, which stays true for the whole life of the boot - the
+/// classification is read once from `otadata` and never revised - so once an
+/// image had confirmed itself the refusal was still there, and every upload
+/// answered `busy` until somebody rebooted the device. **Confirmation is what
+/// lifts it**: a confirmed image is no longer rolling anywhere back, and the
+/// other slot is free.
+#[must_use]
+pub fn slot_is_spoken_for(boot: Boot, confirmed: bool, activating: bool) -> bool {
+    activating || (boot.on_trial() && !confirmed)
+}
+
 /// Decide what kind of boot this is.
 ///
 /// `booted` is the MMU's answer (`PartitionTable::booted_partition`), `selected`
@@ -292,6 +313,45 @@ mod tests {
             assert_eq!(classify(FwSlot::Ota0, FwSlot::Unknown, state), Boot::Unknown);
         }
         assert!(!Boot::Unknown.on_trial());
+    }
+
+    // --- the inactive slot (card 246, item 1) -----------------------------
+
+    #[test]
+    fn a_trial_holds_the_inactive_slot_and_confirming_lets_it_go() {
+        // The whole of card 246's first bug, as three lines. Firmware 0.7.0
+        // had only the first of them and stayed there until a reboot.
+        assert!(slot_is_spoken_for(Boot::Trial, false, false), "on trial");
+        assert!(
+            !slot_is_spoken_for(Boot::Trial, true, false),
+            "confirmed: the rollback image is not needed any more"
+        );
+        assert!(
+            slot_is_spoken_for(Boot::Settled, false, true),
+            "an accepted upload is on its way to being booted"
+        );
+    }
+
+    #[test]
+    fn an_activation_interrupted_between_its_two_writes_also_holds_the_slot() {
+        assert!(slot_is_spoken_for(Boot::Unproven, false, false));
+        assert!(!slot_is_spoken_for(Boot::Unproven, true, false));
+    }
+
+    #[test]
+    fn an_ordinary_boot_never_refuses_an_upload() {
+        for boot in [
+            Boot::Settled,
+            Boot::Reverted(RevertReason::Deadline),
+            Boot::Reverted(RevertReason::Aborted),
+            Boot::Reverted(RevertReason::Rejected),
+            Boot::Unknown,
+        ] {
+            assert!(
+                !slot_is_spoken_for(boot, false, false),
+                "{boot:?} has nothing on trial"
+            );
+        }
     }
 
     // --- decide -----------------------------------------------------------

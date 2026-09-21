@@ -190,7 +190,15 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// window is handled by the bootloader instead, which turns the trial entry
 /// into `ABORTED` on any reset and boots the other slot. `GET /api/v1/panic`
 /// gains an `update` object saying which of those happened.
-pub const FW_VERSION: &str = "0.7.0";
+/// **0.7.1 is card 246, the two firmware halves of what the OTA bench found**:
+/// a confirmed image no longer answers every later upload `busy` (the refusal
+/// protects the rollback image of a trial, and confirmation is what lets it
+/// go), a refusal the route can decide from its own state is answered while
+/// the caller is still sending rather than after five seconds of drained body,
+/// and `fw_state` describes the **running** slot - after a rollback it reads
+/// `valid` for the image that is running, not `invalid` for the one that was
+/// rejected, which `GET /api/v1/panic`'s `update` already describes in words.
+pub const FW_VERSION: &str = "0.7.1";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
