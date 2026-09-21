@@ -94,3 +94,39 @@ Not new scope - a constraint on how deliverables 1-2 are built, so future firmwa
 The worktree this card started in was at commit 127c829 (card 178, several commits before
 the board was pruned to just 188/187/199). Re-branched from `main` at 6bdcc1c per the
 coordinator's instruction; `card/188-held-dark-shades` now starts there.
+
+### 2026-09-21 - deliverable 1: the aligned-code table in `crates/panel`
+
+Added to `crates/panel/src/model.rs`, beside the existing `DEVICE`/`DITHER_PHASES`
+constants and their firmware-fixture test:
+
+- `duty_16ths(v: u8) -> u32` - an sRGB8 code's duty in sixteenths of a level, recovered
+  from `DEVICE.emit1(v) * DEVICE.max()` rather than typed in from the brief or the
+  firmware. New test `duty_16ths_is_the_firmwares_srgb_to_q` checks it against the
+  `FIRMWARE_SRGB_TO_Q` fixture **to the integer**, not `DEVICE.emit1`'s 1e-6: an aligned
+  code is chosen by comparing duties directly, and a float wobble at a boundary would
+  pick the wrong one.
+- `nearest_level(duty_16ths) -> (level, signed offset)` - any duty's nearest whole level
+  and how far off it is, round-half-up (matches the firmware's own `SRGB_TO_Q` rounding).
+- `AlignedLevel { level, code, offset_16ths }` and `aligned_levels(max_level) -> Vec<_>` -
+  the lowest sRGB8 code that *reaches* each level (`duty(code) >= level * DITHER_PHASES`,
+  the brief's "lowest code that lands on"), and how far past the level it actually sits.
+  Reverse-engineered the exact rule from the brief's own 17-value list: it is **not**
+  "nearest by rounding" (that would put sRGB 21, duty 8, at level 1 - it is not, per the
+  existing `dark_srgb_is_no_longer_off`/`BitPlanes` tests) - it is "smallest code whose
+  duty has reached or passed the level's floor". Checked every one of the 17 listed
+  values (0, 34, 50, ... 138) by hand against `FIRMWARE_SRGB_TO_Q` before writing the
+  function, including the worst case (level 13, sRGB 126, 2/16 short) - the new test
+  `aligned_levels_match_the_brief` pins all 17.
+- `nearest_level_agrees_with_the_aligned_table`: every aligned code's own nearest level is
+  the level it was chosen for (never the one below) - the two functions can't disagree
+  about an aligned code.
+
+No literal `16` in any of it - `DITHER_PHASES` throughout - per the firmware session's
+shaping note above.
+
+`cargo test -p screeny-panel --release`: 17/17 green (was 15). `cargo clippy -p
+screeny-panel --all-targets`: silent.
+
+Deliverable 1 is `screeny_panel::{duty_16ths, nearest_level, AlignedLevel,
+aligned_levels}`, re-exported from the crate root.
