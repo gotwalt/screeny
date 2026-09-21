@@ -86,3 +86,27 @@ bank. What he is asking for, in order:
   `mod.rs` (body proportions, the wing root). Own `sim.rs` and the roll/lean quantities and
   how they reach `Bird::frame`; if wing-pose changes are needed in `bird.rs`, keep them to
   the pose inputs (angles), not the proportions, and expect to rebase onto round two.
+
+### 2026-09-21 - claimed, and what today's roll measures
+
+Branch `card/124-flock-roll-and-lean`, cut from `d654629`. Read `CLAUDE.md`,
+`docs/README.md`, this card, card 123 (its Log, the scouting test and the
+turntable), cards 168, 177 and 122, then `crates/art/src/patches/flock/` in full.
+
+Rebuilt card 123's scouting test as throwaway `#[ignore]`d scaffolding (never
+committed; it lives in the scratchpad and is spliced into `tests.rs` for a run and
+taken straight back out). It flies the real patch's `Tuning` at seed 7 and prints,
+per sample, the biggest in-frame bird's span, roll, glide and presentation.
+
+**Before, at the shipped settings** (`birds` 6, `size` 2.5, `calm` 0.90, `wild`
+0.65, 100 s of flight, every bird that is on the panel): roll p50 **0.9 deg**, p95
+**5.7**, max **7.6**. For birds drawn 6 LEDs or wider: p50 0.9, p95 5.6, max 7.6.
+Exactly what the card says - and in the before pictures (`before/turn-a.png` from
+t = 139.6, a sustained left turn with the near bird 16-18 LEDs across, and
+`before/turn-b.png` from t = 26.3, a gliding right turn) the birds are level. There
+is no turn in them at all: the two nearest birds are flat gull shapes that translate
+across the panel.
+
+The scout also prints *presentation* - how much of the wing plane the camera can
+see. Through those two turns it is 0.0-0.5 and usually under 0.2: nearly edge-on,
+which is why the underside flash card 123 drew never fires.

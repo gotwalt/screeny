@@ -70,6 +70,15 @@ const GLIDE_INNER: f32 = 0.24;
 const GLIDE_HAND: f32 = -0.30;
 const GLIDE_FOLD: f32 = 0.34;
 
+/// How much further the **inside** wing of a turn is folded, and the lean at
+/// which it is all the way there (radians). A banking bird draws its lower
+/// wing in - it has less of a turn to fly round and the shorter wing is moving
+/// slower through the air - and at this size that asymmetry is worth as much
+/// as the lean itself: it is what stops a banked bird reading as a bird drawn
+/// wonky (card 124).
+const TUCK: f32 = 0.30;
+const TUCK_AT: f32 = 0.50;
+
 /// One wing, as the drawing needs it.
 pub(crate) struct Wing {
     /// The leading edge: shoulder, wrist, tip.
@@ -134,15 +143,21 @@ pub(crate) fn pose(b: Bird, span: f32, area: f32) -> Pose {
     let Beat { inner, hand, fold } = beat(b);
 
     // The tail fans in a glide and through a hard turn, and is folded shut the
-    // rest of the time. Both of those the bird already carries; neither needs
-    // anything new in `sim`.
-    let spread = b.glide.max((b.roll.abs() / 0.45).min(1.0));
+    // rest of the time. Measured against the **drawn** lean rather than the
+    // honest roll: the tail is part of the same picture as the bank, and a
+    // bird that is visibly leaning with a shut tail looks like it is falling
+    // over rather than turning.
+    let spread = b.glide.max((b.lean.abs() / 0.55).min(1.0));
     let fan = span * (0.090 + 0.060 * spread) * area;
     let tail_tip = along(TAIL_TIP);
 
     let half = 0.5 * span;
     let wing = |sgn: f32| {
         let side = right.scale(sgn);
+        // The inside wing of the turn - the low one - carries more fold than
+        // the outside one, which stays reached out. Positive `lean` puts the
+        // right wing up, so the left wing is the inside one there.
+        let fold = (fold + TUCK * (-sgn * b.lean / TUCK_AT).clamp(0.0, 1.0)).min(1.0);
         let shoulder =
             b.pos.add(fwd.scale(SHOULDER_FWD * span)).add(side.scale(SHOULDER_OUT * span));
         // Out along the span at each segment's own dihedral.

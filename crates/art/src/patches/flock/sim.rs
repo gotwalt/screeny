@@ -135,6 +135,41 @@ const PITCH_SPRING: f32 = 110.0;
 /// second squared per unit of sine. A dive is faster; a climb is slower.
 const TRADE: f32 = 2.6;
 
+/// **The drawn lean** (card 124), which is a picture and not a flight.
+///
+/// `roll` is honest: `atan(lateral / G)`, which at the turn rates cards 168 and
+/// 177 tuned comes out at six or seven degrees at its very worst. That is what
+/// a real bird at that turn radius does, and at sixteen LEDs across it is about
+/// one LED of difference in the wing's projection - invisible. The owner asked
+/// for birds that visibly lean into their turns, so [`Bird::lean`] is the roll
+/// the bird is *drawn* at: the honest one, multiplied up and then bent over
+/// towards a ceiling, so a gentle turn reads and a hard one does not become a
+/// barrel roll.
+///
+/// `LEAN_GAIN` is the multiplier at `lean` 1; `LEAN_MAX` is the ceiling the
+/// tanh approaches, radians (54 degrees, which is a real bird's hard turn).
+/// Nothing in the flight reads either of them.
+const LEAN_GAIN: f32 = 6.0;
+const LEAN_MAX: f32 = 0.95;
+/// How long the drawn lean takes to follow the honest roll, going over and
+/// coming back, seconds. A bird **commits** to a turn and levels out lazily,
+/// so the two are not the same number; and easing it at all is what keeps a
+/// six-fold gain from turning the roll's own small movements into a flicker.
+const LEAN_IN: f32 = 0.22;
+const LEAN_OUT: f32 = 0.45;
+
+/// How far nose-up a bird is drawn at the bottom of its speed band, radians.
+///
+/// The heading is the velocity, so a bird drawn on its heading alone is always
+/// pointing exactly where it is going - which no flying thing does. A slow one
+/// is hanging on its wings with its nose up; a fast one has it down. Speed
+/// already carries the climb (a bird pays for height in speed, [`TRADE`]), so
+/// this one number gives a climbing bird its nose-up attitude and a diving one
+/// its nose along the dive, without asking the flight for anything.
+const AOA: f32 = 0.26;
+/// How long that attitude takes to follow the airspeed, seconds.
+const AOA_TAU: f32 = 0.60;
+
 /// How many drifting blobs the world is laid out with. They are all built
 /// from the seed and the `terrain` parameter says how many of them are real
 /// this frame, so turning it up and down does not re-roll the world.
@@ -325,6 +360,10 @@ pub struct Tuning {
     pub near: f32,
     /// How much of a real bird's bank angle the view is allowed to take.
     pub bank: f32,
+    /// 0..2: how far the birds are *drawn* leaning into a turn. 0 is the
+    /// honest roll and nothing else; 1 is [`LEAN_GAIN`]. It is read by the
+    /// drawing alone - see [`Bird::lean`] - so it never changes the flight.
+    pub lean: f32,
     /// Wingbeats a second at cruise.
     pub beat: f32,
     /// 0..1: how often and how hard the flight changes its mind. It sets the
@@ -375,6 +414,7 @@ impl Tuning {
             turn: 1.10 - 0.95 * calm,
             near,
             bank,
+            lean: 1.0,
             beat,
             wild: 0.45,
             lift: 0.50,
@@ -391,7 +431,19 @@ pub struct Bird {
     pub pos: V3,
     pub vel: V3,
     /// Roll, radians. Positive rolls the right wing up.
+    ///
+    /// The honest one - `atan(lateral / G)` - and the flight's own: the view
+    /// leans on it through `bank`. What the bird is *drawn* at is `lean`.
     pub roll: f32,
+    /// The roll the bird is **drawn** at, radians: `roll` exaggerated towards
+    /// [`LEAN_MAX`] and eased (card 124). A drawing quantity only - no force,
+    /// no limit and nothing the tests measure about the flight reads it, so
+    /// turning `lean` up and down cannot change where a single bird goes.
+    pub lean: f32,
+    /// How far nose-up of its own flight path the bird is drawn, radians: the
+    /// angle of attack it is carrying, out of its airspeed. A drawing quantity
+    /// too, for the same reason.
+    pub pitch: f32,
     /// Wingbeat phase, radians.
     pub phase: f32,
     /// 0 beating, 1 gliding. Low-passed, so it eases in and out.
@@ -420,6 +472,8 @@ impl Bird {
             pos,
             vel,
             roll: 0.0,
+            lean: 0.0,
+            pitch: 0.0,
             phase: rng.range(0.0, TAU),
             glide: 0.0,
             trim: rng.range(0.86, 1.16),
@@ -443,13 +497,21 @@ impl Bird {
         self.vel.unit_or(v3(0.0, 0.0, 1.0))
     }
 
-    /// Right, up, forward for this bird, with its roll applied. Drawing a bird
-    /// and pointing a camera want exactly the same three vectors.
+    /// Right, up, forward for this bird **as it is drawn**: its heading, held
+    /// `pitch` nose-up out of it, and rolled by `lean`.
+    ///
+    /// The two drawing quantities enter here and nowhere else, which is what
+    /// makes them safe: this is read by the pose and by nothing that flies.
     pub fn frame(self) -> (V3, V3, V3) {
-        let fwd = self.heading();
-        let right = fwd.cross(UP).unit_or(v3(1.0, 0.0, 0.0));
-        let up = right.cross(fwd);
-        let (s, c) = self.roll.sin_cos();
+        let along = self.heading();
+        let right = along.cross(UP).unit_or(v3(1.0, 0.0, 0.0));
+        let level = right.cross(along);
+        // Nose up out of the flight path, about the wing axis, so the body and
+        // the wing plane pitch together and the heading is left alone.
+        let (sp, cp) = self.pitch.sin_cos();
+        let fwd = along.scale(cp).add(level.scale(sp));
+        let up = level.scale(cp).sub(along.scale(sp));
+        let (s, c) = self.lean.sin_cos();
         (right.scale(c).add(up.scale(s)), up.scale(c).sub(right.scale(s)), fwd)
     }
 }
@@ -1157,6 +1219,27 @@ impl Sim {
         let want = -(across.dot(right) / G).atan();
         let tau = if camera { 0.55 } else { 0.35 };
         me.roll += (want - me.roll) * (1.0 - (-dt / tau).exp());
+
+        // And the lean it is **drawn** at, which is the same turn told louder
+        // (card 124). A plain multiplier would be enough for the gentle
+        // turns this flight actually flies, but `calm` goes down to 0 and the
+        // roll with it goes to twenty degrees, so it is bent over towards
+        // LEAN_MAX instead: six times as much lean where there is hardly any,
+        // and a hard turn arriving at a bird's own limit rather than past it.
+        let gain = 1.0 + (LEAN_GAIN - 1.0) * tune.lean.max(0.0);
+        let want = LEAN_MAX * (gain * me.roll / LEAN_MAX).tanh();
+        // Quicker going over than coming back: a bird rolls into a turn in one
+        // movement and levels out of it in its own time. Symmetrical, the lean
+        // reads as a dial being turned; asymmetrical, it reads as a decision.
+        let tau = if want.abs() > me.lean.abs() { LEAN_IN } else { LEAN_OUT };
+        me.lean += (want - me.lean) * (1.0 - (-dt / tau).exp());
+
+        // Where its nose is, relative to where it is going: at the bottom of
+        // its own speed band a bird hangs nose-up on its wings, at the top it
+        // has its nose down. `pep` is in there because the band is this bird's,
+        // not the flock's - a quick bird cruising is not a slow one flat out.
+        let want = AOA * (1.0 - ((me.speed() - lo) / (hi - lo).max(0.1)).clamp(0.0, 1.0));
+        me.pitch += (want - me.pitch) * (1.0 - (-dt / AOA_TAU).exp());
 
         // Beating: harder when climbing, a glide when coming down. The rate
         // rises a little with airspeed, so a flock that is working looks like
