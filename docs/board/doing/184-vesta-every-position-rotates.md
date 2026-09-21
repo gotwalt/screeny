@@ -229,3 +229,94 @@ The restrike (`184-07-an-ordinary-minute.png`) is the picture the card asked
 for: `21:12` -> `31:12` -> `42:22` -> `53:23` -> ... -> `10:01` -> `21:02` ->
 `21:13`, four drums turning in a left-to-right wave and the whole board settled
 in 1.37 s.
+
+### Step 3: the strips, the numbers, and what is open with the owner
+
+**Strips** in the session scratchpad's `vesta-faces/`, panel model on. One
+honest line each:
+
+| file | what it shows |
+|---|---|
+| `184-01-rotation-default.png` | every frame of 09:59:59 -> 10:00:00 at the default, 60 frames. The worst rotation the clock draws; all four drums turning, the minutes' tens last to land. |
+| `184-07-an-ordinary-minute.png` | **the one to look at first**: 21:12 -> 21:13, the minute he will see fifty-nine times an hour. `21:12` -> `31:12` -> `42:22` -> ... -> `21:02` -> `21:13`, four drums in a left-to-right wave, settled in 1.37 s. |
+| `184-02-spin-fast-0.8.png` | too fast. Frames +5 to +22 are a jumble - you cannot tell you are looking at numerals. |
+| `184-02-spin-default-1.15.png` | the default. Numerals stream past legibly enough to read as numerals; the module reads as one drum. |
+| `184-02-spin-slow-1.7.png` | too slow. Every card fully readable, which makes it a counter rather than a drum, and it runs nearly 2.6 s at the worst minute. |
+| `184-03-one-fall-against-a-rotation.png` | the same seventeen frames twice: "changed cards only" on top (the whole board changes in five frames and is flat), the rotation below. This is the before and after. |
+| `184-04-the-landing.png` | the last three quarters of a second of 09:59 -> 10:00 at scale 9. Three modules settle, the minutes' tens turns on alone for a dozen frames - which is a real board resolving position by position, not a bug. |
+| `184-06-the-landing-eased-or-not.png` | the ease, top, against `EASE = 0`, bottom. Without it the drum stops dead seven frames earlier; with it the last card takes its full six frames and arrives. |
+| `184-05-midnight.png` | 23:59 -> 00:00, the hours' tens landing on the **blank** card, so the board settles on ` 0:00`. |
+
+**The numbers, as measured.**
+
+| | before (card 174) | now |
+|---|---|---|
+| resting APL | 1.033% | 1.033% |
+| peak APL | 1.23% (mid-flip) | **1.518%** (mid-rotation) |
+| mean over the event | - | 1.211% |
+| mean over a whole minute | 1.033% | **1.037%** |
+| settled frame | 4 colours, 367 B | 4 colours, 367 B |
+| busiest frame | ~620 B | **605 B of 1464**, 25 colours, `pal8-lz, exact` |
+| an ordinary minute | one card, 0.2 s | four drums, **1.37 s** |
+| the worst minute | five cards, ~1.1 s | four drums, **1.76 s** |
+
+**The timing chosen**: `spin` 1.15 s for a full revolution (11 cards), which
+makes the release period 76 ms - two and a half frames - and puts one and a
+half to two cards in the air at once. A spinning card falls in 0.1 s (three
+frames); the last three cards of every run ease back to `flip` (0.2 s). Modules
+let go at 0, 35, 75 and 110 ms and run at 1.00, 1.02, 1.05 and 1.03 times the
+period, left to right.
+
+**What I tried and rejected**, beyond the three speeds and the ease:
+
+- *Equal card counts on every module*, so the board would resolve all at once.
+  There is no way to do it without letting a module skip a card, and skipping
+  is the one thing a flap cannot do. The card's own Context is right: a shared
+  rate with different distances is what makes a real board resolve position by
+  position.
+- *Deriving the period from the longest module*, so the total would be exactly
+  `spin` every minute. Rejected: it would make the drum turn at a different
+  speed depending on what minute it was, which no mechanism does.
+- *Rates that pull against the skew* (1.00, 0.97, 1.04, 0.99) - my first guess,
+  and it put modules 0 and 1 four milliseconds apart, an eighth of a frame.
+  Fixed, and pinned by a test.
+- *Damping the lit edge to save light.* Measured at 1.0, 0.7, 0.45 and 0.3 the
+  peak APL moves six per cent in total, because a one-LED line is not area.
+  The damping stays, but for flash, not for APL - and the honest version of
+  that claim is in the README.
+
+**Open with the owner.**
+
+- **1.76 s at 09:59 -> 10:00 against 1.37 s on an ordinary minute.** The spread
+  is the mechanism being honest - the minutes' tens has six more cards to turn
+  - but it means one module clatters on alone for about a dozen frames after
+  the rest have settled. It looks right to me and it is what a Vestaboard does.
+  If he wants the board to land together, the way to do it is to give each
+  module its own period so they all finish at once, and I would rather he saw
+  this first.
+- **The blank card flashes past every module once a rotation.** That is a real
+  card on a real drum and I think it is part of the charm, but it does mean an
+  ordinary minute has a frame where a position is dark. Taking it off the
+  minutes' drums is a one-line change if he dislikes it.
+- **`spin` is on the page** (0.7 to 2.5 s), so 1.15 is a starting point rather
+  than a verdict.
+
+**Tests, as run.** `cargo test --release --no-fail-fast` at the root: **918
+passed, 0 failed**. No load-sensitive test misfired (cards 156/143 - studio
+`moved`/`soak`, screeny `pacing`/`loopback`/`embed`/`traffic`, sim `telemetry`),
+so nothing needed re-running alone. `cargo clippy --workspace --all-targets`:
+silent.
+
+**Outside my own files**: nothing. `crates/art/src/patches/vesta/mod.rs` and
+`flap.rs`, vesta's section of `crates/art/README.md`, and this card.
+`crates/art/src/faces/` was not touched - the blank card needed no glyph
+lookup, as expected.
+
+**Follow-ups** (un-numbered, for the orchestrator to place): card 175, the
+colon glyph, is still open and the rotation makes it *more* attractive, not
+less - the colon is the only anti-aliased thing left and it is now the only
+thing on the panel that never moves; if the faces ever carry a `':'` the
+rotation could blink it or turn it with the rest. Separately, a rotation is a
+good excuse for a "test the board" action in the studio ("turn it now" without
+waiting for a minute), which would make this much easier to look at on the
+real panel.
