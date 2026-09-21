@@ -22,15 +22,17 @@ const PACKET: usize = screeny_studio::page::PACKET_BYTES;
 /// A window long enough to average a rate over without the test being slow.
 const WINDOW: Duration = Duration::from_secs(2);
 
-/// Put the page on a patch, at a known rate, with nothing else moving.
-async fn playing(at: std::net::SocketAddr, patch: &str, fps: f64, paused: bool) {
+/// Put the page on a patch, with nothing else moving.
+///
+/// Card 161 took the rate out of this: there is one, `screeny_art::FPS`, and
+/// `/api/v1/status` reports it rather than being set to it. What is still
+/// worth waiting for is a render loop that is actually running.
+async fn playing(at: std::net::SocketAddr, patch: &str, paused: bool) {
     post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
-    let body = format!(r#"{{"paused":{paused},"speed":1.0,"fps":{fps}}}"#);
+    let body = format!(r#"{{"paused":{paused},"speed":1.0}}"#);
     assert_eq!(post(at, "/api/v1/set_playback", &body).await.status, 200);
-    // And wait until the render loop is really on that rate, so the window
-    // below measures what it means to.
-    until_json(at, PATIENCE, "the player to be on the new rate", "/api/v1/status", |s| {
-        s["preview"]["fps"] == fps && s["preview"]["alive"] == true
+    until_json(at, PATIENCE, "the player to be running", "/api/v1/status", |s| {
+        s["preview"]["fps"] == screeny_art::FPS && s["preview"]["alive"] == true
     })
     .await;
 }
@@ -41,7 +43,7 @@ async fn playing(at: std::net::SocketAddr, patch: &str, fps: f64, paused: bool) 
 async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", 60.0, false).await;
+    playing(at, "plasma", false).await;
 
     let mut tab = Ws::connect_asking(at, "client=tab&fps=30").await;
     let visible = tab.measure(WINDOW).await;
@@ -78,10 +80,12 @@ async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
 async fn a_socket_gets_the_rate_it_asked_for() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", 60.0, false).await;
+    playing(at, "plasma", false).await;
 
     let mut slow = Ws::connect_asking(at, "client=slow&fps=10").await;
     let mut quiet = Ws::connect_asking(at, "client=quiet").await;
+    // Card 161: 60 is above the render rate, so it can only mean "everything",
+    // which is what the default is too. Both are the full rate now.
     let mut fast = Ws::connect_asking(at, "client=fast&fps=60").await;
 
     // All three at once, so they are measured over the same window and a slow
@@ -100,8 +104,13 @@ async fn a_socket_gets_the_rate_it_asked_for() {
     );
 
     assert!((5.0..15.0).contains(&slow.fps()), "a socket asking for 10 fps got {:.1}", slow.fps());
-    assert!((15.0..40.0).contains(&quiet.fps()), "a socket that asked for nothing got {:.1} fps", quiet.fps());
-    assert!(fast.fps() > quiet.fps(), "asking for 60 got {:.1} fps, no more than the default", fast.fps());
+    assert!(quiet.fps() > slow.fps() * 1.5, "a socket that asked for nothing got {:.1} fps", quiet.fps());
+    assert!(quiet.fps() <= screeny_art::FPS * 1.2, "and no more than there is: {:.1} fps", quiet.fps());
+    assert!(
+        fast.fps() > slow.fps() * 1.5,
+        "asking for more than is rendered got {:.1} fps, no more than the slow one",
+        fast.fps()
+    );
     assert_eq!(slow.frame_bytes / slow.frames.max(1), PACKET, "the frames are the panel's own, unaltered");
     studio.stop().await;
 }
@@ -115,7 +124,7 @@ async fn a_picture_that_has_not_changed_is_not_sent_again() {
     let at = studio.addr;
     // Paused: the strongest form of "a held clock face", and the same thing a
     // numerals clock does for fifteen seconds between minutes.
-    playing(at, "clocks-numerals", 60.0, true).await;
+    playing(at, "clocks-numerals", true).await;
 
     let mut plain = Ws::connect_asking(at, "client=plain&fps=30").await;
     let mut lean = Ws::connect_asking(at, "client=lean&fps=30&repeat=false").await;
@@ -140,14 +149,14 @@ async fn a_picture_that_has_not_changed_is_not_sent_again() {
 /// at all - and picks up again within a moment of somebody looking.
 ///
 /// This is the half of card 120 that is not about bytes: a phone left on the
-/// page in a pocket must not hold a core at 60 fps for a month.
+/// page in a pocket must not hold a core at the full rate for a month.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
     let studio = studio().await;
     let at = studio.addr;
     // No panel is ever attached here, so the only reason to render fast would
     // be a browser watching.
-    playing(at, "plasma", 60.0, false).await;
+    playing(at, "plasma", false).await;
 
     // Rendered frames over a window, read from the sequence number the render
     // loop stamps - the player's own rate, not the socket's.
@@ -182,9 +191,11 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
     let again = rendered(at, WINDOW).await;
 
     println!("no panel: watched {watched:.0} fps -> hidden {unwatched:.0} fps -> watched again {again:.0} fps");
-    assert!(watched > 30.0, "a watched player with no panel should render at its rate, not {watched:.0} fps");
+    // Card 161: the full rate is 30, so these bounds sit between IDLE_FPS (5)
+    // and it rather than above 30.
+    assert!(watched > 18.0, "a watched player with no panel should render at its rate, not {watched:.0} fps");
     assert!(unwatched < 12.0, "a hidden tab held the player at {unwatched:.0} fps");
-    assert!(again > 30.0, "the player did not pick up again when the tab came back: {again:.0} fps");
+    assert!(again > 18.0, "the player did not pick up again when the tab came back: {again:.0} fps");
 
     // And a socket that simply goes away gives its claim back too.
     drop(tab);
@@ -201,7 +212,7 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
 async fn the_status_route_says_what_the_preview_costs() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "plasma", 30.0, false).await;
+    playing(at, "plasma", false).await;
 
     let idle = get(at, "/api/v1/status").await.json();
     assert_eq!(idle["sockets"]["open"], 0);

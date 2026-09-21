@@ -227,7 +227,7 @@ async fn the_panel_comes_back_whatever_is_restarted() {
     wait_until_streaming(at, "the first run to start playing").await;
 
     // Something specific, so "showing what it was showing" is checkable.
-    let set = post(at, "/api/v1/player/set", r#"{"device":"cc22dd","patch":"metaballs","seed":4242,"fps":30}"#).await;
+    let set = post(at, "/api/v1/player/set", r#"{"device":"cc22dd","patch":"metaballs","seed":4242}"#).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
     wait_until_streaming(at, "the chosen patch to start playing").await;
 
@@ -267,7 +267,7 @@ async fn the_panel_comes_back_whatever_is_restarted() {
         assert_eq!(d["id"], "cc22dd", "after restarting {what}: {d}");
         assert_eq!(d["player"]["patch"], "metaballs", "after restarting {what}, it is playing something else: {d}");
         assert_eq!(d["player"]["seed"], 4242, "after restarting {what}, the seed changed: {d}");
-        assert_eq!(d["player"]["fps"], 30.0, "after restarting {what}, the rate changed: {d}");
+        assert_eq!(d["player"]["fps"], 30.0, "after restarting {what}, it is not on the one rate: {d}");
         println!(
             "after restarting {what}: {} playing {} seed {}, {} frames sent, link {}",
             d["id"], d["player"]["patch"], d["player"]["seed"], d["player"]["panel"]["frames_sent"], d["player"]["panel"]["state"]
@@ -289,7 +289,7 @@ async fn the_page_resumes_where_it_was() {
 
     post(at, "/api/v1/set_patch", r#"{"id":"plasma"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":1234}"#).await;
-    post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0,"fps":30.0}"#).await;
+    post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0}"#).await;
     let panel = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
     assert_eq!(panel.status, 200);
     studio.stop().await;
@@ -301,7 +301,7 @@ async fn the_page_resumes_where_it_was() {
     assert_eq!(state["seed"], 1234);
     assert_eq!(state["paused"], true);
     assert_eq!(state["speed"], 2.0);
-    assert_eq!(state["fps"], 30.0);
+    assert_eq!(state["fps"], 30.0, "the one rate, which a restart cannot move either");
 
     // Which panel it was attached to, and that it is driving it again - all
     // out of one answer, so nothing here is about two different moments.

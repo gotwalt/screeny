@@ -41,3 +41,20 @@ Three full-suite runs in a row under load with none of the four failing, or a fa
 says enough to fix.
 
 ## Log
+
+## A failure message, captured (card 161's worker, 2026-09-20)
+
+The card says nobody had one. `tests/moved.rs::the_status_poll_follows_a_panel_that_moved`,
+caught while three test binaries ran side by side; it passed 3 of 3 alone straight after.
+It is not port re-binding. `/api/v1/status` at the timeout said `discovery.probes: 0` and
+`last_seen_ago: 0.0`, with the device still on its **old** `control_addr`:
+
+- the probe only runs for a device `Registry::unheard(stale_after)` returns;
+- the replacement simulator takes the **same HTTP port**, so the device-HTTP poll (about
+  three reads a second here) starts succeeding and refreshes `seen_unix` at once;
+- after that the device is never unheard again, so the probe never fires and the test
+  waits out its 30 s for a `control_addr` that will not move.
+
+So it is a race between the probe tick and the first successful HTTP read, and under load
+the probe loses. Whatever the fix, waiting on `discovery.probes` to advance would at least
+make it say which of the two happened.

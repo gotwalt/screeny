@@ -194,7 +194,10 @@ async function start() {
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
   const pushOutput = () => call('set_output', { output: state.output });
-  const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed, fps: state.fps });
+  // Card 161: no `fps`. The route would ignore it anyway, and there is one
+  // rate. `state.fps` is still read - below, for the limiter's per-frame tick -
+  // but only as the server's report of what that rate is.
+  const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed });
 
   // ---- patch, seed, parameters ----
 
@@ -520,25 +523,7 @@ async function start() {
   // Card 183: every slider that declares its useful stops draws them. Static
   // markup, so once is enough.
   document.querySelectorAll('.slider').forEach(drawStops);
-  // Card 172: any rate the player may be on, including one a script set. The
-  // slider both shows it and changes it, and `set_playback` now clamps rather
-  // than ignoring, so the two can no longer disagree.
-  //
-  // Not `bindSlider`: its output reads the input, and an input with whole
-  // stops rounds a rate that has not got one. The readout says the rate the
-  // player is really on; only the thumb is rounded, and never by more than
-  // half a frame.
-  const fpsInput = $('#fps');
-  const fpsOut = $('#fps-slider').querySelector('output');
-  const showFps = () => {
-    const dragging = busy(fpsInput);
-    if (!dragging) fpsInput.value = String(state.fps);
-    const shown = dragging ? Number(fpsInput.value) : state.fps;
-    fpsOut.textContent = `${Number.isInteger(shown) ? shown : shown.toFixed(1)} fps`;
-  };
-  fpsInput.addEventListener('input', () => { state.fps = Number(fpsInput.value); showFps(); pushPlayback(); });
-  showFps();
-  bind({ refresh: showFps });
+  // Card 161: the rate slider was here. One rate, no control.
   const speedInput = $('#speed');
   const speed = bind(bindSlider($('#speed-slider'), {
     get: () => state.speed,
@@ -754,8 +739,11 @@ async function start() {
       ? `The patch asked for ${pct(st.aplIn)}. Limiter is holding it at ×${st.gain.toFixed(2)}.`
       : 'Limiter idle.';
 
-    // Bar spans 0..10% of full scale per frame; the tick is the limiter's rise rate.
-    const perFrame = s().limiter.max_rise_per_s / (state.fps || 60);
+    // Bar spans 0..10% of full scale per frame; the tick is the limiter's rise
+    // rate. `state.fps` is the server's report of the one rate (card 161), so
+    // the 30 is not written down here as well; the fallback is only for a
+    // bootstrap from a build older than the field.
+    const perFrame = s().limiter.max_rise_per_s / (state.fps || 30);
     mDluma.out.textContent = `${(st.dluma * 100).toFixed(1)}%`;
     width(mDluma.fill, st.dluma / 0.1);
     mDluma.ghost.style.left = `${Math.min(1, st.dluma / 0.1) * 100}%`;
