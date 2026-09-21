@@ -43,7 +43,8 @@ impl RestScale {
 /// The darkest step of a hand's ramp. Anything dimmer is left black.
 ///
 /// It was 0.32 while the panel was thought to have almost no levels down there;
-/// card 102 measured that it has (only sRGB 0 and 1 come out black). At 0.32 the
+/// card 102 measured that it has (only sRGB 0 and 1 come out black; card 248's
+/// dead zone later moved that to 0-4, still a handful of codes). At 0.32 the
 /// faintest edge a hand could have was a pixel it covers 4% of, and everything
 /// from 2% up was rounded *up* to that - which is what made a tip look blunt
 /// and a slow hand's edge arrive in a visible step. At 0.16 the faintest edge

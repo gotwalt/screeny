@@ -53,13 +53,13 @@ impl Palette {
     /// `dark` used to carry the advice "keep it around 0.4 or above, the panel
     /// has almost no levels below that". That was the panel before its
     /// temporal dither: 22 of the 256 sRGB codes came out black and the darker
-    /// half of sRGB was 14 levels. The device now resolves 237 levels and only
-    /// sRGB 0 and 1 are black (card 102), so a ramp may reach much further
-    /// down. What is still true is that the *bottom* of it is the panel's
-    /// weakest range - few refreshes to average over, so a large area of it
-    /// sparkles faintly, and the three channels step at different sRGB values
-    /// so low greys pick up colour casts. Dark ramps are a choice now, not a
-    /// thing to avoid.
+    /// half of sRGB was 14 levels. The device now resolves 229 levels and only
+    /// sRGB 0-4 are black (card 102, dark end re-measured card 248), so a ramp
+    /// may reach much further down. What is still true is that the *bottom* of
+    /// it is the panel's weakest range - few refreshes to average over, so a
+    /// large area of it sparkles faintly, and the three channels step at
+    /// different sRGB values so low greys pick up colour casts. Dark ramps are
+    /// a choice now, not a thing to avoid.
     pub fn ramps(hues: &[f32], steps: usize, (dark, light): (f32, f32), chroma: f32) -> Self {
         let steps = steps.max(1);
         let gap = if steps > 1 { (light - dark) / (steps - 1) as f32 } else { light - dark };

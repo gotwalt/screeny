@@ -8,12 +8,17 @@
 //! What the device does, in one paragraph. The firmware's gamma table is the
 //! sRGB EOTF scaled to `63 * 16`, so it knows each code's wanted duty to a
 //! sixteenth of a level; the display loop spends that remainder across sixteen
-//! successive panel refreshes (`firmware/src/display.rs`, card 030). A colour
-//! that is held therefore averages **1008 duty steps** per channel, not 64,
-//! and only sRGB 0 and 1 come out black. The 64-level hard quantisation this
-//! module used to do was the panel before card 030: it crushed everything
-//! under sRGB 22 and banded every gradient into 64 steps that the panel does
-//! not have.
+//! successive panel refreshes, walked bit-reversed rather than in counting
+//! order so the fast components of the dither move fast
+//! (`firmware/src/display.rs`, card 030 then card 248). A colour that is held
+//! therefore averages **1008 duty steps** per channel, not 64. Since card 248
+//! a remainder of one sixteenth of a level snaps onto the level instead of
+//! blinking at 9.6 Hz (`snap_dead_zone`), so only sRGB 0-4 come out black,
+//! not just 0 and 1 - five codes' worth of light too small to read as light
+//! anyway, traded for a dither that does not blink up close. The 64-level
+//! hard quantisation this module used to do was the panel before card 030: it
+//! crushed everything under sRGB 21 and banded every gradient into 64 steps
+//! that the panel does not have.
 //!
 //! The 32- and 16-level options that used to sit beside it were worse than
 //! obsolete - they were a bug. They modelled "dimmed by scaling", which the
@@ -48,13 +53,14 @@ pub const DEVICE_STEPS: u32 = (NATIVE_LEVELS - 1) * DITHER_PHASES;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Panel {
-    /// **The device.** 64 duty levels spread over [`DITHER_PHASES`] refreshes:
-    /// 1008 duty steps, 237 of the 256 sRGB codes distinguishable, and only
-    /// sRGB 0 and 1 black.
+    /// **The device.** 64 duty levels spread over [`DITHER_PHASES`] refreshes,
+    /// bit-reversed and dead-zone-snapped since card 248: 1008 duty steps,
+    /// 229 of the 256 sRGB codes distinguishable, and sRGB 0-4 black.
     #[default]
     Dithered,
-    /// The bit planes alone: 64 duty levels, 22 codes crushed to black, the
-    /// darkest visible value sRGB 34. What the panel did before card 030, and
+    /// The bit planes alone: 64 duty levels, 21 codes crushed to black, the
+    /// darkest visible value sRGB 21 (card 248: the firmware rounds this path
+    /// instead of truncating it). What the panel did before card 030, and
     /// still the honest view of anything that does not hold still long enough
     /// for the phase cycle (about 104 ms, three frames at 30 fps) to average.
     BitPlanes,
@@ -89,7 +95,7 @@ impl Panel {
     }
 
     /// Distinct levels this panel can reach from the 256 sRGB codes, and how
-    /// many of those codes come out black. `(237, 2)` and `(64, 22)`.
+    /// many of those codes come out black. `(229, 5)` and `(64, 21)`.
     pub fn distinct_levels(self) -> (usize, usize) {
         self.model().distinct_levels()
     }
@@ -235,25 +241,28 @@ mod tests {
         assert_eq!(linear_to_srgb8(62.0 / 63.0), 253);
     }
 
-    /// Card 102's headline. The old model crushed everything under sRGB 22;
-    /// the device puts out light from sRGB 2 and shows 237 distinct levels.
+    /// Card 102's headline, renumbered by card 248. The old model crushed
+    /// everything under sRGB 22; the device puts out light from sRGB 5 (the
+    /// dead zone's cost) and shows 229 distinct levels.
     #[test]
     fn the_device_has_a_dark_end_and_the_bit_planes_do_not() {
         assert_eq!(Panel::Dithered.steps(), DEVICE_STEPS);
         assert_eq!(Panel::Dithered.steps(), 1008);
         assert_eq!(Panel::BitPlanes.steps(), 63);
-        assert_eq!(Panel::Dithered.distinct_levels(), (237, 2));
-        assert_eq!(Panel::BitPlanes.distinct_levels(), (64, 22));
+        assert_eq!(Panel::Dithered.distinct_levels(), (229, 5));
+        assert_eq!(Panel::BitPlanes.distinct_levels(), (64, 21));
 
         let darkest = |p: Panel| (0..=255u8).find(|v| p.emit(*v) > 0.0).unwrap();
-        assert_eq!(darkest(Panel::Dithered), 2);
-        assert_eq!(darkest(Panel::BitPlanes), 22);
+        assert_eq!(darkest(Panel::Dithered), 5);
+        assert_eq!(darkest(Panel::BitPlanes), 21);
     }
 
     /// The whole dark ramp, code by code, against `screeny_panel` - which is
     /// pinned to the firmware's own gamma table in its own tests. The test
     /// card's dark ramp - sRGB 0 to 63 across the panel's 64 columns - keeps
-    /// 45 distinct levels on the device and 4 without the dither.
+    /// 39 distinct levels on the device and 4 without the dither. (Card 248:
+    /// was 45 and 4; the dead zone collapses six of this particular ramp's 64
+    /// codes onto a neighbour.)
     #[test]
     fn the_dark_ramp_agrees_with_the_panel_crate() {
         for p in [Panel::Dithered, Panel::BitPlanes] {
@@ -266,7 +275,7 @@ mod tests {
         let distinct = |p: Panel| {
             (0..64u8).map(|v| p.shown(v)).collect::<std::collections::BTreeSet<_>>().len()
         };
-        assert_eq!(distinct(Panel::Dithered), 45);
+        assert_eq!(distinct(Panel::Dithered), 39);
         assert_eq!(distinct(Panel::BitPlanes), 4);
     }
 
@@ -282,9 +291,13 @@ mod tests {
         assert_eq!(Panel::BitPlanes.quantise(crate::color::srgb8_to_linear(21), 0.0), 0.0);
     }
 
-    /// Quantising costs at most a duty step, and handing the result over as an
-    /// 8-bit code costs at most four more, which is 0.4% of full light at the
-    /// top of the range where the codes are coarser than the panel.
+    /// Quantising costs at most a duty step, handing the result over as an
+    /// 8-bit code costs at most four more, and - since card 248 - the dead
+    /// zone can cost one further step: a chosen code whose own table entry
+    /// happens to sit a sixteenth of a level off is shown snapped onto the
+    /// level, exactly as the firmware shows it. Still under 0.6% of full
+    /// light at the top of the range where the codes are coarser than the
+    /// panel.
     #[test]
     fn the_hand_over_is_faithful_to_within_a_few_duty_steps() {
         let p = Panel::Dithered;
@@ -295,7 +308,7 @@ mod tests {
             let err = (p.emit(p.code(v, 0.0)) - v).abs() * steps;
             worst = worst.max(err);
         }
-        assert!(worst <= 4.5, "worst hand-over error {worst} duty steps");
+        assert!(worst <= 5.5, "worst hand-over error {worst} duty steps");
     }
 
     /// Dither where the panel is coarse, nowhere else - the reason the bias is

@@ -184,7 +184,7 @@ impl Panel {
     /// sRGB codes land on the single lowest level)`.
     ///
     /// Goes through [`Panel::emit1`] rather than recomputing the rounding, so
-    /// this agrees with [`Panel::code`] for every [`Quantiser`] - in
+    /// this agrees with [`Panel::code`] for every `Quantiser` - in
     /// particular so [`DEVICE`]'s count reflects the dead zone.
     #[must_use]
     pub fn distinct_levels(&self) -> (usize, usize) {
@@ -300,20 +300,20 @@ pub const DEEP: Panel = Panel::new(8);
 //
 // Deliberately built from [`DITHER_PHASES`], never a literal `16`.
 //
-// [`duty_16ths`] reads the raw table value, **not** [`DEVICE::emit1`]: since
+// [`duty_16ths`] reads the raw table value, **not** `DEVICE::emit1`: since
 // card 248 the two differ by the dead zone, and an aligned code is chosen by
 // comparing duties against a level - a *static* fact about the table - not
 // against the device's *dither* behaviour. Levels stay exact multiples of
-// [`DITHER_PHASES`] either way. If an aligned code's own duty happens to fall
-// inside the dead zone (offset 1 or 15), that is not a problem: on the device
-// it already snaps to the level it was chosen for, which is the point of
-// aligning it. Card 248 found none of the brief's dark-end aligned codes do
-// (`aligned_levels_avoid_the_dead_zone` below).
+// [`DITHER_PHASES`] either way. Some aligned codes' own duty does fall inside
+// the dead zone (offset 1, sixteenths of a level): that is not a problem, on
+// the device they already snap to the level they were chosen for, which is
+// the point of aligning them (`aligned_codes_inside_the_dead_zone_still_land_on_their_level`
+// below).
 
 /// An sRGB8 code's duty, in sixteenths of a level - the firmware's own
 /// fixed-point unit (`firmware::gamma::SRGB_TO_Q`), before the dead zone.
-/// [`raw_q`] widened; see the module note above for why this is not
-/// [`DEVICE::emit1`].
+/// `raw_q` widened; see the module note above for why this is not
+/// `DEVICE::emit1`.
 #[must_use]
 pub fn duty_16ths(v: u8) -> u32 {
     u32::from(raw_q(v))
@@ -729,7 +729,7 @@ mod tests {
     }
 
     /// Card 188. [`duty_16ths`] has to be the firmware's own `SRGB_TO_Q` to the
-    /// integer, not just close to 1e-6 the way [`DEVICE::emit1`] is: an aligned
+    /// integer, not just close to 1e-6 the way `DEVICE::emit1` is: an aligned
     /// code is chosen by comparing duties, and a rounding wobble there would
     /// pick the wrong one at a boundary.
     #[test]

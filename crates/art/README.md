@@ -809,23 +809,27 @@ Two more left the table in card 102, because they stopped being assumptions.
 reading of `screeny_panel`, not a second copy, and `screeny_panel::DEVICE` is
 checked entry by entry against `firmware/src/gamma.rs`'s own table. What it
 says: the firmware knows each sRGB code's wanted duty to a sixteenth of a level
-and spends the remainder across sixteen successive panel refreshes, so a colour
-that is held averages **1008 duty steps** per channel.
+and spends the remainder across sixteen successive panel refreshes - walked
+bit-reversed rather than in counting order since card 248, so the dither's
+slowest surviving component is 77 Hz rather than 9.6 Hz - so a colour that is
+held averages **1008 duty steps** per channel.
 
 | | `Panel::BitPlanes` | the device (`Panel::Dithered`) |
 |---|---|---|
 | duty steps per channel | 63 | 1008 |
-| distinct levels out of the 256 sRGB codes | 64 | 237 |
-| codes that come out black | 22 | 2 |
-| test card's dark ramp, over its 64 columns | 4 greys | 43 greys |
+| distinct levels out of the 256 sRGB codes | 64 | 229 |
+| codes that come out black | 21 | 5 |
+| test card's dark ramp, over its 64 columns | 4 greys | 38 greys |
 
-So **the dark end is usable**: only sRGB 0 and 1 are black, and slow fades to
-black work. Two things are still true about it. A colour that is *not* held
-only gets about five of the sixteen phases, which is `screeny_panel::TEMPORAL`
-and 195 levels - that is what the codec chooser scores against, and it is why
-large areas of very dark colour sparkle faintly rather than sitting still. And
-the three channels step at different sRGB values, so low greys pick up colour
-casts (brief 2.2). Dark work is a choice with a texture, not a thing to avoid.
+So **the dark end is usable**: only sRGB 0-4 are black - three of those five
+were card 248's dead zone trading a 9.6 Hz blip nobody could see for a level
+that holds still - and slow fades to black work. Two things are still true
+about it. A colour that is *not* held only gets about five of the sixteen
+phases, which is `screeny_panel::TEMPORAL` and 195 levels - that is what the
+codec chooser scores against, and it is why large areas of very dark colour
+sparkle faintly rather than sitting still. And the three channels step at
+different sRGB values, so low greys pick up colour casts (brief 2.2). Dark
+work is a choice with a texture, not a thing to avoid.
 
 The old "fewer levels when dimmed" was simply wrong: the device dims by
 shortening the output-enable window, so every duty step survives at every

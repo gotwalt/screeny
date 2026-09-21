@@ -54,7 +54,12 @@ mod tests {
 
     #[test]
     fn the_configuration_knob_maps_to_the_shared_panel() {
-        assert_eq!(panel_of(&PanelModel { levels: 64 }), screeny_panel::NOMINAL);
+        // `screeny_panel::NOMINAL` is no longer `Panel::levels(64)` by value
+        // (card 248: `NOMINAL` is built from the firmware's own table, not
+        // the generic rounding `Panel::levels` still uses, and the two
+        // disagree at 7 codes) - so this compares `steps`, the only thing
+        // `panel_of`'s knob was ever meant to pick.
+        assert_eq!(panel_of(&PanelModel { levels: 64 }).steps, screeny_panel::NOMINAL.steps);
         assert_eq!(panel_of(&PanelModel { levels: 32 }), screeny_panel::DIM);
     }
 

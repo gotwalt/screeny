@@ -71,11 +71,13 @@ async fn hold_still(at: std::net::SocketAddr, patch: &str) {
 
 /// Card 105's half of card 101's acceptance, which card 170 makes a tautology
 /// and keeps anyway: the studio streams over the network, and what the device
-/// puts up is what the browser is drawing.
+/// puts up is what the browser is drawing - the panel model's dark-end
+/// collapse and (since card 248) dead zone included, not the raw datagram.
 ///
 /// It is a tautology now because there is one engine - the browser is handed
-/// the same decoded datagram the panel is sent - and that is exactly why the
-/// test is worth keeping: if the two ever come apart again, this says so.
+/// the same decoded datagram the panel is sent, run through the same panel
+/// model - and that is exactly why the test is worth keeping: if the two ever
+/// come apart again, this says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_to_panel_streams_the_picture_to_the_device() {
     let (_dev, port, rx) = start_sim();
@@ -130,9 +132,20 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
 
     let last = shown.last().expect("frames");
     assert_eq!(last.decoded.len(), 64 * 32 * 3);
+    // `last.decoded` is the literal wire bytes; `preview` is what the browser
+    // draws, which is the wire bytes run through the panel model
+    // (`Panel::show`) so the dark end's collapse is visible - this was
+    // already true before card 248 (codes 0 and 1 always showed as 0), and
+    // the dead zone widens it a little (codes 0-4 now do, and a sparse set of
+    // other codes move by a sixteenth of a level). So the two are not
+    // byte-identical any more; what must still hold is that `preview` is
+    // exactly what the panel model says `last.decoded` will show as - proved
+    // directly, rather than guessed at with a numeric tolerance.
+    let mut modelled = last.decoded.clone();
+    screeny_art::panel::Panel::DEVICE.show(&mut modelled);
     assert_eq!(
-        last.decoded, preview,
-        "the device is showing something other than what the browser is drawing \
+        modelled, preview,
+        "the browser is not drawing what the panel model says the device's own wire bytes show \
          (codec {:#04x}, {} bytes)",
         last.codec, last.bytes
     );
