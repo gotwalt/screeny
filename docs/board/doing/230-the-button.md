@@ -4,7 +4,7 @@ title: Firmware - the button: a short press shows the status screen, holding 5 s
 type: build
 hardware: orchestrator flashes; the owner presses (the worker builds and host-tests only)
 depends: [202, 223, 243]
-owner:
+owner: opus worker (firmware session, 2026-09-21)
 branch: card/230-the-button
 ---
 

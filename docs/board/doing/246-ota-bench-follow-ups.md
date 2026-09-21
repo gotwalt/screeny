@@ -4,7 +4,7 @@ title: Firmware + probe - four rough edges the OTA bench found
 type: build
 hardware: orchestrator flashes and uploads (the worker builds and host-tests only)
 depends: [241, 245]
-owner:
+owner: opus worker (firmware session, 2026-09-21)
 branch: card/246-ota-follow-ups
 ---
 
