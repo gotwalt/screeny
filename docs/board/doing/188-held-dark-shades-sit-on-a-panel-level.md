@@ -130,3 +130,67 @@ screeny-panel --all-targets`: silent.
 
 Deliverable 1 is `screeny_panel::{duty_16ths, nearest_level, AlignedLevel,
 aligned_levels}`, re-exported from the crate root.
+
+### 2026-09-21 - deliverable 2: `Panel::AlignedDark`, the third `output.panel` choice
+
+**Third `output.panel` value, not a separate flag.** The Goal section itself frames this
+as "the third choice" among panel behaviours (`dithered` blinks dark and held, `bit_planes`
+throws away the bright gradients the dither handles well) - a third enum value says that
+directly, and picking it is exactly the same *kind* of decision as the existing two,
+switched the same way. It also does the least damage to the "default must not change any
+existing patch's pixels" rule: `Panel::default()` stays `Dithered`, so nothing that does not
+explicitly ask for `AlignedDark` is touched. A boolean flag layered on top of `Dithered`
+would have needed its own default-off story to get the same guarantee, for no benefit -
+`output.panel` is already the setting that answers "which codes get chosen", and this is a
+third answer to that one question, not an orthogonal one.
+
+**`crates/art/src/panel.rs`:**
+
+- `Panel::AlignedDark` - third variant, `model()` maps it to `screeny_panel::model::DEVICE`
+  (the same physical panel as `Dithered`: only code *selection* differs, so `emit`, `shown`,
+  `distinct_levels`, `steps` all agree with `Dithered` exactly - pinned by
+  `aligned_dark_is_the_same_device_as_dithered`).
+- `DARK_ALIGN_LEVEL: u32 = 16` - the threshold, a named constant per the card (card 248 may
+  bring it down with a shorter dither cycle).
+- `level_code(level) -> u8` - the code for a level, from `screeny_panel::aligned_levels`,
+  cached once (`OnceLock`, matching `crates/art/src/color.rs`'s own `linear_to_srgb`
+  pattern) rather than per-pixel. One table, read by both the snap and `level_triple`.
+- `level_triple([u32;3]) -> Rgb` - three levels in, linear light out via `level_code` per
+  channel. This is "the new snap" deliverable 3 uses to turn a hand-picked level triple into
+  an actual colour.
+- `Panel::code` special-cases `AlignedDark`: below the threshold it ignores the dither bias
+  entirely (the whole point - the same target always gets the same code, held or not) and
+  returns `level_code` of the target's nearest level (plain rounding against `NOMINAL`, i.e.
+  the *un-dithered* judgement of which level a colour is nearest); at or above the threshold
+  it falls through to the ordinary `Dithered` path, bias included.
+
+Tests added: `aligned_dark_is_steady_below_the_threshold_and_dithered_above_it` (bias moves
+nothing below the line, matches `Dithered` exactly above it),
+`every_aligned_dark_code_is_close_to_its_level` (every code `level_code` can return is
+within 2/16 of the level it was chosen for - re-proving crates/panel's own claim from this
+crate's side), `level_triple_is_three_aligned_codes`, `aligned_dark_is_the_same_device_as_dithered`.
+
+**CLI**: `crates/art/src/bin/screeny-art.rs`'s `--panel` gained `aligned-dark` /
+`aligneddark` beside `dithered`/`bit-planes`, for `screeny-art snapshot --panel aligned-dark`.
+
+**What the Studio page needs, not built (out of scope: `crates/studio` is cards 187/199's).**
+`crates/studio/ui/index.html`'s `#panel-kind` fieldset is hand-authored HTML - two
+`<label><input type="radio" name="panel" value="...">` rows (`dithered`, `bit_planes`) - and
+`picture.js`'s `bindRadios` (in `common.js`) is fully generic over whatever radios that
+fieldset holds, so the *only* change needed is one more label:
+
+```html
+<label title="Dithered above level 16, aligned onto an exact level below it">
+  <input type="radio" name="panel" value="aligned_dark"><span>Aligned dark</span></label>
+```
+
+added inside `<fieldset class="seg" id="panel-kind">` (`crates/studio/ui/index.html`,
+currently lines 152-158), value `aligned_dark` (the enum's own `serde(rename_all =
+"snake_case")` spelling). Still three stops, so `.seg` (card 163's rule: three or fewer is a
+segmented control) does not need to become a `<select>`. No JS change - `bindRadios` reads
+whatever radios are there. This was checked, not guessed: read `picture.js:549` and
+`bindRadios` in `common.js` before writing this note.
+
+`cargo test -p screeny-art --release`: 10/10 in `panel::`, up from 6. `cargo clippy -p
+screeny-art --all-targets`: two `clippy::doc_lazy_continuation` warnings from a `-` that
+read as a markdown list start mid-paragraph; reworded, no code change, now silent.
