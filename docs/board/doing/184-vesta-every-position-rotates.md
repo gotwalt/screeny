@@ -90,3 +90,116 @@ flipboard is for.
 The owner watches a minute turn on the panel and it is fun.
 
 ## Log
+
+### Step 1: the rotation, and the five design questions settled by looking
+
+**The model had to change first.** `flap.rs` draws one falling card and the old
+`Module` advanced one card and asked for the next when it landed, which can
+never overlap. A module is now a **plan**: the card it started from and a `run`
+of `Card { to, at, fall }`, worked out once when the minute turns and only read
+after that. Everything the renderer needs at time `t` - the plate, what is
+standing above the axle, and every card in the air - is a function of that
+plan, which is also what keeps a pinned time byte-identical however many frames
+have been drawn. Cards in the air are drawn front to back in release order: a
+card let go earlier is further round its swing and nearer the eye, and on the
+standing stack it was in front of the one behind it, so release order *is*
+depth order. `Pose` carries up to `MAX_AIR` of them with their `Fall` already
+computed, so `module()` does its trigonometry once a card a frame instead of
+once a sample.
+
+**1. The drum.** One drum on every module: blank, then 0-9, eleven cards. The
+hours' tens only swaps its blank for a `0` when `zero` is on. A drum only ever
+advances one card, so *"a full rotation ending on the new numeral" is eleven
+cards plus the distance* - eleven to twenty-one. I looked for a way to give
+every module the same card count and there is not one that does not let a
+module skip, which is the one thing a flap cannot do. The card's own Context
+says what to do instead and it is right: a shared rate with different distances
+is exactly what makes a real board resolve position by position. The counts at
+the worst minute (09:59 -> 10:00) are 13, 13, 17, 13.
+
+**2. Speed, and overlap.** A rotation needs its own fast card: `AIR` = 0.1 s,
+three frames at 30 fps, the floor the card names. The next card is released a
+`period` after the last, not when it lands, so one and a half to two cards are
+in the air at once. `spin` is the parameter and it means **what a full
+revolution takes**, first card released to last card settled, which is the only
+definition that stays honest when one module has six more cards than another;
+the period is solved from it.
+
+I rendered every frame of the same rotation at `spin` **0.8, 1.15 and 1.7** and
+looked (`184-02-*`):
+
+- **0.8** is flicker, not a drum. Frames +5 to +22 are a jumble - you cannot
+  tell you are looking at numerals going past, only that something is
+  happening. Rejected.
+- **1.7** is a slow counter. Every card is fully readable, which sounds good
+  and is not: it reads as a machine counting up to the time rather than a drum
+  spinning, and at the worst minute it runs nearly 2.6 s. Rejected - a bedroom
+  clock that clatters that long is what the card warned about.
+- **1.15** is it. Numerals stream past legibly enough to see that they *are*
+  numerals, the module reads as one drum turning, and the whole board is done
+  in 1.37 s on an ordinary minute and 1.76 s at 09:59 -> 10:00. Default.
+
+**3. Stagger.** `SKEW` = 0, 35, 75, 110 ms and `RATE` = 1.00, 1.02, 1.05, 1.03,
+fixed per module - they are machined parts, not dice. Left to right, so the
+wave runs the way the time is read and the minutes' units, the one numeral that
+changes every minute, is the last to settle. **This is where I got it wrong
+first**: my first rates were 1.00, 0.97, 1.04, 0.99, and the 0.97 on module 1
+almost exactly cancelled its 35 ms head start - the two modules landed 4 ms
+apart, which is an eighth of a frame, i.e. in lock-step. `the_four_modules_are_
+not_in_step` is that bug turned into a test. Rates that all pull the same way
+as the skew fix it; the gaps are now 61 ms or more.
+
+**4. How long in all.** 1.37 s on a normal minute, 1.76 s at the worst,
+including the settle - the card guessed 1.2-1.8 s and that is where it lands.
+
+**5. The landing.** The last three cards ease from the fast `AIR` back to the
+slow `flip`, so the drum arrives at a walk. I rendered the last half second of
+an ordinary minute with `EASE` 3 and with `EASE` 0 (`184-06`): without it the
+final card is three frames and the drum simply **stops**; with it the last card
+takes its full six frames and reads as arriving. Keeping it, and it costs about
+0.2 s.
+
+**The night clock.** Measured, at 09:59:59 -> 10:00:00, the worst rotation the
+clock draws: resting **1.033%** of the panel, rotation mean **1.211%**, peak
+**1.518%**, and over a whole minute **1.037%**. Today's flip peaked at 1.23%,
+so the rotation costs about a quarter more at its peak for 1.4 s and four
+thousandths of a per cent over the minute. It stays a quiet thing in a dark
+room.
+
+The lit edge is damped with speed (`EDGE_DAMP` 0.45 at the fastest, full
+brightness by the eased landing). **Honest finding: this is not an APL
+decision.** I measured the rotation at damping 1.0, 0.7, 0.45 and 0.3 and the
+peak moved 1.595% -> 1.567% -> 1.518% -> 1.498% - six per cent across the whole
+range, because the edge is a one-LED line and lines are not area. The reason to
+damp it is that a dozen pixels at three times the numeral level, moving, is a
+*flash* even when it is not APL; and the reason to damp it **with speed** is
+that it hands the full brightness back for the landing, where the eye should be
+anyway. One mechanism, two wins.
+
+**On the wire.** Settled: 4 colours, 367 bytes. Through the rotation: 16-25
+colours, peaking at **605 bytes of 1464**, `pal8-lz, exact` at every frame from
++1 to +54 - the palette is still one ramp plus black and still 32 entries with
+a dozen cards in the air. `the_palette_is_one_ramp_and_black` now walks twelve
+moments of a rotation and six parameter sets, including `spin` wound down to
+0.7.
+
+**`flips` replaces `cascade`**: "Full rotation" (default), "Through the
+numerals between" (`cascade` on), "Changed cards only" (`cascade` off). The two
+older modes are left **exactly** as card 155 drew them - no stagger, no
+overlap, no easing - so a person who picks one gets what they remember, and the
+README's five-angle table still lands where it says. An old setting carrying
+`cascade` is refused by `Params::set` and dropped (card 151), leaving the patch
+on the new default;  `a_setting_that_still_says_cascade_loads` pins that.
+
+**Tests.** `every_module_lands_on_the_right_card_for_every_minute_of_a_day`
+walks all 1440 minutes in all three modes, both `zero` settings and both clock
+settings, and checks the run ends on the right card and that a rotation turns
+past every card of the drum. Plus: the rotation begins on the minute and
+*settles* inside 1.2-1.9 s (the drum turns past the new time on the way round,
+so "landed" has to mean "and never moved again"); the four modules are not in
+step; the blank is turned past by every module; "changed cards only" still
+lands every module together and never touches a module whose card did not
+change; mid-rotation there are two numerals and a card between them, and the
+module may go dark for up to three frames because **the blank card is passing**
+- that is a real card, not a hole. `cargo test -p screeny-art --lib vesta`: 26
+passed.

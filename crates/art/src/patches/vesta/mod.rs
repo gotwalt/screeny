@@ -65,8 +65,9 @@ const PARAMS: &[ParamSpec] = &[
     param("size", "Size", 0.55, 1.0, 0.01, 1.0),
     param("weight", "Stroke weight, the Vesta face only (LEDs)", 1.2, 3.0, 0.1, 2.0),
     param("seam", "Seam (LEDs)", 0.0, 3.0, 0.5, 2.0),
-    param("flip", "A card's fall (seconds)", 0.08, 0.6, 0.01, 0.2),
-    toggle("cascade", "Flip through the numerals between", true),
+    choice("flips", "On the minute", FLIPS, 0.0),
+    param("spin", "A full rotation (seconds)", 0.7, 2.5, 0.05, 1.15),
+    param("flip", "A card's fall, and a rotation's landing (seconds)", 0.08, 0.6, 0.01, 0.2),
     param("tilt", "Viewpoint above the board (deg)", 0.0, 40.0, 1.0, 16.0),
     param("fill", "Halftone (0 = solid)", 0.0, 0.6, 0.05, 0.0),
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
@@ -159,26 +160,6 @@ fn ray(hue: f32) -> Rgb {
 
 // ---------------------------------------------------------------- the patch
 
-/// One flap module: what it shows, what it is on its way to, and where the
-/// falling card is.
-#[derive(Clone, Copy, Debug)]
-struct Module {
-    /// The numeral the module is showing, or falling away from.
-    shown: u8,
-    /// The numeral this fall lands on.
-    to: u8,
-    /// Engine time the fall - or the settle after it - began.
-    began: f64,
-    state: State,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum State {
-    Still,
-    Falling,
-    Settling,
-}
-
 /// The blank card.
 ///
 /// A real board's hours-tens drum carries a blank where a leading zero would
@@ -194,112 +175,334 @@ fn glyph(card: u8) -> char {
     char::from_digit(u32::from(card), 10).unwrap_or(' ')
 }
 
-/// What each module's drum carries, in the order it carries it.
+/// **One drum, eleven cards, on every module** (card 184).
 ///
-/// The hours' tens only ever needs three cards, and a real drum only has
-/// three, so `23:59 -> 00:00` is one card falling from `2` to the blank and
-/// not eight flipping through `3..9`. The other three drums are the ten
-/// numerals in order, as before.
-const DRUM_TENS_BLANK: [u8; 3] = [BLANK, 1, 2];
-const DRUM_TENS_ZERO: [u8; 3] = [0, 1, 2];
-const DRUM_TEN: [u8; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// The owner, seeing the new faces land: "let's do an entire rotation of every
+/// position on minute change. I think the fun of a flipboard is that it
+/// flips." A real board's charm is that every module carries the *same* drum
+/// and turns it at the same rate, so a refresh is one wave of identical
+/// clatter rather than four little animations - and the positions resolve one
+/// by one because each has a different distance left to go, not because each
+/// runs at its own speed.
+///
+/// So: the blank first, then the ten numerals. The blank is a card like any
+/// other and flashes past every module once a rotation, which is what a real
+/// board does; on the hours' tens it is also where a leading zero would be,
+/// and `zero` swaps it for the numeral on that module alone.
+const DRUM: [u8; 11] = [BLANK, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+const DRUM_ZERO: [u8; 11] = [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
+/// The drum a module turns. Only the hours' tens differs, and only in what
+/// its first card carries.
 fn drum(module: usize, zero: bool) -> &'static [u8] {
-    match (module, zero) {
-        (0, false) => &DRUM_TENS_BLANK,
-        (0, true) => &DRUM_TENS_ZERO,
-        _ => &DRUM_TEN,
+    if module == 0 && zero {
+        &DRUM_ZERO
+    } else {
+        &DRUM
     }
+}
+
+/// What the minute does to every module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flips {
+    /// The whole drum, everywhere: card 184's default.
+    Rotation,
+    /// Every card between the old numeral and the new one (`cascade` on).
+    Between,
+    /// One card, on the modules whose numeral changed (`cascade` off).
+    Changed,
+}
+
+impl Flips {
+    fn of(v: f32) -> Flips {
+        match v.round() as i32 {
+            1 => Flips::Between,
+            2 => Flips::Changed,
+            _ => Flips::Rotation,
+        }
+    }
+}
+
+const FLIPS: &[&str] = &["Full rotation", "Through the numerals between", "Changed cards only"];
+
+/// A fast card's fall, in seconds. Three frames at 30 fps is the floor at
+/// which a fall still reads as a fall rather than as a flicker, and a
+/// rotation is eleven-plus cards: at the slow `flip` it would be two seconds
+/// of slow motion every minute.
+const AIR: f64 = 0.1;
+
+/// How many cards at the end of a rotation ease back to the slow, readable
+/// `flip`. The landing is the part worth watching - it is the one that says
+/// what time it is - so the drum arrives at a walk instead of stopping dead.
+const EASE: usize = 3;
+
+/// Each module is its own mechanism: it lets go a moment after the one to its
+/// left and its drum turns a per cent or two differently. Fixed, not random -
+/// these are machined parts, and the same board does the same thing every
+/// minute. Left to right, so the wave runs the way the time is read and the
+/// minutes' units, the one numeral that changes every minute, is the last to
+/// settle.
+const SKEW: [f64; 4] = [0.0, 0.035, 0.075, 0.11];
+const RATE: [f64; 4] = [1.0, 1.02, 1.05, 1.03];
+
+/// How much of its lit edge a card keeps at the fastest it falls.
+///
+/// This is a night clock and the lit edge is the brightest thing the patch
+/// draws (card 155). A rotation puts two or three cards in the air on four
+/// modules at once, and at full `EDGE_BOOST` that is a flash. A fast card's
+/// edge is also physically a thinner, shorter-lived line, so damping it with
+/// speed is not a cheat - and it leaves the eased landing at full brightness,
+/// which is where the eye should be anyway.
+const EDGE_DAMP: f32 = 0.45;
+
+/// One card of a run: what it brings down, when it is let go, how long it
+/// falls.
+#[derive(Clone, Copy, Debug)]
+struct Card {
+    /// The numeral on its back - the bottom half it brings down, and the top
+    /// half that stands behind it afterwards.
+    to: u8,
+    /// Engine time it is released, and its fall in seconds.
+    at: f64,
+    fall: f64,
+}
+
+/// One flap module: the card it started from, and every card of the run it is
+/// part way through.
+///
+/// A run is planned once, when the minute turns, and then only read. That is
+/// what lets several cards be in the air at once - the old model advanced one
+/// card and asked for the next when it landed, which can never overlap - and
+/// it is what keeps a pinned time exactly reproducible: the picture at `t` is
+/// a function of the plan, not of how many frames have been drawn.
+#[derive(Clone, Debug, Default)]
+struct Module {
+    /// The card that was showing when this run began.
+    from: u8,
+    /// Every card of the run, in release order.
+    run: Vec<Card>,
+}
+
+/// How a run is timed.
+#[derive(Clone, Copy, Debug)]
+struct Timing {
+    /// Seconds between one card being let go and the next.
+    period: f64,
+    /// A card's fall while the drum is spinning.
+    air: f64,
+    /// A card's fall when it is the last of a run, and in the two slow modes.
+    flip: f64,
+    /// How many cards at the end ease back to `flip`.
+    ease: usize,
+}
+
+impl Timing {
+    /// `spin` is what a **full revolution** takes, first card let go to last
+    /// card settled, so the parameter means what it says whatever a
+    /// particular module has to turn. The extra cards a distant target needs
+    /// are extra time, exactly as they are on a real board.
+    fn rotation(spin: f64, flip: f64) -> Timing {
+        let air = AIR.min(flip);
+        let n = DRUM.len() as f64;
+        // total(k) = (k - 1) * period + (flip - air) + flip * (1 + SETTLE)
+        let fixed = (flip - air) + flip * (1.0 + SETTLE);
+        Timing { period: ((spin - fixed) / (n - 1.0)).max(1.0 / 60.0), air, flip, ease: EASE }
+    }
+
+    /// The old behaviour: one card at a time, the next let go as the last
+    /// lands, no overlap and no easing.
+    fn slow(flip: f64) -> Timing {
+        Timing { period: flip, air: flip, flip, ease: 0 }
+    }
+
+    /// Card `j` of `k`: the last `ease` of them stretch back to `flip`.
+    fn fall_of(&self, j: usize, k: usize) -> f64 {
+        let left = k - 1 - j;
+        if self.ease == 0 || left >= self.ease {
+            return self.air;
+        }
+        let e = (self.ease - left) as f64 / self.ease as f64;
+        self.air + (self.flip - self.air) * e
+    }
+
+    /// Scaled for one module, so the four are never in lock-step.
+    fn at_rate(&self, rate: f64) -> Timing {
+        Timing { period: self.period * rate, air: self.air * rate, flip: self.flip * rate, ease: self.ease }
+    }
+}
+
+/// The cards a change asks for, as numerals in release order.
+///
+/// A drum only ever advances one card, so "a full rotation ending on the new
+/// numeral" is eleven cards **plus** the distance to the target - eleven to
+/// twenty-one of them. There is no way to give every module the same card
+/// count without letting one of them skip, and skipping is the one thing a
+/// flap cannot do; a shared rate with different distances is exactly what
+/// makes a real board resolve position by position.
+fn route(from: u8, target: u8, drum: &[u8], flips: Flips) -> Vec<u8> {
+    let at = |c: u8| drum.iter().position(|d| *d == c);
+    let (i, t) = match (at(from), at(target)) {
+        (Some(i), Some(t)) if flips != Flips::Changed => (i, t),
+        // One card, straight there - which is also what a module showing a
+        // card its drum has not got must do, the instant after `zero` moves.
+        _ => return if from == target { Vec::new() } else { vec![target] },
+    };
+    let n = drum.len();
+    let d = (t + n - i) % n;
+    let k = if flips == Flips::Rotation { n + d } else { d };
+    (1..=k).map(|j| drum[(i + j) % n]).collect()
 }
 
 impl Module {
-    /// Advance to engine time `t`, heading for `target`.
-    fn step(&mut self, t: f64, target: u8, fall: f64, cascade: bool, drum: &[u8]) {
-        // The card after this one on the drum. A module showing a card its
-        // drum does not carry - the moment after `zero` is switched - goes
-        // straight to the target rather than hunting for a position it has
-        // not got.
-        let next = |shown: u8| match (cascade, drum.iter().position(|d| *d == shown)) {
-            (true, Some(k)) => drum[(k + 1) % drum.len()],
-            _ => target,
+    /// Plan a run from what is showing at `t` to `target`.
+    ///
+    /// Cards already let go are kept - a card in the air cannot be recalled -
+    /// and the rest is replanned from the last of them. That only comes up
+    /// when the minute turns mid-rotation, which needs a `pace` of a few
+    /// seconds a minute.
+    fn plan(&mut self, t: f64, target: u8, drum: &[u8], flips: Flips, tm: &Timing, skew: f64) {
+        let gone: Vec<Card> = self.run.iter().copied().filter(|c| c.at <= t).collect();
+        let (from, mut at) = match gone.last() {
+            // A period after the last card that was let go, not when it lands:
+            // the cards of a rotation overlap.
+            Some(c) => (c.to, (c.at + tm.period + (c.fall - tm.air)).max(t)),
+            None => (self.from, t + skew),
         };
-        // Retire every card that has landed since the last frame, each one
-        // handing the clock to the next at the moment it should have landed
-        // rather than at `t`. A card lands between frames, so starting the
-        // next from `t` would cost a cascade a frame a card - by the fifth,
-        // the five modules of `:59` to `:00` are visibly out of step with
-        // each other for no reason. The bound is a guard, not a rule: it
-        // matters only if a frame is dropped for several flips at once.
-        for _ in 0..16 {
-            let (span, was_falling) = match self.state {
-                State::Falling => (fall, true),
-                State::Settling => (fall * SETTLE, false),
-                State::Still => break,
-            };
-            if t - self.began < span {
+        let route = route(from, target, drum, flips);
+        let k = route.len();
+        let mut run = gone;
+        for (j, to) in route.into_iter().enumerate() {
+            let fall = tm.fall_of(j, k);
+            run.push(Card { to, at, fall });
+            at += tm.period + (fall - tm.air);
+        }
+        self.from = from;
+        self.run = run;
+    }
+
+    /// Settle the module on one card, showing it and nothing else.
+    fn still(&mut self, card: u8) {
+        self.from = card;
+        self.run.clear();
+    }
+
+    /// The card on the plate at `t`: the last one to have landed.
+    fn shown(&self, t: f64) -> u8 {
+        self.run.iter().rev().find(|c| t >= c.at + c.fall).map_or(self.from, |c| c.to)
+    }
+
+    /// Where the run ends: the last card landed and its settle over.
+    fn ends(&self) -> f64 {
+        self.run.last().map_or(f64::MIN, |c| c.at + c.fall * (1.0 + SETTLE))
+    }
+
+    /// Cards let go and not yet landed.
+    fn flying(&self, t: f64) -> usize {
+        self.run.iter().filter(|c| c.at <= t && t < c.at + c.fall).count()
+    }
+
+    /// Everything the module is showing at `t`.
+    fn pose(&self, t: f64, g: &Geom) -> Pose {
+        let mut pose = Pose { plate: self.from, standing: self.from, air: [Flying::default(); MAX_AIR], n: 0 };
+        let mut under = self.from;
+        let mut settling: Option<(u8, f32, f64)> = None;
+        for c in &self.run {
+            if t < c.at {
                 break;
             }
-            if was_falling {
-                self.shown = self.to;
-            }
-            self.began += span;
-            self.state = if self.shown != target {
-                self.to = next(self.shown);
-                State::Falling
-            } else if was_falling {
-                State::Settling
+            pose.standing = c.to;
+            if t < c.at + c.fall {
+                let u = ((t - c.at) / c.fall) as f32;
+                pose.push(under, c.to, flap::angle(u), c.fall, g);
             } else {
-                State::Still
-            };
-        }
-        // A target that moves while the module is still or settling lets a
-        // card go now. One that has already let go is never interrupted.
-        if self.state != State::Falling && self.shown != target {
-            self.to = next(self.shown);
-            self.began = t;
-            self.state = State::Falling;
-        }
-    }
-
-    /// What to draw: the numeral on the falling card's front, the one behind
-    /// it, and where the card is.
-    fn pose(&self, t: f64, fall: f64) -> Pose {
-        match self.state {
-            State::Still => Pose { old: self.shown, new: self.shown, theta: 0.0 },
-            State::Falling => {
-                let u = if fall > 0.0 { ((t - self.began) / fall) as f32 } else { 1.0 };
-                Pose { old: self.shown, new: self.to, theta: flap::angle(u) }
+                pose.plate = c.to;
+                let tau = ((t - c.at - c.fall) / (c.fall * SETTLE)) as f32;
+                settling = (tau < 1.0).then_some((c.to, tau, c.fall));
             }
-            // Landed. The card that fell is now the plate below, so both
-            // halves are the same numeral and only the card's small rebound
-            // is left - which is the one thing in the patch that is not
-            // physics but a hint of one.
-            State::Settling => {
-                let tau = if fall > 0.0 { ((t - self.began) / (fall * SETTLE)) as f32 } else { 1.0 };
-                Pose { old: self.shown, new: self.shown, theta: 180.0 - flap::settle(tau, SETTLE_DEG) }
-            }
+            under = c.to;
         }
+        // The card that has just landed is lying on the stack below, in front
+        // of anything still in the air and nearer the eye, so it goes first.
+        if let Some((card, tau, fall)) = settling {
+            pose.unshift(card, card, 180.0 - flap::settle(tau, SETTLE_DEG), fall, g);
+        }
+        pose
     }
 }
 
+/// At most this many cards of one module are drawn at once. Two is what the
+/// default timing puts in the air and three is what the eased landing can
+/// reach; the rest is headroom for a `spin` wound right down.
+const MAX_AIR: usize = 6;
+
+/// One card off the stack.
+#[derive(Clone, Copy, Debug, Default)]
+struct Flying {
+    /// The top half it carries down on its front, and the bottom half it
+    /// brings on its back.
+    front: u8,
+    back: u8,
+    /// Where it is, and how much of its lit edge it keeps.
+    fall: Fall,
+    damp: f32,
+}
+
+/// Everything a module is showing at one instant.
 #[derive(Clone, Copy, Debug)]
 struct Pose {
-    old: u8,
-    new: u8,
-    theta: f32,
+    /// The bottom plate: the last card to have landed.
+    plate: u8,
+    /// Standing above the axle, behind everything in the air.
+    standing: u8,
+    /// Cards off the stack, front first. A card let go earlier is further
+    /// round its swing and nearer the eye, and on the standing stack it was
+    /// in front of the one behind it, so release order is depth order.
+    air: [Flying; MAX_AIR],
+    n: usize,
 }
+
+impl Pose {
+    fn flying(&self) -> &[Flying] {
+        &self.air[..self.n]
+    }
+
+    fn make(front: u8, back: u8, theta: f32, fall: f64, g: &Geom) -> Flying {
+        let speed = if g.flip > 0.0 { (fall / g.flip).clamp(0.0, 1.0) as f32 } else { 1.0 };
+        Flying { front, back, fall: Fall::new(theta, g.tilt, g.h), damp: EDGE_DAMP + (1.0 - EDGE_DAMP) * speed }
+    }
+
+    fn push(&mut self, front: u8, back: u8, theta: f32, fall: f64, g: &Geom) {
+        if self.n < MAX_AIR {
+            self.air[self.n] = Pose::make(front, back, theta, fall, g);
+            self.n += 1;
+        }
+    }
+
+    fn unshift(&mut self, front: u8, back: u8, theta: f32, fall: f64, g: &Geom) {
+        let n = self.n.min(MAX_AIR - 1);
+        self.air.copy_within(..n, 1);
+        self.air[0] = Pose::make(front, back, theta, fall, g);
+        self.n = n + 1;
+    }
+}
+
 
 struct Vesta {
     /// The time of day on the first frame; a sped-up clock (`pace` < 60) runs
     /// on from here, exactly as the other clock patches do.
     born: Option<f64>,
     modules: [Module; 4],
+    /// The cards the runs in hand were planned for. A run is replanned when
+    /// and only when this changes.
+    want: [u8; 4],
+    /// What the four modules were showing on the last frame, for `playing`.
+    face: [u8; 4],
     /// For the studio's "now playing".
     doing: String,
 }
 
 fn make(_seed: u64) -> Box<dyn Patch> {
-    Box::new(Vesta { born: None, modules: [Module { shown: 0, to: 0, began: 0.0, state: State::Still }; 4], doing: String::new() })
+    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], face: [0; 4], doing: String::new() })
 }
 
 /// The hours and minutes a minute-of-day shows.
@@ -323,7 +526,7 @@ fn cards(minute: i64, hours24: bool, zero: bool) -> [u8; 4] {
 impl Patch for Vesta {
     fn playing(&self) -> Option<Playing> {
         let card = |d: u8| if d == BLANK { " ".to_string() } else { d.to_string() };
-        let face: String = self.modules.iter().enumerate().map(|(i, m)| if i == 2 { format!(":{}", card(m.shown)) } else { card(m.shown) }).collect();
+        let face: String = self.face.iter().enumerate().map(|(i, c)| if i == 2 { format!(":{}", card(*c)) } else { card(*c) }).collect();
         Some(Playing { title: face, detail: self.doing.clone(), actions: vec![], notes: vec![] })
     }
 
@@ -339,25 +542,43 @@ impl Patch for Vesta {
         let zero = ctx.get("zero") >= 0.5;
         let target = cards(minute, ctx.get("hours24") >= 0.5, zero);
 
-        let fall = f64::from(ctx.get("flip"));
-        let cascade = ctx.get("cascade") >= 0.5;
+        let flips = Flips::of(ctx.get("flips"));
+        let flip = f64::from(ctx.get("flip"));
+        // The stagger is the rotation's. The two older modes are left exactly
+        // as card 155 drew them - one card at a time, all four modules in
+        // step - so a person who picks one of them gets what they remember.
+        let spinning = flips == Flips::Rotation;
+        let base = if spinning { Timing::rotation(f64::from(ctx.get("spin")), flip) } else { Timing::slow(flip) };
+        // **A run is planned once** - when the card a module is asked for
+        // changes - and only read after that. Replanning every frame would
+        // re-time the tail of a rotation against the clock each time and the
+        // drum would never stop turning; it is also what lets a plan hold
+        // several cards in the air at once, which the old one-card-at-a-time
+        // model could not express at all.
         for (i, (m, want)) in self.modules.iter_mut().zip(target).enumerate() {
             if born_now {
                 // Born reading the time, not flipping its way up to it.
-                *m = Module { shown: want, to: want, began: ctx.t, state: State::Still };
-            } else {
-                m.step(ctx.t, want, fall, cascade, drum(i, zero));
+                m.still(want);
+            } else if self.want[i] != want {
+                let (tm, skew) = if spinning { (base.at_rate(RATE[i]), SKEW[i]) } else { (base, 0.0) };
+                m.plan(ctx.t, want, drum(i, zero), flips, &tm, skew);
+            } else if !m.run.is_empty() && ctx.t >= m.ends() {
+                // Retire a finished run so the plan does not grow all night.
+                m.still(want);
             }
         }
-        let moving = self.modules.iter().filter(|m| m.state == State::Falling).count();
+        self.want = target;
+        self.face = std::array::from_fn(|i| self.modules[i].shown(ctx.t));
+        let moving = self.modules.iter().filter(|m| m.flying(ctx.t) > 0).count();
         self.doing = match moving {
             0 => "settled".to_string(),
             n => format!("{n} of 4 flipping"),
         };
 
-        let poses: [Pose; 4] = std::array::from_fn(|i| self.modules[i].pose(ctx.t, fall));
+        let g = Geom::of(ctx);
+        let poses: [Pose; 4] = std::array::from_fn(|i| self.modules[i].pose(ctx.t, &g));
         let colon_on = ctx.get("blink") < 0.5 || clock.rem_euclid(1.0) < 0.55;
-        picture(&poses, &Geom::of(ctx), &Levels::of(ctx, colon_on), ctx.get("hue"), ctx.get("fill"))
+        picture(&poses, &g, &Levels::of(ctx, colon_on), ctx.get("hue"), ctx.get("fill"))
     }
 }
 
@@ -376,6 +597,8 @@ struct Geom {
     /// A stroke's width, in LEDs. The stroked face only.
     weight: f32,
     tilt: f32,
+    /// A card's slow fall, in seconds: what the lit edge is damped against.
+    flip: f64,
     /// The numerals' face.
     face: &'static Face,
 }
@@ -400,6 +623,7 @@ impl Geom {
             seam: ctx.get("seam") * 0.5,
             weight: ctx.get("weight"),
             tilt: ctx.get("tilt"),
+            flip: f64::from(ctx.get("flip")),
         }
     }
 }
@@ -482,48 +706,54 @@ fn sample(x: f32, y: f32, poses: &[Pose; 4], g: &Geom, levels: &Levels) -> f32 {
 
 /// Light at one point inside a module, `(u, v)` from its axle.
 fn module(u: f32, v: f32, pose: &Pose, g: &Geom, levels: &Levels) -> f32 {
-    let fall = Fall::new(pose.theta, g.tilt, g.h);
     let on = |d: u8, gx: f32, gy: f32| g.face.ink(glyph(d), gx / g.size, gy / g.size, g.weight);
 
-    // The falling card is in front of everything else, so it is asked first.
-    if let Some(r) = fall.along(v) {
+    // The cards off the stack are in front of everything else, so they are
+    // asked first, front to back. Once one of them covers the point the
+    // answer is its own, even when the answer is black: a card occludes.
+    for f in pose.flying() {
+        let fall = f.fall;
+        let Some(r) = fall.along(v) else { continue };
         let across = u / fall.widen(r);
-        if across.abs() <= g.w * 0.5 {
-            if r < g.seam {
-                // The card's own root, at the axle: the seam again.
-                return 0.0;
-            }
-            // The lit edge. Measured on the panel rather than on the card,
-            // because as the card turns edge-on its whole face collapses into
-            // this line and there is nothing else left to see.
-            if (v - fall.screen(fall.reach)).abs() <= EDGE_HALF {
-                return levels.edge * fall.edge;
-            }
-            // Front face: the old numeral's top half, carried down. Back
-            // face, once the card has passed us: the new numeral's bottom
-            // half, arriving.
-            let front = fall.squash >= 0.0;
-            let (digit, gy) = if front { (pose.old, -r) } else { (pose.new, r) };
-            return if on(digit, across, gy) { levels.numeral * fall.shade } else { 0.0 };
+        if across.abs() > g.w * 0.5 {
+            continue;
         }
+        if r < g.seam {
+            // The card's own root, at the axle: the seam again.
+            return 0.0;
+        }
+        // The lit edge. Measured on the panel rather than on the card,
+        // because as the card turns edge-on its whole face collapses into
+        // this line and there is nothing else left to see. `damp` is how
+        // much of it a card falling this fast keeps.
+        if (v - fall.screen(fall.reach)).abs() <= EDGE_HALF {
+            return levels.edge * fall.edge * f.damp;
+        }
+        // Front face: the numeral it is carrying down. Back face, once the
+        // card has passed us: the one it is bringing.
+        let front = fall.squash >= 0.0;
+        let (digit, gy) = if front { (f.front, -r) } else { (f.back, r) };
+        return if on(digit, across, gy) { levels.numeral * fall.shade } else { 0.0 };
     }
 
     if v.abs() < g.seam {
         return 0.0;
     }
     if v < 0.0 {
-        // Above the axle: the next numeral's top half, already standing there.
-        return if on(pose.new, u, v) { levels.numeral } else { 0.0 };
+        // Above the axle: the top half of whatever will be showing when the
+        // cards in the air have all landed, already standing there.
+        return if on(pose.standing, u, v) { levels.numeral } else { 0.0 };
     }
-    // Below it: the old numeral's bottom half, with the falling card's shadow
+    // Below it: the plate's bottom half, with the frontmost card's shadow
     // running down it ahead of the card.
-    let lit = if fall.shadow > 0.0 {
-        let k = smoothstep(fall.shadow + PENUMBRA, fall.shadow - PENUMBRA, v);
+    let shadow = pose.flying().first().map_or(0.0, |f| f.fall.shadow);
+    let lit = if shadow > 0.0 {
+        let k = smoothstep(shadow + PENUMBRA, shadow - PENUMBRA, v);
         1.0 - (1.0 - SHADOW) * k
     } else {
         1.0
     };
-    if on(pose.old, u, v) {
+    if on(pose.plate, u, v) {
         levels.numeral * lit
     } else {
         0.0
@@ -641,109 +871,234 @@ mod tests {
         assert_eq!(read_back(&run("12:34", 3.0, &[("hours24", 0.0)]), &geom(&[])), [1, 2, 3, 4]);
     }
 
-    /// The blank is a card on the hours-tens drum: it falls to and from its
-    /// neighbours in one card's fall, as `1` and `2` do, rather than being
-    /// switched on and off.
+    /// The blank is a card on the drum: it is turned past, landed on and
+    /// fallen away from like any other, rather than being switched on and
+    /// off. Every module carries it, so it flashes past all four once a
+    /// rotation - which is what a real board does.
     #[test]
     fn the_blank_card_flips_like_any_other() {
         let g = geom(&[]);
-        // 09:59 -> 10:00 is the blank falling away and 1 arriving.
+        assert_eq!(drum(0, false), DRUM, "one drum on every module");
+        assert_eq!(drum(3, false), DRUM);
+        assert_eq!(DRUM[0], BLANK, "the blank is the drum's first card");
+        assert_eq!(drum(0, true)[0], 0, "`zero` swaps it on the hours' tens alone");
+        assert_eq!(drum(3, true), DRUM, "and on that module alone");
+        // 09:59 -> 10:00 is the blank turning away and 1 arriving; 23:59 ->
+        // 00:00 is 2 turning away and the blank arriving. Both are a whole
+        // rotation now, so they are read before and well after it.
         assert_eq!(read_back(&run("09:59:59", 0.5, &[]), &g)[0], B);
         assert_eq!(read_back(&run("09:59:59", 3.0, &[]), &g)[0], 1);
-        // 23:59 -> 00:00 is 2 falling away and the blank arriving: one card,
-        // because the drum carries blank, 1 and 2 and nothing else.
         assert_eq!(read_back(&run("23:59:59", 0.5, &[]), &g)[0], 2);
         assert_eq!(read_back(&run("23:59:59", 3.0, &[]), &g)[0], B);
-        assert_eq!(drum(0, false), [BLANK, 1, 2], "the hours' tens carries three cards");
-        assert_eq!(drum(0, true), [0, 1, 2]);
-        assert_eq!(drum(3, false).len(), 10);
-        // One card, not a cascade: the module is settled within a fall (plus
-        // its settle) of the minute turning.
-        let fall = f64::from(params().get("flip"));
-        let dt = 1.0 / crate::snapshot::FPS;
-        for when in ["09:59:59", "23:59:59"] {
-            let want = if when.starts_with("09") { 1 } else { B };
-            let mut landed = None;
-            for k in 30..=(4.0 / dt) as i64 {
-                if reads(&run(when, k as f64 * dt, &[]), &g).map(|r| r[0]) == Some(want) && k as f64 * dt > 1.02 {
-                    landed = Some(k as f64 * dt);
-                    break;
+        // Every module turns *through* the blank on the way, and the one it
+        // lands on is the target, blank or not.
+        let tm = Timing::rotation(1.15, 0.2);
+        for (from, target) in [(BLANK, 1), (2, BLANK), (9, 0), (4, 4)] {
+            let mut m = Module::default();
+            m.still(from);
+            m.plan(0.0, target, &DRUM, Flips::Rotation, &tm, 0.0);
+            let turned: Vec<u8> = m.run.iter().map(|c| c.to).collect();
+            assert_eq!(*turned.last().unwrap(), target, "{from} -> {target} landed elsewhere");
+            for card in DRUM {
+                assert!(turned.contains(&card), "{from} -> {target} never turned past {card}");
+            }
+        }
+        // With "changed cards only" it is still one card, straight there.
+        let one = Timing::slow(0.2);
+        let mut m = Module::default();
+        m.still(2);
+        m.plan(0.0, BLANK, &DRUM, Flips::Changed, &one, 0.0);
+        assert_eq!(m.run.len(), 1);
+        assert_eq!(m.run[0].to, BLANK);
+    }
+
+    /// Every minute of a day, in every mode: the run a module plans ends on
+    /// the card the time asks for, and a rotation turns past every card of
+    /// the drum at least once on the way. This is the whole correctness of
+    /// card 184 in one test - the animation may be wrong, but the clock
+    /// cannot be.
+    #[test]
+    fn every_module_lands_on_the_right_card_for_every_minute_of_a_day() {
+        let modes = [(Flips::Rotation, Timing::rotation(1.15, 0.2)), (Flips::Between, Timing::slow(0.2)), (Flips::Changed, Timing::slow(0.2))];
+        for (flips, tm) in modes {
+            for zero in [false, true] {
+                for hours24 in [true, false] {
+                    let mut m: [Module; 4] = std::array::from_fn(|_| Module::default());
+                    for (i, c) in cards(0, hours24, zero).into_iter().enumerate() {
+                        m[i].still(c);
+                    }
+                    for minute in 1..=1440 {
+                        let want = cards(minute, hours24, zero);
+                        for (i, slot) in m.iter_mut().enumerate() {
+                            let was = slot.shown(0.0);
+                            slot.plan(0.0, want[i], drum(i, zero), flips, &tm.at_rate(RATE[i]), SKEW[i]);
+                            let end = slot.ends().max(0.0) + 1.0;
+                            assert_eq!(slot.shown(end), want[i], "{flips:?} zero={zero} h24={hours24} minute {minute} module {i}");
+                            if flips == Flips::Rotation {
+                                let turned: Vec<u8> = slot.run.iter().map(|c| c.to).collect();
+                                for card in drum(i, zero) {
+                                    assert!(turned.contains(card), "{flips:?} minute {minute} module {i}: {was} -> {} skipped {card}", want[i]);
+                                }
+                            }
+                            // Retire the run so the next minute plans from a
+                            // settled module, as the renderer does.
+                            slot.still(want[i]);
+                        }
+                    }
                 }
             }
-            let landed = landed.unwrap_or_else(|| panic!("{when}: the hours' tens never landed"));
-            assert!(landed - 1.0 <= fall + 2.0 * dt, "{when}: the hours' tens took {:.2} s, more than one card", landed - 1.0);
         }
     }
 
-    /// A flip starts when the minute turns and is over within `flip` seconds
-    /// times the number of numerals it has to pass through. Pinned at
-    /// 09:59:59, one second in is the turn of four modules at once - blank to
-    /// 1, 9 to 0, 5 to 0 and 9 to 0 - which is the worst moment the clock has.
+    /// The four modules are never in lock-step: they let go a few tens of
+    /// milliseconds apart and they stop at different moments, because each
+    /// has a different distance left to turn. That is the wave, and it is
+    /// most of the charm.
     #[test]
-    fn a_flip_begins_on_the_minute_and_ends_when_it_should() {
-        let mut patch = (DEF.make)(1);
-        let p = params();
-        let clock = at("09:59:59");
-        let dt = 1.0 / crate::snapshot::FPS;
-        let fall = f64::from(p.get("flip"));
-        let (mut began, mut ended) = (None, None);
-        let g = geom(&[]);
-        let mut held: Option<Vec<u8>> = None;
-        for i in 0..=(6.0 / dt) as usize {
-            let t = i as f64 * dt;
-            let frame = patch.render(&Ctx { t, dt, now: clock.now(t), params: &p });
-            let pixels: Vec<u8> = (0..N).flat_map(|k| frame.pixel(k).to_srgb8()).collect();
-            let still = held.get_or_insert_with(|| pixels.clone());
-            if began.is_none() {
-                // Before the minute turns the clock reads 09:59 and does not
-                // move an LED - where a clock that flipped early is caught.
-                assert_eq!(reads(&frame, &g), Some([B, 9, 5, 9]), "at t={t} the clock is not holding 9:59");
-                if *still != pixels {
-                    began = Some(t);
-                }
-            } else if ended.is_none() && reads(&frame, &g) == Some([1, 0, 0, 0]) {
-                ended = Some(t);
-            }
+    fn the_four_modules_are_not_in_step() {
+        let tm = Timing::rotation(1.15, 0.2);
+        // 09:59 -> 10:00 moves all four: blank->1, 9->0, 5->0, 9->0.
+        let from = cards(9 * 60 + 59, true, false);
+        let want = cards(10 * 60, true, false);
+        let mut starts = Vec::new();
+        let mut stops = Vec::new();
+        for i in 0..4 {
+            let mut m = Module::default();
+            m.still(from[i]);
+            m.plan(0.0, want[i], drum(i, false), Flips::Rotation, &tm.at_rate(RATE[i]), SKEW[i]);
+            starts.push(m.run[0].at);
+            stops.push(m.ends());
         }
-        let began = began.expect("the modules never moved");
-        let ended = ended.expect("the modules never landed");
-        assert!((0.95..1.10).contains(&began), "the flip began at t={began}, not on the minute");
-        // 5 -> 0 is the longest cascade here: five cards, then the settle.
-        let longest = fall * 5.0 * (1.0 + SETTLE);
-        assert!(ended - began <= longest + 3.0 * dt, "the flip took {:.2} s, longer than {longest:.2}", ended - began);
-        assert!(ended - began > fall, "nothing fell: {:.2} s", ended - began);
+        for pair in starts.windows(2) {
+            assert!(pair[1] - pair[0] >= 0.02, "two modules let go together: {starts:?}");
+        }
+        for (a, b) in stops.iter().enumerate().flat_map(|(i, a)| stops.iter().skip(i + 1).map(move |b| (*a, *b))) {
+            assert!((a - b).abs() >= 0.02, "two modules stopped together: {stops:?}");
+        }
+        // And the whole thing is over inside the time the card asked for.
+        let last = stops.iter().fold(f64::MIN, |a, b| a.max(*b));
+        assert!((1.2..=1.9).contains(&last), "the rotation took {last:.2} s");
     }
 
-    /// With `cascade` off a module goes straight to its numeral, so every
-    /// module lands within one card's fall however far it had to go.
+    /// A setting written before card 184 carries `cascade` and no `flips`.
+    /// Card 151 drops an unknown parameter quietly; what matters is that what
+    /// is left is sensible, which here means the new default.
     #[test]
-    fn without_cascade_every_module_lands_together() {
+    fn a_setting_that_still_says_cascade_loads() {
         let mut p = params();
-        assert!(p.set(DEF.params, "cascade", 0.0));
+        assert!(!p.set(DEF.params, "cascade", 0.0), "`cascade` is gone, and is refused rather than stored");
+        assert_eq!(p.get("flips"), 0.0, "and the patch is left on the new default");
+        assert_eq!(Flips::of(p.get("flips")), Flips::Rotation);
+        // The three stops are the three behaviours, in the order the page
+        // lists them.
+        assert_eq!(FLIPS.len(), 3);
+        assert_eq!(Flips::of(0.0), Flips::Rotation);
+        assert_eq!(Flips::of(1.0), Flips::Between);
+        assert_eq!(Flips::of(2.0), Flips::Changed);
+        assert_eq!(Flips::of(-5.0), Flips::Rotation, "out of range is the default, not a panic");
+        assert_eq!(Flips::of(99.0), Flips::Rotation);
+    }
+
+    /// The picture at every 30 fps frame of a run pinned to `when`, as
+    /// srgb8, with the rendered frames beside them.
+    fn film(when: &str, secs: f64, set: &[(&str, f32)]) -> Vec<(f64, Frame, Vec<u8>)> {
+        let mut p = params();
+        for (k, v) in set {
+            assert!(p.set(DEF.params, k, *v), "no parameter `{k}`");
+        }
         let mut patch = (DEF.make)(1);
-        let clock = at("09:59:59");
+        let clock = at(when);
         let dt = 1.0 / crate::snapshot::FPS;
-        let fall = f64::from(p.get("flip"));
-        let mut settled_at = None;
+        (0..=(secs / dt) as usize)
+            .map(|i| {
+                let t = i as f64 * dt;
+                let frame = patch.render(&Ctx { t, dt, now: clock.now(t), params: &p });
+                let px: Vec<u8> = (0..N).flat_map(|k| frame.pixel(k).to_srgb8()).collect();
+                (t, frame, px)
+            })
+            .collect()
+    }
+
+    /// Nothing moves before the minute; the rotation starts on it and is over
+    /// inside the time `spin` promises. Pinned at 09:59:59, one second in is
+    /// the turn of four modules at once - blank to 1, 9 to 0, 5 to 0 and 9 to
+    /// 0 - which is the worst moment the clock has and the longest rotation
+    /// it draws.
+    #[test]
+    fn a_rotation_begins_on_the_minute_and_ends_inside_its_time() {
         let g = geom(&[]);
-        for i in 0..=(4.0 / dt) as usize {
-            let t = i as f64 * dt;
-            let frame = patch.render(&Ctx { t, dt, now: clock.now(t), params: &p });
-            if t > 1.05 && reads(&frame, &g) == Some([1, 0, 0, 0]) {
-                settled_at = Some(t);
+        let film = film("09:59:59", 3.0, &[]);
+        let still = film[0].2.clone();
+        let began = film.iter().find(|(_, _, px)| *px != still).map(|(t, _, _)| *t).expect("the modules never moved");
+        assert!((0.95..1.10).contains(&began), "the rotation began at t={began}, not on the minute");
+        // Every frame up to the last unchanged one reads 9:59 exactly.
+        for (t, frame, px) in &film {
+            if *px != still {
                 break;
             }
+            assert_eq!(reads(frame, &g), Some([B, 9, 5, 9]), "at t={t} the clock is not holding 9:59");
         }
-        let settled = settled_at.expect("the modules never landed");
+        // The drum turns *past* the new time on its way round, so "landed"
+        // is the first frame that reads it and never moves again.
+        let last_move = film.windows(2).rev().find(|w| w[0].2 != w[1].2).map(|w| w[1].0).expect("the modules never moved");
+        let ended = film
+            .iter()
+            .find(|(t, frame, _)| *t >= last_move && reads(frame, &g) == Some([1, 0, 0, 0]))
+            .map(|(t, _, _)| *t)
+            .expect("the modules never settled on 10:00");
+        for (t, frame, _) in film.iter().filter(|(t, _, _)| *t >= ended) {
+            assert_eq!(reads(frame, &g), Some([1, 0, 0, 0]), "at t={t} the board moved again after landing");
+        }
+        // 09:59 -> 10:00 is the worst rotation the clock draws: the minutes'
+        // tens goes 5 -> 0 the long way round, seventeen cards.
+        assert!((1.2..=1.9).contains(&(ended - began)), "the rotation took {:.2} s", ended - began);
+        // It is a rotation, not a flip: half a second in, the clock does not
+        // yet read the new time anywhere near everywhere.
+        let half = film.iter().find(|(t, _, _)| *t >= began + 0.5).expect("a frame half a second in");
+        assert_ne!(reads(&half.1, &g), Some([1, 0, 0, 0]), "the whole board landed within half a second");
+    }
+
+    /// "Changed cards only" is the old `cascade`-off behaviour: a module goes
+    /// straight to its numeral, so every module lands within one card's fall
+    /// however far it had to go, and the ones that did not change never move.
+    #[test]
+    fn changed_cards_only_lands_every_module_together() {
+        let g = geom(&[]);
+        let fall = f64::from(params().get("flip"));
+        let dt = 1.0 / crate::snapshot::FPS;
+        let settled = film("09:59:59", 4.0, &[("flips", 2.0)])
+            .into_iter()
+            .find(|(t, frame, _)| *t > 1.05 && reads(frame, &g) == Some([1, 0, 0, 0]))
+            .map(|(t, _, _)| t)
+            .expect("the modules never landed");
         assert!(settled - 1.0 <= fall + 2.0 * dt, "one card took {:.2} s", settled - 1.0);
+        // 21:12 -> 21:13 moves one module and leaves three alone.
+        let film = film("21:12:59", 2.0, &[("flips", 2.0)]);
+        let cx = geom(&[]).centres;
+        let untouched = |px: &[u8], q: &[u8], i: usize| {
+            (0..H).all(|y| {
+                (0..W).all(|x| {
+                    let u = x as f32 + 0.5 - cx[i];
+                    u.abs() > g.w * 0.5 || px[(y * W + x) * 3..][..3] == q[(y * W + x) * 3..][..3]
+                })
+            })
+        };
+        let first = film[0].2.clone();
+        for (t, _, px) in &film {
+            for i in 0..3 {
+                assert!(untouched(px, &first, i), "at t={t} module {i} moved and its card did not change");
+            }
+        }
     }
 
     /// The palette is one ramp plus black - 32 colours - so every frame is
     /// exact on the wire whatever the picture does, settled or mid-flip.
     #[test]
     fn the_palette_is_one_ramp_and_black() {
-        let sets: [&[(&str, f32)]; 5] = [&[], &[("fill", 0.5)], &[("size", 0.6)], &[("hue", 40.0)], &[("light", 220.0)]];
-        for at_s in [3.0, 1.03, 1.10, 1.17, 1.23, 1.30, 1.40] {
+        let sets: [&[(&str, f32)]; 6] = [&[], &[("fill", 0.5)], &[("size", 0.6)], &[("hue", 40.0)], &[("light", 220.0)], &[("spin", 0.7)]];
+        // Settled, and then right through a rotation - a dozen cards in the
+        // air across the four modules, which is the busiest the picture gets.
+        for at_s in [3.0, 1.03, 1.10, 1.17, 1.23, 1.30, 1.40, 1.55, 1.70, 1.85, 2.00, 2.20] {
             for set in sets {
                 let frame = run("09:59:59", at_s, set);
                 let Frame::Indexed { palette, indices } = &frame else { panic!("not an indexed frame") };
@@ -801,6 +1156,31 @@ mod tests {
         assert!((half / plain - 0.5).abs() < 0.12, "halftone 0.5 gave {:.2} of the light", half / plain);
         // And `size` takes light out by taking area out.
         assert!(apl(&[("size", 0.6)]) < plain * 0.6);
+    }
+
+    /// **The night-clock budget.** A rotation lights more of the panel, more
+    /// often, than a flip did, and the lit edges of a dozen fast cards are
+    /// the brightest thing the patch draws (card 155's `EDGE_BOOST`). So the
+    /// peak and the mean are pinned, over the rotation and over a whole
+    /// minute, at the worst moment the clock has (09:59:59 -> 10:00:00, four
+    /// modules turning at once).
+    #[test]
+    fn a_rotation_is_still_a_picture_for_a_dark_room() {
+        let apl = |f: &Frame| (0..N).map(|i| f.pixel(i).duty()).sum::<f32>() / N as f32;
+        let film = film("09:59:59", 3.0, &[]);
+        let resting = apl(&film[0].1);
+        let over: Vec<f32> = film.iter().filter(|(t, _, _)| (0.95..2.2).contains(t)).map(|(_, f, _)| apl(f)).collect();
+        let peak = over.iter().copied().fold(0.0_f32, f32::max);
+        let mean = over.iter().sum::<f32>() / over.len() as f32;
+        // Over a whole minute: the rotation, then 58-odd seconds of the
+        // resting picture.
+        let rotation = 2.2 - 0.95;
+        let minute = (mean * rotation + resting * (60.0 - rotation)) / 60.0;
+        println!("APL resting {:.3}%  rotation mean {:.3}%  peak {:.3}%  whole minute {:.3}%", resting * 100.0, mean * 100.0, peak * 100.0, minute * 100.0);
+        assert!(peak < 0.030, "a rotation peaks at {:.2}% of the panel", peak * 100.0);
+        assert!(mean < 0.020, "a rotation averages {:.2}%", mean * 100.0);
+        assert!(minute < 0.012, "a minute with a rotation in it averages {:.2}%", minute * 100.0);
+        assert!(peak > resting, "a rotation should put more light on the panel, not less");
     }
 
     /// Card 162's promise, for this patch: a pinned time draws the same
@@ -893,10 +1273,14 @@ mod tests {
         }
     }
 
-    /// Mid-flip, the module really is showing two different numerals at once -
-    /// the next one standing above the axle, the old one still below it - and
-    /// a card in between with an edge brighter than either. If any of that
-    /// stopped being true the flip would be a wipe.
+    /// Mid-rotation, the module really is showing two different numerals at
+    /// once - the next one standing above the axle, the last one still below
+    /// it - and a card in between with an edge brighter than either. If any
+    /// of that stopped being true the rotation would be a wipe.
+    ///
+    /// The drum carries a blank, so the module *is* allowed to go dark for
+    /// the frame or two that card is on it. That is a real card passing, not
+    /// a hole in the animation, and it must not be more than that.
     #[test]
     fn mid_flip_there_are_two_numerals_and_a_card_between_them() {
         let g = geom(&[]);
@@ -922,25 +1306,32 @@ mod tests {
             }
         }
         assert!(both_halves > 20, "the module rarely shows two numerals at once: {both_halves} of 31 frames");
-        assert_eq!(all_dark, 0, "the module went blank for {all_dark} frames");
+        assert!(all_dark <= 3, "the module went blank for {all_dark} frames - more than the blank card passing");
         assert!(lit_edge > 5, "the falling card's edge is never lit: {lit_edge} of 31 frames");
     }
 
-    /// The angle a single-card module - the hours' tens, blank to 1 - is at on
-    /// frame `frame` of a run pinned to 09:59:59, driven through the same
-    /// `step` and the same clock as the renderer. Nothing here interpolates
-    /// the fall curve by hand, which is how the README's table came to be
-    /// written down against the wrong frame the first time.
+    /// The angle a single-card module - the hours' tens, blank to 1, in
+    /// "changed cards only" - is at on frame `frame` of a run pinned to
+    /// 09:59:59, planned through the same `plan` and the same clock as the
+    /// renderer. Nothing here interpolates the fall curve by hand, which is
+    /// how the README's table came to be written down against the wrong frame
+    /// the first time.
     fn theta_at(flip: f64, frame: i32) -> f32 {
         let clock = at("09:59:59");
         let dt = 1.0 / crate::snapshot::FPS;
-        let mut m = Module { shown: BLANK, to: BLANK, began: 0.0, state: State::Still };
+        let g = geom(&[("flip", flip as f32)]);
+        let tm = Timing::slow(flip);
+        let mut m = Module { from: BLANK, run: Vec::new() };
         for i in 0..=frame {
             let t = f64::from(i) * dt;
             let minute = (clock.now(t) / 60.0).floor() as i64;
-            m.step(t, cards(minute, true, false)[0], flip, true, drum(0, false));
+            let want = cards(minute, true, false)[0];
+            if m.shown(t) != want {
+                m.plan(t, want, drum(0, false), Flips::Changed, &tm, 0.0);
+            }
         }
-        m.pose(f64::from(frame) * dt, flip).theta
+        let pose = m.pose(f64::from(frame) * dt, &g);
+        pose.flying().first().map_or(0.0, |f| f.fall.theta)
     }
 
     /// The README's table of snapshot recipes, checked rather than believed.
@@ -997,8 +1388,9 @@ mod tests {
             ("size", 0.55, 1.0, 1.0),
             ("weight", 1.2, 3.0, 2.0),
             ("seam", 0.0, 3.0, 2.0),
+            ("flips", 0.0, 2.0, 0.0),
+            ("spin", 0.7, 2.5, 1.15),
             ("flip", 0.08, 0.6, 0.2),
-            ("cascade", 0.0, 1.0, 1.0),
             ("tilt", 0.0, 40.0, 16.0),
             ("fill", 0.0, 0.6, 0.0),
             ("pace", 5.0, 60.0, 60.0),
