@@ -264,3 +264,55 @@ locally without committing it. `crates/art/README.md`'s vesta section gains the
 face table, the half-LED rule and the blank card.
 
 `cargo test -p screeny-art`: 95 + 4 + 3 passed, 0 failed.
+
+### Step 3: the PNGs, merged `main`, and the numbers
+
+`main` merged (card 161's one frame rate, `flock`, the firmware cards): no
+conflict, nothing of mine touched. `crate::snapshot::FPS` still resolves, so
+vesta's recipe tests read the one constant card 161 made.
+
+**PNGs** in the session scratchpad's `vesta-faces/`, scale 12, the panel model
+on. One honest line each:
+
+| file | what it shows |
+|---|---|
+| `01-vesta.png` | the house face on five times. Visibly the fuzziest of the six - half-lit LEDs on every curve - which is the owner's complaint made plain. |
+| `02-terminus-bold.png` | the default. Every LED full or black, the biggest numerals in the set, a 5 that is a flat bar over a full bowl. |
+| `03-terminus.png` | the same design two LEDs of stroke instead of three: lighter and still exactly crisp. The one to pick if the bold is too much light at 3 a.m. |
+| `04-spleen.png` | square-shouldered. The 4 built from right angles and the flat-topped 3 are the whole point; the 7's little top-left hook is its signature. |
+| `05-dina.png` | 2 x 2-LED pixels, 18 rows instead of 20, so more black card shows above and below. Chunky without being heavy. |
+| `06-micro-grotesk.png` | the soft one: an outline, so every edge is a ramp. Round unslashed 0, bare-stemmed 1. A real alternative, not a better pixel font. |
+| `07-all-faces-0456.png` | the six at 04:56, the time in the owner's screenshot, with the blank leading card - ` 4:56`. This is the sheet to choose from. |
+| `08-all-faces-0456-leading-zero.png` | the same six with `zero` on, so the 0 is visible in every face and the blank is visible as a choice. |
+| `09-terminus-bold-mid-flip.png` | the seven frames the panel really gets, 09:59:59 to 10:00:00, at the default fall. Four modules turn at once and the blank card falls with them. |
+| `10-terminus-bold-five-angles.png` | the README's five-angle study at `flip=0.6`. Worth looking at: at 97 degrees the blank module is a *bare lit edge* with the 1 already standing behind it, which is exactly what a blank card should look like mid-flip. |
+
+**Numbers.** `snapshot --time 04:56` per face: 4 colours and 368-392 bytes for
+every crisp face, 18 for `Vesta` (527 B) and 19 for `Micro Grotesk` (635 B) -
+still well inside the 1464-byte budget and still `pal8-lz, exact`. Resting APL
+is unchanged at about 1%; the palette is still one ramp plus black, 32 entries,
+for every face and mid-flip (`the_palette_is_one_ramp_and_black` covers the
+default face at five moments and five parameter sets).
+
+**How `weight` and `size` behave per face.** `weight` moves `Vesta`'s stroke
+and nothing else; the five embedded faces have the weight they were cut at and
+ignore it, which is what the label now says ("Stroke weight, the Vesta face
+only"). `size` scales every face as it always did - and below 1 a pixel face is
+resampled and stops being crisp, which is unavoidable and is why the crispness
+test pins `size` 1.
+
+**Tests, as run.** `cargo test --release --no-fail-fast` at the root: **912
+passed, 0 failed** (no load-sensitive test misfired, so nothing was re-run).
+`cargo clippy --workspace --all-targets`: silent. The repo has no
+`rustfmt.toml` and existing files are not `cargo fmt` clean, so formatting
+follows the surrounding style rather than rustfmt.
+
+**Outside my own files**, for the record: `crates/art/src/lib.rs` gained one
+line (`pub mod faces;`), and `crates/art/src/patches/vesta/glyphs.rs` was
+`git mv`d to `crates/art/src/faces/stroked.rs` per amendment 2. Nothing else
+outside `crates/art/src/faces/`, `crates/art/src/patches/vesta/`,
+`tools/art-faces.py` and vesta's section of `crates/art/README.md` was touched.
+
+**Follow-up**: `docs/board/backlog/175-vesta-the-colon-is-not-a-face.md` - the
+colon is still a pair of drawn circles and is the only anti-aliased thing left
+in a crisp frame (it is what turns a 2-colour picture into a 4-colour one).
