@@ -4,8 +4,8 @@ title: Flock - a bird with real wings, for when it is drawn big
 type: build
 hardware: no (the owner judges it on the panel through the Studio)
 depends: [122]
-owner:
-branch:
+owner: worker (opus)
+branch: card/123-flock-bird-wings
 ---
 
 ## Goal
@@ -81,3 +81,84 @@ The owner, with `birds` around 6 and `size` around 2.5 on the panel, sees birds 
 bend and beat like wings.
 
 ## Log
+
+### 2026-09-21 - claimed
+
+Branch `card/123-flock-bird-wings`, cut from `main` at 7f95e5e. Read `CLAUDE.md`,
+`docs/README.md`, this card, cards 168, 177 and 122 in `docs/board/done/`,
+`docs/design/generative-art-brief.md`, then `crates/art/src/patches/flock/` in full.
+
+### 2026-09-21 - the "before" pictures, and finding moments worth photographing
+
+Rendered the before set first, from the untouched code (`before/` in the scratchpad):
+a 16-frame flap cycle, a glide and a banked turn at `birds 6 size 2.5 seed 7`, plus the
+55-bird default at four moments. Confirmed by eye what the card says: at 16-18 LEDs the
+bird is a three-stroke stick figure - a fat body dash with two straight rods off it, an
+asterisk rather than a bird.
+
+Finding the moments took a throwaway `#[ignore]`d scouting test (never committed): it
+flew seed 7 with 6 birds and printed, per frame, the biggest in-frame bird's projected
+span, roll, glide and *presentation* (how much of its wing plane the camera can see).
+Two things fell out of it that shaped the pictures:
+
+- **The flock hardly banks.** At the shipped `calm` 0.90 the largest roll any big bird
+  reaches in 100 s is **7 degrees**; even at `calm` 0.15 / `wild` 0.9 it only reaches
+  **13**. Roll is `atan(lateral / g)` and the turn rate is deliberately gentle, so a
+  "banking turn" picture has to be taken at a low `calm` and is still a shallow lean.
+  The banking sheet is therefore rendered with `--set calm=0.15 --set wild=0.9` and
+  says so.
+- **Most big birds are seen nearly edge-on** (presentation 0.1-0.35). A bird's planform
+  is the view that shows a wing best and it is the rarest one, which is exactly why the
+  wing has to read from the side and head-on as well.
+
+### 2026-09-21 - the model
+
+New `crates/art/src/patches/flock/bird.rs`: the bird as a shape, built in its own frame
+and handed back in world coordinates so the camera does all the foreshortening. Two
+segments per wing with a wrist; the hand wing beats 1.3x further than the inner one and
+**lags it by 0.55 rad of phase**, which is the wave running out along a real wing. The
+fold is driven by the *derivative* of card 168's warped beat, lagged the same way -
+`smoothstep(-0.35, 0.75, rate(phase - LAG))` - so the hand wing is swept back 60 degrees
+and drawn in through the quick half of the beat and nearly straight through the slow
+half. A first attempt drove the fold from the wing's *height* instead and was nearly
+useless: height alone folds and unfolds symmetrically, and it is the asymmetry that
+reads (mid-upstroke and mid-downstroke came out 0.54 vs 0.49 of full fold; with the
+derivative they are 0.99 vs 0.00).
+
+Each wing carries chord - a filled surface from a leading-edge spar back to a trailing
+edge, broad at the root, narrower at the wrist, nothing at the tip - which needed a
+filled-triangle primitive in `Coverage` (`mod.rs`), anti-aliased off the signed distance
+to the nearest edge so its edges match the strokes'. The body is three strokes of
+falling width (chest, neck, tail boom) and the tail is a small fan triangle that spreads
+with `glide` and `|roll|`, both of which `Bird` already carries: **nothing in `sim.rs`
+changed.**
+
+**Level of detail by projected span, never by `size`**: `AREA = (5.0, 9.0)` LEDs,
+smoothstepped, scales the chord and the tail fan. Below 5 LEDs the chord is zero and the
+bird is card 168's bare skeleton, so the default picture keeps its look; the surface
+grows out of the line instead of popping.
+
+### 2026-09-21 - iterating by looking
+
+Three rounds, judged on a throwaway turntable (also never committed: a temporary
+`#[ignore]`d test that draws one bird from six directions - side, 45 below, directly
+below, 45 above, three-quarter front, head-on - through eight wingbeat phases into a
+PPM). Rendering into the real patch was not enough: the flock almost never presents a
+bird broadside, so the planform could only be judged on a rig.
+
+1. First proportions (root chord 0.26 span, body 0.74 span long, shoulder at 0.05):
+   **a manta ray.** From below the two wings and the body fused into one solid lens with
+   no waist and no wing shape at all. Rejected.
+2. Narrowed the chord to 0.19/0.115 span, moved the wing root forward to 0.11 span and
+   shortened the body to card 168's 0.70: readable as a bird in the folded phases, but a
+   **plus sign** in the spread ones - the leading edge was perpendicular and the sweep at
+   full extension (0.14 rad) was under two LEDs of offset.
+3. Sweep at full extension up to 0.34 rad, and the wrist now reaches slightly *forward*
+   of the shoulder when spread and is drawn back when folded
+   (`INNER_SWEEP` -0.02 -> 0.10 span). That is what the card means by "nearly straight
+   and swept slightly forward on the downstroke", and it is what finally made the spread
+   phases read as a bird rather than an aeroplane.
+
+The glide "M" needed doubling to be visible at all: at 0.12/-0.18 rad it was under a LED
+of deflection across the semi-span and head-on the bird was a flat line. At 0.24/-0.30 it
+is the gull M the card asks for.
