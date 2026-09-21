@@ -158,18 +158,6 @@ const LEAN_MAX: f32 = 0.95;
 const LEAN_IN: f32 = 0.22;
 const LEAN_OUT: f32 = 0.45;
 
-/// How far nose-up a bird is drawn at the bottom of its speed band, radians.
-///
-/// The heading is the velocity, so a bird drawn on its heading alone is always
-/// pointing exactly where it is going - which no flying thing does. A slow one
-/// is hanging on its wings with its nose up; a fast one has it down. Speed
-/// already carries the climb (a bird pays for height in speed, [`TRADE`]), so
-/// this one number gives a climbing bird its nose-up attitude and a diving one
-/// its nose along the dive, without asking the flight for anything.
-const AOA: f32 = 0.26;
-/// How long that attitude takes to follow the airspeed, seconds.
-const AOA_TAU: f32 = 0.60;
-
 /// How many drifting blobs the world is laid out with. They are all built
 /// from the seed and the `terrain` parameter says how many of them are real
 /// this frame, so turning it up and down does not re-roll the world.
@@ -440,10 +428,6 @@ pub struct Bird {
     /// no limit and nothing the tests measure about the flight reads it, so
     /// turning `lean` up and down cannot change where a single bird goes.
     pub lean: f32,
-    /// How far nose-up of its own flight path the bird is drawn, radians: the
-    /// angle of attack it is carrying, out of its airspeed. A drawing quantity
-    /// too, for the same reason.
-    pub pitch: f32,
     /// Wingbeat phase, radians.
     pub phase: f32,
     /// 0 beating, 1 gliding. Low-passed, so it eases in and out.
@@ -473,7 +457,6 @@ impl Bird {
             vel,
             roll: 0.0,
             lean: 0.0,
-            pitch: 0.0,
             phase: rng.range(0.0, TAU),
             glide: 0.0,
             trim: rng.range(0.86, 1.16),
@@ -497,20 +480,15 @@ impl Bird {
         self.vel.unit_or(v3(0.0, 0.0, 1.0))
     }
 
-    /// Right, up, forward for this bird **as it is drawn**: its heading, held
-    /// `pitch` nose-up out of it, and rolled by `lean`.
+    /// Right, up, forward for this bird **as it is drawn**: its heading,
+    /// rolled by `lean`.
     ///
-    /// The two drawing quantities enter here and nowhere else, which is what
-    /// makes them safe: this is read by the pose and by nothing that flies.
+    /// The drawn lean enters here and nowhere else, which is what makes it
+    /// safe: this is read by the pose and by nothing that flies.
     pub fn frame(self) -> (V3, V3, V3) {
-        let along = self.heading();
-        let right = along.cross(UP).unit_or(v3(1.0, 0.0, 0.0));
-        let level = right.cross(along);
-        // Nose up out of the flight path, about the wing axis, so the body and
-        // the wing plane pitch together and the heading is left alone.
-        let (sp, cp) = self.pitch.sin_cos();
-        let fwd = along.scale(cp).add(level.scale(sp));
-        let up = level.scale(cp).sub(along.scale(sp));
+        let fwd = self.heading();
+        let right = fwd.cross(UP).unit_or(v3(1.0, 0.0, 0.0));
+        let up = right.cross(fwd);
         let (s, c) = self.lean.sin_cos();
         (right.scale(c).add(up.scale(s)), up.scale(c).sub(right.scale(s)), fwd)
     }
@@ -1233,13 +1211,6 @@ impl Sim {
         // reads as a dial being turned; asymmetrical, it reads as a decision.
         let tau = if want.abs() > me.lean.abs() { LEAN_IN } else { LEAN_OUT };
         me.lean += (want - me.lean) * (1.0 - (-dt / tau).exp());
-
-        // Where its nose is, relative to where it is going: at the bottom of
-        // its own speed band a bird hangs nose-up on its wings, at the top it
-        // has its nose down. `pep` is in there because the band is this bird's,
-        // not the flock's - a quick bird cruising is not a slow one flat out.
-        let want = AOA * (1.0 - ((me.speed() - lo) / (hi - lo).max(0.1)).clamp(0.0, 1.0));
-        me.pitch += (want - me.pitch) * (1.0 - (-dt / AOA_TAU).exp());
 
         // Beating: harder when climbing, a glide when coming down. The rate
         // rises a little with airspeed, so a flock that is working looks like

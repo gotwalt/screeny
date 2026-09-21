@@ -110,3 +110,49 @@ across the panel.
 The scout also prints *presentation* - how much of the wing plane the camera can
 see. Through those two turns it is 0.0-0.5 and usually under 0.2: nearly edge-on,
 which is why the underside flash card 123 drew never fires.
+
+### 2026-09-21 - the lean, and the body pitch that was tried and dropped
+
+`Bird::lean`, the roll the bird is **drawn** at: `LEAN_MAX * tanh(gain * roll /
+LEAN_MAX)` with `gain = 1 + 5 * lean`, so at the shipped `lean` 1 a six-degree
+turn is drawn at about thirty and a hard one (`calm` 0, roll near twenty degrees)
+arrives at 54 rather than past it. Eased asymmetrically - 0.22 s going over, 0.45 s
+coming back - on top of the roll's own 0.35 s low pass. A plain gain with a
+symmetrical ease read like a dial being turned; the asymmetry is what makes it read
+as a decision, and the ease at all is what keeps a six-fold gain from turning the
+roll's own small movements into a flicker.
+
+**Measured, same 100 s, seed 7, six birds, shipped `calm`/`wild`:** honest roll
+p50 0.9 / p95 5.7 / max 7.6 deg (unchanged, and the test asserts it stays under 12);
+drawn lean p50 5.8 / p95 30.1 / **max 37.2 deg**. Presentation - how much of the
+wing plane the camera can see on the nearest big bird - went from 0.0-0.5 to
+0.3-0.7 through the same turns, which is the underside flash card 123 drew finally
+having a reason to fire.
+
+In the pose: the **inside** wing of a turn takes 0.30 more fold (so it is drawn in
+and swept back) at a 29-degree lean, and the tail fan spreads on the drawn lean
+instead of the honest roll. Both are pose inputs; no proportion was touched.
+
+**A body pitch was built and then taken out.** `Bird::pitch` held the bird nose-up
+out of its own flight path by where it sat in its speed band - a climbing bird pays
+for height in speed, so speed already carries the climb, and it gave 6-7 degrees
+nose-up in a climb against 0.5 in a dive. At `AOA` 0.26 the difference in the
+picture was a pixel; at 0.50 (17 degrees nose-up in that climb) it was **still** a
+pixel. The reason is the view: the camera flies with the flock, so a bird is nearly
+always seen from behind or ahead, and from there the body is foreshortened to one
+or two LEDs - pitching it rotates something that has no length on the panel. The
+lean reads for exactly the opposite reason: it rotates the *wingspan*, which is the
+long axis in that same view. Removed rather than kept as a subtle change that only
+moves the default picture. See `zoom-climb.png`.
+
+Two tests: `birds_lean_into_their_turns` (at `lean` 1 the drawn bank passes 25 deg
+while the honest roll stays under 12; at `lean` 0 the drawn bank *is* the honest
+roll to within a degree; and the two never disagree about which way by more than
+the easing's lag) and `the_lean_never_touches_the_flight` (24 birds, 60 s, `lean` 0
+against `lean` 2: every position, velocity, roll and wingbeat phase identical bit
+for bit). The second is the one that matters - it is why `ten_minutes_of_flight`
+and the view's promises cannot be moved by this control.
+
+One thing found on the way: `Sim::new` settles the flock with `Tuning::default()`,
+so the first moment of any run carries a lean from the warm-up whatever the
+parameter says. It decays in well under a second; the tests skip two seconds.
