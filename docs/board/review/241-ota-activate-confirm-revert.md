@@ -569,9 +569,9 @@ curl -s -X POST http://workbench.local:8787/api/v1/player/set \
 | file | `esp_app_desc.version` | bytes | what |
 |---|---|---|---|
 | `screeny-fw-0.7.0-default.elf` | `0.7.0` | - | **the build to serial-flash** |
-| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,013,904 | a good update: must confirm |
-| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,013,696 | never reports healthy: must revert at 180 s |
-| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,014,400 | panics at 20 s: must be rolled back by the bootloader |
+| `screeny-fw-0.7.1-good.bin` | `0.7.1` | 1,014,288 | a good update: must confirm |
+| `screeny-fw-0.7.1-unhealthy.bin` | `0.7.2-unhealthy` | 1,014,160 | never reports healthy: must revert at 180 s |
+| `screeny-fw-0.7.1-panic.bin` | `0.7.3-panic` | 1,014,768 | panics at 20 s: must be rolled back by the bootloader |
 | `screeny-fw-0.7.1-good.elf`, `-unhealthy.elf`, `-panic.elf` | | | the ELFs, for symbolising a backtrace |
 
 The three `.bin`s were made from those ELFs with, from the repository root and
@@ -650,7 +650,7 @@ restarting"** for two seconds, then the boot.
 
 ```
 HTTP 200 in 25.x s (39 KB/s)
-  ok true written 1013904 error None activating true
+  ok true written 1014288 error None activating true
   waiting for the device to come back (up to 90 s)...
   back after ~45 s: fw 0.7.1 slot Ota1 state PendingVerify boot_id N uptime ~20000 ms
   waiting for the trial to end (up to 240 s)...
@@ -663,7 +663,7 @@ HTTP 200 in 25.x s (39 KB/s)
 are this card's whole deliverable:
 
 ```
-ota: staged image accepted - 1013904 bytes, 5 segments, version "0.7.1"
+ota: staged image accepted - 1014288 bytes, 5 segments, version "0.7.1"
 ota: ACTIVATED 0x210000 - restarting into it on trial. If it does not prove itself within 180 s, or resets before it does, the bootloader brings fw 0.7.0 back.
 <the ROM banner and the bootloader>
 boot: #1 since power-on, reset reason software (...)
@@ -1067,3 +1067,36 @@ step 1 again. **Two outcomes, and both are useful:**
 The stop condition is unchanged: `tools/fw-run.sh` always wins. Nothing in this
 branch can write outside the inactive slot and `otadata`, and the watchdog's
 reset is a system reset that leaves both alone.
+
+#### Numbers, and the artefacts
+
+`tools/fw-size.sh`, floor 24,576, **every artefact in the scratchpad rebuilt
+from this branch** with the same names as before:
+
+| build | `.stack` 0.7.0 | `.stack` 0.7.0b | `.bss` |
+|---|---|---|---|
+| default | 26,240 | **26,200** | 110,440 |
+| `panic-test` | 26,176 | **26,120** | 110,504 |
+| `http-selftest` | 25,824 | **25,768** | 110,824 |
+| `start-in-portal` | 26,240 | **26,200** | 110,440 |
+| `ota-test-unhealthy` | 26,240 | **26,200** | 110,440 |
+| `ota-test-panic` | 26,176 | **26,120** | 110,504 |
+
+`.rtc_slow.persistent` 52 -> 56 bytes; `.rwtext` unchanged at 66,932; heap
+unchanged (still one 4 KB allocation per upload and nothing else).
+
+`timeout 1200 cargo test`: **843 passed, 0 failed** - including the
+`screeny-studio` wall-clock test that flaked on the previous run.
+`cargo clippy --workspace --all-targets`: silent. Firmware clippy: the same
+pre-existing warnings as `main`, none new. `screeny-probe http` against the
+simulator: **41 passed, 0 failed, 4 skipped, 0 connects refused**.
+
+| file | `esp_app_desc.version` | bytes |
+|---|---|---|
+| `screeny-fw-0.7.0-default.elf` | `0.7.0` | - |
+| `screeny-fw-0.7.1-good.{bin,elf}` | `0.7.1` | 1,014,288 |
+| `screeny-fw-0.7.1-unhealthy.{bin,elf}` | `0.7.2-unhealthy` | 1,014,160 |
+| `screeny-fw-0.7.1-panic.{bin,elf}` | `0.7.3-panic` | 1,014,768 |
+
+All three pass `screeny-probe fw-scan`. `FW_VERSION` is back at `0.7.0` and the
+tree is clean.
