@@ -166,3 +166,43 @@ Next step on resume: delete `crates/art/src/patches/plasma.rs`, move the test
 card's drawing and card 102's two dark-ramp tests into
 `crates/art/tests/dark_ramp.rs`, take both out of `ALL`, and commit that before
 touching the studio.
+
+### Resumed; the art registry (7 hits looked at)
+
+Merged `main` first (card 177's flock work). The owner's word since the pause:
+he does not care about render cost or timing, so the table above stays as the
+reasoning that picked the fixture and no before/after suite timing is reported.
+What matters is that the load-sensitive studio tests did not get flakier, which
+is the three full runs at the end.
+
+`plasma.rs` deleted. `testcard.rs` deleted from the registry and its two card
+102 tests moved to `crates/art/tests/dark_ramp.rs`, with only the two grey
+strips they read drawn - **on the rows they were on**, because
+`Dither::BlueNoise`'s threshold is a function of `(x, y)` and moving a strip
+would have silently re-baselined `dither_moves_the_dark_row...`. The hue
+sweeps, the colour ramps and the moving line went with the patch: nothing
+asserted anything about them.
+
+Seven hits in `crates/art`, one decision each:
+
+1. `patches/mod.rs` `ALL` - both entries removed.
+2. `patches/mod.rs` `the_test_card_is_the_same_card_whatever_the_seed` - kept as
+   `vesta_is_the_same_face_whatever_the_seed`. Measured before choosing: of the
+   three remaining `seeded: false` patches only `vesta` draws identical frames
+   on seeds 1 and 999983; both clocks vary mid-dance because the seed picks the
+   choreography.
+3. `patch.rs`'s `seeded` doc - `vesta` is the example, for the same reason.
+4. `tests/rate.rs` `PURELY_A_FUNCTION_OF_T` - two entries dropped; the
+   remaining four are unchanged claims.
+5. `tests/rate.rs` `checked >= 6` - had to move, and is now
+   `checked + skipped == ALL.len()` plus `checked >= 5`. Five CPU patches
+   remain, so the old bound would have gone red on a bench with no adapter for
+   a reason that has nothing to do with the test.
+6. `tests/pinned_time.rs` - "a patch that does not tell the time" is now
+   `metaballs` and `flock`, the two that never read `Ctx::now`. **This is the
+   only line I touched in that file** (card 184 is also in it, for vesta).
+7. `tests/sender.rs` - the second indexed patch is `flock`, whose module header
+   states the frame is indexed and exact, which is the claim under test.
+
+`cargo test --release -p screeny-art`: 97 lib + 2 dark_ramp + 4 pinned_time +
+2 rate + 3 sender, all green.
