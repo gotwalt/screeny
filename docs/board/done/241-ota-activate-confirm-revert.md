@@ -1100,3 +1100,40 @@ simulator: **41 passed, 0 failed, 4 skipped, 0 connects refused**.
 
 All three pass `screeny-probe fw-scan`. `FW_VERSION` is back at `0.7.0` and the
 tree is clean.
+
+**Orchestrator, after the merges (2026-09-20): 80d61d7 (241), 043ad8f (241b), 457ea5b (245). OTA works end to end on the device.**
+First bench: fw 0.7.0 wedged ~15 s into any upload. It was not this card: a latent race in
+card 240's flash path (card 245: esp-storage parks core 1 wherever it is and re-enables core
+0's interrupts before un-parking it; the tick handler then spins on the scheduler lock core 1
+holds). 241b's always-on MWDT0 liveness watchdog and the upload breadcrumb are what turned
+"silent until power-cycled" into "reboots in 20 s and says `after N sector(s)`", and the
+drifting N (102 / 47 / 161) is what said "race". With 245's fix, serial attached:
+- **Step 1, good image**: `HTTP 200 in 26.6 s`, `activating true`;
+  `ota: ACTIVATED 0x210000`; `rst:0x3 (SW_RESET)`; `http: fw slot Ota1 state PendingVerify`;
+  `ota: ON TRIAL`; `trial at 30 s - ip true, http 1, swaps 4731 (healthy true)`;
+  **`ota: CONFIRMED at 60 s - fw 0.7.1`**; status `0.7.1 / ota_1 / valid`;
+  `update {"outcome":"confirmed","slot":"ota_1","version":"0.7.1"}`; survives a `reboot`.
+- **Step 2, never-healthy image**: on trial from `Ota0`; `healthy false` at 30..150 s;
+  **`ota: REVERTING at 180 s`**; back on `0.7.1` by itself;
+  `update {"outcome":"reverted","reason":"deadline","slot":"ota_0","version":"0.7.2-unhealthy"}`.
+- **Step 3, panicking image - the bootloader's half**: on trial; panic at 20,127 ms
+  (`ota.rs:1397`), card 243's handler resets; the very next boot is
+  **`Loaded app from partition at offset 0x210000`** - the previous image - after **one**
+  panic (`panic_count 1`, `consecutive 1`); status `0.7.1 / fw_state aborted`;
+  `update {"outcome":"reverted","reason":"aborted","slot":"ota_0","version":"0.7.3-panic"}`.
+  **The card-242 bootloader really has rollback compiled in.** `TRIAL`/RWDT question is moot:
+  241b replaced it with the 20 s MWDT0.
+- WiFi credentials and settings survived all of it (seven boots, two rollbacks, rejoined
+  from the store every time). Final state: `main`'s 0.7.0 serial-flashed,
+  `screeny-probe http` 39/0/6 with 0 refused, UDP 60/0/4, `stack_free` 11.6 KB, stream back.
+**Bugs found on the bench, for a follow-up card (246):**
+1. After `CONFIRMED` the device answers every upload `busy` until it is rebooted (the
+   on-trial refusal is never lifted at confirmation).
+2. `screeny-probe fw-upload --activate` decides "the device came back" before it has gone
+   away (it read the old image's uptime 28 s later and then found no update record): wait
+   for `boot_id` to change.
+3. After a revert, `status.fw_state` reads `invalid`/`aborted` while the *running* image is
+   fine - it is the other slot's state. True to `otadata`, confusing to a person; say whose
+   state it is.
+4. An interrupted `screeny-probe http` run left the device named `probe-228` at brightness
+   49 for an hour: the restore guard does not run when the probe dies on a broken pipe.

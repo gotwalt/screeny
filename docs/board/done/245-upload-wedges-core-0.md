@@ -608,3 +608,15 @@ espflash save-image --chip esp32 --flash-size 8mb \
   way.
 - **`spike_ota.rs` was guarded but is never compiled into anything flashed**, so
   that change is style rather than evidence.
+
+**Orchestrator, after the merge (2026-09-20): merged as 457ea5b. The mechanism and the fix are confirmed on the device.**
+- Phase A, `flash-stress` built from `main`, stream running, three boots: **500 cycles, 0
+  mismatches** each - 24,858 / 25,068 / 25,246 ms wall, erase min/mean/max ~33.2/39.7/54.5 ms,
+  write ~9.1/9.3/11.2 ms, longest masked window 54.5 ms, `core 1 swaps +227..232`. 1,500
+  guarded operations, no wedge; before the fix 248 sectors wedged 3 runs of 3 (and fw 0.6.0
+  on its first retry).
+- Phase B, default 0.7.0, three stage-only uploads: `HTTP 200` in 26.4 / 26.1 / 26.1 s,
+  `248 sectors`, `link downs +0` each, no reset.
+- Then card 241's steps ran to the end on this build (its Log has them).
+The residual hardware hypothesis (core 1 frozen mid cache-fill) did not show in ~2,700
+flash operations today; left.
