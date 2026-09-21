@@ -177,3 +177,35 @@ panic, which is a real gap for testing wording against it, noted below), `devhtt
 `cargo test -p screeny-studio --test device_status`: 7 passed, 0 failed, including
 `the_studio_never_opens_a_second_connection_to_a_device` - the second, sequential connection
 this card adds does not change the "one at a time" property that test proves.
+
+**Tests** (`tests/device_status.rs`), against a hand-written `PanicServer` rather than
+`screeny-sim`: the simulator's `GET /api/v1/panic` always answers `last_panic: null,
+last_reset: null` and can never 404 (card 243 landed the route in it, and it has no crash
+path), so proving "once per boot, not again", "a new boot asks again" and "404 is silence"
+needs a server that can be told to do all three on command - the same reason `CountingServer`
+and `Flood` in this file are hand-written rather than borrowed from the simulator.
+`PanicServer` answers `GET /api/v1/status` with a movable `boot_id` and `GET /api/v1/panic`
+with a canned reply or a 404, and counts each path's hits separately.
+
+- `the_panic_route_is_read_once_per_boot_id_and_not_again`: five-plus status reads at a
+  fixed `boot_id`, one panic read. Also checks the JSON shape that reaches
+  `/api/v1/status` - `boot_count`, `panic_count`, `last_panic.{file,line,consecutive}` and
+  the derived `repeat: true` for `consecutive: 2`.
+- `a_new_boot_id_is_asked_for_its_panic_again`: one read at `boot_id` 1, then the server's
+  `boot_id` moves to 2 and the studio is proven to ask again - `panic_hits` goes 1 -> 2 and
+  no further.
+- `a_404_from_the_panic_route_is_silence`: `devices[0].panic`/`panic_ago` stay `null`,
+  `/api/v1/status`'s `ok` stays `true` with no `problems`, the *status* route's own
+  `last_error` is untouched by the panic route's 404, and the panic route is asked once, not
+  retried every 100 ms poll.
+
+The existing `the_studio_never_opens_a_second_connection_to_a_device` (against its own
+`CountingServer`, which answers any path 200 with a status-shaped body - so the studio's one
+extra panic request per test run gets a reply it fails to parse as `PanicReply` and is
+silently absorbed) still passes unmodified: the panic read is sequential with the status
+read, never concurrent, so `most` stays 1.
+
+`cargo build -p screeny-studio --tests` and `cargo clippy -p screeny-studio --all-targets`:
+clean. `cargo test -p screeny-studio --test device_status`: 10 passed, 0 failed, run three
+times back to back (including under `--test-threads=4`) with no flake. `ps` after every run
+shows nothing of mine left running.
