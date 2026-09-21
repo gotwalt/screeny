@@ -338,3 +338,43 @@ So the signal now joins the two `select`s inside `run_join` and
 them, and the machine's `StopJoin` is what abandons the attempt whose future
 has just been dropped. `.stack` is unchanged at 25,800 (the image grew 224
 bytes of flash).
+
+### Exit: the numbers, and where this stands
+
+- `timeout 1200 cargo test` (the whole workspace, from the worktree root):
+  **948 passed, 0 failed, 1 ignored across 96 suites, exit 0**. 19 of those are
+  new (12 in `crates/provision/tests/button.rs`, 7 in
+  `crates/sim/tests/button.rs`) plus 2 in `crates/provision/src/screen.rs`'s
+  own tests and one doc-test on the recogniser. The firmware is a separate
+  cargo project and is not in that run; it is built and measured below.
+- `tools/fw-size.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw`,
+  fw **0.8.0**, default features:
+
+  | | bytes | note |
+  |---|---|---|
+  | `.data` | 60,108 | |
+  | `.bss` | 110,696 | |
+  | **`.stack`** | **25,800** | floor 24,576; **26,200 on fw 0.7.0**, so the card costs 400 |
+  | `.rwtext` | 67,740 | IRAM, unchanged |
+  | image | 1,026,965 | 49% of a 2 MB slot |
+
+  The button task's own future is 216 bytes of that (`xtensa-esp32-elf-nm`),
+  and `provision_task`'s is unchanged at 2,464 - the wipe's flash write fits
+  inside the call chain `CommitCredentials` already had.
+- `cargo clippy --release` in `firmware/`: the only warnings in the files this
+  card touches are the five pre-existing doc-list ones in `store.rs`'s module
+  header, `ota.rs:700` and `screens.rs:198`, all of which are on `main`.
+- Artefact: `screeny-fw-0.8.0-default.elf` in the orchestrator's scratchpad,
+  `card230/`.
+- **Review state: self-reviewed, not reviewed by anyone else, and not on
+  hardware.** Nothing in this card has touched the device, the serial port or
+  the LAN. The one thing that cannot be proved on a host is the thing card 203
+  already proved with the owner pressing - that GPIO15 goes low - so the bench
+  run above is a confirmation, not an experiment. The card stays in `doing`
+  until it has been run.
+- Not done, deliberately: no CLI flag for the simulator's button (the handle
+  API is what the card's test needs, and `crates/sim`'s diff is being kept
+  small because card 246 is in the same crate); `device-web.md`'s status line
+  left for the orchestrator, same reason; the simulator's `wipe_allowed` is
+  always true, because its firmware upload does not claim the device the way
+  the firmware's does.
