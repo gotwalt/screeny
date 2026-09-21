@@ -1,11 +1,11 @@
 ---
 id: 175
-title: vesta - the colon is the last fuzzy thing in a crisp frame
+title: vesta - the colon is a face's glyph, and a Flip button
 type: build
 hardware: no
 depends: [174]
-owner:
-branch:
+owner: worker-175
+branch: card/175-vesta-colon-and-flip
 ---
 
 ## Goal
@@ -47,3 +47,19 @@ anti-aliased - and that is the whole difference between a 2-colour picture and t
 `snapshot vesta --time 04:56 --set font=1` logs `colours=2`.
 
 ## Log
+
+### Amendment (the orchestrator, 2026-09-20)
+
+From card 184's report: a rotation can only be watched by waiting for a minute.
+So vesta also gains **one action**, `flip`, labelled "Flip", the way the clock
+patches offer "Compose another" and "Move on" (`Patch::playing` / `Playing` /
+`Patch::act`; the Studio draws an action as a button in "Now playing" and posts
+`patch_act`). Pressing it starts a rotation **now**, in whatever `flips` mode is
+selected, landing on the current time. In "changed cards only" it must still do
+something visible - a full rotation is the honest reading of a button marked
+Flip - and what was chosen must be said. It must not disturb the next minute's
+own rotation: if it is pressed during one, either ignore it or queue it, and say
+which. A pinned-time render must stay byte-identical when the button is never
+pressed. It needs a test. The Studio's page should need no change for an action
+to appear - check by reading `crates/studio/ui/picture.js`, do not edit
+`crates/studio`.
