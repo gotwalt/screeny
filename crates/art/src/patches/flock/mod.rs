@@ -53,7 +53,7 @@ const PARAMS: &[ParamSpec] = &[
     param("bank", "How far the view leans into a turn", 0.0, 1.5, 0.05, 0.8),
     choice("backdrop", "What is behind the birds", BACKDROPS, 0.0),
     choice("scheme", "Light birds or dark silhouettes", SCHEMES, 0.0),
-    param("hue", "Sky colour (hue)", 0.0, 360.0, 1.0, 250.0),
+    param("hue", "Sky colour", 0.0, 360.0, 1.0, 250.0),
     param("spread", "How much the colour shifts, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
     param("wheel", "How fast the colour rotates (degrees a minute)", 0.0, 120.0, 1.0, 5.0),
     param("sky", "How bright the sky is", 0.3, 1.3, 0.01, 1.0),
