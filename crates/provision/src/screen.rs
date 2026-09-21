@@ -60,6 +60,9 @@ const TITLE: Rgb888 = Rgb888::new(0x5a, 0x9e, 0xff);
 const LABEL: Rgb888 = Rgb888::new(0x70, 0x70, 0x70);
 const VALUE: Rgb888 = Rgb888::new(0xc8, 0xc8, 0xc8);
 const OK: Rgb888 = Rgb888::new(0x30, 0xc0, 0x50);
+/// The one screen that is about to throw something away (card 230), in the
+/// same amber `firmware/src/screens.rs` uses for "something is not right".
+const WARN: Rgb888 = Rgb888::new(0xd0, 0x80, 0x20);
 
 /// Which portal layout to draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +131,35 @@ pub enum Screen<'a> {
     /// that has hung, which is exactly the wrong thing to show while one is
     /// deliberately restarting.
     Installing,
+    /// The button has been held past [`crate::button::HOLD_MS`] and the wipe
+    /// is `seconds_left` away (card 230).
+    ///
+    /// **An overlay, like the portal screen**: a streamed frame underneath is
+    /// still decoded and counted, it just does not reach the panel while this
+    /// is up. It is drawn once a second, which is the whole animation - the
+    /// panel runs off laptop USB and CLAUDE.md allows nothing flashing above
+    /// 3 Hz.
+    ///
+    /// The destructive thing on this device is the only one with a countdown,
+    /// and that is the point: 008's gesture design says the owner must be able
+    /// to see what is about to happen and let go.
+    WipeCountdown {
+        /// Whole seconds until the credentials go, 4 down to 1.
+        seconds_left: u8,
+    },
+    /// The button came up before the countdown ran out: nothing was changed.
+    ///
+    /// Shown for a second so that letting go has an answer. Without it a
+    /// cancelled hold and a hold that did nothing at all look the same, and
+    /// the owner is left wondering which of the two he just did.
+    WipeCancelled,
+    /// The hold was refused: a firmware update is in flight or on trial
+    /// (card 230's `wipe_allowed`).
+    ///
+    /// Forgetting the network during an upload orphans it, and during a trial
+    /// it sabotages the health check that is the only thing between this
+    /// device and a rollback - so the button says why instead of doing it.
+    WipeUnavailable,
 }
 
 /// Why a screen could not be drawn.
@@ -212,8 +244,62 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             text(&mut t, "installing", 1, 5, title);
             text(&mut t, "restarting", 1, 16, label);
         }
+        Screen::WipeCountdown { seconds_left } => {
+            let title = MonoTextStyle::new(&FONT_5X7, WARN);
+            let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+            let value = MonoTextStyle::new(&FONT_5X7, VALUE);
+            text(&mut t, "wipe wifi", 1, 0, title);
+            // The digit sits where the title runs out: "wipe wifi" is nine
+            // 6-pixel cells from x=1, so x=57 is the last whole one.
+            let mut n: heapless::String<2> = heapless::String::new();
+            let _ = core::fmt::write(&mut n, format_args!("{}", seconds_left.min(9)));
+            text(&mut t, &n, 57, 0, value);
+            text(&mut t, "keep holding", 1, 10, label);
+            text(&mut t, "let go = keep", 1, 17, label);
+            countdown_blocks(&mut t, seconds_left);
+        }
+        Screen::WipeCancelled => {
+            let title = MonoTextStyle::new(&FONT_5X7, OK);
+            let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+            text(&mut t, "cancelled", 1, 5, title);
+            text(&mut t, "wifi kept", 1, 16, label);
+        }
+        Screen::WipeUnavailable => {
+            let title = MonoTextStyle::new(&FONT_5X7, WARN);
+            let label = MonoTextStyle::new(&FONT_4X6, LABEL);
+            text(&mut t, "wifi reset", 1, 2, title);
+            text(&mut t, "not while", 1, 13, label);
+            text(&mut t, "updating", 1, 21, label);
+        }
     }
     Ok(())
+}
+
+/// One block per second still to go, across the bottom of the countdown
+/// screen.
+///
+/// Four blocks and not a shrinking bar: from across a room "three blocks" is
+/// readable and "62% of a bar" is not, and the digit beside the title is there
+/// for whoever is closer. It goes *out* a block a second, so the panel is
+/// getting emptier as the moment approaches rather than filling up like a
+/// progress bar - a progress bar would suggest something is being built.
+fn countdown_blocks(t: &mut FrameTarget<'_>, seconds_left: u8) {
+    const BLOCKS: i32 = 4;
+    const W_BLOCK: i32 = 14;
+    const GAP: i32 = 2;
+    const Y0: i32 = 25;
+    const Y1: i32 = 29;
+    for b in 0..BLOCKS {
+        // Left to right, the one that goes out next on the right.
+        let lit = b < i32::from(seconds_left.min(BLOCKS as u8));
+        let c = if lit { [0xd0, 0x80, 0x20] } else { [0x28, 0x18, 0x08] };
+        let x0 = 1 + b * (W_BLOCK + GAP);
+        for x in x0..x0 + W_BLOCK {
+            for y in Y0..=Y1 {
+                t.put(x, y, c);
+            }
+        }
+    }
 }
 
 /// The one moving thing on the updating screen: a 62x7 outline that fills
@@ -435,6 +521,10 @@ mod tests {
             Screen::Updating { percent: Some(100) },
             Screen::Updating { percent: None },
             Screen::Installing,
+            Screen::WipeCountdown { seconds_left: 4 },
+            Screen::WipeCountdown { seconds_left: 1 },
+            Screen::WipeCancelled,
+            Screen::WipeUnavailable,
         ] {
             let mut f = [0u8; NBYTES];
             render(&s, &mut f).unwrap();
@@ -512,6 +602,75 @@ mod tests {
             .count();
         assert!(n > 100, "the updating screen drew almost nothing ({n} pixels)");
         assert!(n < 700, "the updating screen is suspiciously bright ({n} pixels)");
+    }
+
+    /// Card 230. The countdown has to be readable as a countdown: a block
+    /// goes out every second, and the four numbers are four different
+    /// pictures.
+    #[test]
+    fn the_wipe_countdown_loses_a_block_a_second() {
+        let blocks = |seconds_left| {
+            let mut f = [0u8; NBYTES];
+            render(&Screen::WipeCountdown { seconds_left }, &mut f).unwrap();
+            // Row 27 is inside the block row; count the lit (amber) pixels,
+            // which the unlit blocks' dim fill does not reach.
+            (0..W)
+                .filter(|x| {
+                    let i = (27 * W + x) * 3;
+                    f[i] > 0x80
+                })
+                .count()
+        };
+        assert_eq!(blocks(4), 4 * 14);
+        assert_eq!(blocks(3), 3 * 14);
+        assert_eq!(blocks(1), 14);
+        // Four distinct screens, so a photograph of one says which second it
+        // was taken in.
+        let frames: [[u8; NBYTES]; 4] = core::array::from_fn(|i| {
+            let mut f = [0u8; NBYTES];
+            render(
+                &Screen::WipeCountdown {
+                    seconds_left: i as u8 + 1,
+                },
+                &mut f,
+            )
+            .unwrap();
+            f
+        });
+        for i in 0..frames.len() {
+            for j in i + 1..frames.len() {
+                assert_ne!(frames[i], frames[j], "seconds {} and {} look the same", i + 1, j + 1);
+            }
+        }
+    }
+
+    /// The three button screens are three different things, and none of them
+    /// is blank: a panel that says nothing is what a broken one says.
+    #[test]
+    fn the_three_button_screens_are_told_apart() {
+        let draw = |s| {
+            let mut f = [0u8; NBYTES];
+            render(&s, &mut f).unwrap();
+            f
+        };
+        let counting = draw(Screen::WipeCountdown { seconds_left: 3 });
+        let cancelled = draw(Screen::WipeCancelled);
+        let unavailable = draw(Screen::WipeUnavailable);
+        assert_ne!(counting, cancelled);
+        assert_ne!(counting, unavailable);
+        assert_ne!(cancelled, unavailable);
+        for (what, f) in [
+            ("countdown", &counting),
+            ("cancelled", &cancelled),
+            ("unavailable", &unavailable),
+        ] {
+            let n = (0..W)
+                .flat_map(|x| (0..H).map(move |y| (x, y)))
+                .filter(|&(x, y)| lit(f, x, y))
+                .count();
+            assert!(n > 80, "the {what} screen drew almost nothing ({n} pixels)");
+            assert!(n < 700, "the {what} screen is suspiciously bright ({n} pixels)");
+        }
     }
 
     #[test]

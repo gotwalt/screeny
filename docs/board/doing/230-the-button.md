@@ -129,3 +129,25 @@ Branch `card/230-the-button` from `main` at 4bc39c2.
   1,000 ms, 4.9 s vs 5.0 s, the u32 wrap, stuck-low at boot, four presses inside
   one status screen) plus the two OTA cases and the late poll.
   `cargo test -p screeny-provision`: **47 passed, 0 failed**, 2 doc-tests.
+
+### step 2a: the three button screens (`crates/provision::screen`)
+
+`Screen` gains `WipeCountdown { seconds_left }`, `WipeCancelled` and
+`WipeUnavailable`, drawn by the same renderer as the portal and the updating
+screens - which is what the card means by "one renderer": the firmware and the
+simulator draw the same pixels, and the tests are host tests.
+
+- The countdown: "wipe wifi" in amber, the digit beside it, "keep holding" /
+  "let go = keep", and four blocks along the bottom that go **out** one a
+  second. Blocks rather than a shrinking bar because "three blocks" is readable
+  across a room; going out rather than filling up because a progress bar
+  suggests something is being built. It redraws once a second (CLAUDE.md:
+  nothing above 3 Hz), and the lit area is a fraction of the panel.
+- `WipeCancelled` ("cancelled / wifi kept") exists so that letting go has an
+  answer; without it a cancelled hold and a hold that never started look the
+  same.
+- `WipeUnavailable` ("wifi reset / not while / updating") is the OTA refusal.
+- Tests: a block goes out per second, the four countdown frames are four
+  different pictures, the three screens are told apart and none is blank or
+  bright, and all of them join the existing "nothing renders a full white
+  frame" list. `cargo test -p screeny-provision`: 25 + 12 + 8 + 47 passed.
