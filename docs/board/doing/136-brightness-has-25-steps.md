@@ -163,3 +163,20 @@ the merge.
   - `timeout 300 cargo test -p screeny-probe -p screeny-sim`: all green
     (probe: 15 unit tests + fixtures; sim: every integration test file,
     including `http_routes.rs`'s `settings_are_clamped_by_the_same_code_udp_clamps_with`).
+- Step 4: spec. The card says "section 6.6"; in the spec as it stands today
+  `SET_BRIGHTNESS`'s own text is a bullet under **§6.3** (Opcodes) - §6.6 is
+  `GET_INFO`'s reply body and has no brightness prose of its own (only the
+  telemetry byte's one-line table entry). Wrote the new paragraph into §6.3,
+  after the existing "`SET_BRIGHTNESS`... `applied`... how a sender learns the
+  cap" bullet: the 25-real-steps fact, the `1..=5` off-by-duty floor, the
+  snap-up-to-the-lowest-lit-level rule, 0 always off, and the cap-wins case
+  when the cap itself sits below the floor.
+  §8.6 (`POST /api/v1/settings`)'s bullet already said the reply is "the whole
+  settings state after clamping, not an echo" - extended one clause to say a
+  caller whose brightness was raised to the dimmest lit level learns that
+  value too, same as a caller whose brightness was capped.
+  Checked `docs/design/device-web.md` (no brightness-resolution prose there,
+  just the `POST /api/v1/settings` route-table row - unchanged) and
+  `docs/design/generative-art-brief.md` (its brightness row already says
+  "25 real steps" - card 020/066 got there first, nothing to fix) and
+  `docs/design/architecture.md` (no brightness-resolution claims).
