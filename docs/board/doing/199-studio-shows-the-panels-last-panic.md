@@ -209,3 +209,21 @@ read, never concurrent, so `most` stays 1.
 clean. `cargo test -p screeny-studio --test device_status`: 10 passed, 0 failed, run three
 times back to back (including under `--test-threads=4`) with no flake. `ps` after every run
 shows nothing of mine left running.
+
+**Root `cargo test --release --no-fail-fast` (first full run) found one break**, not in a
+file this card was told to touch but caused by it:
+`crates/studio/tests/traffic.rs::the_http_and_control_paths_are_counted_separately` asserted
+`http.out.packets == http.reads` - true until now because only a status read ever moved
+`http.out.packets`. Card 199's one-time panic ask goes through the same `metered_http`
+counter (deliberately: it is genuinely HTTP traffic to the panel's status API, and folding it
+into the same "http" bucket is the right accounting, not a bug to work around), so the count
+is `reads + 1` from the moment that ask has landed, and grows 1:1 with `reads` after that -
+never again exactly equal to `reads`. Fixed the test to wait past the one-time ask
+(`devices[0].panic` becomes non-null once it lands; the simulator's panic route never 404s)
+and assert the `+1` explicitly, plus a second, stronger check that the *growth* from one read
+to the next is 1:1 once the one-time ask is behind it. Re-ran
+`the_http_and_control_paths_are_counted_separately` alone three times (release, twice more
+after the fix): all green, no flake.
+
+This is the only test outside the files the card names that needed a change, and the reason
+is explained above rather than left as a silent edit.
