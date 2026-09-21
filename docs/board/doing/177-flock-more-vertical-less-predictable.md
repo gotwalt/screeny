@@ -125,3 +125,108 @@ Plan, in this order, so every number is comparable: (1) extend the long run with
 measurements the card asks for and take the **old** numbers from this unchanged code
 first; (2) spacing; (3) vertical; (4) unpredictability; (5) the camera keeping up; then
 strips, wire, ms/frame.
+
+### 2026-09-20 - the measurements first, on the old code
+
+`ten_minutes_of_flight` now also gathers, on the same single run per seed: every bird's
+nearest-neighbour distance every two seconds (the camera left out), the centroid's
+altitude and climb rate, the view's **pitch** rate and how far off level it actually
+points, the time between noticeable (20 degree) course changes, and - added later, when
+it was needed - how far the furthest bird is from the middle and how many are more than
+20 m out. Run against the unchanged flight, so the "before" column is mine:
+
+```
+             seed 11        seed 29        seed 404
+NN mean       2.67 m         2.55 m         2.60 m
+NN CV         0.10           0.13           0.16      <- a lattice
+NN p05/p95    2.15 / 3.01    1.91 / 2.97    2.00 / 2.99
+climb |v_y|   1.26 / 2.25    1.12 / 2.12    1.33 / 2.23   (median / p95)
+altitude      -21.6 .. 22.9  -15.9 .. 29.4  -18.2 .. 21.0
+view pitch    2.63 / 7.73    2.85 / 9.18    3.19 / 10.54  (p95 / max deg/s)
+turn gaps     3.1 s CV 1.23  2.4 s CV 1.08  2.7 s CV 1.35
+```
+
+The owner was right and the number is stark: **CV 0.10-0.16 is a crystal.** (A random
+scatter of points is about 0.36; a real flock is 0.4-0.6.)
+
+The second thing the numbers said was not what I expected. The old flight *does* move
+vertically - the centroid's altitude covers 40 m and it climbs at over a metre a second
+half the time - but **none of it reaches the panel**, because the camera goes with it
+and the view is pinned level: pitch p95 under 3 deg/s. So "more vertical motion change"
+is two jobs, not one: make the flight's vertical bigger, and let the *view* show it.
+
+### 2026-09-20 - the flight, in the order it was found
+
+Each of these is a number that failed and the change that fixed it. The long run over
+three seeds was the only reason any of them was found rather than guessed at.
+
+1. **Topological neighbours and individuals** (the seven nearest whatever their
+   distance; per-bird room and airspeed; nine clans that fly closer to one another than
+   to strangers). CV 0.10 -> 0.49 on seed 11 at the first try.
+2. **A clan pull with no bound is a runaway.** A clan that drifts a little out of the
+   flock pulls the rest of itself after it: eleven birds seventy-four metres out. Bounded
+   at 15 m - a friendship, not a beacon.
+3. **The sideways part of blob avoidance must be taken across the *flock's* course, not
+   each bird's heading.** Once alignment went topological the headings inside the flock
+   spread out, and a per-bird sideways basis sent neighbours round opposite sides of the
+   same blob: **55 of 55 birds more than 20 m out, for a minute**. Off one shared course
+   the whole flock curves as one body.
+4. **A weak wish to fly the flock's own course** (0.22) on top of the seven neighbours.
+   Topological alignment alone lets the headings fan to 47 degrees, and a fan is what
+   turns a shared shove into a scatter - the fan was visible in the trace before the
+   spread was.
+5. **The gather must not switch off while dodging.** A blob's reach is nearly forty
+   metres, so "dodging" is most of the time, and a flock with no gather for most of its
+   life stays scattered once anything scatters it. Weakened to 0.40 rather than off.
+6. **Soft separation, per-clan room.** A 1/d falloff from the full radius is a wall and
+   every bird settles where the wall stops pushing; a squared falloff with a stiff core
+   at a wingspan is a preference. And room drawn *per bird* averages out - every knot
+   ends the same density - where room drawn **per clan** makes some knots tight and some
+   loose, which is what a broad distribution of gaps actually is.
+7. **The climb limit was a clamp on the velocity, and a clamp rotates the heading** by
+   however much it takes - a turn nobody authorised. Every `x1.03 of its limit` in the
+   long run was this line. It is now a strong restoring acceleration that goes through
+   the same turn-rate clamp as everything else, so there is one limit on how fast
+   anything may change direction, and the climb limit is the angle a bird runs out of
+   lift at rather than a wall.
+8. **The standing spring to one cruise altitude is gone** - `(3 - y) * 0.05`, and the
+   reason every climb was paid back within seconds. What replaces it pulls each bird
+   towards the *flock's* altitude (flocks are wider than they are tall), plus one very
+   weak string on the flock as a whole: without that last one the flock random-walked
+   down and spent the second half of the run at -60 m with the world's whole height
+   unused above it.
+9. **A taller world** (-70..70 with an 18 m margin, against -24..28 with 13). Altitude is
+   invisible - the sky is drawn from the view ray, not from a height - so height costs
+   nothing but room, and the old free band was four seconds of descent.
+10. **Shared surges.** A dive and its recovery, sometimes a climb, sometimes with a swirl
+    through it: a full sine over 5-13 s so both ends are zero and a dive always recovers,
+    with the quiet afterwards drawn from a squared uniform so most of the flight is
+    cruise. `lift` sets the size, `wild` the frequency.
+11. **The camera was watching a levelled fiction.** `focus` - the direction to the flock -
+    was clamped into the horizon's own band *before* the leash read it, so with the flock
+    35 degrees above the camera through a recovery the aim point said 14, the leash was
+    satisfied, and **ten of fifty-five birds were on the panel**. `focus` is now the truth
+    (clamped only at 33 degrees, where an azimuth stops meaning anything).
+12. **Birds before horizon.** The last three corrections in `aim` are now composition,
+    then the leash, then the rate ceiling - card 168 had composition last, which was right
+    when nothing in the flight could push the horizon off the panel and is wrong now. A
+    second, tighter leash in *elevation* (10 degrees, against 16 sideways) because the
+    panel is 21 degrees tall and 38 wide, and an outer wall at 19 degrees so there is
+    always some horizon in shot.
+13. **The camera needed more of everything vertical**: a seat 0.85 s ahead of the flock's
+    climb rate rather than under where it is, a quarter more climb and dive angle, a third
+    of a bird's speed penalty for climbing, and turn slack up to 3.4x.
+14. **`wild` 0.45 was not enough to break the flight's slosh.** At 0.45 the centroid's
+    drift correlated with itself at r=0.70 with a clear 130 s oscillation - the flock
+    bouncing between the world's soft walls. The autocorrelation curve, printed at every
+    lag rather than just its maximum, is what showed it was a real oscillation and not a
+    smooth-series artefact. At 0.65 it is 0.39-0.58 on three seeds, and 0.65 is the
+    default.
+
+Looked at, before going further (strips of ten consecutive frames two seconds apart,
+seed 11, through a surge at simulated t=45 s): with the **horizon line** backdrop the
+line sweeps from the upper third down past the middle over the sequence and tilts with
+the bank - a dive that reads as a dive with almost nothing drawn. On **black** the flock
+slides down the frame and the knots are unmistakable: dense clusters with real gaps and
+several visible V's, where the old strip is an even scatter. With the **sky** the horizon
+band moves the same way, more quietly.
