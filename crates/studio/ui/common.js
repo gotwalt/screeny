@@ -416,6 +416,37 @@ function cappedStops(stops, cap) {
   return kept;
 }
 
+/** Card 126: how long the control holds what the person just chose (or what
+ *  the panel said it applied) against a reading that has not caught up yet.
+ *
+ *  The panel's telemetry is polled periodically (five seconds by default),
+ *  so for a while after a `change` the freshest telemetry the page has still
+ *  carries the OLD brightness - measured against `screeny-sim`, about 1.6 s
+ *  of a ~5 s poll window. `player.health.brightness_applied` is already the
+ *  true new number the moment the POST that set it resolves (`api.rs` writes
+ *  it synchronously, so every browser's next state message carries it), so
+ *  the bug was never a missing fact - it was `show()` always preferring
+ *  telemetry over it whenever telemetry existed at all, stale or not. Five
+ *  seconds comfortably brackets one poll interval; a change from elsewhere
+ *  that is real (a second browser, the CLI, the device's own drift) still
+ *  reaches the slider once telemetry disagrees for the whole of it. */
+const BRIGHTNESS_HOLD_MS = 5000;
+
+/** Whether a brightness hold started at `held` should still override
+ *  `reading`, the value `show()` would otherwise paint. Pure so it can be
+ *  pinned without a DOM: `now` and `until` are `Date.now()` milliseconds,
+ *  `held` and `reading` are raw brightness bytes (`reading` may be `null` or
+ *  `undefined` when there is nothing to compare against yet).
+ *
+ *  Releases the moment `reading` agrees with what was held - there is no
+ *  reason to keep waiting out the clock once the panel has confirmed it -
+ *  and otherwise once `until` passes, which is what lets a change made
+ *  elsewhere eventually win instead of being held forever. */
+export function brightnessHoldWins(now, until, held, reading) {
+  if (reading !== null && reading !== undefined && reading === held) return false;
+  return now < until;
+}
+
 /** Brightness: the same control on both screens (card 198), stepping
  *  through the panel's real resolution rather than `0..255` (card 187) - most
  *  of that range lands on a picture a neighbouring value already showed
@@ -451,17 +482,62 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
   input.min = '0';
   input.max = String(live.length - 1);
 
-  input.addEventListener('input', () => { out.textContent = String(levelAt(input.value)); });
+  /** The one thing `show()` holds against a stale reading - see
+   *  `brightnessHoldWins` - `null` when nothing is being held. */
+  let held = null;
+
+  /** Card 126, second half: `busy(input)` is "is this the focused element",
+   *  and Safari - desktop and iOS both - never focuses an
+   *  `<input type="range">` on a click or a touch, only on Tab. So on Safari
+   *  `busy(input)` is false for the whole of a drag, and `show()` would
+   *  rewrite `input.value` out from under the person's mouse or finger every
+   *  time a fresh reading arrived - up to several times a second - which
+   *  reads exactly as "I move the slider and it bounces around". `holding` is
+   *  the same idea `busy` is reaching for, tracked directly instead of
+   *  through focus: set the moment a gesture starts (`pointerdown`,
+   *  `touchstart` - a touch that never becomes a pointer event on an older
+   *  browser, `keydown`, and `input` itself, a backstop for whatever starts
+   *  a change no earlier event caught), cleared once `change` says the
+   *  gesture landed. `pointerup`/`pointercancel`/`blur` clear it too, as a
+   *  backstop for a gesture that ends without ever firing `change` (a touch
+   *  cancelled by a system gesture, a pointer that leaves the window). */
+  let holding = false;
+  const grab = () => { holding = true; };
+  const release = () => { holding = false; };
+  input.addEventListener('pointerdown', grab);
+  input.addEventListener('touchstart', grab, { passive: true });
+  input.addEventListener('keydown', grab);
+  input.addEventListener('pointerup', release);
+  input.addEventListener('pointercancel', release);
+  input.addEventListener('blur', release);
+
+  input.addEventListener('input', () => { grab(); out.textContent = String(levelAt(input.value)); });
   input.addEventListener('change', () => {
+    release();
     const device = attached();
     if (!device) { notice('No panel is attached, so there is no brightness to set.', 'say'); return; }
     const level = levelAt(input.value);
+    // Hold what was asked from the moment the gesture lands, not from
+    // whenever the POST happens to resolve - the gap between them is exactly
+    // the window in which nothing used to be held at all (`held` was still
+    // `null`, or `busy` had already gone false on Safari), and `show()` could
+    // paint a reading from before the change.
+    held = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
     attempt(`Brightness ${level}`, async () => {
-      const done = await invoke('device/brightness', { device, level });
-      if (!done) return '';
-      if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
-      if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
-      return `Brightness ${done.applied}`;
+      try {
+        const done = await invoke('device/brightness', { device, level });
+        if (!done) { held = null; return ''; }
+        // Replace the held value with the true applied one, not what was
+        // asked - the floor and the cap are real, and this is what stops the
+        // slider bouncing back to them once telemetry catches up.
+        held = { value: done.applied, until: Date.now() + BRIGHTNESS_HOLD_MS };
+        if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
+        if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
+        return `Brightness ${done.applied}`;
+      } catch (e) {
+        held = null; // the ask never landed; nothing to hold
+        throw e;
+      }
     });
   });
   return {
@@ -474,8 +550,11 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
       const maxIndex = String(live.length - 1);
       if (input.max !== maxIndex) input.max = maxIndex;
       const t = d && d.telemetry;
-      const shown = t ? t.brightness : player && (player.health.brightness_applied ?? player.brightness);
-      if (!busy(input) && shown !== null && shown !== undefined) {
+      const reading = t ? t.brightness : player && (player.health.brightness_applied ?? player.brightness);
+      if (!d) held = null; // no panel to hold anything against
+      if (held && !brightnessHoldWins(Date.now(), held.until, held.value, reading)) held = null;
+      const shown = held ? held.value : reading;
+      if (!busy(input) && !holding && shown !== null && shown !== undefined) {
         input.value = String(indexOf(Math.min(shown, learnedCap || 255)));
         out.textContent = String(levelAt(input.value));
       }

@@ -7,6 +7,11 @@
 //! page, and every route it calls exists on the server. Both of those are
 //! silent failures in a browser and loud ones here.
 //!
+//! Card 126 is the one exception: `common.js`'s brightness hold logic is a
+//! small pure function, and pinning it directly is worth *running* `node` at
+//! test time when the machine happens to have it - still no build step, no
+//! dependency, and the test skips cleanly (saying why) when there is none.
+//!
 //! Card 170 folded the dashboard into the one page; card 198 split that page
 //! into two **screens** - the Picture at `/` and the Panel at `/panel` - and
 //! `/dashboard` still has to work as a bookmark.
@@ -19,6 +24,8 @@
 mod common;
 
 use common::{get, post, studio};
+use std::path::Path;
+use std::process::Command;
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 const PANEL_HTML: &str = include_str!("../ui/panel.html");
@@ -277,6 +284,67 @@ async fn bootstrap_carries_the_brightness_stops() {
     assert_eq!(stops.first(), Some(&0), "off is always the first stop: {stops:?}");
     assert!(stops.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {stops:?}");
     assert!(stops.len() > 2 && stops.len() < 256, "the real resolution, not 256 raw values: {stops:?}");
+}
+
+/// Card 126: the slider bounced after a brightness change because `show()`
+/// always preferred the panel's periodic telemetry over
+/// `player.health.brightness_applied`, even in the second or so right after a
+/// change when telemetry still carried the old number (`health.brightness_applied`
+/// is written the instant the change's own POST resolves - measured against
+/// `screeny-sim` in the card's Log). `brightnessHoldWins` is the rule that
+/// fixes it, pulled out as a pure function so it can be pinned exactly.
+///
+/// Runs the real, shipped `common.js` under `node`, not a copy - so a change
+/// to the function is what this test sees. Skipped, loudly, when there is no
+/// `node` on `PATH`: this crate has no Node dependency at build time, and a
+/// worker or a bench without one still gets a clean `cargo test`.
+#[test]
+fn brightness_hold_wins_pins_the_hold_and_release_rules() {
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!(
+            "skipping brightness_hold_wins_pins_the_hold_and_release_rules: no `node` on PATH \
+             (this crate has no Node dependency at build time; the test just cannot run here)"
+        );
+        return;
+    }
+
+    let common_js = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/common.js");
+    let script = format!(
+        r#"
+import {{ brightnessHoldWins as wins }} from 'file://{path}';
+const cases = [
+  // [now, until, held, reading, expected, label]
+  [0,    1000, 80, null, true,  "nothing to compare against yet: keep holding"],
+  [0,    1000, 80, 30,   true,  "reading still disagrees, well before the deadline"],
+  [999,  1000, 80, 30,   true,  "reading still disagrees, one ms before the deadline"],
+  [0,    1000, 80, 80,   false, "the reading agrees: release at once, not at the deadline"],
+  [1000, 1000, 80, 30,   false, "the deadline has passed and the reading never agreed: let it through"],
+  [5000, 1000, 80, 30,   false, "long past the deadline: still released"],
+];
+let failed = 0;
+for (const [now, until, held, reading, expected, label] of cases) {{
+  const got = wins(now, until, held, reading);
+  if (got !== expected) {{
+    failed += 1;
+    console.error(`FAIL ${{label}}: wins(${{now}}, ${{until}}, ${{held}}, ${{reading}}) = ${{got}}, want ${{expected}}`);
+  }}
+}}
+if (failed) {{ process.exit(1); }}
+console.log(`${{cases.length}} cases passed`);
+"#,
+        path = common_js.display(),
+    );
+
+    let output = Command::new("node")
+        .args(["--input-type=module", "-e", &script])
+        .output()
+        .expect("node is on PATH; just checked above");
+    assert!(
+        output.status.success(),
+        "brightnessHoldWins:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Card 164: **what a panel costs the network is on the Panel screen, and the
