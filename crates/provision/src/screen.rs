@@ -173,6 +173,41 @@ pub enum RenderError {
     NoQr,
 }
 
+/// Whether this screen must be shown at a fixed, known-good brightness rather
+/// than at whatever the runtime setting happens to be (card 247, item 2).
+///
+/// True for exactly one screen: the portal in [`Layout::QrAndName`]. Every
+/// other screen on this device is drawn for a human eye and honours the
+/// brightness the owner (or the Studio) set. The QR is not drawn for an eye at
+/// all - it is drawn for a phone camera, which is a much less forgiving reader
+/// of a 25-module code at one LED per module.
+///
+/// Why it matters here, on this panel: the device dims by **shortening the
+/// output-enable window**, not by scaling pixel values. Runtime brightness 56
+/// lights 5 of the 25 slots where the default, 96, lights 9 - a little over
+/// half the light, and a rolling-shutter camera sees a short OE window as
+/// banding across the code. `docs/design/device-web.md` decision 1 measured
+/// this exact QR - version 2-L, 25x25, one LED per module, lit white
+/// background with dark modules off, a 3-pixel lit quiet zone - scanning
+/// "easily" **at the default brightness**, and nothing about the bitmap has
+/// changed since. The runtime setting had.
+///
+/// The caller supplies the number, because what "the default" is belongs to
+/// the settings store and not to this crate. The rule is: whatever it is, it
+/// is fixed, it is the level that has actually been measured, and the runtime
+/// setting comes back untouched when the portal ends - this function reports a
+/// presentation rule, it does not change a setting.
+#[must_use]
+pub const fn wants_fixed_brightness(screen: &Screen<'_>) -> bool {
+    matches!(
+        screen,
+        Screen::Portal {
+            layout: Layout::QrAndName,
+            ..
+        }
+    )
+}
+
 /// Draw `screen` into `frame`, clearing it first.
 ///
 /// # Errors

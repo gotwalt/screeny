@@ -168,3 +168,72 @@ only other route. Noted for a later card rather than changed here.
 
 Build after this step: `.stack` **25,800** (unchanged from the 0.8.1 baseline; floor
 24,576), image 1,027,841. `cargo test -p screeny-sim --test arbitration`: 9 green.
+
+#### Step 3 - item 2, the QR
+
+**What changed since decision 1 / card 223, read out of the code and the history:**
+
+* The QR bitmap has **not** changed. `crates/provision/src/screen.rs`'s drawing of
+  `Screen::Portal { layout: QrAndName }` - `blit_qr`, `QUIET = 3`, `QR_X = 3`,
+  `QR_Y = (32-25)/2 = 3`, lit white background with dark modules off, one LED per
+  module - is untouched since `2dae13a` (2026-09-20, "the QR stays on the panel",
+  fw 0.5.1), which is the build the owner's phone scanned. The only commit to touch
+  that file since is `f7e6d5c` (card 230), and it only *adds* three button screens.
+  `uri.rs` and `qr.rs` have not been touched since card 221. `crates/provision`'s
+  existing tests already prove the bitmap independently: `rqrr` (a decoder that has
+  never seen our encoder) reads `WIFI:T:nopass;S:screeny-4a00a4;;` back off the frame,
+  and an FNV-1a golden hash pins all 6,144 bytes.
+* The alternating layouts are gone (card 223) and nothing has brought them back. The
+  portal screen is recomposed every `PORTAL_MS` = 250 ms with identical pixels, so it
+  does not move or blink.
+* Nothing draws over it on the device. The frame task's rank is update > button >
+  portal, and the button's countdown/cancelled/refused screens all clear themselves -
+  `WipeWifi` calls `clear()` before signalling the wipe, so no button screen survives
+  into the portal. `Intent::Identify` cannot draw over the portal either: the portal
+  branch is tested first. (The *simulator* does draw identify over the portal; see
+  step 2's note.)
+* **The one thing that did change is the brightness.** The runtime setting was 56
+  (the Studio sets it); decision 1 was measured at the default, 96. This panel dims by
+  shortening the output-enable window, not by scaling pixels:
+  `display::slots_for(56)` = **5** of 25 slots, `slots_for(96)` = **9**. A little over
+  half the light, and a phone's rolling shutter sees a short OE window as banding
+  across the code - which is exactly the failure mode where a QR looks fine to an eye
+  and will not scan.
+
+**The fix**, proportionate as the orchestrator asked - no bigger version, no scaling,
+no alternating screens, not one pixel of the bitmap moved:
+
+* `screeny_provision::wants_fixed_brightness(&Screen)` - true for exactly
+  `Portal { layout: QrAndName }`, false for every other screen. Pure, host-tested
+  (`crates/provision/tests/render.rs`, 2 new tests; the second re-asserts the golden
+  hash and the independent decode, so "fix the brightness" can never quietly become
+  "redraw the code").
+* `firmware/src/provision.rs::fixed_brightness` supplies the number -
+  `display::DEFAULT_BRIGHTNESS` - because which level is known-good belongs to the
+  settings store, not to a `no_std` drawing crate. (`PanelScreen::as_screen` factored
+  out of `render` so both go through one conversion.)
+* `firmware/src/main.rs`: `SCREEN_BRIGHTNESS` / `SCREEN_BRIGHTNESS_NONE`, read by
+  `target_oe_slots()` *below* the bench `OE_OVERRIDE` and through
+  `clamp_brightness(_, BRIGHTNESS_CAP)`, so it can never exceed the cap.
+* `firmware/src/net.rs`: the frame task writes it on the edge, in the same rank order
+  it draws in (an update or a button screen covering the portal clears it), and bumps
+  `BRIGHTNESS_DIRTY` so core 1 rewrites both framebuffers' OE windows. It is a
+  presentation override, not a setting: nothing is written to flash, `BRIGHTNESS` is
+  untouched, `GET_INFO` and `/api/v1/status` keep reporting what the owner set, and
+  "restore it when the portal ends" is the edge clearing itself. No new field on
+  `StatusReply`.
+
+**What is still a hypothesis, and cannot be settled without the panel and the phone:**
+that brightness is *the* reason it did not scan. What is established from the code is
+only that the bitmap is byte-identical to the one decision 1 measured, that nothing
+covers or alternates with it, and that the light was roughly 5/9 of what was measured.
+Whether 9 slots is enough for that phone today, in that room, is a bench answer. The
+owner's own view is that it may simply be marginal for a 64x32 panel - if the QR still
+does not scan at the default brightness, then it is marginal by nature and this change
+has cost nothing.
+
+`FW_VERSION` -> **0.8.2** (0.8.1 skipped; it was spent as a bench upload image).
+
+`tools/fw-size.sh` on the final default build: `.data` 60,108, `.bss` 110,704,
+**`.stack` 25,792** (floor 24,576; 25,800 on 0.8.0 - eight bytes for the new atomic
+and its alignment), `.rwtext` 67,740, image 1,028,189.

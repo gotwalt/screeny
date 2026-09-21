@@ -197,3 +197,70 @@ fn the_lit_area_stays_inside_what_the_owner_accepted() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The brightness rule (card 247, item 2)
+// ---------------------------------------------------------------------------
+
+/// The QR screen is shown at a fixed, known-good brightness; every other
+/// screen honours the runtime setting.
+///
+/// The bench finding behind it: on 2026-09-20 the owner's phone scanned this
+/// code "easily" (`docs/design/device-web.md` decision 1) at the **default**
+/// brightness. On 2026-09-21 it would not, and the one thing that had changed
+/// was the runtime brightness - 56, set by the Studio. The device dims by
+/// shortening the output-enable window, so 56 lights 5 of 25 slots where the
+/// default lights 9: a little over half the light, and a rolling-shutter
+/// camera sees a short OE window as banding across the code. The QR is the one
+/// screen drawn for a camera rather than for an eye, so it is the one screen
+/// that does not follow the setting.
+#[test]
+fn only_the_qr_screen_asks_for_a_fixed_brightness() {
+    use screeny_provision::wants_fixed_brightness;
+
+    assert!(
+        wants_fixed_brightness(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass)),
+        "the QR screen is the one screen a camera has to read"
+    );
+    assert!(wants_fixed_brightness(&portal(
+        "screeny-4a00a4",
+        Layout::QrAndName,
+        UriForm::ShortOpen
+    )));
+
+    // Everything else is for a human eye and follows the setting.
+    assert!(
+        !wants_fixed_brightness(&portal("screeny-4a00a4", Layout::Text, UriForm::NoPass)),
+        "the text fallback carries no code, so there is nothing to scan"
+    );
+    for s in [
+        Screen::Connected {
+            ip: [192, 168, 7, 221],
+        },
+        Screen::Updating { percent: Some(50) },
+        Screen::Installing,
+        Screen::WipeCountdown { seconds_left: 3 },
+        Screen::WipeCancelled,
+        Screen::WipeUnavailable,
+    ] {
+        assert!(
+            !wants_fixed_brightness(&s),
+            "{s:?} is drawn for an eye and must honour the brightness setting"
+        );
+    }
+}
+
+/// The fix is a *presentation* rule, not a redraw: fixing the brightness must
+/// not change one pixel of the code. If it ever did, decision 1's measurement
+/// would stop describing what the panel shows, and the golden hash above is
+/// what would have to move.
+#[test]
+fn asking_for_a_fixed_brightness_changes_no_pixel() {
+    let f = frame_of(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass));
+    assert_eq!(
+        fnv1a(&f),
+        GOLDEN[0].1,
+        "the QR bitmap is bit for bit the one decision 1 measured"
+    );
+    assert_eq!(decode(&f), ["WIFI:T:nopass;S:screeny-4a00a4;;"]);
+}

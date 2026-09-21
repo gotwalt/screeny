@@ -230,6 +230,7 @@ pub async fn frames_task(
     let mut stuck_sends = 0u32;
     let mut ota_was = false;
     let mut button_was: Option<crate::button::Panel> = None;
+    let mut screen_brightness_was = crate::SCREEN_BRIGHTNESS_NONE;
 
     loop {
         let mut keep_len = 0usize;
@@ -382,6 +383,34 @@ pub async fn frames_task(
         // only the slow repaint.
         let button_edge = button != button_was;
         button_was = button;
+        // Card 247, item 2: the QR is drawn for a phone camera, not for an
+        // eye, so it is shown at the one brightness decision 1 measured the
+        // owner's phone scanning rather than at whatever the runtime setting
+        // is (it was 56 on the card 230 bench, five of twenty-five
+        // output-enable slots where the default lights nine, and the phone
+        // would not read it). Computed in the same rank order the drawing
+        // below uses - an update or a button screen covers the portal, and a
+        // covered QR is not being scanned by anybody - and written on the edge
+        // only, because `BRIGHTNESS_DIRTY` is what makes core 1 rewrite both
+        // framebuffers' OE windows. Clearing it back to
+        // `SCREEN_BRIGHTNESS_NONE` when the screen goes away is the whole of
+        // "restore the setting afterwards": nothing was ever stored.
+        let fixed = if ota.is_some() || button.is_some() {
+            None
+        } else {
+            portal.as_ref().and_then(crate::provision::fixed_brightness)
+        };
+        let fixed = fixed.unwrap_or(crate::SCREEN_BRIGHTNESS_NONE);
+        if fixed != screen_brightness_was {
+            screen_brightness_was = fixed;
+            crate::SCREEN_BRIGHTNESS.store(fixed, Ordering::Relaxed);
+            crate::BRIGHTNESS_DIRTY.store(2, Ordering::Relaxed);
+            if fixed == crate::SCREEN_BRIGHTNESS_NONE {
+                info!("display: back to the brightness setting");
+            } else {
+                info!("display: the qr screen is shown at brightness {}", fixed);
+            }
+        }
         // An update ending has to redraw once even if nothing else is due:
         // until it does, the panel is still showing the progress bar of an
         // upload that finished.
