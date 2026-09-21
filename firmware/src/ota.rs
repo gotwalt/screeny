@@ -1023,8 +1023,11 @@ fn read_version(
 /// does it in one pass, under one lock, before any task exists.
 ///
 /// Returns the state to report as `fw_state`, which may differ from what was
-/// read: an `Undefined` entry that selects the running slot is promoted to
-/// `PENDING_VERIFY` here, and from then on the device really is on trial.
+/// read, for two reasons. An `Undefined` entry that selects the running slot
+/// is promoted to `PENDING_VERIFY` here, and from then on the device really is
+/// on trial. And after a rollback the entry that was read is the *rejected*
+/// slot's, so what is reported is [`screeny_otastate::running_state`]'s answer
+/// about the slot that is running (card 246, item 3).
 pub fn note_boot(
     booted: FwSlot,
     selected: FwSlot,
@@ -1125,7 +1128,20 @@ pub fn note_boot(
         ),
     }
 
-    state
+    // **Card 246, item 3: `fw_state` is the running slot's, not `otadata`'s
+    // highest-sequence entry's.** After a rollback those are different slots,
+    // and reporting the rejected one made a healthy device read
+    // `0.7.1 / ota_1 / invalid` - a fault where there is none. What the
+    // rejected image was and why it went is `GET /api/v1/panic`'s `update`,
+    // which says it in words and loses nothing by this.
+    let reported = screeny_otastate::running_state(booted, selected, state);
+    if reported != state {
+        info!(
+            "ota: otadata's selected entry reads {:?}, which is the slot that was rolled back from; fw_state reports {:?} for {:?}, the slot that is running.",
+            state, reported, booted
+        );
+    }
+    reported
 }
 
 // ---------------------------------------------------------------------------

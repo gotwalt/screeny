@@ -1182,11 +1182,13 @@ shape here bumps it and moves the prefix, a new optional field does not.
   reader can tell a reboot from a link flap without inferring it from uptime
   going backwards), `stack_free`, `store_errors`, `portal`, `fw_slot`,
   `fw_state` and `reset_reason`. `fw_slot` is the slot the device is **really
-  running**, read from the MMU, and `fw_state` is the state of the `otadata`
-  entry that selected this boot - which after a rollback (§8.10) is the entry
-  of the image that was *rejected*, and reads `aborted` or `invalid` while the
-  device runs perfectly well on the one before it. That is the signal, not a
-  fault; `panic.update` says it in words. Its `wifi_state` is **the link** -
+  running**, read from the MMU, and `fw_state` is **that same slot's** `otadata`
+  state. The two always describe one image. After a rollback (§8.10) the entry
+  `otadata` selects is the *rejected* image's, and a device MUST NOT report it
+  here: it reads `aborted` or `invalid` while the device runs perfectly well on
+  the image before it, which reads as a fault and is not one. What was rejected
+  and why is `panic.update`, which says it in words. (Firmware 0.7.0 reported
+  the selected entry and was corrected in 0.7.1, card 246.) Its `wifi_state` is **the link** -
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
   **Nothing else goes in it.** It is the one route that is polled - the Studio
@@ -1497,9 +1499,12 @@ may have gone wrong.
      reset then lands in the case above.
 5. **After a revert** the device is running the previous image and says so:
    `fw_slot` is the slot really running (read from the MMU, not from
-   `otadata`), `fw_state` is the *rejected* entry's state - `invalid` or
-   `aborted` - and `panic.update` names the slot, the reason and the version
-   that was rejected.
+   `otadata`) and `fw_state` is **that slot's** state, which is `valid` - the
+   bootloader will not hand over to an `invalid` or `aborted` entry, so the
+   image it fell back to is one it considers good. The rejected entry's state
+   is *not* reported there (§8.6); `panic.update` names the slot, the reason
+   and the version that was rejected, which is the whole story and is in
+   words.
 
 Two properties a caller may rely on. **An update never leaves a device that
 does not boot**: at every instant from the first staged byte to the confirm,

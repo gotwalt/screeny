@@ -133,3 +133,44 @@ release, and building the `Upload` outside the `Result` puts `.stack` back at
 in this worktree with the same toolchain). That is card 227's lesson arriving
 in a place nobody was looking: *anything* alive across an `await` here is
 `.bss`, and `.bss` is core 0's stack.
+
+### Item 3 - whose `fw_state` it is (2026-09-21)
+
+`http::read_fw_health` reads `Ota::current_ota_state()`, which is the entry
+with the **highest sequence number**. On a settled or trial boot that is the
+running slot's own entry and everything is fine. After a rollback it is the
+entry of the slot that was rolled back *from* - `esp-bootloader-esp-idf`'s
+`current_app_partition` works from `max(ota_seq)` and never looks at the states
+(card 241's Log, "the trap in the crate's own bookkeeping") - so the device
+reported `fw 0.7.1, fw_slot ota_1, fw_state invalid` with a healthy 0.7.1
+running: `fw_slot` from the MMU, `fw_state` from the other slot, two fields
+describing two different images.
+
+`screeny_otastate::running_state(booted, selected, selected_state)` is the
+correction, in the one place, with tests:
+
+* `booted == selected` - the entry read **is** the running slot's: report it
+  unchanged, including the messy `invalid`/`aborted` case where the bootloader
+  fell back to `ota_0` and `otadata` is in a state nobody should hide.
+* `booted != selected` - a rollback. The bootloader will not hand over to an
+  `invalid` or `aborted` entry, so the slot it chose is one it considers good
+  and the image running is the one that confirmed itself last time: **`valid`**.
+* either slot unknown - pass through what was read.
+
+`note_boot` returns that instead of the raw state (and logs one `info!` line
+naming both, so the `otadata` truth is still on the serial log). **No new
+field on `StatusReply`**, nothing added to the reply at all. The simulator
+needs no change: its `Ident::fw_state` is already documented as "the running
+slot's state" and it has no `otadata` to disagree with.
+
+Shared surface touched, both doc-only apart from the new function:
+`crates/device-api/src/enums.rs` (`FwState`'s doc comment) and
+**`docs/design/protocol-v1.md` §8.6 and §8.10 step 5**, which said the opposite
+in as many words - §8.10 step 5 read "`fw_state` is the *rejected* entry's
+state". Spec and code disagreed; the **spec was the one that was wrong** (it
+described what 0.7.0 did, not what a reader can use), and it is now normative
+the other way: `fw_slot` and `fw_state` always describe one image. The software
+session shares that file: this is the change to tell them about.
+
+`cargo test -p screeny-otastate`: 18 unit + 23 interruption tests, 0 failed.
+`.stack` still 26,200.
