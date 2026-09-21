@@ -455,17 +455,24 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
     assert_eq!(a.wire.rgb, b.wire.rgb);
 }
 
-/// A minute of each scheme, straight through the real pipeline, measured by
-/// the real encoder: **every frame is exact**, and the pictures cost the same.
+/// A minute of each picture the patch can draw, straight through the real
+/// pipeline and measured by the real encoder: **every frame is exact**.
 ///
-/// They cost the same because the two schemes are the same index image with a
-/// different set of 84 colours in front of it - which is the whole point of
-/// making the palette two-dimensional. Only the birds' contrast floor differs,
-/// so the counts are close rather than identical.
+/// The two *schemes* cost the same because they are the same index image with
+/// a different set of colours in front of it - which is the whole point of
+/// making the palette two-dimensional; only the birds' contrast floor differs,
+/// so the counts are close rather than identical. The two backdrops without a
+/// sky cost far less, because most of the index plane is one value.
 #[test]
 fn every_frame_goes_out_exactly() {
-    for (scheme, name) in [(0.0, "light on dark"), (1.0, "dusk silhouettes")] {
+    for (backdrop, scheme, name) in [
+        (0.0, 0.0, "sky, light on dark"),
+        (0.0, 1.0, "sky, dusk silhouettes"),
+        (1.0, 0.0, "horizon line"),
+        (2.0, 0.0, "black"),
+    ] {
         let mut params = Params::defaults(PARAMS);
+        params.set(PARAMS, "backdrop", backdrop);
         params.set(PARAMS, "scheme", scheme);
         if scheme > 0.5 {
             // The dusk sky wants a warm horizon; see the README.
@@ -500,7 +507,7 @@ fn every_frame_goes_out_exactly() {
             apl * 100.0,
         );
         assert_eq!(lossy, 0, "{name}: {lossy} frames of 1800 could not be sent exactly");
-        assert!(colours as usize <= BANDS * INK, "{name}: more colours than the palette has");
+        assert!(colours as usize <= BANDS * ink_levels(backdrop as usize), "{name}: more colours than the palette has");
         assert!(worst < crate::meter::PAYLOAD_BYTES, "{name}: {worst} bytes leaves no headroom");
         assert!(gain > 0.95, "{name}: the limiter had to pull the picture down to x{gain:.2}");
     }
