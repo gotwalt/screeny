@@ -7,7 +7,7 @@
 //! numbers a device-shaped thing reports over the same HTTP the panel serves:
 //! nothing in this file constructs a `DeviceFacts` by hand.
 //!
-//! The thresholds themselves are the firmware session's, measured on the real
+//! The thresholds themselves are measured on the real
 //! device, and they live in `devices.rs` beside their reasoning. What is
 //! pinned here is which side of them a given reading falls on.
 //!
@@ -30,7 +30,7 @@ use screeny_studio::{Config, Running, Studio};
 /// failure rather than a hung suite.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// The real panel's healthy readings, as the orchestrator measured them on the
+/// The real panel's healthy readings, as measured on the
 /// live service (card 180's log, 2026-09-20): firmware 0.4.3, 45612 of 90112
 /// bytes of heap (51%) and 20272 bytes of stack never touched.
 const REAL_PANEL: Health = Health {
@@ -163,7 +163,7 @@ impl Bench {
     }
 }
 
-/// **Free stack has two levels** (card 195). The firmware session's numbers:
+/// **Free stack has two levels** (card 195). The measured numbers:
 /// warn below 8192, fault below 4096, because `stack_free` is a high-water
 /// mark that only ever falls and interrupts eat it 256 bytes at a time.
 ///
@@ -195,8 +195,8 @@ async fn the_stack_has_a_warning_level_and_a_fault_level() {
     b.finish().await;
 }
 
-/// **A heap past 85% is a fault**, which is the firmware session's line:
-/// steady state is 51% and the worst instant they measured, with the setup AP
+/// **A heap past 85% is a fault**, which is the measured line:
+/// steady state is 51% and the worst instant measured, with the setup AP
 /// up, is 60%. 90% is nowhere near either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_heap_past_the_line_is_a_fault() {
@@ -210,7 +210,7 @@ async fn a_heap_past_the_line_is_a_fault() {
         .await;
     assert_eq!(f["low_heap"], true, "90% of the heap is in use: {f}");
 
-    // The worst instant the firmware session measured is not a fault: 60%.
+    // The worst instant measured is not a fault: 60%.
     let f = b
         .health(
             "the worst measured instant, 60%",

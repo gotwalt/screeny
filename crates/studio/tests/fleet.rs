@@ -144,7 +144,7 @@ async fn a_typed_address_becomes_a_device_and_starts_playing() {
 ///
 /// This replaces `promoting_the_preview_is_explicit`, which pinned the
 /// opposite - that playing with the design view did *not* touch the panel.
-/// That was card 106's reading of the vision and it is the thing the owner
+/// That was card 106's reading of the vision and it is the thing the author
 /// corrected, so the test is inverted rather than deleted: the behaviour it
 /// described must not come back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]

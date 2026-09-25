@@ -132,7 +132,7 @@ async fn with_http_the_page_has_what_only_the_device_knows() {
     assert_eq!(f["store_errors"], 0, "{f}");
     assert_eq!(f["wifi_state"], "connected", "{f}");
     assert_eq!(f["boot_id"], dev.handle().boot_id(), "the boot id is the device's own: {f}");
-    assert!(f["ssid"].is_string(), "the network name is on the owner's page: {f}");
+    assert!(f["ssid"].is_string(), "the network name is on the author's page: {f}");
     assert!(f["ip"].is_string(), "{f}");
 
     // What only a studio that has watched more than one read can say.
@@ -193,7 +193,7 @@ async fn without_http_nothing_complains() {
 
 /// **`boot_id` changing is the device rebooting**, and that is the only thing
 /// the studio counts reboots from - never uptime, which is the agreement with
-/// the firmware session.
+/// the firmware.
 ///
 /// The simulator draws a fresh `boot_id` at every start, so stopping one and
 /// putting another on the same ports is a reboot as far as the wire can tell.
