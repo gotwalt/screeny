@@ -1,8 +1,8 @@
 //! The button gesture recogniser: levels and milliseconds in, gestures out.
 //!
 //! The Tidbyt Gen 1 has one button, on GPIO15, active low
-//! (`docs/research/008-button.md`, confirmed on the bench with the owner
-//! pressing, card 203). Card 230 gives it two jobs, and device-web decision 10
+//! (`docs/research/008-button.md`, confirmed on the bench with the button
+//! pressed, card 203). Card 230 gives it two jobs, and device-web decision 10
 //! narrows them to exactly these two:
 //!
 //! | held for | what happens |
@@ -13,7 +13,7 @@
 //! | released during the countdown | [`ButtonEvent::HoldCancelled`] - nothing is changed |
 //! | [`WIPE_MS`] | [`ButtonEvent::WipeWifi`] - forget the network, raise the portal |
 //!
-//! There is no 15 s factory reset and no held-at-boot ladder: the owner
+//! There is no 15 s factory reset and no held-at-boot ladder: the author
 //! dropped both (device-web decision 10), and a pin that is already low when
 //! the firmware starts is **ignored until it is released** - see
 //! [`Recognizer::poll`].

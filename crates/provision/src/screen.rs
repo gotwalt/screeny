@@ -22,7 +22,7 @@
 //!
 //! Polarity is the measured one and **must not change**: the quiet zone and
 //! the light modules are lit white, the dark modules are off. That is what
-//! the owner's phone scanned on 2026-09-19.
+//! the author's phone scanned on 2026-09-19.
 
 use embedded_graphics::mono_font::ascii::{FONT_4X6, FONT_5X7};
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -137,12 +137,12 @@ pub enum Screen<'a> {
     /// **An overlay, like the portal screen**: a streamed frame underneath is
     /// still decoded and counted, it just does not reach the panel while this
     /// is up. It is drawn once a second, which is the whole animation - the
-    /// panel runs off laptop USB and CLAUDE.md allows nothing flashing above
+    /// panel runs off laptop USB and nothing may flash above
     /// 3 Hz.
     ///
     /// The destructive thing on this device is the only one with a countdown,
-    /// and that is the point: 008's gesture design says the owner must be able
-    /// to see what is about to happen and let go.
+    /// and that is the point: 008's gesture design says whoever is holding the
+    /// button must be able to see what is about to happen and let go.
     WipeCountdown {
         /// Whole seconds until the credentials go, 4 down to 1.
         seconds_left: u8,
@@ -151,7 +151,8 @@ pub enum Screen<'a> {
     ///
     /// Shown for a second so that letting go has an answer. Without it a
     /// cancelled hold and a hold that did nothing at all look the same, and
-    /// the owner is left wondering which of the two he just did.
+    /// whoever is holding the button is left wondering which of the two just
+    /// happened.
     WipeCancelled,
     /// The hold was refused: a firmware update is in flight or on trial
     /// (card 230's `wipe_allowed`).

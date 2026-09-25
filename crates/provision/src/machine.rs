@@ -535,7 +535,7 @@ impl Provisioner {
     ///
     /// The portal screen is [`Layout::QrAndName`] and **stays put**: the two
     /// layouts used to alternate every four seconds, and a phone camera
-    /// cannot lock on to a code that keeps leaving (the owner's phone test,
+    /// cannot lock on to a code that keeps leaving (the author's phone test,
     /// 2026-09-20). [`Layout::Text`] is only the fallback for a name no
     /// version 2-L code can carry, so [`crate::render`] cannot fail on what
     /// this returns. `now_ms` times the `Connected` screen.
