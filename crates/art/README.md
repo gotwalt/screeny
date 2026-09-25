@@ -27,7 +27,7 @@ cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.pn
 cargo test -p screeny-art                        # includes the end-to-end wire tests
 
 # to a panel (use --release, the encoder is ~10x slower in a debug build)
-cargo run --release -p screeny-art -- play metaballs --to screeny-4a00a4
+cargo run --release -p screeny-art -- play metaballs --to screeny-c0ffee
 
 # the network-free build: no sockets, no mdns-sd, no `play`
 cargo build -p screeny-art --no-default-features            # also no GPU patches
@@ -42,7 +42,7 @@ cargo build -p screeny-art --no-default-features --features gpu
 
 | you write | it is | found by |
 |---|---|---|
-| `screeny-4a00a4` | an mDNS instance name - **preferred**, because the link re-resolves it on every reconnect and so follows the device across a DHCP lease | a browse |
+| `screeny-c0ffee` | an mDNS instance name - **preferred**, because the link re-resolves it on every reconnect and so follows the device across a DHCP lease | a browse |
 | `10.0.0.5`, `10.0.0.5:49374` | an address | nothing; used as given |
 | `host.docker.internal:49374`, `panel.lan` | a host name: anything with a dot or a port in it | the system resolver, on the link's connect thread, again on every reconnect |
 
@@ -65,7 +65,7 @@ Three things are worth knowing before building on it:
 
 ### The `sender` feature is on by default
 
-Decided by the orchestrator on 2026-09-19 (card 112). `SenderOutput` and `play`
+Decided on 2026-09-19 (card 112). `SenderOutput` and `play`
 live behind the `sender` feature, and that feature is **default-on**, alongside
 `gpu`:
 
@@ -253,8 +253,8 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   studio shows this in its inspector. The clock names its dance ("rings > morph
   > split, point") and offers "Play it again" and "Compose another", which
   perform at once to the time already showing. The dials patch names its mood and offers
-  "Move on". (A ratings mechanism was tried and removed: the owner likes nearly
-  every dance, so the composer is steered by variety, not taste.)
+  "Move on". (A ratings mechanism was tried and removed: nearly
+  every dance reads well, so the composer is steered by variety, not taste.)
 - **A minute has a shape**: the dance lands as the minute turns, the time is
   held ("Seconds the time is held"), then the hands are released into
   **ambient** motion (`ambient.rs`) until it is time to settle and dance again.
@@ -268,7 +268,7 @@ continuous digit lines. CPU-rendered, one 16-colour ramp, exact at 4 bpp.
   `1`, `4` and `7` leave dials out of their glyph, and until card 160 those rested
   with both hands at 7:30, at full brightness: three identical strokes stacked beside
   a `1` are a colon, so `21:12` read as `2:1:12` and `14:47` as `1,4,4,7`. They must
-  stay visible clock hands (the owner), so the fix is a pose and a presentation, not
+  stay visible clock hands (the author), so the fix is a pose and a presentation, not
   blanking. The default is **"hatched, quiet"**: hour hand at 7:30, minute hand at
   1:30 - one diagonal corner to corner, a dial reading about 1:37 - at a fifth of the
   ink. A diagonal is the one direction the digits never use, and it survives being
@@ -365,7 +365,7 @@ as it turns out of the light; and the card's shadow, which runs 1-2 LEDs *ahead*
 of it down the plate below because the light sits below the eye - put the light
 above and the shadow hides under the card and buys nothing.
 
-**Every position rotates** (card 184). The owner, with the new faces on the
+**Every position rotates** (card 184). The author, with the new faces on the
 panel: "let's do an entire rotation of every position on minute change. I think
 the fun of a flipboard is that it flips." So on the minute all four modules run
 their whole drum and land on the new time, the ones whose numeral did not
@@ -495,7 +495,7 @@ anything), `pace`, `blink` (off: nothing in a bedroom should blink), `hours24`,
 ### The blank card
 
 A real board's hours-tens drum carries a **blank** where a leading zero would
-be, and shows it most of the day - the owner asked for it and that is what the
+be, and shows it most of the day - the author asked for it and that is what the
 default is: ` 9:05`, not `09:05`. It is a card like any other, on a drum of
 three (blank, 1, 2), so `09:59 -> 10:00` falls from blank to 1 and
 `23:59 -> 00:00` falls from 2 to blank in **one** card rather than cascading
@@ -506,7 +506,7 @@ draws nothing for a glyph it has not got, and the blank card has no glyph.
 
 Six faces, from `crates/art/src/faces/` - a crate-wide module, not one of
 vesta's files, because the faces are worth having in more than one patch. Card
-174: the owner did not love the drawn numerals ("in particular the 5 has a
+174: the author did not love the drawn numerals ("in particular the 5 has a
 super long descender that's not symmetrical") and asked for pixel fonts.
 
 | `font` | What it is | Ink box | Crisp |
@@ -580,7 +580,7 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
 3D steering round invisible geometry, on the CPU, at 0.30 ms a frame. Cards
 168, 177, 122, 123 and 124.
 
-- **`birds` goes down to 3** (card 122, the owner: "too many birds, too far
+- **`birds` goes down to 3** (card 122, the author: "too many birds, too far
   away - the resolution of the screen means that a lot of the detail gets
   lost"). A flock that small is measured over ten simulated minutes the same
   way the 55-bird default is (`the_smallest_flock_still_flocks`): it keeps its
@@ -598,7 +598,7 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   standoff distance. `near`'s own range and default are unchanged - card
   169's `near 3.0` with the full flock is still there for anyone who wants a
   closer camera rather than a bigger lens.
-- **`samples` ("Samples per axis") is gone** (the owner: "super confusing").
+- **`samples` ("Samples per axis") is gone** (the author: "super confusing").
   It was always anti-aliasing quality, never a look, and never a cost that
   bound anything (0.14-0.98 ms/frame across its old range against a 33 ms
   budget) - fixed at 3 (`SUPERSAMPLE`) rather than left on the page. An old
@@ -681,8 +681,8 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   so nothing is tested against every sample. **Depth reads as contrast far more
   than as size** at 64x32: 16 m of air halves how much a bird stands out, and
   that is what stops fifty of them reading as fog.
-- **A wing with a wrist** (`bird.rs`, card 123; the owner, after card 122 let
-  him draw a handful of big ones: "the expanded bird shapes don't have natural
+- **A wing with a wrist** (`bird.rs`, card 123; the author, after card 122
+  allowed drawing a handful of big ones: "the expanded bird shapes don't have natural
   looking wings"). Each wing is two segments. The hand wing beats 1.3x further
   than the inner one and **lags it by 0.55 rad of phase** - the wave that runs
   out along a real wing - and it **folds back and draws in through the quick
@@ -726,7 +726,7 @@ Birds in slow motion, seen by a camera that is one of them. Reynolds' boids in
   shoulder, with a short neck and a shorter head ahead of it rather than one
   long nose stroke.
 - **The birds lean into their turns, and the lean is a drawing** (card 124; the
-  owner, shown the wings and told the flock barely rolls: "yeah, let's add some
+  author, shown the wings and told the flock barely rolls: "yeah, let's add some
   roll & lean capabilities"). A bird's `roll` is honest - `atan(lateral / g)` -
   and at the turn rates cards 168 and 177 tuned that is **seven degrees at its
   very worst**, which across a sixteen-LED wing is about one LED: invisible. So
@@ -913,7 +913,7 @@ faked a lossy encode with median cut and an ordered dither - was deleted by card
 | Assumption | Where |
 |---|---|
 | Transfer curve is standard sRGB | `color.rs`: `srgb_to_linear` / `linear_to_srgb` |
-| The panel takes 30 fps. This stopped being an assumption in card 161: the brief measured ~30, the device's cadence ceiling is 30, and the owner asked for one rate with no variability. `screeny_art::FPS` is it, and nothing offers a choice | `crates/art/src/lib.rs`: `FPS` |
+| The panel takes 30 fps. This stopped being an assumption in card 161: the brief measured ~30, the device's cadence ceiling is 30, and one rate with no variability was chosen. `screeny_art::FPS` is it, and nothing offers a choice | `crates/art/src/lib.rs`: `FPS` |
 | Hand-over is raw RGB frames or palette + indices | `frame.rs`: `WireFrame`; `output/mod.rs` |
 | Luminance weights are Rec.709 (panel primaries unmeasured) | `color.rs`: `Rgb::luma` |
 
