@@ -411,10 +411,10 @@ impl PatchMemory {
 /// **One of these for the whole studio**, shared by the design view and by
 /// every panel's player. Tuning a patch anywhere updates it; switching to a
 /// patch anywhere restores from it. (The card asked for one per context; that
-/// was reversed on 2026-09-19 because the
-/// browser is meant to be a window onto what the panel is doing, and because the
-/// preview/player split is being unified in card 170. A per-context memory
-/// would have been built for a distinction that is about to go away.)
+/// was reversed on 2026-09-19: the browser is meant to be a window onto what
+/// the panel is doing, and card 170 unified the preview/player split, so a
+/// per-context memory would have been built for a distinction that was about
+/// to go away.)
 pub type Memory = BTreeMap<String, PatchMemory>;
 
 /// The one memory, as the engine and every player hold it.
