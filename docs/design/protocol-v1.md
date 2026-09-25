@@ -1010,13 +1010,7 @@ holds the credential until the machine asks for it to be committed, which is
 **At boot**, in order:
 
 1. the **stored** credentials, if the store holds a pair;
-2. the build's **compile-time** credentials, if it has any. A default build has
-   none and its `build.rs` does not look for any; the one build that does is
-   the off-by-default `bench-wifi` build, for testing (device-web decision 6).
-   A compile-time pair that joins **seeds an empty store**; it never replaces a
-   stored pair that failed, which is the author's to replace and not a test
-   build's to overwrite;
-3. otherwise - nothing stored and nothing compiled in, or both exhausted - the
+2. otherwise - nothing stored, or the stored pair fails three times - the
    **portal** of §8.1. The portal is never terminal.
 
 Each target gets `join_attempts` = 3 attempts and each attempt is bounded by
@@ -1039,10 +1033,10 @@ there is an address**: an association with no DHCP answer is a failed attempt.
 - A trial posted **while the device is online or joining** raises no AP: there
   is one station, so it drops the association it has, and there is nobody on a
   setup network to inform. A failure goes back to the **stored** credentials
-  (then the compile-time pair, then the portal only if there is nothing at
-  all) and **never clears the store**. The panel stays the stream's, the
-  telemetry `state` byte takes **no** `PROVISIONING` overlay - nothing about
-  this device is in setup - and `ip` is `None` for the length of the trial.
+  (the portal only if there are none) and **never clears the store**. The
+  panel stays the stream's, the telemetry `state` byte takes **no**
+  `PROVISIONING` overlay - nothing about this device is in setup - and `ip`
+  is `None` for the length of the trial.
 - A failed online-origin trial is **sticky**: `GET_WIFI` reads `FAILED` and
   `GET /api/v1/wifi` carries the reason until the next post, a credentials wipe
   or a reboot - the previous network reconnecting is not an answer to "did the
@@ -1745,9 +1739,9 @@ byte on the wire; `txtvers` and `proto` are unaffected.
 31. **The serial console of 8.1** - struck. It was never built and will not be:
     the portal, the settings page and `SET_WIFI` are the three paths
     (device-web decision 5, section 8.1).
-32. **Compile-time credentials** - step 2 of the join order, present only in a
-    `bench-wifi` build, and they seed an **empty** store rather than replacing
-    a stored pair that failed (device-web decision 6, section 8.3).
+32. **Compile-time credentials** - struck (fw 0.10.0). No build compiles one
+    in any more; the join order is stored credentials, then the portal
+    (section 8.3).
 33. **What a posted pair does** - one trial machine behind three front doors,
     committing nothing until it has joined, not retrying an authentication
     failure, and falling back to the stored network with a sticky `FAILED`
