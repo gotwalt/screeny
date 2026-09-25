@@ -48,8 +48,8 @@
 //!     has_stored: false,
 //!     ..Config::default()
 //! });
-//! // Nothing in the store and no compile-time credentials: straight to the
-//! // portal, and the caller is told to raise the soft-AP.
+//! // Nothing in the store: straight to the portal, and the caller is told
+//! // to raise the soft-AP.
 //! let actions = p.step(Event::Boot, 0);
 //! assert_eq!(actions.as_slice(), &[Action::RaiseAp]);
 //! assert_eq!(p.state(), State::Portal);

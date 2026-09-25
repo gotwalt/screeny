@@ -26,18 +26,17 @@ const T: Timing = Timing {
     connected_screen_ms: 700,
 };
 
-fn cfg(stored: bool, builtin: bool) -> Config<'static> {
+fn cfg(stored: bool) -> Config<'static> {
     Config {
         ap_ssid: "screeny-4a00a4",
         has_stored: stored,
-        has_builtin: builtin,
         form: UriForm::NoPass,
         timing: T,
     }
 }
 
-fn booted(stored: bool, builtin: bool) -> (Provisioner, Vec<Action>) {
-    let mut p = Provisioner::new(&cfg(stored, builtin));
+fn booted(stored: bool) -> (Provisioner, Vec<Action>) {
+    let mut p = Provisioner::new(&cfg(stored));
     let a = p.step(Event::Boot, 0).as_slice().to_vec();
     (p, a)
 }
@@ -55,7 +54,7 @@ fn fail_n(p: &mut Provisioner, n: usize, reason: FailReason, mut now: u32) -> Ve
 /// Drive a device all the way to `Online` through the portal and a trial, the
 /// way a person with a phone does. Returns the machine at `now = 1000`.
 fn provisioned_through_the_portal() -> Provisioner {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     assert_eq!(p.state(), State::Portal);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 1_000);
@@ -70,7 +69,7 @@ fn provisioned_through_the_portal() -> Provisioner {
 /// Row 1: `BOOT` + store has credentials -> `JOINING`.
 #[test]
 fn boot_with_stored_credentials_joins() {
-    let (p, actions) = booted(true, false);
+    let (p, actions) = booted(true);
     assert_eq!(p.state(), State::Joining);
     assert_eq!(
         actions,
@@ -86,7 +85,7 @@ fn boot_with_stored_credentials_joins() {
 /// Row 2: `BOOT` + store empty -> `PORTAL`.
 #[test]
 fn boot_with_an_empty_store_raises_the_portal() {
-    let (p, actions) = booted(false, false);
+    let (p, actions) = booted(false);
     assert_eq!(p.state(), State::Portal);
     assert_eq!(actions, [Action::RaiseAp]);
     assert!(p.ap_up());
@@ -98,7 +97,7 @@ fn boot_with_an_empty_store_raises_the_portal() {
 /// Row 3: `JOINING` + joined -> `ONLINE`, mDNS and the LAN server up.
 #[test]
 fn joining_that_succeeds_goes_online_and_announces() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, 40);
     assert_eq!(p.state(), State::Online);
     assert_eq!(
@@ -114,7 +113,7 @@ fn joining_that_succeeds_goes_online_and_announces() {
 /// Row 4: `JOINING` + 3 attempts failed -> `PORTAL`, `WIFI_STATE = FAILED`.
 #[test]
 fn three_failed_attempts_raise_the_portal() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     let a = fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
     assert_eq!(p.state(), State::Portal);
     assert_eq!(
@@ -141,7 +140,7 @@ fn three_failed_attempts_raise_the_portal() {
 fn a_silent_radio_reaches_the_portal_after_three_attempt_windows() {
     let mut p = Provisioner::new(&Config {
         timing: Timing::SPEC,
-        ..cfg(true, false)
+        ..cfg(true)
     });
     p.step(Event::Boot, 0);
     // One tick a second, as the firmware will.
@@ -158,7 +157,7 @@ fn a_silent_radio_reaches_the_portal_after_three_attempt_windows() {
 /// the AP stays up - that is the whole point of APSTA here.
 #[test]
 fn a_posted_credential_starts_a_trial_and_commits_nothing() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
     assert_eq!(p.state(), State::Trial);
     assert_eq!(
@@ -179,7 +178,7 @@ fn a_posted_credential_starts_a_trial_and_commits_nothing() {
 /// Row 6: `TRIAL` + joined -> `ONLINE`; commit, hold the AP 30 s, then drop.
 #[test]
 fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, 600);
     assert_eq!(p.state(), State::Online);
@@ -221,7 +220,7 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
 fn a_trial_that_fails_reports_why_and_leaves_the_store_alone() {
     // Start from a device that already has credentials, so "untouched" is a
     // claim with something to be untouched.
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
     assert_eq!(p.state(), State::Portal);
     assert!(p.has_stored());
@@ -256,7 +255,7 @@ fn every_failure_reason_reaches_the_page() {
         (FailReason::NetworkNotFound, "not_found"),
         (FailReason::Other, "other"),
     ] {
-        let (mut p, _) = booted(false, false);
+        let (mut p, _) = booted(false);
         p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
         // A transient reason is retried; drive it to the end either way.
         for i in 0..T.trial_attempts as u32 {
@@ -274,7 +273,7 @@ fn every_failure_reason_reaches_the_page() {
 /// Anything else is retried.
 #[test]
 fn an_auth_error_is_not_retried_but_a_transient_failure_is() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
     let a = p.step(
         Event::JoinFailed {
@@ -285,7 +284,7 @@ fn an_auth_error_is_not_retried_but_a_transient_failure_is() {
     assert_eq!(p.state(), State::Portal);
     assert!(a.is_empty());
 
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
     let a = p.step(
         Event::JoinFailed {
@@ -307,7 +306,7 @@ fn an_auth_error_is_not_retried_but_a_transient_failure_is() {
 /// The 3 a.m. router reboot heals itself.
 #[test]
 fn the_portal_retries_the_stored_credentials_when_nobody_is_on_it() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
     assert_eq!(p.state(), State::Portal);
 
@@ -339,7 +338,7 @@ fn the_portal_retries_the_stored_credentials_when_nobody_is_on_it() {
 /// would cost whoever is typing a password a ~45 s outage.
 #[test]
 fn the_retry_is_suppressed_while_a_phone_is_on_the_portal() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     fail_n(&mut p, 3, FailReason::Other, 0);
     p.step(Event::ApClientAssociated, 10);
     assert_eq!(p.ap_clients(), 1);
@@ -366,7 +365,7 @@ fn the_retry_is_suppressed_while_a_phone_is_on_the_portal() {
 /// default for 007's open question 4).
 #[test]
 fn an_empty_store_never_retries_and_the_portal_never_expires() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     for i in 1..=20u32 {
         assert!(p.step(Event::Tick, i * T.portal_retry_ms).is_empty());
         assert_eq!(p.state(), State::Portal);
@@ -439,14 +438,14 @@ fn losing_a_network_for_good_ends_at_the_portal() {
 #[test]
 fn button_wipe_from_every_state() {
     // Boot.
-    let mut p = Provisioner::new(&cfg(true, true));
+    let mut p = Provisioner::new(&cfg(true));
     let a = p.step(Event::ButtonWipe, 5);
     assert_eq!(p.state(), State::Portal);
     assert_eq!(a.as_slice(), [Action::ClearCredentials, Action::RaiseAp]);
     assert!(!p.has_stored());
 
     // Joining: the join in flight is abandoned first.
-    let (mut p, _) = booted(true, true);
+    let (mut p, _) = booted(true);
     assert_eq!(p.state(), State::Joining);
     let a = p.step(Event::ButtonWipe, 5);
     assert_eq!(p.state(), State::Portal);
@@ -467,7 +466,7 @@ fn button_wipe_from_every_state() {
 
     // Portal: already there, and the AP is already up, so it is not raised
     // twice - but the credentials still go.
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     fail_n(&mut p, 3, FailReason::Other, 0);
     assert!(p.has_stored());
     let a = p.step(Event::ButtonWipe, 500);
@@ -481,7 +480,7 @@ fn button_wipe_from_every_state() {
     );
 
     // Trial.
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
     assert_eq!(p.state(), State::Trial);
     let a = p.step(Event::ButtonWipe, 20);
@@ -490,79 +489,14 @@ fn button_wipe_from_every_state() {
 }
 
 // ---------------------------------------------------------------------------
-// The compile-time fallback (spec 8.3 step 2, device-web decision 6)
+// The join order: stored, then the portal
 // ---------------------------------------------------------------------------
 
-/// Stored credentials first, compile-time ones second, portal last.
-#[test]
-fn compile_time_credentials_are_tried_after_the_stored_ones() {
-    let (mut p, a) = booted(true, true);
-    assert_eq!(
-        a,
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
-    let a = fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
-    assert_eq!(
-        a,
-        [
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 2
-            },
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 3
-            },
-            // Not the portal yet: the compile-time credentials are step 2.
-            Action::StartJoin {
-                which: JoinTarget::Builtin,
-                attempt: 1
-            },
-        ]
-    );
-    assert_eq!(p.state(), State::Joining);
-
-    let a = fail_n(&mut p, 3, FailReason::NetworkNotFound, 100);
-    assert_eq!(*a.last().unwrap(), Action::RaiseAp);
-    assert_eq!(p.state(), State::Portal);
-}
-
-/// An empty store in a build that has compile-time credentials tries them
-/// rather than raising the portal, and a success **seeds the store** with
-/// them - device-web decision 6, which is what makes a bench flash come
-/// straight up and be provisioned afterwards.
-#[test]
-fn compile_time_credentials_seed_an_empty_store() {
-    let (mut p, a) = booted(false, true);
-    assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a,
-        [Action::StartJoin {
-            which: JoinTarget::Builtin,
-            attempt: 1
-        }]
-    );
-    let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, 50);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::CommitCredentials {
-                which: JoinTarget::Builtin
-            },
-            Action::Announce,
-        ]
-    );
-    assert!(p.has_stored());
-}
-
-/// A build with neither goes straight to the portal, which is what a public
-/// repo's default build does.
+/// An empty store goes straight to the portal, which is what every build
+/// does now that there is no compiled-in fallback.
 #[test]
 fn a_build_with_no_credentials_at_all_boots_to_the_portal() {
-    let (p, a) = booted(false, false);
+    let (p, a) = booted(false);
     assert_eq!(p.state(), State::Portal);
     assert_eq!(a, [Action::RaiseAp]);
 }
@@ -578,7 +512,7 @@ fn every_timer_survives_the_49_day_wrap() {
     const NEAR: u32 = u32::MAX - 50;
 
     // The join attempt window, straddling the wrap.
-    let mut p = Provisioner::new(&cfg(true, false));
+    let mut p = Provisioner::new(&cfg(true));
     p.step(Event::Boot, NEAR);
     assert!(p.step(Event::Tick, NEAR.wrapping_add(T.join_attempt_ms - 1)).is_empty());
     assert_eq!(p.state(), State::Joining);
@@ -593,7 +527,7 @@ fn every_timer_survives_the_49_day_wrap() {
     );
 
     // The portal retry, straddling the wrap.
-    let mut p = Provisioner::new(&cfg(true, false));
+    let mut p = Provisioner::new(&cfg(true));
     p.step(Event::Boot, NEAR);
     fail_n(&mut p, 3, FailReason::Other, NEAR);
     assert_eq!(p.state(), State::Portal);
@@ -606,7 +540,7 @@ fn every_timer_survives_the_49_day_wrap() {
     assert_eq!(p.state(), State::Joining);
 
     // The AP grace window and the link-down window, straddling the wrap.
-    let mut p = Provisioner::new(&cfg(false, false));
+    let mut p = Provisioner::new(&cfg(false));
     p.step(Event::Boot, NEAR);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, NEAR + 1);
     p.step(Event::Joined { ip: [10, 0, 0, 5] }, NEAR + 2);
@@ -622,7 +556,7 @@ fn every_timer_survives_the_49_day_wrap() {
     assert_eq!(p.state(), State::Joining);
 
     // And the screen, at both ends of the clock.
-    let (p, _) = booted(false, false);
+    let (p, _) = booted(false);
     assert!(p.screen(u32::MAX).is_some());
     assert!(p.screen(0).is_some());
 }
@@ -654,7 +588,7 @@ fn a_very_late_tick_still_fires_every_timer() {
 /// new name rather than ignoring the correction.
 #[test]
 fn a_second_post_during_a_trial_restarts_it() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 10);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 20);
     assert_eq!(p.state(), State::Trial);
@@ -677,7 +611,7 @@ fn a_second_post_during_a_trial_restarts_it() {
 /// `JoinFailed` after a `StopJoin`.
 #[test]
 fn events_that_do_not_apply_are_ignored() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     assert_eq!(p.state(), State::Portal);
     for ev in [
         Event::Boot,
@@ -698,7 +632,7 @@ fn events_that_do_not_apply_are_ignored() {
 /// Client counting cannot go negative or overflow, whatever the radio says.
 #[test]
 fn ap_client_counting_saturates_both_ways() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::ApClientLeft, 1);
     assert_eq!(p.ap_clients(), 0);
     for i in 0..300u32 {
@@ -713,7 +647,7 @@ fn ap_client_counting_saturates_both_ways() {
 /// overflowed. Spec 6.3 caps `SET_WIFI` at 32; an HTTP form does not.
 #[test]
 fn an_over_long_posted_ssid_is_cut_to_the_store_limit() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     let long = "x".repeat(200);
     p.step(Event::CredentialsPosted { ssid: &long }, 10);
     assert_eq!(p.trial().unwrap().ssid.len(), screeny_provision::SSID_MAX);
@@ -727,12 +661,12 @@ fn an_over_long_posted_ssid_is_cut_to_the_store_limit() {
 /// against research 007 section 5.2's mapping paragraph.
 #[test]
 fn the_state_bytes_match_007_section_5_2() {
-    let p = Provisioner::new(&cfg(true, false));
+    let p = Provisioner::new(&cfg(true));
     assert_eq!(p.state(), State::Boot);
     assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED);
     assert_eq!(p.overlay_state(), None);
 
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     assert_eq!(p.wifi_state(), wifi_state::CONNECTING); // JOINING
     assert_eq!(p.overlay_state(), None);
 
@@ -740,7 +674,7 @@ fn the_state_bytes_match_007_section_5_2() {
     assert_eq!(p.wifi_state(), wifi_state::CONNECTED); // ONLINE
     assert_eq!(p.overlay_state(), None);
 
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED); // PORTAL, empty store
     assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
 
@@ -767,7 +701,7 @@ fn the_state_bytes_match_007_section_5_2() {
 fn the_panel_shows_the_portal_then_the_address_then_nothing() {
     use screeny_provision::{Layout, Screen};
 
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     let layout_at = |p: &Provisioner, t: u32| match p.screen(t) {
         Some(Screen::Portal { layout, ssid, .. }) => {
             assert_eq!(ssid, "screeny-4a00a4");
@@ -799,7 +733,7 @@ fn the_panel_shows_the_portal_then_the_address_then_nothing() {
 /// is standing there waiting for it, and the idle screen already shows the IP.
 #[test]
 fn a_boot_time_join_does_not_take_the_panel() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 10);
     assert_eq!(p.screen(10), None);
 }
@@ -813,7 +747,7 @@ fn a_name_that_cannot_be_a_qr_gets_the_text_layout_every_time() {
 
     let mut p = Provisioner::new(&Config {
         ap_ssid: "screeny-a-very-long-name",
-        ..cfg(false, false)
+        ..cfg(false)
     });
     p.step(Event::Boot, 0);
     for t in [0, 40, 4_000, 8_000, u32::MAX] {
@@ -831,7 +765,7 @@ fn a_name_that_cannot_be_a_qr_gets_the_text_layout_every_time() {
 /// that brings credentials in carries the SSID alone.
 #[test]
 fn nothing_debug_printable_can_hold_a_psk() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     let actions = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
     let dump = format!("{p:?} {actions:?} {:?}", p.trial());
     assert!(dump.contains("Example-Wifi1"), "the SSID is not a secret");
@@ -889,7 +823,7 @@ fn the_firmware_knows_exactly_what_this_crate_costs_it() {
 /// [`provisioned_through_the_portal`] no AP was ever raised, which is the
 /// ordinary case for a post from the LAN settings page.
 fn online_from_stored() -> Provisioner {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 1_000);
     assert_eq!(p.state(), State::Online);
     assert!(!p.ap_up());
@@ -933,7 +867,7 @@ fn an_online_origin_trial_is_not_provisioning() {
     assert!(p.screen(1_100 + 4_000).is_none());
 
     // ...whereas a portal trial is, exactly as it always was.
-    let (mut q, _) = booted(false, false);
+    let (mut q, _) = booted(false);
     q.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
     assert_eq!(q.trial().unwrap().origin, TrialOrigin::Portal);
     assert_eq!(q.overlay_state(), Some(tstate::PROVISIONING));
@@ -1127,7 +1061,7 @@ fn stored_credentials_failing_after_the_fallback_still_reach_the_portal() {
 /// There is one station; it cannot chase two networks.
 #[test]
 fn a_post_while_joining_cancels_the_attempt_in_flight() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     assert_eq!(p.state(), State::Joining);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 50);
     assert_eq!(p.state(), State::Trial);
@@ -1148,37 +1082,11 @@ fn a_post_while_joining_cancels_the_attempt_in_flight() {
     assert!(p.step(Event::Tick, 50 + T.join_attempt_ms - 1).is_empty());
 }
 
-/// A `JOINING` device with no store to fall back to - a bench build trying
-/// its compile-time credentials - falls back to those instead.
-#[test]
-fn a_failed_post_while_joining_an_empty_store_falls_back_to_the_builtin() {
-    let (mut p, _) = booted(false, true);
-    assert_eq!(p.state(), State::Joining);
-    assert!(!p.has_stored());
-    p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 50);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        60,
-    );
-    assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Builtin,
-            attempt: 1
-        }]
-    );
-    assert!(!p.has_stored());
-    assert_eq!(p.wifi_state(), wifi_state::FAILED, "sticky, as ever");
-}
-
 /// A post to the portal is a portal trial whatever the store holds, so the
 /// wiped-and-reprovisioned path is untouched by any of this.
 #[test]
 fn a_post_to_the_portal_is_a_portal_trial_even_with_an_empty_store() {
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     p.step(Event::ButtonWipe, 1);
     assert_eq!(p.state(), State::Portal);
     assert!(!p.has_stored());
@@ -1266,7 +1174,7 @@ fn button_wipe_during_an_online_origin_trial_still_reaches_the_portal() {
 #[test]
 fn an_online_origin_trial_survives_the_49_day_wrap() {
     const NEAR: u32 = u32::MAX - 50;
-    let (mut p, _) = booted(true, false);
+    let (mut p, _) = booted(true);
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, NEAR);
     assert_eq!(p.state(), State::Online);
 
@@ -1316,7 +1224,7 @@ fn an_online_origin_trial_survives_the_49_day_wrap() {
 /// `Event::Boot` is processed - and is ignored rather than mishandled.
 #[test]
 fn a_post_before_boot_is_ignored() {
-    let mut p = Provisioner::new(&cfg(true, false));
+    let mut p = Provisioner::new(&cfg(true));
     assert_eq!(p.state(), State::Boot);
     assert!(p
         .step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 0)
@@ -1339,7 +1247,7 @@ fn a_post_before_boot_is_ignored() {
 /// still an online-origin post: the state, not the radio, is what decides.
 #[test]
 fn a_post_during_the_ap_grace_window_is_an_online_origin_trial() {
-    let (mut p, _) = booted(false, false);
+    let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 100);
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 200);
     assert_eq!(p.state(), State::Online);

@@ -120,8 +120,8 @@ pub const CONNECTED_SCREEN_MS: u32 = Timing::SPEC.connected_screen_ms;
 pub enum State {
     /// Powered on, nothing decided yet.
     Boot,
-    /// Trying stored or compile-time credentials. The AP may or may not be
-    /// up: a retry out of `Portal` keeps it up.
+    /// Trying the stored credentials. The AP may or may not be up: a retry
+    /// out of `Portal` keeps it up.
     Joining,
     /// Associated and addressed. The LAN server and mDNS are up.
     Online,
@@ -151,10 +151,6 @@ impl State {
 pub enum JoinTarget {
     /// What the settings store holds.
     Stored,
-    /// The compile-time credentials, when the build has them. Spec section
-    /// 8.3's step 2: tried after the stored ones fail and before the portal
-    /// is raised, which is what makes a bench flash come straight up.
-    Builtin,
     /// What was just posted to the portal, held by the caller.
     Trial,
 }
@@ -313,10 +309,6 @@ pub struct Config<'a> {
     pub ap_ssid: &'a str,
     /// Whether the settings store holds credentials.
     pub has_stored: bool,
-    /// Whether this build was compiled with credentials (device-web decision
-    /// 6: when present they seed an empty store; a build without them boots
-    /// straight to the portal, which is what a public repo needs).
-    pub has_builtin: bool,
     /// Which `WIFI:` spelling the QR carries.
     pub form: UriForm,
     /// Timing. [`Timing::SPEC`] unless this is a test.
@@ -328,7 +320,6 @@ impl Default for Config<'_> {
         Config {
             ap_ssid: "screeny-000000",
             has_stored: false,
-            has_builtin: false,
             form: UriForm::NoPass,
             timing: Timing::SPEC,
         }
@@ -346,7 +337,6 @@ pub struct Provisioner {
 
     state: State,
     has_stored: bool,
-    has_builtin: bool,
 
     /// Which credentials the join or trial in flight is using.
     target: JoinTarget,
@@ -393,7 +383,6 @@ impl Provisioner {
             form: cfg.form,
             state: State::Boot,
             has_stored: cfg.has_stored,
-            has_builtin: cfg.has_builtin,
             target: JoinTarget::Stored,
             attempt: 0,
             attempt_since: 0,
@@ -715,19 +704,12 @@ impl Provisioner {
 
     // --- transitions -------------------------------------------------------
 
-    /// `BOOT`: stored credentials first, then the compile-time ones, then the
-    /// portal.
+    /// `BOOT`: stored credentials, then the portal.
     ///
-    /// Research 007's table says "store empty -> PORTAL" and separately that
-    /// the compile-time credentials are step 2 of spec 8.3. Device-web
-    /// decision 6 settles the overlap: a build *with* compile-time
-    /// credentials and an empty store tries them, and on success
-    /// [`Action::CommitCredentials`] seeds the store with them.
+    /// Research 007's table: "store empty -> PORTAL".
     fn begin(&mut self, now_ms: u32, out: &mut Actions) {
         if self.has_stored {
             self.start_join(JoinTarget::Stored, now_ms, out);
-        } else if self.has_builtin {
-            self.start_join(JoinTarget::Builtin, now_ms, out);
         } else {
             self.enter_portal(now_ms, false, out);
         }
@@ -823,12 +805,6 @@ impl Provisioner {
                     self.trial_failed_sticky = true;
                     if self.has_stored {
                         self.start_join(JoinTarget::Stored, now_ms, out);
-                    } else if self.has_builtin {
-                        // Reachable only from `Joining` on a build with
-                        // compile-time credentials and an empty store: there
-                        // is no previous network to go back to, so step 2 of
-                        // spec 8.3 is the next best thing.
-                        self.start_join(JoinTarget::Builtin, now_ms, out);
                     } else {
                         // Nothing to fall back to at all. The portal is the
                         // only way back in.
@@ -852,10 +828,6 @@ impl Provisioner {
             );
             return;
         }
-        if self.target == JoinTarget::Stored && self.has_builtin {
-            self.start_join(JoinTarget::Builtin, now_ms, out);
-            return;
-        }
         self.enter_portal(now_ms, true, out);
     }
 
@@ -869,17 +841,6 @@ impl Provisioner {
                     out,
                     Action::CommitCredentials {
                         which: JoinTarget::Trial,
-                    },
-                );
-                self.has_stored = true;
-            }
-            // Device-web decision 6: compile-time credentials seed an empty
-            // store, so a bench flash comes up once and is provisioned after.
-            JoinTarget::Builtin => {
-                push(
-                    out,
-                    Action::CommitCredentials {
-                        which: JoinTarget::Builtin,
                     },
                 );
                 self.has_stored = true;

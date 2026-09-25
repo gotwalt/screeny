@@ -10,16 +10,16 @@ drive it, so the behaviour cannot drift between them. Card 221; the design is
 
 ```
                  ┌──────────┐
-   Event::Boot ─▶│   Boot   │ store has credentials? built-in ones?
+   Event::Boot ─▶│   Boot   │ store has credentials?
                  └────┬─────┘
-             yes ┌────┴────┐ neither
+             yes ┌────┴────┐ no
                  ▼         ▼
            ┌──────────┐  ┌──────────────────────────────┐
            │ Joining  │  │            Portal            │
-           │ stored,  │  │ AP `screeny-<id>` up, QR on  │
-           │ then     │  │ the panel, DHCP + DNS + HTTP │
-           │ built-in │  │ on 192.168.4.1. No timeout.  │
-           │ 3 x 15 s │  └───┬──────────────────────▲───┘
+           │ stored   │  │ AP `screeny-<id>` up, QR on  │
+           │ 3 x 15 s │  │ the panel, DHCP + DNS + HTTP │
+           │          │  │ on 192.168.4.1. No timeout.  │
+           │          │  └───┬──────────────────────▲───┘
            └──┬────┬──┘      │ CredentialsPosted    │ JoinFailed
        Joined │    │ 3 fails ▼                      │ (AP never dropped,
               │    └──────▶┌───────────┐            │  store untouched)
@@ -61,8 +61,8 @@ door it came in by (card 232):
   network to keep informed.
 * **A failure goes back, not to the portal.** The store still holds the network that was
   working a moment ago. If *those* credentials then fail three times, the ordinary
-  `Joining` -> `Portal` rule takes over. With an empty store the built-in credentials are
-  tried, and with neither the portal is the only way back in.
+  `Joining` -> `Portal` rule takes over, and with an empty store the portal is the only
+  way back in.
 * **The failure is sticky.** `wifi_state()` reads `FAILED` and `trial_is_current()` stays
   true even once the old network is back, until the next post or a reboot - otherwise the
   old network reconnecting a few seconds later reads as "your new network worked".
@@ -82,7 +82,7 @@ door it came in by (card 232):
 
 | action | the caller does |
 |---|---|
-| `StartJoin { which, attempt }` | begin a join with the stored, built-in or just-posted credentials |
+| `StartJoin { which, attempt }` | begin a join with the stored or just-posted credentials |
 | `StopJoin` | abandon the join in flight |
 | `RaiseAp` | APSTA soft-AP, DHCP, the DNS catch-all and the portal HTTP server up |
 | `DropAp` | all of that down |
