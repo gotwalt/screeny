@@ -83,6 +83,8 @@ narrowing the output-enable window rather than by throwing away bits. Discovery 
 DNS-SD (`_screeny._udp`); control and telemetry ride a second port; a source lock means
 two senders cannot fight over the panel.
 
+![Screeny Studio's Picture screen: flock playing on the attached panel](docs/media/studio-picture.png)
+
 **The Studio is one binary.** An axum server with the web page compiled in, no desktop
 window, no Node. It runs the same on a laptop and in a container. Players render on
 their own threads, a patch that panics or stalls is replaced without the process
