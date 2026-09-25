@@ -3,7 +3,7 @@
 //!
 //! [`FONT_5X7`] is the usual 5x7 cell (6 px pitch, so ten characters across a
 //! 64-wide panel). [`FONT_3X5`] is digits and a dot only, at a 4 px pitch, so
-//! that `192.168.7.221` fits on one line with room to spare.
+//! that `192.168.1.50` fits on one line with room to spare.
 //!
 //! Glyphs are column-major: one byte per column, bit 0 the top row.
 
