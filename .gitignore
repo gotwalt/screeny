@@ -3,7 +3,6 @@ backup/*.bin
 captures/
 .DS_Store
 lab/out/
-.claude/worktrees/
 lab/Cargo.lock
 lab/xtensa-bench/target/
 lab/xtensa-bench/Cargo.lock
@@ -18,3 +17,8 @@ wifi.env
 # docker compose reads `.env` from the project directory. That file is host
 # state - ports, the render gid, a timezone - and never belongs in the repo.
 .env
+
+# The development process record (task board, coordinator playbook, agent
+# instructions) is kept locally and is not part of the published tree.
+.claude/
+CLAUDE.local.md

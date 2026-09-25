@@ -1,83 +1,54 @@
 # Project docs
 
-The coordinating session's own playbook is `docs/ORCHESTRATOR.md`.
-
-## Layout
-
 ```
 docs/
-  board/            kanban: one markdown file per card
-    backlog/        ready to be picked up (ordered by card number)
-    doing/          claimed; the card names its owner and branch
-    review/         work finished on a branch, waiting for the orchestrator to merge
-    done/           merged to main
-    parked/         deliberately deferred; not picked up without the owner asking
-  research/         findings. One file per question, conclusions first.
-  design/           settled decisions (protocol spec, architecture). Source of truth.
+  design/       settled decisions. The source of truth when code and docs disagree.
+  research/     how we got there: one file per question, conclusions first.
+  media/        renders used by the README (see tools/render-media.sh).
 ```
 
-## Cards
+## Design
 
-File name: `NNN-short-slug.md`. Front matter:
+| File | What it settles |
+|---|---|
+| [`design/protocol-v1.md`](design/protocol-v1.md) | The wire protocol: one frame per UDP datagram, the codecs, the control channel, discovery, telemetry. Normative. |
+| [`design/architecture.md`](design/architecture.md) | How the crates fit together and why the split is where it is. |
+| [`design/generative-art-brief.md`](design/generative-art-brief.md) | What the art system is for and the rules a patch has to live by (the panel's colour model, the wire budget, brightness safety). |
+| [`design/studio-vision.md`](design/studio-vision.md) | Screeny Studio as a server-first web app that runs unattended. |
+| [`design/deployment.md`](design/deployment.md) | Running the Studio as a Docker service on a Linux box. |
+| [`design/device-web.md`](design/device-web.md) | The device's own web page, the captive-portal WiFi setup, safe over-the-air updates, and the button. |
 
-```
----
-id: 007
-title: Short imperative title
-type: research | design | build | test
-hardware: no | yes        # yes = may touch serial port / camera / flash
-depends: [003, 004]
-status: parked             # optional; parked cards stay in backlog/ and are not picked up
-owner:                    # filled in when claimed
-branch:                   # filled in when claimed
----
-```
+## Research
 
-Body: **Goal**, **Context** (links into research/ and design/), **Deliverables**
-(exact file paths), **Acceptance** (how we know it is done), and a **Log** section
-the worker appends to.
+Numbered in the order the questions came up. Each one opens with its conclusions.
 
-**Cards before 150 say "piece" for what is now a patch**, and "settings" for what is
-now a patch's `output` block. Card 150 renamed both everywhere in the code, the API,
-the page and `docs/design/`; `done/`, `parked/` and `docs/research/` are history and
-were left as they were written. `docs/board/ROADMAP.md` and `docs/ORCHESTRATOR.md`
-are the orchestrator's own running records and were left alone for the same reason.
+| File | Question |
+|---|---|
+| `research/000-bench-notes.md` | Bench setup: serial, flashing, the camera. |
+| `research/001-firmware-stack.md` | Can `no_std` Rust on embassy drive this hardware? What does the Tidbyt actually contain? |
+| `research/002-frame-encoding.md` | How to fit a 64x32 frame into one datagram: the codec lab. |
+| `research/003-protocol-transport.md` | UDP framing, pacing, discovery, what loss looks like over WiFi. |
+| `research/004-first-bringup.md` | The first day on real hardware. |
+| `research/005-end-to-end.md` | Measured results of the whole stack. |
+| `research/006-flash-store-ota.md` | Partition table, a settings store in flash, over-the-air updates with rollback. |
+| `research/007-device-web-and-portal.md` | An HTTP server, a soft-AP and a captive portal on the device, within the RAM budget. |
+| `research/008-button.md` | Where the Tidbyt's button is wired and what to do with it. |
+| `research/009-ram-headroom.md`, `research/010-stack-and-ram-levers.md` | Where the ESP32's RAM goes and how to get some back. |
+| `research/010-numerals-rest-pose.md` | A design study for the numerals clock. |
 
-## Worker protocol
+**About the numbers you will see.** Development was tracked as numbered work items
+("card 212", "card 080"), and the research docs, the design docs and many code comments
+cite them. The numbers are stable identifiers for a piece of work and its evidence;
+there is no separate document per number in this tree.
 
-1. You are given a card number. Work only in your own git worktree on branch
-   `card/NNN-slug`.
-2. First commit: `git mv` the card from `backlog/` to `doing/`, fill in `owner`/`branch`.
-3. Do the work. Commit early and often. Keep to the card's scope; if you find
-   other work, write a new card into `backlog/` rather than doing it.
-4. Append what you did, what you measured, and anything surprising to the card's **Log**.
-5. Last commit: `git mv` the card to `review/`. Do not merge to `main`.
-6. Report back: branch name, summary, open questions.
+## Conventions
 
-The orchestrator reviews, merges to `main`, and moves the card to `done/`.
-
-## Clippy
-
-`cargo clippy --workspace --all-targets` is expected to say **nothing**, for
-every host crate (cards 125 and 186). There is no CI gate - there is no CI - so it is on
-whoever is changing a crate to run it before handing the card over. An
-`#[allow]` that survives carries a one-line reason beside it saying why the
-lint is wrong for that code; a blanket `#![allow]` at the top of a file is not
-how this is kept quiet.
-
-Some crates are pixel-exact on the wire and have golden tests to prove it. A
-clippy "simplification" that reassociates a float sum changes pixels, so in
-`crates/art` and `crates/demos` a suggestion that touches arithmetic is only
-applied when the rendered output is shown to be byte-identical.
-
-## Hardware access
-
-One Tidbyt, one serial port, one camera. Parallel flashing or capture corrupts
-results, so:
-
-- Only cards with `hardware: yes` may touch `/dev/cu.usbserial-2140` or the camera,
-  and only one such card is in `doing/` at a time.
-- Everyone else develops against the host simulator (`sim`), which speaks the same
-  wire protocol as the firmware.
-- Serial baud <= 230400. Higher rates corrupt data on this bench.
-- No flashing without a verified stock backup in `backup/`.
+- `cargo clippy --workspace --all-targets` is expected to say nothing. An `#[allow]`
+  carries a one-line reason beside it.
+- Some crates are pixel-exact on the wire and have golden tests to prove it. In
+  `crates/art` and `crates/demos` a clippy suggestion that reassociates float arithmetic
+  is applied only when the rendered output is shown to be byte-identical.
+- One implementation of each thing: wire format and decoders live in `crates/proto`
+  and nowhere else.
+- The spec is normative. If code and `design/protocol-v1.md` disagree, one of them has
+  a bug; fix it and say which.

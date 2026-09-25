@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 publish = false
-license = "MIT OR Apache-2.0"
+license = "MIT"
 description = "screeny firmware: Tidbyt Gen 1 (ESP32) as a UDP network frame buffer"
 
 # Standalone crate: deliberately not part of any parent workspace.
