@@ -148,7 +148,7 @@ Three things the simulator does **not** pretend about:
 A request whose `Host` is not the device's own gets what fw 0.5.1 answers:
 while the portal is up, **the setup page itself - `200`, `text/html`,
 `Cache-Control: no-store`, no `Location`** - and otherwise `404`. It is not a
-`302`: the owner's phone test (card 223's Log, finding 3) found that the
+`302`: the author's phone test (card 223's Log, finding 3) found that the
 redirect made iOS open a further connection, which smoltcp - with no backlog -
 refused, and iOS does not retry a refused connection. The body is non-empty
 because iOS needs content to pop the sheet and Android calls a
