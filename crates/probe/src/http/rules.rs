@@ -27,8 +27,8 @@ use super::{
     KNOWN_223, NEEDS_UDP,
 };
 
-/// The SSID and PSK every test on this bench uses. Never a real pair: CLAUDE.md
-/// forbids one in a tracked file, and this one is in every fixture already.
+/// The SSID and PSK every test on this bench uses. Never a real pair: a
+/// tracked file must never carry one, and this dummy is in every fixture already.
 const DUMMY_SSID: &str = "Example-Wifi1";
 /// The dummy PSK. Also what rule 38 greps every reply for.
 const DUMMY_PSK: &str = "password9";

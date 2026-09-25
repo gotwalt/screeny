@@ -58,7 +58,7 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// So the connect is retried - and **counted**, which is the more important
 /// half. [`Client::connect_refusals`] is reported in the suite's last line, so
 /// "the run passed" and "the device refused eleven connections on the way" are
-/// two facts the orchestrator sees rather than one that hides the other.
+/// two facts the reader sees rather than one that hides the other.
 pub const CONNECT_TRIES: usize = 3;
 
 /// How long to wait between a refused connect and the next try.

@@ -3,7 +3,7 @@
 //! The bench one-liner, and the thing to run after every flash:
 //!
 //! ```text
-//! cargo run --release -p screeny-probe -- --addr 192.168.7.221 http
+//! cargo run --release -p screeny-probe -- --addr 192.168.1.50 http
 //! ```
 //!
 //! One rule per thing an outside observer can check about the HTTP API, each
