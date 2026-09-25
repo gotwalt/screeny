@@ -7,7 +7,7 @@
 //! per second, so the limits can be read and checked as what they are.
 //!
 //! A bird is not a clone of the bird beside it, and the flock is not a cloud
-//! of interchangeable dots (card 177, the owner: "the boids seem to be very
+//! of interchangeable dots (card 177, the author: "the boids seem to be very
 //! evenly separated from each other, which is not lifelike"). Four things put
 //! the unevenness there, and all four are spatial - none of them makes the
 //! flight busier:
@@ -140,7 +140,7 @@ const TRADE: f32 = 2.6;
 /// `roll` is honest: `atan(lateral / G)`, which at the turn rates cards 168 and
 /// 177 tuned comes out at six or seven degrees at its very worst. That is what
 /// a real bird at that turn radius does, and at sixteen LEDs across it is about
-/// one LED of difference in the wing's projection - invisible. The owner asked
+/// one LED of difference in the wing's projection - invisible. The author asked
 /// for birds that visibly lean into their turns, so [`Bird::lean`] is the roll
 /// the bird is *drawn* at: the honest one, multiplied up and then bent over
 /// towards a ceiling, so a gentle turn reads and a hard one does not become a
@@ -185,7 +185,7 @@ pub const CAM_SLACK: f32 = 3.40;
 /// six or seven in real starling flocks - and it is most of the difference
 /// between a lattice and a live flock. Under a *metric* rule every bird inside
 /// one radius pushes, so a dense patch pushes itself apart and the flock
-/// relaxes into equal gaps in every direction, which is exactly what the owner
+/// relaxes into equal gaps in every direction, which is exactly what the author
 /// saw. Under a topological one a bird in a knot is pushed by its seven
 /// nearest and not at all by the twenty behind them, so the knot may stay a
 /// knot while the air beside it stays empty.
@@ -437,7 +437,7 @@ pub struct Bird {
     /// How much room this one likes, as a multiple of `separation`, and how
     /// fast it likes to fly, as a multiple of the flock's band. Individuals,
     /// not clones: identical birds with identical radii settle into identical
-    /// gaps, which is the lattice the owner saw.
+    /// gaps, which is the lattice the author saw.
     pub room: f32,
     pub pep: f32,
     /// Which loose sub-group it belongs to, or [`NO_CLAN`] for the camera.

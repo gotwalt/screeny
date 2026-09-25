@@ -70,7 +70,7 @@ const PARAMS: &[ParamSpec] = &[
     param("beat", "How fast the wings beat (Hz)", 0.5, 6.0, 0.1, 2.4),
 ];
 
-/// What is behind the birds (the owner, 2026-09-20): the whole sky; nothing
+/// What is behind the birds (the author, 2026-09-20): the whole sky; nothing
 /// at all - white birds on true black; or black with only a faint line where
 /// the horizon is, which is the least that still shows the camera banking and
 /// climbing.
@@ -84,8 +84,8 @@ const SCHEMES: &[&str] = &["light on dark", "dusk silhouettes"];
 const FOV: f32 = 76.0;
 
 /// Coverage samples per panel pixel per axis, used to anti-alias the birds
-/// (card 168). This used to be a parameter ("Samples per axis") - the owner,
-/// 2026-09-21: "super confusing." Nothing here is a cost the owner asked
+/// (card 168). This used to be a parameter ("Samples per axis") - the author,
+/// 2026-09-21: "super confusing." Nothing here is a cost the author asked
 /// about, and three was always the answer: 0.3 ms a frame at 55 birds, well
 /// inside the 33 ms budget (card 177's Log), so there was nothing to trade
 /// and nothing for a person to usefully turn. An old saved value for
@@ -470,7 +470,7 @@ impl Patch for Flock {
         self.advance(ctx, &tune);
 
         let wheel = ctx.get("wheel") * (ctx.t / 60.0) as f32;
-        // The owner's options (2026-09-20). Without the sky the birds are
+        // The author's options (2026-09-20). Without the sky the birds are
         // white on true black whatever `scheme` says - a silhouette needs
         // something to be cut out of - and the sun goes too, so nothing but
         // the flock (and, if asked for, one faint line) is ever lit.
@@ -564,7 +564,7 @@ impl Patch for Flock {
 /// **The level of detail is decided by projected span, never by `size`.** At
 /// the default 55 birds the far side of the flock is two or three pixels
 /// across and the nearest is seven or eight: below [`AREA.0`] the model is
-/// exactly card 168's skeleton, so the picture the owner said "this is great"
+/// exactly card 168's skeleton, so the picture the author said "this is great"
 /// about is the picture that still comes out. The surface grows in over the
 /// next few LEDs rather than switching on, so a bird coming towards the camera
 /// does not pop.

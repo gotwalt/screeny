@@ -129,7 +129,7 @@ pub struct Fall {
 /// *viewer* at `90 + tilt`, so a large tilt leaves a few frames where the card
 /// still faces us and is already unlit. At `tilt` 16 the face is 3 LEDs tall
 /// by then and it does not show; above about 28 it does. Card 155 left that
-/// with the owner rather than guessing at a light that follows the viewpoint.
+/// with the author rather than guessing at a light that follows the viewpoint.
 const LIGHT: f32 = 6.0;
 
 impl Fall {
