@@ -161,10 +161,9 @@ after a second the panel counts down, at five seconds it forgets the network and
 returns to the setup screen. Letting go during the countdown cancels. A short press
 shows the status screen over whatever is playing, for ten seconds.
 
-For a bench where you reflash often, the cargo feature `bench-wifi` embeds a
-credential pair from `~/.config/screeny/wifi.env` (or `firmware/wifi.env`, both
-gitignored; `firmware/wifi.env.example` shows the format) and seeds an empty store
-with it on first boot. A default build never reads those files.
+There is no way to compile credentials into the firmware, on purpose: a build never
+contains a network name or password, and the only way in is the portal, the device's
+settings page, or the `SET_WIFI` control message on the LAN.
 
 ## 6. Stream to it
 
