@@ -317,7 +317,7 @@ def emit(faces, revs, out):
     w = []
     w.append("//! The faces themselves - **generated** by `tools/art-faces.py`, do not edit.")
     w.append("//!")
-    w.append("//! Card 174: the owner did not like the one face vesta had, so the face is a")
+    w.append("//! Card 174: the author did not like the one face vesta had, so the face is a")
     w.append("//! choice. A bitmap face's cells *are* LEDs - drawn at 1:1 every one of them")
     w.append("//! lands whole on one LED, which is a kind of crisp a stroked face cannot be")
     w.append("//! on a 64 x 32 panel; see the half-LED rule in the module above.")

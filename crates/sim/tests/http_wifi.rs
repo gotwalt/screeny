@@ -26,7 +26,7 @@ use screeny_sim::{
 /// broken test fails rather than hangs.
 const T: Duration = Duration::from_secs(5);
 
-/// The `Example-Wifi1` / `password9` of `CLAUDE.md`. Never a real network.
+/// The `Example-Wifi1` / `password9` test dummies. Never a real network.
 const SSID: &str = "Example-Wifi1";
 const PSK: &str = "password9";
 

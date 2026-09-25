@@ -21,7 +21,7 @@ use sequential_storage::mock_flash::{MockFlashBase, WriteCountCheck};
 type Flash = MockFlashBase<16, 4, 1024>;
 const LEN: u32 = 16 * 4096;
 
-/// The tests' Wi-Fi dummies. Never the real ones (CLAUDE.md).
+/// The tests' Wi-Fi dummies. Never the real ones.
 const SSID: &[u8] = b"Example-Wifi1";
 const PSK: &[u8] = b"password9";
 
@@ -291,7 +291,7 @@ fn an_unknown_key_is_ignored_not_an_error() {
     let mut st = store(blank_flash());
     block_on(st.save_brightness(scratch.as_mut_slice(), 77)).unwrap();
 
-    // Key 6 is the next one the orchestrator expects to add (a boot counter);
+    // Key 6 is the next one expected to be added (a boot counter);
     // key 200 is something further out still.
     let flash = poke_bytes(st.flash().clone(), 6, &[1, 2, 3, 4]);
     let flash = poke_bytes(flash, 200, b"a much longer future value");

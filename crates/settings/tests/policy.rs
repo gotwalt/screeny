@@ -5,7 +5,7 @@ use screeny_settings::{
     QUIET_MS,
 };
 
-/// The dummies CLAUDE.md requires. Never a real credential, anywhere.
+/// Test dummies only. Never a real credential, anywhere.
 const SSID: &[u8] = b"Example-Wifi1";
 const PSK: &[u8] = b"password9";
 

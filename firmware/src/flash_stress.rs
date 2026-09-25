@@ -6,7 +6,7 @@
 //! section. That makes it a *statistical* claim, and a statistical claim needs
 //! trials. Before this build there was exactly one way to run a trial - upload
 //! a megabyte over HTTP and watch - which costs twenty-five seconds of
-//! orchestrator attention per five hundred flips, produces one bit of evidence,
+//! attention per five hundred flips, produces one bit of evidence,
 //! and confounds the flash path with the socket, the scanner, the claim, the
 //! panel and the radio all at once.
 //!
@@ -78,7 +78,7 @@ use crate::store;
 ///
 /// Long enough for the association, DHCP, mDNS and the Studio's first frames,
 /// so the run happens with a stream on the wire rather than on a device that is
-/// still coming up. The orchestrator starts the stream before flashing.
+/// still coming up. The stream is started before flashing.
 const START_AFTER_S: u64 = 30;
 
 /// How many erase + write + read-back cycles one run does.

@@ -49,7 +49,7 @@
 //! [`FRAC_BITS`], for two reasons. The firmware passes the constant and the
 //! compiler folds the whole thing away; the tests run all three widths in one
 //! `cargo test`, whichever width the build happens to select. Card 248 step 2
-//! wants three builds the owner can compare by eye, and a constant that only
+//! wants three builds the author can compare by eye, and a constant that only
 //! one of them exercises is a constant whose other values are untested.
 
 #![no_std]
@@ -89,7 +89,7 @@ compile_error!("pick one of frac-bits-3 / frac-bits-2, or neither for the defaul
 /// and `frac-bits-2` shorten the cycle to eight (19 Hz, 504 steps) and four
 /// (38 Hz, 252 steps); the panel still resolves far more than the 64 levels
 /// the bit planes alone give, and the slowest thing on it moves faster than
-/// the eye follows. Which of the three ships is the owner's choice, made by
+/// the eye follows. Which of the three ships is the author's choice, made by
 /// looking at three builds.
 pub const FRAC_BITS: u16 = if cfg!(feature = "frac-bits-2") {
     2

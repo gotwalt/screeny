@@ -14,7 +14,7 @@
 //! frame and then, microseconds later, drew the identify screen into a
 //! *different* slot of the lock-free triple buffer that core 1 latches ~154
 //! times a second; at 30 fps the panel caught the stream in that gap several
-//! times a second. The owner saw "the art flickering through" the status
+//! times a second. The author saw "the art flickering through" the status
 //! screen on the card 230 bench, and reproduced it with no button involved at
 //! all (`screeny identify --ms 10000` over a live stream). The setup, update
 //! and button screens never flickered because the same task already gated

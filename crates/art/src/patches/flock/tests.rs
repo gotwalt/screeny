@@ -44,7 +44,7 @@ struct Run {
     spread: Vec<f32>,
     /// Every bird's distance to its nearest neighbour, sampled every two
     /// seconds, the camera left out of it. The *shape* of this distribution is
-    /// the owner's "very evenly separated ... not lifelike": a lattice is a
+    /// the author's "very evenly separated ... not lifelike": a lattice is a
     /// spike (coefficient of variation near 0), a live flock is broad and
     /// skewed (card 177 asks for 0.4-0.6).
     nn: Vec<f32>,
@@ -405,7 +405,7 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     assert!(percentile(&run.roll, 0.95) <= 6.0, "the view rolls at {:.2} deg/s", percentile(&run.roll, 0.95));
     assert!(worst.0 < 0.6, "the flight repeats itself: r={:.2} at {} s", worst.0, worst.1);
 
-    // Card 177's three, in the same order the owner said them.
+    // Card 177's three, in the same order the author said them.
     assert!(
         nn_cv >= 0.30,
         "the flock is a lattice again: nearest-neighbour CV {nn_cv:.2} (it was 0.10-0.16 \
@@ -440,7 +440,7 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     );
 }
 
-/// Card 122: the owner wants a handful of birds, not thirty. `birds` now goes
+/// Card 122: the author wants a handful of birds, not thirty. `birds` now goes
 /// down to 3 - so a flock that small has to still be a flock, not three
 /// strangers that happen to share a sky. Ten minutes, three seeds, the
 /// shipped default `near` (the personal-space wall that keeps the camera from
@@ -618,7 +618,7 @@ fn a_distant_bird_has_no_surface_left() {
 
 /// **The birds visibly lean into their turns**, and the lean is a drawing.
 ///
-/// Two claims, one flight each, at the settings the owner actually watches
+/// Two claims, one flight each, at the settings the author actually watches
 /// (card 124: six birds, the shipped `calm` and `wild`, seed 7).
 ///
 /// 1. At `lean` 1 the drawn bank reaches something the eye can see. The honest
@@ -794,7 +794,7 @@ fn the_far_corner_of_both_controls_still_fits() {
 /// so the counts are close rather than identical. The two backdrops without a
 /// sky cost far less, because most of the index plane is one value.
 /// **Card 123**: the big birds have filled wings now, so every backdrop is
-/// flown twice - once at the defaults and once at the picture the owner
+/// flown twice - once at the defaults and once at the picture the author
 /// actually asked card 123 for, a handful of birds drawn as large as `size`
 /// goes. Black sky with big light birds is the case that matters for the
 /// panel: it is the most lit area this patch can put on it while the frame is

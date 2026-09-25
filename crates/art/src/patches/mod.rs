@@ -13,7 +13,7 @@ mod metaballs;
 mod overland;
 pub(crate) mod vesta;
 
-/// Card 178 took two out of this list, at the owner's word ("let's also kill
+/// Card 178 took two out of this list, at the author's word ("let's also kill
 /// the plasma and test card patches - they're not interesting"):
 ///
 /// - **`plasma`**, which is simply gone.

@@ -369,7 +369,7 @@ pub async fn frames_task(
         // **The `connected` screen yields to a stream.** It is up for a minute
         // after a join from the portal, and the Studio finds the panel within
         // seconds of that join: both used to publish, and the panel showed the
-        // address every few frames of the art (the owner's phone test,
+        // address every few frames of the art (the author's phone test,
         // 2026-09-20). The phone's page has the address too, and a panel that
         // is being sent a picture shows the picture.
         let portal = portal.filter(|s| {

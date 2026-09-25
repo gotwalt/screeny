@@ -338,8 +338,8 @@ async fn a_frame_packet_is_a_header_and_a_picture() {
 
 /// **Every old route still answers**, on the same handler as its new name.
 ///
-/// The card's promise is that nothing that works today stops working: the
-/// firmware session drives this API from shell scripts, and a script written
+/// The card's promise is that nothing that works today stops working: shell
+/// scripts drive this API directly, and a script written
 /// before card 150 says `set_piece`, `set_settings`, `piece_playing` and
 /// `piece_act`. What comes *back* is the new vocabulary, which is the other
 /// half of the promise - one name per thing, on the way out.

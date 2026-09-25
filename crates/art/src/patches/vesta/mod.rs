@@ -1,6 +1,6 @@
 //! `vesta`: a split-flap clock for a dark room.
 //!
-//! Four flap modules and a colon, `HH:MM`, red on black. The owner asked for
+//! Four flap modules and a colon, `HH:MM`, red on black. The author asked for
 //! "a simple low light clock for night time ... render in 3d as if it were a
 //! vestaboard, where the numerals animate vertically on change" (card 155).
 //!
@@ -24,7 +24,7 @@
 //! The 3D has to come from the numerals' own shading, the seam, the falling
 //! card's lit edge and the shadow it throws on the plate below - and it does.
 //!
-//! **Size.** The owner withdrew his own "fill only maybe half the pixels": "I
+//! **Size.** The author withdrew his own "fill only maybe half the pixels": "I
 //! think I'd rather spend the pixels than be artificially constrained". A
 //! falling card only looks like one if it has rows to foreshorten through, so
 //! the modules are as large as `HH:MM` allows - 14 x 30 LEDs each, a 4-LED
@@ -166,7 +166,7 @@ fn ray(hue: f32) -> Rgb {
 /// The blank card.
 ///
 /// A real board's hours-tens drum carries a blank where a leading zero would
-/// be, and shows it for most of the day (the owner, 2026-09-20: "let's add a
+/// be, and shows it for most of the day (the author, 2026-09-20: "let's add a
 /// blank card for leading zero, it's a thing the real thing does"). It is a
 /// card like any other: it falls, it is fallen onto, and the module keeps its
 /// seam and its black body while it is up.
@@ -184,7 +184,7 @@ fn glyph(card: u8) -> char {
 
 /// **One drum, eleven cards, on every module** (card 184).
 ///
-/// The owner, seeing the new faces land: "let's do an entire rotation of every
+/// The author, seeing the new faces land: "let's do an entire rotation of every
 /// position on minute change. I think the fun of a flipboard is that it
 /// flips." A real board's charm is that every module carries the *same* drum
 /// and turns it at the same rate, so a refresh is one wave of identical
@@ -1040,7 +1040,7 @@ mod tests {
     }
 
     /// **The point of card 184.** On an ordinary minute only one numeral
-    /// changes, and all four modules rotate anyway - the owner asked for "an
+    /// changes, and all four modules rotate anyway - the author asked for "an
     /// entire rotation of every position on minute change". A module whose
     /// card did not change turns its whole drum and comes back to it.
     #[test]
@@ -1627,7 +1627,7 @@ mod tests {
             assert!((got - want).abs() < 0.15, "--at {secs} is {got:.1} degrees, not {want}");
         }
         // And at the default fall these are the six frames the panel gets.
-        // This is the sequence the owner actually sees; it is the one to
+        // This is the sequence the author actually sees; it is the one to
         // argue with.
         let real_time: Vec<f32> = (30..=36).map(|f| theta_at(0.2, f).round()).collect();
         assert_eq!(real_time, vec![0.0, 13.0, 30.0, 52.0, 84.0, 127.0, 180.0]);

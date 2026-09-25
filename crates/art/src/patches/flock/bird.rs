@@ -3,7 +3,7 @@
 //! Card 168 drew a bird as three strokes - a body dash, and one straight
 //! segment per wing raised and lowered by a single angle. At three panel
 //! pixels that is a bird. At fifteen, which is what card 122's `size` made
-//! possible, it is a stick figure, and the owner said so: "the expanded bird
+//! possible, it is a stick figure, and the author said so: "the expanded bird
 //! shapes don't have natural looking wings."
 //!
 //! So a wing here is what a wing is. **Two segments with a wrist between
@@ -31,7 +31,7 @@ use crate::color::smoothstep;
 /// Card 168's bird is 0.70 of a wingspan from beak to tail. A real gull is
 /// nearer 0.46, and at this resolution that difference is the whole
 /// silhouette. At two or three LEDs the long dart is what says *flying*: it is
-/// the only thing left once the wings are a single pixel each, and the owner
+/// the only thing left once the wings are a single pixel each, and the author
 /// said of that picture "this is great". At sixteen it is what made the bird
 /// read as a paper dart instead of a bird - the commonest view in this patch
 /// is from behind or ahead, where the body carries the whole shape and a body

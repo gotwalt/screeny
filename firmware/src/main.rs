@@ -220,7 +220,7 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// had it alternating at 8-13 Hz and faster with a stream arriving than
 /// without. And the setup portal's QR is shown at a fixed, known-good
 /// brightness - the default, which is the level decision 1 measured the
-/// owner's phone scanning - whatever the runtime brightness is, because the
+/// author's phone scanning - whatever the runtime brightness is, because the
 /// panel dims by shortening the output-enable window and a dim code a phone
 /// cannot read looks perfectly fine to an eye.
 ///
@@ -229,7 +229,7 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// walks its thresholds **bit-reversed** (0, 8, 4, 12, 2, 10, ...) instead of
 /// in counting order, so a pixel wanting half a level alternates every single
 /// refresh at 77 Hz rather than sitting lit for eight refreshes and dark for
-/// eight at 9.6 Hz - which is what the owner was seeing blink from a few feet
+/// eight at 9.6 Hz - which is what the author was seeing blink from a few feet
 /// away. A remainder worth a sixteenth of a level or less, the only component
 /// the reversal cannot speed up, is snapped onto the level instead of spent as
 /// one flash per 104 ms. With the dither off, `q >> 4` now **rounds** rather
@@ -237,7 +237,7 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// 64 level codes landing a level low. The arithmetic moved out of
 /// `src/display.rs` into `screeny-dither`, a host-tested workspace crate; the
 /// cargo features `frac-bits-3` and `frac-bits-2` build the shorter dither
-/// cycles (19 Hz and 38 Hz) the owner compares this against.
+/// cycles (19 Hz and 38 Hz) the author compares this against.
 pub const FW_VERSION: &str = "0.9.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
@@ -386,13 +386,13 @@ pub const SCREEN_BRIGHTNESS_NONE: u8 = u8::MAX;
 /// dims by shortening the output-enable window - runtime brightness 56 lights
 /// 5 of 25 slots where the default lights 9, which a rolling shutter reads as
 /// banding across a 25-module code at one LED per module.
-/// `docs/design/device-web.md` decision 1 measured the owner's phone scanning
+/// `docs/design/device-web.md` decision 1 measured the author's phone scanning
 /// this exact bitmap "easily" at the **default** brightness; on the card 230
 /// bench, at 56, it would not scan.
 ///
 /// It is a *presentation* override and not a setting: nothing is written to
 /// flash, `BRIGHTNESS` is untouched, `GET_INFO` and `/api/v1/status` keep
-/// reporting what the owner set, and clearing this back to
+/// reporting what the author set, and clearing this back to
 /// [`SCREEN_BRIGHTNESS_NONE`] when the portal screen goes away is the whole of
 /// "restore the setting". `crate::net::frames_task` is the only writer, on the
 /// edge, and it bumps [`BRIGHTNESS_DIRTY`] so core 1 rewrites both
@@ -1075,13 +1075,13 @@ async fn main(spawner: Spawner) {
     // row, each within a minute of a boot. It stops here: the panel says so and
     // nothing else is started - no radio, no HTTP, no stream - because a panel
     // that reboots for ever on USB power is worse than one that says it is
-    // broken (card 243, the owner's "pretty crash proof").
+    // broken (card 243, the author's "pretty crash proof").
     //
     // **Here** and not earlier, because this is the first point at which there
     // is a panel to say it on, and not later, because everything below is a
     // thing that could panic again. A power cycle clears the breadcrumb - the
     // RTC region is zeroed on a power-on reset and on nothing else - so the
-    // recovery is the one the owner would try anyway.
+    // recovery is the one the author would try anyway.
     if crashed {
         // Read the breadcrumb again here rather than carrying it from
         // `panic::boot()`: `main`'s locals live in a future, which is `.bss`,

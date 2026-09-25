@@ -36,7 +36,7 @@ async fn set_seed(at: SocketAddr, seed: u32) -> serde_json::Value {
     post(at, "/api/v1/set_seed", &format!(r#"{{"seed":{seed}}}"#)).await.json()
 }
 
-/// The owner's request, in the design view, in his own words (card 150 leaves
+/// The author's request, in the design view, in his own words (card 150 leaves
 /// them as he said them): *"changing settings for a given art piece persists
 /// the settings so that if we switch pieces and then switch back, it restores
 /// the settings"*.
@@ -210,8 +210,8 @@ async fn a_panel_restores_a_patchs_memory_too() {
     assert!(after["params"].as_object().expect("params").is_empty(), "Reset on a panel means it stays reset: {after}");
 }
 
-/// **One memory for the whole studio**, which is what card 165 settled once
-/// the orchestrator reversed its per-context decision. With card 170 the page
+/// **One memory for the whole studio**, which is what card 165 settled after
+/// reversing an earlier per-context decision. With card 170 the page
 /// *is* one of the panels, so the interesting version of this is two panels:
 /// tuning a patch on one is tuning it everywhere.
 ///

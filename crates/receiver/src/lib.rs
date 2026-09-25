@@ -379,7 +379,7 @@ impl Intent {
     /// decoded frame and then drew the identify screen over it, microseconds
     /// later, into a different slot of a triple buffer that core 1 latches
     /// ~154 times a second: at 30 fps the panel caught the stream in that gap
-    /// several times a second and the owner saw "the art flickering through"
+    /// several times a second and the author saw "the art flickering through"
     /// the status screen. The setup, update and button screens never did,
     /// because they had this rule and `IDENTIFY` did not.
     ///

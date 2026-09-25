@@ -1,7 +1,7 @@
 //! The wire-level conformance suite, run against an in-process simulator.
 //!
 //! This is card 080's other half. `screeny_probe::suite` is the catalogue of
-//! rules the orchestrator points at the real panel; running it here, on
+//! rules pointed at the real panel; running it here, on
 //! loopback, in `cargo test`, is what stops it rotting between bench sessions
 //! and is why the wire-level assertions could come out of the other test
 //! files in this directory.

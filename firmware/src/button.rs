@@ -17,7 +17,7 @@
 //!
 //! **GPIO15, input, internal pull-up, active low.** That is what the stock
 //! firmware does, byte for byte (`docs/research/008-button.md` section 1), and
-//! card 203 confirmed it on this unit with the owner pressing: edges on GPIO15
+//! card 203 confirmed it on this unit with the author pressing: edges on GPIO15
 //! and on no other candidate, high at rest, low while held, one 11 ms bounce
 //! in eleven presses.
 //!
@@ -163,7 +163,7 @@ fn clear() {
 /// about to drop, and the device would come up in the portal with half an
 /// image in the inactive slot. A trial is worse - the health check needs an
 /// address and a served request to confirm the running image, so wiping the
-/// credentials mid-trial is a reliable way to get the firmware the owner just
+/// credentials mid-trial is a reliable way to get the firmware the author just
 /// installed rolled back at 180 s.
 ///
 /// The refusal is visible ([`Panel::Refused`]), it is logged, and it is over

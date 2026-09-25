@@ -1,7 +1,7 @@
 //! Numeral faces a patch can choose between, and the rule that makes a pixel
 //! font land 1:1 on the LEDs.
 //!
-//! `vesta` is the only patch using this today (card 174: the owner did not
+//! `vesta` is the only patch using this today (card 174: the author did not
 //! love its drawn numerals and asked for pixel fonts, and for the face to be
 //! configurable). It is a crate-wide module rather than one of vesta's files
 //! because the faces are worth having twice - "we'll probably want to use our

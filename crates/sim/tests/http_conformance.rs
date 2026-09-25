@@ -2,7 +2,7 @@
 //!
 //! This is the other half of `screeny_probe::http`, exactly as
 //! `conformance.rs` is the other half of `screeny_probe::suite`: the
-//! orchestrator points the same rules at the real device after a flash, and
+//! same rules run against the real device after a flash, and
 //! running them here, on loopback, in `cargo test`, is what stops them rotting
 //! between bench sessions.
 //!

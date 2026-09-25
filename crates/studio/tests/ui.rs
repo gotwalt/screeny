@@ -552,7 +552,7 @@ async fn status_says_whether_discovery_is_on() {
     assert_eq!(status["ok"], true, "not looking for panels is never unhealthy");
 }
 
-/// Card 161: **no control on either screen offers a frame rate.** The owner
+/// Card 161: **no control on either screen offers a frame rate.** The author
 /// asked for one rate with no variability, so the rate slider card 172 built
 /// (and the two buttons card 105 had before it) are gone, and nothing was left
 /// behind that could set one.
@@ -744,7 +744,7 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
             .clone()
     };
 
-    // The owner's example: five named treatments, not a slider with the list
+    // The author's example: five named treatments, not a slider with the list
     // in its label.
     let rest = param("rest");
     assert_eq!(rest["label"], "Resting dials", "the label is a label again");
@@ -1005,7 +1005,7 @@ fn the_two_column_layout_is_behind_a_breakpoint() {
     let before = &STYLE_CSS[..bench];
     assert!(
         !before.contains("grid-template-areas"),
-        "the narrow layout must not be a grid with a fixed side column - that is the ~600 px overlap the owner saw"
+        "the narrow layout must not be a grid with a fixed side column - that is the ~600 px overlap the author saw"
     );
 }
 

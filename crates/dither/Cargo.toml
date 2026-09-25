@@ -18,7 +18,7 @@ description = "The panel's sub-level arithmetic: how a duty in sixteenths of a b
 default = []
 # Card 248 step 2: fractional bits below one duty level, i.e. the length of
 # the dither cycle. Four (16 refreshes, 9.6 Hz) is the default and what
-# shipped before this card; three and two are the comparison builds the owner
+# shipped before this card; three and two are the comparison builds the author
 # looks at. The three are mutually exclusive - enabling more than one is a
 # compile error - and `firmware/` forwards its own features of the same name.
 frac-bits-3 = []

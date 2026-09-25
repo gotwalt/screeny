@@ -908,7 +908,7 @@ pub fn can_activate() -> bool {
 /// this is the *live* question, and it stops being true the moment
 /// [`trial_task`] writes `VALID`. Card 230's button reads it: forgetting the
 /// network during a trial would take away the address and the served request
-/// the health check needs, and get the image the owner just installed rolled
+/// the health check needs, and get the image the author just installed rolled
 /// back at 180 s.
 #[must_use]
 pub fn trial_pending() -> bool {
@@ -1166,7 +1166,7 @@ pub fn note_boot(
 /// **Card 241b, after the bench found fw 0.7.0 wedging silently part way
 /// through an upload.** That is the second time this device has gone quiet with
 /// no panic, no reset and no evidence (card 234 was the first), and it is the
-/// one failure the owner's bar - "pretty crash proof" - does not tolerate: a
+/// one failure the author's bar - "pretty crash proof" - does not tolerate: a
 /// panel that needs somebody to walk over and unplug it is worse than one that
 /// reboots and says why.
 ///

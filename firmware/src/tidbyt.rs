@@ -81,7 +81,7 @@ pub mod pins {
 /// Tidbyt's forum says the same thing independently. `docs/research/008-button.md`
 /// has the evidence, the gesture design and the build cards.
 ///
-/// **Confirmed on this unit** (card 203, 2026-09-20): with the owner pressing the
+/// **Confirmed on this unit** (card 203, 2026-09-20): with the author pressing the
 /// button, `gpio_probe` logged edges on GPIO15 and on no other candidate, HIGH at
 /// rest and LOW while held. It reads the same with the internal pull-down selected,
 /// so something on the board holds the pin up; use the internal pull-up anyway, as

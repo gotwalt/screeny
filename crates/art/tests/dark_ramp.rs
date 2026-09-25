@@ -2,7 +2,7 @@
 //! and four bands without the panel model.
 //!
 //! These two tests used to live inside the `testcard` patch, which card 178
-//! took out of the registry: the owner does not want a chart on the menu of
+//! took out of the registry: the author does not want a chart on the menu of
 //! things to play ("they're not interesting"). What the chart was *for* is not
 //! a patch, though - it is a measuring instrument for the pipeline and the
 //! panel model, and there is no camera to point at the panel - so the drawing
@@ -77,7 +77,7 @@ fn dark_ramp(panel: Panel, dither: Dither) -> Vec<u8> {
 /// since there is no camera to point at the panel.
 ///
 /// What the row is **for**: it is the one place the dark end is visible as a
-/// ramp rather than as an adjective, and the numbers below are what the owner
+/// ramp rather than as an adjective, and the numbers below are what the author
 /// should expect to see by eye. On the device it is a ramp - 38 distinct greys
 /// out of 64 columns (card 248: was 43 - the dead zone trades a few of them
 /// for a dither that does not blink), rising the whole way, lit from the

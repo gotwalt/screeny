@@ -1,7 +1,7 @@
 //! **The network's name is in the status payload, and it must not leak.**
 //!
-//! `GET /api/v1/status` on the device carries the real SSID. `CLAUDE.md` is
-//! plain about it: it may be on the owner's page, and it must never be written
+//! `GET /api/v1/status` on the device carries the real SSID. It may be on
+//! the author's page, and it must never be written
 //! into a tracked file, a fixture, a log line, a card or a commit message. Two
 //! of those the compiler cannot help with - the studio's own log, and the
 //! state file it writes - so they are checked here.
@@ -53,7 +53,7 @@ async fn the_ssid_never_reaches_the_log_or_the_state_file() {
     let (_dev, frame, http) = start_sim();
     let state = Temp::new("ssid");
 
-    // The product, as the owner runs it, minus the LAN: no discovery, its own
+    // The product, as the author runs it, minus the LAN: no discovery, its own
     // state directory, an ephemeral loopback port, and its status reads
     // pointed at the simulator rather than at port 80.
     let mut child = Guard {
@@ -88,7 +88,7 @@ async fn the_ssid_never_reaches_the_log_or_the_state_file() {
     .await;
     assert_eq!(
         seen["devices"][0]["facts"]["ssid"], SECRET,
-        "the owner's page is where the network name belongs"
+        "the author's page is where the network name belongs"
     );
 
     // Stop it the way `docker stop` does, so the state file is written the way

@@ -772,7 +772,7 @@ pub async fn seed_wifi(wifi: &Wifi) {
 /// `Event::ButtonWipe` and from nothing else. A failure is counted and logged
 /// (there is no reply to downgrade to `ERR_STORAGE` here, because the thing
 /// that asked for it was a button) and the device still raises the portal,
-/// which is the behaviour the owner standing in front of the panel expects. It
+/// which is the behaviour the author standing in front of the panel expects. It
 /// would then rejoin the old network on the next reboot, and `store_errors` in
 /// `GET /api/v1/status` is where that shows up.
 pub async fn clear_wifi() {
@@ -956,10 +956,10 @@ async fn commit(field: Field) {
 
 /// Exercise the store on the device, by itself, and say what each write cost.
 ///
-/// Off by default (`--features store-selftest`). It exists because a worker
-/// cannot reach the device over the LAN to send `SET_*`, so without it the only
-/// evidence that a flash write works, and what it does to the panel while it is
-/// happening, would be the orchestrator's over-the-wire pass after a merge.
+/// Off by default (`--features store-selftest`). It exists because there is
+/// no way to reach the device over the LAN to send `SET_*` here, so without it
+/// the only evidence that a flash write works, and what it does to the panel
+/// while it is happening, would be a manual pass over the wire after a flash.
 ///
 /// One run, at boot + 25 seconds:
 ///
