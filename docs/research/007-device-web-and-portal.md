@@ -57,11 +57,11 @@ the settings store, OTA) and 202 (the button) own everything I leave to them.
    `main` builds two 12 KB `FrameBuffer` temporaries on that stack. **This build
    would very likely panic on the stack guard at boot.** The RAM budget, not any
    API, is the hard part of this card. Section 6 says exactly what has to move.
-6. **QR: yes, version 2-L, and the SSID must stay <= 14 characters.** The owner
-   measured `WIFI:T:nopass;S:screeny-4a00a4;;` (exactly 32 bytes, version 2-L,
+6. **QR: yes, version 2-L, and the SSID must stay <= 14 characters.** The author
+   measured `WIFI:T:nopass;S:screeny-c0ffee;;` (exactly 32 bytes, version 2-L,
    25x25) scanning easily on the panel at one LED per module with a 3-pixel lit
    quiet zone. The block is then 31x31, which leaves 32 of 64 columns - eight
-   `FONT_4X6` characters - for the name. `screeny-4a00a4` is *exactly* at the
+   `FONT_4X6` characters - for the name. `screeny-c0ffee` is *exactly* at the
    32-byte limit: a 15-character SSID needs version 3 (29x29), which with a
    1-pixel quiet zone is 31 of 32 rows and leaves no room for text at all.
    `qrcodegen-no-heap 1.8.1` encodes it with no allocator in two 107-byte
@@ -666,7 +666,7 @@ Notes:
   parser; a browser `fetch('/api/v1/firmware', {method:'POST', body: file})`
   sends the raw bytes with a `Content-Length`, which is exactly what the
   streaming reader wants.
-- **Auth: open, same posture as spec 8.4** (owner's decision). Design so a PIN
+- **Auth: open, same posture as spec 8.4** (the author's decision). Design so a PIN
   can be added: every mutating route takes an optional `X-Screeny-Pin` header
   and a `counter`, checked in one function that today returns `Ok(())`. Card 041
   owns the real thing.
@@ -700,11 +700,11 @@ module under `crates/` that a host test drives.
 
 **Should `crates/sim` serve the same HTTP API?** Yes, and it is nearly free once
 the JSON shapes are in `crates/proto`: the simulator already models `GET_INFO`,
-telemetry and `SET_WIFI`, and parked card 081 already asks it to model the join
+telemetry and `SET_WIFI`, and card 081 (a possible later addition) already asks it to model the join
 states and the `PROVISIONING` overlay. A sim that also answers
 `GET /api/v1/status` on a host port lets the Studio's device page be built and
 tested with no hardware at all. That is a build card, and it should depend on
-081 being unparked.
+081 being taken up.
 
 ---
 
@@ -712,7 +712,7 @@ tested with no hardware at all. That is a build card, and it should depend on
 
 ### 9.1 The QR
 
-The owner measured on 2026-09-19: `WIFI:T:nopass;S:screeny-4a00a4;;` is **exactly
+The author measured on 2026-09-19: `WIFI:T:nopass;S:screeny-c0ffee;;` is **exactly
 32 bytes**, lands on **version 2-L** (25x25 modules), and at one LED per module
 with **standard polarity** (quiet zone and light modules lit white, dark modules
 off) and a **3-pixel lit quiet zone**, centred on the 64x32 panel at default
@@ -732,12 +732,12 @@ firmware links.
 So: **the AP SSID must be at most 14 characters**, and `screeny-<6 hex>` is
 exactly 14. That is not comfortable - it means the AP SSID can never be derived
 from a `SET_NAME` friendly name, and a future `screeny-setup-<id>` would not
-fit. The escape hatch is the **short open form** `WIFI:S:screeny-4a00a4;;`,
+fit. The escape hatch is the **short open form** `WIFI:S:screeny-c0ffee;;`,
 which the Wi-Fi Alliance WPA3 spec v3.5 §7.1 asks for on an unauthenticated
 network (`T` absent means "unauthenticated") and which ZXing's parser - the one
 Android's `WifiQrCode.java` implements - defaults to `nopass` when `T` is
 missing. It is nine bytes shorter and buys nine characters of SSID at the same
-QR version. It is *not yet measured on the owner's phone*, so:
+QR version. It is *not yet measured on the author's phone*, so:
 
 - **ship `T:nopass`** (measured, works, 14-character limit), and
 - put one bench test in a build card: show the short form on the panel and scan
@@ -887,8 +887,8 @@ table.
 
 ## 12. Proposed build cards
 
-Not written as card files, as the card instructs. Suggested numbers are from my
-range where they are mine to give; the orchestrator owns the real numbering.
+Not written as card files, as the card instructs. Suggested numbers are from a
+free range; final numbering happens later.
 
 **A. Raise the TCP and RAM headroom, and prove the APSTA heap.** Before any
 feature: add `"tcp"` explicitly to `embassy-net`'s features, raise the STA stack
@@ -931,10 +931,10 @@ without ever leaving the mini-browser.
 
 **F. The portal screen.** Layout A and layout C alternating every ~4 s, drawn
 through `crates/provision`, with the acquired IP shown for 60 s after a
-successful trial. Acceptance is the owner's eye and a phone: scan the panel, join
+successful trial. Acceptance is judged by eye and a phone: scan the panel, join
 the AP.
 
-**G. `crates/sim` serves the same HTTP API.** Depends on unparking card 081. The
+**G. `crates/sim` serves the same HTTP API.** Depends on taking up card 081. The
 simulator answers `GET /api/v1/status` and friends on a host port with the same
 `crates/proto` shapes, and models the join states so the Studio's device page can
 be developed with no hardware.
@@ -942,19 +942,19 @@ be developed with no hardware.
 **H. Spec surgery.** Strike section 8.1 (the serial console) and rewrite 8.3's
 fallback rule to end at the portal rather than at a message. Add the HTTP API as
 a new section, and record the `PROVISIONING` overlay's two sub-states. Say in the
-commit which side was the bug, per CLAUDE.md.
+commit which side was the bug.
 
 **I. Bench: does HTTP cost a frame?** The measurement of section 10, once, on
-the final build. And the one QR experiment: show `WIFI:S:screeny-4a00a4;;` on the
+the final build. And the one QR experiment: show `WIFI:S:screeny-c0ffee;;` on the
 panel and scan it with an iPhone and an Android phone; if both read it, the SSID
 limit goes from 14 to 23 characters and card F's naming rule relaxes.
 
 ---
 
-## 13. Open questions for the owner
+## 13. Open questions
 
 1. **The AP SSID can be at most 14 characters** with the measured QR form.
-   `screeny-4a00a4` is exactly 14, which means the AP name can never be derived
+   `screeny-c0ffee` is exactly 14, which means the AP name can never be derived
    from a `SET_NAME` friendly name and a `screeny-setup-<id>` would not fit. Is
    `screeny-<id>` the permanent AP name? (Card I's experiment may relax this to
    23; if it does, the question goes away.)
@@ -963,7 +963,7 @@ limit goes from 14 to 23 characters and card F's naming rule relaxes.
    QR - 11+ more bytes, pushing the payload to version 3 and off layout A - plus
    somewhere for the passphrase to live and be shown. The gain would be that the
    home PSK stops crossing an open network in clear. Spec 8.4 already records
-   that the owner does not treat it as a secret.
+   that the author does not treat it as a secret.
 3. **HTTP auth is decided (open on the LAN)**, so likewise for the file: the
    design leaves an `X-Screeny-Pin` header and a counter on every mutating route,
    checked in one function that returns `Ok(())` today. Card 041 turns it on.
@@ -975,7 +975,7 @@ limit goes from 14 to 23 characters and card F's naming rule relaxes.
    10-minute background retry means it heals itself. Confirm.
 5. **Should the LAN web server also be reachable while a sender is streaming?**
    I have assumed yes (one worker, short keep-alive), because "show me the device
-   health page" is the point. If the owner would rather the panel be untouchable
+   health page" is the point. If the author would rather the panel be untouchable
    during a stream, the LAN server can refuse with 503 while `state == LIVE` and
    the frame path stops sharing core 0 entirely.
 6. **`_http._tcp` in mDNS**: I recommend advertising it. It means the device
