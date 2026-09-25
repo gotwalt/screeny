@@ -48,8 +48,8 @@ has no canvas and therefore asks the socket for no frames at all.
 
 A flag beats the environment; the environment beats the default.
 
-**`--listen 0.0.0.0:8787` has no password.** There is no authentication yet (parked
-card 041), so anyone who can reach the port can change what is playing, and point the
+**`--listen 0.0.0.0:8787` has no password.** There is no authentication yet (a possible
+later addition, 041), so anyone who can reach the port can change what is playing, and point the
 studio at any panel on the network. That is the intended deployment on a home LAN or
 over a tailnet, and it must not be published to the internet.
 
@@ -80,8 +80,8 @@ construction rather than by agreement.
   its real one the first time it answers.
 - **One player per panel**, each rendering on its own thread. A collection from day
   one even though one panel is the expected case; several panels get a plain chooser
-  and nothing more, and no multi-panel sync or fan-out is built (card 091 stays
-  parked). The page shows the **focused** one.
+  and nothing more, and no multi-panel sync or fan-out is built (a possible later
+  addition, 091). The page shows the **focused** one.
 - **A studio always has a picture**, even before it has a panel. With none found yet
   the player is *unbound*: it renders for the page and has no link. The first panel
   found is **adopted into that same player** - renamed onto it, same thread, same
@@ -147,10 +147,10 @@ why switching patches and switching back gives you what you had, before and afte
 
 ```jsonc
 "version": 5,
-"devices": [ { "id": "4a00a4", "name": "Desk", ... } ],
-"players": [ { "device": "4a00a4", "patch": "metaballs", "on": true,
+"devices": [ { "id": "c0ffee", "name": "Desk", ... } ],
+"players": [ { "device": "c0ffee", "patch": "metaballs", "on": true,
                "paused": false, "speed": 1.0, ... } ],
-"focus": "4a00a4",                          // which panel the page is a window onto
+"focus": "c0ffee",                          // which panel the page is a window onto
 "patches": {                                // and how each patch is set, once
   "metaballs": {
     "seed": 111, "params": { "size": 2.5 }, "speed": 0.4,    // the working copy
@@ -181,7 +181,7 @@ was showing.
 
 There is **one** memory for the whole studio, not one per context: tuning a patch
 anywhere updates it, switching to a patch anywhere restores from it. (The card asked for
-one per context; the orchestrator reversed that on 2026-09-19 because the browser is
+one per context; that was reversed on 2026-09-19 because the browser is
 meant to be a window onto what the panel is doing, and card 170 unifies the preview and
 the player into one engine. A per-context memory would have been built for a distinction
 that is about to go away.) Which patch is showing where is still per context - the design
@@ -238,7 +238,7 @@ the rest of the state file, and never an error. What is on disk is left as it wa
 build that has the parameter back gets the value back.
 
 The **seed** is in a setting, and in the state file, and on the API, and nowhere on the
-page: the number is opaque and says nothing about what is on the panel (the owner, 2026-09-20).
+page: the number is opaque and says nothing about what is on the panel (the author, 2026-09-20).
 What a person wants from it is "show me another one like this", which is the one quiet
 **Another** button beside the settings control - shown only for a patch whose picture
 really depends on its seed (`PatchDef::seeded`, set per patch by reading its code), with
@@ -279,7 +279,7 @@ so the patch is on Default and honestly marked modified.
 > name. That one is on the device, on port 80, and has nothing to do with these: nothing
 > is shared but the word.
 
-Putting a good setting into the repo as a factory setting was offered to the owner and not
+Putting a good setting into the repo as a factory setting was offered to the author and not
 chosen, so it is not built. A setting is plain data in `state.json`, so nothing stops it
 later.
 
@@ -367,7 +367,7 @@ live facts and not state. `tests/ssid.rs` checks both.
 
 ### What a panel costs the network (card 164)
 
-The owner's question: *"how much network traffic are we sending, and receiving?"*
+The author's question: *"how much network traffic are we sending, and receiving?"*
 Every device on `/api/v1/status` carries `traffic`, and the Panel screen says it in
 three lines under Link:
 
@@ -413,7 +413,7 @@ supervisor. No lock on the send path, and nothing logged per packet.
 
 ### What counts as trouble, and what only looks like it (card 195)
 
-**The thresholds are the firmware session's**, measured on the real device across
+**The thresholds are measured on the real device**, across
 several builds, and they live in `devices.rs` beside their reasoning - the page carries
 no copy of any of them and `tests/ui.rs` keeps it that way. Free stack has two levels,
 because it is a high-water mark that only ever falls and interrupts eat it 256 bytes at
@@ -483,8 +483,8 @@ curl -s -X POST -H 'content-type: application/json' \
 #     screen and stops receiving frames. The page carries on showing the patch.
 
 curl -s -X POST -H 'content-type: application/json' \
-     -d '{"on":true,"to":"screeny-4a00a4"}' localhost:8787/api/v1/set_panel
-#  -> {"on":true,"device":"4a00a4","panel":{...},...}
+     -d '{"on":true,"to":"screeny-c0ffee"}' localhost:8787/api/v1/set_panel
+#  -> {"on":true,"device":"c0ffee","panel":{...},...}
 ```
 
 Off is off for **every** player, not only the one the page shows. The answer says what
@@ -492,8 +492,8 @@ happened rather than `null`, because a 200 that means "I have let it go" and a 2
 means "I am still streaming to it at 30 fps" must not look the same. (They did, until
 card 170: a firmware conformance suite ran against a panel it believed it had borrowed.)
 
-`to` is a device id, an mDNS instance name (`screeny-4a00a4`), a host name or an address
-(`192.168.7.221`, `127.0.0.1:49374`); one this studio has not heard of is added, exactly
+`to` is a device id, an mDNS instance name (`screeny-c0ffee`), a host name or an address
+(`192.168.1.50`, `127.0.0.1:49374`); one this studio has not heard of is added, exactly
 as `POST /devices/add` would. It is looked up in the background, so attaching answers at
 once whether or not the panel is there. Every change is persisted.
 
