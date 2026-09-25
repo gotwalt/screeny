@@ -39,4 +39,4 @@ the right thing.
 It is a model of two real implementations and is only as good as the reading
 behind it; the citations are in the module's documentation, file and line. The
 bench, not this crate, is what proves the real bootloader behaves this way -
-`docs/board/done/241-*.md` has the procedure and what it found.
+card 241's own log has the procedure and what it found.
