@@ -7,7 +7,7 @@
 //! nothing, and the backtrace went to a UART nobody was attached to. Card 234
 //! ranked that as the best single-event explanation of the one silent stall of
 //! 0.5.1 and could not settle it, because nothing survived the event. This
-//! module is the instrument it asked for, and the behaviour the owner asked for
+//! module is the instrument it asked for, and the behaviour the author asked for
 //! ("pretty crash proof", device-web decision 10): a panic prints, records what
 //! and where, and reboots. The device is back on the network in ~15 s and the
 //! next boot's log - and `GET /api/v1/status` - say that it panicked.
@@ -691,7 +691,7 @@ fn reason_word(raw: u32) -> &'static str {
 
 /// Panic on core 0, once per power-on, some seconds after boot.
 ///
-/// The orchestrator's proof that the whole path works end to end: backtrace,
+/// The proof that the whole path works end to end: backtrace,
 /// breadcrumb, reset, rejoin, and the next boot reporting it over HTTP. It
 /// fires **once** - the latch is in the breadcrumb, so the reset it causes does
 /// not arm it again - which is what keeps a bench build from becoming the crash

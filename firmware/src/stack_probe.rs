@@ -28,8 +28,8 @@
 //!
 //! Card 220 scanned once, at the 60 s telemetry tick, and reported a number.
 //! Card 222 then found real TCP traffic pushing core 0 far deeper than the
-//! in-memory router test had, and the orchestrator found the mark still
-//! creeping an hour later with nothing but the stream, a WiFi rejoin and a
+//! in-memory router test had, and the mark was still found creeping
+//! an hour later with nothing but the stream, a WiFi rejoin and a
 //! handful of requests. A single reading cannot say *what* went deep.
 //!
 //! So [`watch_task`] samples every [`WATCH_MS`] milliseconds and logs only

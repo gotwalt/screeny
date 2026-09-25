@@ -73,7 +73,7 @@ apsta-probe = ["esp-alloc/internal-heap-stats"]
 fb-on-stack = []
 
 # **Card 243's bench build.** Panic on core 0 twenty seconds after boot,
-# **once** per power-on, so the orchestrator can watch the whole path: the
+# **once** per power-on, so the whole path can be watched: the
 # backtrace, the breadcrumb, the reset, the rejoin, and the next boot reporting
 # the panic in its log and in `GET /api/v1/status`. The one-shot latch lives in
 # the breadcrumb itself, so the reset it causes does not arm it again and a
@@ -81,8 +81,8 @@ fb-on-stack = []
 # default; never shipped.
 panic-test = []
 
-# **Card 241's two bench builds.** Both are *deliberately broken updates*: the
-# orchestrator uploads them to a working device and watches the previous image
+# **Card 241's two bench builds.** Both are *deliberately broken updates*:
+# uploading one to a working device shows the previous image
 # come back by itself. Off by default, never shipped, and neither is any use
 # flashed over serial - the point is what happens when one of them is the image
 # on trial.
@@ -101,7 +101,7 @@ ota-test-panic = []
 # duty level, which is the length of the dither cycle in refreshes. The
 # default (four, 16 refreshes, 9.6 Hz) is what shipped up to fw 0.8.2; three
 # and two shorten it to 19 Hz and 38 Hz at the cost of duty resolution (1008
-# steps -> 504 -> 252, against 63 from the bit planes alone). The owner picks
+# steps -> 504 -> 252, against 63 from the bit planes alone). The author picks
 # by looking at three builds, so this has to be a build flag and not a
 # constant somebody edits:
 #
@@ -133,7 +133,7 @@ gpio-probe = []
 # **Card 223's bench build.** Boot as if the settings store held no
 # credentials, **without erasing or overwriting a byte of it**: the machine is
 # told `has_stored: false`, so it goes straight to `Portal`, raises the soft-AP
-# and puts the QR on the panel. The owner's real credentials are still in
+# and puts the QR on the panel. The author's real credentials are still in
 # flash, so typing them into the setup form runs a real trial that really
 # joins and really commits. This is the build the phone test is done with; it
 # does not join a network by itself, so there is no stream while it runs. Off

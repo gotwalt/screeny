@@ -191,7 +191,7 @@ pub fn crashed(frame: &mut Frame, file: &str, line: u32, panics: u32) {
 /// one mechanism, whether the request came over the wire or off the panel's
 /// own button. Section 6.3 asks for "a high-contrast pattern plus the device
 /// name and IP" and that is still what this is; card 230 adds the firmware
-/// version and the signal on a third line, because the owner standing in front
+/// version and the signal on a third line, because the author standing in front
 /// of the panel with no laptop is the person the button is for.
 /// The chevron border alternates on this period, and it is a **wall clock**
 /// rather than a redraw count (card 247).
@@ -200,8 +200,8 @@ pub fn crashed(frame: &mut Frame, file: &str, line: u32, panics: u32) {
 /// frame task - which is 50 redraws a second at idle and up to 80 with a
 /// stream arriving. That made the border alternate somewhere between 8 and
 /// 13 Hz *and* made the screen look different depending on whether anything
-/// was being sent to the panel, which is half of what the owner was looking at
-/// when he reported the flicker. CLAUDE.md allows nothing flashing above 3 Hz
+/// was being sent to the panel, which is half of what the author was looking at
+/// when he reported the flicker. Nothing may flash above 3 Hz
 /// on this USB-powered panel; 400 ms is 1.25 Hz, it does not change when a
 /// stream starts or stops, and it is still unmistakable across a room.
 const CHEVRON_MS: u64 = 400;
