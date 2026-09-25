@@ -1,5 +1,5 @@
 //! The QR encoder wrapper: `qrcodegen-no-heap` pinned to exactly the code the
-//! owner scanned off the panel, and nothing else.
+//! author scanned off the panel, and nothing else.
 //!
 //! Version **2**, error correction **L**, **byte** mode, 25x25 modules. Not a
 //! range, not "whatever fits": the panel layout is built around a 25x25 block
