@@ -566,7 +566,7 @@ Mapping onto the spec:
   compile-time ones, then display the failure" becomes "try stored credentials,
   then the compile-time ones, then **raise the portal** and display the SSID and
   the QR". The compile-time credentials stay as step 2 - they are what makes a
-  bench flash come straight up.
+  bench flash come straight up (removed in fw 0.10.0).
 
 The one timing number worth arguing about is the `PORTAL` -> `JOINING` retry
 interval. 10 minutes is a guess informed by WLED's 5-minute throttle and

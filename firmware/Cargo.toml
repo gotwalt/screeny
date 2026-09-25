@@ -35,20 +35,6 @@ display-on-core0 = []
 # Off by default; never flashed. See docs/research/006-flash-store-ota.md.
 spike-ota = []
 
-# **Bench override for the WiFi credentials** (owner's decision, 2026-09-20).
-# OFF by default, and off means off: with the feature clear `build.rs` does not
-# read the environment, `firmware/wifi.env` or `~/.config/screeny/wifi.env` at
-# all, and `crate::SSID` / `crate::PASSWORD` do not exist, so anything that
-# tried to use a compiled-in credential would fail to compile rather than
-# silently ship one. A default build joins from the store and nothing else.
-#
-# With the feature on, the pair is embedded and does exactly two things: it
-# seeds an *empty* store at boot through the ordinary save path, and it is spec
-# section 8.3 step 2 - the fallback after stored credentials have failed three
-# times. The bench flow is to flash a `bench-wifi` build once to seed the store,
-# then flash the default build and watch it join from flash alone.
-bench-wifi = []
-
 # Card 212's bench self-test. A worker cannot reach the device over the LAN, so
 # this exercises the store on the device by itself at boot + 20 s: it saves a
 # name, a brightness and an idle mode through the same code path the control

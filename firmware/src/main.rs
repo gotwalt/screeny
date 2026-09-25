@@ -143,19 +143,6 @@ esp_bootloader_esp_idf::esp_app_desc!(
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// The **bench override** credentials, supplied by `build.rs` from outside git.
-///
-/// These exist only in a `--features bench-wifi` build (owner's decision,
-/// 2026-09-20). In a default build the constants are not declared at all, so
-/// there is no name by which a credential could reach the binary, and anything
-/// that tried would fail to compile. The device joins from its settings store;
-/// the compiled-in pair is a bench convenience that seeds an empty store and
-/// acts as spec section 8.3's step-2 fallback, and nothing else.
-#[cfg(feature = "bench-wifi")]
-pub const SSID: &str = env!("SCREENY_WIFI_SSID");
-#[cfg(feature = "bench-wifi")]
-const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
-
 /// The `fw=` TXT key and `GET_INFO` field.
 ///
 /// 0.3.0 was card 212: settings live in flash. 0.4.0 is card 222: the device
@@ -238,7 +225,10 @@ const PASSWORD: &str = env!("SCREENY_WIFI_PASSWORD");
 /// `src/display.rs` into `screeny-dither`, a host-tested workspace crate; the
 /// cargo features `frac-bits-3` and `frac-bits-2` build the shorter dither
 /// cycles (19 Hz and 38 Hz) the author compares this against.
-pub const FW_VERSION: &str = "0.9.0";
+///
+/// **0.10.0: the compiled-in credential path is gone; the join order is
+/// stored -> portal.**
+pub const FW_VERSION: &str = "0.10.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -652,23 +642,6 @@ pub fn current_ssid() -> &'static str {
 /// The firmware no longer keeps a second opinion about it.
 pub fn wifi_report_state() -> u8 {
     provision::wifi_state()
-}
-
-/// The pair this build was compiled with, or `None` - which is every default
-/// build (owner's decision, 2026-09-20). `crates/provision` models the same
-/// thing as `has_builtin: false`.
-pub fn builtin_wifi() -> Option<Wifi> {
-    #[cfg(feature = "bench-wifi")]
-    {
-        // `build.rs` has already checked both lengths against 802.11's limits,
-        // so this cannot fail; `ok()` rather than `expect` keeps a panic out of
-        // the boot path regardless.
-        Wifi::new(SSID.as_bytes(), PASSWORD.as_bytes()).ok()
-    }
-    #[cfg(not(feature = "bench-wifi"))]
-    {
-        None
-    }
 }
 
 /// Turn a stored credential pair into a radio configuration.
@@ -1196,12 +1169,10 @@ async fn main(spawner: Spawner) {
     #[cfg(not(feature = "start-in-portal"))]
     let stored = settings.wifi.clone();
 
-    // Device-web decision 6: a default build has no compile-time credentials
-    // at all, and `bench-wifi` is the one exception. The machine models it as
-    // `has_builtin`, and a built-in pair that joins seeds an *empty* store
-    // through `CommitCredentials { Builtin }` - which is the only place in
-    // this firmware that seeds one now.
-    provision::init(host, stored.is_some(), builtin_wifi().is_some());
+    // Device-web decision 6: no build embeds a WiFi pair any more. The join
+    // order is stored -> portal, and nothing seeds the store but `SET_WIFI`
+    // and a real trial typed into the portal's form.
+    provision::init(host, stored.is_some());
 
     // Card 220's measurement build owns the controller instead, because the
     // switch into APSTA, the re-association and the AP's own stack all have

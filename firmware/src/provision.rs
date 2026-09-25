@@ -668,8 +668,6 @@ async fn dns_loop<S: edge_nal::UdpReceive + edge_nal::UdpSend>(
 struct Held {
     /// What the store holds, kept in step with every commit.
     stored: Option<Wifi>,
-    /// The compile-time pair, in a `bench-wifi` build only.
-    builtin: Option<Wifi>,
     /// What was last posted to `POST /api/v1/wifi` or `SET_WIFI`. RAM only,
     /// until the machine says it joined.
     trial: Option<Wifi>,
@@ -681,7 +679,6 @@ impl Held {
     fn get(&self, which: JoinTarget) -> Option<&Wifi> {
         match which {
             JoinTarget::Stored => self.stored.as_ref(),
-            JoinTarget::Builtin => self.builtin.as_ref(),
             JoinTarget::Trial => self.trial.as_ref(),
         }
     }
@@ -885,23 +882,6 @@ impl Driver {
                     }
                 }
                 self.held.stored = Some(w);
-            }
-            // Device-web decision 6: the compile-time pair **seeds an empty
-            // store**, and only an empty one. The machine reaches `Builtin`
-            // down two roads - nothing stored at all, and a stored pair that
-            // failed three times - and the second must not write: a stored
-            // pair that stopped working is the owner's to replace, not this
-            // build's to quietly overwrite with the bench network. That was
-            // the rule `station_loop` carried ("deliberately *not* stored")
-            // and it is carried here now, because this is the only place in
-            // the firmware that can commit.
-            JoinTarget::Builtin => {
-                if self.held.stored.is_some() {
-                    info!("provision: the build's credentials joined; the stored pair is left alone");
-                } else {
-                    crate::store::seed_wifi(&w).await;
-                    self.held.stored = Some(w);
-                }
             }
             // The store already holds them; that is where they came from.
             JoinTarget::Stored => {}
@@ -1168,20 +1148,16 @@ impl Driver {
 /// of [`provision_task`] instead: a `Stack<'d>` holds a `&RefCell<Inner>` and
 /// is therefore not `Sync`, so it cannot live in a `static` at all - the same
 /// constraint `crate::http::Ctx` documents.
-pub fn init(ap_ssid: &'static str, has_stored: bool, has_builtin: bool) {
+pub fn init(ap_ssid: &'static str, has_stored: bool) {
     MACHINE.lock(|c| {
         *c.borrow_mut() = Some(Provisioner::new(&ProvConfig {
             ap_ssid,
             has_stored,
-            has_builtin,
             form: UriForm::NoPass,
             timing: Timing::SPEC,
         }));
     });
-    info!(
-        "provision: ap {} | stored credentials {} | built-in {}",
-        ap_ssid, has_stored, has_builtin
-    );
+    info!("provision: ap {} | stored credentials {}", ap_ssid, has_stored);
 }
 
 /// Owns the radio and drives the machine. Never returns.
@@ -1195,7 +1171,6 @@ pub async fn provision_task(
     let mut d = Driver {
         held: Held {
             stored,
-            builtin: crate::builtin_wifi(),
             trial: None,
             trial_persist: true,
         },

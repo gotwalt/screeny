@@ -176,16 +176,10 @@ pub async fn probe_task(
         .with_channel(1);
 
     // Card 212: credentials come from the store now, so the station half of the
-    // APSTA config is built from whatever the station is actually using rather
-    // than from a compiled-in constant. With nothing stored (and no `bench-wifi`
-    // pair) the probe still measures the heap, which is its whole job; it just
-    // will not associate.
-    let builtin = crate::builtin_wifi();
-    let sta = stored
-        .as_ref()
-        .or(builtin.as_ref())
-        .and_then(station_config)
-        .unwrap_or_default();
+    // APSTA config is built from whatever the station is actually using. With
+    // nothing stored the probe still measures the heap, which is its whole
+    // job; it just will not associate.
+    let sta = stored.as_ref().and_then(station_config).unwrap_or_default();
 
     info!("apsta-probe: stage 2, raising open AP {:?}", ap_ssid);
     match controller.set_config(&WifiConfig::AccessPointStation(sta, ap)) {

@@ -373,8 +373,8 @@ pub struct Config {
     /// Research 007 section 5.2's timing, or a test's compressed version of
     /// it. [`WifiTiming::SPEC`] is a device's behaviour and is the default.
     pub wifi_timing: WifiTiming,
-    /// Boot straight into the captive portal: an empty store and no
-    /// compile-time credentials, which is what a factory-fresh device is.
+    /// Boot straight into the captive portal: an empty store, which is what
+    /// a factory-fresh device is.
     pub start_in_portal: bool,
 
     // --- card 192: the half of the status a host cannot measure -------------

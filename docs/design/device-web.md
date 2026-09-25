@@ -31,7 +31,7 @@ what the research settled, and the build order at the end.
 | 3 | **HTTP is unauthenticated on the LAN**, settings and firmware upload included - the same posture as `SET_WIFI` and `REBOOT` (spec 8.4). The API is shaped so a PIN can be added (a possible later addition, 041). An upload is still validated as a `screeny-fw` image before the boot slot changes. | author, 2026-09-20 |
 | 4 | **The button is real and reachable** (on the back; you can press it). Its GPIO is unknown: card 202 finds it statically and ships a probe firmware, run with the button held. | author, 2026-09-20 |
 | 5 | **The serial console of spec 8.1 is superseded** by the portal and the settings page. `SET_WIFI` (8.2) stays and writes the same store. The spec is edited when the store lands. | decided, 2026-09-20 |
-| 6 | **Compiled-in WiFi credentials are removed.** A default build contains none and `build.rs` does not even look for them; the device gets its network from the store (portal, settings page, `SET_WIFI`). The only override is the off-by-default cargo feature `bench-wifi`, for testing: it embeds the credentials from outside the repo, seeds an empty store with them and keeps them as the spec 8.3 step-2 fallback. The settings partition survives a reflash, so one `bench-wifi` flash seeds the bench device and default builds run from the store thereafter. Lands with card 212; spec 8.3 is rewritten in card 225. | author, 2026-09-20 |
+| 6 | **No compiled-in WiFi credentials.** A build contains none; the device gets its network from the store (portal, settings page, `SET_WIFI`). The `bench-wifi` bench override that once seeded a store was removed in fw 0.10.0 once the portal was validated. | author, 2026-09-20 |
 | 7 | **The frame path is the product.** No HTTP request, flash write or portal activity may cost a frame at 30 fps, except a firmware update, which is allowed to take the panel over with an "updating" screen. | standing |
 | 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the button held (card 203). | author, 2026-09-20 |
 | 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | author, 2026-09-20 |
@@ -188,8 +188,7 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
 Refinements made while building the state machine (card 221, `crates/provision`; its
 README has the diagram and the action list) - these are now the design:
 
-- Empty store + compile-time credentials: join with the built-ins, and success commits
-  them to the store (that is the seeding of decision 6). Neither present: portal.
+- Empty store: straight to the portal.
 - A trial join fails **immediately** on an authentication error (a wrong password is
   deterministic); other reasons retry up to 3 times. Boot-time joins always take 3.
 - The machine owns a 15 s per-attempt deadline (3 x 15 s = the 45 s), so a silent radio
@@ -251,10 +250,11 @@ HTTP replaced the working pair in flash, the device ran on
 its in-RAM fallback until the next reboot and then could join nothing. The handlers now
 hand `NewWifi { wifi, persist }` to the WiFi task, which commits after a successful join;
 a store failure then is counted (`store_errors`), not reported in the reply. Recovery, if
-a device ever has a bad pair in flash: flash a `--features bench-wifi` build (stored pair
-fails three times, the built-ins join), send `screeny-probe set-wifi SSID PSK --persist`,
-flash the default build. **Bench rule that follows: after any wrong-credentials test,
-reboot the device and see it rejoin before calling the test passed.**
+a device ever has a bad pair in flash: the stored pair fails three times and the machine
+raises the portal by itself, or the button wipe (5 s) forces it sooner - either way the
+next credentials come from a real trial typed into the portal's form, not a flash.
+**Bench rule that follows: after any wrong-credentials test, reboot the device and see
+it rejoin before calling the test passed.**
 
 Where core 0's stack goes (card 227, `docs/research/010-stack-and-ram-levers.md`),
 measured on fw 0.4.2: **the boot path sets the mark (13,056 bytes)**; 2,378 real HTTP
@@ -299,8 +299,8 @@ Credentials posted while the device is online (card 232) - now part of the machi
 - `Online` or `Joining` + credentials posted -> a trial **without the AP**
   (`TrialOrigin::Online`): the one station drops its association and tries the new
   network. Success commits and announces; failure goes back to the **stored** network
-  (then the built-ins, then the portal only if there is nothing at all), never clearing
-  the store. No overlay, no portal screen, no address on the panel: the stream keeps the
+  (the portal only if there is nothing at all), never clearing the store. No overlay,
+  no portal screen, no address on the panel: the stream keeps the
   panel through the rejoin. `ip()` is `None` for the length of the trial.
 - The failed result is sticky until the next post, a button wipe or a reboot
   (`trial_is_current()`, `wifi_state()`); a later card may add an explicit acknowledge.
@@ -371,7 +371,7 @@ address the new firmware needs to prove itself and get it rolled back.
 | 211 | `crates/settings`, host-tested against the real map - **done** (42 tests) | no |
 | 220 | framebuffers off core 0's stack; APSTA heap measured - **done**: stack high-water 26.5 KB -> ~6 KB of 37.5 KB; APSTA costs 3.3 KB of heap (44 KB free at the worst instant); keep the 64 + 32 KB heap; the full track leaves ~20 KB of stack against ~6 KB of demand (`docs/research/009-ram-headroom.md`) | yes |
 | 203 | bench: GPIO15 confirmed with the probe, button pressed - **done** | yes |
-| 212 | **done, on the device (fw 0.3.0)** - firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
+| 212 | **done, on the device (fw 0.3.0)** - firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, a bench-only pair baked into the binary as a fallback (removed in fw 0.10.0) (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
 | 222 | **done, on the device (fw 0.4.0)**: http://192.168.1.50/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
