@@ -115,7 +115,7 @@ use crate::store;
 /// (measured, and it was three quarters empty) and the heap arena (measured
 /// against the APSTA peak, not the station one), and spent part of it here.
 ///
-/// What the second worker buys, measured over the wire by the orchestrator at
+/// What the second worker buys, measured over the wire at
 /// the end of card 222: smoltcp has **no listen backlog**, so with one worker
 /// a SYN arriving between two `accept()`s is simply unanswered and the client
 /// retransmits. macOS's first retransmit is at one second, and that is exactly
@@ -1879,7 +1879,7 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 /// 192.168.4.1, and the rest of the time they are the LAN workers exactly as
 /// card 227 made them.
 ///
-/// Card 223 moved only one, and the owner's phone test (2026-09-20) is why
+/// Card 223 moved only one, and the author's phone test (2026-09-20) is why
 /// that was wrong. smoltcp has no listen backlog: with one socket, a second
 /// connection that arrives while the first is open is *refused*. An iPhone's
 /// captive sheet opens a connection it does not use straight away next to the
@@ -2014,7 +2014,7 @@ const CLOSE_ACK_MS: u64 = 1500;
 /// measured on 2026-09-20: 9 to 17 refusals of ~35 requests, where the same
 /// build an hour earlier had had none. There was no firmware change between
 /// those runs because the variable was never in the firmware. It is the same
-/// weakness the owner's iPhone hit on the setup network (card 223, finding 3),
+/// weakness the author's iPhone hit on the setup network (card 223, finding 3),
 /// seen from the other end of the connection.
 ///
 /// ## What this one does instead
@@ -2243,7 +2243,7 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
 /// request and keeps the bytes it writes back.
 ///
 /// What it does *not* prove is the TCP path. The accept loop being up, plus
-/// the orchestrator's `curl` run after the merge, cover that.
+/// a `curl` run against real hardware after the merge, cover that.
 #[cfg(feature = "http-selftest")]
 mod mem_socket {
     // **`picoserve::io::`, not `embedded_io_async::`.** There are two versions
