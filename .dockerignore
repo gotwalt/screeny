@@ -2,9 +2,9 @@
 #
 # Two reasons to keep this tight: speed (the context is sent to the daemon on
 # every build) and safety (nothing secret or device-specific may ever reach a
-# layer). `firmware/` is excluded whole, which also excludes `firmware/wifi.env`
-# - the image builds host crates only and never needs WiFi credentials - and
-# `backup/` is excluded because it holds the Tidbyt's stock flash image.
+# layer). `firmware/` is excluded whole - the image builds host crates only
+# and firmware has no compiled-in WiFi credentials to need excluding anyway -
+# and `backup/` is excluded because it holds the Tidbyt's stock flash image.
 
 # Build outputs: the container builds its own, in its own cache mount.
 target/
@@ -15,7 +15,6 @@ lab/xtensa-bench/target/
 # Never in an image, never in a build context.
 backup/
 firmware/
-**/wifi.env
 .env
 *.env
 
