@@ -4,7 +4,7 @@ Card 227. Every number here came either from `tools/fw-size.sh` /
 `xtensa-esp32-elf-objdump` / `xtensa-esp32-elf-nm` on a build in this worktree,
 or from the device itself over the serial port. Card 220
 (`docs/research/009-ram-headroom.md`) is the research this continues; sections
-2 and 4 there are the parts card 222 and the orchestrator's over-the-wire run
+2 and 4 there are the parts card 222 and a later over-the-wire run
 then falsified.
 
 ---
@@ -181,8 +181,8 @@ buffers are still there.
 
 ### 2.2 What the device actually did
 
-Two 200-second runs on fw 0.4.2, the Studio streaming 30 fps throughout, the
-orchestrator driving HTTP from the LAN. Every line below is `watch_task`
+Two 200-second runs on fw 0.4.2, the Studio streaming 30 fps throughout, with
+HTTP driven from the LAN. Every line below is `watch_task`
 reporting a mark that had just grown.
 
 **Run A** - `.stack` 22,832 (core 1 still 16 KB), 2,576 requests in 240 s,
@@ -212,8 +212,8 @@ Two things fall out of this:
 
 * **Boot sets the mark.** 13,056 of the 13,232-13,328 ceiling is reached
   before the first packet. Serving HTTP flat out is worth 272 bytes.
-* **The WiFi rejoin path is not deep.** It was the leading suspect - the
-  orchestrator raised it, and `try_join` does a full `AllChannels` scan - and
+* **The WiFi rejoin path is not deep.** It was the leading suspect -
+  `try_join` does a full `AllChannels` scan - and
   it moved the mark by exactly zero.
 
 Every post-boot step is 16 to 112 bytes. That is not a new call chain; it is
@@ -243,7 +243,7 @@ sits on a 784-byte task frame instead.
 So **fixing "credentials are committed before they are proved" also removed
 the deepest call chain in the firmware**, and neither card noticed at the
 time. It is consistent with all three of 0.4.0's readings, including the
-5,176 one, because the orchestrator's card 222 verification ran the
+5,176 one, because card 222's verification ran the
 wrong-credentials POST before the hammer.
 
 It is inference. What would settle it: flash 0.4.0 with this card's
@@ -350,8 +350,8 @@ guard on every context switch. No panic, 3,248 bytes still painted.
 | + `APP_CORE_STACK` 16,384 -> 6,144 | 58,388 | 105,136 | **33,072** | **+10,240** |
 
 Net: **+9,832 bytes of `.stack`** while adding a second HTTP worker, an eighth
-socket slot, a permanent two-core stack probe, and absorbing somebody else's
-600-byte bug fix.
+socket slot, a permanent two-core stack probe, and absorbing a
+600-byte bug fix merged in the meantime.
 
 ### Measured `stack_free`
 
@@ -360,7 +360,7 @@ socket slot, a permanent two-core stack probe, and absorbing somebody else's
 
 | build | `.stack` | high-water | `stack_free` |
 |---|---|---|---|
-| 0.4.0, after the orchestrator's hammer | 23,240 | 17,040 | 5,176 |
+| 0.4.0, after the load-test hammer | 23,240 | 17,040 | 5,176 |
 | 0.4.0, an hour later | 23,240 | 17,904 | 4,312 |
 | **0.4.2 run A** (core 1 not yet resized) | 22,832 | 13,328 | 8,480 |
 | **0.4.2 run C**, hammer + forced rejoin | **33,072** | **13,232** | **18,816** |
@@ -615,7 +615,7 @@ It now does not reach the boot mark at all. All 20 route cases answered the
 expected status first try.
 
 **Real traffic says the same thing.** 200 s on the default 0.4.3 build, the
-Studio streaming throughout, the orchestrator driving 904 requests from the
+Studio streaming throughout, with 904 requests driven from the
 LAN plus the 38-rule HTTP conformance suite:
 
 | build | `.stack` | high-water | `stack_free` |
