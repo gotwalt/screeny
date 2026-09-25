@@ -18,17 +18,16 @@ Fractal zoom, 3 camera frames over 7 s:
 
 ![fractal on the panel](img/panel-fractal.jpg)
 
-Device-side numbers from card 008's evidence runs (full table in
-`docs/board/done/008-firmware-network.md`): every codec 60 s at 30 fps with zero
+Device-side numbers from card 008's evidence runs: every codec 60 s at 30 fps with zero
 decode drops and 0.2-0.9% network loss; decode 0.2-0.8 ms; 10-minute soak with heap
 and refresh unchanged; ping RTT p50 5.2 ms / p99 21 ms, 0 of 300 lost; `REBOOT`
 mid-stream recovers in 11.4 s without the sender restarting.
 
 ## Notes
 
-- The device's mDNS host name is `screeny-4a00a4.local` (spec 5.1: `screeny-<id>`);
-  the instance name is `screeny-4a00a4`. `screeny.local` was the bring-up spike's
-  name and no longer resolves. `--addr 192.168.7.221` always works.
+- The device's mDNS host name is `screeny-c0ffee.local` (spec 5.1: `screeny-<id>`);
+  the instance name is `screeny-c0ffee`. `screeny.local` was the bring-up spike's
+  name and no longer resolves. `--addr 192.168.1.50` always works.
 - One `screeny discover` returned nothing on the very first launch after the binary
   was re-signed; the next five discoveries succeeded. Unexplained; watch for it
   (candidates: macOS evaluating the fresh signature for Local Network, or the
