@@ -425,7 +425,7 @@ mod tests {
         // grid: the three grids, written the way a person says them.
         let grid = by_id(&crate::patches::clocks::dials::DEF, "grid");
         assert_eq!(grid.choices, ["4 x 2", "6 x 3", "8 x 4"]);
-        assert_eq!((grid.min, grid.max, grid.default), (0.0, 2.0, 1.0), "the range and default are card 100's");
+        assert_eq!((grid.min, grid.max, grid.default), (0.0, 2.0, 0.0), "the range is card 100's; the default became 4 x 2 on 2026-09-25");
     }
 
     /// Nothing card 163 touched changed a patch's behaviour: every id, range,
@@ -436,7 +436,7 @@ mod tests {
             ("clocks-numerals", "dance", 0.0, 13.0, 1.0, 0.0),
             ("clocks-numerals", "rest", 0.0, 4.0, 1.0, 2.0),
             ("clocks-numerals", "hours24", 0.0, 1.0, 1.0, 1.0),
-            ("clocks-dials", "grid", 0.0, 2.0, 1.0, 1.0),
+            ("clocks-dials", "grid", 0.0, 2.0, 1.0, 0.0), // default 6 x 3 -> 4 x 2, 2026-09-25
             ("clocks-dials", "mood", 0.0, 8.0, 1.0, 0.0),
         ];
         for (patch, id, min, max, step, default) in want {

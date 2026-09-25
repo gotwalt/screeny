@@ -46,7 +46,7 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    choice("grid", "Dials", GRID_CHOICES, 1.0),
+    choice("grid", "Dials", GRID_CHOICES, 0.0),
     choice("mood", "Mood", MOOD_CHOICES, 0.0),
     param("dwell", "Seconds in a mood", 8.0, 120.0, 1.0, 32.0),
     param("tell", "Tell the time every (s, 0 = never)", 0.0, 600.0, 5.0, 60.0),
@@ -125,7 +125,7 @@ struct Flow {
 fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = Rng::new(seed);
     let mood = REPERTOIRE[(rng.u64() % REPERTOIRE.len() as u64) as usize];
-    let grid = 1;
+    let grid = 0;
     let field = Ambient::new(&mut rng, mood, GRIDS[grid].0, GRIDS[grid].1, W as f32 / GRIDS[grid].0 as f32);
     eprintln!("dials: t=0 {}", field.name());
     Box::new(Flow { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default(), tinge: None, doing: String::new(), move_on: false })
