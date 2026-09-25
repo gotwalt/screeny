@@ -113,7 +113,7 @@ pub const MAX_NAME_CHARS: usize = 40;
 ///
 /// The seed is in here because it is half of what makes a picture reproducible
 /// even though the page does not show the number any more (card 151), and
-/// `speed` because the owner asked for it. The pipeline `output` is **not**:
+/// `speed` because the author asked for it. The pipeline `output` is **not**:
 /// the panel model, the dither and the limiter are about the panel, not about
 /// the patch.
 ///
@@ -410,9 +410,9 @@ impl PatchMemory {
 ///
 /// **One of these for the whole studio**, shared by the design view and by
 /// every panel's player. Tuning a patch anywhere updates it; switching to a
-/// patch anywhere restores from it. (The card asked for one per context; the
-/// orchestrator reversed that on 2026-09-19 after the owner explained that the
-/// browser is meant to be a window onto what the panel is doing, and that the
+/// patch anywhere restores from it. (The card asked for one per context; that
+/// was reversed on 2026-09-19 because the
+/// browser is meant to be a window onto what the panel is doing, and because the
 /// preview/player split is being unified in card 170. A per-context memory
 /// would have been built for a distinction that is about to go away.)
 pub type Memory = BTreeMap<String, PatchMemory>;
@@ -1943,7 +1943,7 @@ mod tests {
     /// The whole point: switch away, switch back, and it is as you left it.
     ///
     /// The tuned entry here is **`plasma`, which this build has not got** -
-    /// card 178 removed it - and that is deliberate: the owner may have spent
+    /// card 178 removed it - and that is deliberate: someone may have spent
     /// an evening on it, a patch can come back, and the promise is that a
     /// memory entry for a patch nobody can play any more round-trips through
     /// the file untouched, settings and all. `back == want` is that promise.

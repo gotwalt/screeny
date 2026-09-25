@@ -409,13 +409,13 @@ struct PanelOutcome {
 
 /// **Panel output**, and which panel the page is attached to.
 ///
-/// Two bodies matter and are kept exactly, because another session drives them
-/// from a script to borrow the panel for firmware tests:
+/// Two bodies matter and are kept exactly, because a conformance script drives
+/// them to borrow the panel for firmware tests:
 ///
 /// - `{"on":false}` - the link is released with `FINAL`, the panel goes back to
 ///   its own idle screen and **stops receiving frames**, and the page carries
 ///   on showing the patch.
-/// - `{"on":true,"to":"screeny-4a00a4"}` - attach to that panel and drive it.
+/// - `{"on":true,"to":"screeny-c0ffee"}` - attach to that panel and drive it.
 ///   `to` may be a device id from the registry, an mDNS instance name or an
 ///   address; one that is not known yet is added, exactly as
 ///   `POST /devices/add` would. An empty `to` means "the panel already
@@ -486,7 +486,7 @@ async fn devices_list(State(st): State<AppState>) -> Json<Vec<crate::health::Dev
 
 #[derive(Deserialize)]
 struct AddDevice {
-    /// A name (`screeny-4a00a4`) or an address (`192.168.7.221`, `127.0.0.1:49374`).
+    /// A name (`screeny-c0ffee`) or an address (`192.168.1.50`, `127.0.0.1:49374`).
     to: String,
     #[serde(default)]
     name: String,

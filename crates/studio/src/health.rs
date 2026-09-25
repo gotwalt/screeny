@@ -140,7 +140,7 @@ pub struct DeviceStatus {
     ///
     /// **It carries the network's SSID**, which is why it is on the owner's
     /// page and in this reply and nowhere else: never a log line, never the
-    /// state file (`CLAUDE.md`).
+    /// state file.
     pub facts: Option<DeviceFacts>,
     pub facts_ago: Option<f64>,
     /// Card 199: `GET /api/v1/panic`'s last answer - the panic breadcrumb, the

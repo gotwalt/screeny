@@ -511,8 +511,8 @@ const QUIET_RESETS: [ResetReason; 3] = [ResetReason::PowerOn, ResetReason::Softw
 /// page in the same commit that adds it.
 ///
 /// **`Debug` is written by hand and redacts the SSID.** The status payload
-/// carries the real network name, which is credential-adjacent in this repo
-/// (`CLAUDE.md`): it may be on the owner's page and in the studio's own
+/// carries the real network name, which is credential-adjacent: it may be
+/// on the owner's page and in the studio's own
 /// `/api/v1/status`, and it must never reach a log line, the state file, a
 /// fixture or a commit message. Deriving `Debug` here would put it one
 /// `{:?}` away from stderr, and [`DeviceRecord`] derives `Debug`.

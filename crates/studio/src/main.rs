@@ -208,7 +208,7 @@ mod tests {
         })
     }
 
-    /// The order the orchestrator asked for: a flag beats the environment,
+    /// The order this was asked for: a flag beats the environment,
     /// and the environment beats the default.
     #[test]
     fn a_flag_beats_the_environment_which_beats_the_default() {

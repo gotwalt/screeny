@@ -99,7 +99,7 @@ pub fn spawn_supervisor(st: AppState) {
 }
 
 /// A studio that has never been attached to a panel attaches itself to the
-/// first one it finds. That is the zero-click case the owner asked for: plug
+/// first one it finds. That is the zero-click case the author asked for: plug
 /// the panel in, open the page, and the picture the page was already showing
 /// is on the panel.
 ///
