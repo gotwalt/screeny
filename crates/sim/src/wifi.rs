@@ -137,7 +137,6 @@ impl WifiModel {
             p: Provisioner::new(&ProvConfig {
                 ap_ssid: &cfg.ap_ssid,
                 has_stored: stored.is_some(),
-                has_builtin: false,
                 form: screeny_provision::UriForm::NoPass,
                 timing: cfg.wifi_timing,
             }),
@@ -414,10 +413,7 @@ impl WifiModel {
             Action::CommitCredentials { which } => {
                 let ssid = match which {
                     JoinTarget::Trial => self.p.trial().map(|t| t.ssid.as_str().to_string()),
-                    // The simulator is never built with compile-time
-                    // credentials, so this cannot happen; keeping what is
-                    // stored is the honest fallback.
-                    JoinTarget::Builtin | JoinTarget::Stored => self.stored_ssid.clone(),
+                    JoinTarget::Stored => self.stored_ssid.clone(),
                 };
                 if let Some(ssid) = ssid {
                     self.stored_ssid = Some(ssid);
