@@ -198,7 +198,7 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
 
     // The AP is still up while the page reports the new address - and the
     // trial is still *the answer*, or the page's reload gets the empty form
-    // back (which is what the owner's phone got on 2026-09-20).
+    // back (which is what the author's phone got on 2026-09-20).
     assert!(p.ap_up());
     assert!(p.trial_is_current());
     assert!(p.step(Event::Tick, 600 + T.ap_grace_ms - 1).is_empty());
@@ -362,7 +362,7 @@ fn the_retry_is_suppressed_while_a_phone_is_on_the_portal() {
 }
 
 /// Card 221: with an empty store there is nothing to retry, so the portal
-/// just sits there. It has no time limit (device-web, the orchestrator's
+/// just sits there. It has no time limit (device-web's
 /// default for 007's open question 4).
 #[test]
 fn an_empty_store_never_retries_and_the_portal_never_expires() {
@@ -759,7 +759,7 @@ fn the_state_bytes_match_007_section_5_2() {
 }
 
 /// The panel: the QR layout **stays put** for as long as the portal is up (a
-/// code that alternates with a text screen does not scan: the owner's phone
+/// code that alternates with a text screen does not scan: the author's phone
 /// test, 2026-09-20), and the acquired address is shown for
 /// `connected_screen_ms` after a successful trial and then handed back to the
 /// normal idle path.

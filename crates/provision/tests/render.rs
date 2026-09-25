@@ -172,11 +172,11 @@ fn the_pngs_are_committed_and_current() {
 // Panel safety
 // ---------------------------------------------------------------------------
 
-/// CLAUDE.md: the panel runs off laptop USB, and no screen may be a full
-/// white frame. The QR's lit area is 31x31 of 64x32, which the owner has
+/// The panel runs off laptop USB, and no screen may be a full
+/// white frame. The QR's lit area is 31x31 of 64x32, which the author has
 /// already seen and accepted.
 #[test]
-fn the_lit_area_stays_inside_what_the_owner_accepted() {
+fn the_lit_area_stays_inside_what_the_author_accepted() {
     let f = frame_of(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass));
     let full_white = f.as_chunks::<3>().0.iter().filter(|p| **p == [0xff, 0xff, 0xff]).count();
     assert!(
@@ -205,7 +205,7 @@ fn the_lit_area_stays_inside_what_the_owner_accepted() {
 /// The QR screen is shown at a fixed, known-good brightness; every other
 /// screen honours the runtime setting.
 ///
-/// The bench finding behind it: on 2026-09-20 the owner's phone scanned this
+/// The bench finding behind it: on 2026-09-20 the author's phone scanned this
 /// code "easily" (`docs/design/device-web.md` decision 1) at the **default**
 /// brightness. On 2026-09-21 it would not, and the one thing that had changed
 /// was the runtime brightness - 56, set by the Studio. The device dims by
