@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# Flash an ELF to the Tidbyt, log serial output for a while, and grab a camera still.
-# Hardware-owner only (see docs/README.md).
+# Flash an ELF to the Tidbyt, log serial output for a while, and (optionally)
+# grab a camera still.
+# Talks to the device over serial; one process at a time.
 # Usage: tools/fw-run.sh <elf> <name> [seconds=20]
-#   -> captures/<name>.log (ANSI stripped) and captures/<name>.jpg
+#   -> captures/<name>.log (ANSI stripped) and, with SCREENY_CAMERA=1, captures/<name>.jpg
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ELF=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 NAME=${2:?name}
 SECS=${3:-20}
-PORT=${SCREENY_PORT:-/dev/cu.usbserial-2140}
+if [[ -z "${SCREENY_PORT:-}" ]]; then
+  echo "SCREENY_PORT is not set. Candidate ports:" >&2
+  ls /dev/cu.usbserial-* /dev/ttyUSB* 2>/dev/null >&2 || echo "  (none found)" >&2
+  exit 1
+fi
+PORT=$SCREENY_PORT
 cd "$ROOT"
 mkdir -p captures
 
 [[ -n $(find backup -name 'tidbyt-stock-*.bin' -size +8000k 2>/dev/null) ]] || {
   echo "refusing to flash: no stock backup in backup/" >&2; exit 1; }
 
-# 230400 is the fastest baud this bench's serial link survives.
+# 230400 is the fastest baud the Tidbyt's CP2102N link has been seen to
+# survive; higher rates corrupted on the author's bench.
 # --partition-table: two OTA slots + the settings partition (docs/research/006).
 # --erase-data-parts ota: espflash never touches otadata, so without this a stale
 # OTA selection survives a serial flash and the device boots the *other* slot.
@@ -32,7 +39,7 @@ espflash monitor --chip esp32 --port "$PORT" --non-interactive --elf "$ELF" \
   > "captures/$NAME.raw.log" 2>&1 &
 MON=$!
 sleep "$SECS"
-tools/cam-request.sh "$NAME" || true
+[[ "${SCREENY_CAMERA:-0}" == 1 ]] && tools/cam-request.sh "$NAME" || true
 kill $MON 2>/dev/null || true
 wait $MON 2>/dev/null || true
 sed $'s/\x1b\\[[0-9;]*m//g' "captures/$NAME.raw.log" > "captures/$NAME.log"
