@@ -103,7 +103,7 @@ pub struct StatusReply {
     /// The API version, always [`crate::API_VERSION`]. First field, so a
     /// reader that does not recognise it can stop.
     pub api: u8,
-    /// The stable short device id (the MAC suffix), `"4a00a4"`.
+    /// The stable short device id (the MAC suffix), `"c0ffee"`.
     pub id: IdText,
     /// The friendly name. Empty means "the device is called `screeny-<id>`".
     pub name: NameText,

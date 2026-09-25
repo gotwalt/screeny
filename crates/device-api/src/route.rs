@@ -265,7 +265,7 @@ pub fn path_is_known(path: &str) -> bool {
 ///
 /// `POST /api/v1/firmware` **activates by default**: the natural reading of
 /// "send this firmware to the panel" is that the panel then runs it, and the
-/// five-line instruction for the owner is one `curl`. Staging without
+/// five-line instruction for whoever runs it is one `curl`. Staging without
 /// activating - which is all card 240's firmware could do, and which is what a
 /// probe suite wants against a live device - is the thing you have to ask for.
 pub const ACTIVATE_KEY: &str = "activate";
