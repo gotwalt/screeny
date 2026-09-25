@@ -1,10 +1,11 @@
-# Screeny Studio on workbench.local (Ubuntu 24.04, Docker 29, Intel iGPU).
+# Screeny Studio on a Linux host with a GPU (e.g. Ubuntu 24.04, Docker 29,
+# Intel iGPU).
 #
 #   docker compose -p screeny build
 #   docker compose -p screeny up -d
-#   curl -s http://workbench.local:8787/healthz
+#   curl -s http://<host>:8787/healthz
 #
-# `tools/deploy-workbench.sh` does all of that over SSH; see
+# `tools/deploy.sh` does all of that over SSH; see
 # `docs/design/deployment.md`.
 #
 # This file assumes Linux: host networking so mDNS discovery and the outbound
@@ -15,9 +16,9 @@
 # take `devices:` back out again.
 #
 # There is no authentication on the studio (parked card 041). With host
-# networking it listens on every interface of workbench, which is the owner's
-# choice for a machine on the home LAN and the tailnet. Do not publish it
-# further: no reverse proxy, no port forward, no tunnel.
+# networking it listens on every interface of the host, which is fine for a
+# machine on a private LAN and nothing else. Do not publish it further: no
+# reverse proxy, no port forward, no tunnel.
 
 name: screeny
 
@@ -38,10 +39,10 @@ services:
     # binds ${SCREENY_PORT} on the host directly.
     network_mode: host
 
-    # The Intel iGPU. `group_add` puts the container's unprivileged user in the
-    # host's `render` group - 993 on workbench; `stat -c %g /dev/dri/renderD128`
-    # says what it is on any other host - which is what makes renderD128
-    # openable without running as root.
+    # The GPU. `group_add` puts the container's unprivileged user in the
+    # host's `render` group - `stat -c %g /dev/dri/renderD128` says what it is
+    # on the host - which is what makes renderD128 openable without running
+    # as root.
     devices:
       - /dev/dri:/dev/dri
     group_add:
