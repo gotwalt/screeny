@@ -82,8 +82,12 @@ build_variant() {
     # partition (see partitions.csv) - so this file carries a *clean* otadata,
     # the same "nothing selected yet" state tools/fw-run.sh gets by passing
     # --erase-data-parts ota. A device booting this image always starts ota_0,
-    # no extra erase step needed.
-    timeout 120 espflash save-image --merge --chip esp32 --flash-size 8mb \
+    # no extra erase step needed. --skip-padding: without it espflash pads the
+    # file out to the full 8 MB, and writing that would also erase ota_1 and
+    # the settings partition at 0x410000 - the stored WiFi credentials - on
+    # every reflash. The file ends where the app ends, and everything past it
+    # on the chip is left alone.
+    timeout 120 espflash save-image --merge --skip-padding --chip esp32 --flash-size 8mb \
       --partition-table "$PARTS" --bootloader "$BOOTLOADER" "$ELF" "$full"
   else
     [[ -f "$app" && -f "$full" ]] || { echo "--no-build: $app / $full missing" >&2; exit 1; }
