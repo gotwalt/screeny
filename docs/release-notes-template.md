@@ -36,9 +36,11 @@ espflash write-bin --chip esp32 --port <port> --baud 230400 --non-interactive \
   0x0 screeny-fw-<version>-full.bin
 ```
 
-If the panel's test pattern comes up with the wrong colours (red and blue, or the
-green channels, swapped), some Gen 1 units have their HUB75 colour lines wired the
-other way round. Reflash with `screeny-fw-<version>-hdk-colours-full.bin` instead.
+Some Gen 1 units have their HUB75 colour lines wired in the other of two orders. Once
+the panel is on your network, stream a test pattern (`screeny pattern`, from the
+repository's host tools) and look: if red, green and blue come out as the wrong
+colours, reflash with `screeny-fw-<version>-hdk-colours-full.bin` instead. Your WiFi
+settings survive a reflash.
 
 ## Updating a panel already running screeny, over WiFi
 

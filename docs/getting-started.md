@@ -64,7 +64,44 @@ permission. An unsigned Rust binary gets a new identity on every rebuild and the
 permission does not stick; if discovery keeps failing after you said yes, see
 [macOS signing](#macos-local-network-permission).
 
-## 2. Install the firmware toolchain
+## 2. Put the firmware on the Tidbyt
+
+There are two ways. **Flash a release** needs no Rust toolchain: one Python tool and
+one file. **Build it yourself** (steps 2b to 4) is for changing the firmware.
+
+### 2a. Flash a release
+
+```bash
+pip install esptool                                   # or: brew install esptool
+ls /dev/cu.usbserial-*                                # macOS; Linux: ls /dev/ttyUSB*
+export SCREENY_PORT=/dev/cu.usbserial-XXXX
+```
+
+**Back up the stock firmware first.** It is not published anywhere, it holds the
+device's identity for Tidbyt's service, and this is the only way back:
+
+```bash
+esptool --port "$SCREENY_PORT" --baud 230400 read-flash 0 0x800000 tidbyt-stock-mine.bin
+```
+
+Expect an 8,388,608-byte file after a few minutes; copy it somewhere safe. Then
+download `screeny-fw-<version>-full.bin` from the
+[latest release](https://github.com/gotwalt/screeny/releases), check it against
+the release's `SHA256SUMS`, and write it at address 0:
+
+```bash
+esptool --port "$SCREENY_PORT" --baud 230400 write-flash 0 screeny-fw-<version>-full.bin
+```
+
+The file is the bootloader, the partition table and the app in one; everything past
+it on the chip, including the settings partition, is left alone, so reflashing keeps
+a panel's WiFi. Stay at 230400 baud: faster rates corrupted long transfers on the
+author's bench. Now skip to [step 5](#5-give-it-wifi).
+
+If, once it is streaming, the test pattern's colours are wrong, flash the
+`-hdk-colours-full.bin` file from the same release instead (step 6 explains).
+
+### 2b. Install the firmware toolchain
 
 The firmware is `no_std` Rust for the ESP32's Xtensa core, which needs Espressif's
 fork of the compiler. `espup` installs it.
@@ -85,6 +122,8 @@ Check it: `cd firmware && cargo build --release` should finish with an ELF at
 (it compiles `core` for the target).
 
 ## 3. Back up the stock firmware
+
+(Skip if you did it in step 2a.)
 
 This is the step that lets you change your mind. The Tidbyt's stock firmware is not
 published anywhere, and it holds the device's identity for Tidbyt's service. Read it
@@ -236,7 +275,9 @@ espflash save-image --chip esp32 --flash-size 8mb --partition-table firmware/par
 cargo run --release -p screeny-probe -- --name screeny-xxxxxx fw-upload new.bin --activate
 ```
 
-The image is checked before a byte is written, goes into the spare slot, and the
+Each release also carries this app image ready-made, `screeny-fw-<version>.bin`, so
+updating a running panel needs no toolchain either. The image is checked before a
+byte is written, goes into the spare slot, and the
 device restarts into it **on trial**. It confirms itself once it has an address, has
 drawn a frame and has served a request, never sooner than a minute. If it crashes,
 never joins or wedges, the bootloader boots the previous image within about three and

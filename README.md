@@ -117,19 +117,21 @@ cargo run --release -p screeny-art -- play flock --to screeny-sim
 cargo run --release -p screeny -- --name screeny-sim clock
 ```
 
-With a Tidbyt Gen 1: install the Xtensa toolchain, **back up the stock firmware**,
-build and flash `firmware/`, set up WiFi from your phone, and stream. Twenty minutes
-if the toolchain behaves.
+With a Tidbyt Gen 1: **back up the stock firmware**, write a release image from the
+[releases page](https://github.com/gotwalt/screeny/releases), set up WiFi from your
+phone, and stream. No firmware toolchain needed; ten minutes.
 
 ```bash
-cargo install espup espflash && espup install && . ~/export-esp.sh
-SCREENY_PORT=/dev/cu.usbserial-XXXX tools/backup-flash.sh "$SCREENY_PORT" backup/tidbyt-stock-mine.bin
-(cd firmware && cargo build --release)
-SCREENY_PORT=/dev/cu.usbserial-XXXX tools/fw-run.sh firmware/target/xtensa-esp32-none-elf/release/screeny-fw first-boot 30
+pip install esptool
+esptool --port /dev/cu.usbserial-XXXX --baud 230400 read-flash 0 0x800000 tidbyt-stock-mine.bin   # keep this
+esptool --port /dev/cu.usbserial-XXXX --baud 230400 write-flash 0 screeny-fw-<version>-full.bin
 # the panel shows a QR code: scan it, join, enter your WiFi
 cargo run --release -p screeny -- discover
 cargo run --release -p screeny-art -- play clocks-numerals
 ```
+
+To change the firmware itself, install the Xtensa toolchain (`espup`) and build in
+`firmware/`; the guide has the steps and `tools/fw-run.sh` flashes the result.
 
 To run the Studio as a service on a Linux box, see
 [`docs/design/deployment.md`](docs/design/deployment.md): a Dockerfile, a compose
