@@ -46,7 +46,7 @@
 //! can run the same rules in process (cards 080 and 228).
 //!
 //! The bench one-liner after a flash is
-//! `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http`.
+//! `cargo run --release -p screeny-probe -- --addr 192.168.1.50 http`.
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
@@ -701,8 +701,8 @@ fn telemetry(ctrl: &mut Control) -> Result<Telemetry, String> {
 /// This replaced two hand-rolled command bodies - the old `conformance` and
 /// `lock-test` - with one rule catalogue, so that the simulator's integration
 /// tests and the bench run exactly the same checks (card 080). `lock-test`
-/// survives as an alias for `--only 7`, because the orchestrator's runbooks
-/// and several done cards name it.
+/// survives as an alias for `--only 7`, because existing runbooks
+/// and several cards name it.
 fn cmd_conformance(
     frame_addr: SocketAddr,
     ctrl_addr: SocketAddr,
