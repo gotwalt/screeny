@@ -93,7 +93,7 @@ door it came in by (card 232):
 ## Driving it from the firmware
 
 ```rust
-let mut p = Provisioner::new(&Config { ap_ssid: "screeny-4a00a4", has_stored, .. });
+let mut p = Provisioner::new(&Config { ap_ssid: "screeny-c0ffee", has_stored, .. });
 for a in p.step(Event::Boot, now_ms()) { carry_out(a).await }
 loop {
     let ev = select(radio_event(), ap_event(), http_post(), Timer::after_secs(1)).await;
@@ -123,9 +123,9 @@ loop {
 ## The QR, which is measured and not adjustable
 
 Version 2, ECC L, **byte** mode, payload `WIFI:T:nopass;S:<ssid>;;` (exactly 32 bytes for
-`screeny-4a00a4`), one LED per module, standard polarity - quiet zone and light modules
+`screeny-c0ffee`), one LED per module, standard polarity - quiet zone and light modules
 lit white, dark modules off - and a 3-pixel lit quiet zone, giving a 31x31 block in
-columns 0..=30. The owner scanned that off the real panel on 2026-09-19. An SSID that
+columns 0..=30. The author scanned that off the real panel on 2026-09-19. An SSID that
 does not fit is **refused**, not silently grown to version 3, and gets the text-only
 screen instead. `tests/render.rs` decodes the rendered frame with `rqrr`, which has never
 seen our encoder, so none of this can rot quietly.
