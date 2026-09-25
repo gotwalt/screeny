@@ -103,7 +103,7 @@ wrong repair for a sender that is merely eager. `Cadence::Free` hands it all
 back. `Link::pacer()` gives you spec 9.1's schedule if you want ours.
 
 **5. The frame rate is a choice, and it moves.** `LinkConfig::sender.fps`
-defaults to 30, the owner's target; the firmware was measured clean to 120 on
+defaults to 30, the author's target; the firmware was measured clean to 120 on
 the bench (card 008). Whatever you ask for, spec 6.9's ladder steps it down
 under sustained loss and back up after ten clean seconds, so read
 `Link::fps()` rather than assuming. `Link::limits()` has the rest - budget,
@@ -542,7 +542,7 @@ median period, drift, how late the host woke it - whether it passed or not.
   `Error::hint` says whichever of those applies to the machine it is printed
   on (card 147). `--addr` always works.
 - **Naming a panel in full is the cheap way to name it** (card 176). A DNS-SD
-  instance name is unique on a link, so a browse for `screeny-4a00a4` stops the
+  instance name is unique on a link, so a browse for `screeny-c0ffee` stops the
   moment that instance answers - tens of milliseconds, the same as an unnamed
   browse - and only pays the whole window when the panel is not there, where
   waiting buys the list of what *did* answer. A friendly `name=` or a prefix of
