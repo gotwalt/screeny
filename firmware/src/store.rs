@@ -739,36 +739,10 @@ async fn repair(f: &mut Flash, report: &LoadReport) -> Option<(Settings, LoadRep
     }
 }
 
-/// Write a credential pair into an empty store.
-///
-/// Only the `bench-wifi` build has anything to seed with, and only a store that
-/// holds no credentials at all is seeded - a `SET_WIFI` always outranks the
-/// build. Seeding goes through the ordinary save path on purpose: from the very
-/// first boot the device is running on stored credentials, so the path that
-/// matters is the one being exercised.
-///
-/// Kept (rather than `#[cfg]`-ed away) in a default build so that the two
-/// builds compile the same file: there is simply nothing to call it with, which
-/// is the point.
-#[cfg_attr(not(feature = "bench-wifi"), allow(dead_code))]
-pub async fn seed_wifi(wifi: &Wifi) {
-    let mut guard = STORE.lock().await;
-    let Some(f) = guard.as_mut() else {
-        return;
-    };
-    match f.save_wifi(wifi).await {
-        Ok(t) => info!(
-            "store: seeded the empty store from the build's credentials ({:?}, {} us, {} erases)",
-            t.write, t.us, t.erases
-        ),
-        Err(e) => warn!("store: seeding failed: {:?}", e),
-    }
-}
-
 /// Forget the stored credentials, for `Action::ClearCredentials` (card 230).
 ///
-/// The mirror of [`seed_wifi`], and it is called from exactly one place:
-/// `crate::provision`'s action handler, which is reached from
+/// Called from exactly one place: `crate::provision`'s action handler, which
+/// is reached from
 /// `Event::ButtonWipe` and from nothing else. A failure is counted and logged
 /// (there is no reply to downgrade to `ERR_STORAGE` here, because the thing
 /// that asked for it was a button) and the device still raises the portal,
