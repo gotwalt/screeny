@@ -197,7 +197,7 @@ tasks, and both regimes come from one boot:
 1. 60 s of station only, running the *same* `station_loop` the default build runs
    (extracted from `wifi_task`, not copied), with the Studio streaming.
 2. `set_config(Config::AccessPointStation(station, ap))` with an **open** AP named
-   `screeny-4a00a4` on channel 1. The mode change stops and restarts the radio, so
+   `screeny-c0ffee` on channel 1. The mode change stops and restarts the radio, so
    the station drops and re-associates; power saving is re-disabled afterwards
    because the restart resets it.
 3. The second `embassy-net` stack on `Interface::access_point()`, static
@@ -271,7 +271,7 @@ RSSI estimate is taken from a worse duty; TX power or the receive chain is
 configured differently in APSTA mode.
 
 It did not cost a frame here. But the portal's whole job is to get a station
-associated on a network the owner has just typed in, sometimes from the far side
+associated on a network that was just typed in, sometimes from the far side
 of a house, and giving away 24 dB while doing it would matter. It is one
 observation from one boot and it should be reproduced before anyone designs
 around it.
@@ -342,8 +342,8 @@ Numbers 221-229 are suggestions, not card files.
   is the moment we know what number to put in it.
 - **224 - Measure the stack again with picoserve actually serving.** The 6,304
   here is the frame path. The number that matters for the portal is the one with
-  a request in flight, and it needs `wrk` and the LAN, which is the
-  orchestrator's side of the bench.
+  a request in flight, and it needs `wrk` and the LAN, which is a hardware
+  bench measurement.
 - **225 - Bound `scan_async`'s heap use.** See section 4.
 - **226 - The 24 KB of `.data`, if flash or boot time ever matters.** A zeroed
   `.bss` static plus an in-place `const fn format()` puts it back, for one
