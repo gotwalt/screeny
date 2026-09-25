@@ -291,8 +291,8 @@ the rest, so a floating pin cannot flood the port or hide the real answer. Every
 5 s there is one summary line: every pin's current level, its edge count and its
 dropped count.
 
-**What the orchestrator should see, and what to ask the owner to do.** Flash it,
-open the monitor at 115200, and ask the owner to press and release the button
+**What to see, and what to do.** Flash it,
+open the monitor at 115200, and press and release the button
 three or four times during phase A, then hold it for about ten seconds, then do
 the same again during phase B. Expected result:
 
@@ -300,7 +300,7 @@ the same again during phase B. Expected result:
   GPIO12 whatever it is (no pull, so it may be noisy), the input-only pins
   whatever the board does with them, likely noisy and capped.
 * Each press produces exactly two lines on GPIO15, `HIGH -> LOW` then
-  `LOW -> HIGH`, with a gap that matches how long the owner held it, and
+  `LOW -> HIGH`, with a gap that matches how long the button was held, and
   **nothing on any other pin**.
 * Phase B: if GPIO15 rests **LOW** with a pull-down, it has nothing external on
   it and the internal pull-up is what holds it up — the simplest case. If it
@@ -309,7 +309,7 @@ the same again during phase B. Expected result:
 * If some other pin moves instead, the static analysis is wrong and the pin is
   whatever moved. (I do not expect this.)
 
-If the owner is not available: a paper clip briefly shorting nothing is not a
+If nobody is available to press the button: a paper clip briefly shorting nothing is not a
 substitute, and there is no software-only way to finish this. The probe is the
 whole answer; it takes one minute.
 
@@ -329,13 +329,13 @@ also the answer to "which of these is which" when there is more than one device.
 Crossing 1 s while still held starts a **countdown on the panel**, "WIPE WIFI
 5… 4… 3…", one digit a second, drawn by the existing screens module; releasing
 at any point during the countdown cancels it and shows "cancelled" for a second,
-so the destructive action cannot happen by accident and the owner can always see
-what is about to happen. Reaching **5 s held** wipes the stored WiFi credentials
+so the destructive action cannot happen by accident and what is about to happen
+is always visible. Reaching **5 s held** wipes the stored WiFi credentials
 and reboots into the captive portal (card 201's territory: this card only
 specifies when the wipe is asked for, not how it is stored). Holding past **15 s**
 escalates to a **factory reset** — every setting, not just WiFi — with the panel
 switching to "FACTORY RESET 5… 4…" at 10 s so that the second stage is as
-visible and as cancellable as the first; if the owner just leans on the button
+visible and as cancellable as the first; if someone just leans on the button
 forever, the action fires once at 15 s and then nothing more happens until they
 let go. Boot is the same code path with one addition: after the button task
 starts, if GPIO15 is already low, the firmware runs the countdown immediately, so
@@ -390,7 +390,7 @@ boot that resets the counter to zero. So a boot that survives 10 seconds erases
 the evidence, and only rapid, deliberate power cycles accumulate. On the boot
 where the counter reaches 3, wipe WiFi, reset the counter, and enter the portal.
 The panel should show the count ("2 of 3") for the first ten seconds so the
-gesture is discoverable and so the owner can see it working.
+gesture is discoverable and so it is visible working.
 
 Failure modes, all of which argue for keeping this as a fallback rather than a
 feature:
@@ -417,18 +417,18 @@ to be unusable, and keep the 10-second reset window short.
 
 ## 7. Proposed build cards
 
-Titles and one paragraph each. No card files written — the orchestrator decides
-what actually goes on the board and in which order. The free range for this
+Titles and one paragraph each. No card files written — what actually happens
+and in which order is decided later. The free range for this
 track is 230-239.
 
 **Confirm the button pin on the bench (`hardware: yes`).** Flash
-`firmware/target/xtensa-esp32-none-elf/release/gpio_probe` with the owner
-present, run the two phases once, and record the serial transcript in this
+`firmware/target/xtensa-esp32-none-elf/release/gpio_probe`, run the two phases
+once with someone pressing the button, and record the serial transcript in this
 document. Expected outcome: GPIO15 changes and nothing else does, and phase B
 answers whether the pin has anything external on it. Then set
 `tidbyt::BUTTON_GPIO = Some(15)`, replace the "do not guess it, measure it"
 comment with the measurement, and note beside `BOARD_ID_ADC_B` that GPIO15 is
-both the board-ID strap and the button. One flash, one minute of the owner's
+both the board-ID strap and the button. One flash, one minute of bench
 time, and after it nothing in this area is a guess any more. Depends on nothing;
 blocks everything else here.
 
@@ -450,25 +450,25 @@ what is about to happen. Depends on the button task and on card 200's store.
 
 **Wire the wipe to the portal.** Connect "5 s held" to card 201's captive portal:
 clear the stored credentials, reboot, come up in soft-AP mode with the settings
-page. This is the card that makes the button do the thing the owner actually
+page. This is the card that makes the button do the thing actually
 asked for, and it is deliberately last because it needs the store and the portal
 to exist first. Depends on 200 and 201.
 
 **Fallback: the power-cycle gesture.** Only if the confirmation card says the
 button is unusable. Implements section 6, gated on a power-on reset reason, with
-the panel showing the count. Parked by default.
+the panel showing the count. Left unbuilt by default.
 
 ---
 
 ## Bench confirmation (card 203, 2026-09-20)
 
-The orchestrator flashed `gpio_probe` with the owner at the panel pressing the button
+`gpio_probe` was flashed, with the author at the panel pressing the button
 (about 1 s down, 2 s up, with longer holds) for 80 s, across phase A (pull-up, 0-25 s),
 phase B (pull-down, 25-50 s) and phase A again.
 
 - **Edges were logged on GPIO15 and on no other candidate**: 11 HIGH -> LOW
   transitions, each followed by LOW -> HIGH, with hold times from 1.7 s to 8.4 s that
-  match what the owner did. `BUTTON_GPIO` is now `Some(15)`.
+  match what the author did. `BUTTON_GPIO` is now `Some(15)`.
 - **The press works in phase B too** (e.g. `[30264 ms] HIGH -> LOW`, `[32170 ms] LOW ->
   HIGH`), and in an earlier run with nobody pressing GPIO15 rested HIGH in both phases.
   So the open question above is answered: something external holds the pin up (the
@@ -479,7 +479,7 @@ phase B (pull-down, 25-50 s) and phase A again.
 - **One bounce in eleven presses**: `[61643 ms] LOW -> HIGH`, `[61654 ms] HIGH -> LOW`,
   `[61795 ms] LOW -> HIGH` - an 11 ms glitch on release. The 30 ms debounce in the
   gesture design covers it.
-- Owner's decision the same day: the gesture ladder as proposed, **including** the
+- The author's decision the same day: the gesture ladder as proposed, **including** the
   15 s factory reset.
 
 Logs: `captures/card203-gpio-probe.log` (no presses) and
