@@ -499,7 +499,7 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
 /// than replacing them. Absent or failing HTTP is normal and never a problem
 /// in `/healthz`.
 ///
-/// **Every rule the firmware session asked for is a property of this one task**
+/// **Every rule the firmware imposes is a property of this one task**
 /// (card 222: the device has one connection worker and no listen backlog, so a
 /// second simultaneous connection is dropped at SYN):
 ///
