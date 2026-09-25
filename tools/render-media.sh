@@ -35,10 +35,15 @@ trap 'rm -rf "$TMP"' EXIT
 ALL_PATCHES="clocks-numerals clocks-dials vesta metaballs flock overland lattice knot"
 PATCHES="${*:-$ALL_PATCHES}"
 
+# The clocks settle in for their first eight seconds or so (the dials fan into
+# place and rest before they first read the time), so their clips render
+# longer and `skip_for` trims that lead-in; the numerals then hold 21:11, dance
+# on the minute and settle on 21:12. `still_for` is which second of the trimmed
+# clip the PNG shows (default: the middle).
 args_for() {
   case "$1" in
-    clocks-numerals) echo "--seed 7 --time 21:11:56 --seconds 8" ;;
-    clocks-dials)    echo "--seed 7 --time 21:11:56 --seconds 8" ;;
+    clocks-numerals) echo "--seed 7 --time 21:11:44 --seconds 26" ;;
+    clocks-dials)    echo "--seed 7 --time 21:11:50 --seconds 12" ;;
     vesta)           echo "--time 09:59:56 --seconds 8" ;; # no --seed: vesta has no randomness
     metaballs)       echo "--seed 3 --seconds 6" ;;
     flock)           echo "--seed 11 --seconds 6" ;;
@@ -48,6 +53,8 @@ args_for() {
     *) echo "render-media: unknown patch \`$1\`" >&2; exit 1 ;;
   esac
 }
+skip_for()  { case "$1" in clocks-numerals) echo 8 ;; clocks-dials) echo 2 ;; *) echo 0 ;; esac; }
+still_for() { case "$1" in clocks-numerals) echo 4 ;; clocks-dials) echo 2 ;; *) echo "" ;; esac; }
 
 # One 8x8 tile, tiled 64x32 -> scaled 512x256, a soft round dot (Gaussian
 # falloff, radius ~1.5 px of 4) on black: this is the "LED, not a smooth
@@ -73,12 +80,12 @@ led_look() {
 render_one() {
   local id="$1"
   local raw="$TMP/$id.raw" gif="$OUT/$id.gif" png="$OUT/$id.png"
-  local args frames dur fps=30 bytes
-  args=$(args_for "$id")
-  echo "== $id ($args) ==" >&2
+  local args frames dur fps=30 bytes skip still
+  args=$(args_for "$id"); skip=$(skip_for "$id"); still=$(still_for "$id")
+  echo "== $id ($args, skip ${skip}s) ==" >&2
   # shellcheck disable=SC2086
   "$ART" pipe "$id" $args > "$raw"
-  bytes=$(wc -c < "$raw"); frames=$((bytes / 6144))
+  bytes=$(wc -c < "$raw"); frames=$((bytes / 6144 - skip * 30))
   dur=$(awk -v f="$frames" 'BEGIN{printf "%.4f", f/30}')
 
   for fps in 30 15; do
@@ -86,7 +93,7 @@ render_one() {
     # blend's default eof_action=repeat lets the infinite loop input run
     # forever once the finite raw stream ends (found the hard way - it will
     # happily render hours of frames into /dev/null).
-    "$FF" -y -f rawvideo -pix_fmt rgb24 -s 64x32 -r 30 -i "$raw" \
+    "$FF" -y -f rawvideo -pix_fmt rgb24 -s 64x32 -r 30 -ss "$skip" -i "$raw" \
       -loop 1 -framerate 30 -t "$dur" -i "$MASK" \
       -filter_complex "$(led_look "$fps");[led]split=2[vid][palin];[palin]palettegen=stats_mode=diff[pal];[vid][pal]paletteuse=dither=bayer:bayer_scale=3[out]" \
       -map "[out]" "$gif" >/dev/null 2>"$TMP/$id.err"
@@ -97,7 +104,8 @@ render_one() {
   # The still: one frame (near the minute turn for the clocks/vesta), same
   # look, full colour (no GIF palette).
   local mid=$((frames / 2))
-  "$FF" -y -f rawvideo -pix_fmt rgb24 -s 64x32 -r 30 -i "$raw" \
+  [ -n "$still" ] && mid=$((still * 30))
+  "$FF" -y -f rawvideo -pix_fmt rgb24 -s 64x32 -r 30 -ss "$skip" -i "$raw" \
     -loop 1 -framerate 30 -t "$dur" -i "$MASK" \
     -filter_complex "$(led_look 30);[led]select=eq(n\,$mid)[out]" \
     -map "[out]" -frames:v 1 "$png" >/dev/null 2>>"$TMP/$id.err"
