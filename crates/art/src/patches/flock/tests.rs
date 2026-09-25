@@ -286,14 +286,31 @@ fn defaults() -> (Tuning, usize) {
     (Flock::tuning(&ctx), p.get("birds") as usize)
 }
 
+/// The tuning the long flight below was measured against: the defaults from
+/// card 168 up to 2026-09-25, when the author made the shipped default a
+/// handful of large birds with the camera riding close (`birds` 8, `near` 2,
+/// `size` 2.3, `calm` 0.27, `wild` 1). Its thresholds (fifteen birds in shot
+/// at worst, a median of thirty-five, the camera four metres from the nearest
+/// bird) are statements about *this* flock, so it keeps flying it; the shipped
+/// defaults have their own test.
+fn reference() -> (Tuning, usize) {
+    let mut p = Params::defaults(PARAMS);
+    for (id, v) in [("birds", 55.0), ("calm", 0.90), ("wild", 0.65), ("lift", 0.50), ("near", 6.0), ("lean", 1.0), ("bank", 0.8), ("terrain", 0.55), ("beat", 2.4)] {
+        p.set(PARAMS, id, v);
+    }
+    let ctx = Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &p };
+    (Flock::tuning(&ctx), p.get("birds") as usize)
+}
+
 // ----------------------------------------------------------------------
 // The flight
 // ----------------------------------------------------------------------
 
-/// The one long run. Ten simulated minutes at the defaults, asked everything.
+/// The one long run. Ten simulated minutes at the reference tuning (see
+/// [`reference`]), asked everything.
 #[test]
 fn ten_minutes_of_flight() {
-    let (tune, birds) = defaults();
+    let (tune, birds) = reference();
     // Three seeds, not one. The flight is a chaotic system: a small change to
     // any parameter gives a completely different trajectory, so a promise
     // checked on a single seed is a promise about one trajectory. Tuning
@@ -485,6 +502,45 @@ fn the_smallest_flock_still_flocks() {
         assert!(run.speed_ratio <= 1.02, "speed went x{:.3} outside its band", run.speed_ratio);
         assert!(run.turn_ratio <= 1.02, "a bird turned at x{:.3} of its limit", run.turn_ratio);
         assert!(spread <= 10.0, "three birds spread {spread:.1} m apart - that is scattered, not a flock");
+    }
+}
+
+/// The shipped defaults since 2026-09-25: eight birds, drawn large, the camera
+/// two metres off the nearest, quick to change its mind. Fewer birds and a
+/// closer seat than the reference flight, so its thresholds are the small
+/// flock's: the physics holds, most of the flock stays on the panel, and it
+/// does not scatter.
+#[test]
+fn the_shipped_defaults_still_flock() {
+    let (tune, birds) = defaults();
+    for seed in [11u64, 29, 404] {
+        let run = fly(seed, 600.0, &tune, birds);
+        let in_min = *run.in_frame.iter().min().expect("samples");
+        let in_med = median_usize(&run.in_frame);
+        let empty = run.in_frame.iter().filter(|n| **n == 0).count();
+        let spread = percentile(&run.spread, 0.5);
+        eprintln!(
+            "flock, 10 min, {birds} birds (the defaults), seed {seed}: \
+             in frame min {in_min} median {in_med}, empty {empty} of {} samples, seat p95 {:.1} m, spread {spread:.1} m, \
+             speed x{:.3}, turn rate x{:.3}, clearance {:.1} m (camera {:.1} m)",
+            run.in_frame.len(),
+            percentile(&run.seat, 0.95),
+            run.speed_ratio,
+            run.turn_ratio,
+            run.clearance,
+            run.cam_clearance,
+        );
+        // With the camera two metres off the nearest bird and the view
+        // leaning hard into turns, a moment with every bird out of shot does
+        // happen (seed 29: 2% of samples); what must not happen is an empty
+        // panel as a habit.
+        assert!(empty * 20 <= run.in_frame.len(), "the panel was empty {empty} of {} samples", run.in_frame.len());
+        assert!(in_med * 2 >= birds, "median {in_med} of {birds} in frame is not much of a flock");
+        assert!(run.clearance >= 0.0, "a bird was {:.2} m inside a blob", -run.clearance);
+        assert!(run.cam_clearance >= 0.0, "the camera was {:.2} m inside a blob", -run.cam_clearance);
+        assert!(run.speed_ratio <= 1.02, "speed went x{:.3} outside its band", run.speed_ratio);
+        assert!(run.turn_ratio <= 1.02, "a bird turned at x{:.3} of its limit", run.turn_ratio);
+        assert!(spread <= 12.0, "{birds} birds spread {spread:.1} m apart - that is scattered, not a flock");
     }
 }
 
@@ -748,6 +804,12 @@ fn the_far_corner_of_both_controls_still_fits() {
         params.set(PARAMS, "scheme", scheme);
         params.set(PARAMS, "birds", param_spec("birds").max);
         params.set(PARAMS, "size", param_spec("size").max);
+        // The corner is birds x size. The camera distance is a third axis:
+        // at the shipped `near` of 2 m (since 2026-09-25) 150 birds at size 3
+        // are a wall that fills the frame and a third of the frames go
+        // approximated - noise, and the fallback's job. This holds the
+        // camera at the 6 m the corner was measured from.
+        params.set(PARAMS, "near", 6.0);
         if scheme > 0.5 {
             params.set(PARAMS, "hue", 35.0);
             params.set(PARAMS, "spread", 95.0);

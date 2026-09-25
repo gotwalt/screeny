@@ -51,23 +51,23 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("birds", "How many birds", 3.0, 150.0, 1.0, 55.0),
+    param("birds", "How many birds", 3.0, 150.0, 1.0, 8.0),
     param("pace", "How fast the flight moves (lower is slower, dreamier)", 0.15, 2.0, 0.05, 0.7),
-    param("calm", "How wide and slow the turns are", 0.0, 1.0, 0.01, 0.90),
-    param("wild", "How often it changes its mind", 0.0, 1.0, 0.01, 0.65),
+    param("calm", "How wide and slow the turns are", 0.0, 1.0, 0.01, 0.27),
+    param("wild", "How often it changes its mind", 0.0, 1.0, 0.01, 1.0),
     param("lift", "How much of the motion is vertical", 0.0, 1.0, 0.01, 0.50),
-    param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 6.0),
-    param("size", "How big the birds are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.0),
+    param("near", "How close the camera rides (m)", 2.0, 16.0, 0.5, 2.0),
+    param("size", "How big the birds are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 2.3),
     param("lean", "How far the birds lean into a turn", 0.0, 2.0, 0.05, 1.0),
-    param("bank", "How far the view leans into a turn", 0.0, 1.5, 0.05, 0.8),
+    param("bank", "How far the view leans into a turn", 0.0, 1.5, 0.05, 1.5),
     choice("backdrop", "What is behind the birds", BACKDROPS, 0.0),
     choice("scheme", "Light birds or dark silhouettes", SCHEMES, 0.0),
-    param("hue", "Sky colour", 0.0, 360.0, 1.0, 250.0),
-    param("spread", "How much the colour shifts, horizon to zenith", -150.0, 150.0, 1.0, 40.0),
-    param("wheel", "How fast the colour rotates (degrees a minute)", 0.0, 120.0, 1.0, 5.0),
-    param("sky", "How bright the sky is", 0.3, 1.3, 0.01, 1.0),
-    param("terrain", "How much unseen scenery makes them swerve", 0.0, 1.0, 0.01, 0.55),
-    param("beat", "How fast the wings beat (Hz)", 0.5, 6.0, 0.1, 2.4),
+    param("hue", "Sky colour", 0.0, 360.0, 1.0, 16.0),
+    param("spread", "How much the colour shifts, horizon to zenith", -150.0, 150.0, 1.0, -38.0),
+    param("wheel", "How fast the colour rotates (degrees a minute)", 0.0, 120.0, 1.0, 0.0),
+    param("sky", "How bright the sky is", 0.3, 1.3, 0.01, 0.90),
+    param("terrain", "How much unseen scenery makes them swerve", 0.0, 1.0, 0.01, 0.86),
+    param("beat", "How fast the wings beat (Hz)", 0.5, 6.0, 0.1, 1.3),
 ];
 
 /// What is behind the birds (the author, 2026-09-20): the whole sky; nothing
@@ -562,7 +562,7 @@ impl Patch for Flock {
 /// surface rather than a wing's line, and how wide before it has all of it.
 ///
 /// **The level of detail is decided by projected span, never by `size`.** At
-/// the default 55 birds the far side of the flock is two or three pixels
+/// 55 birds (the default until 2026-09-25; now 8, drawn large) the far side of the flock is two or three pixels
 /// across and the nearest is seven or eight: below [`AREA.0`] the model is
 /// exactly card 168's skeleton, so the picture the author said "this is great"
 /// about is the picture that still comes out. The surface grows in over the
