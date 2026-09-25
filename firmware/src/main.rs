@@ -1169,9 +1169,9 @@ async fn main(spawner: Spawner) {
     #[cfg(not(feature = "start-in-portal"))]
     let stored = settings.wifi.clone();
 
-    // Device-web decision 6: a default build has no compiled-in credentials at
-    // all. The join order is stored -> portal, and nothing seeds the store but
-    // `SET_WIFI` and a real trial typed into the portal's form.
+    // Device-web decision 6: no build embeds a WiFi pair any more. The join
+    // order is stored -> portal, and nothing seeds the store but `SET_WIFI`
+    // and a real trial typed into the portal's form.
     provision::init(host, stored.is_some());
 
     // Card 220's measurement build owns the controller instead, because the

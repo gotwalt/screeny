@@ -298,11 +298,12 @@ what is it called".
 
 **v1 recommendation: 1 and 2 together**, credentials in `sequential-storage` on
 a dedicated flash partition, plus a compile-time fallback (the `Example-Wifi1`
-credentials) used when storage is empty. Add a project-specific rule that costs
-nothing and saves a lot of bench time: **if the stored credentials fail to join
-three times, fall back to the compiled-in ones; if those also fail, say so on
-the panel.** The device is a display - it should tell you why it is not working
-instead of making you open a serial monitor.
+credentials) used when storage is empty (removed in fw 0.10.0). Add a
+project-specific rule that costs nothing and saves a lot of bench time: **if
+the stored credentials fail to join three times, fall back to the compiled-in
+ones; if those also fail, say so on the panel.** The device is a display - it
+should tell you why it is not working instead of making you open a serial
+monitor.
 
 Improv Serial (option 3) is worth listing separately because it is an actual
 published standard, not a bespoke command set: `IMPROV` (6 bytes) + version
