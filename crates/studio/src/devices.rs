@@ -1528,7 +1528,7 @@ mod tests {
         assert!(!facts(STACK_FAULT, 0, 1).stack_fault);
         assert!(facts(STACK_FAULT - 1, 0, 1).stack_fault);
 
-        // The heap: the worst instant the firmware session measured (60%) is
+        // The heap: the worst instant measured on the device (60%) is
         // quiet; 90% is not.
         assert!(!facts(20_000, 54 * 1024, 90_112).low_heap);
         assert!(facts(20_000, 88_474, 98_304).low_heap);

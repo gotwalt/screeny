@@ -517,7 +517,7 @@ pub async fn dhcp_task(stack: Stack<'static>) {
         // `http://192.168.4.1/` on research 007's "ship it, never rely on it".
         // But 8910/8908 want an HTTPS API endpoint on a hostname that answers
         // `application/captive+json`, Apple prefers the option to its own probe
-        // since iOS 14, and this device can offer neither. On the owner's
+        // since iOS 14, and this device can offer neither. On the author's
         // iPhone the sheet opened and then said "error opening page" on two
         // runs in three; an option that can only be wrong is not worth that.
         // The DNS catch-all and the HTTP catch-all carry the whole weight, as

@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn nothing_renders_a_full_white_frame() {
-        // CLAUDE.md: the panel runs off laptop USB. The QR's lit area is
+        // The panel runs off laptop USB. The QR's lit area is
         // 31x31 of 64x32 and nothing else comes close.
         for s in [
             Screen::Portal {

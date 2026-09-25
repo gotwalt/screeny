@@ -109,8 +109,8 @@ pub fn encode(payload: &str) -> Result<Qr, QrError> {
         Version::new(QR_VERSION),
         None,
         // `boostecl: false`. A boosted ECC level cannot shrink the code and
-        // would change the module pattern away from the one the owner
-        // scanned; we want the measured code, not the strongest one.
+        // would change the module pattern away from the one that was
+        // scanned on the real panel; we want the measured code, not the strongest one.
         false,
     )
     .map_err(|_| QrError::TooLong)?;

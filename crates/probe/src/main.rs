@@ -224,8 +224,8 @@ fn run() -> Result<bool, String> {
         "bench" => cmd_bench(ctrl_addr, rest),
         "stream" => cmd_stream(&args, frame_addr, ctrl_addr, rest),
         "conformance" => cmd_conformance(frame_addr, ctrl_addr, rest, None),
-        // Kept as an alias: the orchestrator's runbooks and cards 008 and 016
-        // all say `lock-test`, and section 7 is exactly what it used to mean.
+        // Kept as an alias: the bench notes and cards 008 and 016 all say
+        // `lock-test`, and section 7 is exactly what it used to mean.
         "lock-test" => cmd_conformance(frame_addr, ctrl_addr, rest, Some("7")),
         "http" => cmd_http(&args, ctrl_addr, rest),
         other => Err(format!("unknown command {other:?}\n{USAGE}")),

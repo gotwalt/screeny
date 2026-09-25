@@ -279,8 +279,8 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         };
         return if in_portal {
             // **The setup page itself, `200`, never a `302` to it**, which is
-            // what fw 0.5.1 does after the owner's phone test (card 223's Log,
-            // finding 3): a redirect made iOS open a *further* connection, and
+            // what fw 0.5.1 does after the phone test (card 223, finding 3):
+            // a redirect made iOS open a *further* connection, and
             // smoltcp has no backlog, so the SYN was refused and iOS - unlike
             // macOS - does not retry one. `Cache-Control: no-store` is on
             // every response this server writes.

@@ -247,7 +247,7 @@ mod tests {
     fn the_product_never_reads_a_panels_status_faster_than_the_floor() {
         let cfg = parse_env(&[], &[]).unwrap().unwrap();
         assert_eq!(cfg.device_http_every, screeny_studio::MIN_DEVICE_HTTP_EVERY);
-        assert!(cfg.device_http_every >= Duration::from_secs(10), "the firmware session asked for ten seconds");
+        assert!(cfg.device_http_every >= Duration::from_secs(10), "the device asks for ten seconds between polls");
         assert!(cfg.device_http, "a panel's own status is read by default");
         assert_eq!(cfg.device_http_port, 80, "the device serves it on 80");
         // ...and the same floor is what `Config::default` carries, so a

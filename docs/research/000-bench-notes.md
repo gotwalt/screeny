@@ -14,11 +14,9 @@ Auto-reset into the bootloader over DTR/RTS works; no button press needed.
 
 ## Camera
 
-Anker PowerConf C200, avfoundation. The Claude desktop app cannot get macOS camera
-permission (it never appears in Privacy > Camera), so captures go through
-`tools/cam-daemon.sh` running in Terminal.app. Start it with
-`open -a Terminal tools/cam-daemon.sh` (NOT from the Claude terminal pane, which has
-no camera access either). It is single-instance; a second copy exits immediately.
+Anker PowerConf C200, avfoundation. A sandboxed terminal cannot get macOS camera
+permission, so captures go through `tools/cam-daemon.sh` running in Terminal.app.
+Start it with `open -a Terminal tools/cam-daemon.sh`. It is single-instance; a second copy exits immediately.
 Request captures with:
 
     tools/cam-request.sh NAME           # -> captures/NAME.jpg

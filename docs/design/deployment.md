@@ -96,7 +96,7 @@ ssh <host> -- docker exec screeny-studio screeny discover
 ```
 
 **Good:** a line naming your device's mDNS instance and address, e.g.
-`screeny-4a00a4` at `192.168.1.50:49374`. The `mdns-sd` crate binds UDP 5353 with
+`screeny-c0ffee` at `192.168.1.50:49374`. The `mdns-sd` crate binds UDP 5353 with
 `SO_REUSEPORT`, so it shares the port with the avahi daemon that already owns it on
 the host.
 

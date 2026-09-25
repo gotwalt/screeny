@@ -504,7 +504,7 @@ impl IntoResponse for Reply {
             Reply::Portal(p) => {
                 Response::ok(p)
                     // A captive probe that is cached is a captive sheet that
-                    // never opens again - and since the owner's phone test
+                    // never opens again - and since the phone test
                     // this page *is* the answer to the probe.
                     .with_header("Cache-Control", "no-store")
                     .write_to(connection, response_writer)
@@ -1630,7 +1630,7 @@ impl PathRouterService for Dispatch {
 
         // One line per request **on the setup network only**: it exists for
         // minutes, a phone's captive probing is what goes wrong on it, and the
-        // serial log is the only witness (the owner's phone test, 2026-09-20).
+        // serial log is the only witness (the phone test, 2026-09-20).
         // Never on the LAN, where the Studio polls for months.
         if self.ap {
             let headers = request.parts.headers();
