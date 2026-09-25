@@ -16,7 +16,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-ESP_BIN=/Users/aaron/.rustup/toolchains/esp/xtensa-esp-elf/esp-15.2.0_20250920/xtensa-esp-elf/bin
+if [[ -z "${ESP_BIN:-}" ]]; then
+  ESP_BIN=$(ls -d "$HOME"/.rustup/toolchains/esp/xtensa-esp-elf/*/xtensa-esp-elf/bin 2>/dev/null | head -1) || true
+fi
+[[ -n "$ESP_BIN" ]] || { echo "run.sh: no xtensa-esp-elf toolchain found under \$HOME/.rustup; set ESP_BIN or run espup first" >&2; exit 1; }
 export PATH="$ESP_BIN:$PATH"
 PAYLOADS=../out/payloads
 LOG=$(mktemp -d)

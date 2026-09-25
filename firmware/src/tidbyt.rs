@@ -5,8 +5,12 @@
 //! published). `docs/research/001-firmware-stack.md` carries the citations
 //! and says which of these are cross-checked and which are inferred.
 //!
-//! None of it has been confirmed against real hardware — this crate has never
-//! been flashed.
+//! Confirmed on the author's unit: the panel geometry, this pin map (though
+//! its colour-line order is rotated on that particular board - see the
+//! `panel-hdk-colours` feature in `Cargo.toml`), the button pin
+//! ([`BUTTON_GPIO`]) and the pixel clock. The firmware has run for days on
+//! that hardware; what is still inferred rather than cross-checked is called
+//! out inline below.
 //!
 //! Some of these constants exist to be read rather than called: they record
 //! which GPIOs are already spoken for, so that a later card does not

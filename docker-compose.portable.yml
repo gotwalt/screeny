@@ -16,7 +16,7 @@
 #   does not work here and is not expected to.** Outbound unicast UDP is NATed
 #   and does work, so a manually configured address does: point the studio at
 #   `host.docker.internal:49374` for a `screeny-sim` on the host, or at
-#   `192.168.7.221` for the real panel if the VM can route to it.
+#   `192.168.1.50` for the real panel if the VM can route to it.
 # * **No GPU.** `/dev/dri` is not passed and WGPU_BACKEND is not forced. With
 #   the default (`gpu`) build the GPU pieces fall back to Mesa's lavapipe
 #   software rasteriser if it is present and to black frames if it is not, and

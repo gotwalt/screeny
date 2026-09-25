@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Capture-on-request daemon. Must run from an app that has macOS camera permission
-# (Terminal.app / iTerm). The Claude desktop app, including its terminal pane, does
-# not have it, so start this with:
+# (Terminal.app / iTerm). Sandboxed terminals - including some AI coding
+# assistants' built-in terminal panes - typically do not have it, so start
+# this from a plain terminal app:
 #
 #   open -a Terminal tools/cam-daemon.sh
 #

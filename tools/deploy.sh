@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# Deploy Screeny Studio to workbench.local over SSH.
+# Deploy Screeny Studio to a Docker host over SSH.
 #
-#   tools/deploy-workbench.sh --dry-run        # print the whole plan, run nothing
-#   tools/deploy-workbench.sh                  # pull on the host, build, up -d
-#   tools/deploy-workbench.sh --status         # is it up? is it healthy?
-#   tools/deploy-workbench.sh --logs           # what has it been saying?
-#   tools/deploy-workbench.sh --down           # stop and remove the stack
+#   tools/deploy.sh --dry-run        # print the whole plan, run nothing
+#   tools/deploy.sh                  # pull on the host, build, up -d
+#   tools/deploy.sh --status         # is it up? is it healthy?
+#   tools/deploy.sh --logs           # what has it been saying?
+#   tools/deploy.sh --down           # stop and remove the stack
 #
 # What it does, and nothing else: read-only `git` locally, `ssh` to the deploy
 # host, and `docker compose` inside one checkout directory on that host with an
-# explicit project name (`screeny`) and an explicit `-f` file. Five other
-# compose projects run on workbench - `docker`, `homework`, `homework-work`,
-# `june`, `scrypted` - and the project name is what keeps this one out of their
-# way. It never touches another container, never changes Docker daemon
-# settings, never prunes, never opens a firewall port.
+# explicit project name (`screeny`) and an explicit `-f` file. The project name
+# and `-f` file are what keep this stack out of the way of anything else
+# running on the host: they never touch another container, never change Docker
+# daemon settings, never prune, never open a firewall port.
 #
 # **This script never pushes anything, anywhere.** Pushing is a deliberate,
 # separate step somebody does by hand. What the script does instead is refuse to
@@ -22,14 +21,11 @@
 #
 # Two routes to get the code onto the host:
 #
-#   github (default)  the host clones/pulls git@github.com:gotwalt/screeny.git
-#                     itself. It authenticates to GitHub as `gotwalt` and can
-#                     read the private repo. The owner allowed pushing `main`
-#                     to that repo on 2026-09-20.
-#   workbench         a bare repo on the host, reached as the git remote
-#                     `workbench`. Nothing goes near GitHub. Kept for a host
-#                     with no GitHub access, and for the days before a repo is
-#                     allowed off the bench.
+#   github (default)  the host clones/pulls the git remote `origin` itself.
+#   deploy             a bare repo on the host, reached as the git remote
+#                     `deploy`. Nothing goes near GitHub (or wherever `origin`
+#                     points). Kept for a host with no access to `origin`, and
+#                     for a repo that is not meant to leave this machine yet.
 #
 # See `docs/design/deployment.md` for the runbook and for what to check on the
 # host afterwards.
@@ -38,26 +34,27 @@ set -euo pipefail
 
 # ------------------------------------------------------------------ defaults
 
-HOST=${SCREENY_DEPLOY_HOST:-workbench.local}
+HOST=${SCREENY_DEPLOY_HOST:-}
 ROUTE=github
-GITHUB_URL=${SCREENY_GITHUB_URL:-git@github.com:gotwalt/screeny.git}
+GITHUB_URL=${SCREENY_GITHUB_URL:-$(git remote get-url origin 2>/dev/null || true)}
 REMOTE_NAME=origin
 # Where the checkout and the bare repo live on the deploy host. `$HOME` is the
 # *remote* shell's, and must reach it unexpanded, so the single quotes are the
 # point and SC2016 is exactly backwards here.
 # shellcheck disable=SC2016
-DIR='$HOME/src/screeny'
+DIR=${SCREENY_DEPLOY_DIR:-'$HOME/src/screeny'}
 # shellcheck disable=SC2016
 BARE='$HOME/srv/screeny.git'
 PROJECT=screeny
 COMPOSE_FILE=docker-compose.yml
 PORT=${SCREENY_PORT:-8787}
 BRANCH=main
-# The host's `render` group, which owns /dev/dri/renderD128. 993 on workbench;
-# `stat -c %g /dev/dri/renderD128` says what it is anywhere else.
+# The host's `render` group, which owns /dev/dri/renderD128. There is no
+# universal default; `stat -c %g /dev/dri/renderD128` on the host says what it
+# is there.
 RENDER_GID=${SCREENY_RENDER_GID:-993}
-# workbench's own timezone is Etc/UTC, and the clock pieces are meant to show
-# the owner's local time, so the container is told explicitly.
+# The host's own timezone may not be the timezone the clock patches should
+# show, so the container is told explicitly.
 TZ_NAME=${SCREENY_TZ:-America/Los_Angeles}
 
 DRY_RUN=0
@@ -67,16 +64,21 @@ DOWN_VOLUMES=0
 
 usage() {
   cat <<'EOF'
-tools/deploy-workbench.sh - deploy Screeny Studio to a Docker host over SSH
+tools/deploy.sh - deploy Screeny Studio to a Docker host over SSH
 
-  --route github|workbench  where the host gets the code from.
-                            github (default): the host pulls from
-                              git@github.com:gotwalt/screeny.git
-                            workbench: a bare repo on the host, pushed to as
-                              the git remote `workbench`. No GitHub involved.
-  --host HOST               ssh target (default: workbench.local, or $SCREENY_DEPLOY_HOST)
-  --dir PATH                checkout on the host (default: $HOME/src/screeny)
-  --bare PATH               bare repo on the host, workbench route
+  SCREENY_DEPLOY_HOST must be set (or pass --host): the ssh target. There is
+  no default - deploying to the wrong box by accident is worse than refusing.
+
+  --route github|deploy     where the host gets the code from.
+                            github (default): the host pulls from the local
+                              `origin` remote's URL ($SCREENY_GITHUB_URL
+                              overrides it)
+                            deploy: a bare repo on the host, pushed to as
+                              the git remote `deploy`. No GitHub involved.
+  --host HOST               ssh target (required: $SCREENY_DEPLOY_HOST, or this flag)
+  --dir PATH                checkout on the host (default: $HOME/src/screeny,
+                            or $SCREENY_DEPLOY_DIR)
+  --bare PATH               bare repo on the host, deploy route
                             (default: $HOME/srv/screeny.git)
   --port N                  web port on the host (default: 8787, or $SCREENY_PORT)
   --render-gid N            the host's `render` group, which owns /dev/dri
@@ -103,12 +105,12 @@ EOF
 # ------------------------------------------------------------------ plumbing
 
 say()  { printf '%s\n' "$*"; }
-warn() { printf 'deploy-workbench: %s\n' "$*" >&2; }
+warn() { printf 'deploy: %s\n' "$*" >&2; }
 step() { printf '\n== %s\n' "$*"; }
 
 # A refusal is not a crash: say what is wrong, then what to run about it.
 refuse() {
-  printf '\ndeploy-workbench: refusing.\n\n  %s\n\n' "$1" >&2
+  printf '\ndeploy: refusing.\n\n  %s\n\n' "$1" >&2
   shift
   if [ "$#" -gt 0 ]; then
     printf 'What to do:\n\n' >&2
@@ -118,7 +120,7 @@ refuse() {
   exit 1
 }
 
-die() { printf '\ndeploy-workbench: %s\n\n' "$1" >&2; exit 2; }
+die() { printf '\ndeploy: %s\n\n' "$1" >&2; exit 2; }
 
 # Every command this script runs is printed first, local or remote, dry run or
 # not, so that what happened on the host is in the scrollback afterwards.
@@ -128,7 +130,8 @@ run_local() {
 }
 
 # The remote side takes one shell string on purpose: these are pipelines and
-# `cd`s, and pretending otherwise would be a lie about what runs.
+# `cd`s, and pretending otherwise would be a lie about what runs. Nothing here
+# ever ssh's when DRY_RUN is set - the print is the whole effect.
 run_remote() {
   printf '  + ssh %s -- %s\n' "$HOST" "$1"
   if [ "$DRY_RUN" -eq 0 ]; then
@@ -151,7 +154,7 @@ compose() {
 
 while [ "$#" -gt 0 ]; do
   case $1 in
-    --route)    ROUTE=${2:?--route needs github or workbench}; shift 2 ;;
+    --route)    ROUTE=${2:?--route needs github or deploy}; shift 2 ;;
     --host)     HOST=${2:?--host needs a name}; shift 2 ;;
     --dir)      DIR=${2:?--dir needs a path}; shift 2 ;;
     --bare)     BARE=${2:?--bare needs a path}; shift 2 ;;
@@ -170,12 +173,18 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -z "$HOST" ]; then
+  usage >&2
+  warn "SCREENY_DEPLOY_HOST is not set, and no --host was given. Nothing was run."
+  exit 1
+fi
+
 case $ROUTE in
-  github)    REMOTE_NAME=origin ;;
-  workbench) REMOTE_NAME=workbench ;;
+  github)  REMOTE_NAME=origin ;;
+  deploy)  REMOTE_NAME=deploy ;;
   *) refuse "--route $ROUTE is not a route." \
-       "--route github      (the host pulls from GitHub; the default)" \
-       "--route workbench   (a bare repo on $HOST; no GitHub)" ;;
+       "--route github   (the host pulls from origin; the default)" \
+       "--route deploy   (a bare repo on $HOST; no GitHub)" ;;
 esac
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -187,7 +196,7 @@ say "host        $HOST"
 say "route       $ROUTE   (git remote '$REMOTE_NAME')"
 say "branch      $BRANCH"
 say "checkout    $DIR   (on $HOST)"
-if [ "$ROUTE" = workbench ]; then
+if [ "$ROUTE" = deploy ]; then
   say "bare repo   $BARE   (on $HOST)"
 else
   say "source      $GITHUB_URL"
@@ -245,10 +254,10 @@ git rev-parse --verify --quiet "$BRANCH" >/dev/null || refuse \
 LOCAL_SHA=$(git rev-parse "$BRANCH")
 say "  $BRANCH        $LOCAL_SHA"
 
-if [ "$ROUTE" = workbench ]; then
-  # The remote must exist and must point at this host, not at GitHub. Adding a
-  # remote is a local, reversible thing; repointing an existing one is not, so
-  # the script will not do that.
+if [ "$ROUTE" = deploy ]; then
+  # The remote must exist and must point at this host, not somewhere else.
+  # Adding a remote is a local, reversible thing; repointing an existing one
+  # is not, so the script will not do that.
   SSH_URL="$HOST:${BARE#\$HOME/}"
   if git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
     HAVE=$(git remote get-url "$REMOTE_NAME")
@@ -257,7 +266,7 @@ if [ "$ROUTE" = workbench ]; then
       *github.com*) refuse \
         "the git remote '$REMOTE_NAME' points at GitHub ($HAVE)." \
         "That is not what this route is. Either use the GitHub route:" \
-        "  tools/deploy-workbench.sh --route github" \
+        "  tools/deploy.sh --route github" \
         "or point the remote at the host:" \
         "  git remote set-url $REMOTE_NAME $SSH_URL" ;;
     esac
@@ -269,14 +278,14 @@ else
   git remote get-url origin >/dev/null 2>&1 || refuse \
     "there is no 'origin' remote, and --route github deploys what is on origin/$BRANCH." \
     "git remote add origin $GITHUB_URL" \
-    "or use --route workbench, which needs no GitHub at all."
+    "or use --route deploy, which needs no GitHub at all."
   say "  remote      origin -> $(git remote get-url origin)"
 fi
 
 # --------------------------------------------------------------- reachable?
 #
-# Before the ahead/behind check, not after, because on the workbench route the
-# refusal below says "git push workbench main" - and that push only works once
+# Before the ahead/behind check, not after, because on the deploy route the
+# refusal below says "git push deploy main" - and that push only works once
 # the bare repo on the host exists. Making it exist is the next step.
 
 step "can we reach $HOST?"
@@ -286,7 +295,7 @@ run_remote "echo connected as \$(id -un)@\$(hostname) && docker --version && doc
     ssh $HOST -- docker ps            # are you in the docker group there?
   --host NAME points this somewhere else."
 
-if [ "$ROUTE" = workbench ]; then
+if [ "$ROUTE" = deploy ]; then
   step "the bare repo on $HOST"
   run_remote "mkdir -p \$(dirname $BARE) && { test -d $BARE || git init --bare -b $BRANCH $BARE; } && echo bare repo: $BARE"
 fi
@@ -330,7 +339,7 @@ fi
 # ----------------------------------------------------------------- get code
 
 step "the checkout on $HOST"
-if [ "$ROUTE" = workbench ]; then
+if [ "$ROUTE" = deploy ]; then
   run_remote "test -d $DIR/.git || git clone $BARE $DIR"
   run_remote "cd $DIR && git remote set-url origin $BARE && git fetch --prune origin && git checkout -B $BRANCH origin/$BRANCH && git --no-pager log --oneline -1"
 else
@@ -352,12 +361,12 @@ run_remote "$(compose 'up -d --remove-orphans')" \
   || die "docker compose up failed on $HOST. The error is above. If it is about
   /dev/dri or a group, check the render gid:
     ssh $HOST -- stat -c '%G %g' /dev/dri/renderD128
-    tools/deploy-workbench.sh --render-gid <gid>"
+    tools/deploy.sh --render-gid <gid>"
 
 step "waiting for it to answer"
 run_remote "for i in \$(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:$PORT/healthz && { echo \"healthz: ok after \${i}s\"; exit 0; }; sleep 1; done; echo 'healthz: NO ANSWER after 60s'; exit 1" \
   || die "the studio did not answer on $HOST:$PORT within 60s. Look at the log:
-    tools/deploy-workbench.sh --logs"
+    tools/deploy.sh --logs"
 
 step "the stack"
 run_remote "$(compose ps)"
@@ -371,11 +380,11 @@ Deployed.
 Three things to check once, on $HOST:
 
   ssh $HOST -- docker exec screeny-studio screeny discover      # (a) does mDNS work in the container?
-  ssh $HOST -- docker exec screeny-studio vulkaninfo --summary  # (b) does it see the Intel iGPU?
+  ssh $HOST -- docker exec screeny-studio vulkaninfo --summary  # (b) does it see the GPU?
   ssh $HOST -- docker exec screeny-studio date                  # (c) is the clock local time?
 
 To undo everything this created:
 
-  tools/deploy-workbench.sh --down              # stop and remove the container
-  tools/deploy-workbench.sh --down --volumes    # ... and forget the saved state
+  tools/deploy.sh --down              # stop and remove the container
+  tools/deploy.sh --down --volumes    # ... and forget the saved state
 EOF

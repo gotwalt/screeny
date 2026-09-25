@@ -6,7 +6,7 @@
 # and the workspace `target/` in BuildKit cache mounts, so the second and later
 # builds on a machine are incremental (minutes rather than tens of minutes).
 # The runtime is plain Debian plus Mesa's Vulkan driver, because the GPU pieces
-# go through wgpu and workbench's adapter is an Intel iGPU (ANV).
+# go through wgpu and the author's Linux host has an Intel iGPU (ANV).
 #
 # The build needs no secrets of any kind: it compiles host crates only. WiFi
 # credentials belong to `firmware/`, which `.dockerignore` keeps out of the
@@ -72,11 +72,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # ---------------------------------------------------------------- runtime ---
 FROM ${RUNTIME_IMAGE} AS runtime
 
-# libvulkan1 + mesa-vulkan-drivers give wgpu the Intel ANV driver on workbench
-# (and lavapipe, Mesa's software rasteriser, on a host with no usable adapter -
-# slow, but 64x32 is small). vulkan-tools is `vulkaninfo`, which is how the
-# "does the container see the GPU?" question gets a one-line answer; it is a
-# couple of megabytes and can be dropped once that stops being interesting.
+# libvulkan1 + mesa-vulkan-drivers give wgpu the Intel ANV driver on a host
+# with an Intel iGPU (and lavapipe, Mesa's software rasteriser, on a host with
+# no usable adapter - slow, but 64x32 is small). vulkan-tools is `vulkaninfo`,
+# which is how the "does the container see the GPU?" question gets a one-line
+# answer; it is a couple of megabytes and can be dropped once that stops being
+# interesting.
 # curl is the healthcheck and the way to poke the API from inside the container.
 # tzdata so TZ means something: the clock pieces show local time.
 RUN set -eux; \

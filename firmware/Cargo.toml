@@ -18,6 +18,13 @@ hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
 
 [features]
 default = []
+# Some Gen 1 units have their HUB75 colour lines wired in the order Tidbyt's
+# own `hdk` publishes (R1 GPIO21, G1 GPIO2, B1 GPIO22, R2 GPIO23, G2 GPIO4,
+# B2 GPIO27 - `tidbyt::pins`); others have them rotated, as the author's unit
+# does. Off by default, which keeps the rotated map that is confirmed on the
+# author's unit. If the test card's colours come up wrong, build with this
+# feature on instead.
+panel-hdk-colours = []
 # Bench A/B only (card 008): run the display task on core 0's executor, the
 # way card 007 shipped it, so the cost of the core split can be measured
 # against the identical decode path. Never ship this.

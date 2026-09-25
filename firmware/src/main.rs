@@ -932,17 +932,40 @@ async fn main(spawner: Spawner) {
         panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
     }
 
+    // Some Gen 1 units have their colour lines wired in the order Tidbyt's own
+    // `hdk` publishes; others have them rotated. This unit's colour lines are
+    // rotated relative to the hdk's names: the lines it calls R/G/B drive
+    // blue/red/green. Confirmed on the panel at bring-up (card 001) and again
+    // by card 007's test card. Card 021 owns the board-revision story. If the
+    // test card's colours come up wrong on a different unit, build with
+    // `--features panel-hdk-colours` instead, which uses the published order
+    // (`tidbyt::pins`) rather than this rotated one.
+    #[cfg(feature = "panel-hdk-colours")]
+    let (red1, grn1, blu1, red2, grn2, blu2) = (
+        peripherals.GPIO21.degrade(),
+        peripherals.GPIO2.degrade(),
+        peripherals.GPIO22.degrade(),
+        peripherals.GPIO23.degrade(),
+        peripherals.GPIO4.degrade(),
+        peripherals.GPIO27.degrade(),
+    );
+    #[cfg(not(feature = "panel-hdk-colours"))]
+    let (red1, grn1, blu1, red2, grn2, blu2) = (
+        peripherals.GPIO2.degrade(),
+        peripherals.GPIO22.degrade(),
+        peripherals.GPIO21.degrade(),
+        peripherals.GPIO4.degrade(),
+        peripherals.GPIO27.degrade(),
+        peripherals.GPIO23.degrade(),
+    );
+
     let pins = Hub75Pins16 {
-        // This unit's colour lines are rotated relative to the hdk's names:
-        // the lines it calls R/G/B drive blue/red/green. Confirmed on the
-        // panel at bring-up (card 001) and again by card 007's test card.
-        // Card 021 owns the board-revision story.
-        red1: peripherals.GPIO2.degrade(),
-        grn1: peripherals.GPIO22.degrade(),
-        blu1: peripherals.GPIO21.degrade(),
-        red2: peripherals.GPIO4.degrade(),
-        grn2: peripherals.GPIO27.degrade(),
-        blu2: peripherals.GPIO23.degrade(),
+        red1,
+        grn1,
+        blu1,
+        red2,
+        grn2,
+        blu2,
         addr0: peripherals.GPIO26.degrade(),
         addr1: peripherals.GPIO5.degrade(),
         addr2: peripherals.GPIO25.degrade(),

@@ -8,7 +8,8 @@
 # the Bonjour service type.
 #
 # Usage: tools/sign-macos.sh [--debug]
-#   SCREENY_SIGN_IDENTITY overrides the identity (name, team id or "-" for ad hoc).
+#   SCREENY_SIGN_IDENTITY sets the identity (name, team id or "-" for ad hoc) -
+#   required, no default.
 # The first run makes macOS ask for keychain access to the signing key: choose
 # "Always Allow".
 set -euo pipefail
@@ -16,7 +17,12 @@ cd "$(dirname "$0")/.."
 
 PROFILE=release; FLAG=--release
 if [[ "${1:-}" == "--debug" ]]; then PROFILE=debug; FLAG=; fi
-IDENTITY=${SCREENY_SIGN_IDENTITY:-"Developer ID Application: Aaron Gotwalt (L2EG537FL9)"}
+if [[ -z "${SCREENY_SIGN_IDENTITY:-}" ]]; then
+  echo "SCREENY_SIGN_IDENTITY is not set: it names the code-signing identity macOS ties Local Network permission to." >&2
+  echo "List yours with: security find-identity -v -p codesigning   (or use \"-\" for ad hoc, which does not make Local Network permission stick)" >&2
+  exit 1
+fi
+IDENTITY=$SCREENY_SIGN_IDENTITY
 BIN=target/$PROFILE/screeny
 
 cargo build $FLAG -p screeny
