@@ -10,8 +10,8 @@
 //! cargo run --release --bin portal-mock -- ../docs/research/img
 //! ```
 //!
-//! The owner measured on 2026-09-19 that a version 2-L code
-//! (`WIFI:T:nopass;S:screeny-4a00a4;;`, 32 bytes, 25x25 modules) at one LED
+//! The author measured on 2026-09-19 that a version 2-L code
+//! (`WIFI:T:nopass;S:screeny-c0ffee;;`, 32 bytes, 25x25 modules) at one LED
 //! per module with a 3-pixel lit quiet zone scans easily from a phone. These
 //! layouts are all built around that.
 

@@ -312,7 +312,7 @@ fn warm(v: u8) -> [u8; 3] {
 /// bottom, sixteen four-pixel steps from black to sRGB 70.
 ///
 /// Held is the whole point (`animated()` is false for it). Card 248 is about a
-/// flicker the owner sees on a *static* picture from a few feet away; anything
+/// flicker the author sees on a *static* picture from a few feet away; anything
 /// that moves by itself hides exactly that. What it is for:
 ///
 /// * **Count the steps.** With `output.panel: bit_planes` the bottom few

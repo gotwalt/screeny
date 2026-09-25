@@ -6,7 +6,7 @@
 //! the end running the spec's own numbers - is now done better by
 //! `tests/conformance.rs`, which drives the whole of section 7 at `LOCK_MS`
 //! 500 and `STREAM_TIMEOUT_MS` 1000 through `screeny_probe::suite`, the same
-//! rules the orchestrator points at the firmware.
+//! rules pointed at the firmware.
 //!
 //! So what is left here is the half a conformance run cannot see:
 //! `active_source`, the `LockReleased` events and their reasons, the decoded

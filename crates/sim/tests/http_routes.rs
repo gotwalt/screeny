@@ -428,7 +428,7 @@ const PROBES: &[(&str, &str)] = &[
 
 #[test]
 fn in_the_portal_a_foreign_host_gets_the_setup_page_not_a_redirect() {
-    // fw 0.5.1's answer, after the owner's phone test (card 223's Log, finding
+    // fw 0.5.1's answer, after the author's phone test (card 223's Log, finding
     // 3): the page itself, so the captive sheet needs no further connection.
     let dev = portal_device();
     let addr = api(&dev);

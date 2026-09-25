@@ -13,7 +13,7 @@ use screeny_device_api::error::ErrorCode;
 use screeny_device_api::form::{parse_wifi_form, FormError, MAX_FORM_LEN};
 use screeny_device_api::text::{MAX_PSK_LEN, MAX_SSID_LEN};
 
-/// Never the real ones (CLAUDE.md).
+/// Never the real ones.
 const SSID: &str = "Example-Wifi1";
 const PSK: &str = "password9";
 

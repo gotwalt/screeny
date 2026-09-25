@@ -132,7 +132,7 @@ fn a_cancelled_hold_says_so_on_the_panel() {
 }
 
 /// A wipe takes the panel to the portal screen, which is the whole point of
-/// the gesture: the QR to join the setup network is what the owner needs next.
+/// the gesture: the QR to join the setup network is what the author needs next.
 #[test]
 fn a_wipe_leaves_the_portal_screen_on_the_panel() {
     let dev = online();

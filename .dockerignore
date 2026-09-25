@@ -28,7 +28,6 @@ captures/
 docs/
 lab/
 README.md
-CLAUDE.md
 tools/
 Dockerfile
 .dockerignore
