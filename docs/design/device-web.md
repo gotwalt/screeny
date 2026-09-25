@@ -1,18 +1,19 @@
 # Device web: status, settings, firmware update, captive portal, the button
 
-**Status (2026-09-21, afternoon): the device-web track the owner asked for is COMPLETE. The device runs fw 0.8.2 (updated over WiFi, CONFIRMED at 63 s): card 247 fixed the two things the owner saw on the button bench - identify is solid over a live stream and the iPhone scans the portal QR again (it is shown at the default brightness whatever the setting) - both confirmed by him on the panel; `probe http` 39/0/6, conformance 60/0/4, `panic_count` 0. Nothing is in flight; remaining firmware backlog is parked (062, 068, 130). Earlier today:** **(2026-09-21, midday): cards 246, 230 and 136 are merged, on the device and benched (fw 0.8.0 serial-flashed, then updated over WiFi to the identical 0.8.1 test image: CONFIRMED at 64 s, a second upload accepted without a reboot; the button benched with the owner, WiFi wiped by a 5 s hold and re-provisioned from his iPhone; `probe http` 39/0/6 with 0 refused, UDP conformance 60/0/4). One card is open, 247 (identify flickers over a live stream; the portal QR did not scan at brightness 56) - the owner has said 136 was the last planned firmware card of this cycle, so after 247 the track is complete. The `software` session has ended: this session gives the panel back to the Studio itself. Older status follows.** **Status (2026-09-20, night): the device ran fw 0.7.0, with working over-the-air updates - settings and WiFi
-credentials in flash, an HTTP status/settings page and JSON API on the LAN, the setup
-portal (open soft-AP, DHCP, DNS catch-all, QR screen, trial join before commit), a
-rollback-capable bootloader and two OTA slots. The phone test passed on **fw 0.5.1** after five fixes
-(card 223's Log: QR stays put, the page says Connected, captive probes get the setup page
-as a `200` and not a `302`, no option 114, the connected screen yields to a stream). The one silent
-stall of 0.5.1 never reproduced; card 234 fixed an unbounded UDP send and card 243 makes a
-panic reboot and say so (`GET /api/v1/panic`). Card 236 bounded the HTTP close (refused connects 9-17 per probe run -> 0). Cards 240/241 are OTA on the full plan of research 006, proved on the device with a good, a never-healthy and a panicking image; card 245 found and fixed the two-core deadlock in the flash-write path that OTA exposed (`store::guarded`); an always-on 20 s liveness watchdog means a wedge reboots and reports itself. To update the panel over WiFi: `screeny-probe --addr 192.168.7.221 fw-upload <image.bin> --activate`. Next: **246** (four OTA bench follow-ups) and **230** (the button, one card) - both written, in `docs/board/backlog/`; after them the track the owner asked for is complete.**
-This file is the source of truth for the device-web track (cards 200-249, coordinated by
-the `firmware` Claude session): decisions, what the research settled, and the build
-order at the end.
+**Status (September 2026): the device-web track is complete, on firmware 0.9.0.**
+Settings and WiFi credentials live in flash; the device serves an HTTP status/settings
+page and JSON API on the LAN; a device with no network raises a setup portal (open
+soft-AP, DHCP, DNS catch-all, a WiFi QR code on the panel, trial join before commit);
+firmware updates go over the same LAN API through a rollback-capable bootloader and two
+OTA slots, staying on trial until they prove themselves healthy; a panic leaves a
+breadcrumb and reboots, an always-on liveness watchdog recovers a wedge, and the
+button on the back gives a short-press identify screen and a 5 s hold to wipe WiFi and
+reopen the portal.
 
-## What the owner asked for (2026-09-20)
+This file is the source of truth for the device-web track (cards 200-249): decisions,
+what the research settled, and the build order at the end.
+
+## What was asked for (2026-09-20)
 
 1. A web server on the device: diagnostics and status, network settings, and a
    **safe** firmware update.
@@ -23,40 +24,38 @@ order at the end.
 
 ## Decisions
 
-| # | Decision | Who, when |
+| # | Decision | Decided, when |
 |---|---|---|
-| 1 | **The portal screen carries a WiFi QR code.** Measured on the real panel: version 2-L (25x25 modules), `WIFI:T:nopass;S:screeny-4a00a4;;` (exactly the 32 bytes 2-L holds), one LED per module, standard polarity (lit white background, dark modules off), 3-pixel lit quiet zone, default brightness. The owner's phone scanned it "easily". | owner's phone, 2026-09-20 |
-| 2 | **The setup AP is an open network** named `screeny-<id>`. The home PSK crosses it in clear during setup; the owner does not treat that PSK as a secret (spec 8.4). | owner, 2026-09-20 |
-| 3 | **HTTP is unauthenticated on the LAN**, settings and firmware upload included - the same posture as `SET_WIFI` and `REBOOT` (spec 8.4). The API is shaped so a PIN can be added (parked card 041). An upload is still validated as a `screeny-fw` image before the boot slot changes. | owner, 2026-09-20 |
-| 4 | **The button is real and reachable** (on the back; the owner can press it). Its GPIO is unknown: card 202 finds it statically and ships a probe firmware; the orchestrator runs the probe with the owner pressing. | owner, 2026-09-20 |
-| 5 | **The serial console of spec 8.1 is superseded** by the portal and the settings page (CLAUDE.md: "do not build other schemes"). `SET_WIFI` (8.2) stays and writes the same store. The spec is edited when the store lands, with notice to the software session. | orchestrator, 2026-09-20 |
-| 6 | **Compiled-in WiFi credentials are removed.** A default build contains none and `build.rs` does not even look for them; the device gets its network from the store (portal, settings page, `SET_WIFI`). The only override is the off-by-default cargo feature `bench-wifi`, for testing: it embeds the credentials from outside the repo, seeds an empty store with them and keeps them as the spec 8.3 step-2 fallback. The settings partition survives a reflash, so one `bench-wifi` flash seeds the bench device and default builds run from the store thereafter. Lands with card 212; spec 8.3 is rewritten in card 225. | owner, 2026-09-20 |
+| 1 | **The portal screen carries a WiFi QR code.** Measured on the real panel: version 2-L (25x25 modules), `WIFI:T:nopass;S:screeny-c0ffee;;` (exactly the 32 bytes 2-L holds), one LED per module, standard polarity (lit white background, dark modules off), 3-pixel lit quiet zone, default brightness. The author's phone scanned it "easily". | author's phone, 2026-09-20 |
+| 2 | **The setup AP is an open network** named `screeny-<id>`. The home PSK crosses it in clear during setup; the author does not treat that PSK as a secret (spec 8.4). | author, 2026-09-20 |
+| 3 | **HTTP is unauthenticated on the LAN**, settings and firmware upload included - the same posture as `SET_WIFI` and `REBOOT` (spec 8.4). The API is shaped so a PIN can be added (a possible later addition, 041). An upload is still validated as a `screeny-fw` image before the boot slot changes. | author, 2026-09-20 |
+| 4 | **The button is real and reachable** (on the back; you can press it). Its GPIO is unknown: card 202 finds it statically and ships a probe firmware, run with the button held. | author, 2026-09-20 |
+| 5 | **The serial console of spec 8.1 is superseded** by the portal and the settings page. `SET_WIFI` (8.2) stays and writes the same store. The spec is edited when the store lands. | decided, 2026-09-20 |
+| 6 | **Compiled-in WiFi credentials are removed.** A default build contains none and `build.rs` does not even look for them; the device gets its network from the store (portal, settings page, `SET_WIFI`). The only override is the off-by-default cargo feature `bench-wifi`, for testing: it embeds the credentials from outside the repo, seeds an empty store with them and keeps them as the spec 8.3 step-2 fallback. The settings partition survives a reflash, so one `bench-wifi` flash seeds the bench device and default builds run from the store thereafter. Lands with card 212; spec 8.3 is rewritten in card 225. | author, 2026-09-20 |
 | 7 | **The frame path is the product.** No HTTP request, flash write or portal activity may cost a frame at 30 fps, except a firmware update, which is allowed to take the panel over with an "updating" screen. | standing |
-| 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the owner pressing (card 203). | owner, 2026-09-20 |
-| 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | owner, 2026-09-20 |
-| 10 | **Scope, after the phone test: "this is not a commercial product, we don't need to overly bomb-proof it. As long as it's not running out of memory and is pretty crash proof I'm happy."** WiFi setup is good enough as it stands. **Dropped**: 229 (network scan list), a faster wrong-password verdict (45 s today), identical-credentials-is-a-no-op, the Android refresh-chain check, mDNS re-announce on an address change (the Studio's card 141 follows a panel that moved), the simulator serving the setup page and the `crates/provision` tidy. **Kept**: 234 (the silent stall), 243 (panic breadcrumb) with the boot-path stack lever, a one-hour soak as the acceptance check, **OTA 240/241 on the full plan of research 006**, and the button as **one card: short press = status for 10 s, hold 5 s (countdown, release cancels) = wipe WiFi -> portal** - no 15 s factory reset, no held-at-boot (this narrows decision 8). Order: stability first, then OTA, then the button; host-only work (spec 225, the simulator's captive `200`) in parallel on Opus workers. | owner, 2026-09-20 |
-| 11 | **No long soak runs as acceptance.** "These soak tests are so freaking long - can we defer them? I think things look pretty stable. We can re-evaluate if they turn out not to be." The evidence that stands in for them: the device runs under the Studio all day anyway, a panic now reboots and reports itself (`GET /api/v1/panic`: `boot_count` / `panic_count` say whether anything happened overnight), and the two probe suites after each flash. fw 0.5.2 did run a clean hour and 0.5.3 a clean partial one before this was decided. | owner, 2026-09-20 |
+| 8 | **Button gestures**: short press = status/identify screen (IP, name, RSSI, version) for 10 s; held past 1 s an on-panel countdown starts and release cancels; 5 s wipes WiFi and opens the portal; **15 s factory-resets all settings**. The pin is GPIO15, confirmed on the bench with the button held (card 203). | author, 2026-09-20 |
+| 9 | **Build a rollback-capable bootloader and commit the blob** (`firmware/bootloader/`, ESP-IDF v6.1 in docker, recipe in `tools/build-bootloader.sh`). | author, 2026-09-20 |
+| 10 | **Scope, after the phone test: "this is not a commercial product, we don't need to overly bomb-proof it. As long as it's not running out of memory and is pretty crash proof I'm happy."** WiFi setup is good enough as it stands. **Dropped**: 229 (network scan list), a faster wrong-password verdict (45 s today), identical-credentials-is-a-no-op, the Android refresh-chain check, mDNS re-announce on an address change (the Studio's card 141 follows a panel that moved), the simulator serving the setup page and the `crates/provision` tidy. **Kept**: 234 (the silent stall), 243 (panic breadcrumb) with the boot-path stack lever, a one-hour soak as the acceptance check, **OTA 240/241 on the full plan of research 006**, and the button as **one card: short press = status for 10 s, hold 5 s (countdown, release cancels) = wipe WiFi -> portal** - no 15 s factory reset, no held-at-boot (this narrows decision 8). Order: stability first, then OTA, then the button; host-only work (spec 225, the simulator's captive `200`) happens in parallel. | author, 2026-09-20 |
+| 11 | **No long soak runs as acceptance.** "These soak tests are so freaking long - can we defer them? I think things look pretty stable. We can re-evaluate if they turn out not to be." The evidence that stands in for them: the device runs under the Studio all day anyway, a panic now reboots and reports itself (`GET /api/v1/panic`: `boot_count` / `panic_count` say whether anything happened overnight), and the two probe suites after each flash. fw 0.5.2 did run a clean hour and 0.5.3 a clean partial one before this was decided. | author, 2026-09-20 |
 
-## Working agreement with the software session
+## Working with a Studio on the same device
 
-`firmware/`, the serial port and flashing belong to the firmware session; cards
-200-249. `crates/proto`, `crates/receiver` and `docs/design/protocol-v1.md` are
-shared: either session tells the other before changing them. After any flash the
-regression check is `cargo run --release -p screeny-probe -- --addr 192.168.7.221
-conformance --slow` (firmware 0.2.0: 60 pass, 0 fail, 4 skip). Once the Studio runs
-on workbench it holds the source lock around the clock; release it with
-`POST http://workbench.local:8787/api/v1/player/set {"device":"4a00a4","on":false}`
-before bench work and give it back with `"on":true`. `POST /api/v1/set_panel
-{"on":false}` / `{"on":true,"to":"screeny-4a00a4"}` also works again since the Studio's
-card 170 (between cards 106 and 170 it answered 200 and did nothing, which read as ~35
-conformance failures, all "LIVE -> LIVE"). Either way: **check `screeny stats` says HOLD
-or IDLE before starting a conformance run.** The choice survives a Studio
-restart, so always put it back. **And check the bench Mac's own network first:**
-`ping -c 40 192.168.7.1` must be clean. With its WiFi (en0) and Thunderbolt Ethernet
-(en5) both up on the same subnet this Mac's path stalled for seconds at a time, which
-read as `no reply to op ...` / `os error 49` failures starting at a different rule each
-run (card 223's Log). With WiFi off the suite passed first time: turn WiFi off for
-conformance and flashing sessions.
+`firmware/`, the serial port and flashing are single-owner: only one person or process
+touches the hardware at a time. `crates/proto`, `crates/receiver` and
+`docs/design/protocol-v1.md` are shared with the host tools, so a change to them needs
+care on both sides. After any flash the regression check is `cargo run --release -p
+screeny-probe -- --addr 192.168.1.50 conformance --slow` (firmware 0.2.0: 60 pass, 0
+fail, 4 skip). Once a Studio is running against the device it holds the source lock
+around the clock; release it with `POST http://studio-host.local:8787/api/v1/player/set
+{"device":"c0ffee","on":false}` before bench work and give it back with `"on":true`
+(or `POST /api/v1/set_panel {"on":false}` / `{"on":true,"to":"screeny-c0ffee"}`).
+Either way: **check `screeny stats` says HOLD or IDLE before starting a conformance
+run**, and put the panel back afterward - the choice survives a Studio restart. **Check
+the bench machine's own network first:** `ping -c 40 192.168.1.1` must be clean. A
+machine with two network interfaces active on the same subnet (e.g. WiFi and a wired
+adapter) can stall for seconds at a time, which reads as `no reply to op ...` / `os
+error 49` failures at a different rule each run; turning WiFi off for conformance and
+flashing runs clears it.
 
 ## How to think about storage and RAM on this device
 
@@ -113,12 +112,12 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   thing to measure on hardware. Card 240 builds the instrument - one log line
   per upload with per-sector erase/write min/mean/max, the fraction of the
   upload spent inside a ROM call, and the frames, stream losses and link-down
-  edges over the same window - and the orchestrator's bench run is what
+  edges over the same window - and a bench run on hardware is what
   answers it.
 - **Rollback**: espflash's bundled bootloader has `APP_ROLLBACK_ENABLE` off. App-side
   revert (mark the running slot `Invalid`, reboot) covers every image that boots but
   never becomes healthy. Only a rebuilt ESP-IDF v6.1 bootloader covers an image that
-  crashes before the confirm code runs. **Owner decision pending**: build that
+  crashes before the confirm code runs. **Decision pending**: build that
   bootloader (ESP-IDF is not installed here; a docker image would do) and commit the
   26 KB blob.
 - Health criterion (proposed): WiFi + DHCP, and one HTTP request or 120 s uptime, and
@@ -137,14 +136,14 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   also the MTDO strap (a held button silences the ROM boot log - harmless) and one of
   the two board-ID ADC straps.
 - `BUTTON_GPIO` stays `None` until the bench confirms it: `cargo build --release
-  --features gpio-probe --bin gpio_probe` in `firmware/`, flash, the owner presses.
+  --features gpio-probe --bin gpio_probe` in `firmware/`, flash, press the button.
   Phase B of the probe (pull-down) says whether anything external holds the pin up.
 - Gestures (proposed): short press = identify/status screen for 10 s; held past 1 s
   starts an on-panel countdown, release cancels; 5 s wipes WiFi and reboots into the
   portal; 15 s factory-resets all settings. Held at boot runs the same ladder. One
   embassy task on core 0 in `wait_for_any_edge`, 30 ms debounce.
-- Fallback (three quick power cycles) is parked unless the probe says the button is
-  unusable.
+- Fallback (three quick power cycles) is a possible later addition unless the probe
+  says the button is unusable.
 
 ### HTTP, soft-AP, portal (card 201, `docs/research/007-device-web-and-portal.md`)
 
@@ -178,7 +177,7 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   leaving 32 columns = eight `FONT_4X6` characters per line. `qrcodegen-no-heap 1.8.1`,
   ~10.5 KB flash, no allocator. Mock-ups: `docs/research/img/201-portal-*.png`.
   With the measured `WIFI:T:nopass;S:...;;` form the SSID is at most 14 characters, and
-  `screeny-4a00a4` is exactly 14: **the AP name is always `screeny-<id>`**, never the
+  `screeny-c0ffee` is exactly 14: **the AP name is always `screeny-<id>`**, never the
   friendly name. (A bench experiment with the short form `WIFI:S:...;;` could raise
   that to 23.)
 - **The RAM gate**: with everything linked, core 0's `.stack` falls from 37.5 KB to
@@ -209,7 +208,7 @@ README has the diagram and the action list) - these are now the design:
 
 The request and reply shapes are one `no_std` crate, `screeny-device-api`, that the
 firmware (222), the simulator (224) and the Studio all depend on - not a feature of
-`crates/proto`, which is shared surface with the software session. Its README has the
+`crates/proto`, which is shared surface with the host tools. Its README has the
 route table; `crates/device-api/tests/golden/` has a checked-in example of every request
 and reply, verified through `serde_json` and `serde-json-core` on every `cargo test`.
 
@@ -227,9 +226,9 @@ and reply, verified through `serde_json` and `serde-json-core` on every `cargo t
 
 Failures are one shape: `{"error":"<code>", "detail"?:"..."}`, the HTTP status being a
 property of the code. Every mutating request carries an optional `pin`/`counter`, parsed
-and ignored today (decision 3); `check_auth` is the single hook for parked card 041.
+and ignored today (decision 3); `check_auth` is the single hook for that possible later addition (041).
 
-Requested by the software session (2026-09-20), to land with card 222: `StatusReply`
+Requested (2026-09-20), to land with card 222: `StatusReply`
 gains **`boot_id`**, a random `u32` drawn once at boot, so the Studio can tell "the device
 rebooted" from "the link flapped" without inferring it from uptime going backwards. A
 random id rather than a persistent counter on purpose: it costs no flash write per boot.
@@ -247,8 +246,8 @@ Also for 223: `GET /api/v1/wifi`'s `reason` is `null` after a failed attempt in 
 it must carry `auth` / `not_found` / `other` from the state machine.
 
 **Credentials are stored only after they have joined** (fw 0.4.1, spec 8.2 corrected
-2026-09-20). Firmware 0.4.0 and the spec stored first; the orchestrator's own
-wrong-credentials test over HTTP replaced the working pair in flash, the device ran on
+2026-09-20). Firmware 0.4.0 and the spec stored first; a wrong-credentials test over
+HTTP replaced the working pair in flash, the device ran on
 its in-RAM fallback until the next reboot and then could join nothing. The handlers now
 hand `NewWifi { wifi, persist }` to the WiFi task, which commits after a successful join;
 a store failure then is counted (`store_errors`), not reported in the reply. Recovery, if
@@ -311,10 +310,10 @@ Credentials posted while the device is online (card 232) - now part of the machi
   use `route::find`, `route::RateLimit` with `SCAN_MIN_INTERVAL_MS`, and per-route
   `max_request_len`.
 - The simulator keeps UDP `SET_WIFI` "accepted, logged, not acted on" outside the portal
-  on purpose (other sessions' tests pin it); HTTP runs the real trial. Closing that
-  asymmetry is a later card, with notice to the software session.
+  on purpose (other tests pin it); HTTP runs the real trial. Closing that
+  asymmetry is a later card.
 
-Orchestrator's defaults for card 201's open questions (the owner can overrule): the
+Defaults for card 201's open questions (the author can overrule): the
 portal has **no time limit** (the 10-minute retry makes that safe); the LAN web server
 **does answer while a sender is streaming**, and a bench card proves it costs no frame;
 the device advertises **`_http._tcp`** in mDNS; JSON shapes for the HTTP API live in
@@ -325,11 +324,12 @@ Studio all depend on - `crates/proto` is not touched.
 
 Five lines, and the fifth is the one that matters.
 
-1. Build it: `. ~/export-esp.sh && cd firmware && cargo build --release`, then
+1. Build it: source the environment file `espup` writes (`. ~/export-esp.sh`), then
+   `cd firmware && cargo build --release`, then
    `espflash save-image --chip esp32 --flash-size 8mb --partition-table
    firmware/partitions.csv firmware/target/xtensa-esp32-none-elf/release/screeny-fw
    new.bin` from the repository root.
-2. Send it: `cargo run --release -p screeny-probe -- --addr 192.168.7.221
+2. Send it: `cargo run --release -p screeny-probe -- --addr 192.168.1.50
    fw-upload new.bin --activate`. It scans the file first, so a bad one is
    refused in a millisecond instead of after half a minute of flash writes.
 3. The panel says "updating" with a progress bar for ~25 s, then "installing",
@@ -339,7 +339,7 @@ Five lines, and the fifth is the one that matters.
    two minutes), and never sooner than 60 s. `fw-upload` prints `CONFIRMED`.
 5. **If anything goes wrong - it crashes, it never joins, it wedges - the old
    image comes back by itself within about three and a half minutes**, and
-   `curl -s http://192.168.7.221/api/v1/panic | jq .update` says which version
+   `curl -s http://192.168.1.50/api/v1/panic | jq .update` says which version
    was rejected and why. No cable is needed. A cable (`tools/fw-run.sh`) is
    still the thing that always wins, because it erases `otadata`.
 
@@ -367,31 +367,31 @@ address the new firmware needs to prove itself and get it rolled back.
 
 | card | what | hardware |
 |---|---|---|
-| 210 | partition table + `tools/fw-run.sh` flags - **done**, on the device, conformance 60/0/4 | yes (orchestrator) |
+| 210 | partition table + `tools/fw-run.sh` flags - **done**, on the device, conformance 60/0/4 | yes |
 | 211 | `crates/settings`, host-tested against the real map - **done** (42 tests) | no |
 | 220 | framebuffers off core 0's stack; APSTA heap measured - **done**: stack high-water 26.5 KB -> ~6 KB of 37.5 KB; APSTA costs 3.3 KB of heap (44 KB free at the worst instant); keep the 64 + 32 KB heap; the full track leaves ~20 KB of stack against ~6 KB of demand (`docs/research/009-ram-headroom.md`) | yes |
-| 203 | bench: GPIO15 confirmed with the probe, owner pressing - **done** | yes (orchestrator + owner) |
+| 203 | bench: GPIO15 confirmed with the probe, button pressed - **done** | yes |
 | 212 | **done, on the device (fw 0.3.0)** - firmware: the store on the `screeny` partition, settings loaded at boot, debounce task, `ERR_STORAGE`, `SET_WIFI` wired, compile-time credentials optional (delivers 063) | yes |
 | 221 | `crates/provision`: the join/portal state machine, the `WIFI:` URI builder, the portal-screen renderer - **done** (60 tests; the rendered QR decodes with an independent decoder) | no |
 | 226 | `crates/device-api`: the HTTP JSON shapes in one `no_std` crate for firmware, sim and Studio - **done** (64 tests, golden JSON files; its own crate rather than a `crates/proto` feature, so the shared wire crate is untouched) | no |
-| 222 | **done, on the device (fw 0.4.0)**: http://192.168.7.221/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
-| 228 | `screeny-probe http`: 38 rules over the HTTP API, the same suite against the sim and the device - **done**; `cargo run --release -p screeny-probe -- --addr 192.168.7.221 http` is the check after every flash, beside the UDP `conformance`. Known firmware-0.4.x gaps are skips behind one constant, `screeny_probe::http::CARD_223_LANDED` | no |
+| 222 | **done, on the device (fw 0.4.0)**: http://192.168.1.50/ - 200 requests in 60 s during a stream cost no frame; one worker, so back-to-back connections pay a 1 s SYN retransmit; `stack_free` fell to 5.2 KB under load -> card 227. Was: firmware: picoserve on the LAN - `GET /api/v1/status`, the status page, `_http._tcp`; bench proof that HTTP costs no frame | yes |
+| 228 | `screeny-probe http`: 38 rules over the HTTP API, the same suite against the sim and the device - **done**; `cargo run --release -p screeny-probe -- --addr 192.168.1.50 http` is the check after every flash, beside the UDP `conformance`. Known firmware-0.4.x gaps are skips behind one constant, `screeny_probe::http::CARD_223_LANDED` | no |
 | 227 | **done (fw 0.4.2)** - RAM levers: where core 0's 18 KB of stack goes, core 1's 16 KB measured and resized, the second HTTP worker; **gates 223** | yes |
 | 233 | **done (fw 0.4.3)** - HTTP conformance 30/0/8, `stack_free` 20 KB and no longer creeping, 47 KB of flash back; the RAM target missed by ~500 bytes, so 223 takes the frame-socket tx buffer lever first. Was: one HTTP dispatch instead of picoserve's nested router: fixes the three findings of the first `screeny-probe http` device run (plain-text 405 for unknown verbs, `bad_request` vs `out_of_range` on an unconfirmed reboot), per-route body limits, and measures the RAM it buys; **gates 223** | yes |
-| 223 | **done, on the device (fw 0.5.0)** - HTTP suite green with the 223 rules enforced; the 64-rule UDP suite 60/0/4 (re-run 2026-09-20 with the Mac's WiFi off); the phone test passed on **fw 0.5.1** after five fixes, and one unexplained silent stall is open (the card's Log, 2026-09-20). Scanning split out to 229. Was: firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
+| 223 | **done, on the device (fw 0.5.0)** - HTTP suite green with the 223 rules enforced; the 64-rule UDP suite 60/0/4 (re-run 2026-09-20 with the bench machine's WiFi off); the phone test passed on **fw 0.5.1** after five fixes, and one unexplained silent stall is open (the card's Log, 2026-09-20). Scanning split out to 229. Was: firmware: APSTA soft-AP, DHCP, DNS catch-all, the portal state machine wired to the store, the portal screen, the settings page (scan list, trial join) | yes |
 | 224 | `crates/sim` serves the same HTTP API and models the WiFi/portal states through `crates/provision` - **done** (delivers 081; `screeny-sim --headless --http-port 8080 --start-in-portal`; sim suites 116 green, 64-rule conformance unchanged) | no |
 | 232 | **done** - from 224's feedback: credentials posted while `Online`/`Joining` run a trial **without** the AP and fall back to the stored network, not the portal, with a sticky `FAILED`; `crates/device-api` gains the scan rate limit constant + `RateLimit` and `route::find` | no |
 | 225 | **done** - spec 8.1 is the setup portal (serial console struck), 8.3 the real join sequence, 8.5-8.9 the HTTP API; nine code/spec disagreements listed and disposed of in the card's Log | no |
 | 235 | **done** - the simulator answers a captive probe with a `200` page like fw 0.5.1, not a `302` | no |
 | 234 | **doing** - fw 0.5.1 went silent once (HTTP first, UDP ~20 s later, then the log); find out why by reading | no |
-| 230 | **done, on the device (fw 0.8.0), benched with the owner 2026-09-21** (short press, hold 3 s and release, hold 5 s -> portal -> re-provisioned from his iPhone -> rejoined after a reboot; what he saw by eye is card 247): the button - GPIO15 with the internal pull-up, the gesture recogniser in `crates/provision::button` (12 host tests), a short press = `IDENTIFY` for 10 s through the mechanism that already existed, hold 5 s with the on-panel countdown = wipe WiFi -> portal, and the hold refused while an update is in flight or on trial. `crates/sim` can press it (`SimHandle::press_button`); 231 (15 s factory reset, held-at-boot) is dropped | yes |
+| 230 | **done, on the device (fw 0.8.0), benched 2026-09-21** (short press, hold 3 s and release, hold 5 s -> portal -> re-provisioned from a phone -> rejoined after a reboot; what was seen by eye is card 247): the button - GPIO15 with the internal pull-up, the gesture recogniser in `crates/provision::button` (12 host tests), a short press = `IDENTIFY` for 10 s through the mechanism that already existed, hold 5 s with the on-panel countdown = wipe WiFi -> portal, and the hold refused while an update is in flight or on trial. `crates/sim` can press it (`SimHandle::press_button`); 231 (15 s factory reset, held-at-boot) is dropped | yes |
 | 229 | network scan list - **dropped** (decision 10) | - |
 | 240 | **done, on the device (fw 0.6.0)** - `POST /api/v1/firmware` streams an image sector by sector into the inactive slot (`crates/fwimage`: 006's checks as a scanner; wrong chip/project refused before the first erase; SHA checked on arrival and read back from flash); `otadata` untouched, so nothing it does can change what boots. Bench: 998 KB in 25 s under a live stream, erases ~40 ms (55 worst), **link downs 0**, ~21% of stream frames lost during the upload, the updating screen on the panel | yes |
 | 241 | **done, on the device (fw 0.7.0)** - OTA activate / confirm / revert (`crates/otastate`): an upload activates by default (`?activate=0` stages only), boots on trial, confirms itself when healthy (never before 60 s), reverts at 180 s, and the bootloader rolls back any image that resets during its trial. Proved on the bench with a good, a never-healthy and a panicking image; always-on 20 s MWDT0 liveness watchdog (241b); `GET /api/v1/panic` reports `update` and `last_reset` | yes |
 | 245 | **done** - a flash erase/write could wedge both cores for ever (esp-storage parks core 1 wherever it is, then re-enables core 0's interrupts before un-parking it; the tick handler spins on the scheduler lock core 1 holds). Every flash write now holds the global critical section across park -> ROM -> un-park (`store::guarded`). 1,500 stress cycles + 6 uploads clean; before: 3 wedges in 3 uploads | yes |
 | 246 | **done, on the device (fw 0.7.1, benched inside 0.8.0 on 2026-09-21)** - a confirmed update no longer answers `busy` (upload -> CONFIRMED at 64 s -> a second upload accepted without a reboot); `fw-upload --activate` waits for `boot_id` to change; `fw_state` describes the running slot (spec 8.6 / 8.10 corrected); the probe restores on SIGTERM and notices a leftover `probe-*` name | yes |
 | 136 | **done, on the device** - a nonzero brightness below the duty floor snaps up to the dimmest lit level (`crates/receiver::clamp_brightness`; `brightness 3` -> applied 6) | no |
-| 247 | **done, on the device (fw 0.8.2, put on over WiFi)** - an identify overlay owns the panel (`Intent::shows_frames()`; the frame task no longer publishes the streamed frame under it; the chevron runs at 1.25 Hz on a wall clock), and the portal's QR screen is shown at the default brightness whatever the setting. The owner's eye: identify is solid over a 30 fps stream; the iPhone scans the QR again | yes |
+| 247 | **done, on the device (fw 0.8.2, put on over WiFi)** - an identify overlay owns the panel (`Intent::shows_frames()`; the frame task no longer publishes the streamed frame under it; the chevron runs at 1.25 Hz on a wall clock), and the portal's QR screen is shown at the default brightness whatever the setting. By eye: identify is solid over a 30 fps stream; the iPhone scans the QR again | yes |
 | 242 | rollback-capable bootloader - **built, committed, flashed by `fw-run.sh`**, boots, conformance 60/0/4; the app-side confirm/revert is card 241 | yes |
 | 243 | **done, on the device (fw 0.5.2)** - a panic prints its backtrace, leaves a breadcrumb in RTC slow memory and resets (proved with the `panic-test` build: panic -> `SW_RESET` -> rejoined -> `GET /api/v1/panic` reports it); crash-loop guard (5 panics under 60 s -> CRASHED screen, halt); boot-path stack lever; `http-selftest` fits again; `stack_free` 12.4 KB after the HTTP suite | yes |
 | 236 | **done, on the device (fw 0.5.3)** - picoserve's close waited for the *client's application* to close (up to 5 s) and logged three blocking UART lines per connection; the worker now owns the accept loop and its close waits only for the peer's ACK (500 ms bound). `screeny-probe http`: 9-17 refused connects per run -> 0, three runs; the probe retries and **counts** refusals in its last line | yes |

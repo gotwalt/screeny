@@ -1,9 +1,9 @@
 # Screeny Studio: from design tool to the thing that runs the panels
 
-Status: **accepted** (2026-09-19). Owner's vision, orchestrator's plan; the owner's
+Status: **accepted** (2026-09-19). The author's vision and plan; the author's
 answers to the open questions are recorded at the end and folded in throughout.
 
-## Vision (owner)
+## Vision
 
 Screeny Studio is run two ways from one codebase:
 
@@ -38,9 +38,9 @@ HTTP + WebSocket server (axum) embedding the static UI. Everything the UI does i
 HTTP/WS call. The two ways of running it are then the same program:
 
 - *local*: `screeny-studio` on localhost, opened in a browser tab;
-- *docker*: the same binary in a container on `workbench.local`, bound to the LAN.
+- *docker*: the same binary in a container on `studio-host.local`, bound to the LAN.
 
-**There is no desktop window.** The Tauri shell is dropped (owner's decision): it is
+**There is no desktop window.** The Tauri shell is dropped (the author's decision): it is
 a heavy dependency, and the real deployment is a server nobody looks at.
 
 This is cheap because of how the Studio was built: the 11 commands become 11 routes,
@@ -65,12 +65,12 @@ Properties that matter:
   a remote control and a window. Restart the container and it resumes what it was
   playing (state store).
 - **One player per device.** Same patch to several panels, or different ones. The
-  multi-device sender (parked card 091) and the patch runner/scheduler (card 104)
+  multi-device sender (a possible later addition, 091) and the patch runner/scheduler (card 104)
   land here, as parts of the server rather than as separate programs.
 - **Device controls** (brightness, identify, name, stats, reboot) are proxied through
   the existing control client. The device's own future captive-portal/HTTP settings
   page is a separate thing, for WiFi setup only.
-- **One panel, one picture** (owner, 2026-09-19, correcting the earlier "editing vs
+- **One panel, one picture** (author, 2026-09-19, correcting the earlier "editing vs
   playing" split): a Studio is set up once against a panel and is then almost always
   connected to it - one panel per Studio, almost always one panel on a network. The web
   page is a window onto what that panel is doing, for when the panel is not within
@@ -82,7 +82,7 @@ Properties that matter:
 
 ## Built to be forgotten
 
-The owner expects this to run **for months without anyone opening the page**.
+The author expects this to run **for months without anyone opening the page**.
 That is a design requirement, not an afterthought:
 
 - The sender reconnects by itself across panel reboots, WiFi drops and DHCP changes
@@ -103,12 +103,12 @@ That is a design requirement, not an afterthought:
 - Quiet hours / brightness schedule belong here eventually (a panel that runs for
   months lives in a room at night).
 
-## Deployment target: `workbench.local` (surveyed 2026-09-19)
+## Deployment target: `studio-host.local` (surveyed 2026-09-19)
 
 | | |
 |---|---|
 | OS | Ubuntu 24.04, x86_64, 12 cores, 30 GB RAM; Docker 29 + compose v5; Portainer on :9000/:9443 |
-| Network | wired, `192.168.7.6/24` - same subnet as the panel. Host avahi already resolves `screeny-4a00a4.local -> 192.168.7.221:49374`; ARP reachable. Only one WiFi hop (AP -> panel) |
+| Network | wired, `192.168.1.10/24` - same subnet as the panel. Host avahi already resolves `screeny-c0ffee.local -> 192.168.1.50:49374`; ARP reachable. Only one WiFi hop (AP -> panel) |
 | GPU | **Intel Raptor Lake-P UHD (integrated)**, `/dev/dri/renderD128`. No NVIDIA driver/runtime. More than enough for 64x32 |
 | Access | SSH with keys from the bench Mac; the login user is in `docker`, `render`, `video` |
 
@@ -122,7 +122,7 @@ the UI. The web port must avoid what is already listening there (8000, 8443, 900
 Described by a `docker-compose.yml` in the repo, deployable as a Portainer stack.
 **The files and the runbook are in [`deployment.md`](deployment.md)** (card 107);
 what follows here is the reasoning behind them.
-Building the image (Rust + wgpu) is slow; build on workbench over SSH
+Building the image (Rust + wgpu) is slow; build on studio-host over SSH
 (`docker compose build`) or publish an image, rather than building inside Portainer.
 
 ## Docker: what still bites
@@ -135,13 +135,13 @@ Building the image (Rust + wgpu) is slow; build on workbench over SSH
 2. **avahi owns UDP 5353 on the host.** The `mdns-sd` crate shares the port with
    `SO_REUSEPORT`; verify in the container early. If it fights, browse through the
    host's avahi over D-Bus instead, or rely on configured addresses.
-3. No authentication on the web UI or the device control channel (parked card 041).
-   Fine on the home LAN and over the tailnet workbench is already on; do not publish
+3. No authentication on the web UI or the device control channel (a possible later addition, 041).
+   Fine on the home LAN and over the tailnet studio-host is already on; do not publish
    the port to the internet.
 
 ## Repository shape
 
-One cargo workspace under `crates/` (owner's direction), firmware outside it because
+One cargo workspace under `crates/` (the author's direction), firmware outside it because
 it has a different target and toolchain:
 
 ```
@@ -164,9 +164,9 @@ One `Cargo.lock`, one `target/` (the separate target dirs currently cost gigabyt
 
 1. **Land what is in flight**: 011 (sender embedding API) and 016 (consolidation).
    Both touch the crates that would move; reorganising under them causes conflicts.
-2. **017 reorg** (orchestrator, mechanical, ~an hour): `git mv` into `crates/`, one
-   workspace, `default-members`, fix paths/docs. Done before the art session starts
-   new work, so nobody builds on the old layout.
+2. **017 reorg** (mechanical, ~an hour): `git mv` into `crates/`, one
+   workspace, `default-members`, fix paths/docs. Done before new patch work
+   starts, so nobody builds on the old layout.
 3. **101 Studio streams to hardware**: `SenderOutput` on `crates/screeny`; the engine
    gets a device target (picker: discovered + manual); real encoder stats replace the
    estimates. Milestone: design a patch in the Studio, watch it on the panel.
@@ -176,18 +176,18 @@ One `Cargo.lock`, one `target/` (the separate target dirs currently cost gigabyt
    manual), a player per device, atomic state store, resume on restart, panic
    containment, `/healthz`, device controls in the UI. The data model is a *list* of
    devices from day one; the UI is designed around one.
-6. **107 `docker-compose.yml` for workbench**: host network, `/dev/dri`, Mesa Vulkan,
+6. **107 `docker-compose.yml` for studio-host**: host network, `/dev/dri`, Mesa Vulkan,
    volume, healthcheck, log rotation, `TZ`; deploy over SSH; Portainer stack notes.
 7. **104 runner/scheduler** (incl. quiet hours), 102 (panel model reconcile), porting
    the demos into art.
 
-## Decisions (owner, 2026-09-19)
+## Decisions (author, 2026-09-19)
 
-1. **Runs on `workbench.local`**, described by `docker-compose.yml`, managed through
+1. **Runs on `studio-host.local`**, described by `docker-compose.yml`, managed through
    Portainer. It has a usable GPU (Intel integrated, see above).
 2. **No desktop window.** Server + browser only.
 3. **One panel is the expected case; several must not be precluded.** Other people may
    run this someday. So: devices and players are collections in the data model, the
    API and the state file; nothing assumes a single global device; manual addresses
    and non-host-network Docker keep working. But no multi-panel UI, synchronisation
-   or fan-out optimisation is built until someone needs it (card 091 stays parked).
+   or fan-out optimisation is built until someone needs it (a possible later addition, 091).

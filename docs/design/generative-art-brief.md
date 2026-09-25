@@ -3,8 +3,7 @@
 You are building a generative art system whose final output is a 64x32 RGB LED
 matrix (a Tidbyt Gen 1 running our custom "screeny" firmware), fed over WiFi by a
 sender program at up to 30 frames per second. This brief tells you what that target
-can and cannot show, how frames get there, and how to design for it. It was written
-by the Claude instance that is building the firmware and sender.
+can and cannot show, how frames get there, and how to design for it.
 
 Every statement carries a status:
 
@@ -29,7 +28,7 @@ If this brief disagrees with those, they win; tell your user so this file gets f
 | Black | LED off. True black, effectively infinite contrast | measured |
 | Colour depth | **6 bit planes per channel, linear light, plus device-side temporal dithering** (16 phases, bit-reversed, across the 154 Hz refresh): held, a colour resolves 229 of the 256 sRGB codes and the darkest visible level is sRGB 5; undithered (`output.panel: bit_planes`) it rounds to the nearest of 64 levels, darkest visible sRGB 21 | measured |
 | Brightness | runtime 0-255 via LED on-time, **does not cost colour depth**; 25 real steps; firmware cap 160, default 96 | measured |
-| Frame rate | **30 fps, and nothing else** (card 161): every codec ran 60 s at 30 with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so faster is *possible* - but WiFi loss and jitter set the ceiling, the picture gains nothing, and the owner asked for one rate with no variability. `screeny_art::FPS` is it | measured, then decided |
+| Frame rate | **30 fps, and nothing else** (card 161): every codec ran 60 s at 30 with zero decode drops and 0.2-0.9% network loss. The firmware stayed clean up to 120 fps on the bench, so faster is *possible* - but WiFi loss and jitter set the ceiling, the picture gains nothing, and one rate with no variability was chosen. `screeny_art::FPS` is it | measured, then decided |
 | Transport | one frame = one UDP datagram, **1464 bytes** for all 2048 pixels (~5.7 bits/pixel) | decided |
 | Delivery | unreliable, newest frame wins, a lost frame is simply skipped; the panel holds the last frame | decided |
 | Latency | ping RTT median 5 ms, p99 21 ms, max 37 ms; decode 0.2-0.8 ms; inter-arrival jitter 2-5 ms | measured |
@@ -61,7 +60,7 @@ sRGB is only 14 levels. **The firmware now fills those gaps by temporal ditherin
 it carries the sub-level remainder across panel refreshes (154 Hz, about 5 per 30 fps
 frame), so in-between values are shown as a time average. **[measured, card 007]**:
 mean luminance wobble is 1.7% with no periodic structure, and nothing is visible as
-flicker to the eye **from across a room**. **[owner, by eye, 2026-09-21]**: within a
+flicker to the eye **from across a room**. **[author, by eye, 2026-09-21]**: within a
 few feet, held colours close to black visibly blinked at several hertz - that 1.7% is
 an average over the panel, and up close the eye resolves single pixels. **[measured,
 card 248]**: the cause was the order the dither walked its sixteen phases in - counting
@@ -71,7 +70,7 @@ eight, a 9.6 Hz square wave. The firmware now walks the same sixteen phases
 components move fast - half a level now alternates every refresh (**77 Hz**), a quarter
 every four refreshes (**38 Hz**), and only a sixteenth of a level is left at 9.6 Hz. A
 **dead zone** then snaps that last, sub-perceptible remainder (1/16 or 15/16 of a level)
-onto the level instead of dithering it, so nothing is left slow at all. **[owner, by
+onto the level instead of dithering it, so nothing is left slow at all. **[author, by
 eye, 2026-09-21]**: "so much better already" up close, on fw 0.9.0 (`frac_bits` 4, the
 shipped default). Section 2.1.1 is what to do from the sender's side to steady the
 handful of levels the dead zone does not reach on its own; card 248's own log is the
@@ -361,7 +360,7 @@ very visible; treat it as a texture you are choosing, not a hidden trick.
   cap **[decided]**. A mostly-white frame is harsh to look at and is where any power
   limiting would bite first. Aim for an average picture level under ~40% and let
   highlights be small.
-- Audio-reactive work is in scope (the owner wants to use this as a visualizer). The
+- Audio-reactive work is in scope (the author wants to use this as a visualizer). The
   display path adds roughly 50 ms worst case (up to 33 ms frame wait plus network),
   so keep capture and analysis under ~20 ms (512-1024 sample windows at 48 kHz) and
   the result will feel locked to the music.
@@ -426,8 +425,8 @@ Seven things about it that should change how you build the output stage.
    so does `frames_coalesced`. **[measured]**
 
    This paragraph used to say the opposite - "keep your 60 fps loop, do *not* solve
-   this by rendering at 30, let the link decimate" - and card 161 reversed it on
-   the owner's instruction: the display can do nothing with the extra frames, so
+   this by rendering at 30, let the link decimate" - and card 161 reversed it: the
+   display can do nothing with the extra frames, so
    half the rendering was being thrown away and a patch's motion was sampled at 60
    and shown at 30. **Step your patch by `ctx.dt`, not by a frame count**, and the
    rate is then something the system can change without changing your patch.
@@ -451,7 +450,7 @@ construction, so it is the wrong answer for you.
 
 **The hardware still has a single owner.** Linking the sender does not change that:
 do not point a stream at the bench device, and never open the serial port or the
-camera (see `CLAUDE.md`). Develop against `crates/sim` - `cargo run -p screeny-sim`
+camera. Develop against `crates/sim` - `cargo run -p screeny-sim`
 is a window that shows what the panel would show, and `SimDevice::start(Config::
 for_test())` is a real receiver on loopback for your own tests - and against your
 own preview:

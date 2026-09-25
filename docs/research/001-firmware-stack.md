@@ -520,7 +520,7 @@ a guess, including the ones in this paragraph.
 **`edge-mdns` works, and there is now a responder in the skeleton**
 (`spike/fw-skeleton/src/mdns.rs`) advertising `screeny.local` and
 `_screeny._udp` on port 49374, with TXT records for protocol version, panel
-size and the control port. The orchestrator asked for this as a compile test;
+size and the control port. It was added as a compile test;
 it went in cleanly, so it stayed.
 
 The working set is `edge-mdns` 0.8.0 (features `io`, no defaults) +

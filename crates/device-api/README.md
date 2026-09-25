@@ -139,8 +139,8 @@ never happens: a real status reply is 385 bytes against a bound of 1039.
   than shown wrongly. Lossy conversion would change its length and mislead somebody
   comparing it with what they typed.
 * **Every mutating request carries an optional `pin` and `counter`**, parsed and ignored
-  (decision 3). `request::check_auth` is the one function parked card 041 will give
-  teeth to; every mutating route already calls it.
+  (decision 3). `request::check_auth` is the one function a possible later addition
+  (041) will give teeth to; every mutating route already calls it.
 
 ## Why 16 networks
 

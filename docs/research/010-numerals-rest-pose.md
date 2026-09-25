@@ -1,6 +1,6 @@
 # The numerals clock's rest pose: why `21:12` read as `2:1:12`
 
-Card 160. Contact sheets for the owner to judge against; the treatments are switchable
+Card 160. Contact sheets for the author to judge against; the treatments are switchable
 live from the studio (`clocks-numerals`, parameter **Resting dials**), because the real
 test is the panel from across the room and neither a preview nor a camera can stand in
 for it.
@@ -38,7 +38,7 @@ resting dials at all, so their five rows are identical: they are the control.
 ![Rest treatments at the awkward times](img/160-rest-sheet.png)
 
 The same sheet blurred down to about half the panel's resolution - "from across the
-room", which is how the owner reads it and the only test that separates the candidates:
+room", which is how the author reads it and the only test that separates the candidates:
 
 ![The same, squinted](img/160-rest-squint.png)
 
@@ -47,7 +47,7 @@ Read row by row:
 | | |
 |---|---|
 | 0 `as it was` | `2:1:12`, `1:1:1:1`, `:10:15`, `:1,4,4,7`. The bug. |
-| 1 `quiet` (7:30, dimmed to 0.20) | Better close up, still punctuation at distance. Kept as the option that changes only brightness: it is the most faithful to the original's rest pose, and the owner may disagree with the squint test on real LEDs. |
+| 1 `quiet` (7:30, dimmed to 0.20) | Better close up, still punctuation at distance. Kept as the option that changes only brightness: it is the most faithful to the original's rest pose, and the author may disagree with the squint test on real LEDs. |
 | 2 `hatched, quiet` | **The recommendation.** Diagonal, dimmed to 0.20. Reads `21 12`, `1447`; the marks read as texture. |
 | 3 `hatched, faint` | The same at 0.10 and drawn 10% short, if 2 is still too present on the panel. About as faint as a hand can be and stay a hand: at this ink it is roughly 6 of the panel's 64 levels. |
 | 4 `zigzag, quiet` | The per-row idea: odd rows mirror the pose so a column never repeats. It does break the straight line, but three small dim marks are still three small dim marks; I do not recommend it. Kept switchable because it is worth one look on the panel. |

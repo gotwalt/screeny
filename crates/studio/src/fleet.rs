@@ -99,7 +99,7 @@ pub fn spawn_supervisor(st: AppState) {
 }
 
 /// A studio that has never been attached to a panel attaches itself to the
-/// first one it finds. That is the zero-click case the owner asked for: plug
+/// first one it finds. That is the zero-click case the author asked for: plug
 /// the panel in, open the page, and the picture the page was already showing
 /// is on the panel.
 ///
@@ -499,7 +499,7 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
 /// than replacing them. Absent or failing HTTP is normal and never a problem
 /// in `/healthz`.
 ///
-/// **Every rule the firmware session asked for is a property of this one task**
+/// **Every rule the firmware imposes is a property of this one task**
 /// (card 222: the device has one connection worker and no listen backlog, so a
 /// second simultaneous connection is dropped at SYN):
 ///

@@ -31,7 +31,7 @@
 //!   structural here: no type in this crate has a field for it.
 //! * **Change the QR.** Version 2, ECC L, byte mode, one LED per module,
 //!   standard polarity, a 3-pixel lit quiet zone. Those five numbers were
-//!   measured against the owner's phone on the real panel on 2026-09-19 and
+//!   measured against the author's phone on the real panel on 2026-09-19 and
 //!   are not up for tuning; `tests/render.rs` decodes the rendered frame back
 //!   with an independent decoder so they cannot rot quietly.
 //! * **Read a clock.** Every method that needs the time is given `now_ms`,
@@ -44,7 +44,7 @@
 //! use screeny_provision::{Action, Config, Event, JoinTarget, Provisioner, State};
 //!
 //! let mut p = Provisioner::new(&Config {
-//!     ap_ssid: "screeny-4a00a4",
+//!     ap_ssid: "screeny-c0ffee",
 //!     has_stored: false,
 //!     ..Config::default()
 //! });

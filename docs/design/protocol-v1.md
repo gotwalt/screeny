@@ -925,7 +925,7 @@ channel and a client on the AP MAY lose it for the length of a trial join.
 
 | | |
 |---|---|
-| AP name | `screeny-<xxxxxx>`, the §5.1 device id. **Never the friendly name**: the QR below carries 14 characters and `screeny-4a00a4` is exactly 14. |
+| AP name | `screeny-<xxxxxx>`, the §5.1 device id. **Never the friendly name**: the QR below carries 14 characters and `screeny-c0ffee` is exactly 14. |
 | Authentication | **open** (device-web decision 2). The home PSK crosses it in clear; §8.4. |
 | Address | 192.168.4.1/24, static. The portal answers on that address only. |
 | DHCP | `192.168.4.50`-`.53`, four leases, 600 s, router and DNS both 192.168.4.1. **No RFC 8910 option 114** (see below). |
@@ -943,7 +943,7 @@ full-page reload, which is the only navigation the iOS mini-browser re-probes
 on. The page has **no file input**: they do not work in a captive mini-browser,
 so a firmware upload is on the LAN page only.
 
-Two things the portal deliberately does not do, both measured on the owner's
+Two things the portal deliberately does not do, both measured on the author's
 phone (iOS 18.7, card 223): it does not send DHCP option 114, because RFC
 8910/8908 want an HTTPS API endpoint on a hostname answering
 `application/captive+json` and this device can offer neither; and it does not
@@ -1014,7 +1014,7 @@ holds the credential until the machine asks for it to be committed, which is
    none and its `build.rs` does not look for any; the one build that does is
    the off-by-default `bench-wifi` build, for testing (device-web decision 6).
    A compile-time pair that joins **seeds an empty store**; it never replaces a
-   stored pair that failed, which is the owner's to replace and not a test
+   stored pair that failed, which is the author's to replace and not a test
    build's to overwrite;
 3. otherwise - nothing stored and nothing compiled in, or both exhausted - the
    **portal** of §8.1. The portal is never terminal.
@@ -1456,7 +1456,7 @@ phone on the setup network can still read the API. On the station interface the
 same request is an ordinary 404: the catch-all is a property of the **listener**
 and not of the `Host:` header.
 
-It is a `200` and not a `302` because of what the owner's phone did on
+It is a `200` and not a `302` because of what the author's phone did on
 2026-09-20 (iOS 18.7, card 223). The captive sheet fetches
 `hotspot-detect.html` on one connection and opens a second it never uses, which
 holds a worker for its read timeout; a redirect made it open a *third* within
@@ -1675,12 +1675,12 @@ Closed by card 004 (2026-09-19):
    the sender takes `--mtu`; the codec ladder already degrades to any budget >= 1376.
 3. **Playout buffer** - none, but the firmware keeps a compile-time toggle for a
    1-frame buffer so card 013 can measure the difference on hardware.
-4. **DDP** - the device never speaks DDP. A host-side proxy is parked as card 040.
+4. **DDP** - the device never speaks DDP. A host-side proxy is a possible later addition (040).
 5. **Ports 49374 / 49375** - confirmed.
 6. **mDNS responder** - `edge-mdns` 0.8 compiles with the stack and works on
    hardware: macOS browses and resolves it (docs/research/004-first-bringup.md).
 7. **Multiple devices from one sender** - sender-side only; no wire change.
-8. **Control auth** - out of v1. Parked as card 041.
+8. **Control auth** - out of v1. A possible later addition (041).
 9. **`FRAME_FRAG`** - stays reserved and undefined. One frame, one datagram.
 10. **Telemetry growth** - append fields and rely on `len`; no version bump.
 

@@ -105,7 +105,7 @@ const _: () = assert!(matches!(
 ///
 /// Four are used - DHCP on UDP/67, the DNS catch-all on UDP/53, and one HTTP
 /// listener per worker ([`crate::http::HTTP_TASKS`], both of which follow the
-/// AP since the owner's phone test) - and one is spare, because `edge-nal-embassy`'s `Udp` has been
+/// AP since the author's phone test) - and one is spare, because `edge-nal-embassy`'s `Udp` has been
 /// seen to hold more than the one socket its buffer type names (see
 /// [`crate::NET_SOCKETS`], where the same surprise cost a boot loop). The
 /// failure mode of getting this wrong is `SocketSet::add` panicking on the
@@ -398,7 +398,7 @@ impl PanelScreen {
 /// beside the QR's golden bitmap; what the firmware adds is the number, which
 /// belongs to the settings store rather than to that crate. It is
 /// [`crate::display::DEFAULT_BRIGHTNESS`] because that is the level
-/// `docs/design/device-web.md` decision 1 actually measured the owner's phone
+/// `docs/design/device-web.md` decision 1 actually measured the author's phone
 /// scanning - a fixed level, not a bright one, and never above what has been
 /// looked at.
 #[must_use]

@@ -311,7 +311,7 @@ published standard, not a bespoke command set: `IMPROV` (6 bytes) + version
 settings", 0x02 "request current state", 0x04 "request scanned networks".
 Implementing 1 in a way that is one refactor away from 3 is free.
 
-**Security.** The owner has said the Wi-Fi password is not a secret, so v1 leaves
+**Security.** The Wi-Fi password is not treated as a secret, so v1 leaves
 `SET_WIFI` and `REBOOT` unauthenticated on the LAN. Do not over-engineer this.
 But record what an untrusted-LAN deployment would need, because it is not
 obvious after the fact:

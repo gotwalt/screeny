@@ -11,7 +11,7 @@ use core::fmt::Write as _;
 use heapless::String;
 pub use screeny_proto::control::{MAX_NAME_LEN, MAX_PSK_LEN, MAX_SSID_LEN};
 
-/// The stable short device id, the MAC suffix: `4a00a4` is six characters.
+/// The stable short device id, the MAC suffix: `c0ffee` is six characters.
 /// Twelve leaves room for a full MAC if a later board wants one.
 pub const MAX_ID_LEN: usize = 12;
 

@@ -11,13 +11,13 @@
 //!
 //! # The length rule
 //!
-//! The owner measured on 2026-09-19 that `WIFI:T:nopass;S:screeny-4a00a4;;`
+//! The author measured on 2026-09-19 that `WIFI:T:nopass;S:screeny-c0ffee;;`
 //! is **exactly** the 32 bytes a version 2-L code holds in byte mode, and
 //! that the resulting 25x25 block scans easily off the panel. One more byte
 //! is version 3 (29x29), which with a 1-pixel quiet zone is 31 of the panel's
 //! 32 rows and leaves no room for text at all. So this module **refuses** an
 //! SSID that does not fit rather than quietly growing the code:
-//! [`SSID_MAX_NOPASS`] is 14 characters, and `screeny-4a00a4` is exactly 14.
+//! [`SSID_MAX_NOPASS`] is 14 characters, and `screeny-c0ffee` is exactly 14.
 
 use heapless::String;
 
@@ -37,7 +37,7 @@ pub const URI_MAX: usize = QR_V2L_BYTES + 2;
 ///
 /// Research 007 section 9.1: both are understood by ZXing's parser, the short
 /// one is nine bytes shorter, and the short one has **not** been scanned off
-/// this panel by the owner's phone yet. Ship [`UriForm::NoPass`]; a later
+/// this panel by the author's phone yet. Ship [`UriForm::NoPass`]; a later
 /// bench card flips the default if the short form reads on both an iPhone and
 /// an Android phone, and that is this enum's whole reason for existing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

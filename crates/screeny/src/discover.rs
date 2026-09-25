@@ -296,13 +296,13 @@ impl Target {
     /// |---|---|---|
     /// | `10.0.0.5:49374`, `[::1]:49374`, `10.0.0.5`, `::1`, `[::1]` | an address | nothing; used as given |
     /// | `host.docker.internal`, `panel.lan:49374`, `localhost:5000` | a host name (a dot, or a port, or both) | the system resolver |
-    /// | `screeny-4a00a4` | a DNS-SD instance name (no dots, no port) | an mDNS browse |
+    /// | `screeny-c0ffee` | a DNS-SD instance name (no dots, no port) | an mDNS browse |
     ///
     /// Two edges are worth saying out loud, because they are the whole of the
     /// ambiguity:
     ///
     /// * **A bare undotted name stays an mDNS instance name**, which is what
-    ///   it has always been and what `screeny-4a00a4` is. Give it a port, or
+    ///   it has always been and what `screeny-c0ffee` is. Give it a port, or
     ///   a dot, if you mean a host to look up.
     /// * **`something.local` is looked up by the system resolver first** and
     ///   browsed for second (as the instance name with `.local` removed). The
@@ -477,8 +477,8 @@ impl Target {
     }
 }
 
-/// The DNS-SD instance name a host name could also be: `screeny-4a00a4.local`
-/// is `screeny-4a00a4`. `None` if what is left still has a dot in it, because
+/// The DNS-SD instance name a host name could also be: `screeny-c0ffee.local`
+/// is `screeny-c0ffee`. `None` if what is left still has a dot in it, because
 /// a DNS-SD instance name in this service does not.
 fn instance_candidate(host: &str) -> Option<&str> {
     let base = host.strip_suffix('.').unwrap_or(host);

@@ -69,7 +69,7 @@ pub const START_GRACE: Duration = Duration::from_secs(15);
 ///
 /// Not a preference: the device has one connection worker and no listen
 /// backlog (firmware card 222), so every request costs it a socket nothing
-/// else can have while it is open. The firmware session measured 200 requests
+/// else can have while it is open. Testing on the real device measured 200 requests
 /// in 60 s during a 30 fps stream costing no frame, and asked for ten seconds.
 /// [`Config::default`] carries this and `main` clamps to it, so nothing that
 /// can reach a real panel can go faster; a test against the simulator on

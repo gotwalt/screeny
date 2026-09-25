@@ -36,7 +36,7 @@ file and line in `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/` at th
    Without it the residual risk is precisely: *an image that is structurally perfect and
    crashes or hangs before our own confirm code runs bootloops until someone plugs in
    USB.* §6 gives the app-side rollback that covers everything short of that, and the
-   cheapest mitigation if the owner does not want an ESP-IDF install.
+   cheapest mitigation if an ESP-IDF install is not wanted.
 
 5. **Core 1 must be stalled during every flash write, and that is survivable.**
    `esp-storage 0.10.0`'s default multi-core strategy is `Error`: with the display owning
@@ -406,11 +406,11 @@ project's bootloader with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` (espflash's 
 `--bootloader firmware/bootloader/...` to `tools/fw-run.sh`. It is written to 0x1000 on
 ESP32 (`espflash/src/target/mod.rs` line 343), same as the bundled one.
 
-Two things for the owner: ESP-IDF is **not installed here today** (`IDF_PATH` unset, no
-`idf.py`, no `~/esp`; `~/export-esp.sh` only sets the Xtensa Rust toolchain), and this puts
-a checked-in binary blob in a repo that is meant to go public. The blob is Espressif's own
-Apache-2.0 output and espflash already ships an equivalent, so it is not a licensing
-problem, but it is the owner's call.
+Two open questions: ESP-IDF is **not installed here today** (`IDF_PATH` unset, no
+`idf.py`, no `~/esp`; the environment file `espup` writes (`. ~/export-esp.sh`) only sets
+the Xtensa Rust toolchain), and this puts a checked-in binary blob in a repo that is
+meant to go public. The blob is Espressif's own Apache-2.0 output and espflash already
+ships an equivalent, so it is not a licensing problem, but it is the author's call.
 
 ### The app-side half, which we need either way
 
@@ -511,7 +511,7 @@ bound, and `Cache::new_uncached()` rather than a `NoCache` type.
 
 ## 9. Proposed build cards
 
-Card numbers are the orchestrator's to assign; these are titles and scope.
+Card numbers are assigned later; these are titles and scope.
 
 **A. Partition table and the flashing path.** Add `firmware/partitions.csv` exactly as
 §3. Change `tools/fw-run.sh` to pass `--partition-table` and `--erase-data-parts ota`, and
@@ -523,7 +523,7 @@ foundation every other card here sits on and should land alone.
 **B. A rollback-capable bootloader.** Install ESP-IDF v6.1, build a bootloader with
 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`, commit the binary under `firmware/bootloader/`
 with a README recording the IDF ref and the exact sdkconfig fragment, and teach
-`tools/fw-run.sh` to pass `--bootloader`. Needs an owner decision first (an IDF install
+`tools/fw-run.sh` to pass `--bootloader`. Needs a decision first (an IDF install
 and a checked-in blob in a repo meant to go public). Without this card, card E's rollback
 only covers images that boot.
 

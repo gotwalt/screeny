@@ -438,8 +438,8 @@ impl TrafficMeter {
 /// Bytes of core-0 stack left untouched, below which the margin has started to
 /// go and the page says so quietly.
 ///
-/// **Card 195: these are the firmware session's numbers, measured on the real
-/// device across several builds, and this is their reasoning.** Interrupts land
+/// **Card 195: these are measured on the real
+/// device across several builds, and this is the reasoning.** Interrupts land
 /// on core 0's stack at about **256 bytes of context per level**, and
 /// `stack_free` is a *high-water mark*: it only ever falls, so a reading is the
 /// worst moment since boot rather than this moment. A healthy 0.4.3 reads
@@ -469,7 +469,7 @@ pub const LOW_STACK: u32 = STACK_FAULT;
 
 /// Fraction of the heap in use, above which the page says so.
 ///
-/// **The firmware session's line, and a fault** (card 195): steady state is
+/// **The measured warning line, and a fault** (card 195): steady state is
 /// 45.6 KB of 90 KB - **51%** - and the measured worst instant, with the setup
 /// AP up, is 54 KB (**60%**). 85% is therefore nowhere near either, so a line
 /// drawn there is a real change rather than noise, and it still leaves ~13 KB,
@@ -511,8 +511,8 @@ const QUIET_RESETS: [ResetReason; 3] = [ResetReason::PowerOn, ResetReason::Softw
 /// page in the same commit that adds it.
 ///
 /// **`Debug` is written by hand and redacts the SSID.** The status payload
-/// carries the real network name, which is credential-adjacent in this repo
-/// (`CLAUDE.md`): it may be on the owner's page and in the studio's own
+/// carries the real network name, which is credential-adjacent: it may be
+/// on the owner's page and in the studio's own
 /// `/api/v1/status`, and it must never reach a log line, the state file, a
 /// fixture or a commit message. Deriving `Debug` here would put it one
 /// `{:?}` away from stderr, and [`DeviceRecord`] derives `Debug`.
@@ -526,9 +526,9 @@ pub struct DeviceFacts {
     /// How many times `boot_id` has **changed** since this studio started:
     /// the number of times the device rebooted while we were watching.
     ///
-    /// Counted from `boot_id` and never inferred from uptime, which is the
-    /// agreement with the firmware session: a device whose link merely flapped
-    /// keeps its `boot_id`, and a device that rebooted draws a new one.
+    /// Counted from `boot_id` and never inferred from uptime: a device whose
+    /// link merely flapped keeps its `boot_id`, and a device that rebooted
+    /// draws a new one.
     pub reboots: u32,
     /// How many of those reboots **this studio did not ask for**, and whose
     /// `reset_reason` is `software` (card 195).
@@ -1499,8 +1499,8 @@ mod tests {
         serde_json::from_str(include_str!("../../device-api/tests/golden/status.json")).expect("the golden status")
     }
 
-    /// The two levels the firmware session measured, and the heap line, read
-    /// off one reply each. The numbers are theirs; what is pinned here is
+    /// The two levels measured on the real device, and the heap line, read
+    /// off one reply each. The numbers come from there; what is pinned here is
     /// which side of them a reading falls on.
     #[test]
     fn the_stack_has_two_levels_and_the_heap_has_one() {

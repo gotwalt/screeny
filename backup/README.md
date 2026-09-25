@@ -14,9 +14,10 @@ Since card 210 (2026-09-20) the device carries screeny's own table instead
 (`firmware/partitions.csv`: nvs, otadata, ota_0 and ota_1 at 2 MB each, a 64 KB
 `screeny` settings partition). Restoring the stock image below overwrites all of it.
 
-Restore (baud must stay <= 230400 on this bench):
+Restore (baud must stay <= 230400 on this bench; your own backup will have a
+different name and hash):
 
-    esptool --port /dev/cu.usbserial-2140 --baud 230400 write-flash 0 tidbyt-stock-b48a0a4a00a4.bin
+    esptool --port $SCREENY_PORT --baud 230400 write-flash 0 tidbyt-stock-b48a0a4a00a4.bin
 
 Taken with `tools/backup-flash.sh`, which reads in 256 KB chunks and retries,
 because long reads corrupt at 460800 baud and above.

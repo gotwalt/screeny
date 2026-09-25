@@ -43,8 +43,8 @@ Xtensa bench. A few representative sheets are copied into
 
 ## Running the Xtensa instruction count
 
-Needs the `esp` rustup toolchain, the Xtensa GCC from `~/export-esp.sh` (for
-its linker), and `qemu-system-xtensa`.
+Needs the `esp` rustup toolchain, the Xtensa GCC from the environment file
+`espup` writes (`. ~/export-esp.sh`, for its linker), and `qemu-system-xtensa`.
 
 ```
 cargo run --release        # writes out/payloads/
