@@ -55,11 +55,11 @@ Screeny Studio as a service, in a container, on a machine nobody logs in to:
 
 ```bash
 docker compose -p screeny -f docker-compose.portable.yml up -d --build   # here, on a Mac
-tools/deploy-workbench.sh --dry-run                                      # there, over SSH
+tools/deploy.sh --dry-run                                                # there, over SSH
 ```
 
 `Dockerfile`, `docker-compose.yml` (Linux host + Intel iGPU),
-`docker-compose.portable.yml` (everywhere else) and `tools/deploy-workbench.sh`.
+`docker-compose.portable.yml` (everywhere else) and `tools/deploy.sh`.
 The runbook, what to verify on the host and how to take it all away again are in
 [`docs/design/deployment.md`](docs/design/deployment.md). **The studio has no
 password**: on a LAN that is the point, but do not publish the port.
