@@ -1,6 +1,6 @@
 //! The faces themselves - **generated** by `tools/art-faces.py`, do not edit.
 //!
-//! Card 174: the owner did not like the one face vesta had, so the face is a
+//! Card 174: the author did not like the one face vesta had, so the face is a
 //! choice. A bitmap face's cells *are* LEDs - drawn at 1:1 every one of them
 //! lands whole on one LED, which is a kind of crisp a stroked face cannot be
 //! on a 64 x 32 panel; see the half-LED rule in the module above.

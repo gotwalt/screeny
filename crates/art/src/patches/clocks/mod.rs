@@ -147,7 +147,7 @@ const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
 /// A resting dial's held, dark ink (card 188, brief 2.1.1). Index 0, **the
 /// default**, is `"as it was"`: the old continuous `tint.scale(ink)`,
 /// untouched - the review after this card's first cut found the default
-/// picture had moved (the warm, graded rest shade the owner had already
+/// picture had moved (the warm, graded rest shade the author had already
 /// tuned became a much dimmer, nearly flat one), which the card's own rule
 /// forbids. Every other entry is a short, hand-picked list of level triples,
 /// chosen **nearest the levels the old continuous colour actually measures
@@ -166,9 +166,9 @@ pub(crate) const DEFAULT_DARK: usize = 0;
 pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
     // "aligned warm": the nearest aligned triple to what the old continuous
     // ink actually measured (card 188 log, 2026-09-21 - "measured, after the
-    // owner's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
+    // author's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
     // Keeps the hour hand's own warm hue as far as per-channel alignment
-    // allows - the graded look the owner had tuned, steadied rather than
+    // allows - the graded look the author had tuned, steadied rather than
     // replaced.
     &[[6, 5, 3], [12, 10, 7]],
     // "aligned neutral": the same two rungs with the channels equalised
@@ -613,7 +613,7 @@ mod tests {
     use crate::color::Rgb;
     use crate::frame::{GUARANTEED_PALETTE, W};
 
-    /// The times the owner found this patch failing at (card 160), and what
+    /// The times the author found this patch failing at (card 160), and what
     /// each must draw. Every one of them contains a digit that leaves dials
     /// resting: `1`, `4` or `7`.
     const AWKWARD: [(u32, u32, [usize; 4]); 7] = [
@@ -685,7 +685,7 @@ mod tests {
 
     /// The format, pinned. Four digits, leading zeros kept, no separator of any
     /// kind: `09:05` is `0905` and the 24 dials are four numerals and nothing
-    /// else. This is the original's format and the owner's decision (card 160);
+    /// else. This is the original's format and the author's decision (card 160);
     /// the patch is not to grow a colon.
     #[test]
     fn the_time_is_four_digits_with_no_punctuation() {
@@ -901,9 +901,9 @@ mod tests {
         }
     }
 
-    /// Card 188 follow-up (owner's review, 2026-09-21): the first cut of this
+    /// Card 188 follow-up (author's review, 2026-09-21): the first cut of this
     /// card made the aligned shade the default and moved the picture - the
-    /// warm, graded rest shade the owner had already tuned became a much
+    /// warm, graded rest shade the author had already tuned became a much
     /// dimmer, nearly flat one - which the card's own rule ("the default must
     /// not change any existing patch's pixels") forbids. Fixed by making
     /// `DARK_CHOICES[0]`, `"as it was"`, the default and giving it `None`
