@@ -352,7 +352,10 @@ async function start() {
    *  Returns `null` when there is nothing worth a line - no panic on record,
    *  no watchdog reset, no update - which is the ordinary case. */
   function panicLine(p) {
+    // A panel that answered 404 (or nothing) leaves `reply` null: silence,
+    // not a line - and not an exception that empties every block below it.
     const r = p.reply;
+    if (!r) return null;
     const parts = [];
     let tone = null;
     if (r.last_panic) {
