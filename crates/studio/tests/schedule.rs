@@ -329,6 +329,33 @@ async fn a_mode_with_a_named_setting() {
     studio.stop().await;
 }
 
+/// Between an entry's minute and the scheduler's next look (up to 30 s in
+/// production) the entry is due and not yet applied. What is playing is then
+/// not *overriding* anything - it is about to be replaced - so the page must
+/// not say "Overridden" for those seconds at every change of mode (the loopback
+/// walkthrough showed it for ten).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_entry_that_has_not_been_applied_yet_is_not_an_override() {
+    let hand = Hand::at(2026, 9, 26, 21, 0);
+    // A scheduler that looks at start-up and then not again for an hour.
+    let cfg = Config { schedule_every: Duration::from_secs(3600), ..config(&hand, None) };
+    let studio = Studio::bind(cfg).await.expect("bind").spawn();
+    let at = studio.addr;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null,"brightness":null}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":null,"brightness":null}"#).await;
+    let s = ok(at, "/api/v1/schedule/set", r#"{"enabled":true,"entries":[{"at":"07:00","mode":"Day"},{"at":"22:00","mode":"Night"}]}"#).await;
+    assert_eq!((s["patch"].clone(), s["overridden"].clone()), ("flock".into(), false.into()));
+    hand.set(2026, 9, 26, 22, 0);
+    let s = state(at).await;
+    assert_eq!(s["patch"], "flock", "not applied yet: the scheduler has not looked");
+    assert_eq!((s["mode"].clone(), s["overridden"].clone()), ("Night".into(), false.into()));
+    // A hand change after it *has* been applied is one.
+    let s = ok(at, "/api/v1/schedule/resume", "{}").await;
+    assert_eq!(s["patch"], "vesta");
+    assert_eq!(ok(at, "/api/v1/set_patch", r#"{"id":"flock"}"#).await["overridden"], true);
+    studio.stop().await;
+}
+
 /// A mode whose patch this build has not got (a hand-edited or older file) is
 /// skipped when it comes due, and said - never an error, never a retry loop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

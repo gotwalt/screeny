@@ -586,8 +586,10 @@ pub struct PageState {
     /// The mode the schedule says should be on now; `null` when the schedule
     /// is off or empty.
     pub mode: Option<String>,
-    /// The schedule is on and what is playing is not what its due mode says -
-    /// by patch, by named setting or by brightness. Computed, never stored.
+    /// The schedule is on, its due entry has been applied, and what is playing
+    /// is not what that mode says - by patch, by named setting or by
+    /// brightness. Computed, never stored. (False while an entry has come due
+    /// and the scheduler has not looked yet: it is about to be applied.)
     pub overridden: bool,
     /// When the next entry comes due, `"HH:MM"`; `null` when the schedule is
     /// off or empty.
@@ -606,7 +608,13 @@ pub fn page_state(st: &AppState) -> PageState {
     let now = st.cfg.clock.now();
     let (mode, overridden, until) = if plan.schedule.enabled {
         let due = due(&plan.schedule, now);
-        let overridden = due.as_ref().and_then(|d| plan.mode(&d.mode)).is_some_and(|m| differs(st, m, &studio));
+        // An entry that has come due and not been applied yet - the seconds
+        // between its minute and the scheduler's next look - is about to be,
+        // so what is playing is not *overriding* it: it is simply early.
+        // Without this the page would say "Overridden" for up to one tick at
+        // every change of mode.
+        let pending = to_fire(&plan, now).is_some();
+        let overridden = !pending && due.as_ref().and_then(|d| plan.mode(&d.mode)).is_some_and(|m| differs(st, m, &studio));
         (due.map(|d| d.mode), overridden, next_at(&plan.schedule, now))
     } else {
         (None, false, None)
