@@ -3172,4 +3172,112 @@ mod tests {
         assert_eq!(loaded.patches["metaballs"].settings.len(), MAX_SETTINGS);
         assert!(store.health().repaired.iter().any(|s| s.contains(&format!("{MAX_SETTINGS}"))), "{:?}", store.health().repaired);
     }
+
+    /// **v5 -> v6** (card 302), on a realistic v5 file: the shape the live
+    /// service writes after card 151 - named settings, a tuned working copy,
+    /// a brightness policy - with dummy device names. The owner's tuning must
+    /// arrive intact; the only things that change are the ones the card
+    /// retired (a speed of 1.7x and a pause), and the three new keys start
+    /// empty. The v5 file is kept, byte for byte.
+    #[test]
+    fn a_real_v5_file_migrates_to_v6_with_its_tuning_intact() {
+        let dir = Temp::new("v5-to-v6");
+        let v5 = r#"{
+  "version": 5,
+  "devices": [
+    { "id": "aa11bb", "name": "the shelf", "instance": "screeny-aa11bb", "address": "", "manual": false }
+  ],
+  "players": [
+    {
+      "device": "aa11bb", "on": true, "patch": "clocks-dials", "seed": 4242,
+      "params": { "mood": 3.0, "dwell": 90.0 },
+      "output": { "dither": "bayer4", "limiter": { "enabled": true, "apl_cap": 0.4, "max_rise_per_s": 2.0 } },
+      "brightness": 96, "paused": true, "speed": 1.7
+    }
+  ],
+  "focus": "aa11bb",
+  "patches": {
+    "clocks-dials": {
+      "seed": 4242, "params": { "mood": 3.0, "dwell": 90.0 }, "speed": 1.7, "setting": "Evening",
+      "settings": {
+        "Evening": { "seed": 4242, "params": { "mood": 3.0, "dwell": 90.0 }, "speed": 1.7 },
+        "Busy":    { "seed": 11, "params": { "mood": 1.0 }, "speed": 1.0 }
+      }
+    },
+    "metaballs": {
+      "seed": 222, "params": { "count": 8.0, "hue": 330.0 },
+      "settings": { "Lava": { "seed": 222, "params": { "count": 8.0, "hue": 330.0 }, "speed": 0.25 } }
+    }
+  }
+}"#;
+        std::fs::write(dir.0.join(FILE), v5).expect("write the v5 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        assert_eq!(loaded.version, 6);
+        assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(5))).expect("the backup"), v5, "kept byte for byte");
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains("v6")), "{:?}", store.health().recovered);
+        assert!(!dir.0.join(BAD_FILE).exists());
+
+        // The tuning, intact.
+        let p = &loaded.players[0];
+        assert_eq!((p.patch.as_str(), p.seed, p.brightness), ("clocks-dials", 4242, Some(96)));
+        assert_eq!(p.params, BTreeMap::from([("dwell".to_string(), 90.0), ("mood".to_string(), 3.0)]));
+        assert_eq!(p.output.dither, screeny_art::dither::Dither::Bayer4);
+        let dials = &loaded.patches["clocks-dials"];
+        assert_eq!(dials.seed, Some(4242));
+        assert_eq!(dials.params, p.params);
+        assert_eq!(dials.setting, "Evening");
+        assert_eq!(dials.settings.keys().collect::<Vec<_>>(), ["Busy", "Evening"]);
+        assert_eq!(dials.settings["Evening"].params, p.params);
+        assert_eq!(dials.settings["Busy"].seed, 11);
+        let balls = &loaded.patches["metaballs"];
+        assert_eq!(balls.settings["Lava"].params, BTreeMap::from([("count".to_string(), 8.0), ("hue".to_string(), 330.0)]));
+
+        // What card 302 retired, and nothing else.
+        assert_eq!(p.speed, 1.0, "1.7x loads as 1.00x");
+        assert!(!p.paused, "and nothing is paused");
+        assert_eq!(dials.speed, Some(1.0));
+        assert!(dials.settings.values().chain(balls.settings.values()).all(|s| s.speed == 1.0));
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("4 saved speeds") && said[0].contains("1 paused player"), "{}", said[0]);
+
+        // The new keys start empty.
+        assert!(loaded.modes.is_empty());
+        assert_eq!(loaded.schedule, Schedule::default());
+        assert!(loaded.schedule_run.is_none());
+
+        // And the named setting still loads as itself - not modified.
+        let def = screeny_art::patch::find("clocks-dials").expect("clocks-dials");
+        let work = Working { params: sparse(def, &p.params), seed: p.seed, speed: p.speed };
+        assert!(!modified(&loaded.patches, def, &work), "Evening is still Evening, unmodified, after the retirement");
+    }
+
+    /// The v6 keys round-trip through the file, and a file that has them is
+    /// read back as it was written, with nothing to say about it.
+    #[test]
+    fn modes_and_the_schedule_round_trip_through_the_file() {
+        use crate::schedule::Entry;
+        let dir = Temp::new("v6-roundtrip");
+        let (store, _) = Store::open(Some(&dir.0));
+        let mut want = Persisted::default();
+        want.modes = vec![
+            Mode { name: "Day".into(), patch: "flock".into(), setting: None, brightness: None },
+            Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()), brightness: Some(6) },
+        ];
+        want.schedule = Schedule {
+            enabled: true,
+            entries: vec![Entry { at: "07:00".into(), mode: "Day".into() }, Entry { at: "22:00".into(), mode: "Night".into() }],
+        };
+        want.schedule_run = Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() });
+        store.save(want.clone());
+        store.flush();
+        store.stop();
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        assert!(text.contains("\"schedule_run\""), "{text}");
+        let (s2, back) = Store::open(Some(&dir.0));
+        assert_eq!(back, want);
+        assert!(s2.health().repaired.is_empty(), "{:?}", s2.health().repaired);
+        assert!(s2.health().recovered.is_none());
+    }
 }
