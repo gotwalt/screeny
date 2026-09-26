@@ -1,15 +1,16 @@
 //! Modes and the daily schedule (card 302).
 //!
-//! The owner, 2026-09-26: *"i'd like, for example, to be able to go into night
-//! mode where it's a different patch at the lowest possible visible
-//! brightness, then restore in the morning."*
+//! The owner, 2026-09-26: a night mode that is a different patch, restored in
+//! the morning. Later the same day (card 309) he made the panel's light level
+//! a separate concern from what is on the screen: a mode names the picture
+//! only; the level is set on the Panel screen or by the smart home, and a mode
+//! never touches it.
 //!
 //! Three things, and nothing else:
 //!
-//! - A **mode** is `{name, patch, setting, brightness}` (card 179's model): what
-//!   the panel should look like, by name. `setting` of `None` is the patch's
-//!   working copy - what it was last left at; `brightness` of `None` leaves the
-//!   panel's brightness alone.
+//! - A **mode** is `{name, patch, setting}`: what the panel should show, by
+//!   name. `setting` of `None` is the patch's working copy - what it was last
+//!   left at.
 //! - The **schedule** is a list of `{at: "HH:MM", mode}` for every day, and a
 //!   switch. The entry **due** at a local time is the latest one at or before
 //!   it - wrapping, so before the day's first entry the last one is due.
@@ -54,7 +55,10 @@ pub const TICK: Duration = Duration::from_secs(30);
 
 // ------------------------------------------------------------- the model ---
 
-/// What the panel should look like, by name.
+/// What the panel should show, by name. Nothing else: the light level is a
+/// separate concern (card 309). A file whose modes still carry the level card
+/// 302 gave them reads fine - serde ignores a key the struct does not declare
+/// (no `deny_unknown_fields` here, on purpose).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mode {
     pub name: String,
@@ -64,10 +68,6 @@ pub struct Mode {
     /// A named setting of that patch, or `Default`. `None` is the patch's
     /// working copy: whatever it was last left at.
     pub setting: Option<String>,
-    /// A panel brightness, always one of `page::brightness_stops()`. `None`
-    /// leaves the brightness alone. `0` is allowed: a dark panel is a
-    /// legitimate night.
-    pub brightness: Option<u8>,
 }
 
 /// One line of the timetable: at this local time, every day, this mode.
@@ -332,27 +332,6 @@ pub fn check_mode_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// The nearest real brightness stop to `level` (card 187): a mode never asks
-/// for a value that lands on a picture its neighbour already showed. A tie
-/// goes to the dimmer stop.
-///
-/// **Zero is dark and nothing else is.** A nonzero level snaps to the nearest
-/// *nonzero* stop, because that is what the firmware does with it (it raises
-/// anything dim-but-nonzero to its floor, card 136/187): `1` means "the
-/// dimmest the panel can show", which is exactly the owner's "lowest possible
-/// visible brightness", and must not round down to a dark panel.
-#[must_use]
-pub fn snap_brightness(level: u8) -> u8 {
-    if level == 0 {
-        return 0;
-    }
-    crate::page::brightness_stops()
-        .into_iter()
-        .filter(|s| *s > 0)
-        .min_by_key(|s| (i16::from(*s) - i16::from(level)).unsigned_abs())
-        .unwrap_or(level)
-}
-
 impl Plan {
     /// The mode called `name`, however it is spelled.
     #[must_use]
@@ -365,14 +344,14 @@ impl Plan {
     /// one that has it, which then takes the new spelling everywhere.
     ///
     /// The caller has already checked the patch and the setting (they need the
-    /// studio's memory); this checks the name, the bound and the brightness.
+    /// studio's memory); this checks the name and the bound.
     ///
     /// # Errors
     ///
     /// A name no mode may have, or [`MAX_MODES`] already.
     pub fn save_mode(&mut self, mode: Mode) -> Result<String, String> {
         let name = check_mode_name(&mode.name)?;
-        let mode = Mode { name: name.clone(), brightness: mode.brightness.map(snap_brightness), ..mode };
+        let mode = Mode { name: name.clone(), ..mode };
         if let Some(i) = self.modes.iter().position(|m| m.name.eq_ignore_ascii_case(&name)) {
             let old = std::mem::replace(&mut self.modes[i], mode);
             if old.name != name {
@@ -587,8 +566,9 @@ pub struct PageState {
     /// is off or empty.
     pub mode: Option<String>,
     /// The schedule is on, its due entry has been applied, and what is playing
-    /// is not what that mode says - by patch, by named setting or by
-    /// brightness. Computed, never stored. (False while an entry has come due
+    /// is not what that mode says - by patch or by named setting (a modified
+    /// setting counts). The light level is not part of a mode. Computed, never
+    /// stored. (False while an entry has come due
     /// and the scheduler has not looked yet: it is about to be applied.)
     pub overridden: bool,
     /// When the next entry comes due, `"HH:MM"`; `null` when the schedule is
@@ -648,21 +628,6 @@ fn differs(st: &AppState, mode: &Mode, now: &StudioState) -> bool {
             return true;
         }
     }
-    if let Some(want) = mode.brightness {
-        let player = st.page();
-        let mut want = snap_brightness(want);
-        // A panel whose own cap is below what the mode asks for has the policy
-        // pulled down to the cap (`Player::brightness_applied`); that is the
-        // mode, as well as this panel can do it, not an override.
-        if want > 0 {
-            if let Some(cap) = player.status().health.brightness_cap {
-                want = want.min(cap);
-            }
-        }
-        if player.stored().brightness != Some(want) {
-            return true;
-        }
-    }
     false
 }
 
@@ -695,8 +660,7 @@ fn resolve_setting(st: &AppState, def: &PatchDef, setting: Option<&str>) -> (Opt
 }
 
 /// Put the focused player into a mode: **one** `Player::configure_faded` - the
-/// patch, then the setting, then the brightness policy - so the panel moves in
-/// one step, over `FADE_SCHEDULED` when the timetable does it. Returns what had to be said on the way, if anything.
+/// patch, then the setting - so the panel moves in one step, over `FADE_SCHEDULED` when the timetable does it. Returns what had to be said on the way, if anything.
 ///
 /// `scheduled` is true when the timetable did it, false for a hand (the page,
 /// `/mode/apply`, the smart home). The run record is not this function's
@@ -716,7 +680,6 @@ pub fn apply(st: &AppState, name: &str, scheduled: bool) -> Result<Option<String
     let change = PlayerChange {
         patch: Some(def.id.to_string()),
         load_setting,
-        brightness: mode.brightness.map(|b| Some(snap_brightness(b))),
         ..PlayerChange::default()
     };
     // Card 304: a scheduled change cross-fades over `FADE_SCHEDULED` (5 s); a
@@ -803,9 +766,9 @@ mod tests {
     fn plan(entries: &[(&str, &str)]) -> Plan {
         let mut p = Plan {
             modes: vec![
-                Mode { name: "Day".into(), patch: "flock".into(), setting: None, brightness: None },
-                Mode { name: "Night".into(), patch: "vesta".into(), setting: None, brightness: Some(6) },
-                Mode { name: "Late".into(), patch: "vesta".into(), setting: None, brightness: Some(0) },
+                Mode { name: "Day".into(), patch: "flock".into(), setting: None },
+                Mode { name: "Night".into(), patch: "vesta".into(), setting: None },
+                Mode { name: "Late".into(), patch: "vesta".into(), setting: None },
             ],
             ..Plan::default()
         };
@@ -968,7 +931,7 @@ mod tests {
     #[test]
     fn modes_are_named_bounded_and_unique_however_they_are_spelled() {
         let mut p = Plan::default();
-        let m = |name: &str| Mode { name: name.into(), patch: "flock".into(), setting: None, brightness: None };
+        let m = |name: &str| Mode { name: name.into(), patch: "flock".into(), setting: None };
         assert_eq!(p.save_mode(m("  Night  ")), Ok("Night".into()));
         assert_eq!(p.modes.len(), 1);
         // The same name in another spelling is the same mode, and takes it.
@@ -986,19 +949,6 @@ mod tests {
         assert!(full.contains(&MAX_MODES.to_string()), "{full}");
         // Overwriting an existing one is still fine when full.
         assert!(p.save_mode(m("night")).is_ok());
-    }
-
-    #[test]
-    fn brightness_is_snapped_to_a_real_stop() {
-        let stops = crate::page::brightness_stops();
-        assert_eq!(snap_brightness(0), 0, "dark is a stop");
-        assert_eq!(snap_brightness(1), stops[1], "dim-but-on is the dimmest visible stop, never dark");
-        assert!(stops.contains(&snap_brightness(97)));
-        assert!(stops.contains(&snap_brightness(255)));
-        assert_eq!(snap_brightness(stops[1]), stops[1], "the dimmest visible stop is itself");
-        let mut p = Plan::default();
-        p.save_mode(Mode { name: "Dim".into(), patch: "vesta".into(), setting: None, brightness: Some(97) }).expect("ok");
-        assert!(stops.contains(&p.modes[0].brightness.expect("kept")));
     }
 
     #[test]
@@ -1034,10 +984,10 @@ mod tests {
     #[test]
     fn a_hand_edited_plan_costs_only_what_is_wrong() {
         let modes = serde_json::json!([
-            { "name": "Day", "patch": "flock", "setting": null, "brightness": null },
-            { "name": "day", "patch": "vesta", "setting": null, "brightness": null },
-            { "name": "", "patch": "vesta", "setting": null, "brightness": null },
-            { "name": "Night", "patch": "vesta", "setting": "Dim", "brightness": 97 },
+            { "name": "Day", "patch": "flock", "setting": null },
+            { "name": "day", "patch": "vesta", "setting": null },
+            { "name": "", "patch": "vesta", "setting": null },
+            { "name": "Night", "patch": "vesta", "setting": "Dim" },
             "rubbish"
         ]);
         let schedule = serde_json::json!({ "enabled": true, "entries": [
@@ -1051,7 +1001,6 @@ mod tests {
         let mut repaired = Vec::new();
         let p = clean(Some(&modes), Some(&schedule), Some(&run), &mut repaired);
         assert_eq!(p.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Day", "Night"]);
-        assert!(crate::page::brightness_stops().contains(&p.modes[1].brightness.expect("kept")));
         assert!(p.schedule.enabled);
         assert_eq!(p.schedule.entries.iter().map(|e| e.at.as_str()).collect::<Vec<_>>(), ["07:00", "22:00"]);
         assert_eq!(p.run.as_ref().expect("run").day, "2026-09-25");
