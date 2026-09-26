@@ -69,6 +69,9 @@ async fn hold_still(at: std::net::SocketAddr, st: &screeny_studio::AppState, pat
     let mut output = state["output"].clone();
     output["limiter"]["enabled"] = false.into();
     post(at, "/api/v1/set_output", &serde_json::json!({ "output": output }).to_string()).await;
+    // Card 304: the patch and the seed each cross-fade, and a blended frame
+    // is neither still nor indexed. Wait until the picture is the patch's own.
+    tokio::time::sleep(Duration::from_secs_f32(screeny_studio::player::FADE_MANUAL + 0.5)).await;
 }
 
 /// Card 105's half of card 101's acceptance, which card 170 makes a tautology

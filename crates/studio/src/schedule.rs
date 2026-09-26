@@ -719,12 +719,12 @@ pub fn apply(st: &AppState, name: &str, scheduled: bool) -> Result<Option<String
         brightness: mode.brightness.map(|b| Some(snap_brightness(b))),
         ..PlayerChange::default()
     };
-    // A scheduled change fades over 5 s; a hand change keeps the manual fade
-    // (`None`, 2 s). `PlayerChange` has no `fade` until card 304 lands.
-    let _fade = scheduled.then_some(5.0_f32);
+    // Card 304: a scheduled change cross-fades over `FADE_SCHEDULED` (5 s); a
+    // hand change - the page, `/mode/apply`, the smart home - over the manual
+    // fade (`None`, 2 s), like any other change made by hand.
+    let fade = scheduled.then_some(crate::player::FADE_SCHEDULED);
     let player = st.page();
-    // card 304: pass fade Some(5.0) here
-    player.configure(&change)?;
+    player.configure_faded(&change, fade)?;
     player.ensure_running();
     Ok(note.map(|n| format!("`{}`: {n}.", mode.name)))
 }

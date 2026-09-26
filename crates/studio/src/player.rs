@@ -43,6 +43,7 @@
 // renamed here because card 150 gave `Output` to the settings block below.
 use screeny_art::output::{Output as FrameSink, PanelStatus, SenderOutput};
 use screeny_art::patch::{local_now, Ctx, Params, Patch, PatchDef, Playing};
+use screeny_art::crossfade::{blend, Crossfade};
 use screeny_art::{Output, Pipeline};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -99,6 +100,28 @@ pub const MAX_FAULTS: u32 = 3;
 pub const IDLE_FPS: f64 = 5.0;
 /// How fast a patch may be played. Card 105's clamp, unchanged.
 pub const MAX_SPEED: f64 = 8.0;
+
+/// Seconds a picture change **made by hand** cross-fades over (card 304): a
+/// patch change, a named setting loaded, a new seed, a restart. The owner's
+/// number, 2026-09-26. Parameter edits happen in place and never fade.
+pub const FADE_MANUAL: f32 = 2.0;
+/// Seconds a picture change **the schedule makes** cross-fades over (card
+/// 304, for card 302's scheduler to pass). Longer, because nobody asked for
+/// it at that moment.
+pub const FADE_SCHEDULED: f32 = 5.0;
+/// Longest fade a caller may ask for. Anything longer is this.
+pub const FADE_MAX: f32 = 60.0;
+
+/// A caller's fade length, in seconds, as the render loop will use it:
+/// `None` (or anything not a number) is [`FADE_MANUAL`], zero or less is a
+/// cut, and nothing is longer than [`FADE_MAX`].
+#[must_use]
+pub fn fade_len(asked: Option<f32>) -> f64 {
+    match asked {
+        Some(s) if s.is_finite() => f64::from(s.clamp(0.0, FADE_MAX)),
+        _ => f64::from(FADE_MANUAL),
+    }
+}
 
 // ------------------------------------------------------------ the patches ---
 
@@ -287,34 +310,27 @@ pub struct PlayerStatus {
 // ----------------------------------------------------------------- a core ---
 
 /// The render state of one patch. Thrown away whole when it misbehaves.
+///
+/// Card 304 took the pipeline out of here and gave it to the render loop: a
+/// cross-fade is two cores feeding **one** limiter, and the limiter has to see
+/// the picture continuously across a change to own its brightness safety.
 struct Core {
     def: &'static PatchDef,
     patch: Box<dyn Patch>,
     params: Params,
-    pipeline: Pipeline,
-    seed: u32,
     t: f64,
-    last: Instant,
-    fps: f32,
 }
 
 impl Core {
-    /// One frame: the patch, the pipeline, and what the page is shown.
+    /// One frame of the patch, `wall` seconds after the last one.
     ///
     /// `paused` and `speed` are card 105's, moved here with the rest of the
     /// design view: the patch's clock is scaled, the pipeline's is not,
     /// because the limiter measures wall-clock rise.
-    fn tick(&mut self, paused: bool, speed: f64) -> screeny_art::pipeline::Processed {
-        let now = Instant::now();
-        let wall = now.duration_since(self.last).as_secs_f64();
-        self.last = now;
+    fn render(&mut self, wall: f64, paused: bool, speed: f64) -> screeny_art::Frame {
         let dt = if paused { 0.0 } else { wall * speed };
         self.t += dt;
-        let frame = self.patch.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params });
-        if wall > 0.0 {
-            self.fps += (1.0 / wall as f32 - self.fps) * 0.1;
-        }
-        self.pipeline.process(frame, wall)
+        self.patch.render(&Ctx { t: self.t, dt, now: local_now(), params: &self.params })
     }
 
     /// The patch's parameters, as the configuration now says.
@@ -324,12 +340,123 @@ impl Core {
             self.params.set(self.def.params, id, *v);
         }
     }
+}
 
-    /// Build the patch again from its seed and start its clock over.
-    fn restart(&mut self) {
-        self.patch = (self.def.make)(u64::from(self.seed));
-        self.pipeline.reset();
-        self.t = 0.0;
+// -------------------------------------------------------- the cross-fade ---
+
+/// What a fade is fading *from* (card 304).
+enum Outgoing {
+    /// The previous core, still running on its own clock - a clock's hands
+    /// keep moving and a flock keeps flying while it goes.
+    Live(Box<Core>),
+    /// A still: the last blended frame, when the picture changed again
+    /// mid-fade (fades never chain), or black at start-up, or whatever was
+    /// on the panel when a live outgoing core failed.
+    Held(screeny_art::Frame),
+}
+
+struct Fade {
+    from: Outgoing,
+    clock: Crossfade,
+}
+
+/// The picture a player renders: the current core and, during a fade, the one
+/// on its way out. Everything the render loop does between "a change arrived"
+/// and "a frame for the pipeline" is here, so the tests can drive it with a
+/// fake clock and no thread.
+struct Deck {
+    core: Core,
+    fade: Option<Fade>,
+    /// The last frame this deck put out, kept only while a fade runs: it is
+    /// the still a change mid-fade fades from.
+    last: Option<screeny_art::Frame>,
+    /// Said once per outgoing core that fails, rather than per frame.
+    warned: bool,
+}
+
+impl Deck {
+    /// A deck on `core` that fades in from black over `fade_in` seconds.
+    fn new(core: Core, fade_in: f64) -> Deck {
+        let mut deck = Deck { core, fade: None, last: None, warned: false };
+        let clock = Crossfade::new(fade_in);
+        if !clock.done() {
+            deck.fade = Some(Fade { from: Outgoing::Held(screeny_art::Frame::black()), clock });
+        }
+        deck
+    }
+
+    /// Put `next` on, fading from what is showing over `len` seconds. Zero is
+    /// a cut.
+    ///
+    /// A change mid-fade does not start a second fade on top of the first:
+    /// the frame on the panel right now is held as a still and becomes what
+    /// the new picture fades from, and both cores that were fading are
+    /// dropped.
+    fn switch(&mut self, next: Core, len: f64) {
+        let old = std::mem::replace(&mut self.core, next);
+        let clock = Crossfade::new(len);
+        if clock.done() {
+            self.fade = None;
+            self.last = None;
+            return;
+        }
+        let from = match self.fade.take() {
+            Some(_) => Outgoing::Held(self.last.take().unwrap_or_else(screeny_art::Frame::black)),
+            None => Outgoing::Live(Box::new(old)),
+        };
+        self.warned = false;
+        self.fade = Some(Fade { from, clock });
+    }
+
+    /// True while two pictures are being mixed.
+    #[cfg(test)]
+    fn fading(&self) -> bool {
+        self.fade.is_some()
+    }
+
+    /// The next frame for the pipeline, `wall` seconds after the last.
+    ///
+    /// The current core renders outside any `catch_unwind` of this deck's: a
+    /// panic there is the player's fault path, as it always was. The
+    /// *outgoing* core's render is caught here, because a patch that is on
+    /// its way out must not take the one coming in with it - a failing
+    /// outgoing core becomes a still of the last frame shown, and the fade
+    /// carries on.
+    fn render(&mut self, wall: f64, paused: bool, speed: f64) -> screeny_art::Frame {
+        let incoming = self.core.render(wall, paused, speed);
+        let Some(fade) = self.fade.as_mut() else {
+            return incoming;
+        };
+        fade.clock.advance(wall);
+        if fade.clock.done() {
+            // Over: the incoming frame goes through untouched, so an indexed
+            // patch is exact again from this frame on.
+            self.fade = None;
+            self.last = None;
+            return incoming;
+        }
+        let w = fade.clock.weight();
+        let out = match &mut fade.from {
+            Outgoing::Held(still) => blend(still, &incoming, w),
+            Outgoing::Live(core) => {
+                let from = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.render(wall, paused, speed)));
+                match from {
+                    Ok(from) => blend(&from, &incoming, w),
+                    Err(_) => {
+                        if !self.warned {
+                            eprintln!("studio: `{}` failed on its way out; fading from a still", core.def.id);
+                            self.warned = true;
+                        }
+                        let still = self.last.take().unwrap_or_else(screeny_art::Frame::black);
+                        let out = blend(&still, &incoming, w);
+                        fade.from = Outgoing::Held(still);
+                        out
+                    }
+                }
+            }
+        };
+        self.last = Some(out.clone());
+        out
     }
 }
 
@@ -386,6 +513,9 @@ struct Pending {
     restart: bool,
     /// One action a composing patch offered (card 140).
     action: Option<String>,
+    /// How long the next rebuild or restart fades over, in seconds, as
+    /// [`fade_len`] reads it. Newest wins, like everything else here.
+    fade: Option<f32>,
 }
 
 impl Pending {
@@ -635,10 +765,30 @@ impl Player {
     /// frame, so the page's sliders cost one re-read per frame rather than a
     /// thread each.
     ///
+    /// A change that rebuilds the picture - a patch, a setting, a seed, a
+    /// restart - cross-fades over [`FADE_MANUAL`] (card 304). To ask for
+    /// another length, [`Player::configure_faded`].
+    ///
     /// # Errors
     ///
     /// If no patch has that id, or the current patch has no such parameter.
     pub fn configure(self: &Arc<Self>, change: &PlayerChange) -> Result<(), String> {
+        self.configure_faded(change, None)
+    }
+
+    /// [`Player::configure`], with the length of the cross-fade the change
+    /// makes if it rebuilds the picture: `None` is [`FADE_MANUAL`],
+    /// `Some(0.0)` is a cut, and card 302's scheduler passes
+    /// `Some(FADE_SCHEDULED)`. Parameter edits never fade, whatever is asked.
+    ///
+    /// A method rather than a field on [`PlayerChange`] only because
+    /// `api.rs` builds a `PlayerChange` with every field named, and that file
+    /// was card 302's while this was written.
+    ///
+    /// # Errors
+    ///
+    /// As [`Player::configure`].
+    pub fn configure_faded(self: &Arc<Self>, change: &PlayerChange, fade: Option<f32>) -> Result<(), String> {
         let mut want = Pending::default();
         {
             let mut cfg = self.cfg();
@@ -746,6 +896,9 @@ impl Player {
             p.params |= want.params;
             p.output |= want.output;
             p.restart |= want.restart;
+            if want.rebuild || want.restart {
+                p.fade = fade;
+            }
             if want.action.is_some() {
                 // One slot: a burst of button presses is the newest one.
                 p.action = want.action;
@@ -1067,9 +1220,9 @@ impl Player {
     /// A core on whatever the configuration says, or on the fallback when that
     /// cannot be run. Never fails: a player always has something to show.
     fn make_core(&self) -> Core {
-        let (def, seed, params_map, output, device) = {
+        let (def, seed, params_map, device) = {
             let cfg = self.cfg();
-            (cfg.patch.clone(), cfg.seed, cfg.params.clone(), cfg.output, cfg.device.clone())
+            (cfg.patch.clone(), cfg.seed, cfg.params.clone(), cfg.device.clone())
         };
         // A patch that is unknown, or one this player has refused, becomes the
         // fallback rather than a reason not to run.
@@ -1093,16 +1246,7 @@ impl Player {
         for (id, v) in &params_map {
             params.set(chosen.params, id, *v);
         }
-        Core {
-            def: chosen,
-            patch: (chosen.make)(u64::from(seed)),
-            params,
-            pipeline: Pipeline::new(output),
-            seed,
-            t: 0.0,
-            last: Instant::now(),
-            fps: 0.0,
-        }
+        Core { def: chosen, patch: (chosen.make)(u64::from(seed)), params, t: 0.0 }
     }
 
     fn start_core(self: &Arc<Self>) {
@@ -1169,10 +1313,19 @@ pub struct PlayerChange {
 /// Everything that can change about what is being played arrives through the
 /// player's one-slot [`Pending`] and is applied here, between frames, so
 /// nothing a browser does costs a thread.
+///
+/// Card 304: the loop owns a [`Deck`] - the current core and, for a couple of
+/// seconds after a change, the one on its way out - and **one** pipeline,
+/// which the deck's blended frame goes through like any other. Every thread
+/// starts by fading in from black, which is the studio's first picture and a
+/// new player's first picture alike.
 fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
-    let mut core = core;
-    let mut patch_id = core.def.id.to_string();
+    let mut deck = Deck::new(core, f64::from(FADE_MANUAL));
+    let mut pipeline = Pipeline::new(player.cfg().output);
+    let mut patch_id = deck.core.def.id.to_string();
     let mut next = Instant::now();
+    let mut last = Instant::now();
+    let mut fps = 0.0_f32;
     let mut limits_at = Instant::now() - Duration::from_secs(10);
     let mut panicked = false;
 
@@ -1188,41 +1341,49 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         // The patch is the only code in here that can panic - `act` as much as
         // `render` - so both are inside the same `catch_unwind`, which is what
         // keeps one bad patch from taking the process, and the panel, with it.
+        //
+        // A rebuild and a restart are the same thing since card 304: a fresh
+        // core from the configuration, faded in over whatever was showing.
         let want = player.take_pending();
-        if want.rebuild {
-            core = player.make_core();
-            patch_id = core.def.id.to_string();
+        let rebuilt = want.rebuild || want.restart;
+        if rebuilt {
+            deck.switch(player.make_core(), fade_len(want.fade));
+            patch_id = deck.core.def.id.to_string();
         }
         // Read the configuration once, and only when something needs it: this
-        // runs sixty times a second.
+        // runs thirty times a second.
         let reconf = (want.params || want.output).then(|| player.stored());
+        if let Some(cfg) = &reconf {
+            if want.output {
+                pipeline.output = cfg.output;
+            }
+        }
+        let now = Instant::now();
+        let wall = now.duration_since(last).as_secs_f64();
+        last = now;
         let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if !want.rebuild {
+            if !rebuilt && want.params {
                 if let Some(cfg) = &reconf {
-                    if want.params {
-                        core.reload_params(cfg);
-                    }
-                    if want.output {
-                        core.pipeline.output = cfg.output;
-                    }
-                }
-                if want.restart {
-                    core.restart();
+                    deck.core.reload_params(cfg);
                 }
             }
             if let Some(action) = &want.action {
-                core.patch.act(action);
+                deck.core.patch.act(action);
             }
-            core.tick(paused, speed)
+            deck.render(wall, paused, speed)
         }));
-        let Ok(out) = rendered else {
+        let Ok(frame) = rendered else {
             panicked = true;
             break;
         };
+        if wall > 0.0 {
+            fps += (1.0 / wall as f32 - fps) * 0.1;
+        }
+        let out = pipeline.process(frame, wall);
         handle.ticks.fetch_add(1, Ordering::Relaxed);
-        *handle.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = core.fps;
+        *handle.fps.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = fps;
         if let Ok(mut p) = handle.playing.lock() {
-            *p = (core.def.id, core.patch.playing());
+            *p = (deck.core.def.id, deck.core.patch.playing());
         }
 
         // The page, if this is the player it is a window onto. One slot,
@@ -1231,7 +1392,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
         // the render loop or the panel link back.
         if player.is_focused() {
             let seq = player.seq.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-            player.screen.show(page::pack(seq, core.t, &out.stats, core.fps, &out.preview));
+            player.screen.show(page::pack(seq, deck.core.t, &out.stats, fps, &out.preview));
         }
 
         // Hand it to the panel. The link is the player's, not the core's.
@@ -1244,7 +1405,7 @@ fn run_core(player: &Arc<Player>, handle: &Arc<CoreHandle>, core: Core) {
                         limits_at = Instant::now();
                         let lim = link.limits();
                         if lim.connected {
-                            core.pipeline.meter().set_limits(lim.budget, lim.codecs.clone());
+                            pipeline.meter().set_limits(lim.budget, lim.codecs.clone());
                         }
                     }
                     let before = link.link().stats().frames_sent;
@@ -1853,6 +2014,227 @@ mod tests {
         let p = Player::new(cfg, false, memory.clone(), Screen::new());
         p.configure(&change(PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() })).expect("metaballs");
         assert!(memory.knows("from-the-future"));
+    }
+
+    // ------------------------------ the cross-fade (card 304) ------------------------------
+
+    use screeny_art::crossfade::ease;
+    use screeny_art::{Frame, Rgb, N};
+
+    /// A patch that is one colour, as an indexed frame, so "the output after
+    /// the fade is the incoming frame exactly" can be checked byte for byte.
+    struct Flat(Rgb);
+
+    impl Patch for Flat {
+        fn render(&mut self, _ctx: &Ctx) -> Frame {
+            Frame::Indexed { palette: vec![self.0], indices: vec![0; N] }
+        }
+    }
+
+    const RED: Rgb = Rgb::new(0.30, 0.02, 0.01);
+    const BLUE: Rgb = Rgb::new(0.01, 0.03, 0.25);
+    const GREEN: Rgb = Rgb::new(0.02, 0.20, 0.03);
+
+    static FLAT_PATCHES: &[PatchDef] = &[
+        PatchDef { id: "test-red", name: "red", blurb: "", params: &[], make: |_| Box::new(Flat(RED)), seeded: false },
+        PatchDef { id: "test-blue", name: "blue", blurb: "", params: &[], make: |_| Box::new(Flat(BLUE)), seeded: false },
+        PatchDef { id: "test-green", name: "green", blurb: "", params: &[], make: |_| Box::new(Flat(GREEN)), seeded: false },
+        PatchDef { id: "test-white", name: "white", blurb: "", params: &[], make: |_| Box::new(Flat(Rgb::splat(1.0))), seeded: false },
+    ];
+
+    fn core_of(def: &'static PatchDef) -> Core {
+        Core { def, patch: (def.make)(0), params: Params::defaults(def.params), t: 0.0 }
+    }
+
+    fn flat(id: &str) -> Core {
+        core_of(FLAT_PATCHES.iter().find(|d| d.id == id).expect("a test patch"))
+    }
+
+    const DT: f64 = 1.0 / 30.0;
+
+    fn close(a: Rgb, b: Rgb) -> bool {
+        (a.r - b.r).abs() < 1e-5 && (a.g - b.g).abs() < 1e-5 && (a.b - b.b).abs() < 1e-5
+    }
+
+    /// A patch change fades over the manual length with smoothstep weights,
+    /// and the first frame after the fade is the incoming patch's own frame,
+    /// indexed and exact - not a blend that happens to land on it.
+    #[test]
+    fn a_patch_change_fades_over_the_manual_length_and_lands_exactly() {
+        let mut deck = Deck::new(flat("test-red"), 0.0);
+        assert!(!deck.fading(), "a zero fade-in is no fade at all");
+        assert!(matches!(deck.render(DT, false, 1.0), Frame::Indexed { .. }));
+
+        deck.switch(flat("test-blue"), fade_len(None));
+        let mut frames = 0;
+        loop {
+            let f = deck.render(DT, false, 1.0);
+            frames += 1;
+            if !deck.fading() {
+                match f {
+                    Frame::Indexed { palette, indices } => {
+                        assert_eq!(palette, vec![BLUE]);
+                        assert_eq!(indices, vec![0; N]);
+                    }
+                    Frame::Linear(_) => panic!("after the fade the incoming frame goes through untouched"),
+                }
+                break;
+            }
+            let w = ease((frames as f64 * DT / f64::from(FADE_MANUAL)) as f32);
+            assert!(close(f.pixel(100), RED.lerp(BLUE, w)), "frame {frames}: {:?} is not {w} of the way", f.pixel(100));
+            assert!(frames < 100, "the fade never ended");
+        }
+        assert!((59..=61).contains(&frames), "two seconds at 30 fps, not {frames} frames");
+    }
+
+    /// The outgoing core keeps its own clock during the fade: it is ticked,
+    /// not frozen.
+    #[test]
+    fn the_outgoing_core_keeps_running() {
+        let mut deck = Deck::new(flat("test-red"), 0.0);
+        for _ in 0..30 {
+            deck.render(DT, false, 1.0);
+        }
+        deck.switch(flat("test-blue"), 2.0);
+        for _ in 0..15 {
+            deck.render(DT, false, 1.0);
+        }
+        let Some(Fade { from: Outgoing::Live(old), .. }) = &deck.fade else { panic!("a live outgoing core") };
+        assert!((old.t - 45.0 * DT).abs() < 1e-9, "the old clock ran on: {}", old.t);
+        assert!((deck.core.t - 15.0 * DT).abs() < 1e-9, "the new one started at zero");
+    }
+
+    /// A change mid-fade holds the frame that was showing as a still and
+    /// fades from that - it does not chain a second fade onto the first, and
+    /// both cores that were fading are gone.
+    #[test]
+    fn a_change_mid_fade_fades_from_a_held_still() {
+        let mut deck = Deck::new(flat("test-red"), 0.0);
+        deck.render(DT, false, 1.0);
+        deck.switch(flat("test-blue"), 2.0);
+        let mut shown = Frame::black();
+        for _ in 0..30 {
+            shown = deck.render(DT, false, 1.0);
+        }
+        let held = shown.pixel(0);
+        assert!(close(held, RED.lerp(BLUE, 0.5)), "one second in is an even mix: {held:?}");
+
+        deck.switch(flat("test-green"), 2.0);
+        match &deck.fade {
+            Some(Fade { from: Outgoing::Held(still), .. }) => assert!(close(still.pixel(0), held), "the still is the frame that was shown"),
+            _ => panic!("a change mid-fade must hold a still, not a live core"),
+        }
+        for k in 1..=45 {
+            let f = deck.render(DT, false, 1.0);
+            let w = ease((k as f64 * DT / 2.0) as f32);
+            assert!(close(f.pixel(0), held.lerp(GREEN, w)), "frame {k}: from the still, not from red or blue");
+        }
+    }
+
+    /// `Some(0.0)` is a cut: the very next frame is the new patch, exactly.
+    #[test]
+    fn a_zero_fade_is_a_cut() {
+        let mut deck = Deck::new(flat("test-red"), 0.0);
+        deck.render(DT, false, 1.0);
+        deck.switch(flat("test-blue"), fade_len(Some(0.0)));
+        assert!(!deck.fading());
+        let f = deck.render(DT, false, 1.0);
+        assert!(matches!(&f, Frame::Indexed { palette, .. } if palette == &vec![BLUE]));
+
+        // And a cut mid-fade is a cut too, not a fade from a still.
+        deck.switch(flat("test-green"), 2.0);
+        deck.render(DT, false, 1.0);
+        deck.switch(flat("test-red"), 0.0);
+        assert!(!deck.fading());
+        assert!(matches!(deck.render(DT, false, 1.0), Frame::Indexed { palette, .. } if palette == vec![RED]));
+    }
+
+    /// The first picture a render thread shows fades in from black.
+    #[test]
+    fn a_new_player_fades_in_from_black() {
+        let mut deck = Deck::new(flat("test-blue"), f64::from(FADE_MANUAL));
+        let first = deck.render(DT, false, 1.0).pixel(0);
+        assert!(first.b < BLUE.b * 0.01, "the first frame is all but black: {first:?}");
+        let mut frames = 1;
+        while deck.fading() {
+            deck.render(DT, false, 1.0);
+            frames += 1;
+        }
+        assert!((59..=61).contains(&frames), "over the manual length, not {frames} frames");
+    }
+
+    /// An outgoing patch that fails on its way out becomes a still of the last
+    /// frame shown; the incoming one carries on and nothing is faulted.
+    #[test]
+    fn an_outgoing_core_that_panics_becomes_a_still() {
+        let panicker = FAULT_PATCHES.iter().find(|d| d.id == "fault-panic").expect("fault-panic");
+        let mut deck = Deck::new(core_of(panicker), 0.0);
+        deck.render(DT, false, 1.0);
+        deck.render(DT, false, 1.0);
+        deck.switch(flat("test-blue"), 2.0);
+        for _ in 0..10 {
+            deck.render(DT, false, 1.0); // its fourth frame panics, inside the deck
+        }
+        assert!(matches!(&deck.fade, Some(Fade { from: Outgoing::Held(_), .. })));
+        while deck.fading() {
+            deck.render(DT, false, 1.0);
+        }
+        assert!(matches!(deck.render(DT, false, 1.0), Frame::Indexed { palette, .. } if palette == vec![BLUE]));
+    }
+
+    /// The limiter sees the blended frame: a fade into full white rises no
+    /// faster than the rise cap and settles at the APL cap, like any frame.
+    #[test]
+    fn the_limiter_runs_on_the_blended_frame() {
+        let mut deck = Deck::new(flat("test-red"), 0.0);
+        let mut pipe = Pipeline::new(Output::default());
+        let cap = Output::default().limiter;
+        let mut prev = pipe.process(deck.render(DT, false, 1.0), DT).stats.luma;
+        deck.switch(flat("test-white"), 2.0);
+        for _ in 0..120 {
+            let s = pipe.process(deck.render(DT, false, 1.0), DT).stats;
+            assert!(s.luma - prev <= cap.max_rise_per_s * DT as f32 + 1e-4, "rose {} in a frame", s.luma - prev);
+            assert!(s.apl <= cap.apl_cap + 1e-4, "{} is over the cap", s.apl);
+            prev = s.luma;
+        }
+        assert!((pipe.process(deck.render(DT, false, 1.0), DT).stats.apl - cap.apl_cap).abs() < 0.01);
+    }
+
+    /// What a caller asks for, as the render loop reads it.
+    #[test]
+    fn fade_lengths_as_asked() {
+        assert_eq!(fade_len(None), 2.0);
+        assert_eq!(fade_len(Some(FADE_SCHEDULED)), 5.0);
+        assert_eq!(fade_len(Some(0.0)), 0.0);
+        assert_eq!(fade_len(Some(-3.0)), 0.0);
+        assert_eq!(fade_len(Some(f32::NAN)), 2.0);
+        assert_eq!(fade_len(Some(1e9)), f64::from(FADE_MAX));
+    }
+
+    /// A rebuild carries its fade length to the render loop; a parameter edit
+    /// never fades, whatever it is asked to.
+    #[test]
+    fn a_rebuild_carries_its_fade_and_a_parameter_edit_has_none() {
+        let p = idle_player();
+        p.configure_faded(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }, Some(FADE_SCHEDULED))
+            .expect("metaballs");
+        let want = p.take_pending();
+        assert!(want.rebuild);
+        assert_eq!(want.fade, Some(FADE_SCHEDULED));
+
+        p.configure_faded(&PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() }, Some(9.0))
+            .expect("size");
+        let want = p.take_pending();
+        assert!(!want.rebuild && !want.restart);
+        assert_eq!(want.fade, None, "nothing to fade");
+
+        p.configure(&PlayerChange { restart: true, ..PlayerChange::default() }).expect("restart");
+        let want = p.take_pending();
+        assert!(want.restart);
+        assert_eq!(fade_len(want.fade), f64::from(FADE_MANUAL), "by hand is the manual length");
+
+        p.configure(&PlayerChange { seed: Some(4), ..PlayerChange::default() }).expect("a seed");
+        assert!(p.take_pending().rebuild, "a seed is a rebuild, and so a fade");
     }
 
     // ------------------------------- the fleet -------------------------------

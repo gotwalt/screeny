@@ -17,13 +17,12 @@
          it is "show me another one like this", which is the Another button in
          the Parameters section. It is still in /api/v1/status, in the state
          file and in that button's tooltip, for reproducing a frame. -->
+    <!-- The Time and Rate readouts were here until 2026-09-26. Time was seconds
+         since the studio started, which after weeks says nothing; Rate has one
+         right answer (the panel's own, `screeny_art::FPS`) and anything else
+         is a fault for /healthz and the Panel screen to raise, not a number to
+         watch. -->
     <dl class="readouts" aria-label="Run">
-      <div><dt>Time</dt><dd id="ro-time">–</dd></div>
-      <!-- Card 161: this is the rate the render loop is **achieving**, not a
-           rate anybody chose - there is only one of those now. It is kept
-           because it is the one place a machine that cannot hold 30 says so
-           (a debug build will not), and because a readout is not a control. -->
-      <div><dt>Rate</dt><dd id="ro-fps">–</dd></div>
       <!-- Card 198: the one thing on this screen that is about the panel
            rather than the picture. It says what the panel is doing, wears a
            fault tone when the panel needs attention - so that trouble is never
