@@ -34,6 +34,7 @@ pub mod api;
 pub mod devhttp;
 pub mod devices;
 pub mod fleet;
+pub mod ha;
 pub mod health;
 pub mod page;
 pub mod player;
@@ -135,6 +136,9 @@ pub struct Config {
     /// Card 302: how often the scheduler looks at the clock
     /// ([`schedule::TICK`], 30 s). It also looks once at start-up.
     pub schedule_every: Duration,
+    /// Card 308: Home Assistant over MQTT. `None` - the default, and what
+    /// every test that does not ask gets - talks to no broker.
+    pub mqtt: Option<ha::MqttConfig>,
 }
 
 impl Default for Config {
@@ -155,6 +159,7 @@ impl Default for Config {
             fault_patches: false,
             clock: schedule::Clock::system(),
             schedule_every: schedule::TICK,
+            mqtt: None,
         }
     }
 }
@@ -280,6 +285,8 @@ pub struct Studio {
     listener: TcpListener,
     state: AppState,
     stop: watch::Sender<bool>,
+    /// Card 308, when there is a broker to talk to.
+    ha: Option<ha::client::Handle>,
 }
 
 /// Stops the studio when dropped: every player ends, the panel link sends
@@ -370,8 +377,9 @@ impl Studio {
         // After the players are running, so its look at start-up applies an
         // entry that came due while the studio was down to a live player.
         schedule::spawn(state.clone());
+        let ha = cfg.mqtt.clone().map(|m| ha::bridge::start(&state, m));
 
-        Ok(Studio { addr, listener, state, stop })
+        Ok(Studio { addr, listener, state, stop, ha })
     }
 
     /// Everything a handler can reach, for a test that would rather poke the
@@ -409,6 +417,7 @@ impl Studio {
     pub async fn serve(self) -> std::io::Result<()> {
         let mut stopped = self.stop.subscribe();
         let st = self.state.clone();
+        let ha = self.ha;
         let app = router(self.state);
         axum::serve(self.listener, app)
             .with_graceful_shutdown(async move {
@@ -420,6 +429,11 @@ impl Studio {
         st.players.shutdown();
         st.persist();
         st.store.flush();
+        // Say `offline` on the way out, rather than leaving it to the broker
+        // to notice in a keep-alive or two.
+        if let Some(ha) = ha {
+            ha.finish(ha::client::GOODBYE).await;
+        }
         Ok(())
     }
 

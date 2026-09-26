@@ -1,0 +1,6 @@
+screeny/studio/patch/state {"id":"overland","name":"Overland","setting":"Dusk","modified":false}
+screeny/studio/brightness/state {"state":"OFF"}
+screeny/studio/scene/state None
+screeny/studio/schedule/state OFF
+screeny/studio/scheduled/state {"scene":null,"until":null,"overridden":false,"note":null}
+screeny/studio/panel/state OFF
