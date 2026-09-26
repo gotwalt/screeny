@@ -16,25 +16,33 @@ cargo run -p screeny-studio -- --ui-dir crates/studio/ui    # edit the UI, reloa
 Use `--release` for anything that streams: a debug build's encoder will not hold 30 fps.
 
 **One panel, one picture.** A Studio is set up once against a panel and is then
-almost always connected to it, and the page is a *window* onto what that panel is
+almost always connected to it, and every screen is a *window* onto what that panel is
 doing - for when the panel is not within eyesight. The frames the browser draws are
 the same decoded datagrams the panel is being sent, and every control on the page
-changes the panel: a patch, a slider, a seed, the seconds a clock holds a time.
+changes the panel: a patch, a slider, the setting a clock holds it to.
 
-There are **two screens** onto that one studio (card 198), because the work is two
-kinds of work:
+There are **three screens** onto that one studio (cards 198, 301), tied together by
+one nav at the top of every one of them, because the work is three kinds of work:
 
 | | |
 |---|---|
-| **Picture**, `/` | the canvas, what is playing, its parameters, time, how the panel is modelled, the limiter, the view, the meters - and **brightness**, which is how a patch looks on the LEDs. Everything that changes or judges what the picture looks like. |
-| **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, the same brightness control, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
+| **Picture**, `/` | the canvas, what is playing, its parameters, and its named settings. Everything that changes or judges what the picture looks like, and nothing else. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel, so it is not a panel setting either. |
+| **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, brightness, the panel model, the limiter, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
+| **Schedule**, `/schedule` | playing patches on a timetable rather than by hand. Card 303 builds the real thing; card 301 gave it the nav and the status chip so it is a real screen from the start. |
 
-They are the same state and the same stream, so a change on one shows on the other -
-and in another browser - at once. The Picture screen carries one **status chip** in
-its title block: the panel's name, what it is doing and the rate it is being sent. It
-is the link to the Panel screen, and it takes the fault tone and says why when the
-panel needs attention, so that trouble is never hidden behind a tab. The Panel screen
-has no canvas and therefore asks the socket for no frames at all.
+Card 301 also simplified the Picture screen: Speed and the pause/restart controls
+are gone - "I don't think speed should be varyable and start/stop is baffling in
+this ui", the owner said - and so is the seed's quiet **Another** button ("zero
+people understand it"). `set_seed`, `set_playback` and `restart` are still on the
+API for a script; nothing in the browser calls them any more.
+
+They are the same state and the same stream, so a change on one screen shows on the
+others - and in another browser - at once. Every screen carries the same **status
+chip**: the panel's name, what it is doing and (on the Picture screen, where there is
+a rate to show) how fast it is being sent. It is the way to the Panel screen, and it
+takes the fault tone and says why when the panel needs attention, so that trouble is
+never hidden behind whichever tab a person happens to be on. The Panel and Schedule
+screens have no canvas and therefore ask the socket for no frames at all.
 
 `/dashboard`, which was a second app until card 170, is folded into `/` and redirects.
 
@@ -239,12 +247,14 @@ build that has the parameter back gets the value back.
 
 The **seed** is in a setting, and in the state file, and on the API, and nowhere on the
 page: the number is opaque and says nothing about what is on the panel (the author, 2026-09-20).
-What a person wants from it is "show me another one like this", which is the one quiet
-**Another** button beside the settings control - shown only for a patch whose picture
-really depends on its seed (`PatchDef::seeded`, set per patch by reading its code), with
-`N` as its shortcut. A patch that composes as it goes has better words of its own - the
-clocks' "Compose another", the dials' "Move on" - and offers those under *Now playing*
-instead. The number is still in `/api/v1/status` and in that button's tooltip.
+What a person wants from it is "show me another one like this", which used to be the one
+quiet **Another** button beside the settings control - shown only for a patch whose
+picture really depends on its seed (`PatchDef::seeded`, set per patch by reading its
+code). Card 301 took it off the page entirely ("zero people understand it", the owner
+said), so `set_seed` is reached from the API now and not from the browser. A patch that
+composes as it goes has better words of its own - the clocks' "Compose another", the
+dials' "Move on" - and those stay, unaffected, under *Now playing*. The number itself
+is still in `/api/v1/status`, for reproducing a frame.
 
 Names are trimmed, 1 to 40 characters, unique within a patch however they are spelled
 (`Lava` and `lava` are one setting), and `Default` is reserved in any case. A refusal is a
@@ -591,34 +601,41 @@ message carries.
 
 ## Editing the UI
 
-`ui/` is six static files and no build step:
+`ui/` is eight static files and no build step:
 
 ```
-index.html  picture.js  ┐
-                        ├─ common.js   style.css
-panel.html  panel.js    ┘
+index.html     picture.js   ┐
+panel.html     panel.js     ├─ common.js   style.css
+schedule.html  schedule.js  ┘
 ```
 
-Two documents, one per screen, and the scripts are plain ES modules: each screen loads
+Three documents, one per screen, and the scripts are plain ES modules: each screen loads
 its own, which `import`s the shared one. `common.js` is the socket, the status poll,
 the notice line, the formatting, the small control bindings, the brightness control and
 the one judgement of what the panel is doing - and it **reaches for no element by id
-except `#notice`**, which both screens have; everything else is handed the element it
-works on. Two documents rather than one document with two views because "nothing about
-devices is on the Picture screen" is then a fact about the file, and because reload, the
-back button and a bookmark are the browser's job rather than a `popstate` handler's.
+except `#notice`**, which every screen has; everything else is handed the element it
+works on. Separate documents rather than one document with several views because
+"nothing about devices is on the Picture screen" is then a fact about the file, and
+because reload, the back button and a bookmark are the browser's job rather than a
+`popstate` handler's.
 
 They are `include_bytes!`d into the binary, so `cargo run` always serves what is in the
 tree; **`--ui-dir` serves them off disk** for a reload-to-see-it loop, which is what to
 use while editing. A new file has to be listed in `src/ui.rs`, and so does a new screen's
 tidy URL.
 
-Each screen is a **scrolling column by default** - the Picture screen is picture, now
-playing, parameters, brightness, time... - and splits into two columns only above
-1100 px, where there is room. Doing it the other way round is what used to put the
-walnut frame on top of the controls at around 600 px. Checked at 390 and 1400 px in a
-browser for both screens (card 198's Log), and at 390, 600, 900 and 1400 in card 170's;
-the screenshots are in those Logs and, for the controls below, in cards 145/163/171-173's.
+**One nav** (card 301), the same markup on every screen, at the very top of it: real
+`<a href>`s to `/`, `/panel` and `/schedule`, the current one marked with
+`aria-current="page"` - real navigation, so reload and the back button stay the
+browser's job, rather than tabs that swap what one document shows.
+
+Each screen is a **scrolling column by default** - the Picture screen is picture, view,
+now playing, parameters... - and splits into two columns only above 1100 px, where
+there is room. Doing it the other way round is what used to put the walnut frame on
+top of the controls at around 600 px. Checked at 390 and 1400 px in a browser for both
+screens (card 198's Log), and at 390, 600, 900 and 1400 in card 170's; the screenshots
+are in those Logs and, for the controls below, in cards 145/163/171-173's. The
+Schedule screen is one short section and never earns either layout.
 
 **A control's shape comes from what it controls** (card 163). The page builds each
 parameter from its `ParamSpec`: an ordinary number is a slider, a spec with `choices` is
@@ -627,19 +644,18 @@ a segmented control (three stops or fewer, which fit across the inspector at 390
 value changes - it is an `f32` set with `set_param` either way - so a patch asks for the
 control it wants by how it declares the parameter, and never by putting a key in a label.
 
-**Nothing on either screen may say something that is not so.** The rate control spans
-the player's whole range rather than offering two stops it might not be on (172), and the
-stops it declares are drawn where the thumb lands rather than declared and left invisible
-(183, and 197 for Speed, whose home position is marked and a double-click away); the
-output switch says what it really does when there is no panel (181); the Panel screen
-says whether the studio is even looking for panels (173); "Reconnects" is a
-player-lifetime count that survives the link being rebuilt (171); a patch that needs
-a graphics adapter there is none for is struck through with the reason rather than
-offered and then black (145); and the brightness slider says out loud that it is the
-panel's own brightness, which is why the picture on screen does not change with it.
-Card 151 took the **seed's number** off both screens for the same reason: it was a
-readout that told a person nothing they could act on. What is left is a button that says
-what it does - *Another* - on the patches where it does anything.
+**Nothing on any screen may say something that is not so.** The output switch says
+what it really does when there is no panel (181); the Panel screen says whether the
+studio is even looking for panels (173); "Reconnects" is a player-lifetime count that
+survives the link being rebuilt (171); a patch that needs a graphics adapter there is
+none for is struck through with the reason rather than offered and then black (145);
+and the brightness slider says out loud that it is the panel's own brightness, which is
+why the picture on screen does not change with it. Card 151 took the **seed's number**
+off every screen for the same reason: it was a readout that told a person nothing they
+could act on. Card 301 went further and took the seed's own control off the page too -
+the quiet *Another* button nobody understood - along with Speed and the pause/restart
+controls, because a rate somebody could vary and a start/stop that (the owner's word)
+baffled were not earning their place either.
 
 **The settings control** heads the Parameters section, above what it holds: the name, a
 mark when it has been moved since, the list to load from with Default first, and Save /
@@ -650,7 +666,7 @@ cannot be driven by the browser tooling, cannot be styled and stop the page - an
 refusal appears beside the control rather than on the page's shared notice line.
 
 No framework, no bundler, no CDN: the box this runs on has no promise of internet, and a
-test asserts that no file of either screen reaches outside it.
+test asserts that no file of any screen reaches outside it.
 
 ## Tests
 
@@ -670,7 +686,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
-| `tests/ui.rs` | **both screens** and their four files are served, `/panel` and `/panel.js` are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **both**), every route they call exists, each screen's narrow layout stays the default - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel screen, brightness bound once for both), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on either screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that every slider's declared stops are **drawn** on the thumb's own geometry, are inside its own range and never snap (183, 197), that a parameter with named stops carries them (163), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
+| `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/schedule`/`/schedule.js`) are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, and **one nav with the current screen marked** is on every one of them (301) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Schedule screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |

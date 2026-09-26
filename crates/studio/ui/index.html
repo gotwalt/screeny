@@ -7,16 +7,25 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body class="picture-page">
+  <!-- Card 301: one nav, the same markup on every screen, with the current
+       one marked. Real navigation - URLs that survive a reload, so the back
+       button is the browser's job and not ours. -->
+  <nav class="nav" aria-label="Screeny Studio">
+    <a href="/" aria-current="page">Picture</a>
+    <a href="/panel">Panel</a>
+    <a href="/schedule">Schedule</a>
+  </nav>
+
   <header class="titleblock">
     <div class="titleblock__patch">
       <h1 id="patch-name">&nbsp;</h1>
       <p id="patch-blurb"></p>
     </div>
-    <!-- Card 151 took the Seed readout out of here. The number is opaque - it
-         says nothing about what is on the panel - and what a person wants from
-         it is "show me another one like this", which is the Another button in
-         the Parameters section. It is still in /api/v1/status, in the state
-         file and in that button's tooltip, for reproducing a frame. -->
+    <!-- Card 151 took the Seed readout out of here, and card 301 took the
+         Another button off the page entirely - "zero people understand it",
+         the owner said. The number is still in /api/v1/status and in the
+         state file, for reproducing a frame; it is reached from the API now,
+         never from the browser. -->
     <!-- The Time and Rate readouts were here until 2026-09-26. Time was seconds
          since the studio started, which after weeks says nothing; Rate has one
          right answer (the panel's own, `screeny_art::FPS`) and anything else
@@ -40,6 +49,43 @@
     <p class="notice stage__notice" id="notice" role="status" hidden></p>
   </section>
 
+  <!-- Card 301: View is how *this browser* draws the panel, not a panel
+       setting - its effect is only visible beside the canvas, and nothing
+       here reaches the panel. It lives folded under the picture, closed by
+       default, rather than beside the patch's own controls in the sidebar. -->
+  <details class="view" id="sec-view">
+    <summary>View</summary>
+    <div class="view__body">
+      <p class="hint">How this browser draws the panel. Nothing here reaches the panel.</p>
+      <fieldset class="seg" id="view-mode">
+        <legend>Show as</legend>
+        <label title="1"><input type="radio" name="mode" value="dots"><span>LEDs</span></label>
+        <label title="2"><input type="radio" name="mode" value="squint"><span>Squint</span></label>
+        <label title="3"><input type="radio" name="mode" value="raw"><span>Pixels</span></label>
+      </fieldset>
+      <fieldset class="seg" id="view-size">
+        <legend>Size</legend>
+        <label><input type="radio" name="size" value="fit"><span>Fit</span></label>
+        <label><input type="radio" name="size" value="actual"><span>Actual</span></label>
+        <label><input type="radio" name="size" value="12"><span>12×</span></label>
+      </fieldset>
+      <div class="row row--density" id="density-row">
+        <label for="density">Screen density</label>
+        <input id="density" type="number" min="2" max="12" step="0.01">
+        <span class="unit">px/mm</span>
+      </div>
+      <p class="hint" id="density-hint">Hold a ruler to the bezel: the lit area should be 192 mm wide.</p>
+      <div class="slider" id="dot-slider">
+        <label for="dot">LED size</label><output></output>
+        <input id="dot" type="range" min="0.4" max="1" step="0.01">
+      </div>
+      <div class="slider" id="bloom-slider">
+        <label for="bloom">Bloom</label><output></output>
+        <input id="bloom" type="range" min="0" max="1" step="0.01">
+      </div>
+    </div>
+  </details>
+
   <aside class="inspector" aria-label="Controls">
     <section id="sec-now">
       <h2>Now playing</h2>
@@ -56,11 +102,6 @@
     <section id="sec-params">
       <div class="section-head">
         <h2>Parameters</h2>
-        <!-- Card 151: "another one like this", which is the only thing the seed
-             is good for to a person. Shown only for a patch whose picture
-             actually depends on its seed (`PatchDef::seeded`); a patch with
-             better words of its own offers those under Now playing instead. -->
-        <button type="button" class="quiet" id="another" hidden>Another</button>
       </div>
 
       <!-- Card 151: the patch's settings, at the head of what they hold.
@@ -95,131 +136,6 @@
         <p class="hint" id="setting-error" data-tone="bad" hidden></p>
       </div>
       <div id="params"></div>
-    </section>
-
-    <!-- Card 198: brightness is the one panel control that stays on this
-         screen, because it changes how the patch looks on the LEDs and is part
-         of judging it. It is the same control as the Panel screen's, bound
-         once in `common.js`; everything else about the panel is over there. -->
-    <section id="sec-bright">
-      <h2>Brightness</h2>
-      <div class="slider" id="bright-slider">
-        <label for="bright">Level</label><output></output>
-        <!-- Card 187: an index into the server's brightness stops, not the
-             raw level - see common.js's bindBrightness, which sets the real
-             min/max/step and the value on load. -->
-        <input id="bright" type="range" min="0" max="25" step="1" value="0">
-      </div>
-      <p class="hint">The panel's own brightness, which is why the picture above does not change with it.</p>
-      <p class="hint" id="bright-note"></p>
-    </section>
-
-    <section id="sec-time">
-      <h2>Time</h2>
-      <div class="row">
-        <button type="button" id="pause" title="Space">Pause</button>
-        <button type="button" id="restart" title="R">Restart</button>
-      </div>
-      <!-- Card 161 took the "Frames per second" slider out of here (card 172
-           put it in; card 105's two buttons before that). There is one rate,
-           30, and nothing offers another: the author asked for no variability,
-           and rendering above the panel's own rate only fed the link frames it
-           folded away. `drawStops` stays - it is Speed's mechanism now too. -->
-      <!-- Card 197: Speed runs 0.1 to 4.0 in steps of 0.05, and 1.00x - "play
-           it as the patch intended" - was one of 79 positions with no mark and
-           no way back except the keyboard. Three stops, drawn by the same
-           mechanism as the rate slider's, and a double-click on the thumb
-           returns it to 1.00x. They do not snap. -->
-      <div class="slider" id="speed-slider">
-        <label for="speed">Speed</label><output></output>
-        <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1" list="speed-stops"
-               title="Double-click for 1.00×">
-        <datalist id="speed-stops">
-          <option value="0.5" label="half speed"></option>
-          <option value="1" label="as the patch intended"></option>
-          <option value="2" label="twice as fast"></option>
-        </datalist>
-      </div>
-    </section>
-
-    <section id="sec-model">
-      <h2>Panel model</h2>
-      <!-- Card 102. This was "Levels per channel: 64 / 32 / 16". 32 and 16
-           modelled the panel being dimmed by scaling pixel values, which this
-           device has not done since card 020 - it shortens the output-enable
-           window instead, so every duty step survives at every brightness. 64
-           was the panel before card 030 taught the firmware to spend the
-           sub-level remainder across sixteen refreshes. What is left is the
-           one comparison the brief actually asks for. -->
-      <fieldset class="seg" id="panel-kind">
-        <legend>Panel</legend>
-        <label title="What the device shows: 1008 duty steps per channel, only sRGB 0-4 black">
-          <input type="radio" name="panel" value="dithered"><span>Dithered</span></label>
-        <label title="The same panel without its temporal dither: 64 levels, nothing below sRGB 21">
-          <input type="radio" name="panel" value="bit_planes"><span>Bit planes</span></label>
-        <label title="Dithered above level 16; below it every held shade sits exactly on a level, so the dark end holds still">
-          <input type="radio" name="panel" value="aligned_dark"><span>Aligned dark</span></label>
-      </fieldset>
-      <p class="hint">The firmware spreads each colour's sub-level remainder over sixteen panel
-        refreshes, walked so the dither does not blink up close (card 248), so a held colour
-        resolves 1008 duty steps and only sRGB 0-4 are black.
-        <em>Bit planes</em> is the same panel without that - 64 levels, nothing under sRGB 21 -
-        which is how the darks behave for anything that does not hold still for about 100 ms.
-        <em>Aligned dark</em> keeps the dithered panel above level 16 and puts every darker
-        shade exactly on a level, so held dark shades do not blink up close (card 188).</p>
-      <fieldset class="seg" id="dither">
-        <legend>Dither</legend>
-        <label><input type="radio" name="dither" value="none"><span>None</span></label>
-        <label><input type="radio" name="dither" value="bayer4"><span>Bayer 4</span></label>
-        <label><input type="radio" name="dither" value="bayer8"><span>Bayer 8</span></label>
-        <label><input type="radio" name="dither" value="blue_noise"><span>Blue noise</span></label>
-      </fieldset>
-      <label class="switch"><input type="checkbox" id="panel-model"><span>Quantise to panel levels</span></label>
-      <label class="switch"><input type="checkbox" id="codec-preview"><span>Show the frame after the real codec</span></label>
-    </section>
-
-    <section id="sec-limiter">
-      <h2>Limiter</h2>
-      <label class="switch"><input type="checkbox" id="limiter-on"><span>Limit brightness and flashing</span></label>
-      <div class="slider" id="apl-slider">
-        <label for="apl-cap">Average level cap</label><output></output>
-        <input id="apl-cap" type="range" min="0.1" max="1" step="0.01">
-      </div>
-      <div class="slider" id="rise-slider">
-        <label for="rise">Fastest rise</label><output></output>
-        <input id="rise" type="range" min="0.5" max="10" step="0.1">
-      </div>
-    </section>
-
-    <section id="sec-view">
-      <h2>View</h2>
-      <p class="hint">How this browser draws the panel. Nothing here reaches the panel.</p>
-      <fieldset class="seg" id="view-mode">
-        <legend>Show as</legend>
-        <label title="1"><input type="radio" name="mode" value="dots"><span>LEDs</span></label>
-        <label title="2"><input type="radio" name="mode" value="squint"><span>Squint</span></label>
-        <label title="3"><input type="radio" name="mode" value="raw"><span>Pixels</span></label>
-      </fieldset>
-      <fieldset class="seg" id="view-size">
-        <legend>Size</legend>
-        <label><input type="radio" name="size" value="fit"><span>Fit</span></label>
-        <label><input type="radio" name="size" value="actual"><span>Actual</span></label>
-        <label><input type="radio" name="size" value="12"><span>12×</span></label>
-      </fieldset>
-      <div class="row row--density" id="density-row">
-        <label for="density">Screen density</label>
-        <input id="density" type="number" min="2" max="12" step="0.01">
-        <span class="unit">px/mm</span>
-      </div>
-      <p class="hint" id="density-hint">Hold a ruler to the bezel: the lit area should be 192 mm wide.</p>
-      <div class="slider" id="dot-slider">
-        <label for="dot">LED size</label><output></output>
-        <input id="dot" type="range" min="0.4" max="1" step="0.01">
-      </div>
-      <div class="slider" id="bloom-slider">
-        <label for="bloom">Bloom</label><output></output>
-        <input id="bloom" type="range" min="0" max="1" step="0.01">
-      </div>
     </section>
   </aside>
 

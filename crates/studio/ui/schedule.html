@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Schedule · Screeny Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="schedule-page">
+  <!-- Card 301: one nav, the same markup on every screen, with the current
+       one marked. -->
+  <nav class="nav" aria-label="Screeny Studio">
+    <a href="/">Picture</a>
+    <a href="/panel">Panel</a>
+    <a href="/schedule" aria-current="page">Schedule</a>
+  </nav>
+
+  <header class="titleblock">
+    <div class="titleblock__patch">
+      <h1>Schedule</h1>
+    </div>
+    <!-- The same trouble indicator every screen carries, so a fault is never
+         hidden behind a tab - see common.js's `panelState` and `attention`. -->
+    <dl class="readouts" aria-label="Panel">
+      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="/panel">–</a></dd></div>
+    </dl>
+  </header>
+
+  <p class="notice sheet__notice" id="notice" role="status" hidden></p>
+
+  <main class="sheet">
+    <!-- Card 303 replaces this body with the real schedule: playing patches by
+         time of day rather than by hand. This card gives the screen a real
+         URL, the nav and the chip, so a person lands somewhere real and not a
+         404 in the meantime. -->
+    <section id="sec-schedule">
+      <h2>Schedule</h2>
+      <p class="hint">Playing patches on a timetable is being built. For now, use the Picture
+        screen to choose what plays.</p>
+    </section>
+  </main>
+
+  <script type="module" src="/schedule.js"></script>
+</body>
+</html>
