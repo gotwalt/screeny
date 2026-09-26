@@ -14,10 +14,13 @@
    1100 px, where there is room for both. Doing it the other way round is what
    put the walnut frame on top of the inspector at ~600 px. The Panel screen is
    a column of the same sections and splits into two above the same
-   breakpoint, for the same reason - each side floated rather than gridded, so
-   a short section on one side does not leave a gap under it to match a long
-   one on the other (card 303). The Schedule screen (card 303) is three short
-   sections, read top to bottom, and never needs either layout. */
+   breakpoint, for the same reason - each side is its own plain box
+   (`.panel-columns__left`/`__right` in `panel.html`), not a shared grid or
+   float, so a short section on one side does not leave a gap under it to
+   match a long one on the other (card 303, twice - a grid's row tracks and a
+   float's top constraint each turned out to reach across both columns). The
+   Schedule screen (card 303) is three short sections, read top to bottom, and
+   never needs either layout. */
 
 :root {
   --bench: #1b1a18;
@@ -632,25 +635,26 @@ select:hover { border-color: var(--dim); }
      but has none of these four sections, and one short block should not be
      squeezed into a 420 px column meant for four.
 
-     Card 303 (an orchestrator note against card 301): a CSS grid's row
-     tracks are shared across every column, so pairing the short Panel
-     section with the much longer Link section in one row left Output
-     stranded below all of Link's height, with a gap under Panel that
-     belonged to neither of them. Floats do not share rows - each side
-     stacks to its own content's height - which is what "let the left
-     column flow" needs. `display: flow-root` gives the floats a block
-     formatting context so `.sheet` still grows to contain them instead of
-     collapsing to nothing. `#sec-output` and `#sec-studio` each `clear`
-     back to the left edge, which - since they come after `#sec-panel` and
-     `#sec-link` in the document - puts them under their own side only. */
-  body.panel-page .sheet {
-    display: flow-root;
+     Card 303, twice over. First try: a CSS grid's row tracks are shared
+     across every column, so pairing the short Panel section with the much
+     longer Link section in one row left Output stranded below all of Link's
+     height. Second try: floats, which turned out to share a top constraint
+     across the *whole* source order and not only within a column, so the
+     same gap just moved to the other side instead of closing. The fix that
+     actually gives each side its own height is structural, not a layout
+     mode: `panel.html` wraps Panel+Output and Link+Studio in their own plain
+     containers (`.panel-columns__left`/`__right`), each an ordinary box in
+     normal document flow - one stack below this breakpoint, in the same DOM
+     order as always, and a flex row of two independent boxes above it, so
+     every column's height comes from its own two sections and nothing
+     else's. */
+  body.panel-page .panel-columns {
+    display: flex;
+    align-items: flex-start;
     max-width: 1040px;
   }
-  #sec-panel { float: left; width: 420px; border-right: 1px solid var(--rule); }
-  #sec-output { float: left; clear: left; width: 420px; border-right: 1px solid var(--rule); }
-  #sec-link { float: left; width: 620px; }
-  #sec-studio { float: left; clear: left; width: 620px; }
+  .panel-columns__left { flex: 0 0 420px; border-right: 1px solid var(--rule); }
+  .panel-columns__right { flex: 0 0 620px; min-width: 0; }
   /* ...and the title block is held to the same 1040 px, so the readouts sit
      over the columns rather than adrift at the edge of a wide window. */
   body.panel-page .titleblock { max-width: 1040px; }
