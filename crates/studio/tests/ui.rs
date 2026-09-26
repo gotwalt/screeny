@@ -237,7 +237,11 @@ async fn every_route_the_page_calls_exists() {
     let studio = studio().await;
     let at = studio.addr;
     let found = routes(&all_js());
-    assert!(found.len() >= 14, "the scan found suspiciously few routes: {found:?}");
+    // Card 301 removed three calls the page made (`set_seed`, `set_playback`,
+    // `restart`) without replacing them, so the floor comes down with it - this
+    // is still a smoke check that the scanner itself is finding real routes,
+    // not a pin on the exact count.
+    assert!(found.len() >= 11, "the scan found suspiciously few routes: {found:?}");
 
     for route in &found {
         // Reads are GET, changes are POST; an empty object is a valid body for
@@ -724,7 +728,7 @@ fn the_seed_is_not_a_control_on_the_page_at_all_any_more() {
         assert!(!html.contains("<dt>Seed</dt>"), "{what} still reads the seed out in its title block");
     }
     for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("schedule.js", SCHEDULE_JS)] {
-        assert!(!js.contains("set_seed"), "{what} still calls set_seed: nothing in the browser does any more");
+        assert!(!js.contains("'set_seed'"), "{what} still calls set_seed: nothing in the browser does any more");
         assert!(!js.contains("anotherButton"), "{what} still has the Another button's own state");
     }
     // The Panel screen still says which setting a panel is on, which is what
@@ -991,9 +995,12 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
         ("panel.html", PANEL_HTML, "Panel"),
         ("schedule.html", SCHEDULE_HTML, "Schedule"),
     ] {
-        assert!(html.contains(r#"<nav class="nav""#), "{what} should carry the nav");
+        let nav_start = html.find(r#"<nav class="nav""#).unwrap_or_else(|| panic!("{what} should carry the nav"));
+        let nav = &html[nav_start..nav_start + html[nav_start..].find("</nav>").expect("a closed nav")];
+        assert_eq!(nav.matches("<a ").count(), 3, "{what}: the nav should have exactly three links: {nav}");
         for (dest, label) in [("/", "Picture"), ("/panel", "Panel"), ("/schedule", "Schedule")] {
-            assert!(html.contains(&format!(r#"href="{dest}">{label}"#)), "{what}: the nav should link {label} to {dest}");
+            assert!(nav.contains(&format!(r#"href="{dest}""#)), "{what}: the nav should link to {dest}");
+            assert!(nav.contains(&format!(">{label}<")), "{what}: the nav should say {label}");
         }
         // Exactly one item is marked, and it is the screen we are actually on.
         assert_eq!(html.matches("aria-current=\"page\"").count(), 1, "{what}: exactly one nav item is current");
