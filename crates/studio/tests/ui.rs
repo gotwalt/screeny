@@ -654,13 +654,16 @@ async fn a_rate_sent_by_an_older_client_is_accepted_and_ignored() {
         assert_eq!(boot["state"]["fps"], 30.0, "fps {rate}: and the page is told the one rate");
     }
 
-    // The page's own route, with card 172's body shape.
+    // The page's own route, with card 172's body shape. Since card 302 the
+    // whole route is retired: speed and pause are not settings any more, so
+    // the body is accepted, nothing changes, and the answer says so.
     let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0,"fps":60.0}"#).await;
     assert_eq!(play.status, 200, "{}", String::from_utf8_lossy(&play.body));
     let play = play.json();
-    assert_eq!(play["paused"], true, "the fields that are still fields were applied");
-    assert_eq!(play["speed"], 2.0);
+    assert_eq!(play["paused"], false, "pause is retired: an older client cannot stop the panel");
+    assert_eq!(play["speed"], 1.0, "speed is retired: there is one speed");
     assert_eq!(play["fps"], 30.0);
+    assert!(play["ignored"].as_str().is_some_and(|s| s.contains("card 302")), "and the answer says why: {play}");
     studio.stop().await;
 }
 
