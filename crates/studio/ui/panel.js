@@ -1,12 +1,17 @@
 // The Studio's Panel screen: `/panel`.
 //
 // Everything about the panel itself and about this studio - which panel,
-// whether it is being looked for, the link, what the device says about its own
-// heap and WiFi and firmware, identify, rename, reboot, and the studio's own
-// health. Card 198 moved it off the Picture screen so that the screen the art
-// is judged on is about the art.
+// whether it is being looked for, the output switch, brightness, the panel
+// model and the limiter, the link, what the device says about its own heap
+// and WiFi and firmware, identify, rename, reboot, and the studio's own
+// health. Card 198 moved the device's own affairs off the Picture screen so
+// that the screen the art is judged on is about the art; card 301 moved the
+// rest of the global controls here too - brightness, the panel model and the
+// limiter change how *any* patch looks on this panel, not how one patch is
+// judged, so they belong beside the output switch rather than beside the
+// parameters.
 //
-// It is the same state and the same stream as the Picture screen: a change
+// It is the same state and the same stream as the other screens: a change
 // made here shows there, and in another browser, at once. What it does **not**
 // ask for is frames (card 120): there is no canvas on this screen, so every
 // frame sent to it would be received and thrown away. `noFrames` is the pace
@@ -16,8 +21,9 @@
 'use strict';
 
 import {
-  $, ago, bindBrightness, busy, connect, duration, facts, IDLE, invoke, kb, kbs,
-  makeAttempt, netSize, nf, noFrames, notice, panelState, pollStatus, size, wifiLine, words,
+  $, ago, bindBrightness, bindRadios, bindSlider, bindSwitch, busy, connect, duration, facts,
+  IDLE, invoke, kb, kbs, makeAttempt, netSize, nf, noFrames, notice, panelState, pct, pollStatus,
+  size, wifiLine, words,
 } from './common.js';
 
 async function start() {
@@ -34,6 +40,16 @@ async function start() {
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
 
   const attempt = makeAttempt(() => readStatus());
+
+  // Controls bound below that show a value out of `state.output`: another
+  // browser changing one is the same thing as this one doing it, and both
+  // paths end here, in `showPanel()`. The same pattern `picture.js` uses.
+  const refreshers = [];
+  const bind = (control) => { refreshers.push(control); return control; };
+
+  const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
+  const pushOutput = () => call('set_output', { output: state.output });
+  const s = () => state.output;
 
   // ---- output, brightness, the device's own controls ----
 
@@ -54,6 +70,28 @@ async function start() {
     attempt,
     stops: boot.brightness_stops,
   });
+
+  // ---- output: panel model, dither, the limiter (card 301, moved from the
+  // Picture screen - the same `pushOutput()` path, moved not rewritten) ----
+
+  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
+  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
+  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
+  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
+  bind(bindSwitch($('#limiter-on'), {
+    get: () => s().limiter.enabled,
+    set: (v) => { s().limiter.enabled = v; pushOutput(); },
+  }));
+  bind(bindSlider($('#apl-slider'), {
+    get: () => s().limiter.apl_cap,
+    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
+    format: pct,
+  }));
+  bind(bindSlider($('#rise-slider'), {
+    get: () => s().limiter.max_rise_per_s,
+    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
+    format: (v) => `${Math.round(1000 / v)} ms to full`,
+  }));
 
   const needPanel = () => {
     const id = attachedId();
@@ -134,6 +172,10 @@ async function start() {
     $('#discovery-note').hidden = !looking;
 
     brightness.show(device);
+    // The output controls (panel model, dither, the limiter): another
+    // browser's change lands in `state` above and is picked up here, the same
+    // way the Picture screen's own controls refresh.
+    for (const control of refreshers) control.refresh();
     showLink(device);
     showDevice(device);
     showStudio();

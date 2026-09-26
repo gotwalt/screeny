@@ -1,22 +1,32 @@
 //! The front end, compiled into the binary.
 //!
-//! **Two screens** since card 198, one studio behind them:
+//! **Three screens** since card 301 (two since card 198), one studio behind
+//! them, tied together by one nav that is the same markup on every screen:
 //!
-//! - `/` - the **Picture**: the canvas, what is playing, its parameters, how
-//!   the panel is modelled, and brightness. What changes or judges what the
-//!   picture looks like.
-//! - `/panel` - the **Panel**: which panel, discovery, the link, what the
-//!   device says about itself, identify / rename / reboot, and this studio's
-//!   own health.
+//! - `/` - the **Picture**: the canvas, what is playing, its parameters and
+//!   the named settings. What changes or judges what the picture looks like,
+//!   and nothing else - card 301 took Speed, pause/restart and the seed's
+//!   Another button off it (the owner: start/stop was baffling and nobody
+//!   understood the seed), and moved brightness, the panel model and the
+//!   limiter to the Panel screen, because those are panel settings rather
+//!   than ways of judging a patch. View (how *this browser* draws the panel)
+//!   stays here, folded into a closed disclosure under the canvas.
+//! - `/panel` - the **Panel**: which panel, discovery, the output switch,
+//!   brightness, the panel model and the limiter, identify / rename / reboot,
+//!   the link, what the device says about itself, and this studio's own
+//!   health.
+//! - `/schedule` - the **Schedule**: playing patches on a timetable rather
+//!   than by hand (card 303 builds it; this card gives it the nav and the
+//!   chip so it is a real screen rather than a 404).
 //!
-//! They are two documents rather than one document with two views: each screen
-//! then holds only its own markup, which is what makes "nothing about devices
-//! is on the Picture screen" a fact about the file rather than a CSS rule.
-//! Both are ordinary URLs, so reload and the back button are the browser's job
-//! and not ours. What they share is `style.css` and `common.js` - the socket,
-//! the poll, the formatting, and the one judgement of what the panel is doing -
-//! so a change made on one screen shows on the other, in another browser, at
-//! once: they are the same state stream.
+//! They are separate documents rather than one document with several views:
+//! each screen then holds only its own markup, which is what makes "nothing
+//! about devices is on the Picture screen" a fact about the file rather than a
+//! CSS rule. All are ordinary URLs, so reload and the back button are the
+//! browser's job and not ours. What they share is `style.css` and `common.js`
+//! - the socket, the poll, the formatting, and the one judgement of what the
+//! panel is doing - so a change made on one screen shows on the others, in
+//! another browser, at once: they are the same state stream.
 //!
 //! `/dashboard` - card 106's separate app, folded into the one page by card
 //! 170 - still redirects to `/`, so an old bookmark still works.
@@ -36,15 +46,17 @@ use std::path::PathBuf;
 const EMBEDDED: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
     ("panel.html", "text/html; charset=utf-8", include_bytes!("../ui/panel.html")),
+    ("schedule.html", "text/html; charset=utf-8", include_bytes!("../ui/schedule.html")),
     ("common.js", "text/javascript; charset=utf-8", include_bytes!("../ui/common.js")),
     ("picture.js", "text/javascript; charset=utf-8", include_bytes!("../ui/picture.js")),
     ("panel.js", "text/javascript; charset=utf-8", include_bytes!("../ui/panel.js")),
+    ("schedule.js", "text/javascript; charset=utf-8", include_bytes!("../ui/schedule.js")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
 ];
 
 /// Tidy URLs: one per screen. `/panel` and `/panel/` are the same screen, and
 /// neither is `/panel.js`, which is a file and keeps its extension.
-const PAGES: &[(&str, &str)] = &[("", "index.html"), ("panel", "panel.html")];
+const PAGES: &[(&str, &str)] = &[("", "index.html"), ("panel", "panel.html"), ("schedule", "schedule.html")];
 
 /// Paths that used to be a page of their own and are now part of `/`.
 const FOLDED_IN: &[&str] = &["dashboard", "dashboard.html"];

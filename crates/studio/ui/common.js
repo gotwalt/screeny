@@ -1,11 +1,12 @@
-// What both of the Studio's screens are made of.
+// What all of the Studio's screens are made of.
 //
-// There are two screens since card 198 - the **Picture** (`/`) and the
-// **Panel** (`/panel`) - and one server behind them. What they share is
-// everything that is not layout: the socket, the poll, the formatting, the
-// small control bindings, and the one judgement of what the panel is doing.
-// Each screen's own file (`picture.js`, `panel.js`) imports from here and
-// touches only the elements its own page has.
+// There are three screens since card 301 - the **Picture** (`/`), the
+// **Panel** (`/panel`) and the **Schedule** (`/schedule`) - and one server
+// behind them. What they share is everything that is not layout: the socket,
+// the poll, the formatting, the small control bindings, and the one judgement
+// of what the panel is doing. Each screen's own file (`picture.js`,
+// `panel.js`, `schedule.js`) imports from here and touches only the elements
+// its own page has.
 //
 // Plain ES modules, loaded by the browser. There is still no Node toolchain,
 // no bundler and no build step: `src/ui.rs` lists the files and the browser
@@ -186,10 +187,10 @@ export async function invoke(cmd, args) {
 // is slow, or whose owner has asked for less data, takes the lower rate - the
 // picture is 64x32 and stays perfectly legible at ten frames a second.
 //
-// **The Panel screen asks for none at all** (card 198), for the same reason a
-// hidden tab does: it draws no canvas, so every frame sent to it would be
-// received and thrown away. It still gets the state and the heartbeat, which
-// is what it is made of.
+// **The Panel and Schedule screens ask for none at all** (card 198, 301), for
+// the same reason a hidden tab does: neither draws a canvas, so every frame
+// sent to either would be received and thrown away. They still get the state
+// and the heartbeat, which is what they are made of.
 const PREVIEW_FPS = 30;
 const PREVIEW_FPS_SLOW = 10;
 
@@ -334,49 +335,6 @@ export function attention(device) {
 
 // ---------- small control helpers ----------
 
-/* Card 183: draw a range input's `list` on the track.
- *
- * Chrome paints tick marks for a `<datalist>` only on the *default* track, and
- * style.css replaces `::-webkit-slider-runnable-track`, so the stops were real
- * to the accessibility tree and invisible on the page - a declaration nobody
- * could see. They are drawn here instead, from the datalist itself, so there is
- * still one list of stops and adding a `list=` to any slider draws it.
- *
- * The geometry is the thumb's, not the track's: a 7px thumb inside a full-width
- * input puts its centre at `3.5px + frac * (W - 7px)`, so a mark at `frac%`
- * would be out by up to half a thumb - visibly wrong at the right-hand end.
- * `calc()` does the same sum the browser does, which also makes it correct at
- * every width without measuring anything.
- *
- * **They do not snap.** Card 172's worker decided that deliberately, card 183
- * kept it, and card 197 kept it again for Speed: a magnet at 1.00 makes 0.95
- * and 1.05 unreachable with a mouse, and a speed a script set must be shown
- * exactly rather than quietly rounded to the nearest stop. The marks say where
- * the useful values are; the arrow keys, the readout and - for Speed - a
- * double-click do the rest. */
-export function drawStops(root) {
-  const input = root.querySelector('input[type="range"][list]');
-  if (!input) return;
-  const list = document.getElementById(input.getAttribute('list'));
-  if (!list) return;
-  const min = Number(input.min), max = Number(input.max);
-  if (!(max > min)) return;
-  const strip = document.createElement('div');
-  strip.className = 'stops';
-  strip.ariaHidden = 'true';
-  for (const option of list.options) {
-    const at = (Number(option.value) - min) / (max - min);
-    if (!(at >= 0 && at <= 1)) continue;
-    const mark = document.createElement('i');
-    // The same arithmetic the thumb does. 3.5px and 7px are the thumb's half
-    // width and width in style.css; keep them in step.
-    mark.style.left = `calc(3.5px + ${at} * (100% - 7px))`;
-    if (option.label) mark.title = option.label;
-    strip.append(mark);
-  }
-  if (strip.children.length) input.after(strip);
-}
-
 export function bindSlider(root, { get, set, format }) {
   const input = root.querySelector('input');
   const out = root.querySelector('output');
@@ -456,10 +414,12 @@ export function brightnessHoldWins(now, until, held, reading) {
  *  the device's own learned cap once there is one - all three come from the
  *  server, never written down again here.
  *
- *  It is on the Picture screen because it changes how the picture looks on the
- *  LEDs and is part of judging a patch, and on the Panel screen because that is
- *  where the panel's controls are. One binding, so the two cannot drift, and
- *  what is shown is what the device says it applied.
+ *  Card 301 took the Picture screen's copy of this control off the page - it
+ *  is a panel setting, not something that changes how a patch is judged - so
+ *  the Panel screen is the one caller now. This stays a shared function rather
+ *  than moving into `panel.js` outright, because "how brightness is stepped
+ *  and held" is exactly the kind of thing that must not drift if a second
+ *  caller ever comes back.
  *
  *  `attached()` gives the id to act on, or `''`; `attempt` is the screen's;
  *  `stops` is `boot.brightness_stops`, the full list before any cap. */

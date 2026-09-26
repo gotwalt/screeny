@@ -6,11 +6,16 @@
 //
 // Card 198 took the panel's own affairs - which panel, discovery, the link, the
 // device's facts, identify/rename/reboot - to a screen of their own at
-// `/panel`, so that this one is about the picture and nothing else. What is
-// left of the panel here is two things, both of which change how the *picture*
-// is judged: **brightness**, which is how the patch looks on the LEDs, and the
-// **status chip** in the title block, which says what the panel is doing, wears
-// a fault tone when it needs attention, and is the way to the Panel screen.
+// `/panel`. Card 301 took the rest of what was not about the picture off this
+// screen too - brightness, the panel model, the limiter, Speed, pause/restart
+// and the seed's Another button, all now either on the Panel screen or gone
+// (the owner: start/stop was baffling, and "zero people understand" the
+// seed) - so what is left is the canvas, what is playing, its parameters, its
+// named settings, and the **status chip** in the title block, which says what
+// the panel is doing, wears a fault tone when it needs attention, and is the
+// way to the Panel screen. View - how *this browser* draws the panel - is not
+// a panel setting either, so it lives folded under the canvas instead of the
+// sidebar.
 //
 // Frames, other browsers' changes and the half-second heartbeat arrive on one
 // WebSocket; the panel's own facts come from GET /api/v1/status every couple of
@@ -24,8 +29,8 @@
 'use strict';
 
 import {
-  $, ago, attention, bindBrightness, bindRadios, bindSlider, bindSwitch, busy, connect,
-  drawStops, invoke, makeAttempt, notice, panelState, pct, pollStatus, trim,
+  $, ago, attention, bindRadios, bindSlider, bindSwitch, busy, connect,
+  invoke, notice, panelState, pct, pollStatus, trim,
 } from './common.js';
 
 const W = 64, H = 32;
@@ -193,13 +198,12 @@ async function start() {
   const bind = (control) => { refreshers.push(control); return control; };
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  const pushOutput = () => call('set_output', { output: state.output });
-  // Card 161: no `fps`. The route would ignore it anyway, and there is one
-  // rate. `state.fps` is still read - below, for the limiter's per-frame tick -
-  // but only as the server's report of what that rate is.
-  const pushPlayback = () => call('set_playback', { paused: state.paused, speed: state.speed });
+  // `state.output` is read-only here: the limiter's numbers feed the meters
+  // below, but the controls that set it (panel model, dither, the limiter
+  // itself) moved to the Panel screen with card 301, along with brightness.
+  const s = () => state.output;
 
-  // ---- patch, seed, parameters ----
+  // ---- patch, parameters ----
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
@@ -384,7 +388,6 @@ async function start() {
   const nameLabel = $('#setting-name-label');
   const confirmDelete = $('#setting-confirm');
   const confirmWhat = $('#setting-confirm-what');
-  const anotherButton = $('#another');
 
   /** Which inline form is open: `'save-as'`, `'rename'` or nothing. */
   let naming = null;
@@ -456,12 +459,6 @@ async function start() {
     $('#setting-rename').disabled = onDefault;
     $('#setting-delete').disabled = onDefault;
     $('#setting-revert').disabled = !state.modified;
-
-    const patch = patchById[state.patch];
-    anotherButton.hidden = !(patch && patch.seeded);
-    // The number nobody needs, kept where somebody reproducing a frame can
-    // find it (card 151).
-    anotherButton.title = `Another one like this (N). Seed ${state.seed}.`;
   }
   showSetting();
   bind({ refresh: showSetting });
@@ -502,88 +499,21 @@ async function start() {
   });
   $('#setting-confirm-no').addEventListener('click', closeConfirm);
 
-  /** A new seed, which is "another one like this" (card 151). It marks the
-   *  setting modified like any other change, because it is one. */
-  const another = async () => sync(await call('set_seed', { seed: null }));
-  anotherButton.addEventListener('click', another);
-
-  // ---- time ----
-
-  const pauseButton = $('#pause');
-  const showPaused = () => {
-    pauseButton.textContent = state.paused ? 'Play' : 'Pause';
-    pauseButton.setAttribute('aria-pressed', String(state.paused));
-  };
-  const togglePause = () => { state.paused = !state.paused; showPaused(); pushPlayback(); };
-  const restart = () => call('restart');
-  pauseButton.addEventListener('click', togglePause);
-  $('#restart').addEventListener('click', restart);
-  showPaused();
-  bind({ refresh: showPaused });
-  // Card 183: every slider that declares its useful stops draws them. Static
-  // markup, so once is enough.
-  document.querySelectorAll('.slider').forEach(drawStops);
-  // Card 161: the rate slider was here. One rate, no control.
-  const speedInput = $('#speed');
-  const speed = bind(bindSlider($('#speed-slider'), {
-    get: () => state.speed,
-    set: (v) => { state.speed = v; pushPlayback(); },
-    format: (v) => `${v.toFixed(2)}×`,
-  }));
-  // Card 197: 1.00x - "play it as the patch intended" - is one of 79 positions
-  // and the only way back to it was the keyboard. It is a drawn stop now (the
-  // datalist, card 183's `drawStops`) and a **double-click** goes home, which
-  // is the way back the card asked for. The stops still do not snap: a magnet
-  // at 1.00 would make 0.95 and 1.05 unreachable with a mouse, and a speed a
-  // script set must be shown exactly.
-  speedInput.addEventListener('dblclick', () => {
-    speedInput.value = '1';
-    state.speed = 1;
-    pushPlayback();
-    speed.show();
-  });
-
-  // ---- panel model ----
-
-  const s = () => state.output;
-  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
-  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
-  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
-  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
-
-  // ---- limiter ----
-
-  bind(bindSwitch($('#limiter-on'), {
-    get: () => s().limiter.enabled,
-    set: (v) => { s().limiter.enabled = v; pushOutput(); },
-  }));
-  bind(bindSlider($('#apl-slider'), {
-    get: () => s().limiter.apl_cap,
-    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
-    format: pct,
-  }));
-  bind(bindSlider($('#rise-slider'), {
-    get: () => s().limiter.max_rise_per_s,
-    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
-    format: (v) => `${Math.round(1000 / v)} ms to full`,
-  }));
+  // Card 301 took the Another button (and the seed with it) off the page:
+  // "zero people understand it", the owner said. `set_seed` is still on the
+  // API for a script to call; nothing in the browser calls it now.
 
   // ---- the panel, as far as this screen is concerned ----
+  //
+  // Card 301 also took Speed, pause/restart, the panel model and the
+  // limiter's own controls off this screen (they are on `/panel` now, or
+  // gone), so what is left here about the panel is only the chip below - the
+  // one thing on this screen that is about the panel rather than the picture.
 
   const attachedId = () => (picture ? picture.preview.device : state.device) || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
   /** The panel link, from the half-second heartbeat. Null when output is off. */
   let link = null;
-
-  const attempt = makeAttempt(() => readStatus());
-  const brightness = bindBrightness({
-    input: $('#bright'),
-    out: $('#bright-slider').querySelector('output'),
-    note: $('#bright-note'),
-    attached: attachedId,
-    attempt,
-    stops: boot.brightness_stops,
-  });
 
   /** The status chip in the title block: the one thing on this screen that is
    *  about the panel rather than the picture, and the way to the Panel screen.
@@ -622,7 +552,6 @@ async function start() {
     // because it is still the truth about what is playing (card 170).
     $('#stage').dataset.panel = here.tone === 'on' ? 'on' : 'away';
 
-    brightness.show(device);
     // Card 145, on the half-second heartbeat: the notice line is shared, so a
     // black GPU patch says so again as soon as the line is free.
     sayIfBlack();
@@ -666,20 +595,15 @@ async function start() {
 
   // ---- keys ----
 
+  // Card 301 took Space (pause), `n` (Another) and `r` (Restart) with the
+  // controls they drove: view mode is what is left with a shortcut.
   window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // A control that has focus owns its own keys: space on a button is that
-    // button, and `n` in a text box is an `n`.
+    // A control that has focus owns its own keys.
     const tag = e.target instanceof HTMLElement ? e.target.tagName : '';
     if (['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'SUMMARY', 'A'].includes(tag)) return;
     const mode = { 1: 'dots', 2: 'squint', 3: 'raw' }[e.key];
     if (mode) { view.mode = mode; storeView(); modeRadios.refresh(); renderer.draw(); }
-    else if (e.key === ' ') { e.preventDefault(); togglePause(); }
-    // `n` is the Another button's shortcut and goes where it goes: on a patch
-    // whose picture does not depend on its seed there is no button, and the
-    // key would rebuild the patch for nothing anybody could see.
-    else if (e.key === 'n') { if (!anotherButton.hidden) another(); }
-    else if (e.key === 'r') restart();
   });
 
   // ---- meters ----

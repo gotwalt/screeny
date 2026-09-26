@@ -3,16 +3,19 @@
    read as the darkest thing in the window, and nothing here may tint how the
    art's colour is judged. The one loud object is the device itself.
 
-   **Two screens since card 198**, in one visual language: the Picture (`/`)
-   and the Panel (`/panel`). Everything above "the panel screen" is shared;
-   what follows it is the second screen's own layout.
+   **Three screens since card 301** (two since card 198), in one visual
+   language: the Picture (`/`), the Panel (`/panel`) and the Schedule
+   (`/schedule`), tied together by one nav at the top of every one of them.
+   Everything above "the nav" is shared; what follows it is each screen's own
+   layout.
 
-   The Picture screen is a **scrolling column by default** - picture, now
-   playing, parameters, brightness, time... - and becomes the two-column bench
-   only above 1100 px, where there is room for both. Doing it the other way
-   round is what put the walnut frame on top of the inspector at ~600 px. The
-   Panel screen is a column of the same sections and splits into two above the
-   same breakpoint, for the same reason. */
+   The Picture screen is a **scrolling column by default** - picture, view,
+   now playing, parameters... - and becomes the two-column bench only above
+   1100 px, where there is room for both. Doing it the other way round is what
+   put the walnut frame on top of the inspector at ~600 px. The Panel screen is
+   a column of the same sections and splits into two above the same
+   breakpoint, for the same reason. The Schedule screen, for now, is one short
+   section and never needs either layout. */
 
 :root {
   --bench: #1b1a18;
@@ -69,6 +72,34 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 
 [hidden] { display: none !important; }
 
+/* ---------- nav ---------- */
+
+/* Card 301: one nav, the same markup on every screen, at the very top of it -
+   real navigation with real URLs, not tabs in a document, so reload and the
+   back button are the browser's own job. Thumb-sized targets and a 16 px
+   gutter (the page's own `--gutter`) so it works at phone width; it scrolls
+   sideways rather than wrapping if a narrower phone ever cannot fit all
+   three, which three short words never actually needs. */
+.nav {
+  display: flex;
+  gap: 4px;
+  padding: 12px var(--gutter) 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+}
+.nav a {
+  padding: 10px 14px;
+  border-radius: 3px;
+  color: var(--dim);
+  font: 400 12.5px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.nav a:hover { color: var(--paper); }
+.nav a[aria-current="page"] { color: var(--amber); }
+
 /* ---------- title block ---------- */
 
 .titleblock {
@@ -119,19 +150,6 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 a.pill { text-decoration: none; }
 a.pill::after { content: " ›"; }
 a.pill:hover { border-color: var(--paper); color: var(--paper); }
-
-/* ...and the way back is a plain one, above the panel's name. */
-.backlink {
-  display: inline-block;
-  margin-bottom: 8px;
-  color: var(--dim);
-  font: 400 12px/1 var(--label);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  text-decoration: none;
-}
-.backlink::before { content: "‹ "; }
-.backlink:hover { color: var(--paper); }
 
 /* ---------- the stage ---------- */
 
@@ -230,6 +248,11 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   background: var(--bench-raised);
   border-top: 1px solid var(--rule);
 }
+
+/* The Schedule screen is one short section and never earns the Panel screen's
+   two-column bench (below); a readable measure keeps its sentence from
+   stretching edge to edge on a wide window. */
+body.schedule-page .sheet { max-width: 640px; }
 
 .inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
 .inspector section > h2, .sheet section > h2, .section-head { margin-bottom: 14px; }
@@ -344,14 +367,6 @@ button:disabled, button:disabled:hover { border-color: var(--rule); color: var(-
 .slider { position: relative; display: grid; grid-template-columns: 1fr auto; row-gap: 7px; align-items: baseline; }
 .slider output { font-size: 12.5px; }
 .slider input { grid-column: 1 / -1; }
-
-/* Card 183: the stops a slider declares in its `list`, drawn under the track.
-   Out of flow, so nothing moves; built by `drawStops` in main.js, which puts
-   each mark where the *thumb* lands rather than at a flat percentage. Four
-   pixels tall and one wide: enough to aim at, quiet enough to ignore. */
-.slider .stops { position: absolute; left: 0; right: 0; bottom: 0; height: 0; pointer-events: none; }
-.slider .stops i { position: absolute; top: -5px; width: 1px; height: 4px; margin-left: -0.5px; background: var(--rule); }
-.slider:hover .stops i { background: var(--dim); }
 
 input[type="range"] {
   -webkit-appearance: none;
@@ -502,13 +517,34 @@ select:hover { border-color: var(--dim); }
 .found__where { color: var(--dim); font-family: var(--data); font-size: 11.5px; overflow-wrap: anywhere; }
 .found__one button { flex: none; }
 
+/* Card 301: View is how *this browser* draws the panel, not a panel setting -
+   its effect is only visible beside the canvas, and nothing here reaches the
+   panel. Folded shut by default, under the canvas rather than beside the
+   patch's own controls; the same quiet, typographic `<summary>` as "Change
+   which panel" above. */
+.view {
+  border-top: 1px solid var(--rule);
+  padding: 14px var(--gutter) 16px;
+  background: var(--bench-raised);
+}
+.view summary {
+  cursor: pointer;
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.view summary:hover { color: var(--paper); }
+.view__body { margin-top: 14px; }
+.view__body > * + * { margin-top: 14px; }
+
 /* ---------- the bench: two columns, above 1100 px ---------- */
 
 @media (min-width: 1100px) {
   :root { --gutter: 24px; }
 
   /* The bench itself does not scroll: the inspector column does. Scoped to the
-     Picture screen, because the Panel screen scrolls like any other page. */
+     Picture screen, because the other screens scroll like any ordinary page. */
   html:has(> body.picture-page) { height: 100%; overflow: hidden; }
 
   body.picture-page {
@@ -516,15 +552,19 @@ select:hover { border-color: var(--dim); }
     overflow: hidden;
     display: grid;
     grid-template-columns: minmax(0, 1fr) 340px;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
     grid-template-areas:
+      "nav     nav"
       "head    side"
       "stage   side"
+      "view    side"
       "meters  side";
   }
 
+  .picture-page .nav { grid-area: nav; }
   .titleblock { grid-area: head; flex-wrap: nowrap; padding-top: 22px; }
   .stage { grid-area: stage; height: auto; }
+  .view { grid-area: view; }
   .meters { grid-area: meters; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .inspector {
     grid-area: side;
@@ -534,20 +574,24 @@ select:hover { border-color: var(--dim); }
   }
 
   /* The Panel screen splits in two at the same width, for the same reason: the
-     panel's own controls on the left, what it and the studio have to say about
-     themselves on the right. The columns are held to a readable measure rather
-     than stretched across a bench - a `dd` two feet wide is not a fact anybody
-     reads. */
-  .sheet {
+     things the owner touches on the left (the switch, brightness, output
+     settings), what it and the studio have to say about themselves on the
+     right. The columns are held to a readable measure rather than stretched
+     across a bench - a `dd` two feet wide is not a fact anybody reads.
+     Scoped to the Panel screen: the Schedule screen shares `.sheet`'s surface
+     but has none of these four sections, and one short block should not be
+     squeezed into a 420 px column meant for four. */
+  body.panel-page .sheet {
     display: grid;
     grid-template-columns: minmax(0, 420px) minmax(0, 620px);
     grid-template-areas:
-      "panel link"
-      "panel studio";
+      "panel  link"
+      "output studio";
     align-items: start;
     justify-content: start;
   }
   #sec-panel { grid-area: panel; border-right: 1px solid var(--rule); }
+  #sec-output { grid-area: output; border-right: 1px solid var(--rule); }
   #sec-link { grid-area: link; }
   #sec-studio { grid-area: studio; }
   /* ...and the title block is held to the same 1040 px, so the readouts sit
