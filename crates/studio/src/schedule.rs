@@ -335,12 +335,20 @@ pub fn check_mode_name(name: &str) -> Result<String, String> {
 /// The nearest real brightness stop to `level` (card 187): a mode never asks
 /// for a value that lands on a picture its neighbour already showed. A tie
 /// goes to the dimmer stop.
+///
+/// **Zero is dark and nothing else is.** A nonzero level snaps to the nearest
+/// *nonzero* stop, because that is what the firmware does with it (it raises
+/// anything dim-but-nonzero to its floor, card 136/187): `1` means "the
+/// dimmest the panel can show", which is exactly the owner's "lowest possible
+/// visible brightness", and must not round down to a dark panel.
 #[must_use]
 pub fn snap_brightness(level: u8) -> u8 {
-    let stops = crate::page::brightness_stops();
-    stops
-        .iter()
-        .copied()
+    if level == 0 {
+        return 0;
+    }
+    crate::page::brightness_stops()
+        .into_iter()
+        .filter(|s| *s > 0)
         .min_by_key(|s| (i16::from(*s) - i16::from(level)).unsigned_abs())
         .unwrap_or(level)
 }
@@ -976,7 +984,7 @@ mod tests {
     fn brightness_is_snapped_to_a_real_stop() {
         let stops = crate::page::brightness_stops();
         assert_eq!(snap_brightness(0), 0, "dark is a stop");
-        assert!(stops.contains(&snap_brightness(1)));
+        assert_eq!(snap_brightness(1), stops[1], "dim-but-on is the dimmest visible stop, never dark");
         assert!(stops.contains(&snap_brightness(97)));
         assert!(stops.contains(&snap_brightness(255)));
         assert_eq!(snap_brightness(stops[1]), stops[1], "the dimmest visible stop is itself");
