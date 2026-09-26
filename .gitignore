@@ -19,3 +19,4 @@ lab/xtensa-bench/Cargo.lock
 # instructions) is kept locally and is not part of the published tree.
 .claude/
 CLAUDE.local.md
+video/
