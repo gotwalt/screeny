@@ -28,7 +28,7 @@ one nav at the top of every one of them, because the work is three kinds of work
 |---|---|
 | **Picture**, `/` | the canvas, what is playing, its parameters, and its named settings. Everything that changes or judges what the picture looks like, and nothing else. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel, so it is not a panel setting either. |
 | **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, brightness, the panel model, the limiter, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
-| **Schedule**, `/schedule` | playing patches on a timetable rather than by hand. Card 303 builds the real thing; card 301 gave it the nav and the status chip so it is a real screen from the start. |
+| **Schedule**, `/schedule` | playing patches on a timetable rather than by hand: what is due now and until when, the timetable, and the modes it plays (card 303, on card 302's routes; card 301 gave it the nav and the status chip). |
 
 Card 301 also simplified the Picture screen: Speed and the pause/restart controls
 are gone - "I don't think speed should be varyable and start/stop is baffling in
@@ -358,6 +358,20 @@ a plain HTTP call from whatever runs the house is the agreed first step:
 curl -s -X POST -H 'content-type: application/json' \
      -d '{"name":"Night"}' http://studio-host.local:8787/api/v1/mode/apply
 ```
+
+**The page** (`/schedule`, card 303) reads top to bottom the way the owner would ask
+about it: **what is due now and until when** ("Night until 07:00", or "Overridden until
+07:00" beside a "Back to schedule" button), **the timetable** (the enabled switch, one
+row per entry with a plain `<input type=time>` and a `<select>` of mode names, add and
+remove - always sent as the whole list, since that is what the route takes), then **the
+modes** it plays (a name, then what it does in one quiet line - the patch, the setting or
+"as left", the brightness worded through the real stops so the lowest nonzero one reads
+as "the dimmest the panel can show" - Apply now, Rename, Delete, refused with the reason
+in the same line `/modes/delete` gives it when the timetable names it). No control on
+this screen composes a patch, a setting or a brightness by hand: a mode is made by
+playing it the way you want on the Picture or Panel screen and coming here to name it
+with **"Save what's playing as..."**, the same way a named setting is made. Every error
+from the server shows on the page's shared notice line exactly as the server wrote it.
 
 **Speed and pause are retired** (the owner, the same morning). A patch plays at 1.00x and
 nothing pauses: `set_playback` still answers 200 and changes nothing (its answer says so in
@@ -699,8 +713,12 @@ now playing, parameters... - and splits into two columns only above 1100 px, whe
 there is room. Doing it the other way round is what used to put the walnut frame on
 top of the controls at around 600 px. Checked at 390 and 1400 px in a browser for both
 screens (card 198's Log), and at 390, 600, 900 and 1400 in card 170's; the screenshots
-are in those Logs and, for the controls below, in cards 145/163/171-173's. The
-Schedule screen is one short section and never earns either layout.
+are in those Logs and, for the controls below, in cards 145/163/171-173's. The Panel
+screen's two-column bench is floated, not gridded (card 303): a CSS grid's row tracks
+are shared across both columns, which used to strand the shorter side's second section
+below all of the longer side's height; a float only answers to what is above it in the
+same column. The Schedule screen (card 303) is three short sections - what is due now,
+the timetable, the modes it plays - and never earns either layout.
 
 **A control's shape comes from what it controls** (card 163). The page builds each
 parameter from its `ParamSpec`: an ordinary number is a slider, a spec with `choices` is
@@ -751,7 +769,7 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
-| `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/schedule`/`/schedule.js`) are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, and **one nav with the current screen marked** is on every one of them (301) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Schedule screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
+| `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/schedule`/`/schedule.js`) are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301, and 303 for the Schedule screen's Now/Timetable/Modes), and **one nav with the current screen marked** is on every one of them (301) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Schedule screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `tests/schedule.rs`, `src/schedule.rs` | card 302: at a hand-held clock, Night at 22:00 and Day at 07:00 switch patch **and** the simulator's brightness on the minute; a hand change reads `overridden` and holds until the next entry; `/mode/apply` holds too and `/schedule/resume` goes back; the hold survives a restart and a restart across an entry applies it; every refusal a 400 in words; a mode with a named setting, and one deleted since; a mode whose patch is gone skipped and said. Unit: the due entry wrapping to yesterday, DST skip and repeat, the first look after start-up, bounds, names, snapping, a hand-edited plan. `src/state.rs`: a realistic v5 file migrated to v6 with its tuning intact and 1.7x loading as 1.0 |
