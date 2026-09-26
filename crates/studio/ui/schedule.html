@@ -28,15 +28,39 @@
 
   <p class="notice sheet__notice" id="notice" role="status" hidden></p>
 
+  <!-- Card 303: top to bottom, in the order the owner would ask about this
+       screen - what is due now and until when, then the timetable that
+       decides it, then the modes the timetable plays. -->
   <main class="sheet">
-    <!-- Card 303 replaces this body with the real schedule: playing patches by
-         time of day rather than by hand. This card gives the screen a real
-         URL, the nav and the chip, so a person lands somewhere real and not a
-         404 in the meantime. -->
-    <section id="sec-schedule">
-      <h2>Schedule</h2>
-      <p class="hint">Playing patches on a timetable is being built. For now, use the Picture
-        screen to choose what plays.</p>
+    <section id="sec-due">
+      <h2>Now</h2>
+      <p class="playing__title" id="due-line">–</p>
+      <p class="playing__detail" id="due-note"></p>
+      <div class="row" id="due-actions">
+        <button type="button" id="resume" hidden>Back to schedule</button>
+      </div>
+    </section>
+
+    <section id="sec-timetable">
+      <h2>Timetable</h2>
+      <label class="switch"><input type="checkbox" id="schedule-on"><span>Play modes on a timetable</span></label>
+      <div class="timetable" id="timetable"></div>
+      <div class="row row--fill" id="entry-add-row">
+        <input id="entry-time" type="time" step="60" aria-label="Time">
+        <select id="entry-mode" aria-label="Mode"></select>
+        <button type="button" id="entry-add">Add</button>
+      </div>
+      <p class="hint" id="timetable-hint" hidden></p>
+    </section>
+
+    <section id="sec-modes">
+      <h2>Modes</h2>
+      <div class="modes" id="modes"></div>
+      <form class="row row--fill" id="mode-save-form">
+        <label for="mode-save-name">Save what’s playing as</label>
+        <input id="mode-save-name" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Night">
+        <button type="submit">Save</button>
+      </form>
     </section>
   </main>
 
