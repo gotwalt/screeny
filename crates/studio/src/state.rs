@@ -20,6 +20,7 @@
 //! rather than a queue. Nothing here can grow without bound.
 
 use screeny_art::patch::{ParamSpec, PatchDef};
+use crate::schedule::{Mode, Schedule, ScheduleRun};
 use screeny_art::Output;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -51,10 +52,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   the working copy was loaded from, empty for Default) and `settings`: name
 ///   -> `{seed, params, speed}`. **"Modified" is not in the file**: it is the
 ///   working copy compared with the setting it names, which cannot go stale.
+/// - **v6** (card 302) adds **modes and the daily schedule**: `modes` (a list of
+///   `{name, patch, setting, brightness}`), `schedule` (`{enabled, entries:
+///   [{at: "HH:MM", mode}]}`) and `schedule_run` (the entry last applied and the
+///   local date it was for - which is what makes "hold until the next entry"
+///   survive a restart). `overridden` and `until` are **not in the file**: they
+///   are computed on every read. The same card **retired speed and pause**:
+///   `speed` stays in the file's shape (players, working copies, settings) for
+///   an older build's sake, but every load puts it back to 1.0 and `paused` to
+///   false, so a v5 file at 1.7x comes up at 1.00x.
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -222,6 +232,18 @@ pub struct Persisted {
     /// must cost that value and not the whole file.
     #[serde(alias = "pieces", skip_serializing_if = "BTreeMap::is_empty")]
     pub patches: Memory,
+    /// Card 302: what the panel should look like, by name. Lifted out of the
+    /// raw JSON and cleaned by [`crate::schedule::clean`] before serde sees the
+    /// file, for the reason `patches` is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<Mode>,
+    /// Card 302: the daily timetable and its switch.
+    #[serde(skip_serializing_if = "Schedule::is_empty")]
+    pub schedule: Schedule,
+    /// Card 302: the entry the scheduler last applied, and for which local
+    /// date. `None` until it has applied one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_run: Option<ScheduleRun>,
 }
 
 impl Default for Persisted {
@@ -232,6 +254,9 @@ impl Default for Persisted {
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
+            modes: Vec::new(),
+            schedule: Schedule::default(),
+            schedule_run: None,
         }
     }
 }
@@ -700,12 +725,9 @@ pub fn usable_setting(memory: &Memory, def: &PatchDef, name: &str) -> Result<(Wo
         .and_then(|e| e.settings.get(name.trim()))
         .ok_or_else(|| format!("`{}` has no setting called `{}`.", def.name, name.trim()))?;
     let (params, mut repaired) = usable_params(&stored.params, def.params);
-    let speed = if stored.speed.is_finite() && stored.speed > 0.0 {
-        stored.speed
-    } else {
-        repaired.push(format!("the speed saved in `{}` was not a speed; back to 1.00x", name.trim()));
-        1.0
-    };
+    // Card 302: speed is retired. Whatever a setting saved, it plays at 1.00x
+    // (and the file says 1.0 after the next load anyway; see `retire_playback`).
+    let speed = 1.0;
     // Say which setting each sentence is about: `repaired` is read on a
     // dashboard beside sentences about the working copy.
     let what = name.trim();
@@ -1180,6 +1202,8 @@ fn load(path: &Path) -> Loaded {
     let patches = clean_memory(raw.get("patches").or_else(|| raw.get("pieces")), &mut repaired);
     note_retired_levels(&raw, &mut repaired);
     note_retired_fps(&raw, &mut repaired);
+    // Card 302's keys, lifted out and cleaned one mode and one entry at a time.
+    let plan = crate::schedule::clean(raw.get("modes"), raw.get("schedule"), raw.get("schedule_run"), &mut repaired);
     // The `preview` block of a v1/v2 file, lifted out for the same reason as
     // `patches`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
@@ -1193,6 +1217,9 @@ fn load(path: &Path) -> Loaded {
         o.remove("patches");
         o.remove("pieces");
         o.remove("preview");
+        o.remove("modes");
+        o.remove("schedule");
+        o.remove("schedule_run");
     }
 
     let mut state: Persisted = match serde_json::from_value(raw) {
@@ -1202,6 +1229,9 @@ fn load(path: &Path) -> Loaded {
     let was = state.version;
     state.version = SCHEMA_VERSION;
     state.patches = patches;
+    state.modes = plan.modes;
+    state.schedule = plan.schedule;
+    state.schedule_run = plan.run;
     let kept = if was < SCHEMA_VERSION {
         let kept = back_up(path, was);
         migrate(&mut state, &legacy, was);
@@ -1212,6 +1242,9 @@ fn load(path: &Path) -> Loaded {
     // After the migrations, so a v1/v2 file's player - which `migrate_to_v3`
     // builds out of the old `preview` block - is looked at too.
     repair_unknown_players(&mut state, &mut repaired);
+    // Every load, not only the v5 -> v6 migration: a hand-edited or older file
+    // must not bring back a control the page no longer has.
+    retire_playback(&mut state, &mut repaired);
     repaired.truncate(MAX_REPAIRS);
     let recovered = (was != SCHEMA_VERSION).then(|| {
         let where_ = kept.map_or(String::new(), |k| format!("; the v{was} file is kept as {k}"));
@@ -1300,6 +1333,10 @@ fn back_up(path: &Path, was: u32) -> Option<String> {
 ///   put back.
 /// - **v4 -> v5** is [`migrate_to_v5`]: the named settings are new and empty,
 ///   and the one thing that has to *move* is speed.
+/// - **v5 -> v6** (card 302) needs no code: modes, the schedule and its run
+///   record start empty. The speed and pause the card retired are put back by
+///   [`retire_playback`], which runs on **every** load rather than behind a
+///   guard, so no file of any version can bring them back.
 ///
 /// Each step is behind its own `was <` guard, so a file that is already past a
 /// step never runs it again - which is the property card 150 wrote the guard
@@ -1311,6 +1348,55 @@ fn migrate(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
     if was < 5 {
         migrate_to_v5(state);
     }
+    // v5 -> v6 (card 302) moves nothing: `modes`, `schedule` and `schedule_run`
+    // start empty, and the speed and pause it retired are put right by
+    // `retire_playback` on every load, of every version.
+}
+
+/// Card 302: **speed and pause are retired** (the owner, 2026-09-26; card 301
+/// takes them off the page). What is in the file keeps its shape - `speed` on a
+/// player, a working copy and a setting, `paused` on a player - so an older
+/// build can still read it, but the values are put back to 1.0 and `false`,
+/// and said once in the `repaired` voice when anything had to move.
+///
+/// A working copy's `Some(x)` becomes `Some(1.0)` rather than `None`, so no
+/// memory entry disappears from under a patch somebody tuned.
+fn retire_playback(state: &mut Persisted, repaired: &mut Vec<String>) {
+    let mut speeds = 0usize;
+    let mut paused = 0usize;
+    for p in &mut state.players {
+        if p.speed != 1.0 {
+            p.speed = 1.0;
+            speeds += 1;
+        }
+        if p.paused {
+            p.paused = false;
+            paused += 1;
+        }
+    }
+    for entry in state.patches.values_mut() {
+        if entry.speed.is_some_and(|s| s != 1.0) {
+            entry.speed = Some(1.0);
+            speeds += 1;
+        }
+        for setting in entry.settings.values_mut() {
+            if setting.speed != 1.0 {
+                setting.speed = 1.0;
+                speeds += 1;
+            }
+        }
+    }
+    if speeds + paused == 0 {
+        return;
+    }
+    let mut what = Vec::new();
+    if speeds > 0 {
+        what.push(format!("{speeds} saved speed{} put back to 1.00x", if speeds == 1 { "" } else { "s" }));
+    }
+    if paused > 0 {
+        what.push(format!("{paused} paused player{} playing again", if paused == 1 { "" } else { "s" }));
+    }
+    repaired.push(format!("speed and pause are not settings any more (card 302): {}", what.join(" and ")));
 }
 
 /// v4 -> v5 (card 151): a patch's **speed** becomes part of what is remembered
@@ -1957,11 +2043,13 @@ mod tests {
             PatchMemory {
                 seed: Some(3),
                 params: BTreeMap::from([("scale".into(), 2.5)]),
-                speed: Some(0.4),
+                // Card 302: speed is retired, so the only speed that
+                // round-trips is 1.00x (anything else is put back on load).
+                speed: Some(1.0),
                 setting: "Lava".into(),
                 settings: BTreeMap::from([(
                     "Lava".to_string(),
-                    Setting { seed: 3, params: BTreeMap::from([("scale".into(), 2.5)]), speed: 0.4 },
+                    Setting { seed: 3, params: BTreeMap::from([("scale".into(), 2.5)]), speed: 1.0 },
                 )]),
             },
         );
@@ -2228,12 +2316,14 @@ mod tests {
 
             assert_eq!(loaded.players.len(), 1, "fps {rate}: the file was used");
             assert_eq!(loaded.players[0].seed, 9, "fps {rate}: the rest of the file survives");
-            assert!(loaded.players[0].paused, "fps {rate}: including the playback state that is still a thing");
-            assert_eq!(loaded.players[0].speed, 0.5);
+            // Card 302 retired the rest of the playback state as well.
+            assert!(!loaded.players[0].paused, "fps {rate}: pause is retired");
+            assert_eq!(loaded.players[0].speed, 1.0, "fps {rate}: and so is speed");
             assert_eq!(loaded.players[0].output.dither, screeny_art::dither::Dither::Bayer8);
 
             let said = store.health().repaired;
-            assert_eq!(said.len(), 1, "fps {rate}: said once, not per player: {said:?}");
+            assert_eq!(said.len(), 2, "fps {rate}: `fps` said once, not per player, and the retired playback once: {said:?}");
+            assert!(said[1].contains("card 302"), "{said:?}");
             assert!(said[0].contains(&format!("`fps` ({rate})")), "{}", said[0]);
             assert!(
                 said[0].contains(&format!("{} fps", screeny_art::FPS)),
@@ -2317,8 +2407,8 @@ mod tests {
         assert_eq!(p.patch, "metaballs");
         assert_eq!(p.seed, 55);
         assert_eq!(p.params["size"], 2.5);
-        assert!(p.paused);
-        assert_eq!(p.speed, 2.0);
+        assert!(!p.paused, "pause is retired (card 302)");
+        assert_eq!(p.speed, 1.0, "and so is speed");
         assert_eq!(loaded.focus, "4a00a4");
     }
 
@@ -2407,7 +2497,7 @@ mod tests {
         // as the studio last left *it*, which is what switching to it by hand
         // would do.
         assert_eq!(loaded.players[0].seed, 77, "the default patch's own remembered seed");
-        assert_eq!(loaded.players[0].speed, 0.25, "and its own speed");
+        assert_eq!(loaded.players[0].speed, 1.0, "speed is retired (card 302): 1.00x whatever was remembered");
         assert_eq!(loaded.players[0].params["rest"], 3.0, "and its own parameters");
         assert!(!loaded.players[0].params.contains_key("scale"), "never the missing patch's: {:?}", loaded.players[0].params);
 
@@ -2574,7 +2664,7 @@ mod tests {
         assert_eq!(p.params, BTreeMap::from([("grid".to_string(), 2.0), ("mood".to_string(), 3.0)]));
         assert_eq!(p.brightness, Some(96), "the brightness policy");
         assert!(!p.paused);
-        assert_eq!(p.speed, 0.75);
+        assert_eq!(p.speed, 1.0, "the file's 0.75x is retired (card 302)");
         // `settings` is read as `output`, in full.
         assert_eq!(p.output.panel, screeny_art::panel::Panel::Dithered);
         assert_eq!(p.output.dither, screeny_art::dither::Dither::Bayer4);
@@ -2595,11 +2685,13 @@ mod tests {
         assert_eq!(loaded.patches["plasma"].params["scale"], 2.97);
         assert_eq!(loaded.patches["long-gone"].seed, Some(5));
 
-        // The one thing that needed saying: a v3 file names `fps`, which card
-        // 161 retired. It names no retired `levels`.
+        // What needed saying: a v3 file names `fps`, which card 161 retired,
+        // and plays at 0.75x, which card 302 retired (the player's speed and
+        // the copy v4 -> v5 made of it). It names no retired `levels`.
         let said = store.health().repaired;
-        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said.len(), 2, "{said:?}");
         assert!(said[0].starts_with("`fps`"), "{}", said[0]);
+        assert!(said[1].contains("card 302") && said[1].contains("2 saved speeds"), "{}", said[1]);
         assert!(!dir.0.join(BAD_FILE).exists(), "a v3 file is migrated, not condemned");
     }
 
@@ -2702,7 +2794,7 @@ mod tests {
     fn a_setting_is_saved_loaded_and_says_when_it_has_been_moved() {
         let def = metaballs();
         let mut memory = Memory::new();
-        let lava = work(111, 2.5, 0.4);
+        let lava = work(111, 2.5, 1.0);
         remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
 
         assert_eq!(current_setting(&memory, "metaballs"), DEFAULT_SETTING, "everything starts on Default");
@@ -2713,14 +2805,14 @@ mod tests {
         assert!(!modified(&memory, def, &lava), "which is not modified the moment it is written");
 
         // Move something: the mark comes back, and the setting is untouched.
-        let moved = work(111, 3.5, 0.4);
+        let moved = work(111, 3.5, 1.0);
         assert!(modified(&memory, def, &moved));
         let (stored, repaired) = usable_setting(&memory, def, "Lava").expect("still there");
         assert_eq!(stored, lava, "the saved setting did not move with the working copy");
         assert!(repaired.is_empty());
 
         // A second setting, and loading the first one back.
-        let ink = work(222, 1.5, 0.2);
+        let ink = work(222, 1.5, 1.0);
         save_setting(&mut memory, def, Some("Slow ink"), &ink).expect("saved");
         assert_eq!(memory["metaballs"].settings.len(), 2);
         let (back, _) = usable_setting(&memory, def, "Lava").expect("still there");
@@ -2779,7 +2871,7 @@ mod tests {
         let why = save_setting(&mut memory, def, Some("lava"), &w).expect_err("a near-duplicate");
         assert!(why.contains("already a setting called `Lava`"), "{why}");
         // ...but the same name, exactly, is an overwrite, which is the point.
-        save_setting(&mut memory, def, Some("Lava"), &work(9, 3.0, 2.0)).expect("overwritten");
+        save_setting(&mut memory, def, Some("Lava"), &work(9, 3.0, 1.0)).expect("overwritten");
         assert_eq!(memory["metaballs"].settings.len(), 1);
         assert_eq!(memory["metaballs"].settings["Lava"].seed, 9);
     }
@@ -2808,7 +2900,7 @@ mod tests {
     fn renaming_follows_the_working_copy_and_deleting_leaves_it_playing() {
         let def = metaballs();
         let mut memory = Memory::new();
-        let lava = work(111, 2.5, 0.4);
+        let lava = work(111, 2.5, 1.0);
         save_setting(&mut memory, def, Some("Lava"), &lava).expect("saved");
         remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
 
@@ -2875,7 +2967,7 @@ mod tests {
         assert_eq!(usable.params["speed"], spec(def, "speed").max, "out of range is clamped");
         assert!(!usable.params.contains_key("size"), "one the patch has gained is simply its default");
         assert_eq!(usable.seed, 7);
-        assert_eq!(usable.speed, 0.5);
+        assert_eq!(usable.speed, 1.0, "a setting plays at 1.00x whatever it saved (card 302)");
         assert_eq!(repaired.len(), 2, "one sentence each, and never an error: {repaired:?}");
         assert!(repaired.iter().all(|r| r.contains("From before")), "each says which setting: {repaired:?}");
 
@@ -2946,7 +3038,7 @@ mod tests {
         assert_eq!(loaded.devices.len(), 1);
         assert_eq!(loaded.players.len(), 1);
         assert_eq!(loaded.players[0].patch, "clocks-dials");
-        assert_eq!(loaded.players[0].speed, 0.4);
+        assert_eq!(loaded.players[0].speed, 1.0, "speed is retired (card 302)");
         assert_eq!(loaded.focus, "aa11bb");
 
         // The memory is v4's, entry for entry, and nothing was invented.
@@ -2955,14 +3047,17 @@ mod tests {
         assert_eq!(loaded.patches["metaballs"].seed, Some(222));
         assert!(loaded.patches.values().all(|e| e.settings.is_empty()), "a v4 file has no settings to carry");
         assert!(loaded.patches.values().all(|e| e.setting.is_empty()), "so every patch is on Default");
-        // The one thing that moves, and only for the patch that was playing.
-        assert_eq!(loaded.patches["clocks-dials"].speed, Some(0.4), "the panel was at 0.4x and comes back at 0.4x");
+        // v4 -> v5 moved the player's 0.4x onto the patch it was on, and card
+        // 302's retirement then put it back to 1.00x - still only for the
+        // patch that was playing, so nothing was invented.
+        assert_eq!(loaded.patches["clocks-dials"].speed, Some(1.0), "moved, then retired");
         assert_eq!(loaded.patches["metaballs"].speed, None, "a patch nothing was playing is left alone");
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v4")), "it says so once");
         let said = store.health().repaired;
-        assert_eq!(said.len(), 1, "a good v4 file needs only the retired `fps` said: {said:?}");
+        assert_eq!(said.len(), 2, "a good v4 file needs only the retired `fps` and speed said: {said:?}");
         assert!(said[0].starts_with("`fps`"), "{}", said[0]);
+        assert!(said[1].contains("card 302"), "{}", said[1]);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(4))).expect("the backup"), v4, "kept byte for byte");
         assert!(!dir.0.join(BAD_FILE).exists(), "a v4 file is migrated, not condemned");
     }
@@ -2972,8 +3067,8 @@ mod tests {
     /// player is at 1.0x but whose patch remembers 0.4x keeps the 0.4x, which
     /// is exactly what a second run of v4 -> v5 would overwrite.
     #[test]
-    fn a_v5_file_does_not_run_the_migration_again() {
-        let dir = Temp::new("v5-once");
+    fn a_current_file_does_not_run_the_migration_again() {
+        let dir = Temp::new("v6-once");
         let v5 = format!(
             r#"{{"version":{SCHEMA_VERSION},"focus":"abc",
                  "players":[{{"device":"abc","patch":"metaballs","seed":8,"speed":1.0}}],
@@ -2983,11 +3078,16 @@ mod tests {
         std::fs::write(dir.0.join(FILE), &v5).expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
         assert!(store.health().recovered.is_none(), "same version, so nothing was migrated");
-        assert!(!dir.0.join(backup_name(5)).exists(), "and nothing was copied aside");
-        assert_eq!(loaded.patches["metaballs"].speed, Some(0.4), "the working copy's own speed, not the player's");
+        assert!(!dir.0.join(backup_name(u64::from(SCHEMA_VERSION))).exists(), "and nothing was copied aside");
+        assert!(!dir.0.join(backup_name(5)).exists());
+        // v4 -> v5 would have overwritten the working copy's speed with the
+        // player's; it did not run. Card 302's retirement runs on every load,
+        // so the 0.4x the file says is 1.00x either way - and said.
+        assert_eq!(loaded.patches["metaballs"].speed, Some(1.0));
         assert_eq!(loaded.patches["metaballs"].setting, "Lava");
         assert_eq!(loaded.patches["metaballs"].settings["Lava"].params["hue"], 2.5);
-        assert_eq!(loaded.patches["metaballs"].settings["Lava"].speed, 0.4);
+        assert_eq!(loaded.patches["metaballs"].settings["Lava"].speed, 1.0);
+        assert!(store.health().repaired.iter().any(|r| r.contains("card 302")));
     }
 
     /// A v1 file goes all the way in one start: v1 -> v3 -> v5.
@@ -3006,8 +3106,10 @@ mod tests {
         let (store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(loaded.patches["clocks-dials"].params["mood"], 3.0, "v1's merge still happened");
-        assert_eq!(loaded.patches["clocks-dials"].speed, Some(0.5), "and each context's speed came with it");
-        assert_eq!(loaded.patches["metaballs"].speed, Some(2.0));
+        // Each context's speed came with it (v4 -> v5) and was then retired
+        // (card 302): an entry each, at 1.00x.
+        assert_eq!(loaded.patches["clocks-dials"].speed, Some(1.0));
+        assert_eq!(loaded.patches["metaballs"].speed, Some(1.0));
         assert!(loaded.patches.values().all(|e| e.settings.is_empty()));
         let why = store.health().recovered.expect("it says so");
         assert!(why.contains("v1") && why.contains(&format!("v{SCHEMA_VERSION}")), "{why}");
@@ -3041,7 +3143,7 @@ mod tests {
         assert!(entry.setting.is_empty(), "a name nothing answers to is not a name it is on");
 
         assert_eq!(entry.settings["Good"].params["hue"], 2.5);
-        assert_eq!(entry.settings["Good"].speed, 0.5);
+        assert_eq!(entry.settings["Good"].speed, 1.0, "retired (card 302)");
         assert_eq!(entry.settings["Bad seed"].seed, DEFAULT_SEED, "a seed that is not a seed takes Default's");
         assert_eq!(entry.settings["Bad speed"].speed, 1.0, "a speed that is not a speed is 1.00x");
         assert!(entry.settings["Bad param"].params.is_empty(), "a value that is not a number is its default");
