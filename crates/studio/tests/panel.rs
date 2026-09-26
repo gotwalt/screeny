@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{get, post, preview_of, seq_of, studio, until, until_json, Ws};
+use common::{get, pause, post, preview_of, seq_of, studio, studio_and_state, until, until_json, Ws};
 use std::sync::mpsc::{channel, Receiver, Sender as Tx};
 use std::time::Duration;
 
@@ -60,10 +60,12 @@ fn sim_on(port: u16) -> SimDevice {
 /// Stop the patch and the limiter, so every frame the engine makes is the
 /// same frame and "the panel shows the preview" is a statement about bytes
 /// rather than about timing.
-async fn hold_still(at: std::net::SocketAddr, patch: &str) {
+///
+/// The pause is in process (card 302 took it off every route; `common::pause`).
+async fn hold_still(at: std::net::SocketAddr, st: &screeny_studio::AppState, patch: &str) {
     post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
-    post(at, "/api/v1/set_seed", r#"{"seed":7}"#).await;
-    let state = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0}"#).await.json();
+    let state = post(at, "/api/v1/set_seed", r#"{"seed":7}"#).await.json();
+    pause(st);
     let mut output = state["output"].clone();
     output["limiter"]["enabled"] = false.into();
     post(at, "/api/v1/set_output", &serde_json::json!({ "output": output }).to_string()).await;
@@ -81,9 +83,9 @@ async fn hold_still(at: std::net::SocketAddr, patch: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_to_panel_streams_the_picture_to_the_device() {
     let (_dev, port, rx) = start_sim();
-    let studio = studio().await;
+    let (studio, st) = studio_and_state().await;
     let at = studio.addr;
-    hold_still(at, "flock").await;
+    hold_still(at, &st, "flock").await;
 
     // The switch, as the UI turns it on: a name or an address, deferred.
     let body = format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#);
@@ -261,9 +263,9 @@ async fn set_panel_hands_the_panel_over_and_takes_it_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_browser_does_not_hold_up_the_engine_or_the_panel() {
     let (_dev, port, _rx) = start_sim();
-    let studio = studio().await;
+    let (studio, st) = studio_and_state().await;
     let at = studio.addr;
-    hold_still(at, "flock").await;
+    hold_still(at, &st, "flock").await;
     post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -346,9 +348,9 @@ async fn a_stalled_browser_is_eventually_dropped() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_panel_that_comes_back_twice_says_two() {
     let (first, port, _rx) = start_sim();
-    let studio = studio().await;
+    let (studio, st) = studio_and_state().await;
     let at = studio.addr;
-    hold_still(at, "flock").await;
+    hold_still(at, &st, "flock").await;
 
     let body = format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#);
     assert_eq!(post(at, "/api/v1/set_panel", &body).await.status, 200);

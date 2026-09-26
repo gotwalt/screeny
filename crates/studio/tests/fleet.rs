@@ -289,6 +289,8 @@ async fn the_page_resumes_where_it_was() {
 
     post(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     post(at, "/api/v1/set_seed", r#"{"seed":1234}"#).await;
+    // Card 302: retired, so this changes nothing - and a restart must not
+    // bring back a pause or a speed from anywhere.
     post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":2.0}"#).await;
     let panel = post(at, "/api/v1/set_panel", &format!(r#"{{"on":true,"to":"127.0.0.1:{port}"}}"#)).await;
     assert_eq!(panel.status, 200);
@@ -299,8 +301,8 @@ async fn the_page_resumes_where_it_was() {
     let state = get(at, "/api/v1/bootstrap").await.json()["state"].clone();
     assert_eq!(state["patch"], "metaballs");
     assert_eq!(state["seed"], 1234);
-    assert_eq!(state["paused"], true);
-    assert_eq!(state["speed"], 2.0);
+    assert_eq!(state["paused"], false, "pause is retired (card 302)");
+    assert_eq!(state["speed"], 1.0, "and so is speed");
     assert_eq!(state["fps"], 30.0, "the one rate, which a restart cannot move either");
 
     // Which panel it was attached to, and that it is driving it again - all
@@ -312,7 +314,7 @@ async fn the_page_resumes_where_it_was() {
     assert_eq!(s["preview"]["patch"], "metaballs", "{}", s["preview"]);
     assert_eq!(s["preview"]["panel_on"], true, "it should still be driving a panel: {}", s["preview"]);
     assert_eq!(s["preview"]["panel_to"], format!("127.0.0.1:{port}"));
-    assert_eq!(s["preview"]["paused"], true, "including the playback state, which used to be the preview's");
+    assert_eq!(s["preview"]["paused"], false, "the playback state that used to be the preview's is retired");
     assert_eq!(get(at, "/api/v1/panel_status").await.json()["connected"], true);
     studio.stop().await;
 }
