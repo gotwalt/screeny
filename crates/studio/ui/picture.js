@@ -676,9 +676,6 @@ async function start() {
     mDluma.tick.style.left = `${Math.min(1, perFrame / 0.1) * 100}%`;
     mDluma.root.dataset.state = st.dlumaPeak > perFrame * 1.05 ? 'over' : '';
     mDluma.note.textContent = `Peak ${(st.dlumaPeak * 100).toFixed(1)}% in the last 2 s.`;
-
-    $('#ro-time').textContent = `${st.t.toFixed(1)} s`;
-    $('#ro-fps').textContent = `${st.fps.toFixed(1)} fps`;
   }
 
   // ---- now playing ----

@@ -77,6 +77,16 @@ impl Frame {
         }
     }
 
+    /// Every pixel as linear RGB, row-major: an `Indexed` frame expanded
+    /// through its palette. The frame itself is left as it was.
+    #[must_use]
+    pub fn to_linear(&self) -> Vec<Rgb> {
+        match self {
+            Frame::Linear(px) => px.clone(),
+            Frame::Indexed { .. } => (0..N).map(|i| self.pixel(i)).collect(),
+        }
+    }
+
     /// Multiply every colour by `k`. On an indexed frame this touches only the
     /// palette, so the frame stays exact.
     pub fn scale(&mut self, k: f32) {

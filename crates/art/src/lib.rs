@@ -11,6 +11,7 @@
 //! opens a socket.
 
 pub mod color;
+pub mod crossfade;
 pub mod dither;
 pub mod faces;
 pub mod frame;
