@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{get, post, studio, until, until_json, Ws, PATIENCE};
+use common::{get, pause, post, studio, studio_and_state, until, until_json, Ws, PATIENCE};
 use std::time::Duration;
 
 /// One frame packet: 52 bytes of header and 64x32 sRGB.
@@ -26,11 +26,11 @@ const WINDOW: Duration = Duration::from_secs(2);
 ///
 /// Card 161 took the rate out of this: there is one, `screeny_art::FPS`, and
 /// `/api/v1/status` reports it rather than being set to it. What is still
-/// worth waiting for is a render loop that is actually running.
-async fn playing(at: std::net::SocketAddr, patch: &str, paused: bool) {
-    post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
-    let body = format!(r#"{{"paused":{paused},"speed":1.0}}"#);
-    assert_eq!(post(at, "/api/v1/set_playback", &body).await.status, 200);
+/// worth waiting for is a render loop that is actually running. (Card 302
+/// took pause off the routes; a test that wants a still picture pauses in
+/// process with `common::pause`.)
+async fn playing(at: std::net::SocketAddr, patch: &str) {
+    assert_eq!(post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await.status, 200);
     until_json(at, PATIENCE, "the player to be running", "/api/v1/status", |s| {
         s["preview"]["fps"] == screeny_art::FPS && s["preview"]["alive"] == true
     })
@@ -43,7 +43,7 @@ async fn playing(at: std::net::SocketAddr, patch: &str, paused: bool) {
 async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "flock", false).await;
+    playing(at, "flock").await;
 
     let mut tab = Ws::connect_asking(at, "client=tab&fps=30").await;
     let visible = tab.measure(WINDOW).await;
@@ -80,7 +80,7 @@ async fn a_hidden_tab_is_sent_no_frames_and_comes_straight_back() {
 async fn a_socket_gets_the_rate_it_asked_for() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "flock", false).await;
+    playing(at, "flock").await;
 
     let mut slow = Ws::connect_asking(at, "client=slow&fps=10").await;
     let mut quiet = Ws::connect_asking(at, "client=quiet").await;
@@ -120,11 +120,12 @@ async fn a_socket_gets_the_rate_it_asked_for() {
 /// so about once a second.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_picture_that_has_not_changed_is_not_sent_again() {
-    let studio = studio().await;
+    let (studio, st) = studio_and_state().await;
     let at = studio.addr;
     // Paused: the strongest form of "a held clock face", and the same thing a
     // numerals clock does for fifteen seconds between minutes.
-    playing(at, "clocks-numerals", true).await;
+    playing(at, "clocks-numerals").await;
+    pause(&st);
     // Card 304: a patch change cross-fades, and a fade is a moving picture
     // even when the patch is paused. Measure the still one after it.
     tokio::time::sleep(Duration::from_secs_f32(screeny_studio::player::FADE_MANUAL + 0.5)).await;
@@ -159,7 +160,7 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
     let at = studio.addr;
     // No panel is ever attached here, so the only reason to render fast would
     // be a browser watching.
-    playing(at, "flock", false).await;
+    playing(at, "flock").await;
 
     // Rendered frames over a window, read from the sequence number the render
     // loop stamps - the player's own rate, not the socket's.
@@ -215,7 +216,7 @@ async fn a_hidden_tab_does_not_hold_the_player_at_full_rate() {
 async fn the_status_route_says_what_the_preview_costs() {
     let studio = studio().await;
     let at = studio.addr;
-    playing(at, "flock", false).await;
+    playing(at, "flock").await;
 
     let idle = get(at, "/api/v1/status").await.json();
     assert_eq!(idle["sockets"]["open"], 0);

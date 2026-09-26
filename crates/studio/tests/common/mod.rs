@@ -13,7 +13,8 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use screeny_studio::{Config, Running, Studio};
+use screeny_studio::player::PlayerChange;
+use screeny_studio::{AppState, Config, Running, Studio};
 use std::path::{Path, PathBuf};
 
 /// Nothing in these tests waits longer than this for a thing that should
@@ -24,6 +25,22 @@ pub const PATIENCE: Duration = Duration::from_secs(5);
 /// the engine thread, releases the panel and stops the server.
 pub async fn studio() -> Running {
     Studio::bind(test_config()).await.expect("bind an ephemeral loopback port").spawn()
+}
+
+/// A studio, and the handle to poke it through in process - for what no route
+/// can do any more.
+pub async fn studio_and_state() -> (Running, AppState) {
+    let studio = Studio::bind(test_config()).await.expect("bind an ephemeral loopback port");
+    let st = studio.state();
+    (studio.spawn(), st)
+}
+
+/// **Pause the page's player, in process.** Card 302 retired pause from every
+/// route - nothing a browser or a script sends can pause the panel any more -
+/// but the player itself still has it, and a test that needs a still picture
+/// (every frame the same frame) holds it here rather than hoping for one.
+pub fn pause(st: &AppState) {
+    st.page().configure(&PlayerChange { paused: Some(true), ..PlayerChange::default() }).expect("pause the player");
 }
 
 /// The configuration every test in this crate starts from.

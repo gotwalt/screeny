@@ -64,15 +64,18 @@ async fn the_api_round_trips() {
     assert_eq!(after["output"]["dither"], "bayer4");
     assert_eq!(after["output"]["limiter"]["enabled"], false);
 
-    // set_playback, with the speed clamped to the player's range. Card 161:
-    // `fps` is not a field of this body any more, and one that still carries
-    // it is accepted with the field ignored - `tests/ui.rs` has that test.
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0}"#).await.json();
-    assert_eq!(play["paused"], true);
-    assert_eq!(play["speed"], 8.0, "speed is clamped to 8x");
+    // set_playback is retired (card 302): still a 200, the whole state as
+    // before, and it changes nothing - and says so. Card 161 retired `fps`
+    // from the same body the same way.
+    let play = post(at, "/api/v1/set_playback", r#"{"paused":true,"speed":99.0}"#).await;
+    assert_eq!(play.status, 200);
+    let play = play.json();
+    assert_eq!(play["paused"], false, "pause is retired");
+    assert_eq!(play["speed"], 1.0, "and so is speed");
     assert_eq!(play["fps"], 30.0, "and the one rate is reported back");
-    let play = post(at, "/api/v1/set_playback", r#"{"paused":false,"speed":1.0}"#).await.json();
-    assert_eq!(play["fps"], 30.0, "which nothing can move");
+    assert_eq!(play["ignored"], screeny_studio::api::PLAYBACK_RETIRED, "it says it changed nothing");
+    assert_eq!(play["patch"], after["patch"], "and it is the whole state");
+    assert_eq!(post(at, "/api/v1/set_playback", "{}").await.status, 200, "any body at all");
 
     // restart keeps the seed and starts the patch's clock again.
     let restarted = post(at, "/api/v1/restart", "{}").await;
@@ -255,10 +258,27 @@ async fn two_browsers_see_each_others_changes() {
     assert!(quiet.is_err(), "the studio echoed Alice her own change: {quiet:?}");
 
     // And Bob changing something reaches Alice, so it is not one-way.
-    post_as(at, "/api/v1/set_playback", r#"{"paused":true,"speed":1.0}"#, Some("bob")).await;
+    post_as(at, "/api/v1/set_seed", r#"{"seed":4321}"#, Some("bob")).await;
     let ev = alice.event("state").await;
-    assert_eq!(ev["state"]["paused"], true);
+    assert_eq!(ev["state"]["seed"], 4321);
     assert_eq!(ev["from"], "bob");
+}
+
+/// Card 302: `player/set` takes `paused` and `speed` as it takes `fps` since
+/// card 161 - accepted, and nothing moves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn player_set_no_longer_pauses_or_speeds_anything_up() {
+    let studio = studio().await;
+    let at = studio.addr;
+    // A port nothing listens on, on loopback.
+    let add = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:9"}"#).await.json();
+    let device = add["id"].as_str().expect("an id").to_string();
+    let p = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{device}","seed":5,"paused":true,"speed":3.0}}"#)).await;
+    assert_eq!(p.status, 200, "{}", String::from_utf8_lossy(&p.body));
+    let p = p.json();
+    assert_eq!(p["seed"], 5, "the rest of the body is applied");
+    assert_eq!((p["paused"].clone(), p["speed"].clone()), (false.into(), 1.0.into()));
+    studio.stop().await;
 }
 
 /// A browser that arrives late is handed the state as it is now, and one that

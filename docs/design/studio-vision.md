@@ -103,8 +103,49 @@ That is a design requirement, not an afterthought:
   (uptime, RSSI, drops by cause) is exposed so a glance answers "is it fine".
 - Wall-clock patches (the clocks) need correct time and time zone in the container
   (`TZ`, host clock via NTP).
-- Quiet hours / brightness schedule belong here eventually (a panel that runs for
-  months lives in a room at night).
+- ~~Quiet hours / brightness schedule belong here eventually (a panel that runs for
+  months lives in a room at night).~~ Superseded by **modes and a daily schedule**
+  (card 302, 2026-09-26): see [Modes and the schedule](#modes-and-the-schedule-card-302).
+
+## Modes and the schedule (card 302)
+
+The owner, 2026-09-26: *"add scheduling to the studio - i'd like, for example, to be able
+to go into night mode where it's a different patch at the lowest possible visible
+brightness, then restore in the morning."* This replaces the quiet-hours line above and
+folds in two parked cards: 179 (day and night modes, switched from the smart home) and 104
+(a runner that rotates and schedules pieces, which he did not want then and still is not
+this: there is no playlist and no rotation).
+
+Decisions, his:
+
+- **A mode is `{patch, named setting, panel brightness}`** (card 179's model, from card
+  155's open question: brightness and patch belong to a *mode*, not to a patch or a
+  setting). Day and night are the two he named; `vesta` is the obvious night patch. A mode
+  may name a setting of its patch, `Default`, or none - the working copy, as it was last
+  left - and a brightness or none (leave it alone).
+- **"The lowest possible visible brightness"** is the lowest nonzero brightness stop: the
+  firmware raises anything dim-but-nonzero to its floor (card 187). Zero is allowed and is
+  a dark panel; any nonzero level is at least visible.
+- **A daily timetable**: `HH:MM -> mode`, every day, in the container's local time (`TZ`).
+  The entry due now is the latest at or before now, wrapping to yesterday's last.
+- **Overrides: "hold until the next timetable entry."** A change made by hand while a mode
+  is on - a patch, a slider, the brightness, another mode - stays until the next entry
+  comes due, then the schedule resumes. The scheduler therefore never compares what is
+  playing with what the mode says: it applies an entry once (the run record, time + local
+  date, is persisted so this holds across a restart) and leaves the panel alone until the
+  next. "Back to schedule" applies the due entry at once.
+- **The smart home calls `POST /api/v1/mode/apply {name}`.** Card 179's virtual Matter
+  switch stays parked; a plain HTTP call is the agreed first step.
+- **Speed and pause are retired** the same morning: every patch plays at 1.00x and nothing
+  pauses. The state file keeps the fields' places for an older build; every load puts them
+  back.
+- A scheduled change fades over 5 s, a hand change over the usual 2 s (card 304's
+  cross-fade).
+
+How it is built - state v6 (`modes`, `schedule`, `schedule_run`), `overridden` and `until`
+computed on every read and never stored, the routes and the DST rules - is in
+[`crates/studio/README.md`](../../crates/studio/README.md#modes-and-the-schedule-card-302).
+The page is card 303.
 
 ## Deployment target: `studio-host.local` (surveyed 2026-09-19)
 
