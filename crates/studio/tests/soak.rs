@@ -177,6 +177,9 @@ async fn flowing(at: SocketAddr, what: &str) -> u32 {
     }
 }
 
+// The owner, 2026-09-26: a sixty-second soak is not part of an ordinary `cargo test`.
+// Run it on purpose: `cargo test --release -p screeny-studio --test soak -- --ignored`.
+#[ignore = "sixty seconds; run on purpose with -- --ignored"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_server_survives_a_bounded_soak() {
     let want = std::env::var("SCREENY_SOAK_SECS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(60);
