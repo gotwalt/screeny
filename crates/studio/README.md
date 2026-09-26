@@ -308,19 +308,22 @@ frame until their stream timeout.
 ## Modes and the schedule (card 302)
 
 The owner, 2026-09-26: *"go into night mode where it's a different patch at the lowest
-possible visible brightness, then restore in the morning."*
+possible visible brightness, then restore in the morning."* The same evening (card 309)
+he made brightness **a separate concern from what is on the screen**: a mode is the
+picture only. The light level is set on the Panel screen or by the smart home
+(`/device/brightness`), and no mode sets it, captures it or is overridden by it - so a
+smart home dimming the panel to the room all day does not fight the schedule.
 
 | | |
 |---|---|
-| **mode** | `{name, patch, setting, brightness}` - what the panel should look like, by name. `setting` is a named setting of that patch or `Default`; `null` is the patch's **working copy** (as it was last left). `brightness` is snapped to a real stop (card 187); `null` leaves the brightness alone; `0` is a dark panel; any nonzero level is at least the dimmest *visible* stop, never dark. At most 32 modes, names 1-40 characters, one name however it is spelled. |
+| **mode** | `{name, patch, setting}` - what the panel should show, by name, and nothing else. `setting` is a named setting of that patch or `Default`; `null` is the patch's **working copy** (as it was last left). At most 32 modes, names 1-40 characters, one name however it is spelled. A `state.json` from card 302's build whose modes carry `brightness` loads as it is, the key dropped and nothing said: it was never wrong, the model changed (card 309). |
 | **schedule** | `{enabled, entries: [{at: "HH:MM", mode}]}`, every day, local time (the container's `TZ`). At most 48 entries, one mode a time, sorted on save; an entry must name a mode that exists, and **a mode the schedule names cannot be deleted** (the 400 says where it is named). |
 | **due** | the latest entry at or before now - and before the day's first, the last one, which came due yesterday. |
 
 **Applying a mode** is one change to the panel the page shows: the patch, then the
-setting, then the brightness policy, in one `Player::configure_faded` - so the panel moves in
-one step, cross-fading over 5 s when the timetable does it and 2 s by hand (card 304) - and the
-brightness goes out on the supervisor's next tick exactly as
-`/device/brightness` leaves it. A mode whose patch this build has not got, or that needs a
+setting, in one `Player::configure_faded` - so the panel moves in one step, cross-fading
+over 5 s when the timetable does it and 2 s by hand (card 304). The brightness policy is
+left exactly where it was. A mode whose patch this build has not got, or that needs a
 graphics adapter there is none of, is **skipped and said**; one whose setting has since been
 deleted plays the working copy and **says so** (`schedule_note`) - neither is an error.
 
@@ -328,23 +331,24 @@ deleted plays the working copy and **says so** (`schedule_note`) - neither is an
 and the due entry is not the one it last applied (`schedule_run`: its time and the local
 date of that occurrence, kept in `state.json`), it applies that entry's mode and writes it
 down. **That is all it does** - it never compares what is playing with what the mode says -
-and that is the owner's rule, **hold until the next timetable entry**: change the patch, a
-slider or the brightness by hand (or apply another mode) while a mode is on, and it stays
-until the next entry comes due. Because the run record is in the file, a hold survives a
+and that is the owner's rule, **hold until the next timetable entry**: change the patch or a
+slider by hand (or apply another mode) while a mode is on, and it stays until the next
+entry comes due. Because the run record is in the file, a hold survives a
 restart; a restart *across* an entry's time applies it, because that entry has not been
 applied yet. DST: an entry in a skipped hour comes due at the first minute that exists; an
 entry in a repeated hour fires once.
 
 **Computed on every read, never stored** (like `modified`), and carried in the state every
 route answers and every socket message carries: `mode` (what the schedule says should be on
-now, or `null` when it is off), `overridden` (it is on, and the patch, the mode's named
-setting or the brightness differ from the mode), `until` (`"HH:MM"`, when the next entry
+now, or `null` when it is off), `overridden` (it is on, and the patch or the mode's named
+setting differ from the mode - a named setting moved off by a slider counts; brightness
+never does), `until` (`"HH:MM"`, when the next entry
 comes due) - enough for "Night until 07:00" or "Overridden until 07:00" - plus `modes`,
 `schedule` and `schedule_note`.
 
 | route | body | answer |
 |---|---|---|
-| `POST /modes/save` | `{name, patch?, setting?, brightness?}` - an absent field is **captured from what is playing**: the patch, the named setting it is on when unmodified (else the working copy), the brightness policy. `null` means none. The same name in any spelling overwrites | the new state |
+| `POST /modes/save` | `{name, patch?, setting?}` - an absent field is **captured from what is playing**: the patch, the named setting it is on when unmodified (else the working copy). `setting: null` is the working copy. The same name in any spelling overwrites. A `brightness` an older client still sends is **ignored, not refused** (card 309) | the new state |
 | `POST /modes/rename` | `{from, to}` - the schedule follows the name | the new state |
 | `POST /modes/delete` | `{name}` - refused while the schedule names it | the new state |
 | `POST /mode/apply` | `{name}` - by hand; the schedule's run record is not touched, so with the schedule on it **holds until the next entry** like any hand change | the new state |
@@ -772,5 +776,5 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/schedule`/`/schedule.js`) are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301, and 303 for the Schedule screen's Now/Timetable/Modes), and **one nav with the current screen marked** is on every one of them (301) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Schedule screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
-| `tests/schedule.rs`, `src/schedule.rs` | card 302: at a hand-held clock, Night at 22:00 and Day at 07:00 switch patch **and** the simulator's brightness on the minute; a hand change reads `overridden` and holds until the next entry; `/mode/apply` holds too and `/schedule/resume` goes back; the hold survives a restart and a restart across an entry applies it; every refusal a 400 in words; a mode with a named setting, and one deleted since; a mode whose patch is gone skipped and said. Unit: the due entry wrapping to yesterday, DST skip and repeat, the first look after start-up, bounds, names, snapping, a hand-edited plan. `src/state.rs`: a realistic v5 file migrated to v6 with its tuning intact and 1.7x loading as 1.0 |
+| `tests/schedule.rs`, `src/schedule.rs` | card 302: at a hand-held clock, Night at 22:00 and Day at 07:00 switch patch on the minute and leave the simulator's brightness where the hand set it, and brightness moved by hand is not an override (309); a hand change reads `overridden` and holds until the next entry; `/mode/apply` holds too and `/schedule/resume` goes back; the hold survives a restart and a restart across an entry applies it; every refusal a 400 in words; a mode with a named setting, and one deleted since; a mode whose patch is gone skipped and said. Unit: the due entry wrapping to yesterday, DST skip and repeat, the first look after start-up, bounds, names, a hand-edited plan. `src/state.rs`: a realistic v5 file migrated to v6 with its tuning intact and 1.7x loading as 1.0; a card 302 file whose modes carry `brightness` loading without it (309) |
 | `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |
