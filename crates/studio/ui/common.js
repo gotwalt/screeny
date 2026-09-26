@@ -333,6 +333,36 @@ export function attention(device) {
   return '';
 }
 
+/** The status chip in the title block (Picture and Schedule, card 198/303):
+ *  the panel's name, what it is doing, and - where a rate means something -
+ *  how fast it is being sent. One function rather than two, since card 307:
+ *  the Picture and Schedule screens used to keep their own copies, and the
+ *  Schedule one had drifted to leave "what it is doing" out entirely, so its
+ *  chip read a bare device name with nothing beside it while the Picture
+ *  screen's said "live · 30 fps".
+ *
+ *  Takes the chip element itself, per this file's own rule of reaching for
+ *  nothing else by id - `#ro-panel` is not on the Panel screen, which has no
+ *  need of a chip pointing at itself.
+ *
+ *  `rate` is the fps to show while live, or `null`/`undefined` where there is
+ *  none worth showing - the Schedule screen has no canvas and so no rate
+ *  (card 198, 301); the Picture screen passes the heartbeat's `link.fps`. */
+export function showChip(chip, { attachedId, device, on, link, rate }) {
+  const here = panelState({ attached: Boolean(attachedId), device, on, link });
+  const name = device ? device.label : attachedId;
+  const doing = here.key === 'live'
+    ? (rate === null || rate === undefined ? 'live' : `live · ${rate.toFixed(0)} fps`)
+    : here.key === 'off' ? 'output off'
+      : here.key === 'away' ? 'away'
+        : here.key === 'stopped' ? 'stopped' : '';
+  const needs = attention(device);
+  const label = here.key === 'none' ? 'No panel' : [name || 'Panel', doing, needs].filter(Boolean).join(' · ');
+  if (chip.textContent !== label) chip.textContent = label;
+  chip.dataset.state = needs ? 'bad' : here.tone;
+  return here;
+}
+
 // ---------- small control helpers ----------
 
 export function bindSlider(root, { get, set, format }) {

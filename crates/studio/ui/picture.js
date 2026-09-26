@@ -29,8 +29,8 @@
 'use strict';
 
 import {
-  $, ago, attention, bindRadios, bindSlider, bindSwitch, busy, connect,
-  invoke, notice, panelState, pct, pollStatus, trim,
+  $, ago, bindRadios, bindSlider, bindSwitch, busy, connect,
+  invoke, notice, pct, pollStatus, showChip as paintChip, trim,
 } from './common.js';
 
 const W = 64, H = 32;
@@ -527,23 +527,18 @@ async function start() {
    *  exists at all.
    *
    *  It reads the half-second heartbeat rather than the two-second poll, so a
-   *  panel going away shows up in half a second. */
+   *  panel going away shows up in half a second.
+   *
+   *  Card 307: the chip's own wording (name, "live · N fps", the fault
+   *  phrase) is one function now, `showChip` in `common.js`, shared with the
+   *  Schedule screen so the two cannot say different things about the same
+   *  panel again. This screen is the one that has a rate to pass it. */
   function showChip() {
     const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link });
-    const name = device ? device.label : attachedId();
-    const doing = here.key === 'live' && link
-      ? `live · ${link.fps.toFixed(0)} fps`
-      : here.key === 'off' ? 'output off'
-        : here.key === 'away' ? 'away'
-          : here.key === 'stopped' ? 'stopped' : '';
-    const needs = attention(device);
-    const label = here.key === 'none'
-      ? 'No panel'
-      : [name || 'Panel', doing, needs].filter(Boolean).join(' · ');
     const chip = $('#ro-panel');
-    if (chip.textContent !== label) chip.textContent = label;
-    chip.dataset.state = needs ? 'bad' : here.tone;
+    const here = paintChip(chip, {
+      attachedId: attachedId(), device, on: state.on, link, rate: link ? link.fps : null,
+    });
     chip.title = device && device.last_seen_ago !== null && device.last_seen_ago !== undefined
       ? `Heard ${ago(device.last_seen_ago)}. The panel screen has the rest.`
       : 'The panel screen has the rest.';

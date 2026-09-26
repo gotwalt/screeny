@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { $, attention, bindSwitch, busy, connect, invoke, noFrames, notice, panelState, pollStatus } from './common.js';
+import { $, bindSwitch, busy, connect, invoke, noFrames, notice, pollStatus, showChip as paintChip } from './common.js';
 
 async function start() {
   const boot = await invoke('bootstrap');
@@ -36,16 +36,18 @@ async function start() {
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
 
   /** The one thing this screen says about the panel: the same chip every
-   *  screen carries, so trouble is never hidden behind this tab either. */
+   *  screen carries, so trouble is never hidden behind this tab either.
+   *
+   *  Card 307: this used to be its own, thinner copy - device name and the
+   *  fault phrase only, with no "live"/"away"/"off" - so it read a bare
+   *  "screeny-4a00a4 ›" while the Picture screen's said "screeny-4a00a4 ·
+   *  live · 30 fps". Both screens now paint through the one `showChip` in
+   *  `common.js`, fed the same fields; this screen has no rate to show
+   *  (no canvas, card 198/301), so it passes `rate: null`. */
   function showChip() {
-    const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link });
-    const name = device ? device.label : attachedId();
-    const needs = attention(device);
-    const label = here.key === 'none' ? 'No panel' : [name || 'Panel', needs].filter(Boolean).join(' · ');
-    const chip = $('#ro-panel');
-    if (chip.textContent !== label) chip.textContent = label;
-    chip.dataset.state = needs ? 'bad' : here.tone;
+    paintChip($('#ro-panel'), {
+      attachedId: attachedId(), device: attachedDevice(), on: state.on, link, rate: null,
+    });
   }
 
   // ---------------------------------------------------------- one call ----

@@ -113,7 +113,13 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
   align-items: flex-end;
   justify-content: space-between;
   gap: 14px 32px;
-  padding: 20px var(--gutter) 0;
+  /* Card 307: bottom padding to match the top, not 0 - the Picture screen
+     got away with 0 because `.stage` follows it with its own gutter padding,
+     but the Panel and Schedule screens put a ruled box (`.sheet`, whose
+     border-top is the very next thing) right underneath, so the readouts
+     row's own bottom edge - the State pill on Panel, the chip on Schedule -
+     used to sit right on that rule with nothing under it. */
+  padding: 20px var(--gutter);
 }
 
 .titleblock__patch { min-width: 0; }
@@ -129,8 +135,13 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
 /* Wraps rather than clipping: at ~600 px the seed used to be cut in half. */
 .readouts { display: flex; flex-wrap: wrap; gap: 12px 26px; }
 .readouts dt { margin-bottom: 5px; }
-.readouts dd { font-size: 15px; }
-.readouts__panel dd { font-family: var(--body); }
+/* Card 307: every readout in a title block reads in the same voice - the
+   Panel screen's "Showing"/"Setting" used to fall through to the generic
+   `dd { font-family: var(--data) }` rule above, which is meant for a number
+   (a fact, a count), and set "Vesta" and "Wall Clock" in a large monospace
+   that matched nothing else up here. `var(--body)` is what the status chip
+   (`.readouts__panel dd`, now folded into this one rule) already used. */
+.readouts dd { font-family: var(--body); font-size: 15px; }
 
 /* The one thing you read from across the room: is it on the panel? */
 .pill {
@@ -259,6 +270,14 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
    Panel screen's two-column bench (below); a readable measure keeps a line
    from stretching edge to edge on a wide window. */
 body.schedule-page .sheet { max-width: 640px; }
+/* Card 307: the title block held no width of its own, so on a wide window
+   `justify-content: space-between` put the chip at the far edge of the
+   viewport while `.sheet` above stopped at 640 px - the chip stranded in
+   empty space, floating well past where the content beneath it ends. Held to
+   the same measure as `.sheet`, the way the Panel screen's title block is
+   held to its own two columns' width (below), so the chip sits over the
+   content it belongs to instead of adrift beside it. */
+body.schedule-page .titleblock { max-width: 640px; }
 #sec-due > * + *, #sec-timetable > * + *, #sec-modes > * + * { margin-top: 12px; }
 
 .inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
