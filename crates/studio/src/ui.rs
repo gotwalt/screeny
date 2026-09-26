@@ -23,9 +23,9 @@
 //! each screen then holds only its own markup, which is what makes "nothing
 //! about devices is on the Picture screen" a fact about the file rather than a
 //! CSS rule. All are ordinary URLs, so reload and the back button are the
-//! browser's job and not ours. What they share is `style.css` and `common.js`
-//! - the socket, the poll, the formatting, and the one judgement of what the
-//! panel is doing - so a change made on one screen shows on the others, in
+//! browser's job and not ours. What they share is `style.css` and `common.js`,
+//! namely the socket, the poll, the formatting, and the one judgement of what
+//! the panel is doing, so a change made on one screen shows on the others, in
 //! another browser, at once: they are the same state stream.
 //!
 //! `/dashboard` - card 106's separate app, folded into the one page by card

@@ -72,13 +72,16 @@ Properties that matter:
   page is a separate thing, for WiFi setup only.
 - **One panel, one picture** (author, 2026-09-19, correcting the earlier "editing vs
   playing" split): a Studio is set up once against a panel and is then almost always
-  connected to it - one panel per Studio, almost always one panel on a network. The web
-  page is a window onto what that panel is doing, for when the panel is not within
+  connected to it - one panel per Studio, almost always one panel on a network. Every
+  screen is a window onto what that panel is doing, for when the panel is not within
   eyesight: what is on screen is what the device is showing, at the same time. Changing a
-  patch, a slider or a seed in the browser changes the panel. There is no separate preview
-  stream with its own state, and no "promote to the panel" step (card 170 removed the one
-  card 106 built, and folded the separate `/dashboard` into the one page). The data model
-  stays a collection (decision 3 below); the UI assumes one.
+  patch, a slider or a setting in the browser changes the panel. There is no separate
+  preview stream with its own state, and no "promote to the panel" step (card 170 removed
+  the one card 106 built, and folded the separate `/dashboard` into one page). Cards 198
+  and 301 then split that one page into **three screens** - Picture, Panel and Schedule -
+  tied together by one nav, because "the picture", "the panel's own affairs" and "when
+  each patch plays" are three different kinds of work and reload-safe URLs beat tabs in
+  one document. The data model stays a collection (decision 3 below); the UI assumes one.
 
 ## Built to be forgotten
 
