@@ -198,8 +198,21 @@ async function start() {
     head.className = 'mode__head';
     head.append(Object.assign(document.createElement('span'), { className: 'mode__name', textContent: m.name }));
     const detail = Object.assign(document.createElement('p'), { className: 'mode__detail', textContent: modeDetail(m) });
+
     const actions = document.createElement('div');
     actions.className = 'mode__actions';
+
+    // Card 307: "update this mode to the current settings" - recaptures
+    // patch, setting and brightness from what is playing now (`/modes/save
+    // {name}` alone, the Context's capture rule). Confirms nothing; the
+    // notice line says what the mode now holds, in the same words the
+    // summary line above uses.
+    const update = Object.assign(document.createElement('button'), { type: 'button', className: 'quiet', textContent: 'Update to what’s playing' });
+    update.addEventListener('click', async () => {
+      if (!(await call('modes/save', { name: m.name }))) return;
+      const updated = (state.modes || []).find((x) => x.name === m.name);
+      notice(`${m.name} is now ${modeDetail(updated || m)}.`, 'say');
+    });
 
     const apply = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Apply now' });
     apply.addEventListener('click', async () => { if (await call('mode/apply', { name: m.name })) notice(`Playing ${m.name} now.`, 'say'); });
@@ -225,7 +238,10 @@ async function start() {
       });
     }
 
-    actions.append(apply, rename, del);
+    // The everyday controls (Update, Apply now) before the rarely-used ones
+    // (Rename, Delete) - the card's own ordering. (A brightness control was
+    // parked mid-build at the orchestrator's word, 2026-09-26 - see the Log.)
+    actions.append(update, apply, rename, del);
     row.append(head, detail, actions);
     return row;
   }
