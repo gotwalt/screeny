@@ -989,6 +989,14 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
         ("the device's own facts", "id=\"device-block\""),
         ("the studio", "id=\"sec-studio\""),
     ]);
+    // The Schedule screen (card 303): what is due now and until when, then
+    // the timetable that decides it, then the modes it plays - the order the
+    // owner would ask about this screen in.
+    order("the Schedule screen", SCHEDULE_HTML, &[
+        ("what is due now", "id=\"sec-due\""),
+        ("the timetable", "id=\"sec-timetable\""),
+        ("the modes", "id=\"sec-modes\""),
+    ]);
 }
 
 /// Card 301: one nav, the same markup, on every screen - and the current
