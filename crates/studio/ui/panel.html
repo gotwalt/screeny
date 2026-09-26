@@ -37,6 +37,18 @@
   <p class="notice sheet__notice" id="notice" role="status" hidden></p>
 
   <main class="sheet">
+    <!-- Card 303 (a follow-up to the orchestrator's card-301 note): two plain
+         column containers, not a CSS grid - a grid's row tracks are shared
+         across both columns, which is what stranded a gap under whichever
+         side was shorter (first under Output, then, once floats replaced the
+         grid, under Link - floats share a top constraint across the whole
+         source order too, not only within a column, so the same gap just
+         moved). Two ordinary boxes, one holding Panel+Output and the other
+         Link+Studio, each in normal document flow, size to their own content
+         and nothing else's - stacked in this same DOM order below the
+         breakpoint (style.css), side by side above it. -->
+    <div class="panel-columns">
+      <div class="panel-columns__left">
     <section id="sec-panel">
       <h2>Panel</h2>
       <!-- Card 173: is the studio even looking? Never a fault tone - a browse
@@ -134,7 +146,9 @@
         <input id="rise" type="range" min="0.5" max="10" step="0.1">
       </div>
     </section>
+      </div>
 
+      <div class="panel-columns__right">
     <section id="sec-link">
       <h2>Link</h2>
       <dl class="facts" id="panel-facts"></dl>
@@ -165,6 +179,8 @@
            once, beside the state file it came out of. -->
       <p class="hint" id="state-repairs" hidden></p>
     </section>
+      </div>
+    </div>
   </main>
 
   <script type="module" src="/panel.js"></script>
