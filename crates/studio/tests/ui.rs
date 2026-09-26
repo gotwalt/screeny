@@ -568,11 +568,15 @@ fn no_control_offers_a_frame_rate() {
         assert!(!js.contains("'set_playback', { paused: state.paused, speed: state.speed, fps"), "{what} still sends a rate");
         assert!(!js.contains("$('#fps')"), "{what} still reaches for a rate control");
     }
-    // What is left is a **readout** of the rate the render loop is achieving,
-    // which is not a control and is the one place a machine that cannot hold
-    // 30 says so.
-    assert!(INDEX_HTML.contains(r#"id="ro-fps""#), "the Rate readout stays");
-    assert!(PICTURE_JS.contains("$('#ro-fps')"), "and something fills it in");
+    // Nor a **readout** of it, since 2026-09-26: the rate has one right answer,
+    // and a machine that cannot hold it is a fault for /healthz to raise, not
+    // a number for a person to watch. The Time readout (seconds since the
+    // studio started, meaningless after weeks) went with it.
+    for gone in [r#"id="ro-fps""#, r#"id="ro-time""#, "<dt>Rate</dt>", "<dt>Time</dt>"] {
+        assert!(!INDEX_HTML.contains(gone), "the Picture screen still shows {gone}");
+    }
+    assert!(!PICTURE_JS.contains("$('#ro-fps')"), "picture.js still fills in a rate readout");
+    assert!(!PICTURE_JS.contains("$('#ro-time')"), "picture.js still fills in a time readout");
 }
 
 /// Card 183: the stops a slider declares are **drawn**, and drawn where the
