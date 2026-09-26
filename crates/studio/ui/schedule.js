@@ -27,10 +27,6 @@ async function start() {
   let link = null;
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
-  /** Card 187's real stops; `[1]` is the lowest nonzero one - "the dimmest
-   *  the panel can show" - the same number `snap_brightness` on the server
-   *  rounds a mode's brightness to. */
-  const stops = boot.brightness_stops;
 
   const attachedId = () => (picture ? picture.preview.device : state.device) || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
@@ -178,17 +174,18 @@ async function start() {
 
   // -------------------------------------------------------------- modes ----
 
-  /** "flock · Lava · brightness 190", the way `wifiLine` and the found-panel
-   *  rows in `panel.js` say several small facts as one line. */
+  /** "flock · Lava", the way `wifiLine` and the found-panel rows in
+   *  `panel.js` say a couple of small facts as one line.
+   *
+   *  Card 307, redirected: brightness came out of modes ("let's make
+   *  controlling the brightness a separate concern from what's on the
+   *  screen") - a mode is what patch, on what setting. The server still
+   *  answers a `brightness` field on a mode until card 309 removes it there
+   *  too; this page never reads it. */
   function modeDetail(m) {
     const patch = patchById[m.patch] ? patchById[m.patch].name : `${m.patch} (not in this build)`;
     const setting = m.setting === null || m.setting === undefined ? 'as left' : m.setting;
-    let brightness;
-    if (m.brightness === null || m.brightness === undefined) brightness = 'brightness unchanged';
-    else if (m.brightness === 0) brightness = 'a dark panel';
-    else if (stops.length > 1 && m.brightness <= stops[1]) brightness = 'the dimmest the panel can show';
-    else brightness = `brightness ${m.brightness}`;
-    return [patch, setting, brightness].join(' · ');
+    return [patch, setting].join(' · ');
   }
 
   function modeRow(m) {
