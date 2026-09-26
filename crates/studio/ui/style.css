@@ -14,8 +14,10 @@
    1100 px, where there is room for both. Doing it the other way round is what
    put the walnut frame on top of the inspector at ~600 px. The Panel screen is
    a column of the same sections and splits into two above the same
-   breakpoint, for the same reason. The Schedule screen, for now, is one short
-   section and never needs either layout. */
+   breakpoint, for the same reason - each side floated rather than gridded, so
+   a short section on one side does not leave a gap under it to match a long
+   one on the other (card 303). The Schedule screen (card 303) is three short
+   sections, read top to bottom, and never needs either layout. */
 
 :root {
   --bench: #1b1a18;
@@ -249,10 +251,12 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   border-top: 1px solid var(--rule);
 }
 
-/* The Schedule screen is one short section and never earns the Panel screen's
-   two-column bench (below); a readable measure keeps its sentence from
-   stretching edge to edge on a wide window. */
+/* Card 303: the Schedule screen is three short sections, read top to bottom -
+   what is due now, the timetable, the modes it plays - and never earns the
+   Panel screen's two-column bench (below); a readable measure keeps a line
+   from stretching edge to edge on a wide window. */
 body.schedule-page .sheet { max-width: 640px; }
+#sec-due > * + *, #sec-timetable > * + *, #sec-modes > * + * { margin-top: 12px; }
 
 .inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
 .inspector section > h2, .sheet section > h2, .section-head { margin-bottom: 14px; }
@@ -517,6 +521,52 @@ select:hover { border-color: var(--dim); }
 .found__where { color: var(--dim); font-family: var(--data); font-size: 11.5px; overflow-wrap: anywhere; }
 .found__one button { flex: none; }
 
+/* Card 303: the Schedule screen's timetable - one row per entry, the same
+   quiet card `.found__one` uses for a discovered panel. A time input is a
+   fixed width so a run of them lines up; the mode name takes what is left. */
+.timetable { display: grid; gap: 6px; }
+.timetable__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--bench);
+}
+.timetable__row input[type="time"] { flex: none; width: 104px; }
+.timetable__row select { flex: 1; min-width: 0; }
+.timetable__row button { flex: none; }
+/* Three controls on one line is tight on a phone; wrapping beats a
+   horizontal scrollbar. */
+#entry-add-row { flex-wrap: wrap; }
+#entry-add-row input[type="time"] { flex: none; width: 104px; }
+#entry-add-row select { flex: 1 1 140px; min-width: 0; }
+#entry-add-row button { flex: none; }
+
+/* The "Save what's playing as" form: the same recipe `.setting__name` uses
+   for naming a setting - a label, an input that grows, a button that does
+   not, wrapping on a narrow phone rather than overflowing it. */
+#mode-save-form { flex-wrap: wrap; }
+#mode-save-form input { flex: 1 1 140px; min-width: 0; }
+#mode-save-form button { flex: none; }
+
+/* Card 303: the modes list - a name, what it plays in one quiet line (the
+   same voice as `wifiLine`/the found-panel rows), and its three actions,
+   sized like `.setting__actions`' small row of buttons. */
+.modes { display: grid; gap: 8px; }
+.mode { padding: 10px 12px; border: 1px solid var(--rule); border-radius: 3px; background: var(--bench); }
+.mode__head { display: flex; align-items: center; }
+.mode__name {
+  color: var(--paper);
+  font: 400 15px/1.2 var(--label);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.mode__detail { margin-top: 4px; color: var(--dim); font-size: 12px; }
+.mode__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.mode__actions button { flex: 1 1 auto; min-width: 72px; height: 26px; padding: 0 8px; font-size: 12px; }
+
 /* Card 301: View is how *this browser* draws the panel, not a panel setting -
    its effect is only visible beside the canvas, and nothing here reaches the
    panel. Folded shut by default, under the canvas rather than beside the
@@ -580,20 +630,27 @@ select:hover { border-color: var(--dim); }
      across a bench - a `dd` two feet wide is not a fact anybody reads.
      Scoped to the Panel screen: the Schedule screen shares `.sheet`'s surface
      but has none of these four sections, and one short block should not be
-     squeezed into a 420 px column meant for four. */
+     squeezed into a 420 px column meant for four.
+
+     Card 303 (an orchestrator note against card 301): a CSS grid's row
+     tracks are shared across every column, so pairing the short Panel
+     section with the much longer Link section in one row left Output
+     stranded below all of Link's height, with a gap under Panel that
+     belonged to neither of them. Floats do not share rows - each side
+     stacks to its own content's height - which is what "let the left
+     column flow" needs. `display: flow-root` gives the floats a block
+     formatting context so `.sheet` still grows to contain them instead of
+     collapsing to nothing. `#sec-output` and `#sec-studio` each `clear`
+     back to the left edge, which - since they come after `#sec-panel` and
+     `#sec-link` in the document - puts them under their own side only. */
   body.panel-page .sheet {
-    display: grid;
-    grid-template-columns: minmax(0, 420px) minmax(0, 620px);
-    grid-template-areas:
-      "panel  link"
-      "output studio";
-    align-items: start;
-    justify-content: start;
+    display: flow-root;
+    max-width: 1040px;
   }
-  #sec-panel { grid-area: panel; border-right: 1px solid var(--rule); }
-  #sec-output { grid-area: output; border-right: 1px solid var(--rule); }
-  #sec-link { grid-area: link; }
-  #sec-studio { grid-area: studio; }
+  #sec-panel { float: left; width: 420px; border-right: 1px solid var(--rule); }
+  #sec-output { float: left; clear: left; width: 420px; border-right: 1px solid var(--rule); }
+  #sec-link { float: left; width: 620px; }
+  #sec-studio { float: left; clear: left; width: 620px; }
   /* ...and the title block is held to the same 1040 px, so the readouts sit
      over the columns rather than adrift at the edge of a wide window. */
   body.panel-page .titleblock { max-width: 1040px; }
