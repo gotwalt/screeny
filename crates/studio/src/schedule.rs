@@ -694,9 +694,9 @@ fn resolve_setting(st: &AppState, def: &PatchDef, setting: Option<&str>) -> (Opt
     }
 }
 
-/// Put the focused player into a mode: **one** `Player::configure` - the
+/// Put the focused player into a mode: **one** `Player::configure_faded` - the
 /// patch, then the setting, then the brightness policy - so the panel moves in
-/// one step. Returns what had to be said on the way, if anything.
+/// one step, over `FADE_SCHEDULED` when the timetable does it. Returns what had to be said on the way, if anything.
 ///
 /// `scheduled` is true when the timetable did it, false for a hand (the page,
 /// `/mode/apply`, the smart home). The run record is not this function's

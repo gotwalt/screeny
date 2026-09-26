@@ -307,8 +307,9 @@ possible visible brightness, then restore in the morning."*
 | **due** | the latest entry at or before now - and before the day's first, the last one, which came due yesterday. |
 
 **Applying a mode** is one change to the panel the page shows: the patch, then the
-setting, then the brightness policy, in one `Player::configure` - so the panel moves in one
-step, and the brightness goes out on the supervisor's next tick exactly as
+setting, then the brightness policy, in one `Player::configure_faded` - so the panel moves in
+one step, cross-fading over 5 s when the timetable does it and 2 s by hand (card 304) - and the
+brightness goes out on the supervisor's next tick exactly as
 `/device/brightness` leaves it. A mode whose patch this build has not got, or that needs a
 graphics adapter there is none of, is **skipped and said**; one whose setting has since been
 deleted plays the working copy and **says so** (`schedule_note`) - neither is an error.
