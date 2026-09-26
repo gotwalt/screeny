@@ -3260,16 +3260,18 @@ mod tests {
         use crate::schedule::Entry;
         let dir = Temp::new("v6-roundtrip");
         let (store, _) = Store::open(Some(&dir.0));
-        let mut want = Persisted::default();
-        want.modes = vec![
-            Mode { name: "Day".into(), patch: "flock".into(), setting: None, brightness: None },
-            Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()), brightness: Some(6) },
-        ];
-        want.schedule = Schedule {
-            enabled: true,
-            entries: vec![Entry { at: "07:00".into(), mode: "Day".into() }, Entry { at: "22:00".into(), mode: "Night".into() }],
+        let want = Persisted {
+            modes: vec![
+                Mode { name: "Day".into(), patch: "flock".into(), setting: None, brightness: None },
+                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()), brightness: Some(6) },
+            ],
+            schedule: Schedule {
+                enabled: true,
+                entries: vec![Entry { at: "07:00".into(), mode: "Day".into() }, Entry { at: "22:00".into(), mode: "Night".into() }],
+            },
+            schedule_run: Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() }),
+            ..Persisted::default()
         };
-        want.schedule_run = Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() });
         store.save(want.clone());
         store.flush();
         store.stop();
