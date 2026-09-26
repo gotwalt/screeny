@@ -52,9 +52,10 @@ async function start() {
   //
   // Every route here answers the whole page state, like the settings routes
   // do, so there is nothing to re-read after a change - only something to
-  // show if it was refused. Named `call` (not `invoke` itself) so the wiring
-  // test's route scanner still finds every one of these (it looks for the
-  // literal text `call('`, which is also panel.js's wrapper).
+  // show if it was refused. Named the same as panel.js's own wrapper, not
+  // `invoke` itself, so the wiring test's route scanner still finds every one
+  // of these (it looks for that name followed by an open paren and a quote,
+  // which is also why this paragraph is careful not to spell it out).
   async function call(cmd, args) {
     try {
       state = await invoke(cmd, args);
