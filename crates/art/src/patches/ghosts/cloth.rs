@@ -494,11 +494,10 @@ impl Cloth {
         // starts at the neck, so testing against the head's own radius
         // shoved the whole skirt out to the head's equator on first settle.
         let (_, neck_r) = dome_and_neck_radius(shape.r.max(0.8));
-        let head_body = world.insert(
+        let (head_body, _) = world.insert(
             RigidBodyBuilder::kinematic_position_based().pose(head0.to_pose()),
             ColliderBuilder::ball(neck_r).contact_skin(HEAD_SKIN),
         );
-        let head_body = head_body.0;
 
         let mut cloth = Cloth { template, faces, kinematic, world, body, head_body, warped: 0.0 };
         const SETTLE_STEPS: usize = 420;
