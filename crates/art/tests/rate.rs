@@ -55,6 +55,21 @@ fn run(def: &PatchDef, seed: u64, dt: f64, steps: usize) -> Vec<[f32; 3]> {
     px.iter().map(|c| [c.r, c.g, c.b]).collect()
 }
 
+/// The largest per-pixel difference (summed over channels), in linear light.
+///
+/// The autumn patches are a few lit things on black: a bat or a ghost is a few
+/// dozen LEDs of 2048, so a whole-frame mean can stay under the floor below
+/// while the subject has plainly moved. Workers were raising counts and sizes
+/// to clear it, which fought the owner's direction ("visual poetry. Busyness is
+/// a thing we are trying to avoid"). So "the picture moved" may be shown either
+/// way; the rate comparison itself still uses the mean.
+fn peak(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() + (x[2] - y[2]).abs())
+        .fold(0.0, f32::max)
+}
+
 /// Mean absolute difference per channel, in linear light. 0 is byte-identical.
 fn diff(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
     assert_eq!(a.len(), N, "a frame is a frame");
@@ -99,9 +114,11 @@ fn every_patch_advances_by_time_and_not_by_frame_count() {
 
         println!("{:<16} 60 vs 30 = {same_time:.5}   60 vs half the time = {half_time:.5}", def.id);
 
+        let half_peak = peak(&fast, &counted);
         assert!(
-            half_time > 0.002,
-            "`{}`: half the time draws the same picture ({half_time:.5}), so this test proves nothing about it",
+            half_time > 0.002 || half_peak > 0.1,
+            "`{}`: half the time draws the same picture (mean {half_time:.5}, peak {half_peak:.5}), \
+             so this test proves nothing about it",
             def.id
         );
         assert!(
