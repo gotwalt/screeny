@@ -37,12 +37,14 @@ people understand it"). `set_seed`, `set_playback` and `restart` are still on th
 API for a script; nothing in the browser calls them any more.
 
 They are the same state and the same stream, so a change on one screen shows on the
-others - and in another browser - at once. Every screen carries the same **status
-chip**: the panel's name, what it is doing and (on the Picture screen, where there is
-a rate to show) how fast it is being sent. It is the way to the Panel screen, and it
-takes the fault tone and says why when the panel needs attention, so that trouble is
-never hidden behind whichever tab a person happens to be on. The Panel and Schedule
-screens have no canvas and therefore ask the socket for no frames at all.
+others - and in another browser - at once. The Picture and Schedule screens each carry
+the same **status chip**, painted by one function (`showChip` in `common.js`, card 307 -
+Schedule used to keep a thinner copy that left "what it is doing" out): the panel's name,
+what it is doing and (on the Picture screen, where there is a rate to show) how fast it
+is being sent. It is the way to the Panel screen, and it takes the fault tone and says
+why when the panel needs attention, so that trouble is never hidden behind whichever tab
+a person happens to be on. The Panel and Schedule screens have no canvas and therefore
+ask the socket for no frames at all.
 
 `/dashboard`, which was a second app until card 170, is folded into `/` and redirects.
 
@@ -364,14 +366,26 @@ about it: **what is due now and until when** ("Night until 07:00", or "Overridde
 07:00" beside a "Back to schedule" button), **the timetable** (the enabled switch, one
 row per entry with a plain `<input type=time>` and a `<select>` of mode names, add and
 remove - always sent as the whole list, since that is what the route takes), then **the
-modes** it plays (a name, then what it does in one quiet line - the patch, the setting or
-"as left", the brightness worded through the real stops so the lowest nonzero one reads
-as "the dimmest the panel can show" - Apply now, Rename, Delete, refused with the reason
-in the same line `/modes/delete` gives it when the timetable names it). No control on
-this screen composes a patch, a setting or a brightness by hand: a mode is made by
-playing it the way you want on the Picture or Panel screen and coming here to name it
-with **"Save what's playing as..."**, the same way a named setting is made. Every error
-from the server shows on the page's shared notice line exactly as the server wrote it.
+modes** it plays (a name, then what it does in one quiet line - the patch, and the setting
+or "as left" - **Update to what's playing**, Apply now, Rename, Delete, refused with the
+reason in the same line `/modes/delete` gives it when the timetable names it). No control
+on this screen composes a patch or a setting by hand: a mode is made by playing it the way
+you want on the Picture screen and coming here to name it with **"Save what's playing
+as..."**, the same way a named setting is made. **"Update to what's playing"** (card 307 -
+"update this mode to the current settings") is the same recapture on a mode that already
+exists: `POST /modes/save {name}` alone, so the server takes the patch and the named
+setting (or the working copy) straight off what is playing now and overwrites the mode
+under its own name. It confirms nothing first - the notice line says what the mode now
+holds, in the same quiet-line words above ("Night is now Vesta · Wall Clock."). Every
+error from the server shows on the page's shared notice line exactly as the server wrote
+it.
+
+**Brightness is not part of a mode** (the owner, redirecting card 307 mid-build: "let's
+make controlling the brightness a separate concern from what's on the screen"). Neither
+the modes list nor "Update to what's playing" reads or sends a brightness at all - the
+Panel screen's own slider is the one place brightness is set, same as it always was.
+Card 302's model and routes still carry a `brightness` field on a mode on the wire until
+card 309 removes it there too; this page simply never shows it and never sends it.
 
 **Speed and pause are retired** (the owner, the same morning). A patch plays at 1.00x and
 nothing pauses: `set_playback` still answers 200 and changes nothing (its answer says so in

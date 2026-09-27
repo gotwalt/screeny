@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { $, attention, bindSwitch, busy, connect, invoke, noFrames, notice, panelState, pollStatus } from './common.js';
+import { $, bindSwitch, busy, connect, invoke, noFrames, notice, pollStatus, showChip as paintChip } from './common.js';
 
 async function start() {
   const boot = await invoke('bootstrap');
@@ -27,25 +27,23 @@ async function start() {
   let link = null;
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
-  /** Card 187's real stops; `[1]` is the lowest nonzero one - "the dimmest
-   *  the panel can show" - the same number `snap_brightness` on the server
-   *  rounds a mode's brightness to. */
-  const stops = boot.brightness_stops;
 
   const attachedId = () => (picture ? picture.preview.device : state.device) || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
 
   /** The one thing this screen says about the panel: the same chip every
-   *  screen carries, so trouble is never hidden behind this tab either. */
+   *  screen carries, so trouble is never hidden behind this tab either.
+   *
+   *  Card 307: this used to be its own, thinner copy - device name and the
+   *  fault phrase only, with no "live"/"away"/"off" - so it read a bare
+   *  "screeny-4a00a4 ›" while the Picture screen's said "screeny-4a00a4 ·
+   *  live · 30 fps". Both screens now paint through the one `showChip` in
+   *  `common.js`, fed the same fields; this screen has no rate to show
+   *  (no canvas, card 198/301), so it passes `rate: null`. */
   function showChip() {
-    const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link });
-    const name = device ? device.label : attachedId();
-    const needs = attention(device);
-    const label = here.key === 'none' ? 'No panel' : [name || 'Panel', needs].filter(Boolean).join(' · ');
-    const chip = $('#ro-panel');
-    if (chip.textContent !== label) chip.textContent = label;
-    chip.dataset.state = needs ? 'bad' : here.tone;
+    paintChip($('#ro-panel'), {
+      attachedId: attachedId(), device: attachedDevice(), on: state.on, link, rate: null,
+    });
   }
 
   // ---------------------------------------------------------- one call ----
@@ -176,17 +174,18 @@ async function start() {
 
   // -------------------------------------------------------------- modes ----
 
-  /** "flock · Lava · brightness 190", the way `wifiLine` and the found-panel
-   *  rows in `panel.js` say several small facts as one line. */
+  /** "flock · Lava", the way `wifiLine` and the found-panel rows in
+   *  `panel.js` say a couple of small facts as one line.
+   *
+   *  Card 307, redirected: brightness came out of modes ("let's make
+   *  controlling the brightness a separate concern from what's on the
+   *  screen") - a mode is what patch, on what setting. The server still
+   *  answers a `brightness` field on a mode until card 309 removes it there
+   *  too; this page never reads it. */
   function modeDetail(m) {
     const patch = patchById[m.patch] ? patchById[m.patch].name : `${m.patch} (not in this build)`;
     const setting = m.setting === null || m.setting === undefined ? 'as left' : m.setting;
-    let brightness;
-    if (m.brightness === null || m.brightness === undefined) brightness = 'brightness unchanged';
-    else if (m.brightness === 0) brightness = 'a dark panel';
-    else if (stops.length > 1 && m.brightness <= stops[1]) brightness = 'the dimmest the panel can show';
-    else brightness = `brightness ${m.brightness}`;
-    return [patch, setting, brightness].join(' · ');
+    return [patch, setting].join(' · ');
   }
 
   function modeRow(m) {
@@ -196,8 +195,21 @@ async function start() {
     head.className = 'mode__head';
     head.append(Object.assign(document.createElement('span'), { className: 'mode__name', textContent: m.name }));
     const detail = Object.assign(document.createElement('p'), { className: 'mode__detail', textContent: modeDetail(m) });
+
     const actions = document.createElement('div');
     actions.className = 'mode__actions';
+
+    // Card 307: "update this mode to the current settings" - recaptures
+    // patch, setting and brightness from what is playing now (`/modes/save
+    // {name}` alone, the Context's capture rule). Confirms nothing; the
+    // notice line says what the mode now holds, in the same words the
+    // summary line above uses.
+    const update = Object.assign(document.createElement('button'), { type: 'button', className: 'quiet', textContent: 'Update to what’s playing' });
+    update.addEventListener('click', async () => {
+      if (!(await call('modes/save', { name: m.name }))) return;
+      const updated = (state.modes || []).find((x) => x.name === m.name);
+      notice(`${m.name} is now ${modeDetail(updated || m)}.`, 'say');
+    });
 
     const apply = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Apply now' });
     apply.addEventListener('click', async () => { if (await call('mode/apply', { name: m.name })) notice(`Playing ${m.name} now.`, 'say'); });
@@ -223,7 +235,10 @@ async function start() {
       });
     }
 
-    actions.append(apply, rename, del);
+    // The everyday controls (Update, Apply now) before the rarely-used ones
+    // (Rename, Delete) - the card's own ordering. (A brightness control was
+    // parked mid-build at the orchestrator's word, 2026-09-26 - see the Log.)
+    actions.append(update, apply, rename, del);
     row.append(head, detail, actions);
     return row;
   }
