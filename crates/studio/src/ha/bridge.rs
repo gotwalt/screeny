@@ -3,7 +3,7 @@
 //! the same functions the page's routes use.
 
 use super::client::{self, Handle};
-use super::{Command, MqttConfig, PatchState, Picture, Snapshot};
+use super::{Command, PatchState, Picture, Snapshot};
 use crate::player::PlayerChange;
 use crate::state::DEFAULT_SETTING;
 use crate::AppState;
@@ -15,18 +15,16 @@ use tokio::sync::{broadcast, mpsc, watch};
 /// without one.
 const LOOK_EVERY: Duration = Duration::from_secs(1);
 
-/// Start the integration against this studio.
+/// Start the integration against this studio: the snapshot and the command
+/// tasks, which cost nothing while there is no broker, and the supervisor that
+/// connects - or does not - as [`crate::ha::Ha`]'s settings say, from now on.
 #[must_use]
-pub fn start(st: &AppState, cfg: MqttConfig) -> Handle {
-    eprintln!(
-        "studio: home assistant: mqtt://{}:{} as `{}` (discovery prefix `{}`)",
-        cfg.host, cfg.port, cfg.instance, cfg.discovery_prefix
-    );
+pub fn start(st: &AppState) -> Handle {
     let (snap_tx, snap_rx) = watch::channel(snapshot(st));
     let (cmd_tx, cmd_rx) = mpsc::channel(client::COMMANDS);
     tokio::spawn(watch_studio(st.clone(), snap_tx));
     tokio::spawn(obey(st.clone(), cmd_rx));
-    client::spawn(cfg, snap_rx, cmd_tx, st.stop.clone())
+    client::supervise(std::sync::Arc::clone(&st.ha), snap_rx, cmd_tx, st.stop.clone())
 }
 
 /// What HA should be shown now.

@@ -107,6 +107,10 @@ pub fn routes() -> Router<AppState> {
         .route("/settings/save", post(settings_save))
         .route("/settings/rename", post(settings_rename))
         .route("/settings/delete", post(settings_delete))
+        // ---- card 311: Home Assistant, set up on the Settings screen ----
+        .route("/home_assistant", get(ha_get))
+        .route("/home_assistant/set", post(ha_set))
+        .route("/home_assistant/forget", post(ha_forget))
         // ---- card 150: the names a piece went by, still answering ----
         .route("/piece_playing", get(patch_playing))
         .route("/set_piece", post(set_patch))
@@ -365,6 +369,68 @@ async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Json(re
 /// nothing honest to save them as.
 fn unknown_patch(player: &Arc<Player>) -> String {
     format!("`{}` is not a patch this build has, so it has no settings.", player.stored().patch)
+}
+
+// ------------------------- card 311: Home Assistant -------------------------
+
+/// The settings without the password, how the connection is doing, and where
+/// to look on the broker.
+async fn ha_get(State(st): State<AppState>) -> Json<crate::ha::HaView> {
+    Json(st.ha.view())
+}
+
+/// Every field optional: what is absent stays as it is. **`password` absent
+/// keeps the saved one**, because the page never has it to send back; an empty
+/// string clears it.
+#[derive(Deserialize)]
+struct SetHa {
+    enabled: Option<bool>,
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    discovery_prefix: Option<String>,
+    instance: Option<String>,
+    name: Option<String>,
+}
+
+/// Change the settings; the connection follows at once - dropped, made, or
+/// made again somewhere else.
+async fn ha_set(State(st): State<AppState>, Json(req): Json<SetHa>) -> ApiResult<Json<crate::ha::HaView>> {
+    let was = st.ha.settings();
+    let next = crate::ha::HaSettings {
+        enabled: req.enabled.unwrap_or(was.enabled),
+        host: req.host.unwrap_or(was.host),
+        port: req.port.unwrap_or(was.port),
+        username: req.username.unwrap_or(was.username),
+        password: req.password.unwrap_or(was.password),
+        discovery_prefix: req.discovery_prefix.unwrap_or(was.discovery_prefix),
+        instance: req.instance.unwrap_or(was.instance),
+        name: req.name.unwrap_or(was.name),
+    }
+    .check()
+    .map_err(ApiError::bad_request)?;
+    st.ha.set(next);
+    st.persist();
+    Ok(Json(st.ha.view()))
+}
+
+/// **Remove this studio from Home Assistant**: switch the integration off,
+/// then connect once more to clear everything it left retained, which makes
+/// HA drop the device and its entities. The settings are kept, switched off,
+/// so switching it back on brings the device back.
+async fn ha_forget(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiResult<Json<crate::ha::HaView>> {
+    let was = st.ha.settings();
+    let cfg = crate::ha::HaSettings { enabled: true, ..was.clone() }
+        .connection()
+        .ok_or_else(|| ApiError::bad_request("There is no broker set up, so there is nothing to remove.".into()))?;
+    st.ha.set(crate::ha::HaSettings { enabled: false, ..was });
+    st.persist();
+    // The running client must be gone first: `forget` connects as the same
+    // client, and the broker would throw one off for the other.
+    st.ha.until_off(crate::ha::client::GOODBYE + std::time::Duration::from_secs(1)).await;
+    crate::ha::client::forget(&cfg, std::time::Duration::from_secs(10)).await.map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
+    Ok(Json(st.ha.view()))
 }
 
 /// Takes no arguments; reads the body for the reason `reset_params` does.

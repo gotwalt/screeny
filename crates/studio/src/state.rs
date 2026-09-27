@@ -68,6 +68,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   named setting is the only saved look left. `modes`, `schedule` and
 ///   `schedule_run` are dropped, and what they held is said once in the
 ///   `repaired` voice, so it can be set up on the Home Assistant side.
+///   It also gains `home_assistant` (card 311): the integration as set up on
+///   the Settings screen, password included - the file is the studio's own,
+///   on its own volume - and never sent back out by the API.
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
@@ -239,6 +242,11 @@ pub struct Persisted {
     /// must cost that value and not the whole file.
     #[serde(alias = "pieces", skip_serializing_if = "BTreeMap::is_empty")]
     pub patches: Memory,
+    /// Card 311: Home Assistant, as set up on the Settings screen. `None`
+    /// until somebody does. Lifted out of the raw JSON before serde sees the
+    /// file, for the reason `patches` is: a malformed block costs the block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home_assistant: Option<crate::ha::HaSettings>,
 }
 
 impl Default for Persisted {
@@ -249,6 +257,7 @@ impl Default for Persisted {
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
+            home_assistant: None,
         }
     }
 }
@@ -1196,6 +1205,17 @@ fn load(path: &Path) -> Loaded {
     note_retired_fps(&raw, &mut repaired);
     // Card 302's modes and timetable, retired by card 310.
     note_retired_modes(&raw, &mut repaired);
+    // Card 311's Home Assistant settings.
+    let home_assistant = match raw.get("home_assistant") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match serde_json::from_value::<crate::ha::HaSettings>(v.clone()).map_err(|e| e.to_string()).and_then(crate::ha::HaSettings::check) {
+            Ok(s) => Some(s),
+            Err(why) => {
+                repaired.push(format!("the Home Assistant settings could not be read and were forgotten: {why}"));
+                None
+            }
+        },
+    };
     // The `preview` block of a v1/v2 file, lifted out for the same reason as
     // `patches`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
@@ -1210,6 +1230,7 @@ fn load(path: &Path) -> Loaded {
         o.remove("pieces");
         o.remove("preview");
         o.remove("modes");
+        o.remove("home_assistant");
         o.remove("schedule");
         o.remove("schedule_run");
     }
@@ -1221,6 +1242,7 @@ fn load(path: &Path) -> Loaded {
     let was = state.version;
     state.version = SCHEMA_VERSION;
     state.patches = patches;
+    state.home_assistant = home_assistant;
     let kept = if was < SCHEMA_VERSION {
         let kept = back_up(path, was);
         migrate(&mut state, &legacy, was);
@@ -3233,9 +3255,10 @@ mod tests {
         std::fs::write(dir.0.join(FILE), v5).expect("write the v5 file");
         let (store, loaded) = Store::open(Some(&dir.0));
 
-        assert_eq!(loaded.version, 6);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(5))).expect("the backup"), v5, "kept byte for byte");
-        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains("v6")), "{:?}", store.health().recovered);
+        let said = format!("v{SCHEMA_VERSION}");
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains(&said)), "{:?}", store.health().recovered);
         assert!(!dir.0.join(BAD_FILE).exists());
 
         // The tuning, intact.

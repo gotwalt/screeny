@@ -3,10 +3,11 @@
    read as the darkest thing in the window, and nothing here may tint how the
    art's colour is judged. The one loud object is the device itself.
 
-   **Two screens** (card 198; card 301 added a third, the Schedule, and card
-   310 retired it with the timetable), in one visual language: the Picture
-   (`/`) and the Panel (`/panel`), tied together by one nav at the top of
-   both.
+   **Three screens** (two since card 198; card 301's third, the Schedule,
+   went with the timetable in card 310 and card 311 put Settings in its
+   place), in one visual language: the Picture (`/`), the Panel (`/panel`)
+   and the Settings (`/settings`), tied together by one nav at the top of
+   every one of them.
    Everything above "the nav" is shared; what follows it is each screen's own
    layout.
 
@@ -19,7 +20,9 @@
    (`.panel-columns__left`/`__right` in `panel.html`), not a shared grid or
    float, so a short section on one side does not leave a gap under it to
    match a long one on the other (card 303, twice - a grid's row tracks and a
-   float's top constraint each turned out to reach across both columns). */
+   float's top constraint each turned out to reach across both columns). The
+   Settings screen is a short column of sections, read top to bottom, and
+   never needs either layout. */
 
 :root {
   --bench: #1b1a18;
@@ -114,9 +117,9 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
   gap: 14px 32px;
   /* Card 307: bottom padding to match the top, not 0 - the Picture screen
      got away with 0 because `.stage` follows it with its own gutter padding,
-     but the Panel and Schedule screens put a ruled box (`.sheet`, whose
+     but the Panel and Settings screens put a ruled box (`.sheet`, whose
      border-top is the very next thing) right underneath, so the readouts
-     row's own bottom edge - the State pill on Panel, the chip on Schedule -
+     row's own bottom edge - the State pill on Panel, the chip on Settings -
      used to sit right on that rule with nothing under it. */
   padding: 20px var(--gutter);
 }
@@ -263,6 +266,17 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   background: var(--bench-raised);
   border-top: 1px solid var(--rule);
 }
+
+/* Card 311: the Settings screen is a short column, held to a readable
+   measure the way card 303/307 held the Schedule screen - title block and
+   sheet both, so the chip sits over the content rather than adrift at the
+   far edge of a wide window. */
+body.settings-page .sheet { max-width: 640px; }
+body.settings-page .titleblock { max-width: 640px; }
+#sec-ha > * + * { margin-top: 12px; }
+#ha-form { display: grid; gap: 8px; }
+#ha-form .row label { width: 96px; }
+#ha-form .setup__body .row label { width: auto; min-width: 96px; }
 
 .inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
 .inspector section > h2, .sheet section > h2, .section-head { margin-bottom: 14px; }
@@ -588,7 +602,7 @@ select:hover { border-color: var(--dim); }
      settings), what it and the studio have to say about themselves on the
      right. The columns are held to a readable measure rather than stretched
      across a bench - a `dd` two feet wide is not a fact anybody reads.
-     Scoped to the Panel screen: the Schedule screen shares `.sheet`'s surface
+     Scoped to the Panel screen: the Settings screen shares `.sheet`'s surface
      but has none of these four sections, and one short block should not be
      squeezed into a 420 px column meant for four.
 

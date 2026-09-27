@@ -531,7 +531,7 @@ async function start() {
    *
    *  Card 307: the chip's own wording (name, "live · N fps", the fault
    *  phrase) is one function now, `showChip` in `common.js`, shared with the
-   *  Schedule screen so the two cannot say different things about the same
+   *  other screens so they cannot say different things about the same
    *  panel again. This screen is the one that has a rate to pass it. */
   function showChip() {
     const device = attachedDevice();

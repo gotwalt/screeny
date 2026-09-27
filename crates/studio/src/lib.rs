@@ -129,8 +129,11 @@ pub struct Config {
     /// The containment tests, and `SCREENY_STUDIO_FAULTS=1` for a human who
     /// wants to watch it happen. Never in the normal patch list.
     pub fault_patches: bool,
-    /// Card 308: Home Assistant over MQTT. `None` - the default, and what
-    /// every test that does not ask gets - talks to no broker.
+    /// Card 308: a Home Assistant connection to start with **when the state
+    /// file has no settings of its own** - which is how a test starts a
+    /// connected studio. The product never sets it: the owner sets the
+    /// integration up on the Settings screen (card 311), and that is kept in
+    /// `state.json`. `None` - the default - talks to no broker.
     pub mqtt: Option<ha::MqttConfig>,
 }
 
@@ -185,6 +188,9 @@ pub struct AppState {
     /// When the process started, for `/api/v1/status` and for the grace period
     /// `/healthz` gives a player that has not started yet.
     pub started: Instant,
+    /// Card 311: Home Assistant - its settings, and how the connection is
+    /// doing.
+    pub ha: Arc<ha::Ha>,
     rev: Arc<AtomicU64>,
 }
 
@@ -196,6 +202,7 @@ impl AppState {
         store: Arc<Store>,
         devices: Arc<Registry>,
         players: Arc<Players>,
+        ha: Arc<ha::Ha>,
     ) -> Self {
         let memory = players.memory();
         let screen = players.screen();
@@ -211,6 +218,7 @@ impl AppState {
             memory,
             cfg,
             started: Instant::now(),
+            ha,
             rev: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -242,6 +250,7 @@ impl AppState {
             // `SCREENY_STATE_DIR` is the volume the container keeps across a
             // rebuild, so this is what makes the memory survive a deploy.
             patches: self.memory.snapshot(),
+            home_assistant: Some(self.ha.settings()).filter(|s| *s != ha::HaSettings::default()),
         });
     }
 
@@ -267,7 +276,7 @@ pub struct Studio {
     state: AppState,
     stop: watch::Sender<bool>,
     /// Card 308, when there is a broker to talk to.
-    ha: Option<ha::client::Handle>,
+    ha: ha::client::Handle,
 }
 
 /// Stops the studio when dropped: every player ends, the panel link sends
@@ -333,6 +342,13 @@ impl Studio {
             store,
             devices,
             Arc::clone(&players),
+            // Card 311: the state file's, else the config's (tests), else off.
+            Arc::new(ha::Ha::new(
+                saved
+                    .home_assistant
+                    .or_else(|| cfg.mqtt.as_ref().map(ha::HaSettings::connecting_as))
+                    .unwrap_or_default(),
+            )),
         );
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
@@ -348,7 +364,7 @@ impl Studio {
         fleet::spawn_discovery(state.clone());
         fleet::spawn_telemetry(state.clone());
         fleet::spawn_device_http(state.clone());
-        let ha = cfg.mqtt.clone().map(|m| ha::bridge::start(&state, m));
+        let ha = ha::bridge::start(&state);
 
         Ok(Studio { addr, listener, state, stop, ha })
     }
@@ -402,9 +418,7 @@ impl Studio {
         st.store.flush();
         // Say `offline` on the way out, rather than leaving it to the broker
         // to notice in a keep-alive or two.
-        if let Some(ha) = ha {
-            ha.finish(ha::client::GOODBYE).await;
-        }
+        ha.finish(ha::client::GOODBYE).await;
         Ok(())
     }
 

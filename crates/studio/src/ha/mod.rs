@@ -29,11 +29,13 @@ pub mod discovery;
 pub mod payload;
 pub mod topics;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Mutex;
+use tokio::sync::watch;
 
-/// Where the broker is and who this studio is on it. From the environment
-/// ([`MqttConfig::from_env`]); `None` there means the integration is off.
+/// Where the broker is and who this studio is on it: one connection's worth
+/// of [`HaSettings`], made only when those say to connect.
 #[derive(Clone, PartialEq, Eq)]
 pub struct MqttConfig {
     pub host: String,
@@ -70,64 +72,229 @@ pub const DEFAULT_PREFIX: &str = "homeassistant";
 pub const DEFAULT_INSTANCE: &str = "studio";
 pub const DEFAULT_NAME: &str = "Screeny";
 
-impl MqttConfig {
-    /// `SCREENY_MQTT_HOST` turns the integration on; the rest have defaults.
-    ///
-    /// | variable | default |
-    /// |---|---|
-    /// | `SCREENY_MQTT_HOST` | unset: no MQTT at all |
-    /// | `SCREENY_MQTT_PORT` | 1883 |
-    /// | `SCREENY_MQTT_USER` | none (anonymous) |
-    /// | `SCREENY_MQTT_PASSWORD` or `SCREENY_MQTT_PASSWORD_FILE` | none |
-    /// | `SCREENY_MQTT_DISCOVERY_PREFIX` | `homeassistant` |
-    /// | `SCREENY_MQTT_ID` | `studio` |
-    /// | `SCREENY_MQTT_NAME` | `Screeny` |
-    ///
-    /// `env` is passed in, like `main`'s, so a test need not touch the
-    /// process's environment.
+/// Card 311: the integration as the owner set it up on the Settings screen,
+/// kept in `state.json`. **Written from the page, never from the
+/// environment**: there is one place to change it.
+///
+/// The password is in the state file in the clear - it is on the studio's own
+/// volume, beside everything else the studio keeps - and it **never goes back
+/// out**: the API says only whether one is set ([`HaView`]).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HaSettings {
+    /// Connect at all.
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    /// Empty: anonymous.
+    pub username: String,
+    pub password: String,
+    pub discovery_prefix: String,
+    pub instance: String,
+    pub name: String,
+}
+
+impl Default for HaSettings {
+    fn default() -> Self {
+        HaSettings {
+            enabled: false,
+            host: String::new(),
+            port: DEFAULT_PORT,
+            username: String::new(),
+            password: String::new(),
+            discovery_prefix: DEFAULT_PREFIX.to_string(),
+            instance: DEFAULT_INSTANCE.to_string(),
+            name: DEFAULT_NAME.to_string(),
+        }
+    }
+}
+
+/// As [`MqttConfig`]'s: the password stays out of every `{:?}`.
+impl fmt::Debug for HaSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HaSettings")
+            .field("enabled", &self.enabled)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &(!self.password.is_empty()).then_some("<set>"))
+            .field("discovery_prefix", &self.discovery_prefix)
+            .field("instance", &self.instance)
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+impl HaSettings {
+    /// Tidy, and refuse what cannot work, in a sentence the page can show.
     ///
     /// # Errors
     ///
-    /// A port that is not a number, a password file that cannot be read, an
-    /// id or prefix with nothing usable left after sanitising.
-    pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Result<Option<MqttConfig>, String> {
-        let Some(host) = env("SCREENY_MQTT_HOST").map(|h| h.trim().to_string()).filter(|h| !h.is_empty()) else {
-            return Ok(None);
-        };
-        let port = match env("SCREENY_MQTT_PORT") {
-            Some(p) => p.trim().parse().map_err(|_| format!("SCREENY_MQTT_PORT {p}: expected a port number"))?,
-            None => DEFAULT_PORT,
-        };
-        let password = match (env("SCREENY_MQTT_PASSWORD"), env("SCREENY_MQTT_PASSWORD_FILE")) {
-            (Some(p), _) => Some(p),
-            (None, Some(path)) => Some(
-                std::fs::read_to_string(&path)
-                    .map_err(|e| format!("SCREENY_MQTT_PASSWORD_FILE {path}: {e}"))?
-                    .trim_end_matches(['\r', '\n'])
-                    .to_string(),
-            ),
-            (None, None) => None,
-        };
-        let prefix = env("SCREENY_MQTT_DISCOVERY_PREFIX").unwrap_or_else(|| DEFAULT_PREFIX.to_string());
-        let prefix = prefix.trim().trim_matches('/').to_string();
+    /// Switched on with no broker; a port of 0; an id with nothing usable in
+    /// it; a discovery prefix with a wildcard in it.
+    pub fn check(mut self) -> Result<HaSettings, String> {
+        self.host = self.host.trim().to_string();
+        self.username = self.username.trim().to_string();
+        self.name = self.name.trim().to_string();
+        if self.name.is_empty() {
+            DEFAULT_NAME.clone_into(&mut self.name);
+        }
+        let prefix = self.discovery_prefix.trim().trim_matches('/').to_string();
         if prefix.is_empty() || prefix.contains(['+', '#']) {
-            return Err(format!("SCREENY_MQTT_DISCOVERY_PREFIX `{prefix}`: expected a topic prefix without wildcards"));
+            return Err(format!("`{prefix}` cannot be a discovery prefix; Home Assistant's own is `{DEFAULT_PREFIX}`."));
         }
-        let raw = env("SCREENY_MQTT_ID").unwrap_or_else(|| DEFAULT_INSTANCE.to_string());
-        let instance = topics::sanitize(&raw);
+        self.discovery_prefix = prefix;
+        let raw = self.instance.trim().to_string();
+        let instance = if raw.is_empty() { DEFAULT_INSTANCE.to_string() } else { topics::sanitize(&raw) };
         if instance.is_empty() {
-            return Err(format!("SCREENY_MQTT_ID `{raw}`: nothing left after keeping [a-zA-Z0-9_-]"));
+            return Err(format!("`{raw}` has nothing in it an id can use: letters, digits, `_` and `-`."));
         }
-        let name = env("SCREENY_MQTT_NAME").map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
-        Ok(Some(MqttConfig {
-            host,
-            port,
-            username: env("SCREENY_MQTT_USER").filter(|u| !u.is_empty()),
-            password,
-            discovery_prefix: prefix,
-            instance,
-            name: name.unwrap_or_else(|| DEFAULT_NAME.to_string()),
-        }))
+        self.instance = instance;
+        if self.port == 0 {
+            return Err("The broker's port cannot be 0; Home Assistant's is usually 1883.".into());
+        }
+        if self.enabled && self.host.is_empty() {
+            return Err("Say where the MQTT broker is before switching this on.".into());
+        }
+        Ok(self)
+    }
+
+    /// The connection these describe, or `None` for "do not connect".
+    #[must_use]
+    pub fn connection(&self) -> Option<MqttConfig> {
+        (self.enabled && !self.host.is_empty()).then(|| MqttConfig {
+            host: self.host.clone(),
+            port: self.port,
+            username: (!self.username.is_empty()).then(|| self.username.clone()),
+            password: (!self.password.is_empty()).then(|| self.password.clone()),
+            discovery_prefix: self.discovery_prefix.clone(),
+            instance: self.instance.clone(),
+            name: self.name.clone(),
+        })
+    }
+
+    /// Settings that connect as `cfg` does - how a test, or a library caller,
+    /// starts a studio already connected ([`crate::Config::mqtt`]).
+    #[must_use]
+    pub fn connecting_as(cfg: &MqttConfig) -> HaSettings {
+        HaSettings {
+            enabled: true,
+            host: cfg.host.clone(),
+            port: cfg.port,
+            username: cfg.username.clone().unwrap_or_default(),
+            password: cfg.password.clone().unwrap_or_default(),
+            discovery_prefix: cfg.discovery_prefix.clone(),
+            instance: cfg.instance.clone(),
+            name: cfg.name.clone(),
+        }
+    }
+}
+
+/// How the connection is doing, for the Settings screen.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Status {
+    /// Switched off, or not set up.
+    Off,
+    Connecting,
+    Connected,
+    /// Trying again, with the last reason it did not work.
+    Failed { detail: String },
+}
+
+/// What the page is told: the settings without the password, how the
+/// connection is doing, and where to look on the broker.
+#[derive(Clone, Debug, Serialize)]
+pub struct HaView {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    /// Whether a password is saved. The password itself never leaves.
+    pub password_set: bool,
+    pub discovery_prefix: String,
+    pub instance: String,
+    pub name: String,
+    pub status: Status,
+    /// `homeassistant/device/screeny_<id>/config`.
+    pub discovery_topic: String,
+    /// `screeny/<id>`.
+    pub topic_base: String,
+}
+
+/// The integration's settings and its state, shared by the page's routes and
+/// the task that keeps the connection ([`client::supervise`]).
+#[derive(Debug)]
+pub struct Ha {
+    settings: Mutex<HaSettings>,
+    /// The connection to keep: `None` for none. The supervisor restarts the
+    /// client whenever this changes.
+    pub(crate) want: watch::Sender<Option<MqttConfig>>,
+    pub(crate) status: watch::Sender<Status>,
+}
+
+impl Ha {
+    #[must_use]
+    pub fn new(settings: HaSettings) -> Ha {
+        let want = watch::Sender::new(settings.connection());
+        Ha { settings: Mutex::new(settings), want, status: watch::Sender::new(Status::Off) }
+    }
+
+    #[must_use]
+    pub fn settings(&self) -> HaSettings {
+        self.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// Take new settings - already [`HaSettings::check`]ed - and reconnect if
+    /// the connection they describe is a different one.
+    pub fn set(&self, settings: HaSettings) {
+        let conn = settings.connection();
+        *self.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
+        self.want.send_if_modified(|was| {
+            if *was == conn {
+                return false;
+            }
+            *was = conn;
+            true
+        });
+    }
+
+    #[must_use]
+    pub fn status(&self) -> Status {
+        self.status.borrow().clone()
+    }
+
+    /// Wait - at most `within` - for the connection to be off.
+    pub async fn until_off(&self, within: std::time::Duration) {
+        let mut rx = self.status.subscribe();
+        let _ = tokio::time::timeout(within, rx.wait_for(|s| *s == Status::Off)).await;
+    }
+
+    #[must_use]
+    pub fn view(&self) -> HaView {
+        let s = self.settings();
+        let t = topics::Topics::new(&MqttConfig {
+            host: String::new(),
+            port: s.port,
+            username: None,
+            password: None,
+            discovery_prefix: s.discovery_prefix.clone(),
+            instance: s.instance.clone(),
+            name: s.name.clone(),
+        });
+        HaView {
+            enabled: s.enabled,
+            host: s.host,
+            port: s.port,
+            username: s.username,
+            password_set: !s.password.is_empty(),
+            discovery_prefix: s.discovery_prefix,
+            instance: s.instance,
+            name: s.name,
+            status: self.status(),
+            discovery_topic: t.discovery,
+            topic_base: t.base,
+        }
     }
 }
 
@@ -201,72 +368,81 @@ pub enum Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
-        move |k| map.get(k).cloned()
+    fn on(host: &str) -> HaSettings {
+        HaSettings { enabled: true, host: host.into(), ..HaSettings::default() }
     }
 
     #[test]
-    fn no_host_means_no_mqtt() {
-        assert_eq!(MqttConfig::from_env(&env(&[])), Ok(None));
-        assert_eq!(MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "  ")])), Ok(None));
+    fn defaults_are_home_assistants_and_off() {
+        let s = HaSettings::default();
+        assert!(!s.enabled);
+        assert_eq!((s.port, s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()), (1883, "homeassistant", "studio", "Screeny"));
+        assert_eq!(s.check().unwrap().connection(), None, "off connects nowhere");
     }
 
     #[test]
-    fn defaults() {
-        let cfg = MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "broker.example")])).unwrap().unwrap();
-        assert_eq!(cfg.port, 1883);
-        assert_eq!(cfg.discovery_prefix, "homeassistant");
-        assert_eq!(cfg.instance, "studio");
-        assert_eq!(cfg.name, "Screeny");
-        assert_eq!(cfg.username, None);
-        assert_eq!(cfg.password, None);
-    }
-
-    #[test]
-    fn everything_set() {
-        let cfg = MqttConfig::from_env(&env(&[
-            ("SCREENY_MQTT_HOST", "broker.example"),
-            ("SCREENY_MQTT_PORT", "1884"),
-            ("SCREENY_MQTT_USER", "someone"),
-            ("SCREENY_MQTT_PASSWORD", "password9"),
-            ("SCREENY_MQTT_DISCOVERY_PREFIX", "/ha/"),
-            ("SCREENY_MQTT_ID", "Living Room!"),
-            ("SCREENY_MQTT_NAME", "Living room panel"),
-        ]))
-        .unwrap()
+    fn check_tidies_and_refuses() {
+        let s = HaSettings {
+            host: " broker.example ".into(),
+            username: " someone ".into(),
+            discovery_prefix: "/ha/".into(),
+            instance: "Living Room!".into(),
+            name: "  ".into(),
+            ..on("x")
+        }
+        .check()
         .unwrap();
-        assert_eq!(cfg.port, 1884);
-        assert_eq!(cfg.discovery_prefix, "ha");
-        assert_eq!(cfg.instance, "Living_Room", "sanitised for topics");
-        assert_eq!(cfg.name, "Living room panel");
-        assert_eq!(cfg.password.as_deref(), Some("password9"));
+        assert_eq!((s.host.as_str(), s.username.as_str()), ("broker.example", "someone"));
+        assert_eq!((s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()), ("ha", "Living_Room", "Screeny"));
+
+        for bad in [
+            on(""),
+            HaSettings { port: 0, ..on("b") },
+            HaSettings { instance: "///".into(), ..on("b") },
+            HaSettings { discovery_prefix: "a/#".into(), ..on("b") },
+        ] {
+            let e = bad.check().unwrap_err();
+            assert!(e.ends_with('.'), "a sentence: {e}");
+        }
+        assert!(HaSettings { host: String::new(), ..HaSettings::default() }.check().is_ok(), "off may be empty");
     }
 
     #[test]
-    fn a_password_file_loses_its_newline() {
-        let path = std::env::temp_dir().join(format!("screeny-mqtt-pw-{}", std::process::id()));
-        std::fs::write(&path, "password9\n").unwrap();
-        let p = path.to_string_lossy().to_string();
-        let cfg = MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_PASSWORD_FILE", &p)])).unwrap().unwrap();
-        std::fs::remove_file(&path).unwrap();
-        assert_eq!(cfg.password.as_deref(), Some("password9"));
+    fn a_connection_only_when_on_and_somewhere() {
+        let c = HaSettings { username: "someone".into(), password: "password9".into(), ..on("b") }.connection().unwrap();
+        assert_eq!((c.host.as_str(), c.username.as_deref(), c.password.as_deref()), ("b", Some("someone"), Some("password9")));
+        assert_eq!(on("b").connection().unwrap().username, None, "empty is anonymous");
+        assert_eq!(HaSettings { enabled: false, ..on("b") }.connection(), None);
     }
 
     #[test]
-    fn bad_values_are_refused() {
-        assert!(MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_PORT", "x")])).is_err());
-        assert!(MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_ID", "///")])).is_err());
-        assert!(MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_DISCOVERY_PREFIX", "a/#")])).is_err());
+    fn the_password_never_leaves() {
+        let ha = Ha::new(HaSettings { password: "password9".into(), ..on("b") });
+        let view = serde_json::to_string(&ha.view()).unwrap();
+        assert!(!view.contains("password9"), "{view}");
+        assert!(view.contains(r#""password_set":true"#), "{view}");
+        assert!(!format!("{:?}", ha.settings()).contains("password9"));
+        let c = ha.settings().connection().unwrap();
+        assert!(!format!("{c:?}").contains("password9"));
     }
 
     #[test]
-    fn debug_hides_the_password() {
-        let cfg = MqttConfig::from_env(&env(&[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_PASSWORD", "password9")])).unwrap().unwrap();
-        let shown = format!("{cfg:?}");
-        assert!(!shown.contains("password9"), "{shown}");
-        assert!(shown.contains("<set>"));
+    fn set_reconnects_only_when_the_connection_changes() {
+        let ha = Ha::new(on("b"));
+        let mut want = ha.want.subscribe();
+        ha.set(HaSettings { name: "Screeny".into(), ..on("b") });
+        assert!(!want.has_changed().unwrap(), "the same connection");
+        ha.set(on("c"));
+        assert!(want.has_changed().unwrap());
+        assert_eq!(want.borrow_and_update().as_ref().map(|c| c.host.clone()).as_deref(), Some("c"));
+        ha.set(HaSettings { enabled: false, ..on("c") });
+        assert_eq!(*want.borrow_and_update(), None);
+    }
+
+    #[test]
+    fn a_file_with_only_some_keys_reads_the_rest_as_defaults() {
+        let s: HaSettings = serde_json::from_str(r#"{"enabled":true,"host":"b"}"#).unwrap();
+        assert_eq!(s, on("b"));
     }
 }
