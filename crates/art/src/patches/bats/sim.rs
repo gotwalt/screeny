@@ -129,21 +129,23 @@ pub struct Tuning {
 }
 
 /// How far out the roaming volume reaches, as an azimuth and elevation about
-/// the fixed camera (degrees) and a depth range (metres). Sampling directly
-/// in these camera-relative angles, rather than in a world-space box, is what
-/// keeps a bat inside a sensible shot at any depth without a separate leash:
-/// the safe cone is the same shape the lens itself has.
+/// its own centre (degrees, see [`Sim::new`]'s `az_centre`/`el_centre`) and a
+/// depth range (metres). Sampling directly in these camera-relative angles,
+/// rather than in a world-space box, is what keeps a bat inside a sensible
+/// shot at any depth without a separate leash: the safe cone is the same
+/// shape the lens itself has.
 ///
 /// Card 319's "the moon, and nothing, or one bat" wants a colony that is
 /// often out of shot - a low bat count and long idle gaps between jinks
 /// already thin the picture out a great deal on their own (see the Log for
 /// how this cone's width was actually chosen: wide enough that a bat spends
-/// real time off to the side, not so wide that a default colony of three is
-/// routinely invisible for seconds at a stretch, which reads as a patch that
-/// forgot to animate rather than a calm one).
-const AZ_CENTRE: f32 = 0.0;
+/// real time off to the side, not so wide that a default colony is routinely
+/// invisible for seconds at a stretch, which reads as a patch that forgot to
+/// animate rather than a calm one). `AZ_HALF`/`EL_HALF` are half-widths
+/// around that per-instance centre, not the old fixed centre-and-span pair -
+/// see the orchestrator's review round 1 in the Log for why the centre
+/// moved off dead-ahead.
 const AZ_AMP: f32 = 13.0;
-const EL_CENTRE: f32 = 2.0;
 const EL_AMP: f32 = 9.0;
 const DEPTH_CENTRE: f32 = 9.5;
 const DEPTH_AMP: f32 = 5.0;
@@ -151,12 +153,12 @@ const DEPTH_AMP: f32 = 5.0;
 const AZ_JIT: f32 = 11.0;
 const EL_JIT: f32 = 9.0;
 const DEPTH_JIT: f32 = 7.0;
-// `pub(crate)`, not private: `tests.rs` checks bats against these same
-// bounds rather than duplicating the numbers.
-pub(crate) const EL_MIN: f32 = -14.0;
-pub(crate) const EL_MAX: f32 = 18.0;
-pub(crate) const AZ_MIN: f32 = -26.0;
-pub(crate) const AZ_MAX: f32 = 26.0;
+/// Half-width of the hard clamp (`contain`'s safety net) around the cone's
+/// own centre, in degrees - the same total span the fixed values `-26..26`
+/// and `-14..18` (about a centre of `0`/`2`) worked out to before the centre
+/// became per-instance.
+const AZ_HALF: f32 = 26.0;
+const EL_HALF: f32 = 16.0;
 
 pub const Z_NEAR: f32 = 2.6;
 pub const Z_FAR: f32 = 42.0;
@@ -265,6 +267,18 @@ pub struct Sim {
     fwd: V3,
     right: V3,
     up: V3,
+    /// The roaming cone's own centre, in the same camera-relative degrees as
+    /// every other angle here - see [`Sim::new`]'s doc for where it comes
+    /// from. `az_min`/`az_max`/`el_min`/`el_max` are [`AZ_HALF`]/[`EL_HALF`]
+    /// on either side of it, stored rather than recomputed everywhere they
+    /// are used (`spawn`, `pick_target`, `update_phase`, and `contain`, which
+    /// cannot borrow `self` - see its own doc).
+    az_centre: f32,
+    el_centre: f32,
+    az_min: f32,
+    az_max: f32,
+    el_min: f32,
+    el_max: f32,
     wander_freq: [f32; 3],
     wander_phase: [f32; 3],
     phase: Phase,
@@ -276,7 +290,14 @@ pub struct Sim {
 }
 
 impl Sim {
-    pub fn new(seed: u64, fwd: V3, right: V3, up: V3, birds: usize) -> Sim {
+    /// `az_centre`/`el_centre` (degrees, the same planar convention
+    /// [`spherical`] and [`gnomonic_of`] share) put the roaming cone's own
+    /// centre wherever the caller wants "home" to be - `mod.rs::build` points
+    /// it at the moon's own screen position (via `gnomonic_of`), rather than
+    /// dead ahead, so the colony's ordinary wandering actually orbits the
+    /// one bright thing in the picture instead of crossing it only by luck
+    /// (orchestrator review round 1, see the Log).
+    pub fn new(seed: u64, fwd: V3, right: V3, up: V3, birds: usize, az_centre: f32, el_centre: f32) -> Sim {
         let mut rng = Rng::new(seed ^ 0xba75_5eed);
         let wander_freq = [rng.range(0.028, 0.052), rng.range(0.021, 0.041), rng.range(0.017, 0.033)];
         let wander_phase = [rng.range(0.0, TAU), rng.range(0.0, TAU), rng.range(0.0, TAU)];
@@ -287,6 +308,12 @@ impl Sim {
             fwd,
             right,
             up,
+            az_centre,
+            el_centre,
+            az_min: az_centre - AZ_HALF,
+            az_max: az_centre + AZ_HALF,
+            el_min: el_centre - EL_HALF,
+            el_max: el_centre + EL_HALF,
             wander_freq,
             wander_phase,
             phase: Phase::Idle { until: 4.0 },
@@ -304,6 +331,19 @@ impl Sim {
         sim
     }
 
+    /// The roaming cone's own hard bounds, for `tests.rs` to check bats
+    /// against rather than duplicating the numbers. Not read outside tests,
+    /// which build without them and would otherwise call these dead code.
+    #[cfg(test)]
+    pub(crate) fn az_bounds(&self) -> (f32, f32) {
+        (self.az_min, self.az_max)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn el_bounds(&self) -> (f32, f32) {
+        (self.el_min, self.el_max)
+    }
+
     pub fn resize(&mut self, n: usize) {
         let n = n.clamp(1, 200);
         while self.bats.len() < n {
@@ -317,8 +357,8 @@ impl Sim {
     }
 
     fn spawn(&mut self) -> Bat {
-        let az = AZ_CENTRE + self.rng.range(-AZ_AMP, AZ_AMP);
-        let el = (EL_CENTRE + self.rng.range(-EL_AMP, EL_AMP)).clamp(EL_MIN, EL_MAX);
+        let az = self.az_centre + self.rng.range(-AZ_AMP, AZ_AMP);
+        let el = (self.el_centre + self.rng.range(-EL_AMP, EL_AMP)).clamp(self.el_min, self.el_max);
         let depth = DEPTH_CENTRE + self.rng.range(-DEPTH_AMP, DEPTH_AMP);
         let pos = self.dir_local(az.to_radians(), el.to_radians()).scale(depth);
         Bat {
@@ -347,8 +387,8 @@ impl Sim {
 
     fn wander(&self, t: f64) -> (f32, f32, f32) {
         let t = t as f32;
-        let az = AZ_CENTRE + AZ_AMP * 0.5 * (self.wander_freq[0] * t + self.wander_phase[0]).sin();
-        let el = EL_CENTRE + EL_AMP * 0.5 * (self.wander_freq[1] * t + self.wander_phase[1]).sin();
+        let az = self.az_centre + AZ_AMP * 0.5 * (self.wander_freq[0] * t + self.wander_phase[0]).sin();
+        let el = self.el_centre + EL_AMP * 0.5 * (self.wander_freq[1] * t + self.wander_phase[1]).sin();
         let depth = DEPTH_CENTRE + DEPTH_AMP * 0.6 * (self.wander_freq[2] * t + self.wander_phase[2]).sin();
         (az, el, depth)
     }
@@ -363,8 +403,8 @@ impl Sim {
         if self.rng.f32() < SWOOP_CHANCE {
             depth = self.rng.range(SWOOP_DEPTH.0, SWOOP_DEPTH.1);
         }
-        az = az.clamp(AZ_MIN, AZ_MAX);
-        el = el.clamp(EL_MIN, EL_MAX);
+        az = az.clamp(self.az_min, self.az_max);
+        el = el.clamp(self.el_min, self.el_max);
         depth = depth.clamp(Z_NEAR, Z_FAR);
         self.dir_local(az.to_radians(), el.to_radians()).scale(depth)
     }
@@ -400,10 +440,10 @@ impl Sim {
                 // A straight sweep across the roaming cone, entering from
                 // one side and leaving out the other - "streams past".
                 let sign = self.rng.sign();
-                let el = self.rng.range(EL_MIN * 0.5, EL_MAX * 0.5);
+                let el = self.el_centre + self.rng.range(-EL_HALF * 0.5, EL_HALF * 0.5);
                 let depth = self.rng.range(DEPTH_CENTRE - 2.0, DEPTH_CENTRE + 2.0);
-                let from = self.dir_local((sign * AZ_MAX * 1.1).to_radians(), el.to_radians()).scale(depth);
-                let to = self.dir_local((-sign * AZ_MAX * 1.1).to_radians(), el.to_radians()).scale(depth);
+                let from = self.dir_local((self.az_centre + sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
+                let to = self.dir_local((self.az_centre - sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
                 let dur = f64::from(self.rng.range(GROUP_DURATION.0, GROUP_DURATION.1));
                 self.phase = Phase::Grouping { until: self.t + dur, start: self.t, from, to };
             }
@@ -476,7 +516,8 @@ impl Sim {
             bat.vel = heading.scale(speed);
             bat.pos = bat.pos.add(bat.vel.scale(dt));
             bat.phase += TAU * tune.beat_hz * dt * (1.0 + 0.06 * (bat.trim - 0.5));
-            contain(self.fwd, self.right, self.up, bat);
+            let bounds = (self.az_min, self.az_max, self.el_min, self.el_max);
+            contain(self.fwd, self.right, self.up, bat, bounds);
 
             let depth = bat.pos.dot(self.fwd);
             if depth > 0.35 {
@@ -532,14 +573,33 @@ fn spherical(fwd: V3, right: V3, up: V3, az: f32, el: f32) -> V3 {
     fwd.add(right.scale(az.tan())).add(up.scale(el.tan()))
 }
 
+/// The inverse of [`spherical`]: the planar azimuth and elevation (degrees)
+/// that would build a direction proportional to `dir` in the basis
+/// `(fwd, right, up)`. `mod.rs::build` uses this to find the moon's own
+/// az/el in the flight's own convention, so the roaming cone can be centred
+/// on it - not on some other, spherical, notion of "the moon's angle" that
+/// `pick_target`'s own clamps would not agree with (the exact confusion
+/// [`spherical`]'s own doc comment warns about).
+pub(crate) fn gnomonic_of(fwd: V3, right: V3, up: V3, dir: V3) -> (f32, f32) {
+    let depth = dir.dot(fwd).max(1e-4);
+    let az = (dir.dot(right) / depth).atan().to_degrees();
+    let el = (dir.dot(up) / depth).atan().to_degrees();
+    (az, el)
+}
+
 /// A gentle nudge back inside the roaming cone for anything that has drifted
 /// well past it - a safety net behind the target sampling, which already
 /// keeps new targets inside bounds; this only fires if a string of jinks (or
 /// a group sweep) has carried a bat out past a generous margin.
 ///
 /// Free rather than a method on `Sim` for the same borrow-checker reason as
-/// [`spherical`]: its caller already holds `&mut self.bats[i]`.
-fn contain(fwd: V3, right: V3, up: V3, bat: &mut Bat) {
+/// [`spherical`]: its caller already holds `&mut self.bats[i]`. `bounds` is
+/// `(az_min, az_max, el_min, el_max)`, the cone's own hard bounds - passed
+/// rather than recomputed from a centre and a half-width so this stays a
+/// pure function of the numbers `pick_target` already clamps against,
+/// wherever the cone is actually centred.
+fn contain(fwd: V3, right: V3, up: V3, bat: &mut Bat, bounds: (f32, f32, f32, f32)) {
+    let (az_min, az_max, el_min, el_max) = bounds;
     let v = bat.pos;
     let depth = v.dot(fwd);
     if depth < 0.2 {
@@ -548,9 +608,15 @@ fn contain(fwd: V3, right: V3, up: V3, bat: &mut Bat) {
     }
     let az = (v.dot(right) / depth).atan().to_degrees();
     let el = (v.dot(up) / depth).atan().to_degrees();
+    // A margin around the cone's own centre, not a scale on its bounds
+    // directly - scaling `(az_min, az_max)` by a factor would also drag the
+    // clamp's own centre away from the cone's whenever that centre is not
+    // zero (true since the cone centred on the moon, see `mod.rs::build`).
     let margin = 1.6;
-    let az_c = az.clamp(AZ_MIN * margin, AZ_MAX * margin);
-    let el_c = el.clamp(EL_MIN * margin, EL_MAX * margin);
+    let (az_c0, az_half) = (0.5 * (az_min + az_max), 0.5 * (az_max - az_min));
+    let (el_c0, el_half) = (0.5 * (el_min + el_max), 0.5 * (el_max - el_min));
+    let az_c = az.clamp(az_c0 - az_half * margin, az_c0 + az_half * margin);
+    let el_c = el.clamp(el_c0 - el_half * margin, el_c0 + el_half * margin);
     let depth_c = depth.clamp(Z_NEAR * 0.6, Z_FAR * 1.15);
     if (az - az_c).abs() > 0.01 || (el - el_c).abs() > 0.01 || (depth - depth_c).abs() > 0.01 {
         bat.pos = spherical(fwd, right, up, az_c.to_radians(), el_c.to_radians()).scale(depth_c);

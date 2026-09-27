@@ -348,7 +348,11 @@ const BLUR_WINDOW: f64 = 2.0 * STEP as f64;
 /// stall's catch-up taking many steps in one render call.
 const HISTORY_CAP: usize = 16;
 
-fn make(seed: u64) -> Box<dyn Patch> {
+/// Everything [`make`] builds, as a concrete, inspectable value - split out
+/// so `tests.rs` can drive the real geometry (the moon's actual screen
+/// position, not a stand-in camera) directly, rather than only through the
+/// `Patch` trait object `make` hands back to everyone else.
+fn build(seed: u64) -> Bats {
     let mut rng = crate::rng::Rng::new(seed ^ 0x00ba_751e);
     let world_up = v3(0.0, 1.0, 0.0);
     // A level camera: there is no ground or horizon left to pitch it
@@ -367,10 +371,24 @@ fn make(seed: u64) -> Box<dyn Patch> {
     let moon_dir = fwd.scale(ca * ce).add(right.scale(sa * ce)).add(up.scale(se)).unit_or(fwd);
     let moon = Moon::new(&mut rng, moon_dir);
 
-    let sim = Sim::new(seed, fwd, right, up, 3);
+    // The ambient roaming cone is centred on the moon's own direction, not
+    // dead ahead - see the Log (orchestrator review round 1): bats that
+    // wander around screen centre while the moon sits off to one side cross
+    // it only by luck, and "crossings happening regularly" (the owner's
+    // words) wants the colony's home range to actually be built around its
+    // one bright landmark. `sim::gnomonic_of` inverts the same planar
+    // convention `sim::spherical` builds targets from, so the cone's centre
+    // and the moon's own screen position agree by construction.
+    let (moon_az_g, moon_el_g) = sim::gnomonic_of(fwd, right, up, moon_dir);
+
+    let sim = Sim::new(seed, fwd, right, up, 3, moon_az_g, moon_el_g);
     let mut history = VecDeque::with_capacity(HISTORY_CAP);
     history.push_back((sim.t(), sim.bats.clone()));
-    Box::new(Bats { sim, warped: 0.0, steps: 0, moon, seen: 0, history })
+    Bats { sim, warped: 0.0, steps: 0, moon, seen: 0, history }
+}
+
+fn make(seed: u64) -> Box<dyn Patch> {
+    Box::new(build(seed))
 }
 
 impl Bats {

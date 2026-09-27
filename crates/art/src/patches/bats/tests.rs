@@ -2,20 +2,21 @@
 //! hunting does not settle into a loop, and that the colony stays mostly in
 //! shot without piling up against one edge of it.
 
-use super::sim::{self, v3, Sim, Tuning, AZ_MAX, AZ_MIN, EL_MAX, EL_MIN};
+use super::sim::{self, v3, Sim, Tuning};
 use super::*;
 use crate::patch::Params;
 use crate::snapshot::{self, Shot};
 
-/// A camera for the sim-level tests: fixed axes, independent of `make`'s own
-/// seeded placement, so these tests are about the flight and not about which
-/// way a particular seed happened to look.
+/// A camera for the sim-level tests: fixed axes and a roaming-cone centre
+/// dead ahead, independent of `build`'s own seeded moon placement, so these
+/// tests are about the flight mechanics and not about where a particular
+/// seed happened to put the moon.
 fn test_sim(seed: u64, birds: usize) -> Sim {
     let fwd = v3(0.0, 0.0, 1.0);
     let world_up = v3(0.0, 1.0, 0.0);
     let right = world_up.cross(fwd).unit_or(v3(1.0, 0.0, 0.0));
     let up = fwd.cross(right).unit_or(world_up);
-    Sim::new(seed, fwd, right, up, birds)
+    Sim::new(seed, fwd, right, up, birds, 0.0, 2.0)
 }
 
 fn reference_tuning() -> Tuning {
@@ -155,6 +156,8 @@ fn the_colony_stays_in_frame_and_does_not_clump_on_an_edge() {
     let mut sim = test_sim(17, 20);
     let tune = reference_tuning();
     let (fwd, right, up) = sim.cam();
+    let (az_min, az_max) = sim.az_bounds();
+    let (el_min, el_max) = sim.el_bounds();
     let (mut inside, mut total) = (0usize, 0usize);
     let (mut at_az_wall, mut at_el_wall) = (0usize, 0usize);
     let steps = (300.0 / sim::STEP) as usize;
@@ -168,13 +171,13 @@ fn the_colony_stays_in_frame_and_does_not_clump_on_an_edge() {
             let az = (b.pos.dot(right) / depth).atan().to_degrees();
             let el = (b.pos.dot(up) / depth).atan().to_degrees();
             total += 1;
-            if (AZ_MIN - 4.0..=AZ_MAX + 4.0).contains(&az) && (EL_MIN - 4.0..=EL_MAX + 4.0).contains(&el) {
+            if (az_min - 4.0..=az_max + 4.0).contains(&az) && (el_min - 4.0..=el_max + 4.0).contains(&el) {
                 inside += 1;
             }
-            if az <= AZ_MIN + 1.5 || az >= AZ_MAX - 1.5 {
+            if az <= az_min + 1.5 || az >= az_max - 1.5 {
                 at_az_wall += 1;
             }
-            if el <= EL_MIN + 1.5 || el >= EL_MAX - 1.5 {
+            if el <= el_min + 1.5 || el >= el_max - 1.5 {
                 at_el_wall += 1;
             }
         }
