@@ -43,16 +43,16 @@
 //! head's own widest point), and a wrong radius here would silently
 //! reproduce it.
 //!
-//! **Air.** Rapier has no wind model: [`Cloth::step`] adds a per-triangle
+//! **Air.** Rapier has no wind model of its own (checked: nothing in its
+//! docs or source mentions one): [`Cloth::step`] adds a per-triangle
 //! aerodynamic force each physics step (`SoftBody::add_particle_force`,
 //! reset every step via `reset_forces`) - the standard flat-plate/pressure
-//! model (Baraff & Witkin, "Large Steps in Cloth Simulation", 1998, and the
-//! model Rapier's own docs point to for wind): force along the face's own
-//! normal, proportional to face area and the velocity component along that
-//! normal. A fold that turns to face the direction of travel catches a lot
-//! of air; one edge-on to it catches almost none - the drag/lift coupling
-//! the card asks for falls out of that single term, no separate lift model
-//! needed.
+//! cloth-wind force (Baraff & Witkin, "Large Steps in Cloth Simulation",
+//! 1998, section 4.1): force along the face's own normal, proportional to
+//! face area and the velocity component along that normal. A fold that
+//! turns to face the direction of travel catches a lot of air; one edge-on
+//! to it catches almost none - the drag/lift coupling the card asks for
+//! falls out of that single term, no separate lift model needed.
 //!
 //! **Determinism.** `enhanced-determinism` is enabled in `Cargo.toml`
 //! (forces libm over the platform's math intrinsics and an order-preserving
