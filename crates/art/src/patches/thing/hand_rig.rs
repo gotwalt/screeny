@@ -37,11 +37,12 @@ use super::geom::v3;
 /// best - which is exactly what shipped once (a handful of barely-lit
 /// dots, not a hand; see the card's Log for 2026-09-26) before this was
 /// measured rather than eyeballed. `HAND_H` is instead the size that reads
-/// as a "luxurious" hand filling a comparable share of the panel a
-/// skeleton would - about a third of a standing figure's own height on
-/// this same camera, chosen the same way `flock`/`skeletons` choose a
-/// subject's *apparent* size in LEDs rather than its real-world one.
-pub const HAND_H: f32 = 0.55;
+/// as a "luxurious" hand on this same camera - enough LEDs across a bone's
+/// own width, up close, that it reads as a filled limb rather than a
+/// scatter of sub-pixel strokes - chosen the same way `flock`/`skeletons`
+/// choose a subject's *apparent* size in LEDs rather than its real-world
+/// one, not a claim that Thing is over a metre long.
+pub const HAND_H: f32 = 1.05;
 
 /// One finger's two joints below the MCP anchor, plus the MCP's own local
 /// rotation. `spread` is abduction (fingers apart, +away from the thumb);
