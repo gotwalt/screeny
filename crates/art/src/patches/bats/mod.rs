@@ -54,11 +54,11 @@ pub const DEF: PatchDef = PatchDef {
 const PARAMS: &[ParamSpec] = &[
     // "bats (max at once, low default)" - card 319's own words: most of the
     // time this patch shows the moon and nothing, or one bat.
-    param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 3.0),
+    param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 5.0),
     param("pace", "How fast the flight moves", 0.3, 2.5, 0.05, 1.0),
     param("jink", "How often it changes its mind, and how sharply", 0.0, 1.0, 0.01, 0.85),
     param("loose", "How loosely the colony holds together", 0.0, 1.0, 0.01, 0.55),
-    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.6),
+    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 2.9),
     param("beat", "How fast the wings beat (Hz)", 4.0, 14.0, 0.5, 8.5),
     param("moon", "How big the moon is", 0.4, 2.2, 0.05, 1.0),
     param("phase", "The moon's phase: 0 and 1 are new, 0.5 is full", 0.0, 1.0, 0.01, 0.62),
