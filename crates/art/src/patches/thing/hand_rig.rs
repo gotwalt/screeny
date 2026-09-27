@@ -37,15 +37,22 @@ use super::geom::v3;
 ///
 /// Card 334 fixed the framing instead (`box_scene.rs` is now a box and a
 /// camera actually scaled for a hand, `eye.z = -0.145` in a box `0.64 m`
-/// deep), so this goes back to close to a real hand's own length: `0.22 m`
-/// - a hand plus the stump's own cosmetic length - rather than the
-/// apparent-size cheat. On this camera that projects to roughly 15-22 LEDs
-/// (about half to two thirds of the panel's height) across the walkable
-/// floor's own depth, and up to ~30 for a close-up gesture pushed to
-/// `WALK_NEAR_Z` - the card's own bar ("often fill a third to two-thirds of
-/// the panel height"), with the clip data's own real-scale positions now
-/// honest rather than a fiction the render alone compensated for.
-pub const HAND_H: f32 = 0.22;
+/// deep), so this is close to a real hand's own length rather than the
+/// apparent-size cheat - `0.30 m`, on the large end of a real hand plus the
+/// stump's own cosmetic length, not `1.05`. The extra headroom over a
+/// stricter `~0.22 m` is real and measured, not a second cheat: at this
+/// panel's resolution, two adjacent open fingers' own true 3-D gap
+/// (confirmed genuinely open - `scene_sdf` positive at the midpoint, the
+/// camera ray through it missing the hand entirely) still fell inside a
+/// single supersampled LED cell at `0.22 m` and washed out in the
+/// box-filtered average; `0.30 m` (plus `SUPERSAMPLES` raised alongside
+/// it) is what actually let that gap span its own LED. On this camera that
+/// projects to roughly 18-26 LEDs (a bit over half to nearly the full
+/// panel height) across the walkable floor's own depth - the card's own
+/// bar ("often fill a third to two-thirds of the panel height") - with the
+/// clip data's own positions honest about a real box and a real camera
+/// rather than a fiction the render alone compensated for.
+pub const HAND_H: f32 = 0.30;
 
 /// One finger's two joints below the MCP anchor, plus the MCP's own local
 /// rotation. `spread` is abduction (fingers apart, +away from the thumb);

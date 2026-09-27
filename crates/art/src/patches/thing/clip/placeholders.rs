@@ -34,24 +34,39 @@ use std::f32::consts::{FRAC_PI_2, PI};
 /// from it the same way, so a tilt baked in here keeps everything - planted
 /// fingertips included - self-consistent. Three tilts, one per way a hand
 /// actually sits in this box:
-/// - [`Tilt::FlatAway`]: lying flat, palm down, fingers pointing further
-///   into the box (`up -> +z`) - `rest`, `wave`.
+/// - [`Tilt::Presented`]: resting, palm mostly down, fingers pointing
+///   further into the box *and* a little up - `rest`, `wave`. Not a full
+///   quarter turn (`up -> +z` exactly): this camera looks almost straight
+///   down the box's own depth axis, so a hand tilted *perfectly* flat
+///   points its fingers straight at the lens's own view direction and
+///   reads foreshortened almost to a dot - measured by projecting a
+///   fingertip through `box_scene::Camera`, not assumed. `PRESENT_PITCH`
+///   leaves `up` with a real `+y` component too, so the wrist-to-fingertip
+///   length actually shows on screen; `right` (where `SPREAD_X` separates
+///   the fingers) is untouched by any pitch, so the fingers' own lateral
+///   spread was never the foreshortened axis and needed no yaw trick.
 /// - [`Tilt::FlatToward`]: lying flat, palm down, fingers pointing at the
-///   glass (`up -> -z`) - `point`.
-/// - [`Tilt::Standing`]: upside down relative to `FlatAway` (`up -> -y`),
+///   glass (`up -> -z`) - `point`, where foreshortening *is* the point: a
+///   finger pointing straight at the viewer is supposed to look like that.
+/// - [`Tilt::Standing`]: upside down relative to a flat hand (`up -> -y`),
 ///   fingers reaching straight down to the floor as legs, wrist held up -
-///   `walk_scuttle`.
+///   `walk_scuttle`, where `up -> -y` is already a screen-vertical axis on
+///   this camera and needs no adjustment.
 #[derive(Clone, Copy)]
 enum Tilt {
-    FlatAway,
+    Presented,
     FlatToward,
     Standing,
 }
 
+/// Degrees off "perfectly flat" `Tilt::Presented` leaves the fingers
+/// pointing, towards the camera's own up direction - see `Tilt`'s own doc.
+const PRESENT_PITCH: f32 = 1.05; // radians, ~60 degrees
+
 impl Tilt {
     fn base(self) -> Quat {
         let pitch = match self {
-            Tilt::FlatAway => FRAC_PI_2,
+            Tilt::Presented => PRESENT_PITCH,
             Tilt::FlatToward => -FRAC_PI_2,
             Tilt::Standing => PI,
         };
@@ -100,14 +115,20 @@ fn point_pose() -> Pose {
 /// Fingers open and a little spread, as if greeting someone - the pose
 /// `wave`'s root motion rocks from side to side.
 fn open_pose() -> Pose {
+    // Card 334: pushed close to `hand_rig::limits::SPREAD`'s own anatomical
+    // cap (`+/-0.35`) - at this panel's resolution even "open, spread"
+    // fingers need most of a real hand's own spread range to leave a
+    // clearly separate LED (or more) of true black between neighbours;
+    // the original, gentler spread read as a single rounded blob (measured
+    // by rendering, not assumed - see the card's Log).
     Pose {
         wrist: Angles::default(),
         thumb: ThumbPose { cmc_abduct: 0.4, cmc_flex: 0.1, ..Default::default() },
         fingers: [
-            FingerPose { spread: -0.25, mcp: 0.1, pip: 0.05, dip: 0.0 },
-            FingerPose { spread: -0.08, mcp: 0.05, pip: 0.0, dip: 0.0 },
-            FingerPose { spread: 0.08, mcp: 0.05, pip: 0.0, dip: 0.0 },
-            FingerPose { spread: 0.25, mcp: 0.1, pip: 0.05, dip: 0.0 },
+            FingerPose { spread: -0.35, mcp: 0.1, pip: 0.05, dip: 0.0 },
+            FingerPose { spread: -0.15, mcp: 0.05, pip: 0.0, dip: 0.0 },
+            FingerPose { spread: 0.15, mcp: 0.05, pip: 0.0, dip: 0.0 },
+            FingerPose { spread: 0.35, mcp: 0.1, pip: 0.05, dip: 0.0 },
         ],
     }
 }
@@ -119,19 +140,19 @@ fn frame(t: f32, pos: V3, tilt: Tilt, yaw: f32, pose: Pose, contacts: [bool; 5])
 /// Standing height (wrist off the floor) for a gesture performed on the
 /// fingertips - a rough stand-in for "stand on the table on the wrist or
 /// fingertips, as feels natural" (the shot list). Card 334 rescaled this
-/// (and every `z`/stride below) in proportion to `hand_rig::HAND_H`'s own
-/// rescale (`1.05` -> `0.22`, a ratio of about `0.21`) and to the new,
+/// (and every `z`/stride/`FLAT_Y` below) in proportion to
+/// `hand_rig::HAND_H`'s own rescale (`1.05` -> `0.30`) and to the new,
 /// hand-scaled box (`box_scene::WALK_NEAR_Z`/`WALK_FAR_Z`, `0.10..0.56` m
 /// deep rather than `0.30..3.48`) - card 333's own numbers were tuned to
 /// the old, human-scaled box and would place every placeholder against the
 /// back wall or beyond it in the new one.
-const STAND_Y: f32 = 0.025;
+const STAND_Y: f32 = 0.034;
 const NONE: [bool; 5] = [false, false, false, false, false];
 const ALL: [bool; 5] = [true, true, true, true, true];
 
 /// A hand lying flat sits *on* the floor, not centred *at* it: `root_pos.y`
 /// is the wrist's own centre, and the wrist capsule has real radius
-/// (`hand_rig::WRIST_R * HAND_H`, about `0.029` m), so `y = 0.0` buries
+/// (`hand_rig::WRIST_R * HAND_H`, about `0.039` m), so `y = 0.0` buries
 /// roughly its bottom half in the floor plane - invisible in card 333's
 /// capsule render (which never drew the floor and the hand in the same
 /// pass) and a real bug the GPU raymarch exposed at once: the box's own
@@ -140,10 +161,10 @@ const ALL: [bool; 5] = [true, true, true, true, true];
 /// loses. A small clearance above the thickest part of the hand keeps the
 /// whole flat pose - wrist, palm, tapering fingers - clear of the floor
 /// plane along its entire length.
-const FLAT_Y: f32 = 0.035;
+const FLAT_Y: f32 = 0.048;
 
-/// Hand flat on the table - the shared hand-off pose. Two frames, identical:
-/// a hold, sampled anywhere gives the same pose (checked by
+/// Hand resting, palm mostly down - the shared hand-off pose. Two frames,
+/// identical: a hold, sampled anywhere gives the same pose (checked by
 /// `pose_is_stable_wherever_it_is_sampled`).
 fn rest() -> Clip {
     let z = 0.30;
@@ -152,8 +173,8 @@ fn rest() -> Clip {
         name: "rest".into(),
         loopable: true,
         frames: vec![
-            frame(0.0, v3(0.0, FLAT_Y, z), Tilt::FlatAway, 0.0, pose, ALL),
-            frame(1.0, v3(0.0, FLAT_Y, z), Tilt::FlatAway, 0.0, pose, ALL),
+            frame(0.0, v3(0.0, FLAT_Y, z), Tilt::Presented, 0.0, pose, ALL),
+            frame(1.0, v3(0.0, FLAT_Y, z), Tilt::Presented, 0.0, pose, ALL),
         ],
     }
 }
@@ -161,27 +182,29 @@ fn rest() -> Clip {
 /// A small side-to-side wave, rocking on the wrist, fingers open - loops
 /// cleanly because its last frame is its first.
 fn wave() -> Clip {
-    let z = 0.22;
+    let z = 0.15;
     let p = open_pose();
     Clip {
         name: "wave".into(),
         loopable: true,
         frames: vec![
-            frame(0.0, v3(0.0, STAND_Y, z), Tilt::FlatAway, 0.0, p, NONE),
-            frame(0.3, v3(0.0, STAND_Y, z), Tilt::FlatAway, 0.5, p, NONE),
-            frame(0.6, v3(0.0, STAND_Y, z), Tilt::FlatAway, -0.5, p, NONE),
-            frame(0.9, v3(0.0, STAND_Y, z), Tilt::FlatAway, 0.5, p, NONE),
-            frame(1.2, v3(0.0, STAND_Y, z), Tilt::FlatAway, 0.0, p, NONE),
+            frame(0.0, v3(0.0, STAND_Y, z), Tilt::Presented, 0.0, p, NONE),
+            frame(0.3, v3(0.0, STAND_Y, z), Tilt::Presented, 0.5, p, NONE),
+            frame(0.6, v3(0.0, STAND_Y, z), Tilt::Presented, -0.5, p, NONE),
+            frame(0.9, v3(0.0, STAND_Y, z), Tilt::Presented, 0.5, p, NONE),
+            frame(1.2, v3(0.0, STAND_Y, z), Tilt::Presented, 0.0, p, NONE),
         ],
     }
 }
 
 /// Rest -> point at the camera -> hold -> rest. A one-shot gesture. The
-/// bookend `rest_pose()` frames share `rest()`'s own `Tilt::FlatAway` (so
+/// bookend `rest_pose()` frames share `rest()`'s own `Tilt::Presented` (so
 /// the inertialized hand-off between the two clips has nothing to blend
-/// away); the pointing frames themselves are `Tilt::FlatToward`, so the
-/// index finger's own straight, uncurled default extends towards the glass
-/// rather than away from it.
+/// away); the pointing frames themselves are `Tilt::FlatToward` at
+/// `yaw = 0.0`, so the index finger's own straight, uncurled default
+/// extends towards the glass, foreshortened on purpose - "pointing at the
+/// camera" reads as exactly that shape, the one case broadside would be
+/// the wrong choice.
 fn point() -> Clip {
     let z = 0.16;
     let r = rest_pose();
@@ -190,10 +213,10 @@ fn point() -> Clip {
         name: "point".into(),
         loopable: false,
         frames: vec![
-            frame(0.0, v3(0.0, FLAT_Y, z), Tilt::FlatAway, 0.0, r, ALL),
+            frame(0.0, v3(0.0, FLAT_Y, z), Tilt::Presented, 0.0, r, ALL),
             frame(0.35, v3(0.0, STAND_Y, z), Tilt::FlatToward, 0.0, p, NONE),
             frame(1.0, v3(0.0, STAND_Y, z), Tilt::FlatToward, 0.0, p, NONE),
-            frame(1.35, v3(0.0, FLAT_Y, z), Tilt::FlatAway, 0.0, r, ALL),
+            frame(1.35, v3(0.0, FLAT_Y, z), Tilt::Presented, 0.0, r, ALL),
         ],
     }
 }
@@ -210,7 +233,7 @@ fn point() -> Clip {
 /// `a_planted_fingertip_does_not_slide_while_the_root_walks` caught it
 /// exactly that way).
 fn walk_scuttle() -> Clip {
-    let y = 0.02;
+    let y = 0.027;
     let base_z = 0.40;
     let p = fist_pose();
     let curled = Pose { fingers: [FingerPose { mcp: 0.7, pip: 0.9, dip: 0.6, spread: 0.1 }; 4], ..p };
@@ -220,9 +243,9 @@ fn walk_scuttle() -> Clip {
     let step = |lift_a: bool| if lift_a { [false, true, false, true, false] } else { [true, false, true, false, true] };
     // Card 334 rescaled this with `HAND_H`/`STAND_Y` (see that const's own
     // doc): the reach a planted fingertip's contact IK can honestly cover
-    // shrank in proportion, so the stride has to as well or it is dragged
+    // changed in proportion, so the stride has to as well or it is dragged
     // rather than planted again (`a_planted_fingertip_does_not_slide_while_the_root_walks`).
-    const X: f32 = 0.013;
+    const X: f32 = 0.018;
     Clip {
         name: "walk-scuttle".into(),
         loopable: true,

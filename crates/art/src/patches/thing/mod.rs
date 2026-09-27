@@ -229,8 +229,7 @@ struct Uniforms {
     shadow: [f32; 4],
     /// ambient, key (point-light) strength, subsurface/translucency, rim.
     light_strength: [f32; 4],
-    /// AO strength, nail highlight boost, palm-join blend radius, floor
-    /// dark cutoff.
+    /// AO strength, nail highlight boost, unused, floor dark cutoff.
     ao_nail_kpalm_darkcut: [f32; 4],
     /// floor's max lightness once lit, palm's own self-blend radius, unused.
     maxl_kpalmself: [f32; 4],
@@ -250,7 +249,7 @@ struct Live {
 /// across the frame interval", the same technique `ghosts` uses).
 const BLUR_SAMPLES: usize = 4;
 /// Samples per axis per LED inside each of those renders.
-const SUPERSAMPLES: u32 = 4;
+const SUPERSAMPLES: u32 = 6;
 
 fn open_gpu() -> Option<Live> {
     let gpu = match Gpu::shared() {
@@ -308,28 +307,34 @@ fn open_gpu() -> Option<Live> {
 const HUE: f32 = 56.0;
 const BASE_CHROMA: f32 = 0.05;
 
-const AMBIENT: f32 = 0.30;
-const KEY_STRENGTH: f32 = 0.95;
+const AMBIENT: f32 = 0.28;
+const KEY_STRENGTH: f32 = 1.45;
 /// "A hint of subsurface warmth at the edges" (the card).
 const BACK_STRENGTH: f32 = 0.16;
 const RIM_STRENGTH: f32 = 0.22;
 /// "Ambient occlusion between fingers" (the card).
-const AO_STRENGTH: f32 = 1.35;
+const AO_STRENGTH: f32 = 2.6;
 const NAIL_BOOST: f32 = 0.10;
 
 const SHADOW_STRENGTH: f32 = 0.55;
 const SHADOW_RADIUS2: f32 = 0.0028;
 
-const DARK_CUT: f32 = 0.12;
-const MAX_L: f32 = 0.62;
+// Card 326 review's own words apply here too - "the box is not the light in
+// the frame, the subject is": pulled the floor's own visible pool in tight
+// (a high `DARK_CUT`, most of the floor snaps true black) and its peak
+// lightness down, so the hand reads as the brightest, most detailed thing
+// in the picture rather than competing with a wide floor gradient.
+const DARK_CUT: f32 = 0.32;
+const MAX_L: f32 = 0.5;
 
 /// Blend radii, world metres at `HAND_H`'s own scale: small within one
-/// finger (round the joints, do not weld the fingers together), a little
-/// fleshier for the palm's own fan of capsules, and small again where a
-/// finger's base meets the palm (real webbing, not a mitten).
+/// finger (round the joints without eating the taper), a little fleshier
+/// for the palm's own fan of capsules. Where a finger meets the palm, and
+/// where two fingers are near each other, `scene_sdf` unions with a plain
+/// `min`, not a third blend radius here - see its own doc for the real bug
+/// (fingers reading as one mitten) a smooth join at that seam caused.
 const K_FINGER: f32 = 0.006;
 const K_PALM_SELF: f32 = 0.013;
-const K_PALM_JOIN: f32 = 0.009;
 
 const STEPS: usize = 26;
 const DARK_L: f32 = 0.02;
@@ -394,7 +399,7 @@ impl Thing {
                 box_dims: [box_scene::HALF_W, box_scene::DEPTH, box_scene::CEIL_Y, box_scene::FLOOR_Y],
                 shadow: [root.x, root.z, SHADOW_STRENGTH, SHADOW_RADIUS2],
                 light_strength: [AMBIENT * light, KEY_STRENGTH * light, BACK_STRENGTH * glow, RIM_STRENGTH * glow],
-                ao_nail_kpalm_darkcut: [AO_STRENGTH, NAIL_BOOST, K_PALM_JOIN, DARK_CUT],
+                ao_nail_kpalm_darkcut: [AO_STRENGTH, NAIL_BOOST, 0.0, DARK_CUT],
                 maxl_kpalmself: [MAX_L * light, K_PALM_SELF, 0.0, 0.0],
                 prims: prim_buf,
             };

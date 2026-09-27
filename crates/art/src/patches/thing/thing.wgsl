@@ -48,7 +48,7 @@ struct Uniforms {
   shadow: vec4<f32>,
   // ambient, key (point-light) strength, subsurface/translucency, rim.
   light_strength: vec4<f32>,
-  // AO strength, nail highlight boost, palm-join blend radius, dark cutoff
+  // AO strength, nail highlight boost, unused, dark cutoff
   // (floor brightness below which it is held to true black).
   ao_nail_kpalm_darkcut: vec4<f32>,
   // floor's max lightness once lit, palm's own self-blend radius, unused x2.
@@ -120,10 +120,22 @@ fn scene_sdf(p: vec3<f32>) -> f32 {
     let k = select(k_finger, k_palm_self, chain == 5u);
     acc[chain] = smin(acc[chain], d, k);
   }
-  let k_palm_join = u.ao_nail_kpalm_darkcut.z;
+  // Hard union between fingers and the palm, and between fingers
+  // themselves - not `smin`. `smin(total, acc[c], k)` looks like it only
+  // ever blends `acc[c]` into the palm, but `total` already carries every
+  // finger folded in by the time a later finger is combined, so a smooth
+  // blend here would let *any two fingers* bridge wherever they are
+  // roughly equidistant from that shared accumulator (the gap between two
+  // adjacent fingertips is exactly such a place) - a real bug found by
+  // rendering, not by inspection: `wave`'s open, spread fingers still came
+  // out a single blob until this changed to a hard `min`. Each finger's
+  // own joints and the palm's own capsules stay smoothly unioned
+  // (`k_finger`/`k_palm_self` above); only the seam between separate
+  // structures is a plain, un-softened minimum, which is what keeps five
+  // fingers five fingers.
   var total = acc[5];
   for (var c = 0u; c < 5u; c++) {
-    total = smin(total, acc[c], k_palm_join);
+    total = min(total, acc[c]);
   }
   return total;
 }
@@ -146,7 +158,7 @@ fn ao_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   var occ = 0.0;
   var sca = 1.0;
   for (var i = 0; i < 5; i++) {
-    let h = 0.004 + 0.018 * f32(i) / 4.0;
+    let h = 0.006 + 0.032 * f32(i) / 4.0;
     let d = scene_sdf(p + n * h);
     occ += (h - d) * sca;
     sca *= 0.6;
