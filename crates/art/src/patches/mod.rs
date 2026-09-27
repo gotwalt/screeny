@@ -21,6 +21,11 @@ mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
 pub(crate) mod skeletons;
+// Card 334: the hand's render became a GPU raymarched SDF (smooth-unioned
+// capsules and spheres, lit and shaded per-pixel in `thing.wgsl`), so `thing`
+// needs the adapter exactly as `ghosts`/`leaves`/`knot`/`lattice`/`overland`
+// do, and is gated the same way.
+#[cfg(feature = "gpu")]
 pub(crate) mod thing;
 pub(crate) mod vesta;
 
@@ -45,6 +50,7 @@ pub static ALL: &[PatchDef] = &[
     #[cfg(feature = "gpu")]
     leaves::DEF,
     skeletons::DEF,
+    #[cfg(feature = "gpu")]
     thing::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
@@ -67,6 +73,8 @@ pub static NEEDS_GPU: &[&str] = &[
     ghosts::DEF.id,
     #[cfg(feature = "gpu")]
     leaves::DEF.id,
+    #[cfg(feature = "gpu")]
+    thing::DEF.id,
     #[cfg(feature = "gpu")]
     overland::DEF.id,
     #[cfg(feature = "gpu")]

@@ -27,22 +27,25 @@ use super::geom::v3;
 /// one place this number lives; `player.rs`, `choreo.rs` and `mod.rs` all
 /// read it from here rather than each keeping their own copy.
 ///
-/// **Not** a real hand's ~0.19 m: `box_scene.rs`'s camera (`Camera::at`,
-/// shared byte-for-byte with `skeletons`) sits at `eye.z = -1.55`, *behind*
-/// the box's own front window (`z = 0`), because it was tuned to frame a
-/// ~1.6-1.8 m standing figure across the box's walkable floor
-/// (`WALK_NEAR_Z` to `WALK_FAR_Z`). A real-scale hand anywhere on that same
-/// floor sits at an actual camera distance of at least `1.55 m` before the
-/// box's own depth is even added, and projects to a couple of LEDs at
-/// best - which is exactly what shipped once (a handful of barely-lit
-/// dots, not a hand; see the card's Log for 2026-09-26) before this was
-/// measured rather than eyeballed. `HAND_H` is instead the size that reads
-/// as a "luxurious" hand on this same camera - enough LEDs across a bone's
-/// own width, up close, that it reads as a filled limb rather than a
-/// scatter of sub-pixel strokes - chosen the same way `flock`/`skeletons`
-/// choose a subject's *apparent* size in LEDs rather than its real-world
-/// one, not a claim that Thing is over a metre long.
-pub const HAND_H: f32 = 1.05;
+/// Card 333 shipped this at `1.05` - nearly six times a real hand - because
+/// its box and camera were `skeletons`' own numbers, tuned to frame a
+/// standing 1.6-1.8 m figure from `eye.z = -1.55`. A real-scale hand
+/// anywhere on that floor sat at least `1.55 m` from the lens before the
+/// box's own depth was even added, and projected to a scatter of
+/// barely-lit dots; `HAND_H` was inflated to compensate rather than fixing
+/// the framing (see the card 333 Log, 2026-09-26).
+///
+/// Card 334 fixed the framing instead (`box_scene.rs` is now a box and a
+/// camera actually scaled for a hand, `eye.z = -0.145` in a box `0.64 m`
+/// deep), so this goes back to close to a real hand's own length: `0.22 m`
+/// - a hand plus the stump's own cosmetic length - rather than the
+/// apparent-size cheat. On this camera that projects to roughly 15-22 LEDs
+/// (about half to two thirds of the panel's height) across the walkable
+/// floor's own depth, and up to ~30 for a close-up gesture pushed to
+/// `WALK_NEAR_Z` - the card's own bar ("often fill a third to two-thirds of
+/// the panel height"), with the clip data's own real-scale positions now
+/// honest rather than a fiction the render alone compensated for.
+pub const HAND_H: f32 = 0.22;
 
 /// One finger's two joints below the MCP anchor, plus the MCP's own local
 /// rotation. `spread` is abduction (fingers apart, +away from the thumb);
@@ -257,16 +260,6 @@ pub fn finger_anchor_frame(root: V3, root_frame: Frame, wrist: Angles, spread: f
     (anchor, palm_frame.rotate(Angles::new(spread, 0.0, 0.0)))
 }
 
-/// One capsule to draw, as fractions of `h` (the caller scales by drawn
-/// size), mirroring `rig::Bone`.
-#[derive(Clone, Copy)]
-pub struct Bone {
-    pub a: V3,
-    pub b: V3,
-    pub ra: f32,
-    pub rb: f32,
-}
-
 /// A stump length behind the wrist, purely cosmetic (the "short flat-ended
 /// stump" the card asks for): a fixed point along `-palm_frame.up` from the
 /// wrist, so the hand does not look like it ends in a point.
@@ -279,29 +272,6 @@ impl Joints {
     #[must_use]
     pub fn stump(&self, h: f32) -> V3 {
         self.wrist.sub(self.palm_frame.up.scale(STUMP_LEN * h))
-    }
-
-    /// Every bone to draw: the phalanges, the metacarpals (drawn fat and
-    /// overlapping so they read as a solid palm, not four thin struts - see
-    /// `mod.rs`'s render for the palm pad proper), and the stump.
-    #[must_use]
-    pub fn bones(&self, h: f32) -> Vec<Bone> {
-        let bone = |a, b, ra, rb| Bone { a, b, ra, rb };
-        let mut out = Vec::with_capacity(24);
-        out.push(bone(self.stump(h), self.wrist, STUMP_R * h, WRIST_R * h));
-        for i in 0..4 {
-            let [mcp, pip, dip, tip] = self.fingers[i];
-            let base_r = [0.052, 0.058, 0.055, 0.045][i];
-            out.push(bone(self.wrist, mcp, PALM_R * h, base_r * h * 1.35));
-            out.push(bone(mcp, pip, base_r * h, base_r * 0.78 * h));
-            out.push(bone(pip, dip, base_r * 0.72 * h, base_r * 0.6 * h));
-            out.push(bone(dip, tip, base_r * 0.55 * h, base_r * 0.4 * h));
-        }
-        out.push(bone(self.wrist, self.thumb[0], PALM_R * 0.9 * h, 0.05 * h));
-        out.push(bone(self.thumb[0], self.thumb[1], 0.05 * h, 0.044 * h));
-        out.push(bone(self.thumb[1], self.thumb[2], 0.044 * h, 0.036 * h));
-        out.push(bone(self.thumb[2], self.thumb[3], 0.036 * h, 0.026 * h));
-        out
     }
 
     /// The four fingertips and the thumb tip, in MediaPipe order

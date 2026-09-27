@@ -171,20 +171,31 @@ impl Performance {
         let (local_t, n) = self.local_t(sim_t);
         let s = clip.sample(local_t);
         let mut pos = self.placement.add(s.root_pos.sub(self.clip_origin)).add(self.loop_delta.scale(n));
-        // Depth (`z`, how far into the box) is the one axis `placement`
-        // does *not* carry forward from the outgoing performance: every
-        // clip is authored at its own considered distance from the camera
-        // (near for a gesture at the glass, further for a walk across),
-        // and re-anchoring `z` the way `x`/`y` are re-anchored (so a walk
-        // picks up exactly where the hand already is) would instead freeze
-        // the *whole run* at whatever the very first performance's `z`
-        // happened to be - which is what shipped once, and is why the
-        // hand rendered as a handful of barely-lit dots for the rest of
-        // the run rather than ever reading as a hand (see the final
-        // report's honest note on this). `Blend`'s decaying offset still
-        // smooths the resulting jump if two consecutive clips are authored
-        // at different distances.
+        // Depth (`z`, how far into the box) and height (`y`, how far off
+        // the floor) are the two axes `placement` does *not* carry forward
+        // from the outgoing performance: every clip is authored at its own
+        // considered distance and height (near and low for a gesture at
+        // the glass, further and raised for a walk across, planted for one
+        // standing on its fingertips), and re-anchoring either the way `x`
+        // is re-anchored (so a walk picks up exactly where the hand
+        // already is, laterally) would instead freeze the *whole run* at
+        // whatever the very first performance's `z`/`y` happened to be.
+        // For `z` this is what shipped once, and is why the hand rendered
+        // as a handful of barely-lit dots for the rest of the run rather
+        // than ever reading as a hand (see the final report's honest note
+        // on this). Card 334 found `y` needs exactly the same carve-out,
+        // for the same reason, the moment the render became precise enough
+        // to show it: every placeholder clip is at a *different*, real
+        // height (`FLAT_Y` lying flat, `STAND_Y` held up gesturing, a
+        // walk's own near-zero stance), and `ClipPlayer::new`'s
+        // `start_anchor.y` is `0.0` - re-anchoring `y` meant every clip
+        // after the very first rendered at that `0.0`, embedded in the
+        // floor plane regardless of its own authored height, which the old
+        // supersampled-capsule render never had the precision to expose.
+        // `Blend`'s decaying offset still smooths the resulting jump if two
+        // consecutive clips are authored at different distances or heights.
         pos.z = s.root_pos.z;
+        pos.y = s.root_pos.y;
         (pos, s.root_rot, s.pose, s.contacts)
     }
 }
@@ -243,22 +254,24 @@ impl ClipPlayer {
             // `to.pos` is in the *new clip's own* local coordinates; `from`
             // is already in world/box coordinates (`pose_vel_now` placed
             // it there). `Performance::new`'s own `placement` is exactly
-            // what cancels that gap for `x`/`y` on every sample *after*
-            // this one, but `Blend::start` wants both sides in the same
-            // frame *right now* - so `x`/`y` get moved into world
-            // coordinates too (`anchor`, by construction: see
-            // `Performance::new`'s doc). An earlier version did this for
-            // `z` as well, which reintroduced exactly the pop
+            // what cancels that gap for `x` on every sample *after* this
+            // one, but `Blend::start` wants both sides in the same frame
+            // *right now* - so `x` gets moved into world coordinates too
+            // (`anchor`, by construction: see `Performance::new`'s doc).
+            // An earlier version did this for `z` as well, which
+            // reintroduced exactly the pop
             // inertialization is supposed to remove whenever `entry_t` was
             // not frame zero (pinned by
             // `switching_clips_is_continuous_in_pose_and_velocity_at_the_cut`).
-            // `z` is left as the new clip's own *raw* depth - `sample`'s
-            // own doc explains why `z` is never re-anchored - so a real
-            // difference in the two clips' own considered distances (a
-            // walk further back, a gesture pushed right up to the glass)
-            // is exactly the discontinuity the blend decays, rather than
-            // one artificially erased before it ever saw it.
-            let to_world = PoseVel { pos: v3(anchor.x, anchor.y, to.pos.z), ..to };
+            // `z` and `y` are left as the new clip's own *raw* depth and
+            // height - `sample`'s own doc explains why neither is
+            // re-anchored - so a real difference in the two clips' own
+            // considered distances or heights (a walk further back, a
+            // gesture pushed right up to the glass, a hand lying flat
+            // versus one standing on its fingertips) is exactly the
+            // discontinuity the blend decays, rather than one artificially
+            // erased before it ever saw it.
+            let to_world = PoseVel { pos: v3(anchor.x, to.pos.y, to.pos.z), ..to };
             self.blend = Some(Blend::start(sim_t, BLEND_TIME, from, to_world));
         }
         self.perf = Some(Performance::new(new_clip, name, sim_t, anchor, entry_t, to.pos));
@@ -271,8 +284,11 @@ impl ClipPlayer {
         let (local_t, n) = perf.local_t(sim_t);
         let mut pv = clip::pose_vel(clip, local_t, 1.0 / 200.0);
         let raw_z = pv.pos.z;
+        let raw_y = pv.pos.y;
         pv.pos = perf.placement.add(pv.pos.sub(perf.clip_origin)).add(perf.loop_delta.scale(n));
-        pv.pos.z = raw_z; // `z` is never re-anchored - see `Performance::sample`'s doc
+        // `z` and `y` are never re-anchored - see `Performance::sample`'s doc.
+        pv.pos.z = raw_z;
+        pv.pos.y = raw_y;
         Some(pv)
     }
 
