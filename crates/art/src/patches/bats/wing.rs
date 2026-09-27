@@ -48,6 +48,13 @@ const EAR_AREA: f32 = 0.55;
 const EAR_LEN: f32 = 0.085;
 const EAR_SPREAD: f32 = 0.055;
 
+/// The thumb claw: a real bat's wing has a small clawed digit at the wrist,
+/// free of the membrane, used for climbing - card 319's "the wrist, the
+/// thumb claw". Same level-of-detail gate as the ears: a hook this small is
+/// only worth drawing once the wrist itself is legible.
+const THUMB_AREA: f32 = 0.55;
+const THUMB_LEN: f32 = 0.09;
+
 pub(crate) struct Wing {
     /// The leading edge: shoulder, wrist, tip.
     pub spar: [V3; 3],
@@ -57,6 +64,9 @@ pub(crate) struct Wing {
     /// anti-aliases the way a flock wing's edges do.
     pub trail: [V3; 4],
     pub normal: V3,
+    /// A short hook forward and up off the wrist, present only once the
+    /// bat's own [`Pose::ears`] would be too - `None` otherwise.
+    pub thumb: Option<[V3; 2]>,
 }
 
 pub(crate) struct Pose {
@@ -116,10 +126,16 @@ pub(crate) fn pose(b: Bat, span: f32, area: f32) -> Pose {
             .sub(fwd.scale(chord_at(0.74) * span * area * (1.0 + SCALLOP * 0.5)));
         let wrist_trail = wrist.sub(fwd.scale(WRIST_CHORD * span * area));
 
+        let thumb = (area > THUMB_AREA).then(|| {
+            let len = span * THUMB_LEN * smoothstep(THUMB_AREA, 1.0, area);
+            [wrist, wrist.add(fwd.scale(len * 0.6)).add(out_in.scale(len * 0.5))]
+        });
+
         Wing {
             spar: [shoulder, wrist, tip],
             trail: [root_trail, notch, scallop, wrist_trail],
             normal: up.scale(ci).sub(side.scale(si)),
+            thumb,
         }
     };
 
