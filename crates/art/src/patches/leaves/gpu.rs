@@ -35,7 +35,9 @@
 //! (so a echo behind a solid leaf is properly hidden) but not depth-writing
 //! (so overlapping echoes blend with each other instead of fighting).
 
+use super::landing::{Landing, Litter};
 use super::leaf::Leaf3D;
+use super::shell::RenderVertex;
 use super::{depth_fade, HueFamily, HUES};
 use crate::frame::Frame;
 use crate::gpu::mat::{self, Mat4};
@@ -246,18 +248,40 @@ fn push_shell_posed(
     out: &mut Vec<GVertex>,
     leaf: &Leaf3D,
     shell: &super::shell::LeafShell,
-    repose: impl Fn(super::shell::RenderVertex) -> super::shell::RenderVertex,
+    repose: impl Fn(RenderVertex) -> RenderVertex,
     families: &[HueFamily; HUES],
     color: f32,
     alpha: f32,
 ) {
-    let fam = &families[leaf.build.hue as usize % HUES];
-    let fade = depth_fade(leaf.pos.z);
+    let verts: Vec<RenderVertex> = shell.render_vertices().into_iter().map(repose).collect();
+    push_lit_mesh(out, &verts, shell.faces(), leaf.build.hue, leaf.pos.z, families, color, alpha);
+}
+
+/// The shared core of every "append this leaf's already-final, world-space
+/// triangles to `out`" path (a falling leaf's live shell, a settling
+/// [`Landing`]'s current pose, or a frozen [`Litter`]): one lighting-family
+/// lookup and depth fade, then one vertex-emitting loop over `faces`. Card
+/// 323 pulled this out of [`push_shell_posed`] once card 323's own ground
+/// litter needed the exact same loop over already-baked vertices instead of
+/// a live shell - "the render can never triangulate a leaf two different
+/// ways" (322's own rule for a shell) extended to "...or emit its vertices
+/// two different ways" for every other source of a finished leaf mesh.
+fn push_lit_mesh(
+    out: &mut Vec<GVertex>,
+    verts: &[RenderVertex],
+    faces: &[[u32; 3]],
+    hue_idx: u8,
+    z: f32,
+    families: &[HueFamily; HUES],
+    color: f32,
+    alpha: f32,
+) {
+    let fam = &families[hue_idx as usize % HUES];
+    let fade = depth_fade(z);
     let (hue, chroma, top_l, bot_l) = (fam.hue, fam.chroma * color.max(0.0), fam.top_l * fade, fam.bot_l * fade);
-    let verts = shell.render_vertices();
-    for &[a, b, c] in shell.faces() {
+    for &[a, b, c] in faces {
         for &i in &[a, b, c] {
-            let v = repose(verts[i as usize]);
+            let v = verts[i as usize];
             out.push(GVertex {
                 pos: [v.pos.x, v.pos.y - super::EYE_Y, -v.pos.z],
                 normal: [v.normal.x, v.normal.y, -v.normal.z],
@@ -272,6 +296,14 @@ fn push_shell_posed(
     }
 }
 
+/// A [`Litter`] leaf, or a still-settling [`Landing`]'s current pose: already
+/// world-space, already final (or as final as this frame's settle has
+/// reached) - no repose needed, unlike [`push_shell_posed`]'s falling-leaf
+/// echoes.
+fn push_baked(out: &mut Vec<GVertex>, verts: &[RenderVertex], faces: &[[u32; 3]], hue: u8, z: f32, families: &[HueFamily; HUES], color: f32, alpha: f32) {
+    push_lit_mesh(out, verts, faces, hue, z, families, color, alpha);
+}
+
 /// Every leaf currently falling: its recent rigid-motion history (newest
 /// last, per [`super::LeavesPatch::advance`] - used for the motion-blur
 /// echoes) and its shells (card 322), index-parallel with `history.last()`.
@@ -283,11 +315,16 @@ pub(crate) struct Falling<'a> {
     pub shells: &'a [super::shell::LeafShell],
 }
 
-/// Every leaf at rest: its state and its shells, index-parallel (same
-/// reasoning as [`Falling`]).
-pub(crate) struct Resting<'a> {
-    pub leaves: &'a VecDeque<Leaf3D>,
-    pub shells: &'a VecDeque<super::shell::LeafShell>,
+/// Everything on or above the ground plane that is not still in free flight
+/// (card 323): leaves fully settled ([`Litter`], drawn opaque, solid), leaves
+/// mid-settle ([`Landing`], drawn opaque from their own current pose, not yet
+/// frozen) and litter fading off the `rest` cap (drawn blended, at its own
+/// remaining alpha - never popping, per the card's "nothing disappears
+/// instantly").
+pub(crate) struct Ground<'a> {
+    pub resting: &'a VecDeque<Litter>,
+    pub landing: &'a [Landing],
+    pub fading: &'a [(&'a Litter, f32)],
 }
 
 fn camera(sun_deg: f32) -> ([f32; 4], Mat4) {
@@ -301,23 +338,14 @@ fn camera(sun_deg: f32) -> ([f32; 4], Mat4) {
 }
 
 impl Live {
-    /// Render every falling leaf's recent physics history and every resting
-    /// leaf, and hand back the continuous, linear-light frame. The solid
-    /// leaf drawn on top (falling: `falling.history`'s newest step; resting:
-    /// every one of `resting.leaves`) is always its own shell's live,
-    /// possibly-flexed shape ([`push_shell`]), never the flat rest mesh;
-    /// the fading motion-blur echoes behind it still draw that flat mesh
-    /// ([`push_leaf`]'s own doc says why).
+    /// Render every falling leaf's recent physics history and everything on
+    /// the ground, and hand back the continuous, linear-light frame. The
+    /// solid leaf drawn on top of a falling one is always its own shell's
+    /// live, possibly-flexed shape ([`push_shell`]); a settled or settling
+    /// leaf is its own baked or live-posed mesh ([`push_baked`]) - never a
+    /// second, re-derived shape.
     #[must_use]
-    pub(crate) fn render(
-        &self,
-        falling: Falling,
-        resting: Resting,
-        sun_deg: f32,
-        color: f32,
-        families: &[HueFamily; HUES],
-        blur_trail: usize,
-    ) -> Frame {
+    pub(crate) fn render(&self, falling: Falling, ground: Ground, sun_deg: f32, color: f32, families: &[HueFamily; HUES], blur_trail: usize) -> Frame {
         let (light, proj) = camera(sun_deg);
         let scene = Scene { view_proj: proj, eye: [0.0, 0.0, 0.0, 1.0], light };
         self.gpu.queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
@@ -328,8 +356,12 @@ impl Live {
                 push_shell(&mut opaque, leaf, shell, families, color, 1.0);
             }
         }
-        for (leaf, shell) in resting.leaves.iter().zip(resting.shells) {
-            push_shell(&mut opaque, leaf, shell, families, color, 1.0);
+        for litter in ground.resting {
+            push_baked(&mut opaque, &litter.verts, &litter.faces, litter.hue, litter.pos.z, families, color, 1.0);
+        }
+        for settling in ground.landing {
+            let verts = settling.render_vertices();
+            push_baked(&mut opaque, &verts, settling.faces(), settling.hue(), settling.depth(), families, color, 1.0);
         }
 
         // The echoes: up to `blur_trail - 1` steps immediately before the
@@ -355,6 +387,15 @@ impl Live {
                     let attach_then = super::shell::Attachment::of(leaf_then);
                     push_shell_posed(&mut ghosts, leaf_then, shell, |v| v.reposed(attach_now, attach_then), families, color, weight);
                 }
+            }
+        }
+        // Litter bumped off the `rest` cap, fading rather than popping: the
+        // same blended pipeline the motion-blur echoes use (depth-tested
+        // against every opaque leaf, not depth-writing, so it only ever
+        // reads as *less there*, never wrongly occludes something nearer).
+        for &(litter, alpha) in ground.fading {
+            if alpha > 0.0 {
+                push_baked(&mut ghosts, &litter.verts, &litter.faces, litter.hue, litter.pos.z, families, color, alpha);
             }
         }
 
