@@ -15,9 +15,9 @@
 //!   brightness, the panel model and the limiter, identify / rename / reboot,
 //!   the link, what the device says about itself, and this studio's own
 //!   health.
-//! - `/schedule` - the **Schedule**: playing patches on a timetable rather
-//!   than by hand (card 303 builds it; this card gives it the nav and the
-//!   chip so it is a real screen rather than a 404).
+//! - `/settings` - the **Settings**: the studio's own settings, starting with
+//!   Home Assistant (card 311), in the place card 303's Schedule had until the
+//!   timetable moved to Home Assistant (card 310; `/schedule` goes to `/`).
 //!
 //! They are separate documents rather than one document with several views:
 //! each screen then holds only its own markup, which is what makes "nothing
@@ -46,20 +46,22 @@ use std::path::PathBuf;
 const EMBEDDED: &[(&str, &str, &[u8])] = &[
     ("index.html", "text/html; charset=utf-8", include_bytes!("../ui/index.html")),
     ("panel.html", "text/html; charset=utf-8", include_bytes!("../ui/panel.html")),
-    ("schedule.html", "text/html; charset=utf-8", include_bytes!("../ui/schedule.html")),
+    ("settings.html", "text/html; charset=utf-8", include_bytes!("../ui/settings.html")),
     ("common.js", "text/javascript; charset=utf-8", include_bytes!("../ui/common.js")),
     ("picture.js", "text/javascript; charset=utf-8", include_bytes!("../ui/picture.js")),
     ("panel.js", "text/javascript; charset=utf-8", include_bytes!("../ui/panel.js")),
-    ("schedule.js", "text/javascript; charset=utf-8", include_bytes!("../ui/schedule.js")),
+    ("settings.js", "text/javascript; charset=utf-8", include_bytes!("../ui/settings.js")),
     ("style.css", "text/css; charset=utf-8", include_bytes!("../ui/style.css")),
 ];
 
 /// Tidy URLs: one per screen. `/panel` and `/panel/` are the same screen, and
 /// neither is `/panel.js`, which is a file and keeps its extension.
-const PAGES: &[(&str, &str)] = &[("", "index.html"), ("panel", "panel.html"), ("schedule", "schedule.html")];
+const PAGES: &[(&str, &str)] = &[("", "index.html"), ("panel", "panel.html"), ("settings", "settings.html")];
 
-/// Paths that used to be a page of their own and are now part of `/`.
-const FOLDED_IN: &[&str] = &["dashboard", "dashboard.html"];
+/// Paths that used to be a page of their own and are now part of `/` - or,
+/// for card 303's Schedule screen, gone with the timetable (card 310), which
+/// Home Assistant keeps now.
+const FOLDED_IN: &[&str] = &["dashboard", "dashboard.html", "schedule", "schedule.html"];
 
 /// Where the UI is read from: the binary, or a directory being edited.
 #[derive(Clone, Debug, Default)]

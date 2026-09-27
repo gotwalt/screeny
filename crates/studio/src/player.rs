@@ -105,10 +105,6 @@ pub const MAX_SPEED: f64 = 8.0;
 /// patch change, a named setting loaded, a new seed, a restart. The owner's
 /// number, 2026-09-26. Parameter edits happen in place and never fade.
 pub const FADE_MANUAL: f32 = 2.0;
-/// Seconds a picture change **the schedule makes** cross-fades over (card
-/// 304, for card 302's scheduler to pass). Longer, because nobody asked for
-/// it at that moment.
-pub const FADE_SCHEDULED: f32 = 5.0;
 /// Longest fade a caller may ask for. Anything longer is this.
 pub const FADE_MAX: f32 = 60.0;
 
@@ -778,8 +774,9 @@ impl Player {
 
     /// [`Player::configure`], with the length of the cross-fade the change
     /// makes if it rebuilds the picture: `None` is [`FADE_MANUAL`],
-    /// `Some(0.0)` is a cut, and card 302's scheduler passes
-    /// `Some(FADE_SCHEDULED)`. Parameter edits never fade, whatever is asked.
+    /// `Some(0.0)` is a cut. (Card 302's scheduler passed a longer one; card
+    /// 310 retired the scheduler.) Parameter edits never fade, whatever is
+    /// asked.
     ///
     /// A method rather than a field on [`PlayerChange`] only because
     /// `api.rs` builds a `PlayerChange` with every field named, and that file
@@ -2204,7 +2201,7 @@ mod tests {
     #[test]
     fn fade_lengths_as_asked() {
         assert_eq!(fade_len(None), 2.0);
-        assert_eq!(fade_len(Some(FADE_SCHEDULED)), 5.0);
+        assert_eq!(fade_len(Some(5.0)), 5.0);
         assert_eq!(fade_len(Some(0.0)), 0.0);
         assert_eq!(fade_len(Some(-3.0)), 0.0);
         assert_eq!(fade_len(Some(f32::NAN)), 2.0);
@@ -2216,11 +2213,11 @@ mod tests {
     #[test]
     fn a_rebuild_carries_its_fade_and_a_parameter_edit_has_none() {
         let p = idle_player();
-        p.configure_faded(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }, Some(FADE_SCHEDULED))
+        p.configure_faded(&PlayerChange { patch: Some("metaballs".into()), ..PlayerChange::default() }, Some(5.0))
             .expect("metaballs");
         let want = p.take_pending();
         assert!(want.rebuild);
-        assert_eq!(want.fade, Some(FADE_SCHEDULED));
+        assert_eq!(want.fade, Some(5.0));
 
         p.configure_faded(&PlayerChange { param: Some(("size".into(), 2.5)), ..PlayerChange::default() }, Some(9.0))
             .expect("size");

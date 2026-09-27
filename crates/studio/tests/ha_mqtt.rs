@@ -27,6 +27,9 @@ use std::time::Duration;
 
 const PREFIX: &str = "screeny_test";
 const PATIENCE: Duration = Duration::from_secs(10);
+// (A studio started with `Config::mqtt` begins connected, as if the Settings
+// screen had been filled in; the rest of this file goes through that screen's
+// routes.)
 
 fn broker() -> (String, u16) {
     let at = std::env::var("SCREENY_TEST_MQTT").unwrap_or_else(|_| "127.0.0.1:1883".into());
@@ -110,48 +113,56 @@ async fn home_assistant_sees_and_drives_the_studio() {
 
     // Connect: the config, online, and every state.
     seen.until(&status, "online", |p| p == "online").await;
-    let config = seen.until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 7)).await;
+    let config = seen.until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 9)).await;
     assert_eq!(config["device"]["identifiers"][0], format!("screeny_{id}"));
     assert_eq!(config["origin"]["name"], "screeny-studio");
-    assert_eq!(config["components"]["scene"]["options"], serde_json::json!([]));
-    for entity in ["patch", "brightness", "scene", "schedule", "scheduled", "panel"] {
+    for (retired, platform) in [("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")] {
+        assert_eq!(config["components"][retired], serde_json::json!({ "platform": platform }), "card 310 removes {retired}");
+    }
+    let options = config["components"]["picture"]["options"].as_array().expect("the picture list").clone();
+    assert!(options.contains(&"Flock".into()) && options.contains(&"Vesta".into()), "{options:?}");
+    for entity in ["patch", "brightness", "level", "picture", "panel"] {
         seen.until(&t(entity, "state"), "a state", |_| true).await;
     }
     assert_eq!(seen.get(&t("panel", "state")).as_deref(), Some("OFF"), "no panel in a test");
 
-    // Two modes, made on the page: the scene list follows, and so does the
-    // scene that matches what is playing.
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"flock"}"#).await.status, 200);
-    assert_eq!(post(at, "/api/v1/modes/save", r#"{"name":"Day"}"#).await.status, 200);
-    assert_eq!(post(at, "/api/v1/set_patch", r#"{"id":"vesta"}"#).await.status, 200);
-    assert_eq!(post(at, "/api/v1/modes/save", r#"{"name":"Night"}"#).await.status, 200);
-    seen.until_json(&config_topic, "the scenes in the list", |v| v["components"]["scene"]["options"] == serde_json::json!(["Day", "Night"])).await;
-    seen.until(&t("scene", "state"), "Night, which is playing", |p| p == "Night").await;
-
-    // HA picks a scene.
-    ha.publish(t("scene", "set"), QoS::AtLeastOnce, false, "Day").await.unwrap();
+    // HA picks a picture: a patch on Default is its bare name.
+    ha.publish(t("picture", "set"), QoS::AtLeastOnce, false, "Flock").await.unwrap();
     seen.until_json(&t("patch", "state"), "flock", |v| v["id"] == "flock").await;
-    seen.until(&t("scene", "state"), "Day", |p| p == "Day").await;
+    seen.until(&t("picture", "state"), "Flock", |p| p == "Flock").await;
+    // A setting saved on the page joins the list, and can be picked.
+    assert_eq!(post(at, "/api/v1/set_param", r#"{"id":"birds","value":40}"#).await.status, 200);
+    seen.until(&t("picture", "state"), "unknown once a slider moves", |p| p == "None").await;
+    assert_eq!(post(at, "/api/v1/settings/save", r#"{"name":"Busy"}"#).await.status, 200);
+    seen.until_json(&config_topic, "Flock · Busy in the list", |v| {
+        v["components"]["picture"]["options"].as_array().is_some_and(|o| o.contains(&"Flock · Busy".into()))
+    })
+    .await;
+    seen.until(&t("picture", "state"), "Flock · Busy", |p| p == "Flock · Busy").await;
+    ha.publish(t("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
+    seen.until_json(&t("patch", "state"), "vesta", |v| v["id"] == "vesta").await;
+    ha.publish(t("picture", "set"), QoS::AtLeastOnce, false, "Flock · Busy").await.unwrap();
+    seen.until_json(&t("patch", "state"), "flock on Busy", |v| v["id"] == "flock" && v["setting"] == "Busy").await;
     // ...and one that is not there changes nothing.
-    ha.publish(t("scene", "set"), QoS::AtLeastOnce, false, "Nope").await.unwrap();
+    ha.publish(t("picture", "set"), QoS::AtLeastOnce, false, "Nope").await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(seen.get(&t("patch", "state")).unwrap().contains(r#""id":"flock""#));
+    assert!(seen.get(&t("patch", "state")).unwrap().contains(r#""setting":"Busy""#));
 
     // Brightness, snapped to a real stop; off is dark; a bare on comes back.
     ha.publish(t("brightness", "set"), QoS::AtLeastOnce, false, r#"{"state":"ON","brightness":100}"#).await.unwrap();
     let lit = seen.until_json(&t("brightness", "state"), "lit", |v| v["state"] == "ON").await;
     let level = lit["brightness"].as_u64().unwrap();
     assert!((90..=110).contains(&level), "the nearest stop to 100, not {level}");
+    seen.until(&t("level", "state"), "the slider follows", |p| p == "40").await;
     ha.publish(t("brightness", "set"), QoS::AtLeastOnce, false, r#"{"state":"OFF"}"#).await.unwrap();
     seen.until_json(&t("brightness", "state"), "dark", |v| v["state"] == "OFF").await;
+    seen.until(&t("level", "state"), "the slider at 0", |p| p == "0").await;
     ha.publish(t("brightness", "set"), QoS::AtLeastOnce, false, r#"{"state":"ON"}"#).await.unwrap();
     seen.until_json(&t("brightness", "state"), "the same level again", |v| v["brightness"] == level).await;
-
-    // The schedule switch.
-    ha.publish(t("schedule", "set"), QoS::AtLeastOnce, false, "ON").await.unwrap();
-    seen.until(&t("schedule", "state"), "on", |p| p == "ON").await;
-    ha.publish(t("schedule", "set"), QoS::AtLeastOnce, false, "OFF").await.unwrap();
-    seen.until(&t("schedule", "state"), "off", |p| p == "OFF").await;
+    // The slider, in the panel's own 4 % steps.
+    ha.publish(t("level", "set"), QoS::AtLeastOnce, false, "8").await.unwrap();
+    seen.until(&t("level", "state"), "8 %", |p| p == "8").await;
+    seen.until_json(&t("brightness", "state"), "the light follows", |v| v["state"] == "ON" && v["brightness"] == 16).await;
 
     // HA restarts: its birth message brings the config back.
     seen.forget(&config_topic);
@@ -169,15 +180,28 @@ async fn home_assistant_sees_and_drives_the_studio() {
     let _ = tokio::time::timeout(Duration::from_secs(1), thief_loop.poll()).await;
     seen.until(&status, "online again", |p| p == "online").await;
     seen.until(&t("patch", "state"), "every state again", |_| true).await;
-    ha.publish(t("scene", "set"), QoS::AtLeastOnce, false, "Night").await.unwrap();
+    ha.publish(t("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
     seen.until_json(&t("patch", "state"), "vesta, after the reconnect", |v| v["id"] == "vesta").await;
 
-    // Stopping says offline.
-    studio.stop().await;
-    seen.until(&status, "offline on the way out", |p| p == "offline").await;
+    // Card 311: the Settings screen. What it is told never has the password;
+    // switching off says offline, and on again brings it all back.
+    let view = common::get(at, "/api/v1/home_assistant").await.json();
+    assert_eq!(view["status"]["state"], "connected", "{view}");
+    assert_eq!(view["password_set"], false);
+    assert!(view.get("password").is_none(), "{view}");
+    let off = post(at, "/api/v1/home_assistant/set", r#"{"enabled":false}"#).await.json();
+    assert_eq!(off["enabled"], false);
+    seen.until(&status, "offline when switched off", |p| p == "offline").await;
+    let on = post(at, "/api/v1/home_assistant/set", r#"{"enabled":true}"#).await.json();
+    assert_eq!(on["enabled"], true);
+    seen.until(&status, "online when switched on", |p| p == "online").await;
+    assert_eq!(post(at, "/api/v1/home_assistant/set", r#"{"enabled":true,"host":""}"#).await.status, 400, "on, but nowhere");
 
-    // And forgetting leaves nothing retained.
-    screeny_studio::ha::client::forget(&mqtt, Duration::from_secs(5)).await.unwrap();
+    // "Remove from Home Assistant": off, and nothing retained.
+    let gone = post(at, "/api/v1/home_assistant/forget", "{}").await;
+    assert_eq!(gone.status, 200, "{}", String::from_utf8_lossy(&gone.body));
+    assert_eq!(gone.json()["enabled"], false);
     seen.until(&config_topic, "the config removed", str::is_empty).await;
     seen.until(&status, "the status cleared", str::is_empty).await;
+    studio.stop().await;
 }

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings · Screeny Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="settings-page">
+  <!-- Card 301: one nav, the same markup on every screen, with the current
+       one marked. Card 311 gave the third place to Settings. -->
+  <nav class="nav" aria-label="Screeny Studio">
+    <a href="/">Picture</a>
+    <a href="/panel">Panel</a>
+    <a href="/settings" aria-current="page">Settings</a>
+  </nav>
+
+  <header class="titleblock">
+    <div class="titleblock__patch">
+      <h1>Settings</h1>
+    </div>
+    <!-- The same trouble indicator every screen carries, so a fault is never
+         hidden behind a tab - see common.js's `panelState` and `attention`. -->
+    <dl class="readouts" aria-label="Panel">
+      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="/panel">–</a></dd></div>
+    </dl>
+  </header>
+
+  <p class="notice sheet__notice" id="notice" role="status" hidden></p>
+
+  <main class="sheet">
+    <!-- Card 311: Home Assistant, by MQTT discovery. HA picks the picture and
+         sets the brightness; its own automations are the schedule. -->
+    <section id="sec-ha">
+      <h2>Home Assistant</h2>
+      <p class="hint">Home Assistant finds the studio through its MQTT integration and shows it as a
+        device: the picture (every patch and each of its saved settings), the panel’s brightness,
+        and what is playing. Schedules are Home Assistant automations.</p>
+      <label class="switch"><input type="checkbox" id="ha-on"><span>Connect to Home Assistant</span></label>
+      <p class="hint" id="ha-status">–</p>
+
+      <form id="ha-form">
+        <div class="row row--fill">
+          <label for="ha-host">Broker</label>
+          <input id="ha-host" type="text" spellcheck="false" autocomplete="off" placeholder="homeassistant.local">
+        </div>
+        <div class="row row--fill">
+          <label for="ha-port">Port</label>
+          <input id="ha-port" type="number" min="1" max="65535" step="1" placeholder="1883">
+        </div>
+        <div class="row row--fill">
+          <label for="ha-user">Username</label>
+          <input id="ha-user" type="text" spellcheck="false" autocomplete="off" placeholder="none">
+        </div>
+        <div class="row row--fill">
+          <label for="ha-pass">Password</label>
+          <input id="ha-pass" type="password" autocomplete="new-password">
+        </div>
+        <details class="setup" id="ha-more">
+          <summary>More</summary>
+          <div class="setup__body">
+            <div class="row row--fill">
+              <label for="ha-name">Device name</label>
+              <input id="ha-name" type="text" spellcheck="false" autocomplete="off" placeholder="Screeny">
+            </div>
+            <div class="row row--fill">
+              <label for="ha-id">Id</label>
+              <input id="ha-id" type="text" spellcheck="false" autocomplete="off" placeholder="studio">
+            </div>
+            <div class="row row--fill">
+              <label for="ha-prefix">Discovery prefix</label>
+              <input id="ha-prefix" type="text" spellcheck="false" autocomplete="off" placeholder="homeassistant">
+            </div>
+            <p class="hint">The id is part of every topic and entity; changing it makes a new device in
+              Home Assistant, so remove this one first. The prefix is Home Assistant’s own unless it
+              was told otherwise.</p>
+            <dl class="facts" id="ha-facts"></dl>
+          </div>
+        </details>
+        <div class="row row--actions">
+          <button type="submit" id="ha-save">Save</button>
+        </div>
+      </form>
+
+      <div class="row row--actions">
+        <button type="button" id="ha-forget" class="danger">Remove from Home Assistant</button>
+      </div>
+      <p class="hint">Removes the device and its entities from Home Assistant and switches this off.
+        Switching it back on brings them back.</p>
+    </section>
+  </main>
+
+  <script type="module" src="/settings.js"></script>
+</body>
+</html>

@@ -78,10 +78,11 @@ Properties that matter:
   patch, a slider or a setting in the browser changes the panel. There is no separate
   preview stream with its own state, and no "promote to the panel" step (card 170 removed
   the one card 106 built, and folded the separate `/dashboard` into one page). Cards 198
-  and 301 then split that one page into **three screens** - Picture, Panel and Schedule -
-  tied together by one nav, because "the picture", "the panel's own affairs" and "when
-  each patch plays" are three different kinds of work and reload-safe URLs beat tabs in
-  one document. The data model stays a collection (decision 3 below); the UI assumes one.
+  and 301 then split that one page into **three screens** - Picture, Panel and (since
+  card 311) Settings - tied together by one nav, because "the picture", "the panel's own
+  affairs" and "the studio's own setup" are three different kinds of work and reload-safe
+  URLs beat tabs in one document. The data model stays a collection (decision 3 below);
+  the UI assumes one.
 
 ## Built to be forgotten
 
@@ -104,53 +105,37 @@ That is a design requirement, not an afterthought:
 - Wall-clock patches (the clocks) need correct time and time zone in the container
   (`TZ`, host clock via NTP).
 - ~~Quiet hours / brightness schedule belong here eventually (a panel that runs for
-  months lives in a room at night).~~ Superseded by **modes and a daily schedule**
-  (card 302, 2026-09-26): see [Modes and the schedule](#modes-and-the-schedule-card-302).
+  months lives in a room at night).~~ Superseded first by **modes and a daily schedule**
+  (card 302, 2026-09-26), then by Home Assistant taking that over entirely (card 310):
+  see [Time of day is Home Assistant's](#time-of-day-is-home-assistants-cards-302-308-311).
 
-## Modes and the schedule (card 302)
+## Time of day is Home Assistant's (cards 302, 308-311)
 
-The owner, 2026-09-26: *"add scheduling to the studio - i'd like, for example, to be able
-to go into night mode where it's a different patch at the lowest possible visible
-brightness, then restore in the morning."* This replaces the quiet-hours line above and
-folds in two parked cards: 179 (day and night modes, switched from the smart home) and 104
-(a runner that rotates and schedules pieces, which he did not want then and still is not
-this: there is no playlist and no rotation).
+Card 302 (2026-09-26) built modes and a daily timetable inside the studio: the owner,
+that day, *"add scheduling to the studio - i'd like, for example, to be able to go into
+night mode where it's a different patch at the lowest possible visible brightness, then
+restore in the morning."* Card 309 took brightness back out of a mode the same evening
+(*"let's make controlling the brightness a separate concern from what's on the
+screen"*) so a smart home dimming the panel would not fight the schedule. Card 308 then
+put the studio on Home Assistant over MQTT discovery, with a mode standing in for an HA
+scene.
 
-Decisions, his:
+Card 310 retired modes and the timetable outright: the owner, *"move all schedule
+related thinking to home assistant - let's remove it from screeny studio,"* and then,
+simplifying further, *"get rid of modes all together and just expose patches & settings
+combinations ... that might just be simpler to think about everywhere."* The studio
+keeps its named settings (card 151) - a patch on a named setting is what a mode used to
+be - and exposes every patch and named setting as one `select.screeny_picture` in Home
+Assistant; a schedule is now an HA automation that sets that select at the times the
+owner wants, and brightness is HA's `number.screeny_brightness` or `light.screeny`, following
+a room's light sensor if he likes. Card 311 then moved the Home Assistant setup itself
+off the environment and onto a Settings screen in the studio (the third screen, in the
+place the timetable's Schedule screen had), so there is one place - the page - to point
+the studio at a broker.
 
-- **A mode is `{patch, named setting}`**, and nothing else. Day and night are the two he
-  named; `vesta` is the obvious night patch. A mode may name a setting of its patch,
-  `Default`, or none - the working copy, as it was last left. (Card 302 built it as card
-  179's `{patch, named setting, panel brightness}`; card 309 took brightness out the same
-  evening - see below.)
-- **Brightness is a separate concern from what is on the screen** (the owner, 2026-09-26
-  evening: *"let's make controlling the brightness a separate concern from what's on the
-  screen"*; card 309). His smart home owns the panel's light level from room light sensors
-  and picks modes as scenes; a mode that also set brightness would fight that automation
-  and read "Overridden" every time the house dimmed the panel. So a mode neither sets,
-  captures nor compares brightness: night's "lowest visible brightness" is set on the
-  Panel screen or by the smart home (`/device/brightness`), not by the mode. The lowest
-  nonzero stop is still what "dimmest visible" means there (card 187).
-- **A daily timetable**: `HH:MM -> mode`, every day, in the container's local time (`TZ`).
-  The entry due now is the latest at or before now, wrapping to yesterday's last.
-- **Overrides: "hold until the next timetable entry."** A change made by hand while a mode
-  is on - a patch, a slider, another mode - stays until the next entry
-  comes due, then the schedule resumes. The scheduler therefore never compares what is
-  playing with what the mode says: it applies an entry once (the run record, time + local
-  date, is persisted so this holds across a restart) and leaves the panel alone until the
-  next. "Back to schedule" applies the due entry at once.
-- **The smart home calls `POST /api/v1/mode/apply {name}`.** Card 179's virtual Matter
-  switch stays parked; a plain HTTP call is the agreed first step.
-- **Speed and pause are retired** the same morning: every patch plays at 1.00x and nothing
-  pauses. The state file keeps the fields' places for an older build; every load puts them
-  back.
-- A scheduled change fades over 5 s, a hand change over the usual 2 s (card 304's
-  cross-fade).
-
-How it is built - state v6 (`modes`, `schedule`, `schedule_run`), `overridden` and `until`
-computed on every read and never stored, the routes and the DST rules - is in
-[`crates/studio/README.md`](../../crates/studio/README.md#modes-and-the-schedule-card-302).
-The page is card 303.
+How it is built - state v7 (`home_assistant`, `modes`/`schedule`/`schedule_run` dropped
+and said once), the entities, the topics and the Settings screen's routes - is in
+[`crates/studio/README.md`](../../crates/studio/README.md#home-assistant-cards-308-310-311).
 
 ## Deployment target: `studio-host.local` (surveyed 2026-09-19)
 

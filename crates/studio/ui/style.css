@@ -3,9 +3,11 @@
    read as the darkest thing in the window, and nothing here may tint how the
    art's colour is judged. The one loud object is the device itself.
 
-   **Three screens since card 301** (two since card 198), in one visual
-   language: the Picture (`/`), the Panel (`/panel`) and the Schedule
-   (`/schedule`), tied together by one nav at the top of every one of them.
+   **Three screens** (two since card 198; card 301's third, the Schedule,
+   went with the timetable in card 310 and card 311 put Settings in its
+   place), in one visual language: the Picture (`/`), the Panel (`/panel`)
+   and the Settings (`/settings`), tied together by one nav at the top of
+   every one of them.
    Everything above "the nav" is shared; what follows it is each screen's own
    layout.
 
@@ -19,7 +21,7 @@
    float, so a short section on one side does not leave a gap under it to
    match a long one on the other (card 303, twice - a grid's row tracks and a
    float's top constraint each turned out to reach across both columns). The
-   Schedule screen (card 303) is three short sections, read top to bottom, and
+   Settings screen is a short column of sections, read top to bottom, and
    never needs either layout. */
 
 :root {
@@ -115,9 +117,9 @@ output, dd, input[type="number"], .unit { font-family: var(--data); font-variant
   gap: 14px 32px;
   /* Card 307: bottom padding to match the top, not 0 - the Picture screen
      got away with 0 because `.stage` follows it with its own gutter padding,
-     but the Panel and Schedule screens put a ruled box (`.sheet`, whose
+     but the Panel and Settings screens put a ruled box (`.sheet`, whose
      border-top is the very next thing) right underneath, so the readouts
-     row's own bottom edge - the State pill on Panel, the chip on Schedule -
+     row's own bottom edge - the State pill on Panel, the chip on Settings -
      used to sit right on that rule with nothing under it. */
   padding: 20px var(--gutter);
 }
@@ -265,20 +267,17 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   border-top: 1px solid var(--rule);
 }
 
-/* Card 303: the Schedule screen is three short sections, read top to bottom -
-   what is due now, the timetable, the modes it plays - and never earns the
-   Panel screen's two-column bench (below); a readable measure keeps a line
-   from stretching edge to edge on a wide window. */
-body.schedule-page .sheet { max-width: 640px; }
-/* Card 307: the title block held no width of its own, so on a wide window
-   `justify-content: space-between` put the chip at the far edge of the
-   viewport while `.sheet` above stopped at 640 px - the chip stranded in
-   empty space, floating well past where the content beneath it ends. Held to
-   the same measure as `.sheet`, the way the Panel screen's title block is
-   held to its own two columns' width (below), so the chip sits over the
-   content it belongs to instead of adrift beside it. */
-body.schedule-page .titleblock { max-width: 640px; }
-#sec-due > * + *, #sec-timetable > * + *, #sec-modes > * + * { margin-top: 12px; }
+/* Card 311: the Settings screen is a short column, held to a readable
+   measure the way card 303/307 held the Schedule screen - title block and
+   sheet both, so the chip sits over the content rather than adrift at the
+   far edge of a wide window. */
+body.settings-page .sheet { max-width: 640px; }
+body.settings-page .titleblock { max-width: 640px; }
+#sec-ha > * + * { margin-top: 12px; }
+#ha-form { display: grid; gap: 8px; }
+/* One label width for the whole form, the widest label's ("Discovery
+   prefix"), so every box starts at the same place. */
+#ha-form .row label { width: 124px; }
 
 .inspector section, .sheet section { padding: 18px var(--gutter) 20px; border-bottom: 1px solid var(--rule); }
 .inspector section > h2, .sheet section > h2, .section-head { margin-bottom: 14px; }
@@ -342,7 +341,7 @@ body.schedule-page .titleblock { max-width: 640px; }
 .unit { color: var(--dim); font-size: 12px; }
 .hint { color: var(--dim); font-size: 12px; }
 
-button, input[type="number"], input[type="text"] {
+button, input[type="number"], input[type="text"], input[type="password"] {
   height: 30px;
   padding: 0 12px;
   border: 1px solid var(--rule);
@@ -351,7 +350,7 @@ button, input[type="number"], input[type="text"] {
   color: var(--paper);
   font: 500 12.5px/1 var(--body);
 }
-input[type="number"], input[type="text"] { padding: 0 8px; font: 13px/1 var(--data); user-select: text; }
+input[type="number"], input[type="text"], input[type="password"] { padding: 0 8px; font: 13px/1 var(--data); user-select: text; }
 button { flex: 1; cursor: pointer; }
 button:hover { border-color: var(--dim); }
 button:active { background: var(--rule); }
@@ -543,52 +542,6 @@ select:hover { border-color: var(--dim); }
 .found__where { color: var(--dim); font-family: var(--data); font-size: 11.5px; overflow-wrap: anywhere; }
 .found__one button { flex: none; }
 
-/* Card 303: the Schedule screen's timetable - one row per entry, the same
-   quiet card `.found__one` uses for a discovered panel. A time input is a
-   fixed width so a run of them lines up; the mode name takes what is left. */
-.timetable { display: grid; gap: 6px; }
-.timetable__row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  background: var(--bench);
-}
-.timetable__row input[type="time"] { flex: none; width: 104px; }
-.timetable__row select { flex: 1; min-width: 0; }
-.timetable__row button { flex: none; }
-/* Three controls on one line is tight on a phone; wrapping beats a
-   horizontal scrollbar. */
-#entry-add-row { flex-wrap: wrap; }
-#entry-add-row input[type="time"] { flex: none; width: 104px; }
-#entry-add-row select { flex: 1 1 140px; min-width: 0; }
-#entry-add-row button { flex: none; }
-
-/* The "Save what's playing as" form: the same recipe `.setting__name` uses
-   for naming a setting - a label, an input that grows, a button that does
-   not, wrapping on a narrow phone rather than overflowing it. */
-#mode-save-form { flex-wrap: wrap; }
-#mode-save-form input { flex: 1 1 140px; min-width: 0; }
-#mode-save-form button { flex: none; }
-
-/* Card 303: the modes list - a name, what it plays in one quiet line (the
-   same voice as `wifiLine`/the found-panel rows), and its three actions,
-   sized like `.setting__actions`' small row of buttons. */
-.modes { display: grid; gap: 8px; }
-.mode { padding: 10px 12px; border: 1px solid var(--rule); border-radius: 3px; background: var(--bench); }
-.mode__head { display: flex; align-items: center; }
-.mode__name {
-  color: var(--paper);
-  font: 400 15px/1.2 var(--label);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.mode__detail { margin-top: 4px; color: var(--dim); font-size: 12px; }
-.mode__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.mode__actions button { flex: 1 1 auto; min-width: 72px; height: 26px; padding: 0 8px; font-size: 12px; }
-
 /* Card 301: View is how *this browser* draws the panel, not a panel setting -
    its effect is only visible beside the canvas, and nothing here reaches the
    panel. Folded shut by default, under the canvas rather than beside the
@@ -650,7 +603,7 @@ select:hover { border-color: var(--dim); }
      settings), what it and the studio have to say about themselves on the
      right. The columns are held to a readable measure rather than stretched
      across a bench - a `dd` two feet wide is not a fact anybody reads.
-     Scoped to the Panel screen: the Schedule screen shares `.sheet`'s surface
+     Scoped to the Panel screen: the Settings screen shares `.sheet`'s surface
      but has none of these four sections, and one short block should not be
      squeezed into a 420 px column meant for four.
 

@@ -16,6 +16,20 @@
       "transition": false,
       "unique_id": "screeny_studio_brightness"
     },
+    "level": {
+      "availability_topic": "screeny/studio/status",
+      "command_topic": "screeny/studio/level/set",
+      "icon": "mdi:brightness-6",
+      "max": 100.0,
+      "min": 0.0,
+      "mode": "slider",
+      "name": "Brightness",
+      "platform": "number",
+      "state_topic": "screeny/studio/level/state",
+      "step": 4.0,
+      "unique_id": "screeny_studio_level",
+      "unit_of_measurement": "%"
+    },
     "panel": {
       "availability_topic": "screeny/studio/status",
       "device_class": "connectivity",
@@ -35,45 +49,32 @@
       "unique_id": "screeny_studio_patch",
       "value_template": "{{ value_json.name }}"
     },
-    "resume": {
+    "picture": {
       "availability_topic": "screeny/studio/status",
-      "command_topic": "screeny/studio/resume/set",
-      "icon": "mdi:calendar-refresh",
-      "name": "Back to schedule",
-      "platform": "button",
-      "unique_id": "screeny_studio_resume"
-    },
-    "scene": {
-      "availability_topic": "screeny/studio/status",
-      "command_topic": "screeny/studio/scene/set",
+      "command_topic": "screeny/studio/picture/set",
       "icon": "mdi:palette",
-      "name": "Scene",
+      "name": "Picture",
       "options": [
-        "Day",
-        "Night"
+        "Overland",
+        "Overland · Dusk",
+        "Vesta",
+        "Vesta · Wall Clock"
       ],
       "platform": "select",
-      "state_topic": "screeny/studio/scene/state",
-      "unique_id": "screeny_studio_scene"
+      "state_topic": "screeny/studio/picture/state",
+      "unique_id": "screeny_studio_picture"
+    },
+    "resume": {
+      "platform": "button"
+    },
+    "scene": {
+      "platform": "select"
     },
     "schedule": {
-      "availability_topic": "screeny/studio/status",
-      "command_topic": "screeny/studio/schedule/set",
-      "icon": "mdi:calendar-clock",
-      "name": "Schedule",
-      "platform": "switch",
-      "state_topic": "screeny/studio/schedule/state",
-      "unique_id": "screeny_studio_schedule"
+      "platform": "switch"
     },
     "scheduled": {
-      "availability_topic": "screeny/studio/status",
-      "icon": "mdi:calendar-star",
-      "json_attributes_topic": "screeny/studio/scheduled/state",
-      "name": "Scheduled scene",
-      "platform": "sensor",
-      "state_topic": "screeny/studio/scheduled/state",
-      "unique_id": "screeny_studio_scheduled",
-      "value_template": "{{ value_json.scene }}"
+      "platform": "sensor"
     }
   },
   "device": {

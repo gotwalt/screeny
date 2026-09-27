@@ -299,8 +299,8 @@ pub struct StudioState {
 pub struct Bootstrap {
     pub patches: Vec<PatchInfo>,
     pub payload_bytes: u32,
-    /// The player's state with card 302's modes and schedule beside it, flat.
-    pub state: crate::schedule::PageState,
+    /// The player's state.
+    pub state: StudioState,
     /// Card 145: whether this process has a graphics adapter, so the page can
     /// say why the GPU patches are not available instead of showing black.
     pub gpu: screeny_art::GpuStatus,

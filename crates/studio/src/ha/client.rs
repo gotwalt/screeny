@@ -23,7 +23,7 @@
 use super::discovery;
 use super::payload::{self, Message};
 use super::topics::Topics;
-use super::{Command, MqttConfig, Snapshot};
+use super::{Command, Ha, MqttConfig, Snapshot, Status};
 use rumqttc::{AsyncClient, ConnectionError, Event, EventLoop, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,10 +69,49 @@ impl Handle {
 }
 
 /// Start talking to the broker. `snapshots` is what to show, `commands` is
-/// where HA's requests go, and `stop` ends it.
+/// where HA's requests go, `status` is told how it is going, and `stop` ends
+/// it.
 #[must_use]
-pub fn spawn(cfg: MqttConfig, snapshots: watch::Receiver<Snapshot>, commands: mpsc::Sender<Command>, stop: watch::Receiver<bool>) -> Handle {
-    Handle { task: tokio::spawn(run(cfg, snapshots, commands, stop)) }
+pub fn spawn(
+    cfg: MqttConfig,
+    snapshots: watch::Receiver<Snapshot>,
+    commands: mpsc::Sender<Command>,
+    status: watch::Sender<Status>,
+    stop: watch::Receiver<bool>,
+) -> Handle {
+    Handle { task: tokio::spawn(run(cfg, snapshots, commands, status, stop)) }
+}
+
+/// Card 311: keep the connection [`Ha`] asks for - none, or one - and start
+/// it again whenever the settings change it. Runs until the studio stops;
+/// the returned handle finishes when the last client has said goodbye.
+#[must_use]
+pub fn supervise(ha: std::sync::Arc<Ha>, snapshots: watch::Receiver<Snapshot>, commands: mpsc::Sender<Command>, mut stop: watch::Receiver<bool>) -> Handle {
+    let task = tokio::spawn(async move {
+        let mut want = ha.want.subscribe();
+        loop {
+            let cfg = want.borrow_and_update().clone();
+            let (quit_client, client_stop) = watch::channel(false);
+            let client = cfg.map(|cfg| {
+                eprintln!("studio: home assistant: mqtt://{}:{} as `{}` (discovery prefix `{}`)", cfg.host, cfg.port, cfg.instance, cfg.discovery_prefix);
+                ha.status.send_replace(Status::Connecting);
+                spawn(cfg, snapshots.clone(), commands.clone(), ha.status.clone(), client_stop)
+            });
+            let done = tokio::select! {
+                changed = want.changed() => changed.is_err(),
+                () = async { drop(stop.wait_for(|s| *s).await) } => true,
+            };
+            let _ = quit_client.send(true);
+            if let Some(client) = client {
+                client.finish(GOODBYE).await;
+            }
+            ha.status.send_replace(Status::Off);
+            if done {
+                return;
+            }
+        }
+    });
+    Handle { task }
 }
 
 /// `will`: leave the retained `offline` as the Last Will. Everything but
@@ -99,13 +138,19 @@ struct Link {
     connects: u64,
 }
 
-async fn run(cfg: MqttConfig, mut snapshots: watch::Receiver<Snapshot>, commands: mpsc::Sender<Command>, mut stop: watch::Receiver<bool>) {
+async fn run(
+    cfg: MqttConfig,
+    mut snapshots: watch::Receiver<Snapshot>,
+    commands: mpsc::Sender<Command>,
+    status: watch::Sender<Status>,
+    mut stop: watch::Receiver<bool>,
+) {
     let topics = Topics::new(&cfg);
     let (client, eventloop) = AsyncClient::new(options(&cfg, &topics, true), REQUESTS);
     let (link_tx, mut link) = watch::channel(Link::default());
     let (incoming_tx, mut incoming) = mpsc::channel(INCOMING);
     let closing = Arc::new(AtomicBool::new(false));
-    let mut poller = tokio::spawn(poll(eventloop, cfg.clone(), link_tx, incoming_tx, Arc::clone(&closing)));
+    let mut poller = tokio::spawn(poll(eventloop, cfg.clone(), link_tx, incoming_tx, status, Arc::clone(&closing)));
     let mut session = Session::new(cfg, topics, client);
     let mut seen = 0;
     loop {
@@ -156,6 +201,7 @@ async fn poll(
     cfg: MqttConfig,
     link: watch::Sender<Link>,
     incoming: mpsc::Sender<(String, Vec<u8>)>,
+    status: watch::Sender<Status>,
     closing: Arc<AtomicBool>,
 ) {
     let mut retry = FIRST_RETRY;
@@ -172,6 +218,7 @@ async fn poll(
                     l.up = true;
                     l.connects += 1;
                 });
+                status.send_replace(Status::Connected);
             }
             Ok(Event::Incoming(Packet::Publish(p))) => {
                 if incoming.try_send((p.topic, p.payload.to_vec())).is_err() {
@@ -186,6 +233,7 @@ async fn poll(
                     return;
                 }
                 let why = describe(&e);
+                status.send_replace(Status::Failed { detail: why.clone() });
                 if last_error.as_deref() != Some(why.as_str()) {
                     eprintln!("studio: home assistant: mqtt://{}:{}: {why}; retrying, backing off to {}s", cfg.host, cfg.port, LAST_RETRY.as_secs());
                     last_error = Some(why);
@@ -201,7 +249,7 @@ async fn poll(
 /// retry.
 fn describe(e: &ConnectionError) -> String {
     match e {
-        ConnectionError::ConnectionRefused(code) => format!("the broker refused the connection ({code:?}); check SCREENY_MQTT_USER and the password"),
+        ConnectionError::ConnectionRefused(code) => format!("the broker refused the connection ({code:?}); check the username and password"),
         other => other.to_string(),
     }
 }
@@ -253,6 +301,11 @@ impl Session {
                 eprintln!("studio: home assistant: subscribing to {topic}: {e}");
             }
         }
+        // Card 310: an empty retained payload deletes a retained message, so
+        // the timetable's old states do not outlive it on the broker.
+        for topic in self.topics.retired_state_topics() {
+            let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+        }
         self.announce(snap);
     }
 
@@ -270,7 +323,7 @@ impl Session {
         if !self.up {
             return;
         }
-        let config = serde_json::to_string(&discovery::build(&self.cfg, &self.topics, snap)).unwrap_or_default();
+        let config = discovery::payload(&self.cfg, &self.topics, snap).to_string();
         // The config before anything that refers to it, and `online` before
         // the states, so HA never sees an entity's state without the entity.
         let mut out = vec![
@@ -318,8 +371,9 @@ impl Session {
 
 /// Take this studio out of HA: connect, publish an empty retained payload on
 /// the discovery topic and on every retained topic of ours, and go. HA drops
-/// the entities and the device. For decommissioning, or before changing
-/// `SCREENY_MQTT_ID`.
+/// the entities and the device. The Settings screen's "Remove from Home
+/// Assistant", which switches the integration off first - this connects as
+/// the same client, and two of those would take turns throwing each other off.
 ///
 /// # Errors
 ///
@@ -338,6 +392,7 @@ pub async fn forget(cfg: &MqttConfig, within: Duration) -> Result<(), String> {
         let (discovery_topic, empty) = discovery::remove_device(&topics);
         let mut clear = vec![discovery_topic, topics.status.clone()];
         clear.extend(payload::state_messages(&topics, &Snapshot::default()).into_iter().map(|m| m.topic));
+        clear.extend(topics.retired_state_topics());
         for topic in clear {
             client.publish(topic, QoS::AtLeastOnce, true, empty.clone()).await.map_err(|e| e.to_string())?;
         }

@@ -1,6 +1,5 @@
 screeny/studio/patch/state {"id":"overland","name":"Overland","setting":"Dusk","modified":false}
 screeny/studio/brightness/state {"state":"ON","brightness":96,"color_mode":"brightness"}
-screeny/studio/scene/state Day
-screeny/studio/schedule/state ON
-screeny/studio/scheduled/state {"scene":"Day","until":"22:00","overridden":false,"note":null}
+screeny/studio/level/state 36
+screeny/studio/picture/state Overland · Dusk
 screeny/studio/panel/state ON

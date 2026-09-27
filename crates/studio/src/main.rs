@@ -28,21 +28,16 @@ screeny-studio - play generative patches on the panels, and design them in a bro
                      at a simulator, which cannot bind 80 without root
     --no-device-http do not read a panel's own status API at all; show what UDP
                      telemetry says and nothing more
-    --mqtt-forget    take this studio out of Home Assistant - an empty retained
-                     payload on its discovery and state topics - and exit
     -h, --help       this
 
-    Home Assistant (MQTT discovery) is on when SCREENY_MQTT_HOST is set; see
-    SCREENY_MQTT_* in crates/studio/README.md.
+    Home Assistant (MQTT discovery) is set up on the Settings screen.
 
     SCREENY_STUDIO_FAULTS=1 also offers two patches that misbehave on purpose
     (fault-panic, fault-stall), for watching the containment work.
 ";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let forget = args.iter().any(|a| a == "--mqtt-forget");
-    let cfg = match parse(args.into_iter().filter(|a| a != "--mqtt-forget"), &from_env) {
+    let cfg = match parse(std::env::args().skip(1), &from_env) {
         Ok(Some(cfg)) => cfg,
         Ok(None) => {
             print!("{USAGE}");
@@ -61,10 +56,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-
-    if forget {
-        return runtime.block_on(forget_mqtt(cfg.mqtt.as_ref()));
-    }
 
     runtime.block_on(async move {
         let studio = match Studio::bind(cfg.clone()).await {
@@ -120,24 +111,6 @@ fn main() -> ExitCode {
     })
 }
 
-/// `--mqtt-forget`.
-async fn forget_mqtt(cfg: Option<&screeny_studio::ha::MqttConfig>) -> ExitCode {
-    let Some(cfg) = cfg else {
-        eprintln!("screeny-studio: --mqtt-forget: SCREENY_MQTT_HOST is not set, so there is no broker to forget this studio on");
-        return ExitCode::FAILURE;
-    };
-    match screeny_studio::ha::client::forget(cfg, std::time::Duration::from_secs(10)).await {
-        Ok(()) => {
-            println!("studio: `{}` is gone from Home Assistant (mqtt://{}:{})", cfg.instance, cfg.host, cfg.port);
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("screeny-studio: --mqtt-forget: {e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 /// `0.0.0.0:8787` is not a thing to click on; say where to go instead.
 fn shown(addr: SocketAddr) -> String {
     if addr.ip().is_unspecified() {
@@ -163,7 +136,6 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
     }
     cfg.state_dir = Some(PathBuf::from(env("SCREENY_STATE_DIR").unwrap_or_else(|| DEFAULT_STATE_DIR.to_string())));
     cfg.fault_patches = env("SCREENY_STUDIO_FAULTS").as_deref() == Some("1");
-    cfg.mqtt = screeny_studio::ha::MqttConfig::from_env(env)?;
     // Card 180: said here rather than inherited, because it is the one number
     // in this program a real panel can be hurt by. `MIN_DEVICE_HTTP_EVERY`
     // says why ten seconds; there is deliberately no flag to go faster.
@@ -296,15 +268,6 @@ mod tests {
         assert!(!parse_env(&[], &[]).unwrap().unwrap().fault_patches);
         assert!(!parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "0")]).unwrap().unwrap().fault_patches);
         assert!(parse_env(&[], &[("SCREENY_STUDIO_FAULTS", "1")]).unwrap().unwrap().fault_patches);
-    }
-
-    /// Card 308: no broker unless one is named.
-    #[test]
-    fn mqtt_is_off_unless_a_host_is_set() {
-        assert!(parse_env(&[], &[]).unwrap().unwrap().mqtt.is_none());
-        let cfg = parse_env(&[], &[("SCREENY_MQTT_HOST", "broker.example")]).unwrap().unwrap();
-        assert_eq!(cfg.mqtt.map(|m| m.host).as_deref(), Some("broker.example"));
-        assert!(parse_env(&[], &[("SCREENY_MQTT_HOST", "b"), ("SCREENY_MQTT_PORT", "x")]).is_err());
     }
 
     #[test]

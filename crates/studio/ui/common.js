@@ -1,12 +1,13 @@
 // What all of the Studio's screens are made of.
 //
-// There are three screens since card 301 - the **Picture** (`/`), the
-// **Panel** (`/panel`) and the **Schedule** (`/schedule`) - and one server
-// behind them. What they share is everything that is not layout: the socket,
-// the poll, the formatting, the small control bindings, and the one judgement
-// of what the panel is doing. Each screen's own file (`picture.js`,
-// `panel.js`, `schedule.js`) imports from here and touches only the elements
-// its own page has.
+// There are three screens - the **Picture** (`/`), the **Panel** (`/panel`)
+// and the **Settings** (`/settings`, card 311, in the place card 303's
+// Schedule had until card 310 retired it) - and one server behind them. What
+// they share is everything that is not layout: the socket, the poll, the
+// formatting, the small control bindings, and the one judgement of what the
+// panel is doing. Each screen's own file (`picture.js`, `panel.js`,
+// `settings.js`) imports from here and touches only the elements its own page
+// has.
 //
 // Plain ES modules, loaded by the browser. There is still no Node toolchain,
 // no bundler and no build step: `src/ui.rs` lists the files and the browser
@@ -161,7 +162,7 @@ export function makeAttempt(after) {
 export const CLIENT = crypto.randomUUID?.() ?? `c${Math.random().toString(36).slice(2)}`;
 
 // Reads; everything else is a POST carrying its arguments as JSON.
-const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices']);
+const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices', 'home_assistant']);
 
 export async function invoke(cmd, args) {
   const init = GETS.has(cmd) ? {} : {
@@ -187,9 +188,9 @@ export async function invoke(cmd, args) {
 // is slow, or whose owner has asked for less data, takes the lower rate - the
 // picture is 64x32 and stays perfectly legible at ten frames a second.
 //
-// **The Panel and Schedule screens ask for none at all** (card 198, 301), for
-// the same reason a hidden tab does: neither draws a canvas, so every frame
-// sent to either would be received and thrown away. They still get the state
+// **The Panel and Settings screens ask for none at all** (card 198, 301,
+// 311), for the same reason a hidden tab does: neither draws a canvas, so
+// every frame sent to either would be received and thrown away. They still get the state
 // and the heartbeat, which is what they are made of.
 const PREVIEW_FPS = 30;
 const PREVIEW_FPS_SLOW = 10;
@@ -333,21 +334,21 @@ export function attention(device) {
   return '';
 }
 
-/** The status chip in the title block (Picture and Schedule, card 198/303):
+/** The status chip in the title block (card 198/303):
  *  the panel's name, what it is doing, and - where a rate means something -
  *  how fast it is being sent. One function rather than two, since card 307:
- *  the Picture and Schedule screens used to keep their own copies, and the
- *  Schedule one had drifted to leave "what it is doing" out entirely, so its
- *  chip read a bare device name with nothing beside it while the Picture
- *  screen's said "live · 30 fps".
+ *  the Picture and (card 303's) Schedule screens used to keep their own
+ *  copies, and the Schedule one had drifted to leave "what it is doing" out
+ *  entirely, so its chip read a bare device name with nothing beside it
+ *  while the Picture screen's said "live · 30 fps".
  *
  *  Takes the chip element itself, per this file's own rule of reaching for
  *  nothing else by id - `#ro-panel` is not on the Panel screen, which has no
  *  need of a chip pointing at itself.
  *
  *  `rate` is the fps to show while live, or `null`/`undefined` where there is
- *  none worth showing - the Schedule screen has no canvas and so no rate
- *  (card 198, 301); the Picture screen passes the heartbeat's `link.fps`. */
+ *  none worth showing - a screen with no canvas has no rate (card 198,
+ *  301); the Picture screen passes the heartbeat's `link.fps`. */
 export function showChip(chip, { attachedId, device, on, link, rate }) {
   const here = panelState({ attached: Boolean(attachedId), device, on, link });
   const name = device ? device.label : attachedId;

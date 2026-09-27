@@ -14,13 +14,15 @@
 //!
 //! Card 170 folded the dashboard into the one page; card 198 split that page
 //! into two **screens** - the Picture at `/` and the Panel at `/panel` - and
-//! card 301 added a third, the Schedule at `/schedule`, tied to the other two
-//! by one nav. `/dashboard` still has to work as a bookmark.
+//! card 301 added a third, tied to the other two by one nav: the Schedule at
+//! `/schedule` until card 310 retired the timetable, and since card 311 the
+//! Settings at `/settings`. `/dashboard` and `/schedule` still have to work as
+//! bookmarks.
 //!
 //! So the wiring check is now per screen: every element `picture.js` reaches
 //! for is in `index.html`, every element `panel.js` reaches for is in
-//! `panel.html`, every element `schedule.js` reaches for is in
-//! `schedule.html`, and every element `common.js` reaches for is in **all
+//! `panel.html`, every element `settings.js` reaches for is in
+//! `settings.html`, and every element `common.js` reaches for is in **all
 //! three** - which is the rule that keeps the shared file shared.
 
 mod common;
@@ -31,17 +33,17 @@ use std::process::Command;
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 const PANEL_HTML: &str = include_str!("../ui/panel.html");
-const SCHEDULE_HTML: &str = include_str!("../ui/schedule.html");
+const SETTINGS_HTML: &str = include_str!("../ui/settings.html");
 const COMMON_JS: &str = include_str!("../ui/common.js");
 const PICTURE_JS: &str = include_str!("../ui/picture.js");
 const PANEL_JS: &str = include_str!("../ui/panel.js");
-const SCHEDULE_JS: &str = include_str!("../ui/schedule.js");
+const SETTINGS_JS: &str = include_str!("../ui/settings.js");
 const STYLE_CSS: &str = include_str!("../ui/style.css");
 
 /// The whole front end, for the claims that are about it rather than about one
 /// screen.
 fn all_js() -> String {
-    format!("{COMMON_JS}\n{PICTURE_JS}\n{PANEL_JS}\n{SCHEDULE_JS}")
+    format!("{COMMON_JS}\n{PICTURE_JS}\n{PANEL_JS}\n{SETTINGS_JS}")
 }
 
 /// Every `$('#id')` and `$('.class', ...)` in the script.
@@ -88,8 +90,8 @@ async fn all_three_screens_are_served_and_so_are_their_files() {
     // (The content types are `ui::content_type`'s and are checked over real
     // HTTP in the card's Log; the test client keeps only the body.)
     for path in [
-        "/", "/index.html", "/panel", "/panel/", "/panel.html", "/schedule", "/schedule/", "/schedule.html",
-        "/common.js", "/picture.js", "/panel.js", "/schedule.js", "/style.css",
+        "/", "/index.html", "/panel", "/panel/", "/panel.html", "/settings", "/settings/", "/settings.html",
+        "/common.js", "/picture.js", "/panel.js", "/settings.js", "/style.css",
     ] {
         let r = get(at, path).await;
         assert_eq!(r.status, 200, "{path}");
@@ -97,22 +99,22 @@ async fn all_three_screens_are_served_and_so_are_their_files() {
     }
 
     // `/panel` is a screen and `/panel.js` is a file: the tidy URL must not
-    // swallow the script that happens to share its name. Same for `/schedule`.
+    // swallow the script that happens to share its name. Same for `/settings`.
     let screen = String::from_utf8_lossy(&get(at, "/panel").await.body).to_string();
     let script = String::from_utf8_lossy(&get(at, "/panel.js").await.body).to_string();
     assert!(screen.starts_with("<!doctype html>"), "/panel should be the screen");
     assert!(script.starts_with("// The Studio's Panel screen"), "/panel.js should be the script");
-    let sched_screen = String::from_utf8_lossy(&get(at, "/schedule").await.body).to_string();
-    let sched_script = String::from_utf8_lossy(&get(at, "/schedule.js").await.body).to_string();
-    assert!(sched_screen.starts_with("<!doctype html>"), "/schedule should be the screen");
-    assert!(sched_script.starts_with("// The Studio's Schedule screen"), "/schedule.js should be the script");
+    let settings_screen = String::from_utf8_lossy(&get(at, "/settings").await.body).to_string();
+    let settings_script = String::from_utf8_lossy(&get(at, "/settings.js").await.body).to_string();
+    assert!(settings_screen.starts_with("<!doctype html>"), "/settings should be the screen");
+    assert!(settings_script.starts_with("// The Studio's Settings screen"), "/settings.js should be the script");
 
     // Each screen loads its own module, and all three load the shared one
     // through it rather than with a second <script> tag.
     assert!(screen.contains(r#"src="/panel.js""#), "the panel screen loads its own script");
     assert!(PANEL_JS.contains("from './common.js'"), "...which imports the shared one");
-    assert!(sched_screen.contains(r#"src="/schedule.js""#), "the schedule screen loads its own script");
-    assert!(SCHEDULE_JS.contains("from './common.js'"), "...which imports the shared one too");
+    assert!(settings_screen.contains(r#"src="/settings.js""#), "the settings screen loads its own script");
+    assert!(SETTINGS_JS.contains("from './common.js'"), "...which imports the shared one too");
 
     // Still no directory traversal, and still a 404 rather than the index for
     // a mistyped asset.
@@ -130,10 +132,13 @@ async fn the_dashboard_is_folded_in_and_redirects() {
     let studio = studio().await;
     let at = studio.addr;
 
-    for path in ["/dashboard", "/dashboard.html"] {
+    // Card 310: the Schedule screen went with the timetable; its address
+    // lands on the Picture screen rather than on a 404.
+    for path in ["/dashboard", "/dashboard.html", "/schedule", "/schedule.html"] {
         let r = get(at, path).await;
         assert_eq!(r.status, 307, "{path} should redirect to the one page");
     }
+    assert_eq!(get(at, "/schedule.js").await.status, 404, "the Schedule screen's script is gone");
     for gone in ["/dashboard.js", "/dashboard.css"] {
         assert_eq!(get(at, gone).await.status, 404, "{gone} should not still be served");
     }
@@ -165,11 +170,11 @@ fn every_element_each_screen_reaches_for_exists() {
     for (what, js, pages) in [
         ("picture.js", PICTURE_JS, &[("index.html", INDEX_HTML)][..]),
         ("panel.js", PANEL_JS, &[("panel.html", PANEL_HTML)][..]),
-        ("schedule.js", SCHEDULE_JS, &[("schedule.html", SCHEDULE_HTML)][..]),
+        ("settings.js", SETTINGS_JS, &[("settings.html", SETTINGS_HTML)][..]),
         (
             "common.js",
             COMMON_JS,
-            &[("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("schedule.html", SCHEDULE_HTML)][..],
+            &[("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)][..],
         ),
     ] {
         for sel in selectors(js) {
@@ -280,11 +285,11 @@ fn the_screens_keep_their_promises() {
         for (what, text) in [
             ("index.html", INDEX_HTML),
             ("panel.html", PANEL_HTML),
-            ("schedule.html", SCHEDULE_HTML),
+            ("settings.html", SETTINGS_HTML),
             ("common.js", COMMON_JS),
             ("picture.js", PICTURE_JS),
             ("panel.js", PANEL_JS),
-            ("schedule.js", SCHEDULE_JS),
+            ("settings.js", SETTINGS_JS),
             ("style.css", STYLE_CSS),
         ] {
             assert!(!text.contains(bad), "{what} must not reach outside the box: {bad}");
@@ -615,7 +620,7 @@ fn no_control_offers_a_frame_rate() {
 /// it: no datalist, no marks, no `drawStops`.
 #[test]
 fn no_slider_declares_stops_any_more_and_the_drawing_mechanism_is_gone_with_them() {
-    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("schedule.html", SCHEDULE_HTML)] {
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
         assert!(!html.contains("list=\""), "{what} still declares a slider's stops");
         assert!(!html.contains("<datalist"), "{what} still has a datalist");
     }
@@ -728,13 +733,13 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
 /// and there is no keyboard shortcut for a button that does not exist.
 #[test]
 fn the_seed_is_not_a_control_on_the_page_at_all_any_more() {
-    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("schedule.html", SCHEDULE_HTML)] {
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
         for gone in [r#"id="seed""#, r#"id="ro-seed""#, r#"id="new-seed""#, r#"id="another""#] {
             assert!(!html.contains(gone), "{what} still has {gone}: the seed is not a control for humans");
         }
         assert!(!html.contains("<dt>Seed</dt>"), "{what} still reads the seed out in its title block");
     }
-    for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("schedule.js", SCHEDULE_JS)] {
+    for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("settings.js", SETTINGS_JS)] {
         assert!(!js.contains("'set_seed'"), "{what} still calls set_seed: nothing in the browser does any more");
         assert!(!js.contains("anotherButton"), "{what} still has the Another button's own state");
     }
@@ -989,14 +994,8 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
         ("the device's own facts", "id=\"device-block\""),
         ("the studio", "id=\"sec-studio\""),
     ]);
-    // The Schedule screen (card 303): what is due now and until when, then
-    // the timetable that decides it, then the modes it plays - the order the
-    // owner would ask about this screen in.
-    order("the Schedule screen", SCHEDULE_HTML, &[
-        ("what is due now", "id=\"sec-due\""),
-        ("the timetable", "id=\"sec-timetable\""),
-        ("the modes", "id=\"sec-modes\""),
-    ]);
+    // The Settings screen (card 311): Home Assistant, and nothing else yet.
+    order("the Settings screen", SETTINGS_HTML, &[("Home Assistant", "id=\"sec-ha\"")]);
 }
 
 /// Card 301: one nav, the same markup, on every screen - and the current
@@ -1008,12 +1007,12 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
     for (what, html, current) in [
         ("index.html", INDEX_HTML, "Picture"),
         ("panel.html", PANEL_HTML, "Panel"),
-        ("schedule.html", SCHEDULE_HTML, "Schedule"),
+        ("settings.html", SETTINGS_HTML, "Settings"),
     ] {
         let nav_start = html.find(r#"<nav class="nav""#).unwrap_or_else(|| panic!("{what} should carry the nav"));
         let nav = &html[nav_start..nav_start + html[nav_start..].find("</nav>").expect("a closed nav")];
         assert_eq!(nav.matches("<a ").count(), 3, "{what}: the nav should have exactly three links: {nav}");
-        for (dest, label) in [("/", "Picture"), ("/panel", "Panel"), ("/schedule", "Schedule")] {
+        for (dest, label) in [("/", "Picture"), ("/panel", "Panel"), ("/settings", "Settings")] {
             assert!(nav.contains(&format!(r#"href="{dest}""#)), "{what}: the nav should link to {dest}");
             assert!(nav.contains(&format!(">{label}<")), "{what}: the nav should say {label}");
         }

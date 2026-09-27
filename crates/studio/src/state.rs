@@ -20,7 +20,6 @@
 //! rather than a queue. Nothing here can grow without bound.
 
 use screeny_art::patch::{ParamSpec, PatchDef};
-use crate::schedule::{Mode, Schedule, ScheduleRun};
 use screeny_art::Output;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,10 +62,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   `speed` stays in the file's shape (players, working copies, settings) for
 ///   an older build's sake, but every load puts it back to 1.0 and `paused` to
 ///   false, so a v5 file at 1.7x comes up at 1.00x.
+/// - **v7** (card 310) **retires modes and the timetable**: the owner moved
+///   every thought about time of day to Home Assistant, which picks a patch
+///   and a named setting directly - "simpler to think about everywhere". A
+///   named setting is the only saved look left. `modes`, `schedule` and
+///   `schedule_run` are dropped, and what they held is said once in the
+///   `repaired` voice, so it can be set up on the Home Assistant side.
+///   It also gains `home_assistant` (card 311): the integration as set up on
+///   the Settings screen, password included - the file is the studio's own,
+///   on its own volume - and never sent back out by the API.
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -234,18 +242,11 @@ pub struct Persisted {
     /// must cost that value and not the whole file.
     #[serde(alias = "pieces", skip_serializing_if = "BTreeMap::is_empty")]
     pub patches: Memory,
-    /// Card 302: what the panel should look like, by name. Lifted out of the
-    /// raw JSON and cleaned by [`crate::schedule::clean`] before serde sees the
-    /// file, for the reason `patches` is.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub modes: Vec<Mode>,
-    /// Card 302: the daily timetable and its switch.
-    #[serde(skip_serializing_if = "Schedule::is_empty")]
-    pub schedule: Schedule,
-    /// Card 302: the entry the scheduler last applied, and for which local
-    /// date. `None` until it has applied one.
+    /// Card 311: Home Assistant, as set up on the Settings screen. `None`
+    /// until somebody does. Lifted out of the raw JSON before serde sees the
+    /// file, for the reason `patches` is: a malformed block costs the block.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub schedule_run: Option<ScheduleRun>,
+    pub home_assistant: Option<crate::ha::HaSettings>,
 }
 
 impl Default for Persisted {
@@ -256,9 +257,7 @@ impl Default for Persisted {
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
-            modes: Vec::new(),
-            schedule: Schedule::default(),
-            schedule_run: None,
+            home_assistant: None,
         }
     }
 }
@@ -1204,8 +1203,19 @@ fn load(path: &Path) -> Loaded {
     let patches = clean_memory(raw.get("patches").or_else(|| raw.get("pieces")), &mut repaired);
     note_retired_levels(&raw, &mut repaired);
     note_retired_fps(&raw, &mut repaired);
-    // Card 302's keys, lifted out and cleaned one mode and one entry at a time.
-    let plan = crate::schedule::clean(raw.get("modes"), raw.get("schedule"), raw.get("schedule_run"), &mut repaired);
+    // Card 302's modes and timetable, retired by card 310.
+    note_retired_modes(&raw, &mut repaired);
+    // Card 311's Home Assistant settings.
+    let home_assistant = match raw.get("home_assistant") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => match serde_json::from_value::<crate::ha::HaSettings>(v.clone()).map_err(|e| e.to_string()).and_then(crate::ha::HaSettings::check) {
+            Ok(s) => Some(s),
+            Err(why) => {
+                repaired.push(format!("the Home Assistant settings could not be read and were forgotten: {why}"));
+                None
+            }
+        },
+    };
     // The `preview` block of a v1/v2 file, lifted out for the same reason as
     // `patches`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
@@ -1220,6 +1230,7 @@ fn load(path: &Path) -> Loaded {
         o.remove("pieces");
         o.remove("preview");
         o.remove("modes");
+        o.remove("home_assistant");
         o.remove("schedule");
         o.remove("schedule_run");
     }
@@ -1231,9 +1242,7 @@ fn load(path: &Path) -> Loaded {
     let was = state.version;
     state.version = SCHEMA_VERSION;
     state.patches = patches;
-    state.modes = plan.modes;
-    state.schedule = plan.schedule;
-    state.schedule_run = plan.run;
+    state.home_assistant = home_assistant;
     let kept = if was < SCHEMA_VERSION {
         let kept = back_up(path, was);
         migrate(&mut state, &legacy, was);
@@ -1339,6 +1348,8 @@ fn back_up(path: &Path, was: u32) -> Option<String> {
 ///   record start empty. The speed and pause the card retired are put back by
 ///   [`retire_playback`], which runs on **every** load rather than behind a
 ///   guard, so no file of any version can bring them back.
+/// - **v6 -> v7** (card 310) needs no code either: [`load`] drops the modes
+///   and the timetable ([`note_retired_modes`]), whatever the file's version.
 ///
 /// Each step is behind its own `was <` guard, so a file that is already past a
 /// step never runs it again - which is the property card 150 wrote the guard
@@ -1352,7 +1363,36 @@ fn migrate(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
     }
     // v5 -> v6 (card 302) moves nothing: `modes`, `schedule` and `schedule_run`
     // start empty, and the speed and pause it retired are put right by
-    // `retire_playback` on every load, of every version.
+    // `retire_playback` on every load, of every version. v6 -> v7 (card 310)
+    // is `load`'s own lookup.
+}
+
+/// Card 310: **modes and the timetable are retired** - Home Assistant picks
+/// a patch and a named setting itself now. A file that had them loses them,
+/// and says so once, naming what went, so the owner can set the same up on
+/// the HA side. Nothing to say for a file that had none.
+fn note_retired_modes(raw: &serde_json::Value, repaired: &mut Vec<String>) {
+    let text = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("?").to_string();
+    let list = |k: &str| raw.get(k).and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    let modes: Vec<String> = list("modes")
+        .iter()
+        .map(|m| {
+            let setting = m.get("setting").and_then(serde_json::Value::as_str).unwrap_or("as left");
+            format!("{} = {} / {setting}", text(m, "name"), text(m, "patch"))
+        })
+        .collect();
+    let entries: Vec<String> = raw
+        .get("schedule")
+        .and_then(|s| s.get("entries"))
+        .and_then(serde_json::Value::as_array)
+        .map(|es| es.iter().map(|e| format!("{} {}", text(e, "at"), text(e, "mode"))).collect())
+        .unwrap_or_default();
+    if !modes.is_empty() {
+        repaired.push(format!("modes are retired (card 310: Home Assistant picks a patch and setting now); they were {}", modes.join(", ")));
+    }
+    if !entries.is_empty() {
+        repaired.push(format!("the timetable is retired (card 310: Home Assistant schedules now); it had {}", entries.join(", ")));
+    }
 }
 
 /// Card 302: **speed and pause are retired** (the owner, 2026-09-26; card 301
@@ -3215,9 +3255,10 @@ mod tests {
         std::fs::write(dir.0.join(FILE), v5).expect("write the v5 file");
         let (store, loaded) = Store::open(Some(&dir.0));
 
-        assert_eq!(loaded.version, 6);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(5))).expect("the backup"), v5, "kept byte for byte");
-        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains("v6")), "{:?}", store.health().recovered);
+        let said = format!("v{SCHEMA_VERSION}");
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains(&said)), "{:?}", store.health().recovered);
         assert!(!dir.0.join(BAD_FILE).exists());
 
         // The tuning, intact.
@@ -3244,10 +3285,6 @@ mod tests {
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("4 saved speeds") && said[0].contains("1 paused player"), "{}", said[0]);
 
-        // The new keys start empty.
-        assert!(loaded.modes.is_empty());
-        assert_eq!(loaded.schedule, Schedule::default());
-        assert!(loaded.schedule_run.is_none());
 
         // And the named setting still loads as itself - not modified.
         let def = screeny_art::patch::find("clocks-dials").expect("clocks-dials");
@@ -3255,44 +3292,13 @@ mod tests {
         assert!(!modified(&loaded.patches, def, &work), "Evening is still Evening, unmodified, after the retirement");
     }
 
-    /// The v6 keys round-trip through the file, and a file that has them is
-    /// read back as it was written, with nothing to say about it.
+    /// Card 310: a v6 file written by card 302's build - modes with card 309's
+    /// retired `brightness`, a timetable and its run record - loads as v7 with
+    /// all three gone, said once each with what they held, so they can be set
+    /// up in Home Assistant; and the next write has no trace of them.
     #[test]
-    fn modes_and_the_schedule_round_trip_through_the_file() {
-        use crate::schedule::Entry;
-        let dir = Temp::new("v6-roundtrip");
-        let (store, _) = Store::open(Some(&dir.0));
-        let want = Persisted {
-            modes: vec![
-                Mode { name: "Day".into(), patch: "flock".into(), setting: None },
-                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()) },
-            ],
-            schedule: Schedule {
-                enabled: true,
-                entries: vec![Entry { at: "07:00".into(), mode: "Day".into() }, Entry { at: "22:00".into(), mode: "Night".into() }],
-            },
-            schedule_run: Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() }),
-            ..Persisted::default()
-        };
-        store.save(want.clone());
-        store.flush();
-        store.stop();
-        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
-        assert!(text.contains("\"schedule_run\""), "{text}");
-        let (s2, back) = Store::open(Some(&dir.0));
-        assert_eq!(back, want);
-        assert!(s2.health().repaired.is_empty(), "{:?}", s2.health().repaired);
-        assert!(s2.health().recovered.is_none());
-    }
-
-    /// Card 309: a v6 file written by card 302's build, whose modes carry a
-    /// `brightness`, loads with its modes intact minus that key - no
-    /// `repaired` line (it was never wrong; the model changed), and the next
-    /// write has no `brightness` on a mode.
-    #[test]
-    fn a_mode_with_card_302s_brightness_loads_without_it() {
-        use crate::schedule::Entry;
-        let dir = Temp::new("v6-mode-brightness");
+    fn a_card_302_file_loads_without_its_modes_or_timetable() {
+        let dir = Temp::new("v6-to-v7");
         let old = r#"{
             "version": 6,
             "modes": [
@@ -3307,33 +3313,19 @@ mod tests {
         }"#;
         std::fs::write(dir.0.join(FILE), old).expect("write the card 302 file");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(
-            loaded.modes,
-            vec![
-                Mode { name: "Day".into(), patch: "flock".into(), setting: None },
-                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()) },
-                Mode { name: "Late".into(), patch: "vesta".into(), setting: None },
-            ]
-        );
-        assert!(loaded.schedule.enabled);
-        assert_eq!(
-            loaded.schedule.entries,
-            vec![
-                Entry { at: "07:00".into(), mode: "Day".into() },
-                Entry { at: "22:00".into(), mode: "Night".into() },
-                Entry { at: "23:30".into(), mode: "Late".into() },
-            ]
-        );
-        assert_eq!(loaded.schedule_run, Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() }));
-        assert!(store.health().repaired.is_empty(), "nothing to repair: {:?}", store.health().repaired);
-        assert!(store.health().recovered.is_none());
+        assert_eq!(loaded.version, 7);
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("Day = flock / as left, Night = vesta / Default, Late = vesta / as left"), "{}", said[0]);
+        assert!(said[1].contains("07:00 Day, 22:00 Night, 23:30 Late"), "{}", said[1]);
+        assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(6))).expect("the backup"), old, "kept byte for byte");
         store.save(loaded);
         store.flush();
         store.stop();
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
         let back: serde_json::Value = serde_json::from_str(&text).expect("json");
-        let modes = back["modes"].as_array().expect("modes");
-        assert_eq!(modes.len(), 3);
-        assert!(modes.iter().all(|m| m.get("brightness").is_none()), "{text}");
+        for gone in ["modes", "schedule", "schedule_run"] {
+            assert!(back.get(gone).is_none(), "{gone} in {text}");
+        }
     }
 }
