@@ -387,9 +387,8 @@ it.
 **Brightness is not part of a mode** (the owner, redirecting card 307 mid-build: "let's
 make controlling the brightness a separate concern from what's on the screen"). Neither
 the modes list nor "Update to what's playing" reads or sends a brightness at all - the
-Panel screen's own slider is the one place brightness is set, same as it always was.
-Card 302's model and routes still carry a `brightness` field on a mode on the wire until
-card 309 removes it there too; this page simply never shows it and never sends it.
+Panel screen's own slider is the one place brightness is set, same as it always was, and
+card 309 took the field out of the model and the routes too.
 
 **Speed and pause are retired** (the owner, the same morning). A patch plays at 1.00x and
 nothing pauses: `set_playback` still answers 200 and changes nothing (its answer says so in
