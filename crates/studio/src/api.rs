@@ -26,8 +26,7 @@ use screeny_art::Output;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::page::{self, Bootstrap};
-use crate::schedule::{self, Entry, Mode, PageState};
+use crate::page::{self, Bootstrap, StudioState};
 use crate::player::{Player, PlayerChange};
 use crate::AppState;
 
@@ -47,7 +46,7 @@ pub struct StateEvent {
     /// Which browser made the change, if it said. `None` means "everyone
     /// should adopt this", which is what a resync sends.
     pub from: Option<String>,
-    pub state: PageState,
+    pub state: StudioState,
 }
 
 /// The half-second heartbeat: what the patch is performing and what the panel
@@ -108,13 +107,6 @@ pub fn routes() -> Router<AppState> {
         .route("/settings/save", post(settings_save))
         .route("/settings/rename", post(settings_rename))
         .route("/settings/delete", post(settings_delete))
-        // ---- card 302: modes and the daily schedule ----
-        .route("/modes/save", post(modes_save))
-        .route("/modes/rename", post(modes_rename))
-        .route("/modes/delete", post(modes_delete))
-        .route("/mode/apply", post(mode_apply))
-        .route("/schedule/set", post(schedule_set))
-        .route("/schedule/resume", post(schedule_resume))
         // ---- card 150: the names a piece went by, still answering ----
         .route("/piece_playing", get(patch_playing))
         .route("/set_piece", post(set_patch))
@@ -136,7 +128,7 @@ pub fn routes() -> Router<AppState> {
 
 /// Apply a change to the player the page is a window onto, tell the other
 /// browsers, and write it down.
-fn on_page(st: &AppState, headers: &HeaderMap, change: &PlayerChange) -> ApiResult<Json<PageState>> {
+fn on_page(st: &AppState, headers: &HeaderMap, change: &PlayerChange) -> ApiResult<Json<StudioState>> {
     let player = st.page();
     player.configure(change).map_err(ApiError::bad_request)?;
     player.ensure_running();
@@ -145,7 +137,7 @@ fn on_page(st: &AppState, headers: &HeaderMap, change: &PlayerChange) -> ApiResu
 
 /// Publish the page's new state to every browser but the one that caused it,
 /// and write it down.
-fn publish(st: &AppState, headers: &HeaderMap, _player: &Arc<Player>) -> PageState {
+fn publish(st: &AppState, headers: &HeaderMap, _player: &Arc<Player>) -> StudioState {
     let state = st.page_state();
     let from = headers.get(CLIENT_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned);
     st.publish_state(from, state.clone());
@@ -191,7 +183,7 @@ struct SetPatch {
     id: String,
 }
 
-async fn set_patch(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<PageState>> {
+async fn set_patch(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<StudioState>> {
     on_page(&st, &headers, &PlayerChange { patch: Some(req.id), ..PlayerChange::default() })
 }
 
@@ -201,14 +193,14 @@ struct SetParam {
     value: f32,
 }
 
-async fn set_param(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetParam>) -> ApiResult<Json<PageState>> {
+async fn set_param(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetParam>) -> ApiResult<Json<StudioState>> {
     on_page(&st, &headers, &PlayerChange { param: Some((req.id, req.value)), ..PlayerChange::default() })
 }
 
 /// Takes no arguments - but reads the body anyway, because the UI sends `{}`
 /// and a server that closes a connection with a request body still unread
 /// gets a TCP reset rather than a clean close.
-async fn reset_params(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<PageState>> {
+async fn reset_params(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
     on_page(&st, &headers, &PlayerChange { reset_params: true, ..PlayerChange::default() })
 }
 
@@ -219,7 +211,7 @@ struct SetSeed {
     seed: Option<u32>,
 }
 
-async fn set_seed(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetSeed>) -> ApiResult<Json<PageState>> {
+async fn set_seed(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetSeed>) -> ApiResult<Json<StudioState>> {
     let seed = req.seed.unwrap_or_else(page::fresh_seed);
     on_page(&st, &headers, &PlayerChange { seed: Some(seed), ..PlayerChange::default() })
 }
@@ -231,7 +223,7 @@ struct SetOutput {
     output: Output,
 }
 
-async fn set_output(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<PageState>> {
+async fn set_output(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
     on_page(&st, &headers, &PlayerChange { output: Some(req.output), ..PlayerChange::default() })
 }
 
@@ -307,7 +299,7 @@ struct LoadSetting {
 /// there is one broadcast and one write, and the panel follows in one step
 /// rather than through a burst of half-loaded pictures (card 196's pacing is
 /// about a burst; a load must not be one).
-async fn settings_load(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<PageState>> {
+async fn settings_load(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<StudioState>> {
     let name = if req.name.trim().is_empty() {
         st.page().state().setting
     } else {
@@ -324,7 +316,7 @@ struct SaveSetting {
     name: Option<String>,
 }
 
-async fn settings_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<PageState>> {
+async fn settings_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<StudioState>> {
     let player = st.page();
     let (def, work) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
     st.memory
@@ -341,7 +333,7 @@ struct RenameSetting {
     to: String,
 }
 
-async fn settings_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<PageState>> {
+async fn settings_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<StudioState>> {
     let player = st.page();
     let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
     st.memory
@@ -359,7 +351,7 @@ struct DeleteSetting {
 /// Delete a setting. **What is playing does not change**: the values stay, and
 /// what goes is the name they came from - so the answer says `Default`, and
 /// `modified`, which is the truth about values nothing is holding any more.
-async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<PageState>> {
+async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<StudioState>> {
     let player = st.page();
     let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
     st.memory
@@ -375,141 +367,8 @@ fn unknown_patch(player: &Arc<Player>) -> String {
     format!("`{}` is not a patch this build has, so it has no settings.", player.stored().patch)
 }
 
-// ---------------- card 302: modes and the daily schedule ----------------
-//
-// The same shape as the settings routes: act, tell the other browsers, write it
-// down, answer the whole state - which carries the modes, the schedule, the due
-// mode, `overridden` and `until`, so a browser needs no second read.
-
-/// Distinguish "absent" (capture what is playing) from `null` (none) for a
-/// mode's setting.
-fn some_string<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(d).map(Some)
-}
-
-#[derive(Deserialize)]
-struct SaveMode {
-    name: String,
-    /// Absent: the patch playing now.
-    #[serde(default)]
-    patch: Option<String>,
-    /// Absent: what is playing now - the named setting it is on when that is
-    /// unmodified, otherwise the working copy. `null`: the working copy.
-    #[serde(default, deserialize_with = "some_string")]
-    setting: Option<Option<String>>,
-    // Card 309: `brightness` was here (card 302). A mode is patch + setting
-    // and nothing else; the key is no longer declared and serde ignores
-    // unknown keys, so an older client that still sends it is accepted and it
-    // does nothing.
-}
-
-/// **Save what is playing as a mode** - or, with fields given, any mode. The
-/// same name in any spelling overwrites that mode. A mode is `{name, patch,
-/// setting}`: brightness is neither captured nor taken (card 309), and a
-/// `brightness` an older client sends is ignored, not refused.
-async fn modes_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveMode>) -> ApiResult<Json<PageState>> {
-    let player = st.page();
-    let now = player.state();
-    let patch = req.patch.map_or_else(|| now.patch.clone(), |p| p.trim().to_string());
-    let def = crate::player::find_patch(&patch, st.cfg.fault_patches)
-        .ok_or_else(|| ApiError::bad_request(format!("There is no patch called `{patch}`.")))?;
-    let setting = match req.setting {
-        Some(None) => None,
-        Some(Some(name)) if name.trim().is_empty() => None,
-        Some(Some(name)) => {
-            let name = name.trim();
-            if crate::state::is_default_name(name) {
-                Some(crate::state::DEFAULT_SETTING.to_string())
-            } else {
-                let found = st.memory.setting_names(def.id).into_iter().find(|n| n.eq_ignore_ascii_case(name));
-                Some(found.ok_or_else(|| ApiError::bad_request(format!("`{}` has no setting called `{name}`.", def.name)))?)
-            }
-        }
-        // Captured: the setting it is on, when it still is that setting.
-        None if def.id == now.patch && !now.modified => Some(now.setting.clone()),
-        None => None,
-    };
-    st.book
-        .plan()
-        .save_mode(Mode { name: req.name, patch: def.id.to_string(), setting })
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &player)))
-}
-
-#[derive(Deserialize)]
-struct RenameMode {
-    from: String,
-    to: String,
-}
-
-async fn modes_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameMode>) -> ApiResult<Json<PageState>> {
-    st.book.plan().rename_mode(&req.from, &req.to).map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &st.page())))
-}
-
-#[derive(Deserialize)]
-struct NameOnly {
-    name: String,
-}
-
-/// Delete a mode. **Not one the schedule names**: that is a 400 saying where.
-async fn modes_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<NameOnly>) -> ApiResult<Json<PageState>> {
-    st.book.plan().delete_mode(&req.name).map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &st.page())))
-}
-
-/// **Put the panel into a mode, by hand** - the page, a script, and the hook
-/// the owner's smart home calls (card 179's Matter switch stays parked; a plain
-/// HTTP call is the agreed first step).
-///
-/// It does not touch the schedule's run record, so it is a hand change like
-/// any other: with the schedule on it holds until the next entry comes due.
-async fn mode_apply(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<NameOnly>) -> ApiResult<Json<PageState>> {
-    let note = schedule::apply(&st, &req.name, false).map_err(ApiError::bad_request)?;
-    st.book.set_note(note);
-    Ok(Json(publish(&st, &headers, &st.page())))
-}
-
-#[derive(Deserialize)]
-struct SetSchedule {
-    /// Absent: as it is.
-    #[serde(default)]
-    enabled: Option<bool>,
-    /// The **whole** timetable, replacing the old one. Absent: as it is - so
-    /// `{"enabled": false}` is "schedule off" and nothing else.
-    #[serde(default)]
-    entries: Option<Vec<Entry>>,
-}
-
-/// Replace the timetable and/or switch it on or off. The scheduler then looks
-/// at once, so switching a schedule on puts the panel into the mode due now
-/// rather than within the next 30 s.
-async fn schedule_set(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetSchedule>) -> ApiResult<Json<PageState>> {
-    {
-        let mut plan = st.book.plan();
-        let enabled = req.enabled.unwrap_or(plan.schedule.enabled);
-        let entries = req.entries.unwrap_or_else(|| plan.schedule.entries.clone());
-        plan.set_schedule(enabled, &entries).map_err(ApiError::bad_request)?;
-    }
-    if !schedule::tick(&st) {
-        // Nothing came due, so `tick` published nothing: this change still has
-        // to reach the other browsers and the file.
-        return Ok(Json(publish(&st, &headers, &st.page())));
-    }
-    Ok(Json(st.page_state()))
-}
-
-/// **"Back to schedule"**: apply the entry due now and make it the run record.
-async fn schedule_resume(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiResult<Json<PageState>> {
-    schedule::resume(&st).map_err(ApiError::bad_request)?;
-    Ok(Json(st.page_state()))
-}
-
 /// Takes no arguments; reads the body for the reason `reset_params` does.
-async fn restart(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<PageState>> {
+async fn restart(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
     on_page(&st, &headers, &PlayerChange { restart: true, ..PlayerChange::default() })
 }
 
@@ -541,7 +400,7 @@ struct PanelOutcome {
     /// The link, or `null` when output is off.
     panel: Option<PanelStatus>,
     /// What the page is showing, which carries on either way.
-    state: PageState,
+    state: StudioState,
 }
 
 /// **Panel output**, and which panel the page is attached to.

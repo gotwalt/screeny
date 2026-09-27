@@ -253,6 +253,11 @@ impl Session {
                 eprintln!("studio: home assistant: subscribing to {topic}: {e}");
             }
         }
+        // Card 310: an empty retained payload deletes a retained message, so
+        // the timetable's old states do not outlive it on the broker.
+        for topic in self.topics.retired_state_topics() {
+            let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+        }
         self.announce(snap);
     }
 
@@ -270,7 +275,7 @@ impl Session {
         if !self.up {
             return;
         }
-        let config = serde_json::to_string(&discovery::build(&self.cfg, &self.topics, snap)).unwrap_or_default();
+        let config = discovery::payload(&self.cfg, &self.topics, snap).to_string();
         // The config before anything that refers to it, and `online` before
         // the states, so HA never sees an entity's state without the entity.
         let mut out = vec![
@@ -338,6 +343,7 @@ pub async fn forget(cfg: &MqttConfig, within: Duration) -> Result<(), String> {
         let (discovery_topic, empty) = discovery::remove_device(&topics);
         let mut clear = vec![discovery_topic, topics.status.clone()];
         clear.extend(payload::state_messages(&topics, &Snapshot::default()).into_iter().map(|m| m.topic));
+        clear.extend(topics.retired_state_topics());
         for topic in clear {
             client.publish(topic, QoS::AtLeastOnce, true, empty.clone()).await.map_err(|e| e.to_string())?;
         }

@@ -41,10 +41,10 @@ pub struct Topics {
     pub device_id: String,
     pub patch: Pair,
     pub brightness: Pair,
-    pub scene: Pair,
-    pub schedule: Pair,
-    pub resume: Pair,
-    pub scheduled: Pair,
+    /// Card 310: the same brightness as a 0-100 % slider, which HA shows on the
+    /// device's own page (a light there is only a switch).
+    pub level: Pair,
+    pub picture: Pair,
     pub panel: Pair,
 }
 
@@ -60,10 +60,8 @@ impl Topics {
             ha_status: format!("{}/status", cfg.discovery_prefix),
             patch: pair("patch"),
             brightness: pair("brightness"),
-            scene: pair("scene"),
-            schedule: pair("schedule"),
-            resume: pair("resume"),
-            scheduled: pair("scheduled"),
+            level: pair("level"),
+            picture: pair("picture"),
             panel: pair("panel"),
             device_id,
             base,
@@ -72,8 +70,16 @@ impl Topics {
 
     /// Every topic HA may send a command on. Subscribed on every connect.
     #[must_use]
-    pub fn command_topics(&self) -> [&str; 4] {
-        [&self.brightness.set, &self.scene.set, &self.schedule.set, &self.resume.set]
+    pub fn command_topics(&self) -> [&str; 3] {
+        [&self.brightness.set, &self.level.set, &self.picture.set]
+    }
+
+    /// Card 310: the retained state topics of the entities modes and the
+    /// timetable took with them. Cleared on every connect, so nothing stale
+    /// is left retained.
+    #[must_use]
+    pub fn retired_state_topics(&self) -> [String; 3] {
+        ["schedule", "scheduled", "scene"].map(|e| format!("{}/{e}/state", self.base))
     }
 
     /// `screeny_<instance>_<entity>`.
@@ -114,7 +120,8 @@ mod tests {
         assert_eq!(t.ha_status, "homeassistant/status");
         assert_eq!(t.brightness.state, "screeny/studio/brightness/state");
         assert_eq!(t.brightness.set, "screeny/studio/brightness/set");
-        assert_eq!(t.scene.set, "screeny/studio/scene/set");
+        assert_eq!(t.picture.set, "screeny/studio/picture/set");
+        assert_eq!(t.level.set, "screeny/studio/level/set");
         assert_eq!(t.unique_id("scene"), "screeny_studio_scene");
     }
 }

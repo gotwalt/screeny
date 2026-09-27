@@ -17,8 +17,11 @@
 //! broker; [`client`] is the connection and its lifecycle, and nothing else.
 //!
 //! Brightness is its own control, separate from what is on the panel (owner,
-//! 2026-09-26): HA sets it from the room's light sensors, and picks a *scene*
-//! (the studio's word is "mode") for what is shown.
+//! 2026-09-26): HA sets it from the room's light sensors. What is shown is a
+//! **picture**: a patch on one of its named settings, picked from one list.
+//! **Time of day is HA's business entirely** (card 310): the studio has no
+//! modes and no timetable, so a schedule is an HA automation that picks a
+//! picture.
 
 pub mod bridge;
 pub mod client;
@@ -136,11 +139,13 @@ pub struct Snapshot {
     /// The panel's brightness policy, `0..=255`, `0` dark. `None` when the
     /// studio has never been told one and the panel is at its own.
     pub brightness: Option<u8>,
-    /// Every mode's name, in the order they were made: the scene list.
-    pub scenes: Vec<String>,
-    /// The scene whose patch and setting are what is playing now, if one is.
-    pub scene: Option<String>,
-    pub schedule: ScheduleState,
+    /// Every picture HA may pick: each patch this studio can play, on
+    /// Default and on each of its named settings.
+    pub pictures: Vec<Picture>,
+    /// The label of the picture playing now; `None` when the working copy
+    /// has been changed since its setting was loaded, which is no picture in
+    /// the list.
+    pub picture: Option<String>,
     /// The studio is driving the panel and the link is up.
     pub panel_connected: bool,
 }
@@ -158,18 +163,28 @@ pub struct PatchState {
     pub modified: bool,
 }
 
-/// The timetable, as far as HA needs it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScheduleState {
-    pub enabled: bool,
-    /// The scene the timetable says should be on now.
-    pub due: Option<String>,
-    /// `"HH:MM"`, when the next entry comes due.
-    pub until: Option<String>,
-    /// Something other than the due scene is playing, by hand.
-    pub overridden: bool,
-    /// What the last application of a scene had to say, if anything.
-    pub note: Option<String>,
+/// One entry in HA's picture list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    /// What HA shows: `Vesta` for a patch on Default, `Vesta · Wall Clock` for
+    /// one of its named settings (owner, 2026-09-26).
+    pub label: String,
+    /// The patch's id.
+    pub patch: String,
+    /// The setting's name; `Default` for the patch's own.
+    pub setting: String,
+}
+
+impl Picture {
+    /// The label for `patch_name` on `setting`.
+    #[must_use]
+    pub fn label(patch_name: &str, setting: &str) -> String {
+        if crate::state::is_default_name(setting) {
+            patch_name.to_string()
+        } else {
+            format!("{patch_name} · {setting}")
+        }
+    }
 }
 
 /// What HA asks for, validated. The only thing that leaves this module.
@@ -177,13 +192,10 @@ pub struct ScheduleState {
 pub enum Command {
     /// A brightness policy, `0..=255`; `0` is dark.
     SetBrightness(u8),
-    /// Put the panel into the scene called this. Already checked against
-    /// [`Snapshot::scenes`]; the studio checks again, since it may have gone.
-    ApplyScene(String),
-    /// Switch the timetable on or off.
-    SetSchedule(bool),
-    /// "Back to schedule": apply the entry due now.
-    ResumeSchedule,
+    /// Show this patch on this named setting (`Default` for its own). Already
+    /// checked against [`Snapshot::pictures`]; the studio checks again, since
+    /// a setting may have gone.
+    ShowPicture { patch: String, setting: String },
 }
 
 #[cfg(test)]

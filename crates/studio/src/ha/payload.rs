@@ -14,6 +14,27 @@ pub const MAX_COMMAND_BYTES: usize = 1024;
 pub const DEFAULT_LIT: u8 = 128;
 /// A select's state for "none of the options" - HA shows it as unknown.
 pub const NO_OPTION: &str = "None";
+/// The brightness slider's step: one output-enable slot of the panel's 25
+/// (card 187), which is exactly 4 % of full light.
+pub const PERCENT_STEP: u8 = 4;
+
+/// The share of full light a brightness level gives, in percent: always a
+/// multiple of [`PERCENT_STEP`], because the panel dims in whole slots.
+#[must_use]
+pub fn percent_of(level: u8) -> u8 {
+    let slots = screeny_panel::model::oe_slots(level);
+    // At most 25 slots, so at most 100.
+    u8::try_from(slots * u32::from(PERCENT_STEP)).unwrap_or(100)
+}
+
+/// The dimmest level that gives `percent` of full light, rounded to the
+/// nearest whole slot. `0` is dark; anything above it is at least one slot.
+#[must_use]
+pub fn level_for(percent: u8) -> u8 {
+    let slots = (u32::from(percent.min(100)) + u32::from(PERCENT_STEP) / 2) / u32::from(PERCENT_STEP);
+    let slots = if percent > 0 { slots.max(1) } else { 0 };
+    (0..=u8::MAX).find(|l| screeny_panel::model::oe_slots(*l) >= slots).unwrap_or(u8::MAX)
+}
 
 /// One retained state message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,15 +52,6 @@ struct LightState {
     brightness: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     color_mode: Option<&'static str>,
-}
-
-/// The schedule sensor's state and attributes.
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct ScheduledState<'a> {
-    scene: Option<&'a str>,
-    until: Option<&'a str>,
-    overridden: bool,
-    note: Option<&'a str>,
 }
 
 /// These types have no maps with non-string keys and nothing that can fail
@@ -61,18 +73,11 @@ pub fn state_messages(topics: &Topics, snap: &Snapshot) -> Vec<Message> {
         Some(0) => LightState { state: Some("OFF"), brightness: None, color_mode: None },
         Some(b) => LightState { state: Some("ON"), brightness: Some(b), color_mode: Some("brightness") },
     };
-    let scheduled = ScheduledState {
-        scene: snap.schedule.due.as_deref(),
-        until: snap.schedule.until.as_deref(),
-        overridden: snap.schedule.overridden,
-        note: snap.schedule.note.as_deref(),
-    };
     vec![
         Message { topic: topics.patch.state.clone(), payload: json(&snap.patch) },
         Message { topic: topics.brightness.state.clone(), payload: json(&light) },
-        Message { topic: topics.scene.state.clone(), payload: snap.scene.clone().unwrap_or_else(|| NO_OPTION.to_string()) },
-        Message { topic: topics.schedule.state.clone(), payload: on_off(snap.schedule.enabled) },
-        Message { topic: topics.scheduled.state.clone(), payload: json(&scheduled) },
+        Message { topic: topics.level.state.clone(), payload: snap.brightness.map_or_else(|| NO_OPTION.to_string(), |b| percent_of(b).to_string()) },
+        Message { topic: topics.picture.state.clone(), payload: snap.picture.clone().unwrap_or_else(|| NO_OPTION.to_string()) },
         Message { topic: topics.panel.state.clone(), payload: on_off(snap.panel_connected) },
     ]
 }
@@ -97,8 +102,8 @@ struct LightCommand {
 }
 
 /// Turn one message on a command topic into a [`Command`], checked against
-/// what the entity declared: brightness `0..=255`, a scene in the list,
-/// `ON`/`OFF`, `PRESS`.
+/// what the entity declared: brightness `0..=255` or `0..=100` %, a picture
+/// in the list.
 ///
 /// `last_lit` is what a bare "on" restores.
 ///
@@ -126,23 +131,19 @@ pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapsh
             other => Err(format!("{topic}: state `{other}` is neither ON nor OFF")),
         };
     }
-    if topic == topics.scene.set {
-        return match snap.scenes.iter().find(|s| s.as_str() == text) {
-            Some(s) => Ok(Command::ApplyScene(s.clone())),
-            None => Err(format!("{topic}: there is no scene called `{text}`")),
-        };
+    if topic == topics.level.set {
+        let p: f64 = text.parse().map_err(|_| format!("{topic}: `{text}` is not a number"))?;
+        if !p.is_finite() || !(0.0..=100.0).contains(&p) {
+            return Err(format!("{topic}: {text} is outside 0..=100"));
+        }
+        // In range, so the cast is exact after rounding.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        return Ok(Command::SetBrightness(level_for(p.round() as u8)));
     }
-    if topic == topics.schedule.set {
-        return match text {
-            "ON" => Ok(Command::SetSchedule(true)),
-            "OFF" => Ok(Command::SetSchedule(false)),
-            other => Err(format!("{topic}: `{other}` is neither ON nor OFF")),
-        };
-    }
-    if topic == topics.resume.set {
-        return match text {
-            "PRESS" => Ok(Command::ResumeSchedule),
-            other => Err(format!("{topic}: `{other}` is not PRESS")),
+    if topic == topics.picture.set {
+        return match snap.pictures.iter().find(|p| p.label == text) {
+            Some(p) => Ok(Command::ShowPicture { patch: p.patch.clone(), setting: p.setting.clone() }),
+            None => Err(format!("{topic}: there is no picture called `{text}`")),
         };
     }
     Err(format!("{topic}: not a command topic"))
@@ -151,7 +152,7 @@ pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapsh
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::ha::{MqttConfig, PatchState, ScheduleState};
+    use crate::ha::{MqttConfig, PatchState, Picture};
     use std::path::PathBuf;
 
     pub(crate) fn config() -> MqttConfig {
@@ -181,19 +182,22 @@ pub(crate) mod tests {
         assert_eq!(text, want, "{name} changed; if that is meant, run with SCREENY_BLESS=1");
     }
 
+    pub(crate) fn pictures() -> Vec<Picture> {
+        let p = |name: &str, id: &str, setting: &str| Picture { label: Picture::label(name, setting), patch: id.into(), setting: setting.into() };
+        vec![
+            p("Overland", "overland", "Default"),
+            p("Overland", "overland", "Dusk"),
+            p("Vesta", "vesta", "Default"),
+            p("Vesta", "vesta", "Wall Clock"),
+        ]
+    }
+
     fn snap() -> Snapshot {
         Snapshot {
             patch: PatchState { id: "overland".into(), name: "Overland".into(), setting: "Dusk".into(), modified: false },
             brightness: Some(96),
-            scenes: vec!["Day".into(), "Night".into()],
-            scene: Some("Day".into()),
-            schedule: ScheduleState {
-                enabled: true,
-                due: Some("Day".into()),
-                until: Some("22:00".into()),
-                overridden: false,
-                note: None,
-            },
+            pictures: pictures(),
+            picture: Some("Overland · Dusk".into()),
             panel_connected: true,
         }
     }
@@ -213,8 +217,7 @@ pub(crate) mod tests {
         let topics = Topics::new(&config());
         let s = Snapshot {
             brightness: Some(0),
-            scene: None,
-            schedule: ScheduleState::default(),
+            picture: None,
             panel_connected: false,
             ..snap()
         };
@@ -233,9 +236,8 @@ pub(crate) mod tests {
         let topics = Topics::new(&config());
         let topic = match topic {
             "light" => topics.brightness.set.clone(),
-            "scene" => topics.scene.set.clone(),
-            "schedule" => topics.schedule.set.clone(),
-            "resume" => topics.resume.set.clone(),
+            "picture" => topics.picture.set.clone(),
+            "level" => topics.level.set.clone(),
             other => other.to_string(),
         };
         parse_command(&topics, &topic, payload.as_bytes(), &snap(), Some(40))
@@ -262,29 +264,61 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn scene_commands() {
-        assert_eq!(parse("scene", "Night"), Ok(Command::ApplyScene("Night".into())));
-        assert_eq!(parse("scene", " Night\n"), Ok(Command::ApplyScene("Night".into())), "whitespace is not part of a name");
-        assert!(parse("scene", "night").is_err(), "HA sends the option exactly as declared");
-        assert!(parse("scene", "Dusk").is_err());
-        assert!(parse("scene", "None").is_err());
+    fn picture_commands() {
+        let show = |patch: &str, setting: &str| Command::ShowPicture { patch: patch.into(), setting: setting.into() };
+        assert_eq!(parse("picture", "Vesta"), Ok(show("vesta", "Default")), "a bare patch name is its Default");
+        assert_eq!(parse("picture", "Vesta · Wall Clock"), Ok(show("vesta", "Wall Clock")));
+        assert_eq!(parse("picture", " Overland · Dusk\n"), Ok(show("overland", "Dusk")), "whitespace is not part of a label");
+        assert!(parse("picture", "vesta").is_err(), "HA sends the option exactly as declared");
+        assert!(parse("picture", "Vesta · Default").is_err(), "Default is the bare name");
+        assert!(parse("picture", "Flock").is_err(), "not in the list");
+        assert!(parse("picture", "None").is_err());
+        assert!(parse("screeny/studio/scene/set", "Day").is_err(), "scenes are retired");
     }
 
     #[test]
-    fn schedule_commands() {
-        assert_eq!(parse("schedule", "ON"), Ok(Command::SetSchedule(true)));
-        assert_eq!(parse("schedule", "OFF"), Ok(Command::SetSchedule(false)));
-        assert!(parse("schedule", "on").is_err());
-        assert_eq!(parse("resume", "PRESS"), Ok(Command::ResumeSchedule));
-        assert!(parse("resume", "").is_err());
+    fn labels() {
+        assert_eq!(Picture::label("Vesta", "Default"), "Vesta");
+        assert_eq!(Picture::label("Vesta", "default"), "Vesta");
+        assert_eq!(Picture::label("Metaballs", "Lava"), "Metaballs · Lava");
+    }
+
+    #[test]
+    fn level_commands() {
+        assert_eq!(parse("level", "0"), Ok(Command::SetBrightness(0)));
+        assert_eq!(parse("level", "100"), Ok(Command::SetBrightness(level_for(100))));
+        assert_eq!(parse("level", "4"), Ok(Command::SetBrightness(level_for(4))));
+        assert_eq!(parse("level", "40.0"), Ok(Command::SetBrightness(level_for(40))));
+        assert!(parse("level", "101").is_err());
+        assert!(parse("level", "-4").is_err());
+        assert!(parse("level", "dim").is_err());
+        assert!(parse("screeny/studio/schedule/set", "ON").is_err(), "the timetable is Home Assistant's now");
+    }
+
+    /// Card 310: the slider's percent is the panel's own resolution - one
+    /// output-enable slot in 25 - so every step is a real change and a level
+    /// read back is the percent that was set.
+    #[test]
+    fn percent_and_level_are_the_panels_own_steps() {
+        let stops = crate::page::brightness_stops();
+        assert_eq!(stops.len(), 26, "dark and 25 slots");
+        for (slots, stop) in stops.iter().enumerate() {
+            let percent = u8::try_from(slots).unwrap() * PERCENT_STEP;
+            assert_eq!(percent_of(*stop), percent);
+            assert_eq!(level_for(percent), *stop, "{percent} %");
+        }
+        assert_eq!(level_for(1), stops[1], "above zero is never dark");
+        assert_eq!(level_for(5), stops[1], "rounds to the nearest step");
+        assert_eq!(level_for(7), stops[2]);
+        assert_eq!(percent_of(255), 100);
     }
 
     #[test]
     fn nonsense_is_refused() {
         assert!(parse("screeny/studio/patch/set", "x").is_err(), "the patch is read-only");
-        assert!(parse("scene", &"x".repeat(MAX_COMMAND_BYTES + 1)).is_err());
+        assert!(parse("picture", &"x".repeat(MAX_COMMAND_BYTES + 1)).is_err());
         let topics = Topics::new(&config());
-        assert!(parse_command(&topics, &topics.scene.set, &[0xff, 0xfe], &snap(), None).is_err());
+        assert!(parse_command(&topics, &topics.picture.set, &[0xff, 0xfe], &snap(), None).is_err());
     }
 
     #[test]

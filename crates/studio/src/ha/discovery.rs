@@ -46,8 +46,7 @@ pub enum Component {
     Sensor(Sensor),
     Light(Light),
     Select(Select),
-    Switch(Switch),
-    Button(Button),
+    Number(Number),
     BinarySensor(BinarySensor),
 }
 
@@ -101,19 +100,21 @@ pub struct Select {
     pub options: Vec<String>,
 }
 
+/// A slider. HA shows one inline on the device's page, which it does not do
+/// for a light's brightness.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Switch {
+pub struct Number {
     #[serde(flatten)]
     pub entity: Entity,
     pub state_topic: String,
     pub command_topic: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Button {
-    #[serde(flatten)]
-    pub entity: Entity,
-    pub command_topic: String,
+    pub min: f32,
+    pub max: f32,
+    pub step: f32,
+    /// `slider` or `box`.
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_of_measurement: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -130,15 +131,23 @@ pub struct BinarySensor {
 pub mod key {
     pub const PATCH: &str = "patch";
     pub const BRIGHTNESS: &str = "brightness";
-    pub const SCENE: &str = "scene";
-    pub const SCHEDULE: &str = "schedule";
-    pub const RESUME: &str = "resume";
-    pub const SCHEDULED: &str = "scheduled";
+    pub const LEVEL: &str = "level";
+    pub const PICTURE: &str = "picture";
     pub const PANEL: &str = "panel";
 }
 
-/// The whole config for this studio as it is now. Only the scene list moves,
-/// so this is republished when a mode is made, renamed or deleted.
+/// Components a previous build announced and this one does not, with their
+/// platforms. Card 310 took modes and the timetable out of the studio - Home
+/// Assistant picks a picture and keeps the time now - and the Scene select,
+/// the schedule switch, button and sensor with them. Device
+/// discovery removes a component by listing it with its platform and nothing
+/// else; they are listed on every announcement, which costs a few bytes and
+/// means a studio that was down when this build first ran still cleans up.
+pub const RETIRED: &[(&str, &str)] = &[("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")];
+
+/// The whole config for this studio as it is now. Only the picture list
+/// moves, so this is republished when a named setting is saved, renamed or
+/// deleted.
 #[must_use]
 pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscovery {
     let entity = |key: &str, name: Option<&str>, icon: Option<&str>, category: Option<&str>| Entity {
@@ -163,12 +172,28 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
         }),
     );
     components.insert(
-        key::SCENE.to_string(),
+        key::LEVEL.to_string(),
+        Component::Number(Number {
+            entity: entity(key::LEVEL, Some("Brightness"), Some("mdi:brightness-6"), None),
+            state_topic: topics.level.state.clone(),
+            command_topic: topics.level.set.clone(),
+            // The panel has 25 visible steps above dark (card 187), each 4 % of
+            // full light: every stop of this slider is a real change, and no
+            // two stops show the same picture.
+            min: 0.0,
+            max: 100.0,
+            step: f32::from(super::payload::PERCENT_STEP),
+            mode: "slider".into(),
+            unit_of_measurement: Some("%".into()),
+        }),
+    );
+    components.insert(
+        key::PICTURE.to_string(),
         Component::Select(Select {
-            entity: entity(key::SCENE, Some("Scene"), Some("mdi:palette"), None),
-            state_topic: topics.scene.state.clone(),
-            command_topic: topics.scene.set.clone(),
-            options: snap.scenes.clone(),
+            entity: entity(key::PICTURE, Some("Picture"), Some("mdi:palette"), None),
+            state_topic: topics.picture.state.clone(),
+            command_topic: topics.picture.set.clone(),
+            options: snap.pictures.iter().map(|p| p.label.clone()).collect(),
         }),
     );
     components.insert(
@@ -178,31 +203,6 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
             state_topic: topics.patch.state.clone(),
             value_template: Some("{{ value_json.name }}".into()),
             json_attributes_topic: Some(topics.patch.state.clone()),
-        }),
-    );
-    components.insert(
-        key::SCHEDULE.to_string(),
-        Component::Switch(Switch {
-            entity: entity(key::SCHEDULE, Some("Schedule"), Some("mdi:calendar-clock"), None),
-            state_topic: topics.schedule.state.clone(),
-            command_topic: topics.schedule.set.clone(),
-        }),
-    );
-    components.insert(
-        key::RESUME.to_string(),
-        Component::Button(Button {
-            entity: entity(key::RESUME, Some("Back to schedule"), Some("mdi:calendar-refresh"), None),
-            command_topic: topics.resume.set.clone(),
-        }),
-    );
-    components.insert(
-        key::SCHEDULED.to_string(),
-        Component::Sensor(Sensor {
-            entity: entity(key::SCHEDULED, Some("Scheduled scene"), Some("mdi:calendar-star"), None),
-            state_topic: topics.scheduled.state.clone(),
-            // `null` renders as "None", which HA shows as unknown.
-            value_template: Some("{{ value_json.scene }}".into()),
-            json_attributes_topic: Some(topics.scheduled.state.clone()),
         }),
     );
     components.insert(
@@ -224,6 +224,19 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
         origin: Origin { name: "screeny-studio".into(), sw_version: env!("CARGO_PKG_VERSION").into(), support_url: None },
         components,
     }
+}
+
+/// What goes on the discovery topic: [`build`], plus the [`RETIRED`]
+/// components' removals.
+#[must_use]
+pub fn payload(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> serde_json::Value {
+    let mut value = serde_json::to_value(build(cfg, topics, snap)).unwrap_or_default();
+    if let Some(map) = value.get_mut("components").and_then(|c| c.as_object_mut()) {
+        for (key, platform) in RETIRED {
+            map.insert((*key).to_string(), serde_json::json!({ "platform": platform }));
+        }
+    }
+    value
 }
 
 /// Removing the whole device: an empty retained payload on its config topic.
@@ -257,14 +270,14 @@ mod tests {
     use crate::ha::payload::tests::{config, snapshot_json};
 
     fn snap() -> Snapshot {
-        Snapshot { scenes: vec!["Day".into(), "Night".into()], ..Snapshot::default() }
+        Snapshot { pictures: crate::ha::payload::tests::pictures(), ..Snapshot::default() }
     }
 
     #[test]
     fn the_device_config() {
         let cfg = config();
         let topics = Topics::new(&cfg);
-        let value = serde_json::to_value(build(&cfg, &topics, &snap())).unwrap();
+        let value = payload(&cfg, &topics, &snap());
         // The version moves with every release; the snapshot says `VERSION`.
         let text = serde_json::to_string_pretty(&value).unwrap().replace(env!("CARGO_PKG_VERSION"), "VERSION");
         snapshot_json("discovery.json", &text);
@@ -275,7 +288,8 @@ mod tests {
         let cfg = config();
         let topics = Topics::new(&cfg);
         let value = serde_json::to_value(build(&cfg, &topics, &snap())).unwrap();
-        let ids: Vec<&str> = value["components"].as_object().unwrap().values().map(|c| c["unique_id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = value["components"].as_object().unwrap().values().filter_map(|c| c["unique_id"].as_str()).collect();
+        assert_eq!(ids.len(), 5);
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -284,12 +298,22 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_list_is_the_modes() {
+    fn the_picture_list_is_every_patch_and_setting() {
         let cfg = config();
         let topics = Topics::new(&cfg);
         let d = build(&cfg, &topics, &snap());
-        let Component::Select(s) = &d.components[key::SCENE] else { panic!("the scene is a select") };
-        assert_eq!(s.options, ["Day", "Night"]);
+        let Component::Select(s) = &d.components[key::PICTURE] else { panic!("the picture is a select") };
+        assert_eq!(s.options, ["Overland", "Overland · Dusk", "Vesta", "Vesta · Wall Clock"]);
+    }
+
+    #[test]
+    fn the_timetables_entities_are_removed() {
+        let cfg = config();
+        let v = payload(&cfg, &Topics::new(&cfg), &snap());
+        assert_eq!(v["components"]["scene"], serde_json::json!({ "platform": "select" }));
+        assert_eq!(v["components"]["schedule"], serde_json::json!({ "platform": "switch" }));
+        assert_eq!(v["components"]["resume"], serde_json::json!({ "platform": "button" }));
+        assert_eq!(v["components"]["scheduled"], serde_json::json!({ "platform": "sensor" }));
     }
 
     #[test]
@@ -299,6 +323,6 @@ mod tests {
         assert_eq!(remove_device(&topics), ("homeassistant/device/screeny_studio/config".to_string(), Vec::new()));
         let v = remove_components(build(&cfg, &topics, &snap()), &[key::PANEL]);
         assert_eq!(v["components"]["panel"], serde_json::json!({ "platform": "binary_sensor" }));
-        assert_eq!(v["components"]["scene"]["platform"], "select", "the others stay whole");
+        assert_eq!(v["components"]["picture"]["platform"], "select", "the others stay whole");
     }
 }

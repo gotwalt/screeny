@@ -38,7 +38,6 @@ pub mod ha;
 pub mod health;
 pub mod page;
 pub mod player;
-pub mod schedule;
 pub mod state;
 pub mod ui;
 pub mod ws;
@@ -55,7 +54,7 @@ use tokio::sync::{broadcast, watch};
 use crate::api::{StateEvent, StatusEvent};
 use crate::devices::Registry;
 use crate::page::Screen;
-use crate::schedule::{Book, PageState};
+use crate::page::StudioState;
 use crate::player::{Player, Players};
 use crate::state::{SharedMemory, Store};
 
@@ -130,12 +129,6 @@ pub struct Config {
     /// The containment tests, and `SCREENY_STUDIO_FAULTS=1` for a human who
     /// wants to watch it happen. Never in the normal patch list.
     pub fault_patches: bool,
-    /// Card 302: where the scheduler reads the local time. The system clock;
-    /// a test puts its own hand on it.
-    pub clock: schedule::Clock,
-    /// Card 302: how often the scheduler looks at the clock
-    /// ([`schedule::TICK`], 30 s). It also looks once at start-up.
-    pub schedule_every: Duration,
     /// Card 308: Home Assistant over MQTT. `None` - the default, and what
     /// every test that does not ask gets - talks to no broker.
     pub mqtt: Option<ha::MqttConfig>,
@@ -157,8 +150,6 @@ impl Default for Config {
             supervise_every: Duration::from_secs(1),
             stale_after: Duration::from_secs(120),
             fault_patches: false,
-            clock: schedule::Clock::system(),
-            schedule_every: schedule::TICK,
             mqtt: None,
         }
     }
@@ -190,8 +181,6 @@ pub struct AppState {
     /// was last left set to, wherever it was left. Every panel shares it, and
     /// it is written to `state.json` and nowhere else.
     pub memory: SharedMemory,
-    /// Card 302: the modes, the schedule and its run record.
-    pub book: Arc<Book>,
     pub cfg: Arc<Config>,
     /// When the process started, for `/api/v1/status` and for the grace period
     /// `/healthz` gives a player that has not started yet.
@@ -207,7 +196,6 @@ impl AppState {
         store: Arc<Store>,
         devices: Arc<Registry>,
         players: Arc<Players>,
-        book: Arc<Book>,
     ) -> Self {
         let memory = players.memory();
         let screen = players.screen();
@@ -221,7 +209,6 @@ impl AppState {
             players,
             store,
             memory,
-            book,
             cfg,
             started: Instant::now(),
             rev: Arc::new(AtomicU64::new(0)),
@@ -234,12 +221,10 @@ impl AppState {
         self.players.ensure_page(self.cfg.fault_patches)
     }
 
-    /// What the page is showing, which is what the panel is showing - and,
-    /// since card 302, the modes, the schedule, and whether what is playing is
-    /// what the schedule says ([`PageState`]).
+    /// What the page is showing, which is what the panel is showing.
     #[must_use]
-    pub fn page_state(&self) -> PageState {
-        schedule::page_state(self)
+    pub fn page_state(&self) -> StudioState {
+        self.page().state()
     }
 
     /// Write everything worth keeping to the state file.
@@ -248,7 +233,6 @@ impl AppState {
     /// has a one-slot mailbox and the newest state wins, so a slider being
     /// dragged costs one write rather than sixty.
     pub fn persist(&self) {
-        let plan = self.book.snapshot();
         self.store.save(state::Persisted {
             version: state::SCHEMA_VERSION,
             devices: self.devices.stored(),
@@ -258,19 +242,16 @@ impl AppState {
             // `SCREENY_STATE_DIR` is the volume the container keeps across a
             // rebuild, so this is what makes the memory survive a deploy.
             patches: self.memory.snapshot(),
-            modes: plan.modes,
-            schedule: plan.schedule,
-            schedule_run: plan.run,
         });
     }
 
     /// Stamp a state change and hand it to everyone watching.
     #[must_use]
-    pub fn state_event(&self, from: Option<String>, state: PageState) -> StateEvent {
+    pub fn state_event(&self, from: Option<String>, state: StudioState) -> StateEvent {
         StateEvent { kind: "state", rev: self.rev.fetch_add(1, Ordering::Relaxed) + 1, from, state }
     }
 
-    pub fn publish_state(&self, from: Option<String>, state: PageState) {
+    pub fn publish_state(&self, from: Option<String>, state: StudioState) {
         // `send` fails only when nobody is listening, which is the normal case
         // for a server with no browser open.
         let _ = self.states.send(self.state_event(from, state));
@@ -334,12 +315,6 @@ impl Studio {
         // writes the same map (card 165).
         let memory = SharedMemory::new(saved.patches);
         let players = Arc::new(Players::new(memory.clone(), Screen::new()));
-        // Card 302: the modes, the schedule and the run record.
-        let book = Arc::new(Book::new(schedule::Plan {
-            modes: saved.modes,
-            schedule: saved.schedule,
-            run: saved.schedule_run,
-        }));
         for p in saved.players {
             players.load(p, cfg.fault_patches);
         }
@@ -358,7 +333,6 @@ impl Studio {
             store,
             devices,
             Arc::clone(&players),
-            book,
         );
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
@@ -374,9 +348,6 @@ impl Studio {
         fleet::spawn_discovery(state.clone());
         fleet::spawn_telemetry(state.clone());
         fleet::spawn_device_http(state.clone());
-        // After the players are running, so its look at start-up applies an
-        // entry that came due while the studio was down to a live player.
-        schedule::spawn(state.clone());
         let ha = cfg.mqtt.clone().map(|m| ha::bridge::start(&state, m));
 
         Ok(Studio { addr, listener, state, stop, ha })
