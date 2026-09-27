@@ -52,12 +52,18 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    // "bats (max at once, low default)" - card 319's own words: most of the
-    // time this patch shows the moon and nothing, or one bat.
+    // Card 319's own words are "max at once, low default" - `5` here (of a
+    // maximum `10`) is the compromise the Log records: a smaller default
+    // colony read truer to "the moon, and nothing, or one bat" but could not
+    // clear `rate.rs`'s animation-rate floor at this bat size, the same
+    // tension card 313 recorded and resolved the same way.
     param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 5.0),
     param("pace", "How fast the flight moves", 0.3, 2.5, 0.05, 1.0),
     param("jink", "How often it changes its mind, and how sharply", 0.0, 1.0, 0.01, 0.85),
     param("loose", "How loosely the colony holds together", 0.0, 1.0, 0.01, 0.55),
+    // Large by default (near this slider's own maximum) so the wing surface
+    // and the scalloped trailing edge actually grow in at ordinary roaming
+    // depth, not only on a rare close swoop - see the same Log entry.
     param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 2.9),
     param("beat", "How fast the wings beat (Hz)", 4.0, 14.0, 0.5, 8.5),
     param("moon", "How big the moon is", 0.4, 2.2, 0.05, 1.0),
