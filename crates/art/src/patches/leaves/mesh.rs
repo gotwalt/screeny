@@ -41,9 +41,16 @@ pub struct Vertex {
 /// enough sometimes to show its outline, where a bird's wing was one part of
 /// a bigger silhouette.
 const LEAF_RINGS: usize = 11;
-/// Rings along the stem, tip to where it meets the blade.
-const STEM_RINGS: usize = 2;
-const RINGS: usize = STEM_RINGS + LEAF_RINGS;
+/// Rings along the stem, tip to where it meets the blade. `pub(crate)`:
+/// card 322's [`super::shell`] pins exactly these rings (the stem) as its
+/// soft body's kinematic attachment, so it needs the boundary by name rather
+/// than a magic `2`.
+pub(crate) const STEM_RINGS: usize = 2;
+pub(crate) const RINGS: usize = STEM_RINGS + LEAF_RINGS;
+/// Lateral samples per ring: left edge, midrib, right edge. `pub(crate)` for
+/// the same reason as [`STEM_RINGS`] - [`super::shell`]'s soft body has one
+/// particle per `(ring, lateral)` pair.
+pub(crate) const LATERAL: usize = 3;
 
 const STEM_LEN: f32 = 0.22;
 const STEM_W: f32 = 0.02;
@@ -116,6 +123,43 @@ fn rings(shape: u8, cup: f32, curl: f32) -> [[V3; 3]; RINGS] {
         *slot = ring(shape, x, cup, curl);
     }
     out
+}
+
+/// A vertex's flat index in the *indexed* mesh ([`indexed`]): ring-major,
+/// three lateral slots per ring - the same `(ring, lateral)` pairing
+/// [`ring`]/[`rings`] already use, just flattened.
+pub(crate) fn vertex_index(ring: usize, lateral: usize) -> usize {
+    ring * LATERAL + lateral
+}
+
+/// The same rest geometry as [`build`], **indexed**: `RINGS * LATERAL`
+/// shared positions (leaf-local space, one per `(ring, lateral)` pair) plus
+/// the triangle list referencing them by index, rather than [`build`]'s
+/// triangle soup (three fresh vertices per triangle, sharing nothing).
+///
+/// Card 322: a soft body's edges connect *particles*, so two triangles that
+/// share an edge in the drawn mesh must share the actual particle at each
+/// end - [`super::shell`] builds its mass-spring topology directly on this.
+/// `build`'s own per-triangle-vertex normals stay as they are (still the
+/// house shape for a static GPU mesh, and their own tests below still check
+/// the rest-shape formulas); a soft body computes its normals from live,
+/// possibly-flexed positions instead (see `shell::LeafShell::normal_at`).
+#[must_use]
+pub(crate) fn indexed(shape: u8, cup: f32, curl: f32) -> (Vec<V3>, Vec<[u32; 3]>) {
+    let shape = shape % SHAPES as u8;
+    let r = rings(shape, cup, curl);
+    let positions: Vec<V3> = r.iter().flatten().copied().collect();
+    let idx = |ring: usize, lateral: usize| vertex_index(ring, lateral) as u32;
+    let mut faces = Vec::with_capacity((RINGS - 1) * 4);
+    for i in 0..RINGS - 1 {
+        let (l0, c0, ri0) = (idx(i, 0), idx(i, 1), idx(i, 2));
+        let (l1, c1, ri1) = (idx(i + 1, 0), idx(i + 1, 1), idx(i + 1, 2));
+        faces.push([l0, l1, c0]);
+        faces.push([c0, l1, c1]);
+        faces.push([c0, c1, ri0]);
+        faces.push([ri0, c1, ri1]);
+    }
+    (positions, faces)
 }
 
 /// Central-difference normal at ring `i`, lateral slot `j` (`0` left, `1`
@@ -216,6 +260,37 @@ mod tests {
         assert!(cupped[0].z > flat[0].z + 0.01, "left edge should have lifted: {:?} vs {:?}", cupped[0], flat[0]);
         assert!(cupped[2].z > flat[2].z + 0.01, "right edge should have lifted");
         assert!((cupped[1].z - flat[1].z).abs() < 1e-6, "the midrib itself does not move with cup");
+    }
+
+    /// [`indexed`]'s shared-vertex mesh has to describe the exact same
+    /// surface [`build`]'s triangle soup does - same vertex count (once
+    /// de-duplicated) and the same triangle count - or the soft body built on
+    /// it (card 322) would be flexing a different shape than the one drawn.
+    #[test]
+    fn indexed_matches_builds_vertex_count_and_triangle_count() {
+        for shape in 0..SHAPES as u8 {
+            let (positions, faces) = indexed(shape, 0.15, 0.1);
+            assert_eq!(positions.len(), RINGS * LATERAL);
+            let soup = build(shape, 0.15, 0.1);
+            assert_eq!(faces.len() * 3, soup.len(), "shape {shape}: triangle count must match");
+        }
+    }
+
+    /// Every indexed position is exactly the point [`rings`] computes for
+    /// that `(ring, lateral)` pair - the flattening in [`indexed`] must not
+    /// reorder or drop anything.
+    #[test]
+    fn indexed_positions_match_rings_directly() {
+        let (cup, curl) = (0.2, -0.1);
+        for shape in 0..SHAPES as u8 {
+            let (positions, _) = indexed(shape, cup, curl);
+            let expected = rings(shape, cup, curl);
+            for (ring_idx, ring_pts) in expected.iter().enumerate() {
+                for (lateral, pt) in ring_pts.iter().enumerate() {
+                    assert_eq!(positions[vertex_index(ring_idx, lateral)], *pt);
+                }
+            }
+        }
     }
 
     /// Curl only touches the tip half (`x > 0`); the stem end is unaffected.

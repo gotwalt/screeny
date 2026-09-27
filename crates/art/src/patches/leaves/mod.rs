@@ -38,6 +38,7 @@ mod geom;
 mod gpu;
 mod leaf;
 mod mesh;
+mod shell;
 mod wind;
 
 use crate::color::smoothstep;
