@@ -1,0 +1,7 @@
+# Pinned, per the card ("Python is acceptable here... pin versions"). Only
+# needed for `--video` (real capture, through MediaPipe's Hand Landmarker);
+# `--landmarks-json` and everything else in this directory (the filter, the
+# fit, contact detection, the synthetic-landmark generator, the tests) uses
+# nothing but the Python 3 standard library.
+mediapipe==0.10.14
+opencv-python==4.10.0.84

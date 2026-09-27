@@ -20,6 +20,7 @@ mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
 pub(crate) mod skeletons;
+pub(crate) mod thing;
 pub(crate) mod vesta;
 
 /// Card 178 took two out of this list, at the author's word ("let's also kill
@@ -42,6 +43,7 @@ pub static ALL: &[PatchDef] = &[
     #[cfg(feature = "gpu")]
     leaves::DEF,
     skeletons::DEF,
+    thing::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
     #[cfg(feature = "gpu")]

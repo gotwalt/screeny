@@ -1865,6 +1865,7 @@ dependencies = [
  "screeny-proto",
  "screeny-sim",
  "serde",
+ "serde_json",
  "wgpu",
 ]
 
