@@ -531,11 +531,13 @@ mod tests {
     /// buffer), the same discipline 326's own log names as the only reliable
     /// one ("the scaled-up PNG dots... compress contrast enough that a
     /// numeric dump was the only reliable check"). Seed and moment chosen by
-    /// rendering and dumping the head region's own raw lightness by hand
-    /// (see the card's Log): at `(7, 74.2)` the head sits in this box.
+    /// rendering and dumping several early, cheap `at`s by hand (see the
+    /// card's Log) rather than a later one that reads well but costs many
+    /// more simulated frames to reach: at `(10, 8.0)` the head sits in this
+    /// box.
     #[test]
     fn eyes_cut_real_dark_holes_in_the_head() {
-        let frame = frame_at(7, 74.2, &[]);
+        let frame = frame_at(10, 8.0, &[]);
         let px = colours(&frame);
         let l = |x: usize, y: usize| -> f32 {
             let c = px[y * W + x];
@@ -543,8 +545,8 @@ mod tests {
         };
         let mut brightest = 0.0_f32;
         let mut darkest = 1.0_f32;
-        for y in 4..10 {
-            for x in 28..36 {
+        for y in 0..10 {
+            for x in 30..46 {
                 let v = l(x, y);
                 brightest = brightest.max(v);
                 darkest = darkest.min(v);

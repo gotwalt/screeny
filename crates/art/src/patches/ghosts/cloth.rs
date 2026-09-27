@@ -62,10 +62,10 @@ use super::act::{ArmPose, Arms, Shape};
 use rapier3d::prelude::*;
 use std::f32::consts::PI;
 
-pub(crate) const COLS: usize = 24;
+pub(crate) const COLS: usize = 20;
 /// Four rings round the dome, plus a fifth: the neck (see [`build_template`]).
 pub(crate) const HEAD_RINGS: usize = 5;
-pub(crate) const SKIRT_RINGS: usize = 18;
+pub(crate) const SKIRT_RINGS: usize = 12;
 pub(crate) const RINGS: usize = HEAD_RINGS + SKIRT_RINGS;
 /// Pole + every ring.
 pub(crate) const VERTS: usize = 1 + RINGS * COLS;
@@ -84,7 +84,7 @@ const LEFT_COL: usize = 3 * COLS / 4;
 /// Which skirt ring hosts the wrist cuff - chosen so a real catenary run of
 /// rings separates it from the neck collar, and enough rings remain past it
 /// to hang on as the wing (see the module doc's "Wrist cuffs").
-const WRIST_RING: usize = HEAD_RINGS + 6;
+const WRIST_RING: usize = HEAD_RINGS + 4;
 /// Columns either side of [`RIGHT_COL`]/[`LEFT_COL`] that are part of the
 /// cuff, spread a little across the wrist's own width rather than collapsed
 /// to one point.
@@ -376,12 +376,7 @@ fn ring_col_index(ring: usize, col: usize) -> usize {
 /// `true` for a column within [`WRIST_SPAN`] of `centre` (wrapping around
 /// the azimuth), and the signed column offset from it if so.
 fn wrist_span_of(col: usize, centre: usize) -> Option<i64> {
-    for d in -WRIST_SPAN..=WRIST_SPAN {
-        if (centre as i64 + d).rem_euclid(COLS as i64) as usize == col {
-            return Some(d);
-        }
-    }
-    None
+    (-WRIST_SPAN..=WRIST_SPAN).find(|&d| (centre as i64 + d).rem_euclid(COLS as i64) as usize == col)
 }
 
 fn build_template(shape: Shape) -> Template {
@@ -697,7 +692,7 @@ impl Cloth {
 
         let mut cloth =
             Cloth { template, faces, head_kinematic, wrist_kinematic, shape, world, body, head_body, torso_body, arm_bodies, warped: 0.0 };
-        const SETTLE_STEPS: usize = 600;
+        const SETTLE_STEPS: usize = 450;
         for _ in 0..SETTLE_STEPS {
             cloth.step(body0, PHYS_DT, sway);
         }
