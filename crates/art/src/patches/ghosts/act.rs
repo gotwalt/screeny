@@ -142,7 +142,7 @@ impl Shape {
         let height = size.max(6.0);
         Shape {
             height,
-            head_r: height * rng.range(0.155, 0.18),
+            head_r: height * rng.range(0.17, 0.19),
             shoulder_x: height * rng.range(0.15, 0.19),
             shoulder_y: -height * rng.range(0.16, 0.20),
             upper_arm: height * rng.range(0.17, 0.21),
@@ -152,7 +152,7 @@ impl Shape {
             phase0: rng.range(0.0, TAU),
             alpha: rng.range(0.82, 0.96),
             turn_rate: rng.range(0.12, 0.26),
-            turn_amp: rng.range(0.18, 0.32),
+            turn_amp: rng.range(0.08, 0.16),
             depth_rate: rng.range(0.08, 0.2),
             depth_amp: rng.range(size * 0.12, size * 0.3),
             gesture_rate: rng.range(0.025, 0.05),
@@ -336,7 +336,12 @@ impl Act {
                 // review: "bias the yaw so the face is toward the camera
                 // most of the time; turns are brief").
                 let swing = (p.shape.turn_rate * active_el + p.shape.phase0 * 1.3).sin();
-                let yaw = p.shape.turn_amp * swing * swing * swing;
+                // The owner's review of an early render: the face must read
+                // face-on during a hold, not mid-turn - a `Peek`'s own
+                // enter/hold/leave split (`gaze_of`'s own windows) gates the
+                // turn to exactly zero for the hold itself, easing back in
+                // only for the brief entrance/exit legs.
+                let yaw = p.shape.turn_amp * swing * swing * swing * self.yaw_gate(active_el, dur);
                 let depth = p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin();
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
                 let arms = arm_gesture(p.shape, active_el);
@@ -412,6 +417,28 @@ impl Act {
             (dx / d, dy / d)
         } else {
             (forward, 0.0)
+        }
+    }
+
+    /// `0` while the head should hold face-on (a `Peek`'s own hold), `1`
+    /// otherwise - what [`poses_at`](Self::poses_at) multiplies the slow
+    /// turn-in-place by. Ramped over the same enter/leave legs
+    /// [`gaze_of`](Self::gaze_of)'s own `Peek` case uses, so the turn eases
+    /// back in exactly as the ghost starts moving again, not as a jump cut.
+    fn yaw_gate(&self, el: f32, dur: f32) -> f32 {
+        match self.kind {
+            Kind::Peek => {
+                let (enter, leave) = (dur * 0.28, dur * 0.28);
+                let hold = (dur - enter - leave).max(0.05);
+                if el < enter {
+                    1.0 - smooth01(el / enter)
+                } else if el < enter + hold {
+                    0.0
+                } else {
+                    smooth01((el - enter - hold) / leave)
+                }
+            }
+            _ => 1.0,
         }
     }
 

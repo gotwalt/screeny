@@ -63,7 +63,7 @@ const PARAMS: &[ParamSpec] = &[
     param("bounce", "Bouncy vs floaty (bounce and chase stay rare accents either way)", 0.0, 1.0, 0.01, 0.25),
     param("size", "How big they are (LEDs tall, crown to hem)", 16.0, 32.0, 0.5, 28.0),
     param("sway", "How loose/floppy the cloth is", 0.0, 1.0, 0.01, 0.45),
-    param("glow", "Soft glow", 0.0, 1.0, 0.01, 0.28),
+    param("glow", "Soft glow", 0.0, 1.0, 0.01, 0.08),
     param("color", "Colour (0 = grayscale)", 0.0, 1.0, 0.01, 0.32),
     param("hue", "Tint, when colour is on (0 = red, the cool default is ~205)", 0.0, 360.0, 1.0, 205.0),
     param("eyes", "Eye size", 0.5, 2.0, 0.05, 1.0),
@@ -152,19 +152,27 @@ fn build_indices() -> Vec<u32> {
 /// single fixed direction is enough at this scale and keeps every ghost lit
 /// the same way regardless of where it has turned to.
 const KEY_LIGHT: [f32; 3] = [-0.35, 0.82, 0.45];
-// The ghost is meant to be the light in the frame (card 326 review: "a soft,
-// luminous pale sheet ... brightest on the dome, folds as gentle shade, not
-// a mostly-mid-grey body") - raised twice now: 0.09 first, then 0.24 still
-// read as a mid-grey body with one bright corner rather than a lit sheet.
-const AMBIENT: f32 = 0.4;
-const KEY_STRENGTH: f32 = 0.62;
+// The ghost is meant to be the light in the frame, and the reference photo
+// is a near-white, fairly uniform sheet - not a mid-grey body. Raised again,
+// a third time (0.09, then 0.24, then 0.4): the owner's own side-by-side
+// against the reference called the sheet "dithered mid-grey" against the
+// reference's near-white. `KEY_STRENGTH` raised to match - together these
+// put most of the sheet close to `LIGHT_L` (below), the brightest thing
+// drawn, capped well short of full white by the palette's own `LIGHT_L`.
+const AMBIENT: f32 = 0.58;
+const KEY_STRENGTH: f32 = 0.85;
 /// "A little translucency ... a faint glow ... if it reads" (card 326): a
 /// soft light-through-fabric term on the shadow side, and a view-dependent
-/// rim, both riding the same `glow` param as the background bloom below.
-const BACK_STRENGTH: f32 = 0.16;
-const RIM_STRENGTH: f32 = 0.22;
+/// rim - both kept subtle now that the sheet itself is meant to be bright,
+/// so neither reads as its own separate glow on top of an already-light
+/// surface.
+const BACK_STRENGTH: f32 = 0.08;
+const RIM_STRENGTH: f32 = 0.12;
 /// "Soft shadows in the folds": how hard the curvature-based AO term bites.
-const AO_STRENGTH: f32 = 1.1;
+/// Lowered from `1.1`: the owner's review asked for "subtle, linear
+/// darkening" in the folds, not the heavy shading a near-white reference
+/// sheet does not show.
+const AO_STRENGTH: f32 = 0.45;
 
 const BASE_CHROMA: f32 = 0.1;
 const DARK_L: f32 = 0.02;
@@ -182,20 +190,28 @@ const STEPS: usize = 30;
 // whole head, `v` runs crown to hem) - a single radius drew a hole one shape
 // in LEDs and another in UV, not the tall oval wanted.
 const EYE_V: f32 = 2.8 / cloth::RINGS as f32;
-const EYE_DX: f32 = 0.13;
+// `u` wraps the *whole* head (360 degrees), not just the visible front - an
+// eye offset (`EYE_DX`) big enough to look reasonable as a fraction of 1.0
+// was actually carrying each eye 50-100+ degrees around toward the sides
+// (found by computing `azimuth` at the columns those `u` values land on),
+// most of it self-occluded or foreshortened to nothing - the real reason
+// bigger eyes never read as two solid holes, not their raw UV size. `0.06`
+// is 21.6 degrees off dead-centre each way: both eyes stay on the clearly
+// camera-facing part of the head.
+const EYE_DX: f32 = 0.06;
 const EYE_R_U: f32 = 0.05;
 const EYE_R_V: f32 = 0.065;
-const EYE_EDGE: f32 = 0.12;
+const EYE_EDGE: f32 = 0.08;
 /// Radians each eye tilts, mirrored - "tilted (sad/spooky)" (card 336).
 const EYE_TILT: f32 = 0.34;
 const GAZE_UV: f32 = 0.05;
 
 /// The mouth's own fixed centre (never gaze-shifted, unlike the eyes) and
 /// shape - "a frowning open mouth below [the eyes]" (card 336).
-const MOUTH_V: f32 = EYE_V + 0.04;
-const MOUTH_R_U: f32 = 0.028;
-const MOUTH_R_V: f32 = 0.024;
-const MOUTH_EDGE: f32 = 0.12;
+const MOUTH_V: f32 = EYE_V + 0.05;
+const MOUTH_R_U: f32 = 0.045;
+const MOUTH_R_V: f32 = 0.036;
+const MOUTH_EDGE: f32 = 0.1;
 
 // ---------------------------------------------------------------- the GPU
 
@@ -453,7 +469,7 @@ fn bloom(px: &[crate::color::Rgb], amount: f32) -> Vec<crate::color::Rgb> {
     if amount <= 0.0 {
         return px.to_vec();
     }
-    const RADIUS: i32 = 2;
+    const RADIUS: i32 = 1;
     let blur_pass = |src: &[crate::color::Rgb], horiz: bool| -> Vec<crate::color::Rgb> {
         let mut out = vec![crate::color::Rgb::BLACK; N];
         for y in 0..H as i32 {

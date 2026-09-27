@@ -86,9 +86,10 @@ const LEFT_COL: usize = 3 * COLS / 4;
 /// to hang on as the wing (see the module doc's "Wrist cuffs").
 const WRIST_RING: usize = HEAD_RINGS + 4;
 /// Columns either side of [`RIGHT_COL`]/[`LEFT_COL`] that are part of the
-/// cuff, spread a little across the wrist's own width rather than collapsed
-/// to one point.
-const WRIST_SPAN: i64 = 1;
+/// cuff. `0`: a single pinned vertex per wrist, on purpose - the owner's
+/// review of the first pass asked for the sheet to make an actual *point*
+/// at the wrist, not a rounded cuff.
+const WRIST_SPAN: i64 = 0;
 
 const THETA_TOP: f32 = 0.22; // ~13 degrees off the pole: the crown is not a point on screen either.
 /// Where the round part of the head stops - short of the equator, so the
@@ -105,11 +106,13 @@ const NECK_FACTOR: f32 = 0.56;
 /// ghost reads as a tall column that flares hard only where an arm actually
 /// holds the fabric out, not a bell at every azimuth (card 336: "tall
 /// silhouette").
-const BASE_FLARE: f32 = 1.05;
-/// Angular half-width (radians) of the raised-cosine bump that pulls the
-/// skirt's own template out toward each arm - just the initial guess the
-/// physics settle refines, not the final shape.
-const ARM_BUMP_WIDTH: f32 = 0.55;
+const BASE_FLARE: f32 = 0.4;
+/// Angular half-width (radians) of the linear taper that pulls the skirt's
+/// own template out toward each arm - narrow, so the wrist reads as an
+/// actual point (the owner's review: "a star shape... a sharp point at each
+/// wrist"), not a wide, rounded wing. About one column each side at this
+/// card's `COLS`.
+const ARM_BUMP_WIDTH: f32 = 0.32;
 
 /// The dome's own widest radius and the neck's radius, both a plain function
 /// of `head_r`.
@@ -130,13 +133,6 @@ fn baseline_hem_len(shape: Shape) -> f32 {
     (shape.height - shape.head_r - neck_y).max(shape.height * 0.3)
 }
 
-/// Fast early widening, easing off - the shoulders are most of the way to
-/// full width within the first skirt ring or two, not a slow taper all the
-/// way to the hem.
-fn flare_profile(t: f32) -> f32 {
-    1.0 - (1.0 - t) * (1.0 - t)
-}
-
 /// Shortest signed angular distance from `az` to `target`, in `(-PI, PI]`.
 fn az_delta(az: f32, target: f32) -> f32 {
     let d = (az - target + PI).rem_euclid(std::f32::consts::TAU) - PI;
@@ -144,17 +140,14 @@ fn az_delta(az: f32, target: f32) -> f32 {
 }
 
 /// How strongly azimuth `az` sits near an arm's own azimuth (`0` = right,
-/// `PI` = left) - `1.0` right at the arm, easing to `0.0` by
-/// [`ARM_BUMP_WIDTH`] radians away. Only used to seed the template's initial
-/// guess (see the module doc); the physics settle is what actually decides
-/// the shape.
+/// `PI` = left) - `1.0` right at the arm, falling *linearly* (not a smooth
+/// cosine ease) to `0.0` by [`ARM_BUMP_WIDTH`] radians away, so the wrist's
+/// own template has a real kink there rather than a rounded shoulder - the
+/// initial guess the physics settle refines, not the final shape, but the
+/// rest length it seeds matters: see [`build_template`].
 fn arm_bump(az: f32) -> f32 {
     let d = az_delta(az, 0.0).min(az_delta(az, PI));
-    if d > ARM_BUMP_WIDTH {
-        0.0
-    } else {
-        0.5 * (1.0 + (PI * d / ARM_BUMP_WIDTH).cos())
-    }
+    (1.0 - d / ARM_BUMP_WIDTH).max(0.0)
 }
 
 /// How far this ghost's cloth can reach from its own centreline, at its
@@ -166,7 +159,17 @@ pub(crate) fn extent(shape: Shape) -> f32 {
     let (_, elbow, wrist) = arm_points(shape, ArmPose { pitch: shape.arm_pitch0, elbow: 0.16 }, 1.0);
     let wing = wrist.x.max(elbow.x) + shape.hem_amp * 0.3;
     let (dome, _) = dome_and_neck_radius(shape.head_r);
-    dome.max(wing)
+    let flat = dome.max(wing);
+    // The camera's perspective grows a ghost's apparent footprint when it
+    // drifts closer than the reference distance (`depth < 0`, up to
+    // `depth_amp`) - `mod.rs`'s `REF_DISTANCE` is 40, so at the closest a
+    // ghost ever comes the picture is roughly `40 / (40 - depth_amp)` times
+    // its flat size. Framing (entrances, exits, a peek's own depth) has to
+    // clear the *apparent* extent, not just the flat one, or a hold at its
+    // closest can crop - found by rendering (the owner's review: "strip
+    // frame 1 is cut off at the left edge").
+    const REF_DISTANCE: f32 = 40.0;
+    flat * REF_DISTANCE / (REF_DISTANCE - shape.depth_amp).max(REF_DISTANCE * 0.5)
 }
 
 /// How far the crown sits above the head's own centre.
@@ -422,47 +425,58 @@ fn build_template(shape: Shape) -> Template {
         col_of[i] = col;
     }
 
-    // Skirt rings: a modest baseline flare away from the arms (`BASE_FLARE`
-    // - "tall silhouette", card 336), pulled wider toward each arm's own
-    // azimuth by `arm_bump` (an initial guess only; the physics settle,
-    // below, is what actually drapes it), with a per-column wave (`humps`)
-    // that only ever pulls the hem *down* and *out* at a few spots, never up
-    // - "uneven, pointed hem with corners hanging low".
+    // Skirt rings: a "star" profile (the owner's own word for the reference
+    // photo), not a bell. Away from the arms, a straight-line taper from the
+    // neck to a modest hem width (`BASE_FLARE`, "tall silhouette", card
+    // 336). At each arm's own azimuth (`arm_bump`, now a narrow linear taper
+    // rather than a wide cosine bump - see its own doc), the radius instead
+    // follows a *triangle*: straight out to a sharp point exactly at the
+    // wrist ring, then straight back in to that same modest hem width -
+    // "the sheet coming to a sharp point at each wrist... straight diagonal
+    // edges from wrist down to the hem" (the owner's review). A per-column
+    // wave (`humps`), sharpened with a cube so it reads as a corner rather
+    // than a wave, only ever pulls the hem *down* and *out* at a few spots
+    // away from the arms - "uneven, pointed hem with corners hanging low".
     let wrist_j = WRIST_RING - HEAD_RINGS + 1;
     let t_wrist = wrist_j as f32 / SKIRT_RINGS as f32;
     // The wrist's own horizontal reach at the baseline "held out" gesture -
-    // what `arm_bump`'s columns actually flare out toward (see `radius`
-    // below), not just an unused weight on the corner lobes.
+    // where the triangle's own peak sits.
     let (_, wrist_elbow, wrist_pt) = arm_points(shape, ArmPose { pitch: shape.arm_pitch0, elbow: 0.16 }, 1.0);
     let wrist_reach = wrist_pt.x.max(wrist_elbow.x);
+    // The hem's own baseline width, away from the arms and the corner
+    // lobes - what both the non-arm columns *and* the far side of the
+    // wrist's own triangle taper down to, so the point at the wrist reads
+    // against a narrower body on both sides of it.
+    let hem_base_radius = neck_radius * (1.0 + BASE_FLARE);
     for j in 1..=SKIRT_RINGS {
         let ring = HEAD_RINGS + j - 1;
         let t = j as f32 / SKIRT_RINGS as f32;
-        let ramp = (t / t_wrist).min(1.0);
-        let base_radius = neck_radius * (1.0 + BASE_FLARE * flare_profile(t));
+        let baseline_radius = lerp(neck_radius, hem_base_radius, t);
+        let wrist_profile = if t <= t_wrist {
+            lerp(neck_radius, wrist_reach, t / t_wrist)
+        } else {
+            lerp(wrist_reach, hem_base_radius, (t - t_wrist) / (1.0 - t_wrist))
+        };
         let base_y = neck_y - hem_len * t;
         for col in 0..COLS {
             let i = ring_col_index(ring, col);
             let az = azimuth(col);
-            let bump = arm_bump(az) * ramp;
-            let lobe = 0.5 + 0.5 * (humps * az + shape.phase0).cos();
-            let drip = shape.hem_amp * 0.6 * t * t * lobe * (1.0 - bump);
-            // Blend the baseline (torso-hugging) radius toward the wrist's
-            // own reach at the arm azimuths - this, not just the wrist
-            // cuff's own pinned ring, is what gives a whole wide *wing* of
-            // fabric hanging from each wrist rather than a single pulled
-            // thread (card 336: "wide fabric 'wings' at the wrists").
-            let radius = lerp(base_radius, wrist_reach, bump) + drip * 0.2;
-            let y = base_y - drip;
+            let bump = arm_bump(az);
+            // Cubed: a real corner, not a sine wave - and only away from the
+            // arms, so a corner lobe never blunts the wrist's own point.
+            let lobe = (0.5 + 0.5 * (humps * az + shape.phase0).cos()).powi(3);
+            let corner = shape.hem_amp * t * t * lobe * (1.0 - bump);
+            let radius = lerp(baseline_radius, wrist_profile, bump) + corner * 0.5;
+            let y = base_y - corner;
             local[i] = V3::new(radius * az.cos(), y, radius * az.sin());
             ring_of[i] = ring;
             col_of[i] = col;
 
-            // The wrist cuff: at the chosen ring, the columns nearest each
-            // arm are pinned instead of free, spread a little across the
-            // wrist's own width. Seed a reasonable initial guess here (the
-            // baseline "held out" gesture); `Cloth::step` overrides the
-            // *live* target every step from the actual gesture.
+            // The wrist point: at the chosen ring, the one column nearest
+            // each arm is pinned instead of free. Seed a reasonable initial
+            // guess here (the baseline "held out" gesture); `Cloth::step`
+            // overrides the *live* target every step from the actual
+            // gesture.
             if ring == WRIST_RING {
                 let side_and_span = wrist_span_of(col, RIGHT_COL)
                     .map(|d| (1.0_f32, d))
@@ -550,7 +564,13 @@ fn edge_softness(sway: f32) -> SpringCoefficients<Real> {
 /// swinging the whole thing as one rigid flap.
 fn bend_softness(sway: f32) -> SpringCoefficients<Real> {
     let s = sway.clamp(0.0, 1.0);
-    SpringCoefficients::new(lerp(30.0, 10.0, s), lerp(0.92, 0.6, s))
+    // Softer than 327's own numbers (was `lerp(30.0, 10.0, s)`): a stiffer
+    // bend rounds the wrist's own point and the hem's corners off into a
+    // smooth curve as the sheet settles - the owner's review named exactly
+    // this ("a star shape... ours is a rounded blob"). A softer bend lets
+    // the mesh crease sharply at the points the template (and the wrist's
+    // own kinematic pin) already put there, instead of resisting them.
+    SpringCoefficients::new(lerp(16.0, 5.0, s), lerp(0.88, 0.55, s))
 }
 
 /// The physics step, seconds - independent of the panel's frame rate.
