@@ -136,29 +136,48 @@ pub struct Tuning {
 /// shape the lens itself has.
 ///
 /// Card 319's "the moon, and nothing, or one bat" wants a colony that is
-/// often out of shot - a low bat count and long idle gaps between jinks
-/// already thin the picture out a great deal on their own (see the Log for
-/// how this cone's width was actually chosen: wide enough that a bat spends
-/// real time off to the side, not so wide that a default colony is routinely
-/// invisible for seconds at a stretch, which reads as a patch that forgot to
-/// animate rather than a calm one). `AZ_HALF`/`EL_HALF` are half-widths
-/// around that per-instance centre, not the old fixed centre-and-span pair -
-/// see the orchestrator's review round 1 in the Log for why the centre
-/// moved off dead-ahead.
-const AZ_AMP: f32 = 13.0;
-const EL_AMP: f32 = 9.0;
+/// often out of shot, and the orchestrator's own review round 1 wants the
+/// moon crossed "regularly, with empty stretches between" - not constantly:
+/// centring the cone on the moon (see the Log) made crossings *too* common
+/// at the cone's first width (bats were on the disc 92% of the time, never
+/// empty), because that width put the moon's own ~7 degree disc close to
+/// the middle of the wander's whole swing. Widened well past the disc so
+/// the colony mostly orbits around it and only crosses near the middle of
+/// each swing - see `tests.rs`'s `the_moon_is_crossed_regularly_with_empty_stretches_between`,
+/// which is what these numbers were actually tuned against.
+const AZ_AMP: f32 = 20.0;
+const EL_AMP: f32 = 14.0;
 const DEPTH_CENTRE: f32 = 9.5;
 const DEPTH_AMP: f32 = 5.0;
-
-const AZ_JIT: f32 = 11.0;
-const EL_JIT: f32 = 9.0;
 const DEPTH_JIT: f32 = 7.0;
+
+/// How close, in degrees, an *ambient* retarget (`pick_target`, most of
+/// them) is required to land to the roaming cone's own centre - which is the
+/// moon's own direction (`mod.rs::build`). Bigger than the moon's disc (a
+/// handful of degrees at the default `moon` size) plus its halo, so ambient
+/// wandering stays clear of it by construction rather than by the luck of a
+/// wide uniform draw - widening a symmetric jitter to get more empty
+/// stretches was tried first and made it worse (see the Log): a bat flying
+/// between two far, random points crosses the middle on the way whether or
+/// not the middle is where it is "aiming".
+const AMBIENT_MIN_R: f32 = 23.0;
+/// How much further out an ambient target can land, on top of `AMBIENT_MIN_R`,
+/// at full `loose`.
+const AMBIENT_SPAN: f32 = 19.0;
+/// Chance, per retarget, that a bat instead deliberately aims close to the
+/// centre - a real, controllable "crossings happening regularly" (the
+/// orchestrator's own words), independent of the ambient scatter above and
+/// of any one seed's slow wander phase.
+const MOON_APPROACH_CHANCE: f32 = 0.07;
+const MOON_APPROACH_SPREAD: f32 = 6.0;
+
 /// Half-width of the hard clamp (`contain`'s safety net) around the cone's
-/// own centre, in degrees - the same total span the fixed values `-26..26`
-/// and `-14..18` (about a centre of `0`/`2`) worked out to before the centre
-/// became per-instance.
-const AZ_HALF: f32 = 26.0;
-const EL_HALF: f32 = 16.0;
+/// own centre, in degrees - generous enough over the ambient sampling's own
+/// reach (`AMBIENT_MIN_R + AMBIENT_SPAN`, plus `AZ_AMP`/`EL_AMP`'s slow
+/// drift and the per-bat `off_az`/`off_el`) that the clamp is a rare safety
+/// net, not a wall the wander constantly presses against.
+const AZ_HALF: f32 = 70.0;
+const EL_HALF: f32 = 64.0;
 
 pub const Z_NEAR: f32 = 2.6;
 pub const Z_FAR: f32 = 42.0;
@@ -397,9 +416,31 @@ impl Sim {
         let (az0, el0, depth0) = self.wander(self.t);
         let (off_az, off_el) = (self.bats[i].off_az, self.bats[i].off_el);
         let spread = 0.35 + 0.65 * loose;
-        let mut az = az0 + off_az * spread + self.rng.range(-AZ_JIT, AZ_JIT) * spread;
-        let mut el = el0 + off_el * spread + self.rng.range(-EL_JIT, EL_JIT) * spread;
         let mut depth = depth0 + self.rng.range(-DEPTH_JIT, DEPTH_JIT) * (0.5 + 0.5 * spread);
+
+        // Most retargets are ambient: somewhere in the loose orbit around
+        // the wander centre, but sampled in *radius and bearing* about that
+        // centre rather than independently in az and el, so "ambient" can
+        // guarantee a minimum distance from it - the moon sits at that
+        // centre (`mod.rs::build`), so this is what keeps the colony mostly
+        // away from the disc without leaving it up to a uniform draw's own
+        // luck. Now and then a retarget instead deliberately aims close to
+        // the centre - "crossings happening regularly" (orchestrator review
+        // round 1) as a real, controllable event rather than an accident of
+        // how wide the ambient scatter happens to be (see the Log: widening
+        // the *ambient* scatter to get more crossings just made bats spend
+        // more of their flight time near the centre in transit, the
+        // opposite of "empty stretches between").
+        let (mut az, mut el) = if self.rng.f32() < MOON_APPROACH_CHANCE {
+            (
+                self.az_centre + self.rng.range(-MOON_APPROACH_SPREAD, MOON_APPROACH_SPREAD),
+                self.el_centre + self.rng.range(-MOON_APPROACH_SPREAD, MOON_APPROACH_SPREAD),
+            )
+        } else {
+            let bearing = self.rng.range(0.0, TAU);
+            let r = self.rng.range(AMBIENT_MIN_R, AMBIENT_MIN_R + AMBIENT_SPAN * spread);
+            (az0 + off_az * spread + r * bearing.cos(), el0 + off_el * spread + r * bearing.sin())
+        };
         if self.rng.f32() < SWOOP_CHANCE {
             depth = self.rng.range(SWOOP_DEPTH.0, SWOOP_DEPTH.1);
         }

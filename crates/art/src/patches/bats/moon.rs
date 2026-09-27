@@ -45,6 +45,15 @@ const LIMB_K: f32 = 0.55;
 const HALO_K: f32 = 60.0;
 const HALO_AMP: f32 = 0.12;
 
+/// A faint hint of the unlit disc - real earthshine, however dim - asked for
+/// by the orchestrator's review round 1: without it a crescent or gibbous
+/// moon's own dark side is indistinguishable from the black sky right next
+/// to it, and the card wants the moon to "read as a moon with surface and
+/// phase, not a disc" - a bald lit sliver with no sense of the sphere behind
+/// it reads more like the second than the first. Small enough that it never
+/// competes with the lit crescent for attention.
+const EARTHSHINE_AMP: f32 = 0.025;
+
 // Bold on purpose (brief section 3: "favour big shapes, bold contrast,
 // strong silhouettes" - a panel this coarse has no room for a subtle 10%
 // modulation). The first version of these numbers (0.30/0.24/0.26) was
@@ -162,7 +171,10 @@ impl Moon {
         let view = ray.scale(-1.0);
         let lambert = n.dot(light).max(0.0);
         let limb = (1.0 - LIMB_K) + LIMB_K * n.dot(view).max(0.0);
-        let disc_v = (lambert * limb * self.albedo(n)).clamp(0.0, 1.2);
+        let lit = (lambert * limb * self.albedo(n)).clamp(0.0, 1.2);
+        // Earthshine only ever raises the dark side's own floor - never adds
+        // to the lit side, which already carries the picture.
+        let disc_v = lit.max(EARTHSHINE_AMP * limb);
         // Blended smoothly across the last few percent of the disc, into the
         // halo's own value right at the limb, rather than a hard ring: an
         // anti-aliased limb on top of the supersampling that already does

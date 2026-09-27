@@ -52,19 +52,20 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    // Card 319's own words are "max at once, low default" - `5` here (of a
-    // maximum `10`) is the compromise the Log records: a smaller default
-    // colony read truer to "the moon, and nothing, or one bat" but could not
-    // clear `rate.rs`'s animation-rate floor at this bat size, the same
-    // tension card 313 recorded and resolved the same way.
-    param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 5.0),
+    // Card 319's own words are "max at once, low default". `rate.rs` briefly
+    // forced this higher (see the Log) until the orchestrator fixed that
+    // test on `main` (a peak-per-pixel-change escape hatch for exactly this
+    // kind of sparse, calm patch) - back to a genuinely low default now that
+    // the test no longer fights the brief.
+    param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 1.0),
     param("pace", "How fast the flight moves", 0.3, 2.5, 0.05, 1.0),
     param("jink", "How often it changes its mind, and how sharply", 0.0, 1.0, 0.01, 0.85),
     param("loose", "How loosely the colony holds together", 0.0, 1.0, 0.01, 0.55),
-    // Large by default (near this slider's own maximum) so the wing surface
-    // and the scalloped trailing edge actually grow in at ordinary roaming
-    // depth, not only on a rare close swoop - see the same Log entry.
-    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 2.9),
+    // A little bigger than a strict "distant and small" reading would pick,
+    // so the wing surface and the scalloped trailing edge actually grow in
+    // at ordinary roaming depth now and again, not only on a rare close
+    // swoop - see the Log for the taste call.
+    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.8),
     param("beat", "How fast the wings beat (Hz)", 4.0, 14.0, 0.5, 8.5),
     param("moon", "How big the moon is", 0.4, 2.2, 0.05, 1.0),
     param("phase", "The moon's phase: 0 and 1 are new, 0.5 is full", 0.0, 1.0, 0.01, 0.62),
@@ -421,7 +422,27 @@ impl Bats {
             }
         }
     }
+
+    /// The camera and the moon's current angular radius and sun direction,
+    /// exactly as `render` draws them - shared with it (not just kept in
+    /// step with it) so `tests.rs` can find the moon's own screen position
+    /// without duplicating this arithmetic and risking the two drifting
+    /// apart.
+    fn geometry(&self, ctx: &Ctx) -> (View, f32, V3) {
+        let focal = 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan();
+        let (fwd, right, up) = self.sim.cam();
+        let view = View { right, up, fwd, focal };
+        let moon_size = ctx.get("moon").max(0.05);
+        let ang_r = (ANG_R_BASE * moon_size).to_radians();
+        let phase = ctx.get("phase").rem_euclid(1.0);
+        let light = self.moon.light_for(phase);
+        (view, ang_r, light)
+    }
 }
+
+/// At `moon` 1.0 the disc is about two fifths of the panel's height - "a
+/// third to half the panel height or more" (card 319's picture).
+const ANG_R_BASE: f32 = 7.0;
 
 /// A bat state part-way through [`Bats::history`], at simulated time `t`
 /// (linear interpolation between the two bracketing recorded states - see
@@ -463,22 +484,11 @@ impl Patch for Bats {
         let tune = Bats::tuning(ctx);
         self.sim.resize(ctx.get("bats") as usize);
         self.advance(ctx, &tune);
+        let (view, ang_r, light) = self.geometry(ctx);
         let history: &[(f64, Vec<Bat>)] = self.history.make_contiguous();
 
         let color = ctx.get("color");
         let palette = build_palette(color);
-
-        let focal = 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan();
-        let (fwd, right, up) = self.sim.cam();
-        let view = View { right, up, fwd, focal };
-
-        let moon_size = ctx.get("moon").max(0.05);
-        // At `moon` 1.0 the disc is about two fifths of the panel's height -
-        // "a third to half the panel height or more" (card 319's picture).
-        const ANG_R_BASE: f32 = 7.0;
-        let ang_r = (ANG_R_BASE * moon_size).to_radians();
-        let phase = ctx.get("phase").rem_euclid(1.0);
-        let light = self.moon.light_for(phase);
 
         let size = ctx.get("size");
         let ss = SUPERSAMPLE;
