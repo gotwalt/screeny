@@ -203,7 +203,18 @@ struct LeavesPatch {
     warped: f64,
     steps: i64,
     falling: Vec<Leaf3D>,
+    /// Card 322: each falling leaf's own soft-body shell
+    /// ([`shell::LeafShell`]) - index-parallel with `falling`. Every place
+    /// that mutates one mutates the other in lockstep (`resize`, `respawn`,
+    /// the landed and gust-pluck paths in `step_once`), so `falling[i]`'s
+    /// rigid attachment and `shells[i]`'s flexing blade are always the same
+    /// leaf.
+    shells: Vec<shell::LeafShell>,
     resting: VecDeque<Leaf3D>,
+    /// Index-parallel with `resting`, same rule as `shells`: a leaf that
+    /// lands keeps the shell it actually flew down with (whatever flex it
+    /// had at the moment it touched down), not a fresh flat one.
+    resting_shells: VecDeque<shell::LeafShell>,
     pending: VecDeque<Pending>,
     gust_clock: f32,
     last_relaunch: f32,
@@ -242,7 +253,9 @@ fn new_patch(seed: u64) -> LeavesPatch {
         warped: 0.0,
         steps: 0,
         falling: Vec::new(),
+        shells: Vec::new(),
         resting: VecDeque::new(),
+        resting_shells: VecDeque::new(),
         pending: VecDeque::new(),
         gust_clock: 0.0,
         last_relaunch: -GUST_RELAUNCH_COOLDOWN,
@@ -267,6 +280,16 @@ fn random_build(rng: &mut Rng) -> Build {
         // visibly spiral (the module doc's "a few get enough of it").
         spin_bias: if rng.f32() < 0.35 { rng.range(-1.0, 1.0) } else { rng.range(-0.15, 0.15) },
     }
+}
+
+/// A fresh soft-body shell for a just-(re)spawned leaf, over its own build
+/// at its own scale ([`gpu::HALF_LEN_M`] times [`leaf::Build::size`] - the
+/// same number [`gpu::push_shell`] draws it at, not a second copy of it),
+/// settling briefly under its own weight before anyone can see it
+/// ([`shell::LeafShell::spawn`]'s own doc).
+fn fresh_shell(leaf: &Leaf3D) -> shell::LeafShell {
+    let scale = gpu::HALF_LEN_M * leaf.build.size;
+    shell::LeafShell::spawn(leaf.build, scale, shell::Attachment::of(leaf))
 }
 
 /// A leaf entering from the top of the frame at its own depth, per
@@ -315,12 +338,16 @@ impl LeavesPatch {
         if self.warm {
             self.warm = false;
             self.falling = (0..n).map(|_| spawn_scattered(&mut self.rng, wind_mean)).collect();
+            self.shells = self.falling.iter().map(fresh_shell).collect();
             return;
         }
         while self.falling.len() < n {
-            self.falling.push(spawn_entering(&mut self.rng, wind_mean));
+            let fresh = spawn_entering(&mut self.rng, wind_mean);
+            self.shells.push(fresh_shell(&fresh));
+            self.falling.push(fresh);
         }
         self.falling.truncate(n);
+        self.shells.truncate(n);
     }
 
     fn advance(&mut self, ctx: &Ctx, wind_mean: f32, gusts: f32, flutter: f32, rest_cap: usize) -> Vec<Vec<Leaf3D>> {
@@ -352,6 +379,12 @@ impl LeavesPatch {
             if strength > GUST_RELAUNCH_THRESHOLD && t - self.last_relaunch > GUST_RELAUNCH_COOLDOWN && !self.resting.is_empty() {
                 self.last_relaunch = t;
                 if let Some(plucked) = self.resting.pop_back() {
+                    // The plucked leaf's own shell is dropped here - a gust
+                    // that snatches a settled leaf back into the air throws
+                    // it hard enough (`next_falling_leaf`'s relaunch velocity
+                    // and spin) that it gets a fresh shell when it re-enters
+                    // `falling` below, the same as any other respawn.
+                    self.resting_shells.pop_back();
                     self.pending.push_back(plucked);
                 }
             }
@@ -359,6 +392,8 @@ impl LeavesPatch {
 
         for i in 0..self.falling.len() {
             self.falling[i].step(&self.wind, t, wind_mean, gusts, flutter);
+            let attach = shell::Attachment::of(&self.falling[i]);
+            self.shells[i].step(attach, &self.wind, t, wind_mean, gusts);
             let leaf = &self.falling[i];
             let ground = ground_y(leaf.pos.z);
             let landed = leaf.pos.y <= ground && leaf.aloft > 0.2;
@@ -375,20 +410,49 @@ impl LeavesPatch {
                 settled.omega = V3::ZERO;
                 settled.resting = true;
                 self.resting.push_back(settled);
+                let mut overflowed = false;
                 if self.resting.len() > rest_cap {
                     if let Some(bumped) = self.resting.pop_front() {
                         self.pending.push_back(bumped);
                     }
+                    overflowed = true;
                 }
-                self.respawn(i, wind_mean);
+                // Refill this slot exactly as `respawn` would, and only
+                // *after* the cap check above - card 321's own order, kept
+                // deliberately: a leaf this step's cap check just bumped
+                // into `pending` must be eligible to be the one
+                // `next_falling_leaf` immediately relaunches into this same
+                // slot, and calling it any earlier would draw from `self.rng`
+                // in a different order (a real behavioural change this card
+                // must not make - caught by rendering, not a test: an
+                // earlier draft called this before the cap check and visibly
+                // flew a different flock than 321 at the same seed).
+                let fresh_leaf = self.next_falling_leaf(wind_mean);
+                let new_shell = fresh_shell(&fresh_leaf);
+                // Keep this leaf's own shell - the flex it actually landed
+                // with, not a fresh flat one - in the resting queue,
+                // index-parallel with `resting` (push now, then pop-front
+                // too if this step's landing overflowed the cap, mirroring
+                // the two deque operations above exactly).
+                let landed_shell = std::mem::replace(&mut self.shells[i], new_shell);
+                self.resting_shells.push_back(landed_shell);
+                if overflowed {
+                    self.resting_shells.pop_front();
+                }
+                self.falling[i] = fresh_leaf;
             } else if off_side || stuck {
                 self.respawn(i, wind_mean);
             }
         }
     }
 
-    fn respawn(&mut self, i: usize, wind_mean: f32) {
-        let fresh = match self.pending.pop_front() {
+    /// The next leaf to occupy a falling slot: a relaunched (bumped or
+    /// gust-plucked) one if any are waiting, re-thrown back into the air,
+    /// else a brand new one entering at the top - shared by [`respawn`] and
+    /// the landed path in [`step_once`] above, so both ways a slot gets
+    /// refilled agree on where the leaf itself comes from.
+    fn next_falling_leaf(&mut self, wind_mean: f32) -> Leaf3D {
+        match self.pending.pop_front() {
             Some(mut relaunched) => {
                 relaunched.resting = false;
                 relaunched.aloft = 0.0;
@@ -397,7 +461,12 @@ impl LeavesPatch {
                 relaunched
             }
             None => spawn_entering(&mut self.rng, wind_mean),
-        };
+        }
+    }
+
+    fn respawn(&mut self, i: usize, wind_mean: f32) {
+        let fresh = self.next_falling_leaf(wind_mean);
+        self.shells[i] = fresh_shell(&fresh);
         self.falling[i] = fresh;
     }
 }
@@ -427,7 +496,9 @@ impl Patch for LeavesPatch {
             self.gpu = Some(gpu::open());
         }
         let Some(Some(live)) = self.gpu.as_ref() else { return Frame::black() };
-        let frame = live.render(&history, &self.resting, sun_deg, color, &FAMILIES, BLUR_TRAIL);
+        let falling = gpu::Falling { history: &history, shells: &self.shells };
+        let resting = gpu::Resting { leaves: &self.resting, shells: &self.resting_shells };
+        let frame = live.render(falling, resting, sun_deg, color, &FAMILIES, BLUR_TRAIL);
 
         let hues: Vec<f32> = FAMILIES.iter().map(|f| f.hue).collect();
         Palette::ramps(&hues, PALETTE_STEPS, PALETTE_RANGE, PALETTE_CHROMA * color.max(0.0))

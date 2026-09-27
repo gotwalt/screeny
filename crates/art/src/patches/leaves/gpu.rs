@@ -52,7 +52,10 @@ const SAMPLES: u32 = 8;
 /// How big one "unit" leaf (half-length 1 in [`super::mesh`]'s local space)
 /// is drawn, world metres, before [`super::leaf::Build::size`] scales it
 /// further. A real leaf's full length, at `size = 1`, is twice this.
-const HALF_LEN_M: f32 = 0.75;
+/// `pub(crate)`: card 322's [`super::shell::LeafShell`] needs the same number
+/// to build its soft body at the scale it will actually be drawn at, rather
+/// than a second, possibly-drifting copy of it in `mod.rs`.
+pub(crate) const HALF_LEN_M: f32 = 0.75;
 
 /// The sun's elevation above the horizon, degrees - fixed; only its bearing
 /// (`sun` param) is a taste the owner tunes. Low, the way an autumn sun (or a
@@ -79,6 +82,12 @@ struct GVertex {
     top_l: f32,
     bot_l: f32,
     alpha: f32,
+    /// Card 322: a curvature/crease proxy from [`super::shell::RenderVertex`],
+    /// 0 for the rigid motion-blur echoes ([`push_leaf`], which still draw
+    /// the flat rest mesh), the shell's own live value for the solid leaf
+    /// ([`push_shell`]), so a real bend darkens its own crease in the
+    /// shader (`ghosts::cloth::compute_fold`'s exact idea, ported).
+    fold: f32,
 }
 
 #[repr(C)]
@@ -114,7 +123,7 @@ fn make_pipeline(
     label: &str,
 ) -> wgpu::RenderPipeline {
     let attrs = wgpu::vertex_attr_array![
-        0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32, 4 => Float32, 5 => Float32, 6 => Float32
+        0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32, 4 => Float32, 5 => Float32, 6 => Float32, 7 => Float32
     ];
     let buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GVertex>() as u64,
@@ -196,10 +205,18 @@ pub(crate) fn open() -> Option<Live> {
     Some(Live { gpu, opaque_pipeline, ghost_pipeline, scene, bind_group, target: Offscreen::new(gpu, SAMPLES) })
 }
 
-/// One leaf's mesh, transformed into the GPU's own view space (see
-/// [`super`]'s module doc: `x` and `y` as they are, world `z` (a positive
-/// depth, camera-forward) negated, which is what lets the vertex shader be a
-/// single matrix multiply) and appended to `out`.
+/// One leaf's *rigid* mesh (the flat rest shape, card 321's own pipeline),
+/// transformed into the GPU's own view space (see [`super`]'s module doc:
+/// `x` and `y` as they are, world `z` (a positive depth, camera-forward)
+/// negated, which is what lets the vertex shader be a single matrix
+/// multiply) and appended to `out`. Used only for the fading motion-blur
+/// echoes ([`Live::render`]): the flex a real gust or landing gives the
+/// blade ([`push_shell`]) is a subtle, slow-moving thing next to a fast
+/// tumble's rotation, which is what the echoes exist to blur, so drawing
+/// them from the plain rest mesh at each historical step's rigid pose - not
+/// the shell's own deformation history, which is not kept per-step - is a
+/// deliberate, cheap simplification: it keeps the rotational smear the
+/// echoes are for while not pretending to a flex history nothing recorded.
 fn push_leaf(out: &mut Vec<GVertex>, leaf: &Leaf3D, families: &[HueFamily; HUES], color: f32, alpha: f32) {
     let fam = &families[leaf.build.hue as usize % HUES];
     let fade = depth_fade(leaf.pos.z);
@@ -216,8 +233,57 @@ fn push_leaf(out: &mut Vec<GVertex>, leaf: &Leaf3D, families: &[HueFamily; HUES]
             top_l,
             bot_l,
             alpha,
+            fold: 0.0,
         });
     }
+}
+
+/// One leaf's *actual*, flexing shell ([`super::shell::LeafShell`], card
+/// 322), already in world space (its pinned particles track the leaf's rigid
+/// stem every physics step - see the module doc; nothing here rotates or
+/// translates it again), appended to `out` as a triangle soup from the
+/// shell's own face list - the *one* implementation of this leaf's triangles
+/// ([`super::shell::LeafShell::faces`], which is also what the physics
+/// body's own collision surface uses), so the picture and the simulation can
+/// never triangulate a leaf two different ways.
+fn push_shell(out: &mut Vec<GVertex>, leaf: &Leaf3D, shell: &super::shell::LeafShell, families: &[HueFamily; HUES], color: f32, alpha: f32) {
+    let fam = &families[leaf.build.hue as usize % HUES];
+    let fade = depth_fade(leaf.pos.z);
+    let (hue, chroma, top_l, bot_l) = (fam.hue, fam.chroma * color.max(0.0), fam.top_l * fade, fam.bot_l * fade);
+    let verts = shell.render_vertices();
+    for &[a, b, c] in shell.faces() {
+        for &i in &[a, b, c] {
+            let v = verts[i as usize];
+            out.push(GVertex {
+                pos: [v.pos.x, v.pos.y - super::EYE_Y, -v.pos.z],
+                normal: [v.normal.x, v.normal.y, -v.normal.z],
+                hue,
+                chroma,
+                top_l,
+                bot_l,
+                alpha,
+                fold: v.fold,
+            });
+        }
+    }
+}
+
+/// Every leaf currently falling: its recent rigid-motion history (newest
+/// last, per [`super::LeavesPatch::advance`] - used for the motion-blur
+/// echoes) and its shells (card 322), index-parallel with `history.last()`.
+/// Bundled rather than passed as two more loose arguments to
+/// [`Live::render`] - `clippy::too_many_arguments`'s bar is a real one here,
+/// not a style nit to `#[allow]` past: these two always travel together.
+pub(crate) struct Falling<'a> {
+    pub history: &'a [Vec<Leaf3D>],
+    pub shells: &'a [super::shell::LeafShell],
+}
+
+/// Every leaf at rest: its state and its shells, index-parallel (same
+/// reasoning as [`Falling`]).
+pub(crate) struct Resting<'a> {
+    pub leaves: &'a VecDeque<Leaf3D>,
+    pub shells: &'a VecDeque<super::shell::LeafShell>,
 }
 
 fn camera(sun_deg: f32) -> ([f32; 4], Mat4) {
@@ -231,14 +297,18 @@ fn camera(sun_deg: f32) -> ([f32; 4], Mat4) {
 }
 
 impl Live {
-    /// Render every falling leaf's recent physics history (newest last, per
-    /// [`super::LeavesPatch::advance`]) and every resting leaf, and hand back
-    /// the continuous, linear-light frame.
+    /// Render every falling leaf's recent physics history and every resting
+    /// leaf, and hand back the continuous, linear-light frame. The solid
+    /// leaf drawn on top (falling: `falling.history`'s newest step; resting:
+    /// every one of `resting.leaves`) is always its own shell's live,
+    /// possibly-flexed shape ([`push_shell`]), never the flat rest mesh;
+    /// the fading motion-blur echoes behind it still draw that flat mesh
+    /// ([`push_leaf`]'s own doc says why).
     #[must_use]
     pub(crate) fn render(
         &self,
-        history: &[Vec<Leaf3D>],
-        resting: &VecDeque<Leaf3D>,
+        falling: Falling,
+        resting: Resting,
         sun_deg: f32,
         color: f32,
         families: &[HueFamily; HUES],
@@ -249,13 +319,13 @@ impl Live {
         self.gpu.queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
 
         let mut opaque = Vec::new();
-        if let Some(newest) = history.last() {
-            for leaf in newest {
-                push_leaf(&mut opaque, leaf, families, color, 1.0);
+        if let Some(newest) = falling.history.last() {
+            for (leaf, shell) in newest.iter().zip(falling.shells) {
+                push_shell(&mut opaque, leaf, shell, families, color, 1.0);
             }
         }
-        for leaf in resting {
-            push_leaf(&mut opaque, leaf, families, color, 1.0);
+        for (leaf, shell) in resting.leaves.iter().zip(resting.shells) {
+            push_shell(&mut opaque, leaf, shell, families, color, 1.0);
         }
 
         // The echoes: up to `blur_trail - 1` steps immediately before the
@@ -263,6 +333,7 @@ impl Live {
         // faded by `BLUR_WEIGHTS`. `history`'s last entry is the newest/solid
         // step, never an echo.
         let mut ghosts = Vec::new();
+        let history = falling.history;
         let n = history.len();
         let ghost_count = blur_trail.saturating_sub(1).min(n.saturating_sub(1));
         for age in 0..ghost_count {

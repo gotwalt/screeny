@@ -131,13 +131,6 @@ fn build_edges() -> (Vec<[u32; 2]>, Vec<[u32; 2]>) {
     (edges, bend)
 }
 
-/// The mesh's triangles in [`mesh::indexed`]'s own indexing - re-exported
-/// under this module so `gpu.rs` reads one implementation, not a second copy
-/// that could drift from the physics body's own collision surface.
-pub(crate) fn triangles(shape: u8, cup: f32, curl: f32) -> Vec<[u32; 3]> {
-    mesh::indexed(shape, cup, curl).1
-}
-
 /// A soft body's own material is tuned once for every leaf: a leaf is much
 /// stiffer than a sheet (`ghosts`' cloth), so both families sit well above
 /// that patch's own numbers - firm enough to hold a leaf's shape, soft
@@ -345,14 +338,18 @@ impl LeafShell {
         (0..VERTS).map(|i| RenderVertex { pos: self.pos(i), normal: self.normal_at(i), fold: self.fold_at(i) }).collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn all_positions(&self) -> Vec<V3> {
-        (0..VERTS).map(|i| self.pos(i)).collect()
+    /// This leaf's own triangles, in [`render_vertices`]'s indexing - the
+    /// *one* implementation of this leaf's mesh topology, shared by the
+    /// physics body's own collision surface (built from this exact list at
+    /// [`spawn`]) and [`super::gpu::push_shell`], so the render can never
+    /// triangulate a leaf differently than the simulation does.
+    pub(crate) fn faces(&self) -> &[[u32; 3]] {
+        &self.faces
     }
 
     #[cfg(test)]
-    pub(crate) fn is_pinned(&self, i: usize) -> bool {
-        self.pinned.contains(&i)
+    pub(crate) fn all_positions(&self) -> Vec<V3> {
+        (0..VERTS).map(|i| self.pos(i)).collect()
     }
 }
 
@@ -485,9 +482,19 @@ mod tests {
         assert!(worst > 0.01, "the blade never moved relative to its rest shape: worst {worst}");
     }
 
+    /// [`LeafShell::faces`], what [`super::gpu::push_shell`] actually draws,
+    /// is exactly [`mesh::indexed`]'s own triangle list for the same build,
+    /// not a second triangulation that could drift from it (the physics
+    /// body's own collision surface is built from this same list at
+    /// [`LeafShell::spawn`], so this is really "the render and the physics
+    /// agree", checked at the one seam a future edit to either side could
+    /// break silently).
     #[test]
-    fn triangles_and_indexed_agree_with_mesh() {
-        let (_, faces) = mesh::indexed(0, 0.1, 0.1);
-        assert_eq!(triangles(0, 0.1, 0.1), faces);
+    fn faces_agree_with_mesh_indexed() {
+        let mut rng = Rng::new(11);
+        let b = build(&mut rng);
+        let (_, faces) = mesh::indexed(b.shape, b.cup, b.curl);
+        let shell = LeafShell::spawn(b, 1.0, attach(V3::ZERO, Quat::IDENTITY));
+        assert_eq!(shell.faces(), faces.as_slice());
     }
 }
