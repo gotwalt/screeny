@@ -4,6 +4,7 @@ use crate::patch::PatchDef;
 
 pub(crate) mod clocks;
 pub(crate) mod flock;
+pub(crate) mod leaves;
 #[cfg(feature = "gpu")]
 mod knot;
 #[cfg(feature = "gpu")]
@@ -28,6 +29,7 @@ pub static ALL: &[PatchDef] = &[
     vesta::DEF,
     metaballs::DEF,
     flock::DEF,
+    leaves::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
     #[cfg(feature = "gpu")]
