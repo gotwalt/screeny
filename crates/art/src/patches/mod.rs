@@ -2,6 +2,7 @@
 
 use crate::patch::PatchDef;
 
+pub(crate) mod bats;
 pub(crate) mod clocks;
 pub(crate) mod flock;
 #[cfg(feature = "gpu")]
@@ -28,6 +29,7 @@ pub static ALL: &[PatchDef] = &[
     vesta::DEF,
     metaballs::DEF,
     flock::DEF,
+    bats::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
     #[cfg(feature = "gpu")]
