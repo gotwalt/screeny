@@ -65,8 +65,12 @@ fn fs_main(v: Varying) -> @location(0) vec4<f32> {
   let half_v = normalize(light + to_eye);
   let glint = pow(max(dot(nf, half_v), 0.0), 46.0);
 
-  let ambient = 0.05;
-  let intensity = ambient + 0.95 * diffuse + 0.80 * transmit;
+  // A face square-on to the key light reaches `intensity = 1.0` exactly (so
+  // `top_l`/`bot_l` are directly "how light this hue reads when well lit"),
+  // a backlit translucent face reaches a dimmer glow, and a face that gets
+  // neither sits at the ambient floor rather than vanishing to nothing.
+  let ambient = 0.24;
+  let intensity = ambient + (1.0 - ambient) * diffuse + 0.70 * transmit;
   let base_l = mix(v.bot_l, v.top_l, top_amount);
   let l = clamp(base_l * intensity, 0.0, 0.92);
   // A backlit leaf reads a little warmer, the way real chlorophyll and

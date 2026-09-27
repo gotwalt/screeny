@@ -52,7 +52,7 @@ const SAMPLES: u32 = 8;
 /// How big one "unit" leaf (half-length 1 in [`super::mesh`]'s local space)
 /// is drawn, world metres, before [`super::leaf::Build::size`] scales it
 /// further. A real leaf's full length, at `size = 1`, is twice this.
-const HALF_LEN_M: f32 = 0.11;
+const HALF_LEN_M: f32 = 0.75;
 
 /// The sun's elevation above the horizon, degrees - fixed; only its bearing
 /// (`sun` param) is a taste the owner tunes. Low, the way an autumn sun (or a

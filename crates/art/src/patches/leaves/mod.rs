@@ -99,10 +99,10 @@ struct HueFamily {
 }
 
 const FAMILIES: [HueFamily; HUES] = [
-    HueFamily { hue: 18.0, top_l: 0.60, bot_l: 0.38, chroma: 0.17 },
-    HueFamily { hue: 64.0, top_l: 0.68, bot_l: 0.44, chroma: 0.15 },
-    HueFamily { hue: 84.0, top_l: 0.62, bot_l: 0.40, chroma: 0.10 },
-    HueFamily { hue: 42.0, top_l: 0.48, bot_l: 0.30, chroma: 0.09 },
+    HueFamily { hue: 18.0, top_l: 0.80, bot_l: 0.58, chroma: 0.19 },
+    HueFamily { hue: 64.0, top_l: 0.86, bot_l: 0.64, chroma: 0.16 },
+    HueFamily { hue: 84.0, top_l: 0.82, bot_l: 0.60, chroma: 0.11 },
+    HueFamily { hue: 42.0, top_l: 0.72, bot_l: 0.50, chroma: 0.10 },
 ];
 
 /// The exact palette's shared lightness range and step count, and the
