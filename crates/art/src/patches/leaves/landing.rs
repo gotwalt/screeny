@@ -478,4 +478,28 @@ mod tests {
             "the second leaf's lowest point ({top_bottom}) sank well below the first leaf's own litter (top {base_top})"
         );
     }
+
+    /// The same touchdown, run twice, settles to the exact same final
+    /// litter both times - the determinism the card asks Rapier soft/rigid
+    /// bodies to be tested for explicitly ("new in the engine... edge
+    /// cases"), checked here at the one seam this module owns (the settle
+    /// itself), not merely inherited from `enhanced-determinism` being on.
+    #[test]
+    fn the_same_touchdown_settles_to_the_same_litter_twice() {
+        fn run(seed: u64) -> Litter {
+            let mut rng = Rng::new(seed);
+            let b = build(&mut rng);
+            let touchdown = touchdown_over(&mut rng, b, super::super::ground_plane_y() + 0.6);
+            let mut landing = Landing::begin(touchdown, std::iter::empty());
+            let mut steps = 0;
+            while !landing.settled() && steps < MAX_STEPS {
+                landing.step();
+                steps += 1;
+            }
+            landing.bake()
+        }
+        let (a, b) = (run(77), run(77));
+        let (pa, pb): (Vec<V3>, Vec<V3>) = (a.verts.iter().map(|v| v.pos).collect(), b.verts.iter().map(|v| v.pos).collect());
+        assert_eq!(pa, pb, "the same touchdown settled to two different final poses");
+    }
 }
