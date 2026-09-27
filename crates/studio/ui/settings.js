@@ -44,7 +44,8 @@ async function start() {
       case 'connected': return [`Connected. Home Assistant shows this studio as “${view.name}”.`, null];
       case 'connecting': return [`Connecting to ${view.host}…`, null];
       case 'failed': return [`Cannot connect: ${s.detail}. Trying again.`, 'bad'];
-      default: return [view.enabled ? 'Not connected.' : 'Off.', null];
+      // On, and the connection not started yet: it is about to be.
+      default: return [view.enabled ? `Connecting to ${view.host}…` : 'Off.', null];
     }
   }
 
@@ -80,6 +81,7 @@ async function start() {
     try {
       ha = await invoke('home_assistant/set', args);
       showHa();
+      soon();
       return true;
     } catch (e) {
       notice(e.message || String(e));
@@ -140,6 +142,10 @@ async function start() {
     } catch { /* the socket's own reconnect notice covers this */ }
   }
   setInterval(readHa, HA_MS);
+  // A change takes a moment to connect or fail; ask again sooner than the
+  // poll would, and at once when the tab comes back into view.
+  const soon = () => { setTimeout(readHa, 500); setTimeout(readHa, 1500); };
+  document.addEventListener('visibilitychange', readHa);
 
   // ------------------------------------------------------------- render ----
 
