@@ -28,8 +28,9 @@ use crate::rng::Rng;
 use crate::variety::Variety;
 use std::f32::consts::{PI, TAU};
 
-pub(crate) const KINDS: usize = 8;
-pub(crate) const NAMES: [&str; KINDS] = ["drift", "bounce", "peek", "swoop", "cross", "chase", "boo", "materialize"];
+pub(crate) const KINDS: usize = 10;
+pub(crate) const NAMES: [&str; KINDS] =
+    ["drift", "bounce", "peek", "swoop", "cross", "chase", "boo", "materialize", "rise", "twirl"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -55,6 +56,16 @@ pub(crate) enum Kind {
     /// and leave by moving across an edge" (card 339's own acceptance
     /// criterion), and a rare one by construction (see `choose_kind`).
     Materialize,
+    /// Straight up from below the bottom edge to above the top one, or the
+    /// reverse - "rise from below / sink out of frame" (card 340's own
+    /// wishlist), the vertical counterpart to [`Kind::Drift`]'s horizontal
+    /// crossing.
+    Rise,
+    /// A `Drift`-like crossing with a real, continuous body spin through the
+    /// middle of it - "spin or twirl so the sheet swings out" (card 340):
+    /// the sheet's own inertia, not a scripted flare, is what actually
+    /// swings it wide as the body yaws quickly.
+    Twirl,
 }
 
 impl Kind {
@@ -67,7 +78,9 @@ impl Kind {
             4 => Kind::Cross,
             5 => Kind::Chase,
             6 => Kind::Boo,
-            _ => Kind::Materialize,
+            7 => Kind::Materialize,
+            8 => Kind::Rise,
+            _ => Kind::Twirl,
         }
     }
 
@@ -81,6 +94,8 @@ impl Kind {
             Kind::Chase => 5,
             Kind::Boo => 6,
             Kind::Materialize => 7,
+            Kind::Rise => 8,
+            Kind::Twirl => 9,
         }]
     }
 
@@ -349,6 +364,39 @@ pub(crate) struct Act {
     pub name: String,
     pub tags: Vec<String>,
     plans: Vec<Plan>,
+    /// This act's own identity, drawn fresh from the seed's RNG stream when
+    /// it is built - what [`Act::poses_at`] keys a ghost's cloth on (via
+    /// `mod.rs`'s `HashMap<u64, Cloth>`), together with the member index
+    /// within this act.
+    ///
+    /// Card 340: this used to be `self.start.to_bits()` - the act's own
+    /// start time - which is exactly right for telling the two members of
+    /// *one* two-ghost act apart, but wrong across acts: an "ensemble" beat
+    /// (`spawn_one`'s `slots > 1`) builds *several separate, solo* `Act`s
+    /// that all share the exact same `start` (the beat's own start,
+    /// unchanged through `spawn_one`'s `while remaining > 0` loop) - so
+    /// every one of them computed the *identical* key (`start.to_bits() ^
+    /// (0).wrapping_mul(..)`, since a solo act's only member is index `0`).
+    /// Two or more simultaneously visible ghosts then collided on the same
+    /// `HashMap` slot in `mod.rs`'s `clothes`: each still got its own,
+    /// correct `Pose` (position, yaw, gaze), but both fought over *one*
+    /// shared `Cloth`, stepping its physics toward two different targets
+    /// every frame - exactly the owner's own words on card 336/338's ghost
+    /// ("I think the rendering is crashing somehow ... rendering with some
+    /// crazy artifacts", card 339) and, later, the "dark mark on the lower
+    /// body" the orchestrator saw in card 339's own contact sheet (a
+    /// correctly-projected face stamped over a mesh that was, at that
+    /// instant, some contested blend of two different ghosts' bodies).
+    /// Found by instrumenting, not guessed: a diagnostic in `mod.rs`'s test
+    /// module recorded every pixel `face::stamp` actually painted alongside
+    /// the exact `head_pos` it used, and cross-checked it against the
+    /// director's own `poses_at(t)` for that same key - the two disagreed by
+    /// tens of LEDs, which is only possible if two different `Pose`s really
+    /// did share one key. A random 64-bit draw per act, from the same seeded
+    /// stream everything else in this module already uses, is unique for
+    /// all practical purposes (regardless of how many acts share a `start`)
+    /// and costs nothing else about the schedule's own determinism.
+    id: u64,
 }
 
 /// How far a drifting or peeking ghost's float bob answers to `bounce`'s
@@ -381,7 +429,7 @@ impl Act {
                     return None;
                 }
                 let p = &self.plans[i];
-                let key = self.start.to_bits() ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let key = self.id ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
                 // Cubed, not a plain sine: mostly near zero (facing the
                 // camera), with brief excursions to the peak rather than
                 // spending equal time at every angle in between (card 326
@@ -393,7 +441,11 @@ impl Act {
                 // enter/hold/leave split (`gaze_of`'s own windows) gates the
                 // turn to exactly zero for the hold itself, easing back in
                 // only for the brief entrance/exit legs.
-                let yaw = p.shape.turn_amp * swing * swing * swing * self.yaw_gate(active_el, dur);
+                let yaw = if self.kind == Kind::Twirl {
+                    twirl_yaw(active_el, dur)
+                } else {
+                    p.shape.turn_amp * swing * swing * swing * self.yaw_gate(active_el, dur)
+                };
                 let depth = if self.kind == Kind::Boo {
                     boo_depth(p.shape, active_el, dur)
                 } else {
@@ -489,6 +541,29 @@ impl Act {
             // when the act was built (`p.amp`); only its own alpha (see
             // `materialize_alpha`) changes.
             Kind::Materialize => (p.amp, p.y, el),
+            // Straight vertical crossing: `p.y` (repurposed - there is no
+            // horizontal band to store here) holds the fixed-ish `x`, with a
+            // little horizontal sway from the same bob term `Drift` applies
+            // to `y`; `p.flip` picks the direction (`false` = rising from
+            // below, `true` = sinking from above), matching `travel`'s own
+            // `flip` convention of "which edge it starts from".
+            Kind::Rise => {
+                let vmargin = super::cloth::total_height(p.shape) + 1.6;
+                let u = (el / dur).clamp(0.0, 1.0);
+                let (y0, y1) =
+                    if p.flip { (-vmargin, crate::frame::H as f32 + vmargin) } else { (crate::frame::H as f32 + vmargin, -vmargin) };
+                let y = lerp(y0, y1, u);
+                let x = p.y + p.amp * (TAU * p.freq * el + p.shape.phase0).sin();
+                (x, y, el)
+            }
+            // A `Drift`-like horizontal crossing; the spin itself lives in
+            // `poses_at`'s own yaw calculation (`twirl_yaw`), not here.
+            Kind::Twirl => {
+                let u = (el / dur).clamp(0.0, 1.0);
+                let x = travel(p.flip, u, margin);
+                let y = p.y + p.amp * (TAU * p.freq * el + p.shape.phase0).sin();
+                (x, y, el)
+            }
         }
     }
 
@@ -568,10 +643,19 @@ impl Act {
                 self.glance_or_forward(i, forward, centres, p.shape.margin() * 2.2)
             }
             Kind::Chase => {
-                // The leader keeps its eyes ahead; the follower is the one
-                // with someone to look at.
+                // The leader mostly keeps its eyes ahead, but glances back
+                // over its own shoulder once, partway through - "one
+                // startling the other" (card 340's own wishlist item), a
+                // real look-back rather than any change to its own path or
+                // speed. The follower is the one that otherwise has someone
+                // to look at.
                 if i == 0 {
-                    (forward, 0.0)
+                    let u = (el / dur).clamp(0.0, 1.0);
+                    if (0.4..0.6).contains(&u) {
+                        normalise((-forward, 0.0))
+                    } else {
+                        (forward, 0.0)
+                    }
                 } else {
                     self.glance_or_forward(i, forward, centres, p.shape.margin() * 3.5)
                 }
@@ -588,9 +672,12 @@ impl Act {
                 let up = -(PI * u).cos() * 0.5;
                 normalise((forward, up))
             }
-            Kind::Drift => normalise((forward, 0.0)),
+            Kind::Drift | Kind::Twirl => normalise((forward, 0.0)),
             // Straight at the viewer - the point of both moves.
             Kind::Boo | Kind::Materialize => (0.0, 0.0),
+            // Looking the way it is travelling - up while rising, down while
+            // sinking.
+            Kind::Rise => normalise((0.0, if p.flip { 1.0 } else { -1.0 })),
         }
     }
 }
@@ -720,6 +807,22 @@ fn materialize_alpha(shape: Shape, el: f32, dur: f32) -> f32 {
     shape.alpha * u
 }
 
+/// A `Twirl`'s own continuous body spin, eased in and back out over the
+/// *whole* act (not a separate enter/hold/leave split like `Boo`/`Peek`'s
+/// holds - the spin *is* the travel, not something paused for): the spin
+/// fraction itself follows `smooth01`, so the angular *rate* eases up from
+/// zero and back down to zero at the ends rather than snapping to a constant
+/// spin speed - "spin or twirl so the sheet swings out" (card 340). `SPINS`
+/// full turns is enough that the sheet's own inertia visibly lags and flares
+/// (checked by rendering, not assumed - see this card's Log) without so many
+/// turns the motion blur smears it into a formless blur.
+const TWIRL_SPINS: f32 = 1.5;
+
+fn twirl_yaw(el: f32, dur: f32) -> f32 {
+    let u = (el / dur).clamp(0.0, 1.0);
+    TAU * TWIRL_SPINS * smooth01(u)
+}
+
 // --------------------------------------------------------------------------
 
 /// Seconds of nothing on screen between beats. Card 326, on top of card
@@ -832,8 +935,8 @@ impl Director {
         }
         let bounce = ctx.get("bounce");
         let bias = |k: Kind| match k {
-            Kind::Bounce | Kind::Swoop => bounce,
-            Kind::Drift | Kind::Peek => 1.0 - bounce,
+            Kind::Bounce | Kind::Swoop | Kind::Twirl => bounce,
+            Kind::Drift | Kind::Peek | Kind::Rise => 1.0 - bounce,
             Kind::Cross | Kind::Chase | Kind::Boo | Kind::Materialize => 0.5,
         };
         let mut best: Option<(f32, Kind)> = None;
@@ -859,6 +962,13 @@ impl Director {
             if k == Kind::Bounce {
                 score -= 0.08;
             }
+            // `Twirl` needs no separate penalty: like `Bounce`/`Swoop`, its
+            // own `bias` already ties it to the `bounce` param (low by
+            // default), which is enough to keep it an accent - measured:
+            // adding the same flat penalty `Bounce` gets pushed it out of a
+            // twenty-minute run entirely for more than one seed, the exact
+            // failure mode `Bounce`'s own comment above already names for a
+            // flat multiplier.
             // "Mostly one thing at a time; a surprise every so often" (card
             // 339) - `Boo` and `Materialize` are the surprises, kept rarer
             // than the everyday `Bounce` accent by the same additive-penalty
@@ -875,6 +985,10 @@ impl Director {
     }
 
     fn build_act(&mut self, kind: Kind, start: f64, pace: f32, ctx: &Ctx) -> Act {
+        // Drawn first, before anything else pulls from the same stream: see
+        // `Act::id`'s own doc for why a beat-shared `start` can't be the
+        // key's own basis any more.
+        let id = self.rng.u64();
         let size = ctx.get("size");
         let bounce = ctx.get("bounce");
         let arms = ctx.get("arms");
@@ -1018,9 +1132,35 @@ impl Director {
                 let plan = Plan { shape: shapes[0], flip, y, amp: x, freq: 0.0, bounces: 0.0, delay: 0.0 };
                 ("materialize".to_string(), vec!["kind:materialize".into()], vec![plan], dur, dur)
             }
+            Kind::Rise => {
+                // The vertical counterpart of `Drift`'s own horizontal
+                // margin: clear the *whole* vertical reach (crown and hem
+                // both) rather than working out which end leads in which
+                // direction - the same conservative, single-number choice
+                // `Shape::margin` already makes for the horizontal case.
+                let vmargin = shapes[0].total_height() + 1.6;
+                let height = crate::frame::H as f32 + 2.0 * vmargin;
+                let dur = (height / (base_speed * 0.85)) as f64 * self.rng.range(0.9, 1.2) as f64;
+                // A horizontal band that keeps the *whole* silhouette
+                // (arms-out extent included) on-panel throughout the
+                // crossing - `x` is fixed-ish (`Plan::y`, repurposed - see
+                // `centre_of`'s own doc), with only a little sway on top.
+                let hmargin = shapes[0].margin();
+                let x_lo = hmargin;
+                let x_hi = (crate::frame::W as f32 - hmargin).max(x_lo + 0.5);
+                let x = self.rng.range(x_lo, x_hi);
+                let plan = Plan { shape: shapes[0], flip, y: x, amp: bob_amp * 0.5, freq: bob_freq, bounces: 0.0, delay: 0.0 };
+                let name = if flip { "sink, out the bottom" } else { "rise, from below" };
+                (name.to_string(), vec!["kind:rise".into()], vec![plan], dur, dur)
+            }
+            Kind::Twirl => {
+                let dur = (width / (base_speed * 0.8)) as f64 * self.rng.range(0.95, 1.2) as f64;
+                let plan = Plan { shape: shapes[0], flip, y, amp: bob_amp, freq: bob_freq, bounces: 0.0, delay: 0.0 };
+                (format!("twirl, {}", side_word(flip)), vec!["kind:twirl".into(), side_tag(flip)], vec![plan], dur, dur)
+            }
         };
 
-        Act { kind, start, duration, travel_dur, name, tags, plans }
+        Act { kind, start, duration, travel_dur, name, tags, plans, id }
     }
 }
 
@@ -1111,6 +1251,17 @@ mod tests {
             let start_poses = act.poses_at(act.start + 1e-3);
             let end_poses = act.poses_at((act.start + act.duration - 1e-3).max(act.start));
             for pose in start_poses.iter().chain(end_poses.iter()) {
+                // `Rise` crosses a vertical edge, not a horizontal one - its
+                // own `x` stays deliberately on-panel throughout (see
+                // `centre_of`'s own doc), so the horizontal check below would
+                // never pass for it; check `cy` against the vertical margin
+                // instead.
+                if act.kind == Kind::Rise {
+                    let vmargin = pose.shape.total_height() + 1.6;
+                    let clear = pose.cy < -vmargin + 0.5 || pose.cy > crate::frame::H as f32 + vmargin - 0.5;
+                    assert!(clear, "{}: ghost at y={} (vmargin {vmargin}) is on screen at an edge of its act", act.name, pose.cy);
+                    continue;
+                }
                 let margin = pose.shape.margin();
                 let clear = pose.cx < -margin + 0.5 || pose.cx > W as f32 + margin - 0.5;
                 assert!(clear, "{}: ghost at x={} (margin {margin}) is on screen at an edge of its act", act.name, pose.cx);
@@ -1172,6 +1323,40 @@ mod tests {
         }
     }
 
+    /// Card 340's own real bug, found by instrumenting a render (see
+    /// `mod.rs`'s Log, not repeated here): `spawn_one`'s "ensemble" beat
+    /// (`slots > 1`) can build several *separate, solo* acts that all share
+    /// the exact same `start` (the beat's own start, unchanged through the
+    /// `while remaining > 0` loop) - and `poses_at`'s key used to be derived
+    /// from `start` alone, so every solo act in the same beat produced the
+    /// *identical* key. Two simultaneously visible ghosts then collided on
+    /// the same `HashMap<u64, Cloth>` slot in `mod.rs`, each correctly
+    /// posed but fighting over one shared cloth - the owner's own "crazy
+    /// artifacts" (card 339) and the "dark mark on the lower body" a review
+    /// later saw (card 340). Direct regression test: a busy, `ghosts`-at-cap
+    /// run over ten real minutes (long enough for several ensemble beats at
+    /// `ENSEMBLE_CHANCE`) never has two simultaneously-posed ghosts share a
+    /// key.
+    #[test]
+    fn simultaneous_ghosts_never_share_a_key() {
+        let p = params(&[("ghosts", 4.0)]);
+        let mut d = Director::new(11);
+        let mut t = 0.0;
+        let mut saw_more_than_one = false;
+        while t < 600.0 {
+            d.advance(t, &ctx(t, &p));
+            let poses = d.poses_at(t);
+            saw_more_than_one |= poses.len() > 1;
+            let mut keys: Vec<u64> = poses.iter().map(|p| p.key).collect();
+            keys.sort_unstable();
+            let before = keys.len();
+            keys.dedup();
+            assert_eq!(keys.len(), before, "two ghosts shared a key at t={t}: {poses:?}");
+            t += 0.2;
+        }
+        assert!(saw_more_than_one, "never saw more than one ghost at once in ten minutes - not a meaningful run of this test");
+    }
+
     /// A long run keeps finding new combinations rather than settling into a
     /// loop: many distinct move kinds get used, not just the freshest one
     /// over and over, and every kind gets a real share of a long run.
@@ -1198,7 +1383,7 @@ mod tests {
             *counts.entry(act.kind.name()).or_default() += 1;
         }
         eprintln!("20 minutes: {counts:?}");
-        assert!(counts.len() >= 7, "only {} of {KINDS} kinds used in twenty minutes: {counts:?}", counts.len());
+        assert!(counts.len() >= 8, "only {} of {KINDS} kinds used in twenty minutes: {counts:?}", counts.len());
         let total: usize = counts.values().sum();
         assert!(total > 20, "only {total} acts in twenty minutes");
         // Card 326 recalibrated `bounce` (and `chase`/`cross`, already rare
@@ -1206,14 +1391,16 @@ mod tests {
         // accent rather than an equal member of the rotation, so
         // "neglected" now means "never happens at all" for those three, and
         // "at least a real share" - the original, stricter bar - for the
-        // two common solo kinds it never touched. Card 339's `boo`/
-        // `materialize` are deliberate rare surprises too (`choose_kind`'s
-        // own penalty) - "never happened at all" is the bar for them.
-        for kind in ["drift", "peek", "swoop"] {
+        // common solo kinds it never touched. Card 339's `boo`/`materialize`
+        // are deliberate rare surprises too (`choose_kind`'s own penalty),
+        // and card 340's `twirl` gets the same treatment as `bounce` - "never
+        // happened at all" is the bar for all four. `rise` gets no such
+        // penalty (`choose_kind`'s own `bias`), so it holds the common bar.
+        for kind in ["drift", "peek", "swoop", "rise"] {
             let share = *counts.get(kind).unwrap_or(&0) as f32 / total as f32;
             assert!(share > 0.03, "`{kind}` is being neglected: {counts:?}");
         }
-        for kind in ["bounce", "cross", "chase", "boo", "materialize"] {
+        for kind in ["bounce", "cross", "chase", "boo", "materialize", "twirl"] {
             assert!(counts.contains_key(kind), "`{kind}` never happened at all in twenty minutes: {counts:?}");
         }
         // No exact repeat back to back too often: the freshness scoring

@@ -197,17 +197,32 @@ pub(crate) fn stamp(px: &mut [Rgb], base: &[Rgb], input: &FaceInput, occluders: 
     let gx = input.gaze.0.clamp(-1.0, 1.0) * GAZE_AMOUNT * input.head_r;
     let gy = input.gaze.1.clamp(-1.0, 1.0) * GAZE_AMOUNT * input.head_r * 0.6;
 
-    let (eye_dx, eye_dy, eye_dz) = (EYE_DX * input.head_r, EYE_DY * input.head_r, EYE_DZ * input.head_r);
+    let d = (-input.head_pos.z).max(1.0);
+    let head_px_radius = (super::REF_DISTANCE / d) * input.head_r;
+    let px_scale = head_px_radius / input.head_r.max(1e-6);
+    let eye_glyph = if head_px_radius * input.eyes_scale >= BUCKET_LED { &EYE_DEFAULT } else { &EYE_SMALL };
+    let mouth_glyph =
+        if head_px_radius * input.mouth_scale.max(0.05) >= BUCKET_LED { &MOUTH_DEFAULT } else { &MOUTH_SMALL };
+
+    // The eyes must never merge into one blob (card 340: "at size=16 the two
+    // eyes merge into one dark blob") - `EYE_DX * head_r` is a *world*
+    // offset, so its projected pixel separation shrinks linearly with the
+    // head, and below some size the two glyphs (each `eye_glyph.w()` LEDs
+    // wide) touch or overlap with no column left for the bridge highlight to
+    // land in. Floor the *pixel* half-separation instead of the world one,
+    // from the glyph actually chosen, so a lit gap of at least one LED is
+    // guaranteed at any head size or depth, not just the sizes this was
+    // tuned against - "two separate eyes with a lit gap" (the card's own
+    // goal), never a deliberate absolute constant that would need
+    // re-tuning every time `EYE_DX` or a glyph's width changes.
+    let min_half_sep_px = (eye_glyph.w() as f32 + 1.0) * 0.5;
+    let nominal_half_sep_px = EYE_DX * head_px_radius;
+    let eye_dx = nominal_half_sep_px.max(min_half_sep_px) / px_scale;
+    let (eye_dy, eye_dz) = (EYE_DY * input.head_r, EYE_DZ * input.head_r);
     let left_local = V3::new(-eye_dx + gx, eye_dy + gy, eye_dz);
     let right_local = V3::new(eye_dx + gx, eye_dy + gy, eye_dz);
     let mouth_local = V3::new(0.0, MOUTH_DY * input.head_r, MOUTH_DZ * input.head_r);
     let bridge_local = V3::new(0.0, eye_dy, eye_dz);
-
-    let d = (-input.head_pos.z).max(1.0);
-    let head_px_radius = (super::REF_DISTANCE / d) * input.head_r;
-    let eye_glyph = if head_px_radius * input.eyes_scale >= BUCKET_LED { &EYE_DEFAULT } else { &EYE_SMALL };
-    let mouth_glyph =
-        if head_px_radius * input.mouth_scale.max(0.05) >= BUCKET_LED { &MOUTH_DEFAULT } else { &MOUTH_SMALL };
 
     let eye_l = DARK_L + (GLOW_CAP - DARK_L) * input.eye_light.clamp(0.0, 1.0);
     let eye_hue = if input.eye_light > 0.001 { input.eye_hue } else { input.hue };
@@ -276,6 +291,27 @@ mod tests {
             eye_light: 0.0,
             eye_hue: 0.0,
             mouth_scale: 1.0,
+        }
+    }
+
+    /// Card 340's own acceptance test, taken literally: "no face pixel lands
+    /// below the head's projected disc". Every feature's head-local offset
+    /// (before yaw, before the gaze nudge) has to have a smaller magnitude
+    /// than `head_r` itself - i.e. sit strictly *inside* the head sphere a
+    /// real head disc bounds - or a stamped feature could in principle
+    /// project outside the head's own circle and read as a mark on
+    /// whatever is behind or below it (a shoulder, another ghost's body).
+    /// This is a property of the module's own constants (`EYE_DX/DY/DZ`,
+    /// `MOUTH_DY/DZ`), so it is checked directly against them rather than by
+    /// rendering - a future edit that pushes one of these too far trips this
+    /// test before it ever reaches a rendered frame.
+    #[test]
+    fn every_face_point_sits_inside_the_head_sphere() {
+        let eye = V3::new(EYE_DX, EYE_DY, EYE_DZ).length();
+        let mouth = V3::new(0.0, MOUTH_DY, MOUTH_DZ).length();
+        let bridge = V3::new(0.0, EYE_DY, EYE_DZ).length();
+        for (name, r) in [("eye", eye), ("mouth", mouth), ("bridge", bridge)] {
+            assert!(r < 1.0, "{name}'s own local offset ({r:.3} x head_r) reaches outside the head sphere");
         }
     }
 
@@ -412,5 +448,43 @@ mod tests {
         let mut px = bright.clone();
         stamp(&mut px, &bright, &input, &[Occluder { key: 1, head_pos: input.head_pos, head_r: 5.0 }]);
         assert!(px.iter().all(|c| c.r < 0.97 && c.g < 0.97 && c.b < 0.97), "a stamped pixel reached full white");
+    }
+
+    /// Card 340, the owner's own saved setting (`size = 16`): "the two eyes
+    /// merge into one dark blob" - `EYE_DX * head_r` is a world offset, so
+    /// its projected pixel separation shrinks with the head, and below some
+    /// size the two eye glyphs touched or overlapped with no column left for
+    /// the lit bridge between them. Sweep a wide range of head radii
+    /// (smaller than any this patch's own `size` range of 16-32 LEDs
+    /// actually produces, to prove the fix holds with real margin, not just
+    /// at the one size that was reported) and require a genuinely lit pixel
+    /// between the two eyes in every row that has one on each side - "two
+    /// separate eyes with a lit gap" (the card's own words), never a single
+    /// wide dark run. Mouth off, so a mouth pixel sharing a row with a tiny
+    /// head's eyes can't be mistaken for one of them.
+    #[test]
+    fn the_eyes_never_merge_at_any_head_size() {
+        for head_r in [1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 16.0] {
+            let bright = vec![Rgb::splat(0.9); crate::frame::N];
+            let mut input = frontal(head_r);
+            input.gaze = (0.0, 0.0);
+            input.mouth_scale = 0.0;
+            let occluders = [Occluder { key: 1, head_pos: input.head_pos, head_r }];
+            let mut px = bright.clone();
+            stamp(&mut px, &bright, &input, &occluders);
+            let mid = W / 2;
+            let mut saw_both_eyes = false;
+            for y in 0..H {
+                let row: Vec<Rgb> = (0..W).map(|x| px[y * W + x]).collect();
+                let left_dark_max = (0..mid).filter(|&x| luma(row[x]) < SILHOUETTE_MIN).max();
+                let right_dark_min = (mid..W).filter(|&x| luma(row[x]) < SILHOUETTE_MIN).min();
+                let (Some(lx), Some(rx)) = (left_dark_max, right_dark_min) else { continue };
+                saw_both_eyes = true;
+                assert!(rx > lx + 1, "head_r {head_r}: eyes touch or overlap at row {y}: dark at {lx} and {rx}");
+                let lit_between = (lx + 1..rx).any(|x| luma(row[x]) > 0.5);
+                assert!(lit_between, "head_r {head_r}: no lit pixel between the eyes at row {y} ({lx}..{rx})");
+            }
+            assert!(saw_both_eyes, "head_r {head_r}: never saw a dark pixel on both sides - test not exercising the eyes");
+        }
     }
 }
