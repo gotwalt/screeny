@@ -436,6 +436,20 @@ export function brightnessHoldWins(now, until, held, reading) {
   return now < until;
 }
 
+/** Card 312: a brightness level as the share of full light it gives, in
+ *  percent - the unit Home Assistant's slider uses too (card 310), so the two
+ *  always say the same number. `stops` is `boot.brightness_stops`: `stops[k]`
+ *  is the first level that lights `k` of the panel's output-enable slots, so
+ *  the slots a level lights are the highest `k` with `stops[k] <= level`, and
+ *  every slot is `100 / (stops.length - 1)` = 4 %. Exported for its test. */
+export function percentOf(level, stops) {
+  let slots = 0;
+  for (let k = 0; k < stops.length; k += 1) {
+    if (stops[k] <= level) slots = k; else break;
+  }
+  return Math.round((100 * slots) / (stops.length - 1));
+}
+
 /** Brightness: the same control on both screens (card 198), stepping
  *  through the panel's real resolution rather than `0..255` (card 187) - most
  *  of that range lands on a picture a neighbouring value already showed
@@ -457,6 +471,9 @@ export function brightnessHoldWins(now, until, held, reading) {
 export function bindBrightness({ input, out, note, attached, attempt, stops }) {
   /** The stops actually reachable right now - `stops` until a cap is learned. */
   let live = stops;
+  /** What a person reads: percent of full light (card 312), never the raw
+   *  0-255 level, which only the wire needs. */
+  const say = (level) => `${percentOf(level, stops)}%`;
   const levelAt = (i) => live[Math.min(Math.max(Math.round(i), 0), live.length - 1)];
   /** The index of the highest stop at or below `level` - so a level this
    *  slider is handed always maps to something the panel could really be
@@ -502,7 +519,7 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
   input.addEventListener('pointercancel', release);
   input.addEventListener('blur', release);
 
-  input.addEventListener('input', () => { grab(); out.textContent = String(levelAt(input.value)); });
+  input.addEventListener('input', () => { grab(); out.textContent = say(levelAt(input.value)); });
   input.addEventListener('change', () => {
     release();
     const device = attached();
@@ -514,7 +531,7 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
     // `null`, or `busy` had already gone false on Safari), and `show()` could
     // paint a reading from before the change.
     held = { value: level, until: Date.now() + BRIGHTNESS_HOLD_MS };
-    attempt(`Brightness ${level}`, async () => {
+    attempt(`Brightness ${say(level)}`, async () => {
       try {
         const done = await invoke('device/brightness', { device, level });
         if (!done) { held = null; return ''; }
@@ -522,9 +539,9 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
         // asked - the floor and the cap are real, and this is what stops the
         // slider bouncing back to them once telemetry catches up.
         held = { value: done.applied, until: Date.now() + BRIGHTNESS_HOLD_MS };
-        if (done.applied > done.asked) return `Raised to ${done.applied}, the dimmest level this panel can show.`;
-        if (done.applied < done.asked) return `This panel caps brightness at ${done.applied}.`;
-        return `Brightness ${done.applied}`;
+        if (done.applied > done.asked) return `Raised to ${say(done.applied)}, the dimmest this panel can show.`;
+        if (done.applied < done.asked) return `This panel caps brightness at ${say(done.applied)}.`;
+        return `Brightness ${say(done.applied)}`;
       } catch (e) {
         held = null; // the ask never landed; nothing to hold
         throw e;
@@ -547,12 +564,12 @@ export function bindBrightness({ input, out, note, attached, attempt, stops }) {
       const shown = held ? held.value : reading;
       if (!busy(input) && !holding && shown !== null && shown !== undefined) {
         input.value = String(indexOf(Math.min(shown, learnedCap || 255)));
-        out.textContent = String(levelAt(input.value));
+        out.textContent = say(levelAt(input.value));
       }
       note.textContent = !d
         ? 'No panel is attached, so this sets nothing yet.'
         : player && player.brightness !== null && player.brightness !== undefined
-          ? `Kept at ${player.brightness} across reconnects.`
+          ? `Kept at ${say(player.brightness)} across reconnects.`
           : 'Not managed: whatever the panel has.';
     },
   };
