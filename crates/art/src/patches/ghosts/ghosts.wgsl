@@ -19,8 +19,34 @@ struct Scene {
   // top to hem), so a plain `distance()` in UV space drew a short, wide
   // ellipse when a round-ish hole was wanted.
   eye_shape: vec4<f32>,
+  // x = each eye's own mirrored tilt, radians (card 336: "tilted (sad/
+  // spooky)") - yzw unused.
+  face: vec4<f32>,
+  // xy = the mouth's own fixed UV centre, the same for every ghost slot
+  // (unlike the eyes, never gaze-shifted) - zw unused.
+  mouth: vec4<f32>,
+  // mouth radius u, radius v, edge softness, `mouth` param (0 = none) -
+  // the same u/v-anisotropy reasoning as `eye_shape`.
+  mouth_shape: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> s: Scene;
+
+// The normalised ellipse distance (1.0 at the shape's own edge) for a hole
+// centred at `c` with UV radii `ru`/`rv`, tilted by `tilt` radians. The tilt
+// is applied after bringing `v` into "u-equivalent" units (scaling by
+// `ru/rv`, the same anisotropy correction the radii themselves already
+// encode) so a rotation here reads as an actual tilt of the oval's own axes
+// in LEDs, not a shear across two UV axes of different physical scale.
+fn tilted_ellipse_dist(uv: vec2<f32>, c: vec2<f32>, ru: f32, rv: f32, tilt: f32) -> f32 {
+  let d = uv - c;
+  let scale = ru / rv;
+  let iso = vec2<f32>(d.x, d.y * scale);
+  let ct = cos(tilt);
+  let st = sin(tilt);
+  let rot = vec2<f32>(ct * iso.x - st * iso.y, st * iso.x + ct * iso.y);
+  let back = vec2<f32>(rot.x, rot.y / scale);
+  return length(vec2<f32>(back.x / ru, back.y / rv));
+}
 
 struct Varying {
   @builtin(position) clip: vec4<f32>,
@@ -89,11 +115,12 @@ fn fs_main(v: Varying) -> @location(0) vec4<f32> {
   let edge = s.eye_shape.z;
   let eye_hue = s.eye_shape.w;
   let eye_light = s.params.z;
-  // Normalised ellipse distance (1.0 at the eye's own edge), not a plain
-  // Euclidean UV distance, so the hole reads as roughly round in actual LEDs
-  // rather than a short, wide streak.
-  let dl = length(vec2<f32>((v.uv.x - eyes.x) / er_u, (v.uv.y - eyes.y) / er_v));
-  let dr = length(vec2<f32>((v.uv.x - eyes.z) / er_u, (v.uv.y - eyes.w) / er_v));
+  let tilt = s.face.x;
+  // Tilted, normalised ellipse distance (1.0 at the eye's own edge) - each
+  // eye mirrored, so they read as a matched, "sad/spooky" pair rather than
+  // both leaning the same way (card 336).
+  let dl = tilted_ellipse_dist(v.uv, eyes.xy, er_u, er_v, tilt);
+  let dr = tilted_ellipse_dist(v.uv, eyes.zw, er_u, er_v, -tilt);
   let d = min(dl, dr);
   // WGSL's `smoothstep(low, high, x)` is only defined for `low < high`, so
   // the edge itself is written ascending-with-distance and then inverted -
@@ -121,11 +148,31 @@ fn fs_main(v: Varying) -> @location(0) vec4<f32> {
   // core sits at l = 0.015, indistinguishable by hue) but wrong in spirit,
   // so it is scaled by `eye_light` explicitly rather than relying on that.
   let frag_hue = mix(hue, eye_hue, clamp(core + spill, 0.0, 1.0) * eye_light);
+
+  // Mouth: a frowning open mouth below the eyes (card 336), always a true
+  // dark hole (no `eye_light`-style glow was asked for). Built as a crescent
+  // - a wide "frown" outline with a smaller, higher inner cut carved out of
+  // it - rather than a plain oval, so it reads as an open, downturned mouth
+  // and not a second pair of eyes.
+  let mr_u = s.mouth_shape.x;
+  let mr_v = s.mouth_shape.y;
+  let m_edge = s.mouth_shape.z;
+  let m_amount = s.mouth_shape.w;
+  let d_outer = tilted_ellipse_dist(v.uv, s.mouth.xy, mr_u, mr_v, 0.0);
+  let inner_c = vec2<f32>(s.mouth.x, s.mouth.y - mr_v * 0.6);
+  let d_inner = tilted_ellipse_dist(v.uv, inner_c, mr_u * 0.88, mr_v * 0.85, 0.0);
+  let m_outer = 1.0 - smoothstep(1.0 - m_edge, 1.0 + m_edge, d_outer);
+  let m_inner = 1.0 - smoothstep(1.0 - m_edge, 1.0 + m_edge, d_inner);
+  let mouth_dark = clamp(m_outer - m_inner, 0.0, 1.0) * step(0.001, m_amount);
+  l = mix(l, 0.015, mouth_dark);
+
   // "Where two overlap, or it crosses something, you can tell" - the dark
-  // end of the eye stays fully opaque (occluding whatever is behind exactly,
-  // per the body-alpha rule) even where the sheet's own body is translucent;
-  // a glowing eye is part of the body's own surface, not an extra occluder.
+  // end of the eye (and the mouth, always dark) stays fully opaque
+  // (occluding whatever is behind exactly, per the body-alpha rule) even
+  // where the sheet's own body is translucent; a glowing eye is part of the
+  // body's own surface, not an extra occluder.
   let body_alpha = s.alpha[v.slot];
-  let a = clamp(body_alpha + core * (1.0 - eye_light) * (1.0 - body_alpha), 0.0, 1.0);
+  let dark_hole = clamp(core * (1.0 - eye_light) + mouth_dark, 0.0, 1.0);
+  let a = clamp(body_alpha + dark_hole * (1.0 - body_alpha), 0.0, 1.0);
   return vec4<f32>(oklch(clamp(l, 0.0, 1.0), chroma, frag_hue), a);
 }

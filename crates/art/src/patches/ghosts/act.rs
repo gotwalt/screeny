@@ -79,17 +79,31 @@ impl Kind {
     }
 }
 
-/// One ghost's silhouette and cloth, fixed for its whole appearance from the
-/// seed: a head of radius `r`, a collar at `hem_base` (where the sheet's
-/// rigid part gives way to the free-hanging skirt), a flare/waviness budget
-/// `hem_amp`, and `humps` low-frequency waves around the hem - see
+/// One ghost's body and cloth, fixed for its whole appearance from the seed:
+/// a small round `head_r`-radius head, shoulders `shoulder_x` apart, and two
+/// arms (`upper_arm` shoulder->elbow, `forearm` elbow->wrist) - the body
+/// `cloth::build_template`'s sheet is dropped over and hangs from (card 336:
+/// "a real bedsheet over a body with a person's arms held out"). `hem_amp`
+/// and `humps` are the hem's own corner-to-corner unevenness - see
 /// `cloth::build_template`. `turn_*` and `depth_*` are the slow, seeded
 /// oscillations behind "ghosts can come nearer and go further ... and turn"
 /// (card 326): each ghost breathes its own depth and turn at its own pace.
+/// `gesture_*`/`wave_*`/`arm_pitch0` seed [`arm_gesture`]'s own slow cycle
+/// between held-out (default), raised ("boo") and drooped, plus one arm's
+/// occasional wave (card 336: "the body's arms are the ghost's gesture").
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shape {
-    pub r: f32,
-    pub hem_base: f32,
+    /// Crown-to-hem, nominally - the actual worst-case reach (what framing
+    /// uses) is [`cloth::total_height`], a hair more once corner droop is
+    /// added on top.
+    pub height: f32,
+    pub head_r: f32,
+    /// Half the shoulder-to-shoulder width.
+    pub shoulder_x: f32,
+    /// The shoulder joint's height below the head's own centre (negative).
+    pub shoulder_y: f32,
+    pub upper_arm: f32,
+    pub forearm: f32,
     pub hem_amp: f32,
     pub humps: f32,
     pub phase0: f32,
@@ -104,29 +118,49 @@ pub(crate) struct Shape {
     /// nearer/further breathing.
     pub depth_rate: f32,
     pub depth_amp: f32,
+    /// The held-out/raised/drooped cycle's own rate and phase (radians/s,
+    /// radians) - see [`arm_gesture`].
+    pub gesture_rate: f32,
+    pub gesture_phase: f32,
+    /// The occasional one-arm wave's own rate and phase.
+    pub wave_rate: f32,
+    pub wave_phase: f32,
+    /// Which arm waves: +1 (right) or -1 (left).
+    pub wave_side: f32,
+    /// The baseline "held out" shoulder pitch, radians above horizontal - a
+    /// little variety between ghosts (some hold their arms a touch higher or
+    /// lower) on top of [`arm_gesture`]'s shared shape.
+    pub arm_pitch0: f32,
 }
 
 impl Shape {
     pub(crate) fn new(rng: &mut Rng, size: f32) -> Shape {
-        // A little variety in size and proportion between ghosts, from the
-        // seed (card 315's brief): a touch wider or narrower, a rounder or
-        // taller head, three or four low waves around the hem.
-        let aspect = rng.range(0.6, 0.8);
-        let r = (size * aspect * 0.5).max(1.4);
-        let body = (size - r).max(size * 0.32);
-        let hem_amp = body * rng.range(0.3, 0.42);
-        let hem_base = (body - hem_amp).max(0.25);
+        // A little variety in proportion between ghosts, from the seed
+        // (card 315's brief, still true at full body scale): a touch
+        // narrower or wider shoulders, a longer or shorter reach, three to
+        // five low waves around the hem.
+        let height = size.max(6.0);
         Shape {
-            r,
-            hem_base,
-            hem_amp,
-            humps: (3 + (rng.u64() % 2)) as f32,
+            height,
+            head_r: height * rng.range(0.17, 0.19),
+            shoulder_x: height * rng.range(0.15, 0.19),
+            shoulder_y: -height * rng.range(0.16, 0.20),
+            upper_arm: height * rng.range(0.17, 0.21),
+            forearm: height * rng.range(0.16, 0.2),
+            hem_amp: height * rng.range(0.05, 0.09),
+            humps: (3 + (rng.u64() % 3)) as f32,
             phase0: rng.range(0.0, TAU),
-            alpha: rng.range(0.78, 0.94),
-            turn_rate: rng.range(0.15, 0.32),
-            turn_amp: rng.range(0.3, 0.5),
-            depth_rate: rng.range(0.1, 0.26),
-            depth_amp: rng.range(size * 0.18, size * 0.42),
+            alpha: rng.range(0.82, 0.96),
+            turn_rate: rng.range(0.12, 0.26),
+            turn_amp: rng.range(0.08, 0.16),
+            depth_rate: rng.range(0.08, 0.2),
+            depth_amp: rng.range(size * 0.12, size * 0.3),
+            gesture_rate: rng.range(0.025, 0.05),
+            gesture_phase: rng.range(0.0, TAU),
+            wave_rate: rng.range(0.5, 0.9),
+            wave_phase: rng.range(0.0, TAU),
+            wave_side: rng.sign(),
+            arm_pitch0: rng.range(-0.26, -0.06),
         }
     }
 
@@ -139,6 +173,61 @@ impl Shape {
     pub(crate) fn total_height(self) -> f32 {
         super::cloth::total_height(self)
     }
+}
+
+/// One arm's joint angles: `pitch` is radians above horizontal (0 = held
+/// straight out to the side, positive = raised, negative = drooped);
+/// `elbow` is the forearm's own further bend past the upper arm's own
+/// direction (see `cloth::arm_points`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ArmPose {
+    pub pitch: f32,
+    pub elbow: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Arms {
+    pub left: ArmPose,
+    pub right: ArmPose,
+}
+
+/// The arm gesture at `el` seconds into this ghost's own appearance: held out
+/// (the baseline) most of the time, with slow, occasional excursions to a
+/// "boo" raise or a droop, plus an independent, occasional wave on whichever
+/// arm this ghost's own seed picked (card 336: "held out (default), slowly
+/// raised for a 'boo', drooped, one waving ... the sheet follows them
+/// physically"). Cubed, not a plain sine - as `poses_at`'s own yaw bias does -
+/// so both cycles spend most of their time near the baseline, with brief
+/// excursions to the extremes, rather than drifting through every angle in
+/// between at equal length.
+pub(crate) fn arm_gesture(shape: Shape, el: f32) -> Arms {
+    const RAISE_PITCH: f32 = 0.85; // ~49 degrees above horizontal: a "boo".
+    const DROOP_PITCH: f32 = -0.6; // ~34 degrees below horizontal: drooped.
+    const WAVE_ELBOW_AMP: f32 = 0.9;
+    const WAVE_PITCH_AMP: f32 = 0.32;
+    const SWAY_AMP: f32 = 0.05; // "a gentle bob and sway as it floats".
+
+    let g = (shape.gesture_rate * el + shape.gesture_phase).sin();
+    let g3 = g * g * g;
+    let raise = g3.max(0.0);
+    let droop = (-g3).max(0.0);
+    let base = shape.arm_pitch0;
+    let sway = SWAY_AMP * (shape.turn_rate * 0.6 * el + shape.phase0 * 0.9).sin();
+    let pitch = base + raise * (RAISE_PITCH - base) + droop * (DROOP_PITCH - base) + sway;
+
+    let wg = (shape.wave_rate * el + shape.wave_phase).sin();
+    let waving = (wg * wg * wg).max(0.0);
+    let wave_osc = (shape.wave_rate * 4.5 * el).sin();
+
+    let mut left = ArmPose { pitch, elbow: 0.16 };
+    let mut right = ArmPose { pitch, elbow: 0.16 };
+    let waved = ArmPose { pitch: pitch + waving * WAVE_PITCH_AMP * wave_osc, elbow: 0.16 + waving * WAVE_ELBOW_AMP * wave_osc };
+    if shape.wave_side > 0.0 {
+        right = waved;
+    } else {
+        left = waved;
+    }
+    Arms { left, right }
 }
 
 /// Everything the picture needs to draw one ghost this frame.
@@ -163,6 +252,8 @@ pub(crate) struct Pose {
     /// Where it is looking, as a unit vector (0, -1 is straight up the panel)
     /// - shifts the eyes within the cloth's own UV, not the head turn above.
     pub gaze: (f32, f32),
+    /// This instant's arm gesture - see [`arm_gesture`].
+    pub arms: Arms,
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -245,10 +336,16 @@ impl Act {
                 // review: "bias the yaw so the face is toward the camera
                 // most of the time; turns are brief").
                 let swing = (p.shape.turn_rate * active_el + p.shape.phase0 * 1.3).sin();
-                let yaw = p.shape.turn_amp * swing * swing * swing;
+                // The owner's review of an early render: the face must read
+                // face-on during a hold, not mid-turn - a `Peek`'s own
+                // enter/hold/leave split (`gaze_of`'s own windows) gates the
+                // turn to exactly zero for the hold itself, easing back in
+                // only for the brief entrance/exit legs.
+                let yaw = p.shape.turn_amp * swing * swing * swing * self.yaw_gate(active_el, dur);
                 let depth = p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin();
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
-                Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze })
+                let arms = arm_gesture(p.shape, active_el);
+                Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze, arms })
             })
             .collect()
     }
@@ -320,6 +417,28 @@ impl Act {
             (dx / d, dy / d)
         } else {
             (forward, 0.0)
+        }
+    }
+
+    /// `0` while the head should hold face-on (a `Peek`'s own hold), `1`
+    /// otherwise - what [`poses_at`](Self::poses_at) multiplies the slow
+    /// turn-in-place by. Ramped over the same enter/leave legs
+    /// [`gaze_of`](Self::gaze_of)'s own `Peek` case uses, so the turn eases
+    /// back in exactly as the ghost starts moving again, not as a jump cut.
+    fn yaw_gate(&self, el: f32, dur: f32) -> f32 {
+        match self.kind {
+            Kind::Peek => {
+                let (enter, leave) = (dur * 0.28, dur * 0.28);
+                let hold = (dur - enter - leave).max(0.05);
+                if el < enter {
+                    1.0 - smooth01(el / enter)
+                } else if el < enter + hold {
+                    0.0
+                } else {
+                    smooth01((el - enter - hold) / leave)
+                }
+            }
+            _ => 1.0,
         }
     }
 
@@ -542,9 +661,9 @@ impl Director {
             shapes[1] = Shape::new(&mut self.rng, size * jitter);
         }
 
-        // Vertical band for the shoulder (`y`): the dome reaches `r` above it,
-        // the hem `hem_base + hem_amp` below it, and both have to clear the
-        // panel - the dome the top, the hem the bottom, with a little more
+        // Vertical band for the shoulder (`y`): the head reaches `head_r`
+        // above it, the hem reaches `drop_below_centre` below it, and both
+        // have to clear the panel - the dome the top, the hem the bottom, with a little more
         // room at the bottom for the ground line. A single "tallest shape"
         // number does not answer this on its own: a wide-domed, short-hemmed
         // ghost and a small-domed, long-hemmed one need different limits at
@@ -581,7 +700,7 @@ impl Director {
                 // generic `y` band above only promises the ghost clears the
                 // top while sitting still, not after adding a hop on top.
                 let ground = y_hi;
-                let max_hop = (ground - shapes[0].r - 1.0).max(1.0);
+                let max_hop = (ground - shapes[0].head_r - 1.0).max(1.0);
                 let hop_amp = (shapes[0].total_height() * self.rng.range(0.8, 1.3) * (0.6 + 0.6 * bounce)).min(max_hop);
                 let plan = Plan { shape: shapes[0], flip, y: ground, amp: hop_amp, freq: bounce, bounces, delay: 0.0 };
                 (format!("bounce x{} {}", bounces as u32, side_word(flip)), vec!["kind:bounce".into(), side_tag(flip)], vec![plan], dur, dur)
@@ -599,7 +718,7 @@ impl Director {
                 // A top-corner entrance: the shoulder starts just clear of the
                 // top and dips down by `arc`, so the dip has to fit between
                 // there and the bottom, hem included.
-                let top = shapes[0].r + 1.5;
+                let top = shapes[0].head_r + 1.5;
                 let max_arc = (y_hi + hem_reach - top).max(1.0);
                 let arc = (self.rng.range(0.4, 0.7) * (crate::frame::H as f32 - tallest)).min(max_arc);
                 let dur = (width / (base_speed * 1.3)) as f64;
@@ -755,24 +874,33 @@ mod tests {
 
     /// A long run keeps finding new combinations rather than settling into a
     /// loop: many distinct move kinds get used, not just the freshest one
-    /// over and over, and every kind gets a real share of a ten-minute run.
+    /// over and over, and every kind gets a real share of a long run.
+    ///
+    /// Twenty minutes, not the ten a pre-336 version of this test used: card
+    /// 336's full body (arms held out) reaches a lot further than a bare
+    /// head-and-sheet did, so `Shape::margin` grew - a slower, longer act,
+    /// fewer of them fit in a fixed window, and a rare accent (`cross`,
+    /// `chase`, needing two free slots at once) needs more real time to be
+    /// sure of landing at all for this seed. Checked directly (30 real
+    /// minutes) rather than assumed: the mechanism itself is unaffected, the
+    /// two-slot coincidence is just rarer per minute now.
     #[test]
     fn a_long_run_does_not_settle_into_a_loop() {
         let p = params(&[]);
         let mut d = Director::new(2026);
         let mut t = 0.0;
         let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-        while t < 600.0 {
+        while t < 1200.0 {
             d.advance(t, &ctx(t, &p));
             t += 0.25;
         }
         for act in &d.acts {
             *counts.entry(act.kind.name()).or_default() += 1;
         }
-        eprintln!("10 minutes: {counts:?}");
-        assert!(counts.len() >= 5, "only {} of {KINDS} kinds used in ten minutes: {counts:?}", counts.len());
+        eprintln!("20 minutes: {counts:?}");
+        assert!(counts.len() >= 5, "only {} of {KINDS} kinds used in twenty minutes: {counts:?}", counts.len());
         let total: usize = counts.values().sum();
-        assert!(total > 20, "only {total} acts in ten minutes");
+        assert!(total > 20, "only {total} acts in twenty minutes");
         // Card 326 recalibrated `bounce` (and `chase`/`cross`, already rare
         // by needing two free slots at once) down to a deliberate rare
         // accent rather than an equal member of the rotation, so
@@ -784,7 +912,7 @@ mod tests {
             assert!(share > 0.03, "`{kind}` is being neglected: {counts:?}");
         }
         for kind in ["bounce", "cross", "chase"] {
-            assert!(counts.contains_key(kind), "`{kind}` never happened at all in ten minutes: {counts:?}");
+            assert!(counts.contains_key(kind), "`{kind}` never happened at all in twenty minutes: {counts:?}");
         }
         // No exact repeat back to back too often: the freshness scoring
         // should keep the same move from following itself most of the time.

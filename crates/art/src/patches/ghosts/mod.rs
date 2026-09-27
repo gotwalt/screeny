@@ -41,7 +41,7 @@ use crate::gpu::{Gpu, Offscreen, COLOR_FORMAT, COMMON_WGSL, DEPTH_FORMAT};
 use crate::palette::Palette;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use act::{Director, Pose};
-use cloth::{Cloth, HeadTarget, V3, VERTS};
+use cloth::{BodyPose, Cloth, V3, VERTS};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
@@ -61,14 +61,15 @@ const PARAMS: &[ParamSpec] = &[
     param("ghosts", "How many at once", 1.0, 4.0, 1.0, 2.0),
     param("pace", "How fast they move (lower is slower, dreamier)", 0.3, 2.2, 0.05, 0.85),
     param("bounce", "Bouncy vs floaty (bounce and chase stay rare accents either way)", 0.0, 1.0, 0.01, 0.25),
-    param("size", "How big they are (LEDs tall)", 8.0, 30.0, 0.5, 22.0),
+    param("size", "How big they are (LEDs tall, crown to hem)", 16.0, 32.0, 0.5, 28.0),
     param("sway", "How loose/floppy the cloth is", 0.0, 1.0, 0.01, 0.45),
-    param("glow", "Soft glow", 0.0, 1.0, 0.01, 0.28),
+    param("glow", "Soft glow", 0.0, 1.0, 0.01, 0.08),
     param("color", "Colour (0 = grayscale)", 0.0, 1.0, 0.01, 0.32),
     param("hue", "Tint, when colour is on (0 = red, the cool default is ~205)", 0.0, 360.0, 1.0, 205.0),
     param("eyes", "Eye size", 0.5, 2.0, 0.05, 1.0),
     param("eye_light", "Eye luminance (0 = true-black holes, 1 = a soft glow)", 0.0, 1.0, 0.01, 0.0),
     param("eye_hue", "Eye tint, once eye_light > 0", 0.0, 360.0, 1.0, 205.0),
+    param("mouth", "Mouth size (0 = none)", 0.0, 2.0, 0.05, 1.0),
 ];
 
 /// Same cap the `ghosts` param allows, and the size every per-frame array
@@ -92,11 +93,12 @@ fn fov_y() -> f32 {
     2.0 * (H as f32 / 2.0 / REF_DISTANCE).atan()
 }
 
-/// A head's rigid placement in world space, from its pose.
-fn head_of(pose: &Pose) -> HeadTarget {
-    HeadTarget {
+/// A body's rigid placement in world space, from its pose.
+fn head_of(pose: &Pose) -> BodyPose {
+    BodyPose {
         pos: V3::new(pose.cx - W as f32 / 2.0, H as f32 / 2.0 - pose.cy, -(REF_DISTANCE + pose.depth)),
         yaw: pose.yaw,
+        arms: pose.arms,
     }
 }
 
@@ -123,8 +125,18 @@ struct Scene {
     /// Per-slot body opacity (`Shape::alpha`) - "where two overlap, or it
     /// crosses something, you can tell" (card 315, kept in the 3D pass).
     alpha: [f32; 4],
-    /// `[er_u, er_v, edge, unused]` - see `ghosts.wgsl`'s `Scene.eye_shape`.
+    /// `[er_u, er_v, edge, eye_hue]` - see `ghosts.wgsl`'s `Scene.eye_shape`.
     eye_shape: [f32; 4],
+    /// `[tilt, unused, unused, unused]` - the eyes' own mirrored tilt,
+    /// radians (card 336: "tall ovals, tilted (sad/spooky)").
+    face: [f32; 4],
+    /// `[u, v, unused, unused]` - the mouth's own fixed UV centre (card 336:
+    /// "a frowning open mouth below [the eyes]"), the same for every slot.
+    mouth: [f32; 4],
+    /// `[mr_u, mr_v, edge, amount]` - `amount` is the `mouth` param
+    /// (0 = none), already folded into `mr_u`/`mr_v`; kept separately too so
+    /// the shader can gate it off exactly at 0 rather than drawing a tiny dot.
+    mouth_shape: [f32; 4],
 }
 
 /// The mesh's triangles, flattened for the GPU index buffer - one
@@ -140,19 +152,27 @@ fn build_indices() -> Vec<u32> {
 /// single fixed direction is enough at this scale and keeps every ghost lit
 /// the same way regardless of where it has turned to.
 const KEY_LIGHT: [f32; 3] = [-0.35, 0.82, 0.45];
-// The ghost is meant to be the light in the frame (card 326 review: "a soft,
-// luminous pale sheet ... brightest on the dome, folds as gentle shade, not
-// a mostly-mid-grey body") - raised twice now: 0.09 first, then 0.24 still
-// read as a mid-grey body with one bright corner rather than a lit sheet.
-const AMBIENT: f32 = 0.4;
-const KEY_STRENGTH: f32 = 0.62;
+// The ghost is meant to be the light in the frame, and the reference photo
+// is a near-white, fairly uniform sheet - not a mid-grey body. Raised again,
+// a third time (0.09, then 0.24, then 0.4): the owner's own side-by-side
+// against the reference called the sheet "dithered mid-grey" against the
+// reference's near-white. `KEY_STRENGTH` raised to match - together these
+// put most of the sheet close to `LIGHT_L` (below), the brightest thing
+// drawn, capped well short of full white by the palette's own `LIGHT_L`.
+const AMBIENT: f32 = 0.58;
+const KEY_STRENGTH: f32 = 0.85;
 /// "A little translucency ... a faint glow ... if it reads" (card 326): a
 /// soft light-through-fabric term on the shadow side, and a view-dependent
-/// rim, both riding the same `glow` param as the background bloom below.
-const BACK_STRENGTH: f32 = 0.16;
-const RIM_STRENGTH: f32 = 0.22;
+/// rim - both kept subtle now that the sheet itself is meant to be bright,
+/// so neither reads as its own separate glow on top of an already-light
+/// surface.
+const BACK_STRENGTH: f32 = 0.08;
+const RIM_STRENGTH: f32 = 0.12;
 /// "Soft shadows in the folds": how hard the curvature-based AO term bites.
-const AO_STRENGTH: f32 = 1.1;
+/// Lowered from `1.1`: the owner's review asked for "subtle, linear
+/// darkening" in the folds, not the heavy shading a near-white reference
+/// sheet does not show.
+const AO_STRENGTH: f32 = 0.45;
 
 const BASE_CHROMA: f32 = 0.1;
 const DARK_L: f32 = 0.02;
@@ -160,19 +180,38 @@ const LIGHT_L: f32 = 0.95;
 const STEPS: usize = 30;
 
 // Eye level sits on the dome's own round part (a head ring short of the
-// neck), not the neck or the skirt. Card 326 review: "~2x2-2x3 LEDs each
-// with at least 2 lit LEDs between them" at default size - tuned against the
-// actual 64x32 output (`Frame::pixel`, not the supersampled buffer) rather
-// than assumed from the UV numbers alone. `EYE_R_U`/`EYE_R_V` are separate
-// because a UV unit is not the same physical size in both directions (`u`
-// wraps the whole head, `v` only runs crown to hem) - a single radius drew a
-// hole about one LED tall and three wide, not the roughly round hole wanted.
-const EYE_V: f32 = 0.2;
-const EYE_DX: f32 = 0.095;
-const EYE_R_U: f32 = 0.046;
-const EYE_R_V: f32 = 0.082;
-const EYE_EDGE: f32 = 0.14;
-const GAZE_UV: f32 = 0.045;
+// neck), not the neck or the skirt - `2.8` head rings down out of
+// `cloth::HEAD_RINGS`, the same relative position 326/327 used, rescaled to
+// this card's own `cloth::RINGS`. Card 336: "big cut-out eyes... about a
+// third of the head's width... several LEDs each" - tuned against the actual
+// 64x32 output (`Frame::pixel`, not the supersampled buffer) rather than
+// assumed from the UV numbers alone. `EYE_R_U`/`EYE_R_V` are separate because
+// a UV unit is not the same physical size in both directions (`u` wraps the
+// whole head, `v` runs crown to hem) - a single radius drew a hole one shape
+// in LEDs and another in UV, not the tall oval wanted.
+const EYE_V: f32 = 2.8 / cloth::RINGS as f32;
+// `u` wraps the *whole* head (360 degrees), not just the visible front - an
+// eye offset (`EYE_DX`) big enough to look reasonable as a fraction of 1.0
+// was actually carrying each eye 50-100+ degrees around toward the sides
+// (found by computing `azimuth` at the columns those `u` values land on),
+// most of it self-occluded or foreshortened to nothing - the real reason
+// bigger eyes never read as two solid holes, not their raw UV size. `0.06`
+// is 21.6 degrees off dead-centre each way: both eyes stay on the clearly
+// camera-facing part of the head.
+const EYE_DX: f32 = 0.06;
+const EYE_R_U: f32 = 0.05;
+const EYE_R_V: f32 = 0.065;
+const EYE_EDGE: f32 = 0.08;
+/// Radians each eye tilts, mirrored - "tilted (sad/spooky)" (card 336).
+const EYE_TILT: f32 = 0.34;
+const GAZE_UV: f32 = 0.05;
+
+/// The mouth's own fixed centre (never gaze-shifted, unlike the eyes) and
+/// shape - "a frowning open mouth below [the eyes]" (card 336).
+const MOUTH_V: f32 = EYE_V + 0.05;
+const MOUTH_R_U: f32 = 0.045;
+const MOUTH_R_V: f32 = 0.036;
+const MOUTH_EDGE: f32 = 0.1;
 
 // ---------------------------------------------------------------- the GPU
 
@@ -346,6 +385,7 @@ impl Ghosts {
             let eye_scale = ctx.get("eyes").clamp(0.5, 2.0);
             let eye_light = ctx.get("eye_light").clamp(0.0, 1.0);
             let eye_hue = ctx.get("eye_hue");
+            let mouth_scale = ctx.get("mouth").clamp(0.0, 2.0);
 
             let Some(Some(live)) = self.live.as_mut() else { unreachable!("opened before this is called") };
 
@@ -383,6 +423,9 @@ impl Ghosts {
                 params2: [AMBIENT, KEY_STRENGTH, BACK_STRENGTH, RIM_STRENGTH * glow],
                 alpha,
                 eye_shape: [EYE_R_U * eye_scale, EYE_R_V * eye_scale, EYE_EDGE, eye_hue],
+                face: [EYE_TILT, 0.0, 0.0, 0.0],
+                mouth: [0.5, MOUTH_V, 0.0, 0.0],
+                mouth_shape: [MOUTH_R_U * mouth_scale.max(0.05), MOUTH_R_V * mouth_scale.max(0.05), MOUTH_EDGE, mouth_scale],
             };
             live.gpu.queue.write_buffer(&live.vertices, 0, bytemuck::cast_slice(&verts));
             live.gpu.queue.write_buffer(&live.scene, 0, bytemuck::bytes_of(&scene));
@@ -426,7 +469,7 @@ fn bloom(px: &[crate::color::Rgb], amount: f32) -> Vec<crate::color::Rgb> {
     if amount <= 0.0 {
         return px.to_vec();
     }
-    const RADIUS: i32 = 2;
+    const RADIUS: i32 = 1;
     let blur_pass = |src: &[crate::color::Rgb], horiz: bool| -> Vec<crate::color::Rgb> {
         let mut out = vec![crate::color::Rgb::BLACK; N];
         for y in 0..H as i32 {
@@ -496,6 +539,37 @@ mod tests {
 
     fn colours(frame: &Frame) -> Vec<[f32; 3]> {
         (0..crate::frame::N).map(|i| { let c = frame.pixel(i); [c.r, c.g, c.b] }).collect()
+    }
+
+    /// The eyes (and, at the default `mouth`, the mouth) really do cut dark
+    /// holes in the head, not just a subtle darker patch - checked directly
+    /// against the actual 64x32 output (`Frame::pixel`, not the supersampled
+    /// buffer), the same discipline 326's own log names as the only reliable
+    /// one ("the scaled-up PNG dots... compress contrast enough that a
+    /// numeric dump was the only reliable check"). Seed and moment chosen by
+    /// rendering and dumping several early, cheap `at`s by hand (see the
+    /// card's Log) rather than a later one that reads well but costs many
+    /// more simulated frames to reach: at `(10, 8.0)` the head sits in this
+    /// box.
+    #[test]
+    fn eyes_cut_real_dark_holes_in_the_head() {
+        let frame = frame_at(10, 8.0, &[]);
+        let px = colours(&frame);
+        let l = |x: usize, y: usize| -> f32 {
+            let c = px[y * W + x];
+            (c[0] + c[1] + c[2]) / 3.0
+        };
+        let mut brightest = 0.0_f32;
+        let mut darkest = 1.0_f32;
+        for y in 0..10 {
+            for x in 30..46 {
+                let v = l(x, y);
+                brightest = brightest.max(v);
+                darkest = darkest.min(v);
+            }
+        }
+        assert!(brightest > 0.3, "expected a lit head in this box: brightest={brightest}");
+        assert!(darkest < brightest * 0.2, "expected a true-dark eye hole in this box: brightest={brightest} darkest={darkest}");
     }
 
 
