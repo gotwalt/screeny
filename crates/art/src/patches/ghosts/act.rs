@@ -28,8 +28,8 @@ use crate::rng::Rng;
 use crate::variety::Variety;
 use std::f32::consts::{PI, TAU};
 
-pub(crate) const KINDS: usize = 6;
-pub(crate) const NAMES: [&str; KINDS] = ["drift", "bounce", "peek", "swoop", "cross", "chase"];
+pub(crate) const KINDS: usize = 8;
+pub(crate) const NAMES: [&str; KINDS] = ["drift", "bounce", "peek", "swoop", "cross", "chase", "boo", "materialize"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -45,6 +45,16 @@ pub(crate) enum Kind {
     Cross,
     /// Two ghosts, the same path, one a beat behind the other.
     Chase,
+    /// In from an edge toward the panel's centre, closer than the ambient
+    /// depth breathe ever comes, arms thrown dramatically up, then straight
+    /// back out the way it came - the card's own "boo": "drift close, pause,
+    /// arms thrown up with the sheet flaring, then retreat" (card 339).
+    Boo,
+    /// Fades in in place, holds, fades back out - never a positional
+    /// entrance at all. The one deliberate, named exception to "always enter
+    /// and leave by moving across an edge" (card 339's own acceptance
+    /// criterion), and a rare one by construction (see `choose_kind`).
+    Materialize,
 }
 
 impl Kind {
@@ -55,7 +65,9 @@ impl Kind {
             2 => Kind::Peek,
             3 => Kind::Swoop,
             4 => Kind::Cross,
-            _ => Kind::Chase,
+            5 => Kind::Chase,
+            6 => Kind::Boo,
+            _ => Kind::Materialize,
         }
     }
 
@@ -67,6 +79,8 @@ impl Kind {
             Kind::Swoop => 3,
             Kind::Cross => 4,
             Kind::Chase => 5,
+            Kind::Boo => 6,
+            Kind::Materialize => 7,
         }]
     }
 
@@ -127,14 +141,39 @@ pub(crate) struct Shape {
     pub wave_phase: f32,
     /// Which arm waves: +1 (right) or -1 (left).
     pub wave_side: f32,
-    /// The baseline "held out" shoulder pitch, radians above horizontal - a
-    /// little variety between ghosts (some hold their arms a touch higher or
-    /// lower) on top of [`arm_gesture`]'s shared shape.
+    /// The baseline "held out" shoulder pitch, radians above horizontal -
+    /// driven by the `arms` param (card 339: "arm height control"; see
+    /// [`arm_baseline_pitch`]), plus a small per-ghost jitter on top so a
+    /// beat of several ghosts is not all holding at the identical angle.
+    /// [`arm_gesture`]'s raise/droop/wave excursions all move *relative* to
+    /// this baseline, whatever it is set to.
     pub arm_pitch0: f32,
 }
 
+/// The owner, 2026-09-27, on card 336/338's ghost: "the arms are too up. Can
+/// you make it so I can adjust their up/down position?" `arms` is that knob:
+/// `-1` hangs the arms down near the body, `0` holds them dead level
+/// ("straight out"), `+1` raises them toward vertical. The two halves of the
+/// range are deliberately different lengths - hanging down has more travel
+/// than raising, since "raised" is already mostly the domain of the
+/// occasional "boo" gesture in [`arm_gesture`], which moves *relative* to
+/// whatever this baseline is (the card's own words), not to a fixed absolute
+/// target - so a ghost holding its arms low still throws them up dramatically
+/// for a "boo", and one holding them raised still has room to go further.
+const ARMS_RAISE_MAX: f32 = 0.9; // ~51.6 degrees above horizontal, at `arms = 1`.
+const ARMS_HANG_MAX: f32 = 1.15; // ~65.9 degrees below horizontal, at `arms = -1`.
+
+fn arm_baseline_pitch(arms: f32) -> f32 {
+    let arms = arms.clamp(-1.0, 1.0);
+    if arms >= 0.0 {
+        arms * ARMS_RAISE_MAX
+    } else {
+        arms * ARMS_HANG_MAX
+    }
+}
+
 impl Shape {
-    pub(crate) fn new(rng: &mut Rng, size: f32) -> Shape {
+    pub(crate) fn new(rng: &mut Rng, size: f32, arms: f32) -> Shape {
         // A little variety in proportion between ghosts, from the seed
         // (card 315's brief, still true at full body scale): a touch
         // narrower or wider shoulders, a longer or shorter reach, three to
@@ -152,7 +191,7 @@ impl Shape {
             phase0: rng.range(0.0, TAU),
             alpha: rng.range(0.82, 0.96),
             turn_rate: rng.range(0.12, 0.26),
-            turn_amp: rng.range(0.08, 0.16),
+            turn_amp: rng.range(0.3, 0.8),
             depth_rate: rng.range(0.08, 0.2),
             depth_amp: rng.range(size * 0.12, size * 0.3),
             gesture_rate: rng.range(0.025, 0.05),
@@ -160,7 +199,7 @@ impl Shape {
             wave_rate: rng.range(0.5, 0.9),
             wave_phase: rng.range(0.0, TAU),
             wave_side: rng.sign(),
-            arm_pitch0: rng.range(-0.26, -0.06),
+            arm_pitch0: arm_baseline_pitch(arms) + rng.range(-0.04, 0.04),
         }
     }
 
@@ -192,17 +231,21 @@ pub(crate) struct Arms {
 }
 
 /// The arm gesture at `el` seconds into this ghost's own appearance: held out
-/// (the baseline) most of the time, with slow, occasional excursions to a
-/// "boo" raise or a droop, plus an independent, occasional wave on whichever
-/// arm this ghost's own seed picked (card 336: "held out (default), slowly
-/// raised for a 'boo', drooped, one waving ... the sheet follows them
-/// physically"). Cubed, not a plain sine - as `poses_at`'s own yaw bias does -
-/// so both cycles spend most of their time near the baseline, with brief
-/// excursions to the extremes, rather than drifting through every angle in
-/// between at equal length.
+/// (the baseline, [`Shape::arm_pitch0`] - card 339's `arms` param) most of the
+/// time, with slow, occasional excursions to a "boo" raise or a droop, plus an
+/// independent, occasional wave on whichever arm this ghost's own seed picked
+/// (card 336: "held out (default), slowly raised for a 'boo', drooped, one
+/// waving ... the sheet follows them physically"). Cubed, not a plain sine -
+/// as `poses_at`'s own yaw bias does - so both cycles spend most of their time
+/// near the baseline, with brief excursions to the extremes, rather than
+/// drifting through every angle in between at equal length. The raise/droop
+/// excursions are a fixed *delta* off the baseline (card 339: "gestures move
+/// relative to it"), not a fixed absolute target - so a ghost holding its
+/// arms down near its side still throws them dramatically upward for a "boo",
+/// and one holding them raised still visibly droops.
 pub(crate) fn arm_gesture(shape: Shape, el: f32) -> Arms {
-    const RAISE_PITCH: f32 = 0.85; // ~49 degrees above horizontal: a "boo".
-    const DROOP_PITCH: f32 = -0.6; // ~34 degrees below horizontal: drooped.
+    const RAISE_DELTA: f32 = 1.0; // a "boo": thrown up, relative to the baseline.
+    const DROOP_DELTA: f32 = -0.5; // relative to the baseline.
     const WAVE_ELBOW_AMP: f32 = 0.9;
     const WAVE_PITCH_AMP: f32 = 0.32;
     const SWAY_AMP: f32 = 0.05; // "a gentle bob and sway as it floats".
@@ -213,7 +256,10 @@ pub(crate) fn arm_gesture(shape: Shape, el: f32) -> Arms {
     let droop = (-g3).max(0.0);
     let base = shape.arm_pitch0;
     let sway = SWAY_AMP * (shape.turn_rate * 0.6 * el + shape.phase0 * 0.9).sin();
-    let pitch = base + raise * (RAISE_PITCH - base) + droop * (DROOP_PITCH - base) + sway;
+    // Clamped well short of a full flip (+/- PI/2 would be dead vertical) so
+    // an extreme `arms` baseline plus a full "boo" excursion still lands on a
+    // sane arm pose rather than folding the arm back on itself.
+    let pitch = (base + raise * RAISE_DELTA + droop * DROOP_DELTA + sway).clamp(-1.5, 1.5);
 
     let wg = (shape.wave_rate * el + shape.wave_phase).sin();
     let waving = (wg * wg * wg).max(0.0);
@@ -254,6 +300,12 @@ pub(crate) struct Pose {
     pub gaze: (f32, f32),
     /// This instant's arm gesture - see [`arm_gesture`].
     pub arms: Arms,
+    /// This instant's opacity: `shape.alpha` for every kind but
+    /// [`Kind::Materialize`], which ramps it from `0` up to `shape.alpha` and
+    /// back down instead of moving on or off panel - the named fade the
+    /// acceptance criteria carve out as the one exception to "always enter
+    /// and leave by crossing an edge" (card 339).
+    pub alpha: f32,
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -342,12 +394,42 @@ impl Act {
                 // turn to exactly zero for the hold itself, easing back in
                 // only for the brief entrance/exit legs.
                 let yaw = p.shape.turn_amp * swing * swing * swing * self.yaw_gate(active_el, dur);
-                let depth = p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin();
+                let depth = if self.kind == Kind::Boo {
+                    boo_depth(p.shape, active_el, dur)
+                } else {
+                    p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin()
+                };
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
-                let arms = arm_gesture(p.shape, active_el);
-                Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze, arms })
+                let arms = if self.kind == Kind::Boo { boo_arms(p.shape, active_el, dur) } else { arm_gesture(p.shape, active_el) };
+                let alpha =
+                    if self.kind == Kind::Materialize { materialize_alpha(p.shape, active_el, dur) } else { p.shape.alpha };
+                Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze, arms, alpha })
             })
             .collect()
+    }
+
+    /// Every performer's own entrance pose - the instant it is first on
+    /// stage (`el = 0` for everyone but a chase's own follower, whose stage
+    /// entrance is its own `delay` seconds later). Lets a ghost's cloth be
+    /// created and settled well before the act actually starts, at the same
+    /// static, off-screen pose it will really enter at (card 339: "spawning
+    /// and settling a ghost's cloth off-screen ahead of its entrance, spread
+    /// across frames" - see [`Director::upcoming`] and `mod.rs`'s prewarm
+    /// pass, and the module doc on why every act is a pure function of
+    /// elapsed time - `poses_at` at `el = 0` is exactly as valid, and exactly
+    /// as reproducible, as at any other instant).
+    pub(crate) fn entrance_poses(&self) -> Vec<Pose> {
+        let mut out = self.poses_at(self.start + 1e-4);
+        if self.kind == Kind::Chase {
+            if let Some(p) = self.plans.get(1) {
+                for extra in self.poses_at(self.start + p.delay + 1e-4) {
+                    if !out.iter().any(|o| o.key == extra.key) {
+                        out.push(extra);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// `(x, y, active_el)`. `active_el` is this ghost's own elapsed time -
@@ -399,6 +481,14 @@ impl Act {
                 let x = travel(p.flip, u, margin);
                 (x, p.y, el2)
             }
+            Kind::Boo => {
+                let (x, y) = boo_pos(p, el, dur, margin);
+                (x, y, el)
+            }
+            // Never moves - the position is fixed at the panel spot picked
+            // when the act was built (`p.amp`); only its own alpha (see
+            // `materialize_alpha`) changes.
+            Kind::Materialize => (p.amp, p.y, el),
         }
     }
 
@@ -438,6 +528,20 @@ impl Act {
                     smooth01((el - enter - hold) / leave)
                 }
             }
+            // The face has to read during the whole point of the move - a
+            // "boo" thrown while three-quarter turned away is not a boo, and
+            // a materialising ghost is staring right at you the whole time.
+            Kind::Boo => {
+                let (enter, hold, leave) = boo_windows(dur);
+                if el < enter {
+                    1.0 - smooth01(el / enter)
+                } else if el < enter + hold {
+                    0.0
+                } else {
+                    smooth01((el - enter - hold) / leave)
+                }
+            }
+            Kind::Materialize => 0.0,
             _ => 1.0,
         }
     }
@@ -485,6 +589,8 @@ impl Act {
                 normalise((forward, up))
             }
             Kind::Drift => normalise((forward, 0.0)),
+            // Straight at the viewer - the point of both moves.
+            Kind::Boo | Kind::Materialize => (0.0, 0.0),
         }
     }
 }
@@ -511,6 +617,109 @@ fn peek_pos(p: &Plan, el: f32, dur: f32, margin: f32) -> (f32, f32) {
     (x, p.y)
 }
 
+/// The shared enter/hold/leave split every `Boo` phase function
+/// (`boo_pos`/`boo_depth`/`boo_arms`/`yaw_gate`) reads - factored out once so
+/// the pause a `Boo` holds is, by construction, the same window its
+/// position, depth, arms and gaze all agree it is holding through.
+fn boo_windows(dur: f32) -> (f32, f32, f32) {
+    let enter = dur * 0.32;
+    let leave = dur * 0.32;
+    let hold = (dur - enter - leave).max(0.05);
+    (enter, hold, leave)
+}
+
+/// In from an edge toward the panel's own centre - much further in than a
+/// `Peek` ever comes - a pause, then straight back out the way it came
+/// (never crossing to the far side): card 339's "boo".
+fn boo_pos(p: &Plan, el: f32, dur: f32, margin: f32) -> (f32, f32) {
+    let (enter, hold, leave) = boo_windows(dur);
+    let edge_x = if p.flip { W as f32 + margin } else { -margin };
+    let close_x = p.amp; // picked in `build_act`: near the panel's own centre.
+    let x = if el < enter {
+        lerp(edge_x, close_x, smooth01(el / enter))
+    } else if el < enter + hold {
+        close_x
+    } else {
+        lerp(close_x, edge_x, smooth01((el - enter - hold) / leave))
+    };
+    (x, p.y)
+}
+
+/// How close a "boo" can safely come before its own apparent extent, at the
+/// perspective scale that depth implies, would no longer clear the panel -
+/// card 336's own "cut off at the edge" bug (an earlier hold's own framing
+/// mistake), checked here with real perspective math rather than repeated by
+/// guesswork. `REF_DISTANCE` is `mod.rs`'s own constant, repeated locally
+/// rather than imported - the same choice `cloth::extent`'s own doc explains
+/// (this module already reasons about the camera's perspective growth
+/// without reaching into `mod.rs` for it).
+fn boo_close_depth(shape: Shape) -> f32 {
+    const REF_DISTANCE: f32 = 40.0;
+    let half = (crate::frame::H as f32 * 0.5 - 1.5).max(2.0);
+    // Whichever the hold would clip on first, at a uniform perspective
+    // zoom: the figure's own height (crown to hem, about the panel's own
+    // shorter side already at the ambient distance) or its arms-out width.
+    let reach = (super::cloth::total_height(shape) * 0.5).max(super::cloth::extent(shape));
+    let safe_scale = (half / reach).clamp(1.05, 2.2);
+    REF_DISTANCE * (1.0 / safe_scale - 1.0)
+}
+
+/// The depth (nearer/further than the reference distance) a `Boo` holds:
+/// a touch further than the ambient breathe on the way in and out, a
+/// dramatic (but panel-safe - see [`boo_close_depth`]) close approach
+/// through the hold.
+fn boo_depth(shape: Shape, el: f32, dur: f32) -> f32 {
+    let (enter, hold, leave) = boo_windows(dur);
+    let far = shape.depth_amp * 0.5;
+    let close = boo_close_depth(shape);
+    if el < enter {
+        lerp(far, close, smooth01(el / enter))
+    } else if el < enter + hold {
+        close
+    } else {
+        lerp(close, far, smooth01((el - enter - hold) / leave))
+    }
+}
+
+/// The arm gesture a `Boo` holds: both arms thrown dramatically up (the
+/// card's own "arms thrown up with the sheet flaring") through the pause,
+/// eased in and back out of the ordinary held-out baseline over the same
+/// enter/leave legs everything else about the move uses.
+fn boo_arms(shape: Shape, el: f32, dur: f32) -> Arms {
+    let (enter, hold, leave) = boo_windows(dur);
+    let base = ArmPose { pitch: shape.arm_pitch0, elbow: 0.16 };
+    let raised = ArmPose { pitch: (shape.arm_pitch0 + 1.05).clamp(-1.5, 1.5), elbow: 0.05 };
+    let u = if el < enter {
+        smooth01(el / enter)
+    } else if el < enter + hold {
+        1.0
+    } else {
+        1.0 - smooth01((el - enter - hold) / leave)
+    };
+    let mix = |a: ArmPose, b: ArmPose, t: f32| ArmPose { pitch: lerp(a.pitch, b.pitch, t), elbow: lerp(a.elbow, b.elbow, t) };
+    Arms { left: mix(base, raised, u), right: mix(base, raised, u) }
+}
+
+/// A `Materialize`'s own opacity: `0` at both ends, `shape.alpha` (the
+/// ordinary "solid enough to tell where it crosses something" level) through
+/// the hold - the one deliberate, named fade the acceptance criteria carve
+/// out as an exception to "always enter and leave by crossing an edge" (card
+/// 339). Never full black-to-full-alpha in a single frame: eased the same
+/// way every other soft transition in this module is.
+fn materialize_alpha(shape: Shape, el: f32, dur: f32) -> f32 {
+    let enter = dur * 0.3;
+    let leave = dur * 0.3;
+    let hold = (dur - enter - leave).max(0.05);
+    let u = if el < enter {
+        smooth01(el / enter)
+    } else if el < enter + hold {
+        1.0
+    } else {
+        1.0 - smooth01((el - enter - hold) / leave)
+    };
+    shape.alpha * u
+}
+
 // --------------------------------------------------------------------------
 
 /// Seconds of nothing on screen between beats. Card 326, on top of card
@@ -533,8 +742,12 @@ pub(crate) struct Director {
     frontier: f64,
 }
 
-/// How far ahead of the frame being drawn the schedule stays decided.
-const LOOKAHEAD: f64 = 1.0;
+/// How far ahead of the frame being drawn the schedule stays decided - at
+/// least as far as `mod.rs`'s own `PREWARM`, so an act is always already on
+/// the books for the whole window its prewarm pass looks ahead through;
+/// otherwise a ghost due soon could be discovered late and lose its lead time
+/// to settle off-screen (card 339).
+const LOOKAHEAD: f64 = 1.75;
 
 impl Director {
     pub(crate) fn new(seed: u64) -> Director {
@@ -558,6 +771,16 @@ impl Director {
     /// Every ghost on screen at `t`, across every act active there.
     pub(crate) fn poses_at(&self, t: f64) -> Vec<Pose> {
         self.acts.iter().filter(|a| a.start <= t && t < a.start + a.duration).flat_map(|a| a.poses_at(t)).collect()
+    }
+
+    /// Every ghost that is not yet on screen at `t` but will be within
+    /// `horizon` seconds, at its own entrance pose - `mod.rs`'s prewarm pass
+    /// creates and settles a cloth for each of these well ahead of time
+    /// (card 339), so the burst of physics steps a brand-new sheet needs
+    /// happens off-screen, spread over many ordinary frames, rather than all
+    /// at once the instant the ghost is due on stage.
+    pub(crate) fn upcoming(&self, t: f64, horizon: f64) -> Vec<Pose> {
+        self.acts.iter().filter(|a| a.start > t && a.start <= t + horizon).flat_map(|a| a.entrance_poses()).collect()
     }
 
     /// The most recently started act, for `Patch::playing`.
@@ -611,7 +834,7 @@ impl Director {
         let bias = |k: Kind| match k {
             Kind::Bounce | Kind::Swoop => bounce,
             Kind::Drift | Kind::Peek => 1.0 - bounce,
-            Kind::Cross | Kind::Chase => 0.5,
+            Kind::Cross | Kind::Chase | Kind::Boo | Kind::Materialize => 0.5,
         };
         let mut best: Option<(f32, Kind)> = None;
         for i in 0..KINDS as u64 {
@@ -636,6 +859,14 @@ impl Director {
             if k == Kind::Bounce {
                 score -= 0.08;
             }
+            // "Mostly one thing at a time; a surprise every so often" (card
+            // 339) - `Boo` and `Materialize` are the surprises, kept rarer
+            // than the everyday `Bounce` accent by the same additive-penalty
+            // logic just above (a flat multiplier would shut them out
+            // entirely for some seeds, per the same finding).
+            if k == Kind::Boo || k == Kind::Materialize {
+                score -= 0.12;
+            }
             if best.is_none_or(|(s, _)| score > s) {
                 best = Some((score, k));
             }
@@ -646,19 +877,20 @@ impl Director {
     fn build_act(&mut self, kind: Kind, start: f64, pace: f32, ctx: &Ctx) -> Act {
         let size = ctx.get("size");
         let bounce = ctx.get("bounce");
+        let arms = ctx.get("arms");
         let flip = self.rng.u64() & 1 == 0;
         let cast = kind.cast();
         let mut shapes: Vec<Shape> = (0..cast)
             .map(|_| {
                 let jitter = self.rng.range(0.85, 1.18);
-                Shape::new(&mut self.rng, size * jitter)
+                Shape::new(&mut self.rng, size * jitter, arms)
             })
             .collect();
         // A pair reads as two ghosts, not twins: give the second a shape of
         // its own rather than sharing the first's exactly.
         if cast == 2 {
             let jitter = self.rng.range(0.85, 1.18);
-            shapes[1] = Shape::new(&mut self.rng, size * jitter);
+            shapes[1] = Shape::new(&mut self.rng, size * jitter, arms);
         }
 
         // Vertical band for the shoulder (`y`): the head reaches `head_r`
@@ -763,6 +995,29 @@ impl Director {
                     .collect();
                 (format!("chase, {}", side_word(flip)), vec!["kind:chase".into(), side_tag(flip)], plans, dur, dur + delay)
             }
+            Kind::Boo => {
+                let dur = self.rng.range(4.5, 7.0) as f64 / f64::from(pace);
+                // Near the panel's own horizontal centre, with a little
+                // jitter - `boo_close_depth` (see its own doc) already keeps
+                // the *apparent*, zoomed-in extent clear of the panel at
+                // whatever depth the hold reaches, so a small offset here is
+                // safe rather than guessed.
+                let close_x = crate::frame::W as f32 * 0.5 + self.rng.range(-4.0, 4.0);
+                let plan = Plan { shape: shapes[0], flip, y, amp: close_x, freq: 0.0, bounces: 0.0, delay: 0.0 };
+                (format!("boo, {}", side_word(flip)), vec!["kind:boo".into(), side_tag(flip)], vec![plan], dur, dur)
+            }
+            Kind::Materialize => {
+                let dur = self.rng.range(5.0, 9.0) as f64 / f64::from(pace);
+                // An on-panel spot, clear of the edges by the sheet's own
+                // flat extent - it never moves there, so this is the only
+                // clearance it ever needs (no perspective growth: `depth`
+                // stays at the ambient breathe, never `Boo`'s close zoom).
+                let clear = super::cloth::extent(shapes[0]) + 1.0;
+                let hi = (crate::frame::W as f32 - clear).max(clear + 1.0);
+                let x = self.rng.range(clear, hi);
+                let plan = Plan { shape: shapes[0], flip, y, amp: x, freq: 0.0, bounces: 0.0, delay: 0.0 };
+                ("materialize".to_string(), vec!["kind:materialize".into()], vec![plan], dur, dur)
+            }
         };
 
         Act { kind, start, duration, travel_dur, name, tags, plans }
@@ -843,6 +1098,13 @@ mod tests {
             t += 1.0 / 30.0;
         }
         for act in &d.acts {
+            // `Materialize` is the one deliberate, named exception the
+            // acceptance criteria carve out: it never moves off panel at
+            // all, it fades - checked separately, on alpha rather than
+            // position, by `a_materialize_fades_rather_than_moves` below.
+            if act.kind == Kind::Materialize {
+                continue;
+            }
             // A hair inside the act's own window, on both edges, so a chased
             // follower's late start (which reports NAN before it) is skipped
             // rather than asserted about.
@@ -854,6 +1116,44 @@ mod tests {
                 assert!(clear, "{}: ghost at x={} (margin {margin}) is on screen at an edge of its act", act.name, pose.cx);
             }
         }
+    }
+
+    /// The one named exception to "always enters/leaves by crossing an edge"
+    /// (card 339's own acceptance criterion): a `Materialize` fades its own
+    /// alpha from `0` up and back down instead, and never moves.
+    #[test]
+    fn a_materialize_fades_rather_than_moves() {
+        let p = params(&[("ghosts", 4.0)]);
+        let mut d = Director::new(42);
+        let mut t = 0.0;
+        let mut found = false;
+        // A deliberately rare surprise (`choose_kind`'s own penalty) needs a
+        // long window to be sure of landing at all for a fixed seed - the
+        // same twenty minutes `a_long_run_does_not_settle_into_a_loop` uses
+        // for `bounce`/`cross`/`chase`, and the same coarse `0.25s` step
+        // (Director-only, no GPU - cheap even over twenty minutes).
+        while t < 1200.0 {
+            d.advance(t, &ctx(t, &p));
+            t += 0.25;
+        }
+        for act in &d.acts {
+            if act.kind != Kind::Materialize {
+                continue;
+            }
+            found = true;
+            let start = act.poses_at(act.start + 1e-3);
+            let mid = act.poses_at(act.start + act.duration * 0.5);
+            let end = act.poses_at((act.start + act.duration - 1e-3).max(act.start));
+            assert_eq!(start.len(), 1);
+            assert_eq!(mid.len(), 1);
+            assert_eq!(end.len(), 1);
+            assert!(start[0].alpha < 0.05, "not near-invisible at the start: {}", start[0].alpha);
+            assert!(end[0].alpha < 0.05, "not near-invisible at the end: {}", end[0].alpha);
+            assert!(mid[0].alpha > start[0].shape.alpha * 0.9, "not near full alpha mid-hold: {}", mid[0].alpha);
+            // Never moves.
+            assert!((start[0].cx - mid[0].cx).abs() < 1e-3 && (start[0].cy - mid[0].cy).abs() < 1e-3, "a materialize moved");
+        }
+        assert!(found, "no `materialize` act landed in 300s at seed 42 - not a meaningful run of this test");
     }
 
     /// Never more ghosts on screen at once than the `ghosts` param allows.
@@ -898,7 +1198,7 @@ mod tests {
             *counts.entry(act.kind.name()).or_default() += 1;
         }
         eprintln!("20 minutes: {counts:?}");
-        assert!(counts.len() >= 5, "only {} of {KINDS} kinds used in twenty minutes: {counts:?}", counts.len());
+        assert!(counts.len() >= 7, "only {} of {KINDS} kinds used in twenty minutes: {counts:?}", counts.len());
         let total: usize = counts.values().sum();
         assert!(total > 20, "only {total} acts in twenty minutes");
         // Card 326 recalibrated `bounce` (and `chase`/`cross`, already rare
@@ -906,12 +1206,14 @@ mod tests {
         // accent rather than an equal member of the rotation, so
         // "neglected" now means "never happens at all" for those three, and
         // "at least a real share" - the original, stricter bar - for the
-        // two common solo kinds it never touched.
+        // two common solo kinds it never touched. Card 339's `boo`/
+        // `materialize` are deliberate rare surprises too (`choose_kind`'s
+        // own penalty) - "never happened at all" is the bar for them.
         for kind in ["drift", "peek", "swoop"] {
             let share = *counts.get(kind).unwrap_or(&0) as f32 / total as f32;
             assert!(share > 0.03, "`{kind}` is being neglected: {counts:?}");
         }
-        for kind in ["bounce", "cross", "chase"] {
+        for kind in ["bounce", "cross", "chase", "boo", "materialize"] {
             assert!(counts.contains_key(kind), "`{kind}` never happened at all in twenty minutes: {counts:?}");
         }
         // No exact repeat back to back too often: the freshness scoring
@@ -935,7 +1237,7 @@ mod tests {
     fn the_default_hold_is_symmetric_outside_a_wave() {
         let mut rng = Rng::new(41);
         for _ in 0..8 {
-            let shape = Shape::new(&mut rng, 28.0);
+            let shape = Shape::new(&mut rng, 28.0, -0.15);
             // The instant, in the first 200s, closest to both cycles' own
             // zero crossing - "a real held-out moment", not mid-gesture.
             let mut best_el = 0.0_f32;

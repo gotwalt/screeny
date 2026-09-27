@@ -712,18 +712,23 @@ impl Cloth {
 
         let mut cloth =
             Cloth { template, faces, head_kinematic, wrist_kinematic, shape, world, body, head_body, torso_body, arm_bodies, warped: 0.0 };
-        // 450 steps of an unoptimized Rapier soft body is real money in a
-        // debug test binary - every `Cloth::spawn` in the whole test suite
-        // (cloth's own tests and every `render_gpu` call that spawns a new
-        // ghost) pays it, and card 336's own log names this as the reason
-        // the ghosts debug suite reached ~9 minutes. A settle this short
-        // never looks fully at rest at the *panel's* own settings (real
-        // playback still uses 450 below), but every property the tests here
-        // check - finite, bounded, deterministic, no interpenetration - holds
-        // long before full visual settle, so cutting it under `cfg(test)`
-        // (card 338's Log: "fewer settle steps in tests") changes nothing
-        // about what ships.
-        const SETTLE_STEPS: usize = if cfg!(test) { 60 } else { 450 };
+        // Card 339: this used to be 450 - most of a whole `render()` call's
+        // worth of physics, synchronously, the instant a ghost was first
+        // drawn - the direct cause of the pops/clumps the owner saw (see
+        // `mod.rs`'s `PREWARM` doc: a spike here is a slow frame, and a slow
+        // frame is a skipped one under wall-clock pacing). `mod.rs`'s prewarm
+        // pass now creates and settles a ghost's cloth off-screen, well
+        // ahead of its entrance, doing the *rest* of the settling a few
+        // ordinary physics steps at a time, once a frame, exactly like an
+        // already-visible ghost's own per-frame cost - so this only has to be
+        // enough to take a completely fresh, ungravitied template to
+        // something finite and stable for one step, not to a fully visually
+        // settled sheet on its own. The fallback path (no prewarm lead time
+        // at all - only possible for the very first ghost or two of a run,
+        // before the director has anything scheduled far enough ahead) still
+        // gets a real, if shorter, settle here so it never looks obviously
+        // unsettled even without prewarming's help.
+        const SETTLE_STEPS: usize = if cfg!(test) { 60 } else { 90 };
         for _ in 0..SETTLE_STEPS {
             cloth.step(body0, PHYS_DT, sway);
         }
@@ -820,7 +825,15 @@ impl Cloth {
     /// simulated time, not a counter, so two callers stepping by different
     /// amounts still agree (card 326's rule, and `flock::Flock::advance`'s).
     pub(crate) fn advance(&mut self, target: f64, sway: f32, mut body_at: impl FnMut(f64) -> BodyPose) {
-        const CATCHUP: i64 = 240; // at most 1.3s of steps in one call, however far `target` jumped.
+        // At most half a second of steps in one call, however far `target`
+        // jumped - card 339 lowered this from 1.3s (`240`): the only time a
+        // real jump this big happens is a brand-new cloth's first `advance`
+        // call, whose `target` is the engine's absolute time while its own
+        // clock starts at zero, and mod.rs's prewarm pass now means that
+        // first call almost always happens off-screen, ahead of the ghost's
+        // entrance, not the instant it becomes visible - so there is no
+        // longer a good reason for it to be a big burst.
+        const CATCHUP: i64 = 90;
         let dt = f64::from(PHYS_DT);
         let already = (self.warped / dt).round() as i64;
         let want = (target / dt + 1e-6).floor() as i64;
@@ -961,7 +974,7 @@ mod tests {
     use crate::rng::Rng;
 
     fn shape(rng: &mut Rng) -> Shape {
-        Shape::new(rng, 28.0)
+        Shape::new(rng, 28.0, -0.15)
     }
 
     fn body(pos: V3, yaw: f32) -> BodyPose {

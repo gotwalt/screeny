@@ -77,6 +77,7 @@ const PARAMS: &[ParamSpec] = &[
     param("eye_light", "Eye luminance (0 = true-black holes, 1 = a soft glow)", 0.0, 1.0, 0.01, 0.0),
     param("eye_hue", "Eye tint, once eye_light > 0", 0.0, 360.0, 1.0, 205.0),
     param("mouth", "Mouth size (0 = none)", 0.0, 2.0, 0.05, 1.0),
+    param("arms", "Arm height (-1 hanging down, 0 straight out, 1 raised); gestures move relative to it", -1.0, 1.0, 0.05, -0.15),
 ];
 
 /// Same cap the `ghosts` param allows, and the size every per-frame array
@@ -85,10 +86,45 @@ const MAX_GHOSTS: usize = 4;
 /// Complete renders averaged per output frame, spread across its own
 /// interval, in linear light - the motion blur (card 326's later
 /// direction: "motion blur (temporal supersampling across the frame
-/// interval)").
-const BLUR_SAMPLES: usize = 4;
-/// Samples per axis per LED inside each of those renders.
-const SUPERSAMPLES: u32 = 6;
+/// interval)"). Card 339 halved this from `4`: each sample is a full GPU
+/// render *and* a synchronous read-back (`Offscreen::finish` polls the
+/// device and waits for it), and that wait, not the rendering work itself,
+/// is most of where a frame's own time goes (found by measuring, not
+/// guessed) - cutting the sample count in half is the single biggest lever
+/// on it available without leaving `crates/art/src/gpu` (shared by every
+/// other GPU patch) or this patch's own render loop. Two samples still blur
+/// real motion (a moving ghost's hem visibly softens) - the card's own
+/// permitted trade ("fewer blur sub-renders ... without losing the look").
+const BLUR_SAMPLES: usize = 2;
+/// Samples per axis per LED inside each of those renders. Card 339 lowered
+/// this from `6`: fewer texels to shade and read back on every one of the
+/// (now two) renders a frame, with no visible loss of edge quality at this
+/// panel's own scale (checked side by side, not assumed).
+const SUPERSAMPLES: u32 = 4;
+
+/// How far ahead of an act's own start its ghost's cloth is created and
+/// begins settling, off-screen and undrawn.
+///
+/// The owner, 2026-09-27, watching card 336/338's ghost: "I think the
+/// rendering is crashing somehow. They just disappear and right now they're
+/// rendering with some crazy artifacts" - and the orchestrator's own
+/// measurement (card 339) found the real cause: a brand-new ghost's cloth
+/// used to be created and settled (hundreds of physics steps) synchronously,
+/// inside the one `render()` call that first drew it - a real spike in that
+/// frame's own cost, exactly the kind of slow frame that makes a wall-clock-
+/// paced consumer like `pipe` skip ahead in time, so several of that ghost's
+/// own entrance frames were never rendered at all and it appeared already
+/// mid-motion, sometimes stacked with others from the same beat. Spreading
+/// the settle over many ordinary frames removes the spike rather than
+/// hiding it: `Ghosts::prewarm` (below) finds every act due to start within
+/// this many seconds, creates its cloth (a small, fixed initial settle -
+/// `cloth::SETTLE_STEPS`), and steps it a little further every frame after
+/// that, at the *held, off-screen entrance pose* - the same handful of
+/// physics steps an already-visible ghost pays every frame, just paid ahead
+/// of time while nothing is watching, so by the time the act actually starts
+/// the cloth is already settled and `frame_at`'s own lazy `or_insert_with`
+/// never has to do the expensive thing at all.
+const PREWARM: f64 = 1.5;
 
 /// World units from the camera to the reference plane (`depth == 0`); world
 /// `x`/`y` are panel LED units directly, so a head at `depth == 0` sits
@@ -313,6 +349,23 @@ fn blur_times(t: f64, dt: f64, samples: usize) -> Vec<f64> {
 }
 
 impl Ghosts {
+    /// Create and step the cloth for every ghost due to start within
+    /// [`PREWARM`] seconds of `t`, held static at its own off-screen entrance
+    /// pose - see `PREWARM`'s own doc for why. Returns the set of keys
+    /// touched, so the caller can keep them alive through this frame's own
+    /// `clothes.retain` (they are not "seen" in `frame_at`'s sense - nothing
+    /// draws them yet - but they must not be dropped either).
+    fn prewarm(&mut self, t: f64, sway: f32) -> std::collections::HashSet<u64> {
+        let mut warming = std::collections::HashSet::new();
+        for pose in self.director.upcoming(t, PREWARM) {
+            warming.insert(pose.key);
+            let body0 = head_of(&pose);
+            let cloth = self.clothes.entry(pose.key).or_insert_with(|| Cloth::spawn(pose.shape, body0, sway));
+            cloth.advance(t, sway, |_| body0);
+        }
+        warming
+    }
+
     /// Every ghost's mesh at `sub_t`, sorted farthest-first so translucent
     /// draw order composites correctly, and the set of keys touched (so the
     /// caller knows which cloths are still wanted this frame).
@@ -332,7 +385,7 @@ impl Ghosts {
                     key: pose.key,
                     mesh: cloth.render_vertices(),
                     gaze: pose.gaze,
-                    alpha: pose.shape.alpha,
+                    alpha: pose.alpha,
                     z: head.pos.z,
                     head_pos: head.pos,
                     yaw: head.yaw,
@@ -347,6 +400,7 @@ impl Ghosts {
 
     fn render_gpu(&mut self, ctx: &Ctx) -> Frame {
         let sway = ctx.get("sway");
+        let warming = self.prewarm(ctx.t, sway);
         let times = blur_times(ctx.t, ctx.dt.max(0.0), BLUR_SAMPLES);
         let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut sum: Option<Vec<crate::color::Rgb>> = None;
@@ -416,7 +470,7 @@ impl Ghosts {
             last_drawn = drawn;
         }
 
-        self.clothes.retain(|k, _| seen.contains(k));
+        self.clothes.retain(|k, _| seen.contains(k) || warming.contains(k));
 
         let norm = 1.0 / times.len() as f32;
         let px: Vec<crate::color::Rgb> = sum.unwrap_or_else(|| vec![crate::color::Rgb::BLACK; N]).iter().map(|c| c.scale(norm)).collect();
@@ -533,6 +587,13 @@ mod tests {
 
     fn colours(frame: &Frame) -> Vec<[f32; 3]> {
         (0..crate::frame::N).map(|i| { let c = frame.pixel(i); [c.r, c.g, c.b] }).collect()
+    }
+
+    /// How many LEDs are genuinely lit (well above the true-black floor) -
+    /// the same signature the orchestrator's own measurement (card 339) used
+    /// to name a pop: "lit-LED count 0 -> 600".
+    fn lit_count(frame: &Frame) -> usize {
+        colours(frame).iter().filter(|c| (c[0] + c[1] + c[2]) / 3.0 > 0.05).count()
     }
 
     /// A pixel this dark, sitting right next to genuinely lit cloth, is a
@@ -705,5 +766,55 @@ mod tests {
             assert!(poses.len() <= MAX_GHOSTS, "{} ghosts at t={t}", poses.len());
             t += dt;
         }
+    }
+
+    /// Card 339: the owner, watching card 336/338's ghost, "I think the
+    /// rendering is crashing somehow. They just disappear and right now
+    /// they're rendering with some crazy artifacts" - and the orchestrator's
+    /// own measurement named it precisely: a whole ghost's lit-LED count
+    /// jumping from 0 to ~600 in a single frame, a pop rather than an
+    /// entrance, and a row of overlapping ghosts already mid-frame (a clump).
+    /// Both traced to a slow frame (a brand-new cloth's settle burst) letting
+    /// a wall-clock-paced consumer skip ahead in time - `PREWARM`'s own fix,
+    /// checked separately by measuring `pipe`'s real throughput (see this
+    /// card's Log), not something a unit test stepped at a steady rate can
+    /// reproduce. What a test *can* check, stepped here at a steady 1/30s
+    /// with nothing skipped: the render pipeline itself never manufactures a
+    /// pop on its own - every entrance and exit crosses an edge a few LEDs
+    /// at a time, never a whole ghost's worth in one step. At the owner's own
+    /// `ghosts = 4`, seeded to spawn early, over several beats (long enough
+    /// to see more than one entrance, short enough to stay well under the
+    /// suite's own time budget).
+    #[test]
+    #[ignore = "slow in debug (four real seconds of real GPU renders, physics included) - run once with --release"]
+    fn no_frame_pops_a_whole_ghost_into_view() {
+        let mut p = Params::defaults(DEF.params);
+        assert!(p.set(DEF.params, "ghosts", 4.0));
+        // `pace` at its own maximum so the very first entrance (every seed's
+        // first act starts at `t = 0`, per `Director::spawn_one`) reaches the
+        // panel quickly - keeps this real-GPU-rendered run cheap without
+        // giving up on exercising a real entrance.
+        assert!(p.set(DEF.params, "pace", 2.2));
+        let mut patch = (DEF.make)(1);
+        let dt = 1.0 / crate::snapshot::FPS;
+        let steps = (4.0 / dt).round() as usize;
+        let mut prev = 0usize;
+        let mut worst = 0usize;
+        let mut any_lit = false;
+        for i in 0..=steps {
+            let t = i as f64 * dt;
+            let frame = patch.render(&Ctx { t, dt, now: t, params: &p });
+            let lit = lit_count(&frame);
+            any_lit |= lit > 0;
+            if i > 0 {
+                worst = worst.max(lit.abs_diff(prev));
+            }
+            prev = lit;
+        }
+        assert!(any_lit, "nothing was ever drawn in 8s at seed 1 - not a meaningful run of this test");
+        // Well below a whole small ghost's own lit-LED count (order 300-600
+        // at this size, per the orchestrator's own measurement) - a real
+        // per-frame edge-crossing never approaches this, only a pop does.
+        assert!(worst < 150, "the lit-LED count changed by {worst} in one frame - a pop, not a gradual entrance/exit");
     }
 }
