@@ -8,6 +8,15 @@
 //! difference at this size is not worth a second dependency - but it is
 //! genuinely layered in space and in time, deterministic from the patch
 //! seed, and cheap enough to sample per leaf per physics step.
+//!
+//! Card 321 moved the flight from 2D to 3D. [`Wind::at3`] is the field a leaf
+//! actually flies through now: the same horizontal push as card 314's `at`
+//! (kept below, byte-for-byte, because the shape of "layered noise in x, y and
+//! time" is exactly right and did not need to change), plus a third,
+//! independent octave for depth (world *z*, toward and away from the camera)
+//! so a gust can carry a leaf a little nearer or further as well as sideways.
+
+use super::geom::{v3, V3};
 
 /// A 32-bit avalanche hash (this is the well-known "triple xorshift-multiply"
 /// mixer, e.g. used in various hash-map and noise implementations). Any
@@ -115,6 +124,23 @@ impl Wind {
         // sideways would read as bouncing, not blowing.
         (mean + gust * push * 5.0, gust * lift * 1.6)
     }
+
+    /// The wind at a point in 3D (panel-ish `x`, world-up `y`, depth `z`),
+    /// world metres, at time `t` seconds: [`Wind::at`]'s horizontal push and
+    /// lift, plus an independent depth component from a third noise channel
+    /// under the same gust envelope. Smaller than the sideways push - a gust
+    /// that carried a leaf toward or away from the camera as hard as it
+    /// carries it sideways would read as the leaf jumping in size, not
+    /// blowing - so this is a gentle wander in depth, not a driving force.
+    #[must_use]
+    pub fn at3(&self, x: f32, y: f32, z: f32, t: f32, mean: f32, gusts: f32) -> V3 {
+        let (wx, wy) = self.at(x, y, t, mean, gusts);
+        let (sx, sz, st) = (x * SCALE, z * SCALE, t * TIME_SCALE);
+        let envelope = fbm(sx * 0.4, sz * 0.4, st * 0.4, self.seed ^ 0x9E37_79B9);
+        let gust = gusts * (0.25 + 1.5 * envelope * envelope);
+        let depth = fbm(sx * 1.1 - 5.0, sz * 1.1 + 3.0, st * 0.9 + 2.0, self.seed ^ 0x5A5A_5A5A) - 0.5;
+        v3(wx, wy, gust * depth * 1.2)
+    }
 }
 
 #[cfg(test)]
@@ -139,5 +165,17 @@ mod tests {
             }
         }
         assert!(saw_difference, "another seed should fly through different air");
+    }
+
+    #[test]
+    fn at3_agrees_with_at_on_the_horizontal_plane_and_stays_bounded() {
+        let w = Wind::new(11);
+        for i in 0..200 {
+            let (x, y, z, t) = (i as f32 * 1.3, i as f32 * 0.8, i as f32 * 0.6, i as f32 * 0.25);
+            let flat = w.at(x, y, t, 0.7, 0.5);
+            let full = w.at3(x, y, z, t, 0.7, 0.5);
+            assert_eq!((flat.0, flat.1), (full.x, full.y), "at3's x/y must be at's x/y");
+            assert!(full.z.is_finite() && full.z.abs() < 20.0, "depth wind should not blow up: {full:?}");
+        }
     }
 }
