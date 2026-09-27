@@ -1,8 +1,10 @@
 //! Card 302: modes and the daily schedule, over the API.
 //!
-//! The owner, 2026-09-26: night mode is "a different patch at the lowest
-//! possible visible brightness", day comes back in the morning, and a change
-//! made by hand **holds until the next timetable entry**.
+//! The owner, 2026-09-26: night mode is a different patch, day comes back in
+//! the morning, and a change made by hand **holds until the next timetable
+//! entry**. Card 309: a mode is patch + setting and nothing else - brightness
+//! is a separate concern (the Panel screen, the smart home), which a mode
+//! neither sets nor is overridden by.
 //!
 //! The studio's clock is a hand this file holds (`Config::clock`), and the
 //! scheduler looks every 100 ms instead of every 30 s, so a day passes in a
@@ -105,14 +107,12 @@ async fn until_state(at: SocketAddr, what: &str, f: impl Fn(&serde_json::Value) 
     until_json(at, PATIENCE, what, "/api/v1/bootstrap", |b| f(&b["state"])).await["state"].clone()
 }
 
-fn stops() -> Vec<u8> {
-    screeny_studio::page::brightness_stops()
-}
-
 /// **The card's acceptance, against a simulator.** Two modes, a schedule that
-/// flips at 22:00 and 07:00, the studio switching patch *and* panel brightness
-/// on the minute, a hand change reading `overridden` and holding, and the next
-/// entry taking it back. Then a hand-applied mode, and "back to schedule".
+/// flips at 22:00 and 07:00, the studio switching patch on the minute, a hand
+/// change reading `overridden` and holding, and the next entry taking it back.
+/// Then a hand-applied mode, and "back to schedule". Throughout, the panel's
+/// brightness is where the hand (the smart home) left it: no mode moves it,
+/// and moving it is never an override (card 309).
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn night_comes_in_the_evening_and_day_in_the_morning() {
     let (sim, port) = start_sim();
@@ -125,18 +125,20 @@ async fn night_comes_in_the_evening_and_day_in_the_morning() {
     })
     .await;
 
-    // "Save what's playing as a mode": flock, on Default, at 100.
+    // The smart home sets the light level; nothing below may move it.
+    let b = post(at, "/api/v1/device/brightness", r#"{"device":"cc5302","level":40}"#).await;
+    assert_eq!(b.status, 200, "{}", String::from_utf8_lossy(&b.body));
+    let level = sim.handle().telemetry().brightness;
+    assert_ne!(level, 0, "the panel is lit");
+
+    // "Save what's playing as a mode": flock, on Default. An older client's
+    // `brightness` is accepted and ignored, not refused.
     ok(at, "/api/v1/set_patch", r#"{"id":"flock"}"#).await;
     let s = ok(at, "/api/v1/modes/save", r#"{"name":"Day","brightness":100}"#).await;
-    let day_level = s["modes"][0]["brightness"].as_u64().expect("a level") as u8;
-    assert!(stops().contains(&day_level), "snapped to a real stop: {day_level}");
-    assert_eq!(s["modes"][0]["patch"], "flock", "captured from what is playing");
-    assert_eq!(s["modes"][0]["setting"], "Default", "on Default, unmodified, so Default");
-    // Night: vesta's working copy at the dimmest visible level.
-    let s = ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":null,"brightness":1}"#).await;
-    let floor = stops()[1];
-    assert_eq!(s["modes"][1]["brightness"], floor, "1 lights nothing; the lowest visible stop is what it means");
-    assert_eq!(s["modes"][1]["setting"], serde_json::Value::Null, "the working copy");
+    assert_eq!(s["modes"][0], serde_json::json!({"name":"Day","patch":"flock","setting":"Default"}), "patch and setting, nothing else");
+    // Night: vesta's working copy.
+    let s = ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":null}"#).await;
+    assert_eq!(s["modes"][1], serde_json::json!({"name":"Night","patch":"vesta","setting":null}), "the working copy");
     assert_eq!(s["schedule"]["enabled"], false);
     assert_eq!(s["mode"], serde_json::Value::Null, "no schedule, no due mode");
 
@@ -145,35 +147,31 @@ async fn night_comes_in_the_evening_and_day_in_the_morning() {
     assert_eq!(s["schedule"]["entries"][0], serde_json::json!({"at":"07:00","mode":"Day"}), "sorted, normalised, spelled as the mode is");
     assert_eq!((s["mode"].clone(), s["until"].clone(), s["overridden"].clone()), ("Day".into(), "22:00".into(), false.into()));
     assert_eq!(s["patch"], "flock");
-    until(PATIENCE, "the panel at Day's brightness", || async { sim.handle().telemetry().brightness == day_level }).await;
 
-    // 22:00: Night, patch and brightness, on the minute.
+    // 22:00: Night, on the minute - and the light level is left alone.
     hand.set(2026, 9, 26, 22, 0);
     let s = until_state(at, "Night to come in", |s| s["patch"] == "vesta").await;
     assert_eq!((s["mode"].clone(), s["until"].clone(), s["overridden"].clone()), ("Night".into(), "07:00".into(), false.into()));
-    until(PATIENCE, "the panel at the dimmest visible level", || async { sim.handle().telemetry().brightness == floor }).await;
-    // And the studio's own record of what the panel said it applied.
-    until_json(at, PATIENCE, "the studio to record the panel's brightness", "/api/v1/status", |s| {
-        s["devices"][0]["player"]["health"]["brightness_applied"] == floor && s["devices"][0]["player"]["brightness"] == floor
-    })
-    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(sim.handle().telemetry().brightness, level, "a mode does not touch brightness");
 
-    // A hand change: overridden, and it holds.
-    let s = ok(at, "/api/v1/set_patch", r#"{"id":"flock"}"#).await;
+    // A hand change: overridden, and it holds. (A patch neither mode plays,
+    // so Day taking it back at 07:00 is visible as a change of patch.)
+    let s = ok(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     assert_eq!((s["overridden"].clone(), s["mode"].clone(), s["until"].clone()), (true.into(), "Night".into(), "07:00".into()));
     hand.set(2026, 9, 26, 23, 30);
     tokio::time::sleep(Duration::from_millis(500)).await;
     hand.set(2026, 9, 27, 3, 0);
     tokio::time::sleep(Duration::from_millis(500)).await;
     let s = state(at).await;
-    assert_eq!(s["patch"], "flock", "a hand change holds until the next entry");
+    assert_eq!(s["patch"], "metaballs", "a hand change holds until the next entry");
     assert_eq!(s["overridden"], true);
 
     // 07:00: the next entry takes it back.
     hand.set(2026, 9, 27, 7, 0);
-    let s = until_state(at, "Day to come back", |s| s["mode"] == "Day" && s["overridden"] == false).await;
-    assert_eq!(s["patch"], "flock");
-    until(PATIENCE, "the panel at Day's brightness again", || async { sim.handle().telemetry().brightness == day_level }).await;
+    let s = until_state(at, "Day to come back", |s| s["patch"] == "flock").await;
+    assert_eq!((s["mode"].clone(), s["overridden"].clone()), ("Day".into(), false.into()));
+    assert_eq!(sim.handle().telemetry().brightness, level, "and still the light level is left alone");
 
     // A mode applied by hand (the smart home's call) is a hand change too.
     let s = ok(at, "/api/v1/mode/apply", r#"{"name":"night"}"#).await;
@@ -185,10 +183,11 @@ async fn night_comes_in_the_evening_and_day_in_the_morning() {
     let s = ok(at, "/api/v1/schedule/resume", "{}").await;
     assert_eq!((s["patch"].clone(), s["mode"].clone(), s["overridden"].clone()), ("flock".into(), "Day".into(), false.into()));
 
-    // Brightness moved by hand is an override too.
-    let b = post(at, "/api/v1/device/brightness", r#"{"device":"cc5302","level":40}"#).await;
+    // Brightness moved by hand (the smart home, all day long) is not an override.
+    let b = post(at, "/api/v1/device/brightness", r#"{"device":"cc5302","level":160}"#).await;
     assert_eq!(b.status, 200, "{}", String::from_utf8_lossy(&b.body));
-    assert_eq!(state(at).await["overridden"], true, "by brightness alone");
+    assert_eq!(state(at).await["overridden"], false, "brightness is not part of a mode");
+    assert_eq!(sim.handle().telemetry().brightness, 160, "nothing pulled it back");
 
     // Off: nothing is due, nothing is overridden, and nothing more happens.
     let s = ok(at, "/api/v1/schedule/set", r#"{"enabled":false}"#).await;
@@ -209,11 +208,10 @@ async fn the_hold_survives_a_restart_and_a_restart_across_an_entry_applies_it() 
     let hand = Hand::at(2026, 9, 26, 22, 5);
     let studio = studio_at(&hand, Some(&dir.0)).await;
     let at = studio.addr;
-    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null,"brightness":null}"#).await;
-    ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":"Default","brightness":0}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":"Default"}"#).await;
     let s = ok(at, "/api/v1/schedule/set", r#"{"enabled":true,"entries":[{"at":"07:00","mode":"Day"},{"at":"22:00","mode":"Night"}]}"#).await;
     assert_eq!(s["patch"], "vesta");
-    assert_eq!(s["modes"][1]["brightness"], 0, "a dark panel is a legitimate night");
     // By hand, then a restart in the same stretch.
     ok(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
     studio.stop().await;
@@ -222,6 +220,7 @@ async fn the_hold_survives_a_restart_and_a_restart_across_an_entry_applies_it() 
     assert_eq!(file["version"], 6);
     assert_eq!(file["schedule_run"], serde_json::json!({"at":"22:00","mode":"Night","day":"2026-09-26"}));
     assert!(file.get("overridden").is_none() && file.get("until").is_none(), "computed, never stored");
+    assert_eq!(file["modes"][1], serde_json::json!({"name":"Night","patch":"vesta","setting":"Default"}), "no brightness on a mode");
 
     hand.set(2026, 9, 27, 1, 0);
     let studio = studio_at(&hand, Some(&dir.0)).await;
@@ -257,7 +256,7 @@ async fn modes_and_schedules_are_validated() {
     ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock"}"#).await;
     ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta"}"#).await;
     // The same name in another spelling is the same mode.
-    let s = ok(at, "/api/v1/modes/save", r#"{"name":"night","patch":"vesta","brightness":null}"#).await;
+    let s = ok(at, "/api/v1/modes/save", r#"{"name":"night","patch":"vesta"}"#).await;
     assert_eq!(s["modes"].as_array().map(Vec::len), Some(2));
     assert_eq!(s["modes"][1]["name"], "night");
 
@@ -305,9 +304,9 @@ async fn a_mode_with_a_named_setting() {
     ok(at, "/api/v1/set_param", r#"{"id":"count","value":8}"#).await;
     ok(at, "/api/v1/settings/save", r#"{"name":"Lava"}"#).await;
     // Captured: on Lava, unmodified, so Lava.
-    let s = ok(at, "/api/v1/modes/save", r#"{"name":"Warm","brightness":null}"#).await;
+    let s = ok(at, "/api/v1/modes/save", r#"{"name":"Warm"}"#).await;
     assert_eq!(s["modes"][0]["setting"], "Lava");
-    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null,"brightness":null}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null}"#).await;
 
     ok(at, "/api/v1/set_param", r#"{"id":"count","value":3}"#).await;
     ok(at, "/api/v1/set_patch", r#"{"id":"flock"}"#).await;
@@ -341,8 +340,8 @@ async fn an_entry_that_has_not_been_applied_yet_is_not_an_override() {
     let cfg = Config { schedule_every: Duration::from_secs(3600), ..config(&hand, None) };
     let studio = Studio::bind(cfg).await.expect("bind").spawn();
     let at = studio.addr;
-    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null,"brightness":null}"#).await;
-    ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":null,"brightness":null}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Day","patch":"flock","setting":null}"#).await;
+    ok(at, "/api/v1/modes/save", r#"{"name":"Night","patch":"vesta","setting":null}"#).await;
     let s = ok(at, "/api/v1/schedule/set", r#"{"enabled":true,"entries":[{"at":"07:00","mode":"Day"},{"at":"22:00","mode":"Night"}]}"#).await;
     assert_eq!((s["patch"].clone(), s["overridden"].clone()), ("flock".into(), false.into()));
     hand.set(2026, 9, 26, 22, 0);
@@ -358,6 +357,8 @@ async fn an_entry_that_has_not_been_applied_yet_is_not_an_override() {
 
 /// A mode whose patch this build has not got (a hand-edited or older file) is
 /// skipped when it comes due, and said - never an error, never a retry loop.
+/// The file is card 302's shape, `brightness` on its mode: it loads all the
+/// same (card 309).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mode_whose_patch_is_gone_is_skipped_and_said() {
     let dir = Temp::new("schedule-gone");

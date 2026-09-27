@@ -400,14 +400,16 @@ struct SaveMode {
     /// unmodified, otherwise the working copy. `null`: the working copy.
     #[serde(default, deserialize_with = "some_string")]
     setting: Option<Option<String>>,
-    /// Absent: the panel's brightness policy now. `null`: leave brightness
-    /// alone. A number is snapped to the nearest real stop.
-    #[serde(default, deserialize_with = "double_option")]
-    brightness: Option<Option<u8>>,
+    // Card 309: `brightness` was here (card 302). A mode is patch + setting
+    // and nothing else; the key is no longer declared and serde ignores
+    // unknown keys, so an older client that still sends it is accepted and it
+    // does nothing.
 }
 
 /// **Save what is playing as a mode** - or, with fields given, any mode. The
-/// same name in any spelling overwrites that mode.
+/// same name in any spelling overwrites that mode. A mode is `{name, patch,
+/// setting}`: brightness is neither captured nor taken (card 309), and a
+/// `brightness` an older client sends is ignored, not refused.
 async fn modes_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveMode>) -> ApiResult<Json<PageState>> {
     let player = st.page();
     let now = player.state();
@@ -430,13 +432,9 @@ async fn modes_save(State(st): State<AppState>, headers: HeaderMap, Json(req): J
         None if def.id == now.patch && !now.modified => Some(now.setting.clone()),
         None => None,
     };
-    let brightness = match req.brightness {
-        Some(b) => b,
-        None => player.stored().brightness,
-    };
     st.book
         .plan()
-        .save_mode(Mode { name: req.name, patch: def.id.to_string(), setting, brightness })
+        .save_mode(Mode { name: req.name, patch: def.id.to_string(), setting })
         .map_err(ApiError::bad_request)?;
     Ok(Json(publish(&st, &headers, &player)))
 }

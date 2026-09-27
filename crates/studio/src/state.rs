@@ -53,7 +53,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   -> `{seed, params, speed}`. **"Modified" is not in the file**: it is the
 ///   working copy compared with the setting it names, which cannot go stale.
 /// - **v6** (card 302) adds **modes and the daily schedule**: `modes` (a list of
-///   `{name, patch, setting, brightness}`), `schedule` (`{enabled, entries:
+///   `{name, patch, setting}`; card 309 took the `brightness` card 302 gave
+///   them, and a file that still has it reads fine, the key ignored),
+///   `schedule` (`{enabled, entries:
 ///   [{at: "HH:MM", mode}]}`) and `schedule_run` (the entry last applied and the
 ///   local date it was for - which is what makes "hold until the next entry"
 ///   survive a restart). `overridden` and `until` are **not in the file**: they
@@ -3262,8 +3264,8 @@ mod tests {
         let (store, _) = Store::open(Some(&dir.0));
         let want = Persisted {
             modes: vec![
-                Mode { name: "Day".into(), patch: "flock".into(), setting: None, brightness: None },
-                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()), brightness: Some(6) },
+                Mode { name: "Day".into(), patch: "flock".into(), setting: None },
+                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()) },
             ],
             schedule: Schedule {
                 enabled: true,
@@ -3281,5 +3283,57 @@ mod tests {
         assert_eq!(back, want);
         assert!(s2.health().repaired.is_empty(), "{:?}", s2.health().repaired);
         assert!(s2.health().recovered.is_none());
+    }
+
+    /// Card 309: a v6 file written by card 302's build, whose modes carry a
+    /// `brightness`, loads with its modes intact minus that key - no
+    /// `repaired` line (it was never wrong; the model changed), and the next
+    /// write has no `brightness` on a mode.
+    #[test]
+    fn a_mode_with_card_302s_brightness_loads_without_it() {
+        use crate::schedule::Entry;
+        let dir = Temp::new("v6-mode-brightness");
+        let old = r#"{
+            "version": 6,
+            "modes": [
+                { "name": "Day", "patch": "flock", "setting": null, "brightness": null },
+                { "name": "Night", "patch": "vesta", "setting": "Default", "brightness": 6 },
+                { "name": "Late", "patch": "vesta", "setting": null, "brightness": 0 }
+            ],
+            "schedule": { "enabled": true, "entries": [
+                { "at": "07:00", "mode": "Day" }, { "at": "22:00", "mode": "Night" }, { "at": "23:30", "mode": "Late" }
+            ]},
+            "schedule_run": { "at": "22:00", "mode": "Night", "day": "2026-09-26" }
+        }"#;
+        std::fs::write(dir.0.join(FILE), old).expect("write the card 302 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(
+            loaded.modes,
+            vec![
+                Mode { name: "Day".into(), patch: "flock".into(), setting: None },
+                Mode { name: "Night".into(), patch: "vesta".into(), setting: Some("Default".into()) },
+                Mode { name: "Late".into(), patch: "vesta".into(), setting: None },
+            ]
+        );
+        assert!(loaded.schedule.enabled);
+        assert_eq!(
+            loaded.schedule.entries,
+            vec![
+                Entry { at: "07:00".into(), mode: "Day".into() },
+                Entry { at: "22:00".into(), mode: "Night".into() },
+                Entry { at: "23:30".into(), mode: "Late".into() },
+            ]
+        );
+        assert_eq!(loaded.schedule_run, Some(ScheduleRun { at: "22:00".into(), mode: "Night".into(), day: "2026-09-26".into() }));
+        assert!(store.health().repaired.is_empty(), "nothing to repair: {:?}", store.health().repaired);
+        assert!(store.health().recovered.is_none());
+        store.save(loaded);
+        store.flush();
+        store.stop();
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        let back: serde_json::Value = serde_json::from_str(&text).expect("json");
+        let modes = back["modes"].as_array().expect("modes");
+        assert_eq!(modes.len(), 3);
+        assert!(modes.iter().all(|m| m.get("brightness").is_none()), "{text}");
     }
 }

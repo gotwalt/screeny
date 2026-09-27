@@ -118,18 +118,23 @@ this: there is no playlist and no rotation).
 
 Decisions, his:
 
-- **A mode is `{patch, named setting, panel brightness}`** (card 179's model, from card
-  155's open question: brightness and patch belong to a *mode*, not to a patch or a
-  setting). Day and night are the two he named; `vesta` is the obvious night patch. A mode
-  may name a setting of its patch, `Default`, or none - the working copy, as it was last
-  left - and a brightness or none (leave it alone).
-- **"The lowest possible visible brightness"** is the lowest nonzero brightness stop: the
-  firmware raises anything dim-but-nonzero to its floor (card 187). Zero is allowed and is
-  a dark panel; any nonzero level is at least visible.
+- **A mode is `{patch, named setting}`**, and nothing else. Day and night are the two he
+  named; `vesta` is the obvious night patch. A mode may name a setting of its patch,
+  `Default`, or none - the working copy, as it was last left. (Card 302 built it as card
+  179's `{patch, named setting, panel brightness}`; card 309 took brightness out the same
+  evening - see below.)
+- **Brightness is a separate concern from what is on the screen** (the owner, 2026-09-26
+  evening: *"let's make controlling the brightness a separate concern from what's on the
+  screen"*; card 309). His smart home owns the panel's light level from room light sensors
+  and picks modes as scenes; a mode that also set brightness would fight that automation
+  and read "Overridden" every time the house dimmed the panel. So a mode neither sets,
+  captures nor compares brightness: night's "lowest visible brightness" is set on the
+  Panel screen or by the smart home (`/device/brightness`), not by the mode. The lowest
+  nonzero stop is still what "dimmest visible" means there (card 187).
 - **A daily timetable**: `HH:MM -> mode`, every day, in the container's local time (`TZ`).
   The entry due now is the latest at or before now, wrapping to yesterday's last.
 - **Overrides: "hold until the next timetable entry."** A change made by hand while a mode
-  is on - a patch, a slider, the brightness, another mode - stays until the next entry
+  is on - a patch, a slider, another mode - stays until the next entry
   comes due, then the schedule resumes. The scheduler therefore never compares what is
   playing with what the mode says: it applies an entry once (the run record, time + local
   date, is persisted so this holds across a restart) and leaves the panel alone until the
