@@ -823,4 +823,35 @@ mod tests {
             assert_eq!((pa.x, pa.y, pa.z), (pb.x, pb.y, pb.z), "non-deterministic step");
         }
     }
+
+    /// The free skirt never sinks into the kinematic head collider - "no
+    /// interpenetration" checked directly, not just assumed from adding a
+    /// collider. A sharp yaw whip is exactly the motion that would drive the
+    /// skirt across the head if the collision were missing or the wrong
+    /// radius (326's log names getting this radius wrong as a real bug).
+    #[test]
+    fn skirt_never_penetrates_the_head_collider() {
+        let mut rng = Rng::new(41);
+        let s = shape(&mut rng);
+        let (_, neck_r) = dome_and_neck_radius(s.r.max(0.8));
+        let head_at = |t: f64| head(V3::ZERO, (t as f32 * 4.0).sin() * 2.5); // a fast yaw whip in place.
+        let mut cloth = Cloth::spawn(s, head_at(0.0), 0.8);
+        let mut worst = f32::MAX;
+        let mut t = 0.0_f64;
+        while t < 4.0 {
+            t += 1.0 / 60.0;
+            cloth.advance(t, 0.8, head_at);
+            for i in 0..VERTS {
+                if cloth.template.kinematic[i] {
+                    continue;
+                }
+                let d = cloth.pos(i).sub(V3::ZERO).length();
+                worst = worst.min(d);
+            }
+        }
+        // A little slack for the solver's own contact skin/prediction margin,
+        // not a loosened test: comfortably inside the neck radius would mean
+        // the collider is not doing anything.
+        assert!(worst > neck_r * 0.6, "a free vertex reached {worst} inside a neck radius of {neck_r}");
+    }
 }
