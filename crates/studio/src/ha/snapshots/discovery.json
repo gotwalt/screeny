@@ -1,0 +1,92 @@
+{
+  "components": {
+    "brightness": {
+      "availability_topic": "screeny/studio/status",
+      "brightness_scale": 255,
+      "command_topic": "screeny/studio/brightness/set",
+      "flash": false,
+      "icon": "mdi:led-strip",
+      "name": null,
+      "platform": "light",
+      "schema": "json",
+      "state_topic": "screeny/studio/brightness/state",
+      "supported_color_modes": [
+        "brightness"
+      ],
+      "transition": false,
+      "unique_id": "screeny_studio_brightness"
+    },
+    "panel": {
+      "availability_topic": "screeny/studio/status",
+      "device_class": "connectivity",
+      "entity_category": "diagnostic",
+      "name": "Panel link",
+      "platform": "binary_sensor",
+      "state_topic": "screeny/studio/panel/state",
+      "unique_id": "screeny_studio_panel"
+    },
+    "patch": {
+      "availability_topic": "screeny/studio/status",
+      "icon": "mdi:image-filter-hdr",
+      "json_attributes_topic": "screeny/studio/patch/state",
+      "name": "Patch",
+      "platform": "sensor",
+      "state_topic": "screeny/studio/patch/state",
+      "unique_id": "screeny_studio_patch",
+      "value_template": "{{ value_json.name }}"
+    },
+    "resume": {
+      "availability_topic": "screeny/studio/status",
+      "command_topic": "screeny/studio/resume/set",
+      "icon": "mdi:calendar-refresh",
+      "name": "Back to schedule",
+      "platform": "button",
+      "unique_id": "screeny_studio_resume"
+    },
+    "scene": {
+      "availability_topic": "screeny/studio/status",
+      "command_topic": "screeny/studio/scene/set",
+      "icon": "mdi:palette",
+      "name": "Scene",
+      "options": [
+        "Day",
+        "Night"
+      ],
+      "platform": "select",
+      "state_topic": "screeny/studio/scene/state",
+      "unique_id": "screeny_studio_scene"
+    },
+    "schedule": {
+      "availability_topic": "screeny/studio/status",
+      "command_topic": "screeny/studio/schedule/set",
+      "icon": "mdi:calendar-clock",
+      "name": "Schedule",
+      "platform": "switch",
+      "state_topic": "screeny/studio/schedule/state",
+      "unique_id": "screeny_studio_schedule"
+    },
+    "scheduled": {
+      "availability_topic": "screeny/studio/status",
+      "icon": "mdi:calendar-star",
+      "json_attributes_topic": "screeny/studio/scheduled/state",
+      "name": "Scheduled scene",
+      "platform": "sensor",
+      "state_topic": "screeny/studio/scheduled/state",
+      "unique_id": "screeny_studio_scheduled",
+      "value_template": "{{ value_json.scene }}"
+    }
+  },
+  "device": {
+    "identifiers": [
+      "screeny_studio"
+    ],
+    "manufacturer": "screeny",
+    "model": "Studio",
+    "name": "Screeny",
+    "sw_version": "VERSION"
+  },
+  "origin": {
+    "name": "screeny-studio",
+    "sw_version": "VERSION"
+  }
+}

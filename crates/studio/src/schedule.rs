@@ -631,6 +631,23 @@ fn differs(st: &AppState, mode: &Mode, now: &StudioState) -> bool {
     false
 }
 
+/// Card 308: the mode that is what the focused player is doing now - the
+/// first one, in the order they were made - or `None`. What Home Assistant
+/// shows as the current scene.
+#[must_use]
+pub fn matching_mode(st: &AppState) -> Option<String> {
+    let now = st.page().state();
+    let plan = st.book.snapshot();
+    plan.modes
+        .iter()
+        .find(|m| {
+            // `differs` calls a mode that cannot play here "not different";
+            // that is not the same as matching.
+            crate::player::find_patch(&m.patch, st.cfg.fault_patches).is_some_and(|d| unplayable(d).is_none()) && !differs(st, m, &now)
+        })
+        .map(|m| m.name.clone())
+}
+
 /// Why a patch cannot play in this process, or `None`.
 fn unplayable(def: &PatchDef) -> Option<String> {
     if screeny_art::patches::needs_gpu(def.id) && !screeny_art::gpu_status().available {
