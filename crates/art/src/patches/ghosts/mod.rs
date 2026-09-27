@@ -61,11 +61,14 @@ const PARAMS: &[ParamSpec] = &[
     param("ghosts", "How many at once", 1.0, 4.0, 1.0, 2.0),
     param("pace", "How fast they move (lower is slower, dreamier)", 0.3, 2.2, 0.05, 0.85),
     param("bounce", "Bouncy vs floaty (bounce and chase stay rare accents either way)", 0.0, 1.0, 0.01, 0.25),
-    param("size", "How big they are (LEDs tall)", 5.0, 20.0, 0.5, 12.0),
+    param("size", "How big they are (LEDs tall)", 8.0, 30.0, 0.5, 22.0),
     param("sway", "How loose/floppy the cloth is", 0.0, 1.0, 0.01, 0.45),
     param("glow", "Soft glow", 0.0, 1.0, 0.01, 0.28),
     param("color", "Colour (0 = grayscale)", 0.0, 1.0, 0.01, 0.32),
     param("hue", "Tint, when colour is on (0 = red, the cool default is ~205)", 0.0, 360.0, 1.0, 205.0),
+    param("eyes", "Eye size", 0.5, 2.0, 0.05, 1.0),
+    param("eye_light", "Eye luminance (0 = true-black holes, 1 = a soft glow)", 0.0, 1.0, 0.01, 0.0),
+    param("eye_hue", "Eye tint, once eye_light > 0", 0.0, 360.0, 1.0, 205.0),
 ];
 
 /// Same cap the `ghosts` param allows, and the size every per-frame array
@@ -120,6 +123,8 @@ struct Scene {
     /// Per-slot body opacity (`Shape::alpha`) - "where two overlap, or it
     /// crosses something, you can tell" (card 315, kept in the 3D pass).
     alpha: [f32; 4],
+    /// `[er_u, er_v, edge, unused]` - see `ghosts.wgsl`'s `Scene.eye_shape`.
+    eye_shape: [f32; 4],
 }
 
 /// `cloth::COLS`, `cloth::RINGS` and `cloth::VERTS`'s own connectivity,
@@ -147,14 +152,12 @@ fn build_indices() -> Vec<u32> {
 /// single fixed direction is enough at this scale and keeps every ghost lit
 /// the same way regardless of where it has turned to.
 const KEY_LIGHT: [f32; 3] = [-0.35, 0.82, 0.45];
-// A generous ambient floor: the first tuning (0.09) left everything but the
-// most directly key-lit folds too dim to read against true black, so the
-// wide, downward-facing flare at the hem all but vanished (found by dumping
-// the settled mesh's own ring radii, which flare correctly, and comparing
-// against how little of it actually showed up in a render - a lighting
-// problem, not a geometry one).
-const AMBIENT: f32 = 0.24;
-const KEY_STRENGTH: f32 = 0.58;
+// The ghost is meant to be the light in the frame (card 326 review: "a soft,
+// luminous pale sheet ... brightest on the dome, folds as gentle shade, not
+// a mostly-mid-grey body") - raised twice now: 0.09 first, then 0.24 still
+// read as a mid-grey body with one bright corner rather than a lit sheet.
+const AMBIENT: f32 = 0.4;
+const KEY_STRENGTH: f32 = 0.62;
 /// "A little translucency ... a faint glow ... if it reads" (card 326): a
 /// soft light-through-fabric term on the shadow side, and a view-dependent
 /// rim, both riding the same `glow` param as the background bloom below.
@@ -165,13 +168,23 @@ const AO_STRENGTH: f32 = 1.1;
 
 const BASE_CHROMA: f32 = 0.1;
 const DARK_L: f32 = 0.02;
-const LIGHT_L: f32 = 0.9;
-const STEPS: usize = 28;
+const LIGHT_L: f32 = 0.95;
+const STEPS: usize = 30;
 
-const EYE_V: f32 = 0.16;
-const EYE_DX: f32 = 0.135;
-const EYE_R: f32 = 0.052;
-const GAZE_UV: f32 = 0.05;
+// Eye level sits on the dome's own round part (a head ring short of the
+// neck), not the neck or the skirt. Card 326 review: "~2x2-2x3 LEDs each
+// with at least 2 lit LEDs between them" at default size - tuned against the
+// actual 64x32 output (`Frame::pixel`, not the supersampled buffer) rather
+// than assumed from the UV numbers alone. `EYE_R_U`/`EYE_R_V` are separate
+// because a UV unit is not the same physical size in both directions (`u`
+// wraps the whole head, `v` only runs crown to hem) - a single radius drew a
+// hole about one LED tall and three wide, not the roughly round hole wanted.
+const EYE_V: f32 = 0.2;
+const EYE_DX: f32 = 0.095;
+const EYE_R_U: f32 = 0.046;
+const EYE_R_V: f32 = 0.082;
+const EYE_EDGE: f32 = 0.14;
+const GAZE_UV: f32 = 0.045;
 
 // ---------------------------------------------------------------- the GPU
 
@@ -342,6 +355,9 @@ impl Ghosts {
             let hue = ctx.get("hue");
             let chroma = BASE_CHROMA * ctx.get("color").clamp(0.0, 1.0);
             let glow = ctx.get("glow").clamp(0.0, 1.0);
+            let eye_scale = ctx.get("eyes").clamp(0.5, 2.0);
+            let eye_light = ctx.get("eye_light").clamp(0.0, 1.0);
+            let eye_hue = ctx.get("eye_hue");
 
             let Some(Some(live)) = self.live.as_mut() else { unreachable!("opened before this is called") };
 
@@ -352,7 +368,12 @@ impl Ghosts {
             let mut eyes = [[0.5_f32, EYE_V, 0.5, EYE_V]; MAX_GHOSTS];
             let mut alpha = [1.0_f32; MAX_GHOSTS];
             for (slot, d) in drawn.iter().enumerate() {
-                let shift = (d.gaze.0.clamp(-1.0, 1.0) * GAZE_UV, d.gaze.1.clamp(-1.0, 1.0) * GAZE_UV * 0.6);
+                // The vertical component gets its own factor, not the same
+                // number as the horizontal one: `u` and `v` are different
+                // physical scales (see `EYE_R_U`/`EYE_R_V`), so an equal UV
+                // shift would move the eyes further, in LEDs, up/down than
+                // side to side.
+                let shift = (d.gaze.0.clamp(-1.0, 1.0) * GAZE_UV, d.gaze.1.clamp(-1.0, 1.0) * GAZE_UV * (EYE_R_V / EYE_R_U) * 0.6);
                 eyes[slot] = [0.5 - EYE_DX - shift.0, EYE_V - shift.1, 0.5 + EYE_DX - shift.0, EYE_V - shift.1];
                 alpha[slot] = d.alpha;
                 for (i, v) in d.mesh.iter().enumerate() {
@@ -370,9 +391,10 @@ impl Ghosts {
                 view_proj: live.view_proj,
                 eyes,
                 light: [KEY_LIGHT[0], KEY_LIGHT[1], KEY_LIGHT[2], 0.0],
-                params: [hue, chroma, EYE_R, AO_STRENGTH],
+                params: [hue, chroma, eye_light, AO_STRENGTH],
                 params2: [AMBIENT, KEY_STRENGTH, BACK_STRENGTH, RIM_STRENGTH * glow],
                 alpha,
+                eye_shape: [EYE_R_U * eye_scale, EYE_R_V * eye_scale, EYE_EDGE, eye_hue],
             };
             live.gpu.queue.write_buffer(&live.vertices, 0, bytemuck::cast_slice(&verts));
             live.gpu.queue.write_buffer(&live.scene, 0, bytemuck::bytes_of(&scene));
@@ -488,6 +510,7 @@ mod tests {
         (0..crate::frame::N).map(|i| { let c = frame.pixel(i); [c.r, c.g, c.b] }).collect()
     }
 
+
     /// The same seed and the same moment draw the same frame, exactly -
     /// `screeny-art snapshot --seed N --at S` is a promise, even though the
     /// picture now goes through a cloth sim and a GPU pipeline to get there.
@@ -521,6 +544,18 @@ mod tests {
             let px = colours(&frame);
             let apl = px.iter().map(|c| (c[0] + c[1] + c[2]) / 3.0).sum::<f32>() / px.len() as f32;
             assert!(apl < 0.16, "at {at}s: average picture level {apl}");
+            assert!(px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97), "at {at}s: something is at full white");
+        }
+    }
+
+    /// The owner's own words on `eye_light`: "never full white" - checked at
+    /// its own maximum, on top of everything else that pushes brightness up
+    /// (`glow`, `ghosts` at its cap, and the biggest `eyes` size).
+    #[test]
+    fn glowing_eyes_are_never_full_white() {
+        for at in [2.0, 5.0, 8.0] {
+            let frame = frame_at(1, at, &[("ghosts", 4.0), ("glow", 1.0), ("eye_light", 1.0), ("eyes", 2.0)]);
+            let px = colours(&frame);
             assert!(px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97), "at {at}s: something is at full white");
         }
     }

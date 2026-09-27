@@ -124,7 +124,7 @@ impl Shape {
             phase0: rng.range(0.0, TAU),
             alpha: rng.range(0.78, 0.94),
             turn_rate: rng.range(0.15, 0.32),
-            turn_amp: rng.range(0.3, 0.65),
+            turn_amp: rng.range(0.3, 0.5),
             depth_rate: rng.range(0.1, 0.26),
             depth_amp: rng.range(size * 0.18, size * 0.42),
         }
@@ -133,11 +133,11 @@ impl Shape {
     /// Half the width a silhouette needs clearing before nothing of it is on
     /// the panel: where an entrance starts and an exit ends.
     pub(crate) fn margin(self) -> f32 {
-        self.r + 1.6
+        super::cloth::extent(self) + 1.6
     }
 
     pub(crate) fn total_height(self) -> f32 {
-        self.r + self.hem_base + self.hem_amp
+        super::cloth::total_height(self)
     }
 }
 
@@ -239,7 +239,13 @@ impl Act {
                 }
                 let p = &self.plans[i];
                 let key = self.start.to_bits() ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                let yaw = p.shape.turn_amp * (p.shape.turn_rate * active_el + p.shape.phase0 * 1.3).sin();
+                // Cubed, not a plain sine: mostly near zero (facing the
+                // camera), with brief excursions to the peak rather than
+                // spending equal time at every angle in between (card 326
+                // review: "bias the yaw so the face is toward the camera
+                // most of the time; turns are brief").
+                let swing = (p.shape.turn_rate * active_el + p.shape.phase0 * 1.3).sin();
+                let yaw = p.shape.turn_amp * swing * swing * swing;
                 let depth = p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin();
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
                 Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze })
@@ -500,9 +506,16 @@ impl Director {
             // Card 326: "bounce and chase become rare accents" - chase is
             // already rare by needing two free slots (`ENSEMBLE_CHANCE`);
             // bounce is a solo kind and needs its own down-weighting here to
-            // stay an accent rather than an equal member of the rotation.
+            // stay an accent rather than an equal member of the rotation. A
+            // flat multiplier here (tried 0.5, then 0.7) shut bounce out of
+            // a ten-minute run altogether for more than one seed - the
+            // random term above already decides most close calls, so
+            // knocking a fixed fraction off *after* it is drawn is much
+            // more punishing than it looks; a smaller, additive penalty on
+            // the freshness term leaves the variety system's own "it always
+            // gets its turn eventually" guarantee intact.
             if k == Kind::Bounce {
-                score *= 0.5;
+                score -= 0.08;
             }
             if best.is_none_or(|(s, _)| score > s) {
                 best = Some((score, k));
@@ -538,9 +551,9 @@ impl Director {
         // each end, so both are measured from the shapes actually in this
         // act, not guessed from their total height.
         let tallest = shapes.iter().map(|s| s.total_height()).fold(0.0_f32, f32::max);
-        let dome_reach = shapes.iter().map(|s| s.r).fold(0.0_f32, f32::max);
-        let hem_reach = shapes.iter().map(|s| s.hem_base + s.hem_amp).fold(0.0_f32, f32::max);
-        let y_lo = dome_reach + 2.0;
+        let dome_reach = shapes.iter().map(|s| super::cloth::rise_above_centre(*s)).fold(0.0_f32, f32::max);
+        let hem_reach = shapes.iter().map(|s| super::cloth::drop_below_centre(*s)).fold(0.0_f32, f32::max);
+        let y_lo = dome_reach + 2.5;
         let y_hi = (crate::frame::H as f32 - hem_reach - 1.5).max(y_lo + 0.5);
         let y = self.rng.range(y_lo, y_hi);
 
@@ -574,7 +587,10 @@ impl Director {
                 (format!("bounce x{} {}", bounces as u32, side_word(flip)), vec!["kind:bounce".into(), side_tag(flip)], vec![plan], dur, dur)
             }
             Kind::Peek => {
-                let peek_depth = shapes[0].r * self.rng.range(1.4, 2.4);
+                // At least the whole sheet's own extent, with headroom - a
+                // peek that only brought the *head* far enough in still left
+                // the flared hem hanging off the edge (card 326 review).
+                let peek_depth = super::cloth::extent(shapes[0]) * self.rng.range(1.15, 1.5);
                 let dur = self.rng.range(2.2, 3.6) as f64 / f64::from(pace);
                 let plan = Plan { shape: shapes[0], flip, y, amp: peek_depth, freq: 0.0, bounces: 0.0, delay: 0.0 };
                 (format!("peek, {}", side_word(flip)), vec!["kind:peek".into(), side_tag(flip)], vec![plan], dur, dur)
@@ -757,8 +773,19 @@ mod tests {
         assert!(counts.len() >= 5, "only {} of {KINDS} kinds used in ten minutes: {counts:?}", counts.len());
         let total: usize = counts.values().sum();
         assert!(total > 20, "only {total} acts in ten minutes");
-        let rarest = *counts.values().min().unwrap_or(&0);
-        assert!(rarest as f32 / total as f32 > 0.03, "a kind is being neglected: {counts:?}");
+        // Card 326 recalibrated `bounce` (and `chase`/`cross`, already rare
+        // by needing two free slots at once) down to a deliberate rare
+        // accent rather than an equal member of the rotation, so
+        // "neglected" now means "never happens at all" for those three, and
+        // "at least a real share" - the original, stricter bar - for the
+        // two common solo kinds it never touched.
+        for kind in ["drift", "peek", "swoop"] {
+            let share = *counts.get(kind).unwrap_or(&0) as f32 / total as f32;
+            assert!(share > 0.03, "`{kind}` is being neglected: {counts:?}");
+        }
+        for kind in ["bounce", "cross", "chase"] {
+            assert!(counts.contains_key(kind), "`{kind}` never happened at all in ten minutes: {counts:?}");
+        }
         // No exact repeat back to back too often: the freshness scoring
         // should keep the same move from following itself most of the time.
         let seq: Vec<&str> = d.acts.iter().map(|a| a.kind.name()).collect();

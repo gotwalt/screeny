@@ -36,7 +36,8 @@
 use super::act::Shape;
 
 pub(crate) const COLS: usize = 20;
-pub(crate) const HEAD_RINGS: usize = 4;
+/// Four rings round the dome, plus a fifth: the neck (see [`build_template`]).
+pub(crate) const HEAD_RINGS: usize = 5;
 pub(crate) const SKIRT_RINGS: usize = 9;
 pub(crate) const RINGS: usize = HEAD_RINGS + SKIRT_RINGS;
 /// Pole + every ring.
@@ -46,10 +47,77 @@ pub(crate) const VERTS: usize = 1 + RINGS * COLS;
 /// one - the ring the skirt actually starts hanging from.
 const FIRST_FREE_RING: usize = HEAD_RINGS;
 
-const THETA_TOP: f32 = 0.24; // ~14 degrees off the pole: the crown is not a point on screen either.
-const THETA_COLLAR: f32 = 1.75; // ~100 degrees: a hair past the equator, into "shoulders".
-/// How much wider the hem flares than the collar.
-const FLARE: f32 = 0.62;
+const THETA_TOP: f32 = 0.22; // ~13 degrees off the pole: the crown is not a point on screen either.
+/// Where the round part of the head stops - short of the equator, so the
+/// dome reads as a ball, not a shape that is still widening when the cloth
+/// takes over (card 326 review: "a head sphere that dominates the top").
+const THETA_DOME: f32 = 1.15; // ~66 degrees.
+/// The neck ring's own height, a little below the dome's widest point.
+const THETA_NECK: f32 = 1.35; // ~77 degrees.
+/// The neck's radius, as a fraction of the dome's own widest point - the
+/// pinch that makes "head, then shoulders" read as two things rather than
+/// one continuously widening cone (the review's main complaint).
+const NECK_FACTOR: f32 = 0.56;
+/// How much wider the hem flares than the neck. Past 1.0 the hem is wider
+/// than the head itself, which is what makes it read as a sheet and not a
+/// collar - most of this is spent early (see `flare_profile`), so the
+/// "shoulders" are already wide just below the neck.
+const FLARE: f32 = 1.55;
+
+/// The dome's own widest radius and the neck's radius, both a plain function
+/// of `r`: the two numbers `act::Shape` needs (for `margin`/`extent`) without
+/// duplicating the rest of the template.
+fn dome_and_neck_radius(r: f32) -> (f32, f32) {
+    let dome = r * THETA_DOME.sin();
+    (dome, dome * NECK_FACTOR)
+}
+
+/// The hem's own eventual radius: how far the flare reaches by `t = 1`.
+fn hem_radius(r: f32) -> f32 {
+    let (_, neck) = dome_and_neck_radius(r);
+    neck * (1.0 + FLARE)
+}
+
+/// Fast early widening, easing off - the shoulders are most of the way to
+/// full width within the first skirt ring or two, not a slow taper all the
+/// way to the hem.
+fn flare_profile(t: f32) -> f32 {
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
+/// How far this ghost's cloth can reach from its own centreline, at its
+/// widest - the hem's flare, almost always, since [`FLARE`] makes it wider
+/// than the dome. What an entrance, an exit or a peek has to clear before
+/// nothing of the *sheet*, not just the head, is on screen.
+pub(crate) fn extent(shape: Shape) -> f32 {
+    let r = shape.r.max(0.8);
+    let (dome, _) = dome_and_neck_radius(r);
+    let hem = hem_radius(r) + shape.hem_amp * 0.74; // the lobes' own bulge, at their biggest.
+    dome.max(hem)
+}
+
+/// How far the crown sits above the head's own centre - always exactly `r`,
+/// whatever the neck pinch does below it.
+pub(crate) fn rise_above_centre(shape: Shape) -> f32 {
+    shape.r.max(0.8)
+}
+
+/// How far the lowest lobe's own drip sits below the head's centre - the
+/// neck's own (small) rise above centre subtracted back out, so this matches
+/// [`build_template`]'s actual geometry rather than a guess at it.
+pub(crate) fn drop_below_centre(shape: Shape) -> f32 {
+    let r = shape.r.max(0.8);
+    let hem_len = (shape.hem_base + shape.hem_amp).max(r * 0.6);
+    let neck_y = r * THETA_NECK.cos();
+    (hem_len + shape.hem_amp * 0.6 - neck_y).max(hem_len * 0.5)
+}
+
+/// Crown to the lowest a lobe's own drip ever reaches - what a vertical
+/// placement has to clear at both ends, matching [`build_template`]'s own
+/// geometry rather than a guess at it.
+pub(crate) fn total_height(shape: Shape) -> f32 {
+    rise_above_centre(shape) + drop_below_centre(shape)
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct V3 {
@@ -169,21 +237,15 @@ fn build_template(shape: Shape) -> Template {
     local[0] = V3::new(0.0, r, 0.0);
     kinematic[0] = true;
 
-    // Head rings: rigid points on the sphere, theta running from just off
-    // the crown to just past the equator.
-    let mut collar_radius = 0.0;
-    let mut collar_y = 0.0;
-    for ring in 0..HEAD_RINGS {
-        let theta = if HEAD_RINGS > 1 {
-            THETA_TOP + (THETA_COLLAR - THETA_TOP) * ring as f32 / (HEAD_RINGS - 1) as f32
-        } else {
-            THETA_COLLAR
-        };
+    // Head rings: the first `HEAD_RINGS - 1` are rigid points on the dome
+    // itself, theta running from just off the crown to short of the equator
+    // (`THETA_DOME`) - a ball, not a shape still widening when the cloth
+    // takes over. The last one is the neck: same rigid, kinematic ring, but
+    // pulled in to `NECK_FACTOR` of the dome's own widest radius, which is
+    // the pinch that separates "head" from "shoulders" at a glance.
+    for ring in 0..HEAD_RINGS - 1 {
+        let theta = THETA_TOP + (THETA_DOME - THETA_TOP) * ring as f32 / (HEAD_RINGS - 2) as f32;
         let (radius, y) = (r * theta.sin(), r * theta.cos());
-        if ring == HEAD_RINGS - 1 {
-            collar_radius = radius;
-            collar_y = y;
-        }
         for col in 0..COLS {
             let i = ring_col_index(ring, col);
             let az = azimuth(col);
@@ -193,21 +255,37 @@ fn build_template(shape: Shape) -> Template {
             col_of[i] = col;
         }
     }
+    let neck_ring = HEAD_RINGS - 1;
+    let (_, neck_radius) = dome_and_neck_radius(r);
+    let neck_y = r * THETA_NECK.cos();
+    for col in 0..COLS {
+        let i = ring_col_index(neck_ring, col);
+        let az = azimuth(col);
+        local[i] = V3::new(neck_radius * az.cos(), neck_y, neck_radius * az.sin());
+        kinematic[i] = true;
+        ring_of[i] = neck_ring;
+        col_of[i] = col;
+    }
 
-    // Skirt rings: hanging further, flaring wider, with a slow per-column
-    // wave (`humps`) so the hem is not a perfect circle even before gravity
-    // and motion get a say.
+    // Skirt rings: hanging further, flaring wider than the head itself
+    // (`FLARE`, most of it spent early - `flare_profile` - so the shoulders
+    // are wide just below the neck), with a per-column wave (`humps`) that
+    // only ever pulls the hem *down* and *out* at a few spots, never up -
+    // "a few distinct lobes/points where the cloth hangs", not a symmetric
+    // wobble.
     for j in 1..=SKIRT_RINGS {
         let ring = HEAD_RINGS + j - 1;
         let t = j as f32 / SKIRT_RINGS as f32;
-        let base_radius = collar_radius * (1.0 + FLARE * t);
-        let base_y = collar_y - hem_len * t;
+        let base_radius = neck_radius * (1.0 + FLARE * flare_profile(t));
+        let base_y = neck_y - hem_len * t;
         for col in 0..COLS {
             let i = ring_col_index(ring, col);
             let az = azimuth(col);
-            let wave = (humps * az + shape.phase0).sin();
-            let radius = base_radius + shape.hem_amp * 0.16 * t * wave;
-            let y = base_y + shape.hem_amp * 0.12 * t * (humps * az + shape.phase0 + 1.0).cos();
+            let lobe = 0.5 + 0.5 * (humps * az + shape.phase0).cos();
+            let drip = shape.hem_amp * 0.6 * t * t * lobe;
+            let bulge = shape.hem_amp * 0.14 * t * lobe;
+            let radius = base_radius + bulge;
+            let y = base_y - drip;
             local[i] = V3::new(radius * az.cos(), y, radius * az.sin());
             ring_of[i] = ring;
             col_of[i] = col;
@@ -383,8 +461,17 @@ impl Cloth {
     }
 
     fn collide(&mut self, head: HeadTarget) {
-        let r = self.template.local[0].y - SKIN; // the head sphere's own radius, less the skin.
-        let min_r = (r + SKIN).max(0.05);
+        // The free skirt starts *below* the neck, not on the head's own
+        // dome - so what it must not clip into is the neck's own (much
+        // smaller) radius, not the head's full one. Using the head's own
+        // radius here was a real bug: every free particle's template
+        // position (radius small, `y` near zero, right where the neck pinch
+        // put it) measured *less* than that radius from the head's centre,
+        // so the very first settle pushed the entire skirt up and out to
+        // sit on the head's own equator instead of hanging from the neck.
+        let head_r = self.template.local[0].y; // the head sphere's own radius (apex's own `y`).
+        let (_, neck_r) = dome_and_neck_radius(head_r);
+        let min_r = (neck_r + SKIN).max(0.05);
         for i in 0..VERTS {
             if self.template.kinematic[i] {
                 continue;
