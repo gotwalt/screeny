@@ -21,14 +21,14 @@ doing - for when the panel is not within eyesight. The frames the browser draws 
 the same decoded datagrams the panel is being sent, and every control on the page
 changes the panel: a patch, a slider, the setting a clock holds it to.
 
-There are **three screens** onto that one studio (cards 198, 301), tied together by
+There are **three screens** onto that one studio (cards 198, 301, 311), tied together by
 one nav at the top of every one of them, because the work is three kinds of work:
 
 | | |
 |---|---|
 | **Picture**, `/` | the canvas, what is playing, its parameters, and its named settings. Everything that changes or judges what the picture looks like, and nothing else. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel, so it is not a panel setting either. |
 | **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, brightness, the panel model, the limiter, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
-| **Schedule**, `/schedule` | playing patches on a timetable rather than by hand: what is due now and until when, the timetable, and the modes it plays (card 303, on card 302's routes; card 301 gave it the nav and the status chip). |
+| **Settings**, `/settings` | the studio's own settings, starting with Home Assistant (card 311): the broker, the device's name and id, and removing it. Card 303's Schedule screen had this place until card 310 retired modes and the timetable; `/schedule` now redirects (307) to `/`. |
 
 Card 301 also simplified the Picture screen: Speed and the pause/restart controls
 are gone - "I don't think speed should be varyable and start/stop is baffling in
@@ -37,14 +37,14 @@ people understand it"). `set_seed`, `set_playback` and `restart` are still on th
 API for a script; nothing in the browser calls them any more.
 
 They are the same state and the same stream, so a change on one screen shows on the
-others - and in another browser - at once. The Picture and Schedule screens each carry
-the same **status chip**, painted by one function (`showChip` in `common.js`, card 307 -
-Schedule used to keep a thinner copy that left "what it is doing" out): the panel's name,
-what it is doing and (on the Picture screen, where there is a rate to show) how fast it
-is being sent. It is the way to the Panel screen, and it takes the fault tone and says
-why when the panel needs attention, so that trouble is never hidden behind whichever tab
-a person happens to be on. The Panel and Schedule screens have no canvas and therefore
-ask the socket for no frames at all.
+others - and in another browser - at once. The Picture and Settings screens each carry
+the same **status chip**, painted by one function (`showChip` in `common.js`, card 307):
+the panel's name, what it is doing and (on the Picture screen, where there is a rate to
+show) how fast it is being sent. It is the way to the Panel screen, and it takes the
+fault tone and says why when the panel needs attention, so that trouble is never hidden
+behind whichever tab a person happens to be on. The Panel screen has no need of a chip
+pointing at itself. The Panel and Settings screens have no canvas and therefore ask the
+socket for no frames at all.
 
 `/dashboard`, which was a second app until card 170, is folded into `/` and redirects.
 
@@ -156,7 +156,7 @@ why switching patches and switching back gives you what you had, before and afte
 `docker restart`.
 
 ```jsonc
-"version": 6,
+"version": 7,
 "devices": [ { "id": "c0ffee", "name": "Desk", ... } ],
 "players": [ { "device": "c0ffee", "patch": "metaballs", "on": true,
                "paused": false, "speed": 1.0, ... } ],
@@ -171,17 +171,23 @@ why switching patches and switching back gives you what you had, before and afte
     }
   },
   "clocks-dials": { "seed": 222, "params": { "dwell": 90 } }
-}
+},
+"home_assistant": { "enabled": false, "host": "", "port": 1883, ... }   // card 311
 ```
 
-Schema **v6**: card 302 added `modes`, `schedule` and `schedule_run` (see *Modes and the
-schedule* below) and retired speed and pause - `speed` and `paused` keep their places in
-the file for an older build's sake, and every load puts them back to 1.0 and `false`.
-Card 151 (v5) added a patch's named settings and the `speed` that is part of
-them; card 150 renamed three keys - `pieces` -> `patches`, a player's `piece` -> `patch`
-and its `settings` -> `output` - and nothing else. Every old key is still read, and a file
-older than v5 is copied to `state.vN.json` before it is migrated, so an older build can be
-put back on the same volume.
+Schema **v7**: card 310 dropped `modes`, `schedule` and `schedule_run` - Home Assistant
+picks a patch and setting now, and keeps the time - and a file that had any of them says
+so once, in the `repaired` voice, naming what it lost (`note_retired_modes` in
+`src/state.rs`), so the owner can set the same up on the HA side. v7 also added
+`home_assistant` (card 311): the broker, the device's id and name, kept nowhere else.
+v6 (card 302) had added `modes`, `schedule` and `schedule_run` in the first place, and
+retired speed and pause - `speed` and `paused` keep their places in the file for an
+older build's sake, and every load puts them back to 1.0 and `false`. Card 151 (v5)
+added a patch's named settings and the `speed` that is part of them; card 150 renamed
+three keys - `pieces` -> `patches`, a player's `piece` -> `patch` and its `settings` ->
+`output` - and nothing else. Every old key is still read, and a file older than v5 is
+copied to `state.vN.json` before it is migrated, so an older build can be put back on
+the same volume.
 
 v1, v2, v3 and v4 files are migrated in place, never thrown away, and a v1 file comes all
 the way up in one start.
@@ -307,116 +313,30 @@ different values, **the panel's win**: the panel is what was being looked at.
 panel with `FINAL` and flush the state file, rather than leaving the panels on the last
 frame until their stream timeout.
 
-## Modes and the schedule (card 302)
+Card 302's modes and timetable - a schedule built and run inside the studio - were
+retired by card 310: Home Assistant picks a patch and setting and keeps the time now.
 
-The owner, 2026-09-26: *"go into night mode where it's a different patch at the lowest
-possible visible brightness, then restore in the morning."* The same evening (card 309)
-he made brightness **a separate concern from what is on the screen**: a mode is the
-picture only. The light level is set on the Panel screen or by the smart home
-(`/device/brightness`), and no mode sets it, captures it or is overridden by it - so a
-smart home dimming the panel to the room all day does not fight the schedule.
-
-| | |
-|---|---|
-| **mode** | `{name, patch, setting}` - what the panel should show, by name, and nothing else. `setting` is a named setting of that patch or `Default`; `null` is the patch's **working copy** (as it was last left). At most 32 modes, names 1-40 characters, one name however it is spelled. A `state.json` from card 302's build whose modes carry `brightness` loads as it is, the key dropped and nothing said: it was never wrong, the model changed (card 309). |
-| **schedule** | `{enabled, entries: [{at: "HH:MM", mode}]}`, every day, local time (the container's `TZ`). At most 48 entries, one mode a time, sorted on save; an entry must name a mode that exists, and **a mode the schedule names cannot be deleted** (the 400 says where it is named). |
-| **due** | the latest entry at or before now - and before the day's first, the last one, which came due yesterday. |
-
-**Applying a mode** is one change to the panel the page shows: the patch, then the
-setting, in one `Player::configure_faded` - so the panel moves in one step, cross-fading
-over 5 s when the timetable does it and 2 s by hand (card 304). The brightness policy is
-left exactly where it was. A mode whose patch this build has not got, or that needs a
-graphics adapter there is none of, is **skipped and said**; one whose setting has since been
-deleted plays the working copy and **says so** (`schedule_note`) - neither is an error.
-
-**The scheduler** looks at the clock at start-up and every 30 s. When the schedule is on
-and the due entry is not the one it last applied (`schedule_run`: its time and the local
-date of that occurrence, kept in `state.json`), it applies that entry's mode and writes it
-down. **That is all it does** - it never compares what is playing with what the mode says -
-and that is the owner's rule, **hold until the next timetable entry**: change the patch or a
-slider by hand (or apply another mode) while a mode is on, and it stays until the next
-entry comes due. Because the run record is in the file, a hold survives a
-restart; a restart *across* an entry's time applies it, because that entry has not been
-applied yet. DST: an entry in a skipped hour comes due at the first minute that exists; an
-entry in a repeated hour fires once.
-
-**Computed on every read, never stored** (like `modified`), and carried in the state every
-route answers and every socket message carries: `mode` (what the schedule says should be on
-now, or `null` when it is off), `overridden` (it is on, and the patch or the mode's named
-setting differ from the mode - a named setting moved off by a slider counts; brightness
-never does), `until` (`"HH:MM"`, when the next entry
-comes due) - enough for "Night until 07:00" or "Overridden until 07:00" - plus `modes`,
-`schedule` and `schedule_note`.
-
-| route | body | answer |
-|---|---|---|
-| `POST /modes/save` | `{name, patch?, setting?}` - an absent field is **captured from what is playing**: the patch, the named setting it is on when unmodified (else the working copy). `setting: null` is the working copy. The same name in any spelling overwrites. A `brightness` an older client still sends is **ignored, not refused** (card 309) | the new state |
-| `POST /modes/rename` | `{from, to}` - the schedule follows the name | the new state |
-| `POST /modes/delete` | `{name}` - refused while the schedule names it | the new state |
-| `POST /mode/apply` | `{name}` - by hand; the schedule's run record is not touched, so with the schedule on it **holds until the next entry** like any hand change | the new state |
-| `POST /schedule/set` | `{enabled?, entries?}` - `entries` replaces the whole timetable; an absent field is left as it is, so `{"enabled":false}` only switches it off. The scheduler looks at once | the new state |
-| `POST /schedule/resume` | `{}` - **"back to schedule"**: apply the entry due now and make it the run record | the new state |
-
-**`/mode/apply` is the smart home's hook.** Card 179's virtual Matter switch stays parked;
-a plain HTTP call from whatever runs the house is the agreed first step:
-
-```sh
-curl -s -X POST -H 'content-type: application/json' \
-     -d '{"name":"Night"}' http://studio-host.local:8787/api/v1/mode/apply
-```
-
-**The page** (`/schedule`, card 303) reads top to bottom the way the owner would ask
-about it: **what is due now and until when** ("Night until 07:00", or "Overridden until
-07:00" beside a "Back to schedule" button), **the timetable** (the enabled switch, one
-row per entry with a plain `<input type=time>` and a `<select>` of mode names, add and
-remove - always sent as the whole list, since that is what the route takes), then **the
-modes** it plays (a name, then what it does in one quiet line - the patch, and the setting
-or "as left" - **Update to what's playing**, Apply now, Rename, Delete, refused with the
-reason in the same line `/modes/delete` gives it when the timetable names it). No control
-on this screen composes a patch or a setting by hand: a mode is made by playing it the way
-you want on the Picture screen and coming here to name it with **"Save what's playing
-as..."**, the same way a named setting is made. **"Update to what's playing"** (card 307 -
-"update this mode to the current settings") is the same recapture on a mode that already
-exists: `POST /modes/save {name}` alone, so the server takes the patch and the named
-setting (or the working copy) straight off what is playing now and overwrites the mode
-under its own name. It confirms nothing first - the notice line says what the mode now
-holds, in the same quiet-line words above ("Night is now Vesta · Wall Clock."). Every
-error from the server shows on the page's shared notice line exactly as the server wrote
-it.
-
-**Brightness is not part of a mode** (the owner, redirecting card 307 mid-build: "let's
-make controlling the brightness a separate concern from what's on the screen"). Neither
-the modes list nor "Update to what's playing" reads or sends a brightness at all - the
-Panel screen's own slider is the one place brightness is set, same as it always was, and
-card 309 took the field out of the model and the routes too.
-
-**Speed and pause are retired** (the owner, the same morning). A patch plays at 1.00x and
-nothing pauses: `set_playback` still answers 200 and changes nothing (its answer says so in
-`ignored`), `player/set` ignores `paused` and `speed`, a setting loads at 1.00x whatever it
-saved, and a state file of any version comes up at 1.00x and unpaused, said once in
-`repaired`. The player itself can still be paused in process, which is how the tests hold a
-still picture.
-
-## Home Assistant (card 308)
+## Home Assistant (cards 308, 310, 311)
 
 The studio shows up in Home Assistant through **MQTT discovery**: HA's own MQTT
 integration, no custom component, no YAML on the HA side. HA can see what is playing,
-set the brightness, pick a scene, and switch the timetable. Brightness is **its own
-control**, separate from what is on the panel (owner, 2026-09-26), so an HA automation
-can follow the room's light sensor while the scenes decide the picture. A *scene* in HA
-is a *mode* here, the same thing under HA's name.
+set the brightness, and pick a picture. Brightness is **its own control**, separate
+from what is on the panel (owner, 2026-09-26), so an HA automation can follow the
+room's light sensor while a schedule - now an HA automation of its own - decides the
+picture. *"Time of day is Home Assistant's business entirely"* (card 310): the studio
+has no modes and no timetable any more, and a schedule is just an automation that sets
+the Picture entity below.
 
-It is off unless `SCREENY_MQTT_HOST` is set:
-
-| variable | default | |
-|---|---|---|
-| `SCREENY_MQTT_HOST` | *(unset: off)* | the broker, e.g. HA's Mosquitto add-on |
-| `SCREENY_MQTT_PORT` | `1883` | |
-| `SCREENY_MQTT_USER` | *(anonymous)* | |
-| `SCREENY_MQTT_PASSWORD` / `SCREENY_MQTT_PASSWORD_FILE` | *(none)* | the file form is what the container uses (a compose secret; see `docs/design/deployment.md`) |
-| `SCREENY_MQTT_DISCOVERY_PREFIX` | `homeassistant` | only if HA was told otherwise |
-| `SCREENY_MQTT_ID` | `studio` | the stable id: every topic and `unique_id` is built from it, kept to `[a-zA-Z0-9_-]`. Change it and HA sees a new device. |
-| `SCREENY_MQTT_NAME` | `Screeny` | the device's name in HA |
+**Set up on the Settings screen** (`/settings`, card 311), not the environment: Connect
+switch, Broker, Port, Username, Password (write-only - the API only ever says whether
+one is set), and under "More" the Name in Home Assistant, the Id, the discovery prefix
+and the resulting discovery topic and topic base. Saving restarts the connection with
+the new settings at once, and the screen reports how it is doing. The settings live in
+`state.json` under `home_assistant` (schema v7) - the password in the clear, on the
+studio's own volume, and **nowhere else**: the API never sends it back out. The
+environment variables an earlier build read (`SCREENY_MQTT_*`), the `--mqtt-forget`
+flag and the compose secret are gone with them; `Config::mqtt` remains only as the
+settings a test starts already connected with.
 
 **Entities.** One device (`screeny_<id>`), one retained config at
 `homeassistant/device/screeny_<id>/config`, with every entity in its `components` map:
@@ -424,17 +344,23 @@ It is off unless `SCREENY_MQTT_HOST` is set:
 | entity (default id) | platform | topics under `screeny/<id>/` | payload |
 |---|---|---|---|
 | `light.screeny` | light, JSON schema, brightness only | `brightness/state`, `brightness/set` | `{"state":"ON","brightness":96}`, 0-255, snapped to the panel's nearest real step (card 187). `OFF` is a dark panel (the studio carries on playing); a bare `ON` goes back to the last lit level (128 if there was none). |
-| `select.screeny_scene` | select | `scene/state`, `scene/set` | a mode's name. The options are the modes and follow them (discovery is republished when a mode is made, renamed or deleted). The state is the mode that matches what is playing, `None` (unknown) when none does. Picking one is a hand change, like Apply now: the 2 s fade, and the timetable holds until its next entry. |
+| `number.screeny_level` | number, "Brightness" | `level/state`, `level/set` | `0`-`100` in steps of 4 (one output-enable slot of the panel's 25, card 187 - every step is a real change). HA shows this inline on the device's own page, which it does not do for a light's brightness. |
+| `select.screeny_picture` | select, "Picture" | `picture/state`, `picture/set` | every playable patch, on Default and on each of its named settings: `Vesta`, `Vesta · Wall Clock`, ... The list follows the named settings (discovery is republished when one is saved, renamed or deleted). The state is the current patch and setting's label, or `None` (unknown) when the working copy has been modified since the setting was loaded. Picking one is a hand change with the usual 2 s fade. |
 | `sensor.screeny_patch` | sensor | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
-| `switch.screeny_schedule` | switch | `schedule/state`, `schedule/set` | `ON` / `OFF`: the timetable on or off |
-| `button.screeny_back_to_schedule` | button | `resume/set` | `PRESS`: "Back to schedule" |
-| `sensor.screeny_scheduled_scene` | sensor | `scheduled/state` | `{"scene":"Night","until":"07:00","overridden":false,"note":null}` |
 | `binary_sensor.screeny_panel_link` | binary sensor, `connectivity`, diagnostic | `panel/state` | `ON` while the studio is driving the panel and the link is up |
 
 Availability for all of them is `screeny/<id>/status`: `online` / `offline`, retained,
 with `offline` as the Last Will. Every state is retained, so HA has the right values after
-its own restart. A command that is not valid for its entity (a scene that is not in the
+its own restart. A command that is not valid for its entity (a picture that is not in the
 list, brightness above 255) is refused and logged, and changes nothing.
+
+**Retired, and removed from HA.** Card 310 took modes and the timetable out of the
+studio, and with them the `scene` select, the `schedule` switch, the `resume` button and
+the `scheduled` sensor. They are listed in `ha::discovery::RETIRED` and announced on
+every connect as a bare `{"platform": ...}` - which is how device discovery removes a
+component while keeping the rest - so a studio that was down when this build first ran
+still cleans up after itself; their retained state topics are cleared on every connect
+too (`Topics::retired_state_topics`).
 
 **Lifecycle.** On every connect, first or after a broker restart, the studio
 resubscribes to the command topics and to `homeassistant/status`, then publishes the
@@ -443,41 +369,89 @@ publishes the config and every state again. A lost broker is retried with a back
 to 30 s, for as long as the studio runs, and logged once rather than once per retry.
 Stopping publishes `offline` before disconnecting.
 
-**Removing it from HA:** `screeny-studio --mqtt-forget` (same environment) publishes an
-empty retained payload on the config topic and on every retained topic of ours, then
-exits. HA drops the entities and the device. Do this before changing `SCREENY_MQTT_ID`.
-(`ha::discovery::remove_components` builds the payload for removing some entities and
-keeping the rest.)
+**Removing it from HA:** the Settings screen's "Remove from Home Assistant" button
+(`POST /api/v1/home_assistant/forget`) switches the integration off, then connects once
+more to clear everything it left retained - the config and every retained state topic -
+so HA drops the device and its entities. The settings are kept, switched off, so
+switching it back on brings the device back.
 
-**Trying it against a local broker:**
+| route | body | answer |
+|---|---|---|
+| `GET /home_assistant` | | `HaView`: `enabled`, `host`, `port`, `username`, `password_set`, `discovery_prefix`, `instance`, `name`, `status` (`{state: "off"\|"connecting"\|"connected"\|"failed", detail?}`), `discovery_topic`, `topic_base` |
+| `POST /home_assistant/set` | every field optional; absent is unchanged, an absent `password` keeps the saved one and `""` clears it | the new `HaView`, or a 400 with a sentence (e.g. switched on with no broker) |
+| `POST /home_assistant/forget` | `{}` | the new `HaView`, switched off |
+
+**Trying it against a local broker**, now through the API rather than the environment:
 
 ```sh
 docker run -d --rm --name screeny-mqtt -p 127.0.0.1:18830:1883 \
     eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
 mosquitto_sub -h 127.0.0.1 -p 18830 -v -t '#' &        # watch everything
-SCREENY_MQTT_HOST=127.0.0.1 SCREENY_MQTT_PORT=18830 \
-    cargo run -p screeny-studio -- --no-discover --state-dir /tmp/studio-mqtt
+cargo run -p screeny-studio -- --no-discover --state-dir /tmp/studio-mqtt
+# from another terminal, once the studio is up:
+curl -s -X POST -H 'content-type: application/json' \
+     -d '{"enabled":true,"host":"127.0.0.1","port":18830}' \
+     http://127.0.0.1:8787/api/v1/home_assistant/set
 #  -> homeassistant/device/screeny_studio/config {"device":{...},"origin":{...},"components":{...}}
 #     screeny/studio/status online
 #     screeny/studio/patch/state {"id":"clocks-numerals","name":"Clocks: numerals",...}
 #     screeny/studio/brightness/state {"state":null}      (until something sets one)
-#     screeny/studio/scene/state None
+#     screeny/studio/picture/state None
 #     ...
-mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/brightness/set -m '{"state":"ON","brightness":60}'
-#  -> screeny/studio/brightness/state {"state":"ON","brightness":57,"color_mode":"brightness"}   (the nearest real step)
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/level/set -m '40'
+#  -> screeny/studio/brightness/state {"state":"ON","brightness":97,"color_mode":"brightness"}
+#     screeny/studio/level/state 40
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/picture/set -m 'Vesta'
+#  -> screeny/studio/picture/state Vesta               (the panel cross-fades to it over 2 s)
 # Ctrl-C the studio:
 #  -> screeny/studio/status offline
 docker stop screeny-mqtt
 ```
 
+Two HA-side examples - an automation is Home Assistant's own YAML, not anything this
+studio reads:
+
+```yaml
+# A schedule: pick the picture by time of day.
+automation:
+  - alias: Screeny night picture
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      - service: select.select_option
+        target: { entity_id: select.screeny_picture }
+        data: { option: "Vesta" }
+  - alias: Screeny day picture
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      - service: select.select_option
+        target: { entity_id: select.screeny_picture }
+        data: { option: "Flock" }
+
+# Brightness following a lux sensor.
+automation:
+  - alias: Screeny brightness follows the room
+    trigger:
+      - platform: state
+        entity_id: sensor.living_room_lux
+    action:
+      - service: number.set_value
+        target: { entity_id: number.screeny_level }
+        data: { value: "{{ (states('sensor.living_room_lux') | float / 10) | round(0) }}" }
+```
+
 The same broker runs the end-to-end test, which is ignored by default because it needs one:
 `SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored`.
 It uses the discovery prefix `screeny_test`, so it cannot put entities in front of a real
-HA even when pointed at the house broker. The module is `src/ha/`: `discovery.rs` (the
-config, as types), `payload.rs` (states out, commands in), `client.rs` (the connection
-and its lifecycle), and `bridge.rs`, the one file that knows the studio. The payload
-snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a change that
-is meant.
+HA even when pointed at the house broker. It covers the picture select, the brightness
+slider, the settings routes, reconnecting, and forgetting. The module is `src/ha/`:
+`discovery.rs` (the config, as types), `payload.rs` (states out, commands in), `client.rs`
+(the connection and its lifecycle), and `bridge.rs`, the one file that knows the studio.
+The payload snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a
+change that is meant.
 
 ## Health: what 503 means
 
@@ -652,7 +626,7 @@ it changes the panel, which is the point of card 170.
 | `POST /restart` | `{}` | the new state |
 | `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |
 | `POST /settings/load\|save\|rename\|delete` | | the patch's named settings; see above |
-| `POST /modes/save\|rename\|delete`, `POST /mode/apply`, `POST /schedule/set\|resume` | | modes and the daily schedule (card 302); see below |
+| `GET /home_assistant`, `POST /home_assistant/set\|forget` | | Home Assistant (card 311); see above |
 | `GET /ws` | | the frame socket |
 
 **The old names still work on the way in** (card 150). `POST /set_piece`,
@@ -782,9 +756,9 @@ message carries.
 `ui/` is eight static files and no build step:
 
 ```
-index.html     picture.js   ┐
-panel.html     panel.js     ├─ common.js   style.css
-schedule.html  schedule.js  ┘
+index.html      picture.js    ┐
+panel.html      panel.js      ├─ common.js   style.css
+settings.html   settings.js   ┘
 ```
 
 Three documents, one per screen, and the scripts are plain ES modules: each screen loads
@@ -803,9 +777,10 @@ use while editing. A new file has to be listed in `src/ui.rs`, and so does a new
 tidy URL.
 
 **One nav** (card 301), the same markup on every screen, at the very top of it: real
-`<a href>`s to `/`, `/panel` and `/schedule`, the current one marked with
+`<a href>`s to `/`, `/panel` and `/settings`, the current one marked with
 `aria-current="page"` - real navigation, so reload and the back button stay the
-browser's job, rather than tabs that swap what one document shows.
+browser's job, rather than tabs that swap what one document shows. Card 311 gave the
+third place to Settings; `/schedule` redirects (307) to `/` for an old bookmark.
 
 Each screen is a **scrolling column by default** - the Picture screen is picture, view,
 now playing, parameters... - and splits into two columns only above 1100 px, where
@@ -816,8 +791,8 @@ are in those Logs and, for the controls below, in cards 145/163/171-173's. The P
 screen's two-column bench is floated, not gridded (card 303): a CSS grid's row tracks
 are shared across both columns, which used to strand the shorter side's second section
 below all of the longer side's height; a float only answers to what is above it in the
-same column. The Schedule screen (card 303) is three short sections - what is due now,
-the timetable, the modes it plays - and never earns either layout.
+same column. The Settings screen (card 311) is a single narrow sheet, capped at 640 px,
+and never earns either layout.
 
 **A control's shape comes from what it controls** (card 163). The page builds each
 parameter from its `ParamSpec`: an ordinary number is a slider, a spec with `choices` is
@@ -868,8 +843,8 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
-| `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/schedule`/`/schedule.js`) are not the same thing, `/dashboard` redirects, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301, and 303 for the Schedule screen's Now/Timetable/Modes), and **one nav with the current screen marked** is on every one of them (301) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Schedule screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
+| `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/settings`/`/settings.js`) are not the same thing, `/dashboard` and `/schedule` redirect, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301), and **one nav with the current screen marked** is on every one of them (301, 311) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Settings screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
 | `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
-| `tests/schedule.rs`, `src/schedule.rs` | card 302: at a hand-held clock, Night at 22:00 and Day at 07:00 switch patch on the minute and leave the simulator's brightness where the hand set it, and brightness moved by hand is not an override (309); a hand change reads `overridden` and holds until the next entry; `/mode/apply` holds too and `/schedule/resume` goes back; the hold survives a restart and a restart across an entry applies it; every refusal a 400 in words; a mode with a named setting, and one deleted since; a mode whose patch is gone skipped and said. Unit: the due entry wrapping to yesterday, DST skip and repeat, the first look after start-up, bounds, names, a hand-edited plan. `src/state.rs`: a realistic v5 file migrated to v6 with its tuning intact and 1.7x loading as 1.0; a card 302 file whose modes carry `brightness` loading without it (309) |
-| `src/*` unit tests | the state file's six failure modes, the registry's keying, the player's configuration, the argument and environment precedence |
+| `tests/ha_mqtt.rs` | cards 308-311, **ignored by default** - needs a broker (`SCREENY_TEST_MQTT=HOST:PORT`, see above): the picture select and its options following the named settings, the brightness light and the percent slider, the settings routes (`GET`/`POST /home_assistant/set\|forget`), reconnecting after a broker restart and after HA's own restart, and forgetting clearing every retained topic |
+| `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, the player's configuration, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |
