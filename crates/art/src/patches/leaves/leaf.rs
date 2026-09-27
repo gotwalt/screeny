@@ -78,8 +78,11 @@ pub const STEP: f32 = 1.0 / 90.0;
 /// no real leaf mass or air density in this model - chosen with `AERO_K` and
 /// the drag coefficients below so a leaf takes several seconds to fall the
 /// world's fall height ([`super::FALL_HEIGHT`]), the "ambient, unhurried"
-/// pace the brief asks for.
-const GRAVITY: f32 = 1.0;
+/// pace the brief asks for. `pub(crate)`: card 323's [`super::landing::Landing`]
+/// reuses this exact number as its own rigid-body gravity, so a leaf's speed
+/// does not visibly change the instant it hands off from the aero model to
+/// the ground-contact one.
+pub(crate) const GRAVITY: f32 = 1.0;
 
 /// Flat-plate drag coefficients, edge-on and broadside (dimensionless; see
 /// e.g. Hoerner's drag data - the same standard shapes card 314 used, unchanged).

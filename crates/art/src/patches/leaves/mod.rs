@@ -18,13 +18,21 @@
 //! **The picture is calm on purpose.** A handful of leaves in the air at
 //! once (`leaves`, default 3), true black behind them - the owner, 2026-09-26:
 //! "we'll prefer foreground animations against a black backdrop... The
-//! leaves are the only light in the frame" - so there is no sky, no ground
-//! plane and no heightfield pile any more (card 314's dropped `scheme` and
-//! `pile`): a leaf that lands simply stops and lies still, lit exactly as it
-//! was falling, until either the `rest` cap bumps it back into the air to
-//! make room for the next one to land, or a strong gust plucks it up in a
-//! swirl (both reusing card 314's respawn-through-a-pending-queue shape,
-//! `pending`/`respawn` below).
+//! leaves are the only light in the frame" - so there is still no sky and no
+//! heightfield pile (card 314's dropped `scheme` and `pile`, not brought
+//! back). There *is* a real ground now (card 323, [`ground_plane_y`]): not
+//! drawn (no floor colour, no grid, no horizon - the owner's rule holds), it
+//! exists only through the leaves lying on it. A leaf that comes within
+//! reach of it hands off to a real physical settle
+//! ([`landing::Landing`] - it may skid, tip or flip before coming to rest)
+//! rather than an aerodynamic leaf simply stopping wherever it happened to
+//! be; once settled it is an immutable [`landing::Litter`], lit exactly as
+//! it was falling and never touched by physics again. It leaves the ground
+//! two ways: a strong gust plucks it back into the air for another fall
+//! (reusing card 314's respawn-through-a-pending-queue shape, `pending`/
+//! `respawn` below), or - card 323, replacing 321/322's instant bump - the
+//! `rest` cap's own overflow fades the oldest out over several seconds
+//! rather than popping it away on the same frame a new one lands.
 //!
 //! **The frame is still indexed and exact** (brief section 2.3), the same
 //! promise every patch here makes - but the route there changed with the
@@ -36,6 +44,7 @@
 
 mod geom;
 mod gpu;
+mod landing;
 mod leaf;
 mod mesh;
 mod shell;
@@ -48,6 +57,7 @@ use crate::palette::Palette;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use geom::{v3, Quat, V3};
+use landing::{Landing, Litter, Touchdown};
 use leaf::{Build, Leaf3D};
 use std::collections::VecDeque;
 use wind::Wind;
@@ -137,6 +147,9 @@ const ASPECT: f32 = 2.0;
 /// planes use, short of the true edge, so nothing spawns or lands exactly on
 /// the frame's boundary.
 const TOP_MARGIN: f32 = 0.92;
+/// How close to the visible frame's own bottom edge, at [`Z_NEAR`], the real
+/// ground plane ([`ground_plane_y`]) sits - short of the true edge, so the
+/// nearest litter never touches the very last row.
 const GROUND_MARGIN: f32 = 0.88;
 const X_MARGIN: f32 = 0.85;
 
@@ -153,16 +166,32 @@ fn top_y(z: f32) -> f32 {
     EYE_Y + z.max(0.5) * tan_half_vfov() * TOP_MARGIN
 }
 
-/// The world y a leaf at depth `z` rests at - just above the visible frame's
-/// bottom edge at that depth, so "on the ground" means "at the bottom of the
-/// picture" whatever the leaf's depth, exactly as a real floor would look
-/// under this camera.
-fn ground_y(z: f32) -> f32 {
-    EYE_Y - z.max(0.5) * tan_half_vfov() * GROUND_MARGIN
+/// **The real ground: card 323.** A single, constant world height - not a
+/// line that used to slide with a leaf's own depth (321/322's `ground_y(z)`,
+/// which was really "the bottom of the visible frame at this leaf's depth",
+/// never a floor at all - the owner's "the leaves motion really dies at the
+/// bottom of the screen" was partly this: every leaf just stopped wherever
+/// the frame's own edge happened to be for it). A level camera looking at a
+/// real, constant-height plane already draws correct perspective on its own
+/// (the classic "floor's horizon sits at eye height, the near edge of the
+/// visible floor is at the bottom of frame, it recedes upward toward the
+/// horizon with depth" picture) - no camera tilt needed, only a real plane.
+///
+/// The constant is chosen so that the near edge of the *visible* floor lands
+/// almost exactly at [`Z_NEAR`] (short of it by [`GROUND_MARGIN`], the same
+/// margin `ground_y` used to keep a leaf off the very last row): solving
+/// "the ground plane's own screen position at `Z_NEAR` is the old formula's
+/// value there" gives back exactly the old `ground_y(Z_NEAR)` expression.
+/// Every leaf's own depth range (`Z_NEAR..Z_FAR`) then sits entirely beyond
+/// that near edge, so the whole floor - near and far - stays inside the
+/// frame's own bottom band, receding toward the horizon (screen-centre, eye
+/// height) as depth grows, exactly the card's own picture.
+pub(crate) fn ground_plane_y() -> f32 {
+    EYE_Y - Z_NEAR * tan_half_vfov() * GROUND_MARGIN
 }
 
 /// Half the visible width at depth `z`.
-fn half_width(z: f32) -> f32 {
+pub(crate) fn half_width(z: f32) -> f32 {
     z.max(0.5) * tan_half_vfov() * ASPECT * X_MARGIN
 }
 
@@ -180,6 +209,30 @@ const GUST_RELAUNCH_COOLDOWN: f32 = 7.0;
 /// How strong the sampled wind has to be, near the ground, to count as the
 /// "strong gust now and then" that plucks a resting leaf back up.
 const GUST_RELAUNCH_THRESHOLD: f32 = 2.4;
+
+/// How far above [`ground_plane_y`], in leaf half-lengths, a falling leaf's
+/// landing physics ([`landing::Landing`]) takes over from its full
+/// aerodynamic flight - one leaf-length of real fall-and-contact left for
+/// the settle itself to resolve a tip, a skid or a flip, rather than handing
+/// off already touching (which would have no room to look like anything)
+/// or well above the ground (a visible, ownerless gap of plain falling
+/// before the "landing" begins).
+const LANDING_TRIGGER_LENGTHS: f32 = 1.0;
+
+/// How long a leaf bumped off the `rest` cap takes to fade away once it
+/// starts - the card's own "the oldest fade out slowly (over several
+/// seconds)... nothing disappears instantly", replacing 321/322's instant
+/// pop-and-relaunch on overflow (the "bump" the owner's wobble complaint
+/// named directly).
+const FADE_SECONDS: f32 = 3.0;
+
+/// A litter leaf bumped off the `rest` cap, fading out rather than
+/// disappearing: still drawn (blended, weight = its own remaining alpha)
+/// until `vanish_at`.
+struct Fading {
+    litter: Litter,
+    vanish_at: f32,
+}
 
 /// A landed leaf bumped out by the `rest` cap, or plucked up by a gust,
 /// waiting for the next falling slot to become it - reusing the ordinary
@@ -210,11 +263,20 @@ struct LeavesPatch {
     /// rigid attachment and `shells[i]`'s flexing blade are always the same
     /// leaf.
     shells: Vec<shell::LeafShell>,
-    resting: VecDeque<Leaf3D>,
-    /// Index-parallel with `resting`, same rule as `shells`: a leaf that
-    /// lands keeps the shell it actually flew down with (whatever flex it
-    /// had at the moment it touched down), not a fresh flat one.
-    resting_shells: VecDeque<shell::LeafShell>,
+    /// Card 323: leaves whose shell has reached [`ground_plane_y`] and are
+    /// mid-settle in [`landing::Landing`]'s own small rigid-body world -
+    /// skidding, tipping or flipping toward a real rest, not yet frozen.
+    landing: Vec<Landing>,
+    /// Leaves that have actually finished settling: an immutable, baked
+    /// [`Litter`] each - no physics ever runs on one again, so it cannot
+    /// jitter even in principle.
+    resting: VecDeque<Litter>,
+    /// Litter bumped off the `rest` cap, fading rather than popping (see
+    /// [`Fading`]'s own doc) - almost always at most one at a time, at this
+    /// patch's calm landing rate; a small `VecDeque` rather than an
+    /// `Option` so an unlucky cluster of landings is still handled correctly
+    /// rather than silently dropping one's fade.
+    fading: VecDeque<Fading>,
     pending: VecDeque<Pending>,
     gust_clock: f32,
     last_relaunch: f32,
@@ -254,8 +316,9 @@ fn new_patch(seed: u64) -> LeavesPatch {
         steps: 0,
         falling: Vec::new(),
         shells: Vec::new(),
+        landing: Vec::new(),
         resting: VecDeque::new(),
-        resting_shells: VecDeque::new(),
+        fading: VecDeque::new(),
         pending: VecDeque::new(),
         gust_clock: 0.0,
         last_relaunch: -GUST_RELAUNCH_COOLDOWN,
@@ -318,7 +381,7 @@ fn spawn_scattered(rng: &mut Rng, mean_wind: f32) -> Leaf3D {
     let z = rng.range(Z_NEAR, Z_FAR);
     let hw = half_width(z);
     let x = rng.range(-hw, hw);
-    let y = rng.range(ground_y(z), top_y(z));
+    let y = rng.range(ground_plane_y(), top_y(z));
     let vel = v3(mean_wind * 0.4 + rng.range(-0.3, 0.3), rng.range(-0.7, -0.1), rng.range(-0.2, 0.2));
     Leaf3D {
         pos: v3(x, y, z),
@@ -379,13 +442,23 @@ impl LeavesPatch {
             if strength > GUST_RELAUNCH_THRESHOLD && t - self.last_relaunch > GUST_RELAUNCH_COOLDOWN && !self.resting.is_empty() {
                 self.last_relaunch = t;
                 if let Some(plucked) = self.resting.pop_back() {
-                    // The plucked leaf's own shell is dropped here - a gust
-                    // that snatches a settled leaf back into the air throws
-                    // it hard enough (`next_falling_leaf`'s relaunch velocity
-                    // and spin) that it gets a fresh shell when it re-enters
-                    // `falling` below, the same as any other respawn.
-                    self.resting_shells.pop_back();
-                    self.pending.push_back(plucked);
+                    // Rising from wherever it actually lay (`plucked.pos`),
+                    // in its own shape and hue (`plucked.build`) - a gust
+                    // that snatches a settled leaf back into the air, not a
+                    // fresh leaf appearing elsewhere. `next_falling_leaf`
+                    // gives it real relaunch velocity/spin once it reaches
+                    // the front of `pending`, and a fresh shell once it
+                    // re-enters `falling`, the same as any other respawn.
+                    self.pending.push_back(Leaf3D {
+                        pos: plucked.pos,
+                        vel: V3::ZERO,
+                        orient: plucked.orient,
+                        omega: V3::ZERO,
+                        build: plucked.build,
+                        aloft: 0.0,
+                        broadside: 0.0,
+                        resting: false,
+                    });
                 }
             }
         }
@@ -395,55 +468,64 @@ impl LeavesPatch {
             let attach = shell::Attachment::of(&self.falling[i]);
             self.shells[i].step(attach, &self.wind, t, wind_mean, gusts);
             let leaf = &self.falling[i];
-            let ground = ground_y(leaf.pos.z);
-            let landed = leaf.pos.y <= ground && leaf.aloft > 0.2;
+            let touch = ground_plane_y() + LANDING_TRIGGER_LENGTHS * leaf.build.size * gpu::HALF_LEN_M;
+            let approaching = leaf.pos.y <= touch && leaf.aloft > 0.2;
             let off_side = {
                 let hw = half_width(leaf.pos.z) + 1.0;
                 leaf.pos.x < -hw || leaf.pos.x > hw
             };
             let stuck = leaf.aloft > MAX_ALOFT;
 
-            if landed {
-                let mut settled = *leaf;
-                settled.pos.y = ground;
-                settled.vel = V3::ZERO;
-                settled.omega = V3::ZERO;
-                settled.resting = true;
-                self.resting.push_back(settled);
-                let mut overflowed = false;
-                if self.resting.len() > rest_cap {
-                    if let Some(bumped) = self.resting.pop_front() {
-                        self.pending.push_back(bumped);
-                    }
-                    overflowed = true;
-                }
-                // Refill this slot exactly as `respawn` would, and only
-                // *after* the cap check above - card 321's own order, kept
-                // deliberately: a leaf this step's cap check just bumped
-                // into `pending` must be eligible to be the one
-                // `next_falling_leaf` immediately relaunches into this same
-                // slot, and calling it any earlier would draw from `self.rng`
-                // in a different order (a real behavioural change this card
-                // must not make - caught by rendering, not a test: an
-                // earlier draft called this before the cap check and visibly
-                // flew a different flock than 321 at the same seed).
+            if approaching {
+                // Hand off to a real physical settle (card 323,
+                // `landing::Landing`): this leaf's shell, exactly as it flexes
+                // right now, becomes a rigid body carrying the rigid
+                // velocity/spin it was already flying with - no snap, no
+                // instant freeze. Refill this slot immediately, exactly as
+                // any other respawn (card 321's own rule: `next_falling_leaf`
+                // draws from `self.rng` in the same place every other exit
+                // path does).
+                let touchdown = Touchdown {
+                    verts: self.shells[i].render_vertices(),
+                    faces: self.shells[i].faces().to_vec(),
+                    build: leaf.build,
+                    vel: leaf.vel,
+                    omega: leaf.omega,
+                    orient: leaf.orient,
+                };
+                let floor = self.resting.iter().chain(self.fading.iter().map(|f| &f.litter));
+                self.landing.push(Landing::begin(touchdown, floor));
                 let fresh_leaf = self.next_falling_leaf(wind_mean);
-                let new_shell = fresh_shell(&fresh_leaf);
-                // Keep this leaf's own shell - the flex it actually landed
-                // with, not a fresh flat one - in the resting queue,
-                // index-parallel with `resting` (push now, then pop-front
-                // too if this step's landing overflowed the cap, mirroring
-                // the two deque operations above exactly).
-                let landed_shell = std::mem::replace(&mut self.shells[i], new_shell);
-                self.resting_shells.push_back(landed_shell);
-                if overflowed {
-                    self.resting_shells.pop_front();
-                }
+                self.shells[i] = fresh_shell(&fresh_leaf);
                 self.falling[i] = fresh_leaf;
             } else if off_side || stuck {
                 self.respawn(i, wind_mean);
             }
         }
+
+        // Step every settle in progress, and freeze any that finished.
+        let mut i = 0;
+        while i < self.landing.len() {
+            self.landing[i].step();
+            if self.landing[i].settled() {
+                let litter = self.landing.swap_remove(i).bake();
+                self.resting.push_back(litter);
+                // The cap: the oldest leaf overflowing it fades rather than
+                // popping straight back into `pending` (321/322's own
+                // instant bump, named directly by the owner's "wobble"
+                // complaint on this card - see `review/322-leaves-flex-
+                // rapier.md`'s Log). Only a gust, above, ever relaunches a
+                // resting leaf now.
+                if self.resting.len() > rest_cap {
+                    if let Some(old) = self.resting.pop_front() {
+                        self.fading.push_back(Fading { litter: old, vanish_at: t + FADE_SECONDS });
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+        self.fading.retain(|f| t < f.vanish_at);
     }
 
     /// The next leaf to occupy a falling slot: a relaunched (bumped or
@@ -497,8 +579,14 @@ impl Patch for LeavesPatch {
         }
         let Some(Some(live)) = self.gpu.as_ref() else { return Frame::black() };
         let falling = gpu::Falling { history: &history, shells: &self.shells };
-        let resting = gpu::Resting { leaves: &self.resting, shells: &self.resting_shells };
-        let frame = live.render(falling, resting, sun_deg, color, &FAMILIES, BLUR_TRAIL);
+        // Alpha computed here, not inside `gpu` (which has no clock of its
+        // own): 1 while not yet fading, ramping down to 0 by `vanish_at` -
+        // the card's own "fade out slowly... nothing disappears instantly".
+        let now = self.steps as f32 * STEP;
+        let fading: Vec<(&Litter, f32)> =
+            self.fading.iter().map(|f| (&f.litter, ((f.vanish_at - now) / FADE_SECONDS).clamp(0.0, 1.0))).collect();
+        let ground = gpu::Ground { resting: &self.resting, landing: &self.landing, fading: &fading };
+        let frame = live.render(falling, ground, sun_deg, color, &FAMILIES, BLUR_TRAIL);
 
         let hues: Vec<f32> = FAMILIES.iter().map(|f| f.hue).collect();
         Palette::ramps(&hues, PALETTE_STEPS, PALETTE_RANGE, PALETTE_CHROMA * color.max(0.0))

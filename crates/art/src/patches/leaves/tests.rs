@@ -148,6 +148,99 @@ fn resting_never_exceeds_its_cap_over_a_long_run() {
     resting_never_exceeds_its_cap(LONG_RUN_SECONDS, &[0.0, 1.0, 4.0, 6.0], 4.0);
 }
 
+/// Card 323's own ground plane: no leaf that has actually landed - settled
+/// litter, or litter fading off the `rest` cap - ever has a vertex below it.
+/// Checked directly against the real world constant, at a gusty setting
+/// likely to produce several landings (and, via the cap, several overflows)
+/// within the smoke horizon.
+#[test]
+fn no_litter_leaf_is_ever_below_the_ground() {
+    let mut params = defaults();
+    params.set(PARAMS, "gusts", 1.2);
+    params.set(PARAMS, "leaves", 6.0);
+    params.set(PARAMS, "rest", 2.0);
+    let floor = ground_plane_y();
+    let mut saw_litter = false;
+    fly(41, &params, SMOKE_SECONDS, |patch, t| {
+        for litter in patch.resting.iter().chain(patch.fading.iter().map(|f| &f.litter)) {
+            saw_litter = true;
+            for v in &litter.verts {
+                assert!(v.pos.y >= floor - 0.05, "a litter vertex sank to {} at t={t}, ground is at {floor}", v.pos.y);
+            }
+        }
+    });
+    assert!(saw_litter, "never saw a single leaf land in {SMOKE_SECONDS}s");
+}
+
+/// Once a leaf lands, it is truly still - the card's own "put resting bodies
+/// to sleep... no jitter, no wobble" - checked as a structural invariant,
+/// not just a tuned probability: with the `rest` cap wide enough, and no
+/// gusts to pluck one back up, nothing in this patch ever mutates an entry
+/// already sitting in `resting` (only `push_back`, on a fresh landing, and
+/// `pop_front`, on an overflow this test's own cap never reaches) - so every
+/// litter present at an earlier moment must still be present, byte-for-byte,
+/// at every later one. The render evidence's own pixel-diff strip
+/// (`leaves-ground/settle/`) is the same claim, judged by eye on the actual
+/// rendered frame rather than the physics state.
+#[test]
+fn a_settled_leaf_never_moves_again() {
+    let mut params = defaults();
+    params.set(PARAMS, "gusts", 0.0);
+    params.set(PARAMS, "rest", MAX_REST as f32);
+    // Few aloft at once, on purpose: this test's own point is "nothing
+    // removes an entry" (checked separately from the cap/fade mechanism,
+    // `overflow_fades_rather_than_popping_back_into_flight`, above) - a
+    // high `leaves` count risks the initial warm scatter alone landing
+    // enough leaves to overflow even this generous a cap within the smoke
+    // horizon, which would exercise the *other* test's own mechanism
+    // instead of this one's.
+    params.set(PARAMS, "leaves", 2.0);
+    let mut patch = new_patch(51);
+    let dt = 1.0 / 30.0;
+    let mut t = 0.0;
+    let mut snapshot: Vec<Vec<geom::V3>> = Vec::new();
+    let mut checked_any = false;
+    while t < SMOKE_SECONDS {
+        t += dt;
+        let _ = patch.render(&ctx(t, dt, &params));
+        assert!(patch.resting.len() <= MAX_REST, "cap grew past its own max: {}", patch.resting.len());
+        // Every litter already known about (by its position in the queue,
+        // which - with no overflow and no gusts - only ever grows from the
+        // back) must still read exactly as it did when first seen.
+        for (i, prev) in snapshot.iter().enumerate() {
+            let now: Vec<geom::V3> = patch.resting[i].verts.iter().map(|v| v.pos).collect();
+            assert_eq!(*prev, now, "litter {i} moved after settling, at t={t}");
+            checked_any = true;
+        }
+        snapshot = patch.resting.iter().map(|l| l.verts.iter().map(|v| v.pos).collect()).collect();
+    }
+    assert!(checked_any, "never saw a second frame with an already-settled leaf in {SMOKE_SECONDS}s");
+}
+
+/// The `rest` cap's overflow fades a litter out over several seconds rather
+/// than popping it back into flight on the same frame (321/322's own bump -
+/// the owner's "wobble" complaint on this card names it directly). Checked
+/// two ways: the cap itself never grows past `rest` (already covered above,
+/// re-checked here for this specific scenario), and an overflowed leaf is
+/// seen actually fading (present in `fading`, with `vanish_at` within
+/// `FADE_SECONDS` of the moment it must have overflowed) rather than simply
+/// vanishing.
+#[test]
+fn overflow_fades_rather_than_popping_back_into_flight() {
+    let mut params = defaults();
+    params.set(PARAMS, "rest", 1.0);
+    params.set(PARAMS, "leaves", 6.0);
+    let mut saw_fade = false;
+    fly(61, &params, SMOKE_SECONDS, |patch, t| {
+        assert!(patch.resting.len() <= 1, "cap exceeded: {} resting at t={t}", patch.resting.len());
+        for f in &patch.fading {
+            saw_fade = true;
+            assert!(f.vanish_at <= t as f32 + FADE_SECONDS + 1e-3, "a fading entry's own vanish time is implausibly far off at t={t}");
+        }
+    });
+    assert!(saw_fade, "never saw an overflow actually fading in {SMOKE_SECONDS}s");
+}
+
 /// No falling leaf is ever aloft longer than [`MAX_ALOFT`] (90s) - the "no
 /// leaf stuck forever" backstop, over a long run at a gusty, windy setting
 /// most likely to find an edge case. **Cannot be meaningfully shortened**:
