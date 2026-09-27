@@ -807,7 +807,8 @@ studio is even looking for panels (173); "Reconnects" is a player-lifetime count
 survives the link being rebuilt (171); a patch that needs a graphics adapter there is
 none for is struck through with the reason rather than offered and then black (145);
 and the brightness slider says out loud that it is the panel's own brightness, which is
-why the picture on screen does not change with it. Card 151 took the **seed's number**
+why the picture on screen does not change with it - in percent of full light since card
+312, 0 to 100 in the panel's own 4 % steps, the same number Home Assistant's slider shows. Card 151 took the **seed's number**
 off every screen for the same reason: it was a readout that told a person nothing they
 could act on. Card 301 went further and took the seed's own control off the page too -
 the quiet *Another* button nobody understood - along with Speed and the pause/restart

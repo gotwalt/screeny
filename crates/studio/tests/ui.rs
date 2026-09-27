@@ -379,6 +379,36 @@ console.log(`${{cases.length}} cases passed`);
     );
 }
 
+/// Card 312: the Panel screen's brightness reads in percent of full light,
+/// the unit Home Assistant's slider uses (card 310) - and it must be **the same
+/// number**, level for level. Runs the shipped `percentOf` under `node` over
+/// every level 0-255 against the server's own stops, and compares each with
+/// `ha::payload::percent_of`, the one HA is sent. Skipped, loudly, without
+/// `node`, like the test above.
+#[test]
+fn the_panel_screen_and_home_assistant_say_the_same_percent() {
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipping the_panel_screen_and_home_assistant_say_the_same_percent: no `node` on PATH");
+        return;
+    }
+    let stops = screeny_studio::page::brightness_stops();
+    let want: Vec<u8> = (0..=u8::MAX).map(screeny_studio::ha::payload::percent_of).collect();
+    let common_js = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/common.js");
+    let script = format!(
+        r#"
+import {{ percentOf }} from 'file://{path}';
+const stops = {stops:?};
+console.log(JSON.stringify(Array.from({{ length: 256 }}, (_, l) => percentOf(l, stops))));
+"#,
+        path = common_js.display(),
+    );
+    let output = Command::new("node").args(["--input-type=module", "-e", &script]).output().expect("node is on PATH");
+    assert!(output.status.success(), "percentOf: {}", String::from_utf8_lossy(&output.stderr));
+    let got: Vec<u8> = serde_json::from_slice(&output.stdout).expect("a JSON list of percents");
+    assert_eq!(got, want, "the page and Home Assistant must say the same percent for every level");
+    assert_eq!((got[0], got[stops[1] as usize], got[255]), (0, 4, 100), "dark, the dimmest visible step, full");
+}
+
 /// Card 164: **what a panel costs the network is on the Panel screen, and the
 /// page does not do the arithmetic.**
 ///
