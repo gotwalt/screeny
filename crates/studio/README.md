@@ -397,6 +397,88 @@ saved, and a state file of any version comes up at 1.00x and unpaused, said once
 `repaired`. The player itself can still be paused in process, which is how the tests hold a
 still picture.
 
+## Home Assistant (card 308)
+
+The studio shows up in Home Assistant through **MQTT discovery**: HA's own MQTT
+integration, no custom component, no YAML on the HA side. HA can see what is playing,
+set the brightness, pick a scene, and switch the timetable. Brightness is **its own
+control**, separate from what is on the panel (owner, 2026-09-26), so an HA automation
+can follow the room's light sensor while the scenes decide the picture. A *scene* in HA
+is a *mode* here, the same thing under HA's name.
+
+It is off unless `SCREENY_MQTT_HOST` is set:
+
+| variable | default | |
+|---|---|---|
+| `SCREENY_MQTT_HOST` | *(unset: off)* | the broker, e.g. HA's Mosquitto add-on |
+| `SCREENY_MQTT_PORT` | `1883` | |
+| `SCREENY_MQTT_USER` | *(anonymous)* | |
+| `SCREENY_MQTT_PASSWORD` / `SCREENY_MQTT_PASSWORD_FILE` | *(none)* | the file form is what the container uses (a compose secret; see `docs/design/deployment.md`) |
+| `SCREENY_MQTT_DISCOVERY_PREFIX` | `homeassistant` | only if HA was told otherwise |
+| `SCREENY_MQTT_ID` | `studio` | the stable id: every topic and `unique_id` is built from it, kept to `[a-zA-Z0-9_-]`. Change it and HA sees a new device. |
+| `SCREENY_MQTT_NAME` | `Screeny` | the device's name in HA |
+
+**Entities.** One device (`screeny_<id>`), one retained config at
+`homeassistant/device/screeny_<id>/config`, with every entity in its `components` map:
+
+| entity (default id) | platform | topics under `screeny/<id>/` | payload |
+|---|---|---|---|
+| `light.screeny` | light, JSON schema, brightness only | `brightness/state`, `brightness/set` | `{"state":"ON","brightness":96}`, 0-255, snapped to the panel's nearest real step (card 187). `OFF` is a dark panel (the studio carries on playing); a bare `ON` goes back to the last lit level (128 if there was none). |
+| `select.screeny_scene` | select | `scene/state`, `scene/set` | a mode's name. The options are the modes and follow them (discovery is republished when a mode is made, renamed or deleted). The state is the mode that matches what is playing, `None` (unknown) when none does. Picking one is a hand change, like Apply now: the 2 s fade, and the timetable holds until its next entry. |
+| `sensor.screeny_patch` | sensor | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
+| `switch.screeny_schedule` | switch | `schedule/state`, `schedule/set` | `ON` / `OFF`: the timetable on or off |
+| `button.screeny_back_to_schedule` | button | `resume/set` | `PRESS`: "Back to schedule" |
+| `sensor.screeny_scheduled_scene` | sensor | `scheduled/state` | `{"scene":"Night","until":"07:00","overridden":false,"note":null}` |
+| `binary_sensor.screeny_panel_link` | binary sensor, `connectivity`, diagnostic | `panel/state` | `ON` while the studio is driving the panel and the link is up |
+
+Availability for all of them is `screeny/<id>/status`: `online` / `offline`, retained,
+with `offline` as the Last Will. Every state is retained, so HA has the right values after
+its own restart. A command that is not valid for its entity (a scene that is not in the
+list, brightness above 255) is refused and logged, and changes nothing.
+
+**Lifecycle.** On every connect, first or after a broker restart, the studio
+resubscribes to the command topics and to `homeassistant/status`, then publishes the
+config, `online`, and every state. When HA says `online` there (HA restarted), it
+publishes the config and every state again. A lost broker is retried with a backoff up
+to 30 s, for as long as the studio runs, and logged once rather than once per retry.
+Stopping publishes `offline` before disconnecting.
+
+**Removing it from HA:** `screeny-studio --mqtt-forget` (same environment) publishes an
+empty retained payload on the config topic and on every retained topic of ours, then
+exits. HA drops the entities and the device. Do this before changing `SCREENY_MQTT_ID`.
+(`ha::discovery::remove_components` builds the payload for removing some entities and
+keeping the rest.)
+
+**Trying it against a local broker:**
+
+```sh
+docker run -d --rm --name screeny-mqtt -p 127.0.0.1:18830:1883 \
+    eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+mosquitto_sub -h 127.0.0.1 -p 18830 -v -t '#' &        # watch everything
+SCREENY_MQTT_HOST=127.0.0.1 SCREENY_MQTT_PORT=18830 \
+    cargo run -p screeny-studio -- --no-discover --state-dir /tmp/studio-mqtt
+#  -> homeassistant/device/screeny_studio/config {"device":{...},"origin":{...},"components":{...}}
+#     screeny/studio/status online
+#     screeny/studio/patch/state {"id":"clocks-numerals","name":"Clocks: numerals",...}
+#     screeny/studio/brightness/state {"state":null}      (until something sets one)
+#     screeny/studio/scene/state None
+#     ...
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/brightness/set -m '{"state":"ON","brightness":60}'
+#  -> screeny/studio/brightness/state {"state":"ON","brightness":57,"color_mode":"brightness"}   (the nearest real step)
+# Ctrl-C the studio:
+#  -> screeny/studio/status offline
+docker stop screeny-mqtt
+```
+
+The same broker runs the end-to-end test, which is ignored by default because it needs one:
+`SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored`.
+It uses the discovery prefix `screeny_test`, so it cannot put entities in front of a real
+HA even when pointed at the house broker. The module is `src/ha/`: `discovery.rs` (the
+config, as types), `payload.rs` (states out, commands in), `client.rs` (the connection
+and its lifecycle), and `bridge.rs`, the one file that knows the studio. The payload
+snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a change that
+is meant.
+
 ## Health: what 503 means
 
 `GET /healthz` is **200 `ok`**, or **503** and the reasons in words.

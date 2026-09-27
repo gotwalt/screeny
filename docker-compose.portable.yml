@@ -43,6 +43,17 @@ services:
       SCREENY_STATE_DIR: /data
       SCREENY_LISTEN: "0.0.0.0:8787"
       SCREENY_PORT: "8787"
+      # Card 308: Home Assistant over MQTT. Off while SCREENY_MQTT_HOST is empty.
+      # The password is never in the environment or the .env: it is a file on
+      # the host (SCREENY_MQTT_PASSWORD_FILE there), mounted as a secret.
+      SCREENY_MQTT_HOST: "${SCREENY_MQTT_HOST:-}"
+      SCREENY_MQTT_PORT: "${SCREENY_MQTT_PORT:-1883}"
+      SCREENY_MQTT_USER: "${SCREENY_MQTT_USER:-}"
+      SCREENY_MQTT_PASSWORD_FILE: /run/secrets/mqtt_password
+      SCREENY_MQTT_ID: "${SCREENY_MQTT_ID:-studio}"
+      SCREENY_MQTT_NAME: "${SCREENY_MQTT_NAME:-Screeny}"
+    secrets:
+      - mqtt_password
 
     # So `host.docker.internal` resolves on Linux too, where it is not built in.
     extra_hosts:
@@ -70,3 +81,9 @@ services:
 
 volumes:
   state:
+
+secrets:
+  # Empty unless the host names a file; an empty password with no user is an
+  # anonymous connection.
+  mqtt_password:
+    file: "${SCREENY_MQTT_PASSWORD_FILE:-/dev/null}"

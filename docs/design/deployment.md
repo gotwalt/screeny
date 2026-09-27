@@ -284,6 +284,12 @@ variable to the deploy script.
 | `SCREENY_RENDER_GID` | `993` | the host's `render` group, which owns `/dev/dri/renderD128`. Find yours with `stat -c %g /dev/dri/renderD128`; 993 is only a common default, not a guarantee. |
 | `TZ` | `America/Los_Angeles` | what the clock patches call "now". Set this to your own timezone. |
 | `SCREENY_FEATURES` | *(empty)* | cargo features for the build. `none` = no graphics driver at all, CPU patches only. |
+| `SCREENY_MQTT_HOST` | *(empty: off)* | card 308: the MQTT broker Home Assistant uses. Set it and the studio appears in HA by MQTT discovery; see `crates/studio/README.md`. |
+| `SCREENY_MQTT_PORT` | `1883` | the broker's port. |
+| `SCREENY_MQTT_USER` | *(empty: anonymous)* | the broker login. |
+| `SCREENY_MQTT_PASSWORD_FILE` | *(none)* | **a path on the host** to a file holding only the broker password, mounted into the container as a secret. It must be readable by uid 10001 (`sudo chown 10001 FILE && chmod 400 FILE`). The password itself never goes in the `.env`. |
+| `SCREENY_MQTT_ID` | `studio` | the stable id of this studio in HA: topics are `screeny/<id>/...`, the device is `screeny_<id>`. Changing it makes a new device; run `--mqtt-forget` under the old one first. |
+| `SCREENY_MQTT_NAME` | `Screeny` | the device's name in HA, which HA also puts in front of every entity's. |
 
 An `.env` is host state, not repo state: it is in `.gitignore` and in
 `.dockerignore`, and it must never hold a credential.
