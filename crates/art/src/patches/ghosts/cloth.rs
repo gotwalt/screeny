@@ -59,9 +59,9 @@
 //! contact map); the crate's default is single-threaded already (the
 //! `parallel` feature, which would pull in rayon, is never enabled); the
 //! physics step is fixed-size ([`PHYS_DT`]) and `Cloth::advance` is the same
-//! total-simulated-time accumulator as 326's (and `flock::Flock::advance`'s)
-//! - so two callers stepping by different call granularities land on the
-//! same bytes, tested below.
+//! total-simulated-time accumulator as 326's (and `flock::Flock::advance`'s),
+//! so two callers stepping by different call granularities land on the same
+//! bytes, tested below.
 
 use super::act::Shape;
 use rapier3d::prelude::*;
@@ -404,13 +404,16 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 /// the orchestrator's review of 326 asked for.
 fn edge_softness(sway: f32) -> SpringCoefficients<Real> {
     let s = sway.clamp(0.0, 1.0);
-    SpringCoefficients::new(lerp(46.0, 10.0, s), lerp(0.95, 0.4, s))
+    SpringCoefficients::new(lerp(46.0, 12.0, s), lerp(0.95, 0.55, s))
 }
 /// Bending resists far less than stretching, at every `sway` - the same
-/// ratio 326's hand-rolled weights used (`0.35` of structural).
+/// ratio 326's hand-rolled weights used (`0.35` of structural) - but kept
+/// stiff enough, and damped enough, that a lateral gust folds the skirt
+/// rather than swinging the whole thing as one rigid triangular flap: tuned
+/// down from an initial pass by rendering (see the Log).
 fn bend_softness(sway: f32) -> SpringCoefficients<Real> {
     let s = sway.clamp(0.0, 1.0);
-    SpringCoefficients::new(lerp(18.0, 4.0, s), lerp(0.9, 0.35, s))
+    SpringCoefficients::new(lerp(30.0, 10.0, s), lerp(0.92, 0.6, s))
 }
 
 /// The physics step, seconds - independent of the panel's frame rate.
@@ -434,7 +437,7 @@ const HEAD_SKIN: f32 = 0.15;
 /// along that normal. Tuned by rendering - big enough that a fast turn or a
 /// swoop visibly trails and billows the hem, far below anything that would
 /// overpower gravity and the structural springs at rest.
-const AIR_DRAG: f32 = 0.028;
+const AIR_DRAG: f32 = 0.018;
 
 /// The sheet's live state: Rapier's own soft-body world (one per ghost - a
 /// ghost's cloth is simulated continuously across frames, `mod.rs` keys one
@@ -659,7 +662,7 @@ impl Cloth {
     /// convex points are left alone.
     fn compute_fold(&self) -> Vec<f32> {
         let mut fold = vec![0.0; VERTS];
-        for i in 1..VERTS {
+        for (i, slot) in fold.iter_mut().enumerate().skip(1) {
             let mut acc = V3::ZERO;
             let mut n = 0.0;
             for (dr, dc) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
@@ -674,7 +677,7 @@ impl Cloth {
             let avg = acc.scale(1.0 / n);
             let laplacian = self.pos(i).sub(avg);
             let normal = self.normal_at(i);
-            fold[i] = laplacian.dot(normal);
+            *slot = laplacian.dot(normal);
         }
         fold
     }
