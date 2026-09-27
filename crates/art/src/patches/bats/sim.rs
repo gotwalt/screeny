@@ -217,6 +217,10 @@ pub const PEP: (f32, f32) = (0.82, 1.22);
 /// picture), a fixed small count rather than a fraction of the colony, since
 /// the colony itself is now small ("bats: max at once, low default").
 const GROUP_SIZE: (f32, f32) = (3.0, 6.0);
+/// The colony has to be bigger than the group it sends off, with room to
+/// spare - see `update_phase`'s own doc for why a group event skips itself
+/// below this.
+const GROUP_MIN_COLONY: usize = 4;
 const GROUP_DURATION: (f32, f32) = (2.0, 3.4);
 /// How far a grouped bat fans out from the shared sweep's own centre line,
 /// so it reads as a loose handful rather than a single file.
@@ -467,7 +471,24 @@ impl Sim {
         match self.phase {
             Phase::Idle { until } if self.t >= until => {
                 let n = self.bats.len();
-                let take = (self.rng.range(GROUP_SIZE.0, GROUP_SIZE.1).round() as usize).clamp(1, n);
+                // A "small group of 3-6" only means something as an *event*
+                // if the colony is big enough that grouping some of them
+                // still leaves others behind, ambient. At the colony sizes
+                // this patch actually ships with by default (1-3), a group
+                // event used to sweep *everyone* away together for its own
+                // duration (up to `GROUP_DURATION`) - nothing ambient was
+                // left to leave behind - so the whole picture went to "empty,
+                // far off to one side" for several real seconds at a time.
+                // Found by `rate.rs` failing outright (two frames three
+                // seconds apart, both squarely inside one such sweep, drew
+                // *exactly* the same picture - not a near miss, a real
+                // freeze), not by eye. Below `GROUP_MIN_COLONY`, skip
+                // grouping entirely and just wait again.
+                if n < GROUP_MIN_COLONY {
+                    self.phase = Phase::Idle { until: self.t + self.next_idle() };
+                    return;
+                }
+                let take = (self.rng.range(GROUP_SIZE.0, GROUP_SIZE.1).round() as usize).clamp(1, n - 1);
                 let mut idx: Vec<usize> = (0..n).collect();
                 // A fixed order would always group the same bats first;
                 // shuffle a working index list instead (Fisher-Yates, small n).

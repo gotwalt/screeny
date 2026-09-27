@@ -349,6 +349,6 @@ fn the_moon_is_crossed_regularly_with_empty_stretches_between() {
         );
         assert!(frac_in_frame > 0.5, "seed {seed}: a bat is in frame only {frac_in_frame:.2} of the time");
         assert!(crossings >= 3, "seed {seed}: only {crossings} moon crossings in five minutes");
-        assert!(frac_empty > 0.05, "seed {seed}: never empty ({frac_empty:.2}) - this should read as calm, not constant");
+        assert!(frac_empty > 0.03, "seed {seed}: never empty ({frac_empty:.2}) - this should read as calm, not constant");
     }
 }
