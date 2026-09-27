@@ -27,6 +27,7 @@ screeny = { path = "../screeny", optional = true }
 # instead of holding the last frame for the stream timeout. `Drop` does not run
 # on a signal; see `crates/screeny/README.md`, "Two sharp edges that are left".
 ctrlc = { version = "3", optional = true }
+rapier3d = { version = "0.36", features = ["fem", "enhanced-determinism"] }
 
 [dev-dependencies]
 # The reference receiver, for the end-to-end tests. `window` off: they are
