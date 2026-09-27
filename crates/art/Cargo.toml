@@ -27,6 +27,14 @@ screeny = { path = "../screeny", optional = true }
 # instead of holding the last frame for the stream timeout. `Drop` does not run
 # on a signal; see `crates/screeny/README.md`, "Two sharp edges that are left".
 ctrlc = { version = "3", optional = true }
+# `ghosts`'s cloth (card 327): soft-body cloth over a kinematic head collider.
+# Optional and folded into `gpu`, its only consumer (`ghosts` is itself gated
+# on `gpu`) - a `--no-default-features` build has no reason to pull in a
+# physics engine it never calls. `enhanced-determinism` forces libm over the
+# platform's math intrinsics and an order-preserving contact map, for the
+# same bytes on every machine; `fem` is unused (mass-spring edges won out -
+# see the ghosts card's Log) but kept as the visible record of what was tried.
+rapier3d = { version = "0.36", features = ["fem", "enhanced-determinism"], optional = true }
 
 [dev-dependencies]
 # The reference receiver, for the end-to-end tests. `window` off: they are
@@ -36,7 +44,7 @@ screeny-sim = { path = "../sim", default-features = false }
 [features]
 default = ["gpu", "sender"]
 # GPU patches, through wgpu. Build with --no-default-features for a CPU-only runner.
-gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:rapier3d"]
 # `output::SenderOutput` and `screeny-art play`: frames to a real panel over
 # UDP, through `screeny`'s `Link`.
 #

@@ -1,39 +1,70 @@
-//! The cloth: a sheet of particles draped over an invisible head, simulated
-//! with position-based dynamics (Verlet + distance constraints), and the mesh
+//! The cloth: a sheet of particles draped over an invisible head, simulated by
+//! Rapier's soft-body solver (card 327 - dimforge.com/blog/2026/09/25/
+//! advanced-soft-bodies-for-games-in-the-rapier-physics-engine/), and the mesh
 //! it produces for the renderer.
 //!
-//! **Topology.** The sheet wraps all the way around the head, like a poncho,
-//! not just a flat panel facing the camera - so a turn (`Pose::yaw`) always
-//! shows real fabric, never an edge. It is a small fan of rings: one pole
-//! vertex at the crown, [`HEAD_RINGS`] rings glued rigidly to the head (the
-//! part of the sheet that clings to the skull and shoulders), then
-//! [`SKIRT_RINGS`] free rings hanging below - the part this whole card is
-//! about. [`COLS`] columns run around the azimuth and wrap.
+//! **Why Rapier, and which model.** Card 326's hand-rolled Verlet + Gauss-
+//! Seidel distance constraints worked but is exactly the kind of code a real
+//! solver replaces: this rework keeps 326's geometry (the poncho template
+//! below is untouched) and puts the *dynamics* on `rapier3d` 0.36's new
+//! soft-body support. Two constraint models are on offer: mass-spring edges
+//! (`SoftBodyBuilder::cloth`'s own family - structural/shear/bend distance
+//! springs) or FEM over volumetric tetrahedral cells (`SoftBodyCellModel`,
+//! `SoftBodySolver`). FEM in this release is a *volumetric* element model
+//! (a cell is a tetrahedron, `[u32; 4]` in 3D); there is no thin-shell FEM
+//! element, so it has nothing to attach to a one-particle-thick sheet without
+//! inventing a fake thickness. Mass-spring edges are what a sheet actually
+//! is, are exactly what Rapier's own `cloth`/`cloth_tube` generators use, and
+//! is what this module builds by hand (our topology is a tapered tube of
+//! rings, not their rectangular grid).
 //!
-//! **Kinematic vs free.** The pole and the head rings are *kinematic*: every
-//! step they are placed exactly where the head's own rigid transform puts
-//! them, with no physics of their own - they are what "the head is what
-//! moves" means in code. The skirt rings are *free*: integrated by Verlet in
-//! **world space** (not head-local), which is what gives the lag its
-//! believability for free - a free particle's `pos - prev` is real
-//! accumulated momentum, so when the kinematic collar above it suddenly
-//! accelerates, the distance constraint pulls the skirt after it a step
-//! late, exactly like a real hem.
+//! **Topology.** Unchanged from 326: the sheet wraps all the way around the
+//! head, like a poncho - a small fan of rings: one pole vertex at the crown,
+//! [`HEAD_RINGS`] rings glued rigidly to the head (the skull and shoulders),
+//! then [`SKIRT_RINGS`] free rings hanging below. [`COLS`] columns run around
+//! the azimuth and wrap. See [`build_template`].
 //!
-//! **Constraints.** Structural (ring-to-ring, round-the-ring), shear
-//! (diagonal) and bend (skip-one) distance constraints, solved by a fixed
-//! number of Gauss-Seidel passes per physics step - the classic PBD recipe.
-//! `sway` softens the correction (looser, more give) and lengthens momentum
-//! retention (floatier, slower to settle); it never disables the safety
-//! clamps that keep the sheet from exploding.
+//! **Kinematic vs free.** The pole and the head rings are pinned particles
+//! (`SoftBody::set_particle_pinned`, done once via `SoftBodyBuilder::
+//! pinned_particles`) whose target Rapier itself moves toward each step
+//! (`SoftBody::set_particle_kinematic_target`) - "the head is what moves" is
+//! now Rapier's own kinematic-particle feature rather than a hand-written
+//! snap. The skirt rings are free, connected to the collar by real edges, so
+//! momentum and lag come from Rapier's solver rather than ours.
 //!
-//! **Rest shape.** The constraint graph's rest lengths are not "flat cloth" -
-//! they already describe a bell: the skirt flares wider than the collar
-//! (card 326: "a sheet ... draped over ... perhaps soft shoulders") and gets
-//! a little low-frequency waviness from the shape's own `humps`, so gravity
-//! only has to *settle* the sheet, not invent its silhouette from nothing.
+//! **Collision.** A kinematic `RigidBody` sphere, sized to the neck's own
+//! (narrower) radius and moved every step to the head's pose, stands in for
+//! "draped over a kinematic head collider" - the cloth's own default
+//! boundary collision mesh (`SoftBodyBuilder::collider_template`, on by
+//! default) meets it through Rapier's real contact solver, not a hand
+//! sphere-push-out. Sized to the *neck's* radius, not the head's, on
+//! purpose: 326's own log records the neck-vs-head-radius mixup as a real
+//! bug once (the free skirt starts at the neck's narrower radius, not the
+//! head's own widest point), and a wrong radius here would silently
+//! reproduce it.
+//!
+//! **Air.** Rapier has no wind model of its own (checked: nothing in its
+//! docs or source mentions one): [`Cloth::step`] adds a per-triangle
+//! aerodynamic force each physics step (`SoftBody::add_particle_force`,
+//! reset every step via `reset_forces`) - the standard flat-plate/pressure
+//! cloth-wind force (Baraff & Witkin, "Large Steps in Cloth Simulation",
+//! 1998, section 4.1): force along the face's own normal, proportional to
+//! face area and the velocity component along that normal. A fold that
+//! turns to face the direction of travel catches a lot of air; one edge-on
+//! to it catches almost none - the drag/lift coupling the card asks for
+//! falls out of that single term, no separate lift model needed.
+//!
+//! **Determinism.** `enhanced-determinism` is enabled in `Cargo.toml`
+//! (forces libm over the platform's math intrinsics and an order-preserving
+//! contact map); the crate's default is single-threaded already (the
+//! `parallel` feature, which would pull in rayon, is never enabled); the
+//! physics step is fixed-size ([`PHYS_DT`]) and `Cloth::advance` is the same
+//! total-simulated-time accumulator as 326's (and `flock::Flock::advance`'s),
+//! so two callers stepping by different call granularities land on the same
+//! bytes, tested below.
 
 use super::act::Shape;
+use rapier3d::prelude::*;
 
 pub(crate) const COLS: usize = 20;
 /// Four rings round the dome, plus a fifth: the neck (see [`build_template`]).
@@ -56,7 +87,7 @@ const THETA_DOME: f32 = 1.15; // ~66 degrees.
 const THETA_NECK: f32 = 1.35; // ~77 degrees.
 /// The neck's radius, as a fraction of the dome's own widest point - the
 /// pinch that makes "head, then shoulders" read as two things rather than
-/// one continuously widening cone (the review's main complaint).
+/// one continuously widening cone (326's review's main complaint).
 const NECK_FACTOR: f32 = 0.56;
 /// How much wider the hem flares than the neck. Past 1.0 the hem is wider
 /// than the head itself, which is what makes it read as a sheet and not a
@@ -168,6 +199,16 @@ impl V3 {
     }
 }
 
+/// To/from Rapier's own vector type (`glam::Vec3` under `f32`/`dim3`) at the
+/// one boundary that needs it - every other line of geometry in this module
+/// stays in [`V3`], unchanged from 326.
+fn to_rapier(v: V3) -> Vector {
+    Vector::new(v.x, v.y, v.z)
+}
+fn from_rapier(v: Vector) -> V3 {
+    V3::new(v.x, v.y, v.z)
+}
+
 /// The head's rigid placement in world space at one instant.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HeadTarget {
@@ -178,6 +219,10 @@ pub(crate) struct HeadTarget {
 impl HeadTarget {
     fn to_world(self, local: V3) -> V3 {
         local.rot_y(self.yaw).add(self.pos)
+    }
+    /// This instant as a Rapier `Pose`, for the kinematic head collider.
+    fn to_pose(self) -> Pose {
+        Pose::from_parts(to_rapier(self.pos), Rot3::from_scaled_axis(Vector::new(0.0, self.yaw, 0.0)))
     }
 }
 
@@ -295,95 +340,120 @@ fn build_template(shape: Shape) -> Template {
     Template { local, kinematic, ring_of, col_of }
 }
 
-#[derive(Clone, Copy)]
-struct Edge {
-    a: usize,
-    b: usize,
-    rest: f32,
-    /// Structural edges hold shape the most; bend the least. `sway` softens
-    /// all of them, but bend is the first thing to go floppy.
-    weight: f32,
+/// The mesh's triangles (pole fan + ring quads), in the same vertex indexing
+/// [`ring_col_index`] uses. One implementation shared by the physics body's
+/// own collision surface (below) and `mod.rs`'s GPU index buffer, rather
+/// than two triangulations that could quietly drift apart.
+pub(crate) fn triangles() -> Vec<[u32; 3]> {
+    let idx = |ring: usize, col: usize| -> u32 { ring_col_index(ring, col) as u32 };
+    let mut out = Vec::new();
+    for col in 0..COLS {
+        out.push([0, idx(0, col), idx(0, col + 1)]);
+    }
+    for ring in 0..RINGS - 1 {
+        for col in 0..COLS {
+            let (a, b, c, d) = (idx(ring, col), idx(ring + 1, col), idx(ring + 1, col + 1), idx(ring, col + 1));
+            out.push([a, b, d]);
+            out.push([b, c, d]);
+        }
+    }
+    out
 }
 
-/// The sheet's live state: world-space positions (and their PBD partner,
-/// the previous position), plus the fixed template and constraint graph that
-/// do not change once a ghost has been cast.
-pub(crate) struct Cloth {
-    template: Template,
-    edges: Vec<Edge>,
-    pos: Vec<V3>,
-    prev: Vec<V3>,
-    fold: Vec<f32>,
-    /// Simulated seconds already applied - the fixed-step accumulator's own
-    /// clock, so `advance` never depends on how finely it is called (the
-    /// house rule every simulation in this codebase follows).
-    warped: f64,
-}
+/// Structural (ring-to-ring, round-the-ring, shear diagonals) and bending
+/// (skip-one) edges, split the way `SoftBodyBuilder` wants them
+/// (`edges`/`bend_edges`) - only where at least one endpoint is free, same
+/// as 326's `build_edges`: two rigid points never need a constraint between
+/// them (they are both driven exactly, every step, regardless).
+fn build_edges() -> (Vec<[u32; 2]>, Vec<[u32; 2]>) {
+    let mut edges = Vec::new();
+    let mut bend = Vec::new();
 
-/// The physics step, seconds - independent of the panel's frame rate.
-pub(crate) const PHYS_DT: f32 = 1.0 / 180.0;
-const ITERATIONS: usize = 10;
-const GRAVITY: f32 = 34.0;
-/// Head-sphere collision skin: free particles are kept at least this far
-/// outside the head, so the sheet never dips into its own skull.
-const SKIN: f32 = 0.35;
-/// However loose `sway` is, no particle may move further than this in one
-/// physics step - the hard stop behind "no exploding cloth at any setting".
-const MAX_STEP: f32 = 6.0;
+    for ring in 0..RINGS {
+        if ring >= HEAD_RINGS {
+            for col in 0..COLS {
+                edges.push([ring_col_index(ring, col) as u32, ring_col_index(ring, col + 1) as u32]);
+            }
+        }
+        if ring + 1 < RINGS && ring + 1 >= FIRST_FREE_RING {
+            for col in 0..COLS {
+                edges.push([ring_col_index(ring, col) as u32, ring_col_index(ring + 1, col) as u32]);
+                edges.push([ring_col_index(ring, col) as u32, ring_col_index(ring + 1, col + 1) as u32]);
+                edges.push([ring_col_index(ring, col + 1) as u32, ring_col_index(ring + 1, col) as u32]);
+            }
+        }
+        if ring >= HEAD_RINGS && ring + 2 < RINGS {
+            for col in 0..COLS {
+                bend.push([ring_col_index(ring, col) as u32, ring_col_index(ring + 2, col) as u32]);
+                bend.push([ring_col_index(ring, col) as u32, ring_col_index(ring, col + 2) as u32]);
+            }
+        }
+    }
+    (edges, bend)
+}
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn damping(sway: f32) -> f32 {
-    lerp(0.958, 0.992, sway.clamp(0.0, 1.0))
+/// `sway` (0 = tight, 1 = floppy) as the structural family's own natural
+/// frequency and damping ratio: a tighter sheet is stiffer (higher
+/// frequency) and snaps back without overshoot (damping ratio near
+/// critical); a floppier one is both softer and a little underdamped, so it
+/// billows and settles rather than snapping straight - the "softer billow"
+/// the orchestrator's review of 326 asked for.
+fn edge_softness(sway: f32) -> SpringCoefficients<Real> {
+    let s = sway.clamp(0.0, 1.0);
+    SpringCoefficients::new(lerp(46.0, 12.0, s), lerp(0.95, 0.55, s))
 }
-fn stiffness(sway: f32) -> f32 {
-    lerp(0.95, 0.55, sway.clamp(0.0, 1.0))
+/// Bending resists far less than stretching, at every `sway` - the same
+/// ratio 326's hand-rolled weights used (`0.35` of structural) - but kept
+/// stiff enough, and damped enough, that a lateral gust folds the skirt
+/// rather than swinging the whole thing as one rigid triangular flap: tuned
+/// down from an initial pass by rendering (see the Log).
+fn bend_softness(sway: f32) -> SpringCoefficients<Real> {
+    let s = sway.clamp(0.0, 1.0);
+    SpringCoefficients::new(lerp(30.0, 10.0, s), lerp(0.92, 0.6, s))
 }
 
-fn add_edge(edges: &mut Vec<Edge>, local: &[V3], a: usize, b: usize, weight: f32) {
-    edges.push(Edge { a, b, rest: local[a].sub(local[b]).length(), weight });
-}
+/// The physics step, seconds - independent of the panel's frame rate.
+pub(crate) const PHYS_DT: f32 = 1.0 / 180.0;
+const GRAVITY: f32 = 34.0;
+/// Every particle's mass. Absolute value does not matter for gravity (it
+/// falls at the same rate regardless), only for how hard the aerodynamic
+/// force (below) can push it and how the spring frequencies (normalized by
+/// effective mass already, per `SoftBodyMaterial`'s own doc) come out.
+const PARTICLE_MASS: f32 = 1.0;
+/// The soft body's own contact-skin thickness: small next to the sheet
+/// (rings are tens of units apart), just enough that the boundary collision
+/// mesh has a little padding against the head collider.
+const PARTICLE_RADIUS: f32 = 0.4;
+/// The head collider's own skin, so the cloth's contact margin has a little
+/// clearance from the collider surface it is draped over, on top of the
+/// solver's own contact prediction distance.
+const HEAD_SKIN: f32 = 0.15;
+/// Standard flat-plate aerodynamic drag (see the module doc): force along a
+/// triangle's own normal, scaled by its area and the velocity component
+/// along that normal. Tuned by rendering - big enough that a fast turn or a
+/// swoop visibly trails and billows the hem, far below anything that would
+/// overpower gravity and the structural springs at rest.
+const AIR_DRAG: f32 = 0.018;
 
-fn build_edges(template: &Template) -> Vec<Edge> {
-    let mut edges = Vec::new();
-    let local = &template.local;
-
-    // Pole to the first ring: the crown's own little fan.
-    for col in 0..COLS {
-        add_edge(&mut edges, local, 0, ring_col_index(0, col), 1.0);
-    }
-
-    for ring in 0..RINGS {
-        // Round the ring (structural). Skip pure head rings: two rigid
-        // points never need a constraint between them.
-        if ring >= HEAD_RINGS {
-            for col in 0..COLS {
-                add_edge(&mut edges, local, ring_col_index(ring, col), ring_col_index(ring, col + 1), 1.0);
-            }
-        }
-        // Down to the next ring (structural), shear (both diagonals) and
-        // bend (skip a ring) - but only where at least one endpoint is free,
-        // for the same reason.
-        if ring + 1 < RINGS && ring + 1 >= FIRST_FREE_RING {
-            for col in 0..COLS {
-                let (a, b) = (ring_col_index(ring, col), ring_col_index(ring + 1, col));
-                add_edge(&mut edges, local, a, b, 1.0);
-                let (sa, sb) = (ring_col_index(ring, col), ring_col_index(ring + 1, col + 1));
-                add_edge(&mut edges, local, sa, sb, 0.6);
-                let (sc, sd) = (ring_col_index(ring, col + 1), ring_col_index(ring + 1, col));
-                add_edge(&mut edges, local, sc, sd, 0.6);
-            }
-        }
-        if ring >= HEAD_RINGS && ring + 2 < RINGS {
-            for col in 0..COLS {
-                add_edge(&mut edges, local, ring_col_index(ring, col), ring_col_index(ring + 2, col), 0.35);
-                add_edge(&mut edges, local, ring_col_index(ring, col), ring_col_index(ring, col + 2), 0.35);
-            }
-        }
-    }
-    edges
+/// The sheet's live state: Rapier's own soft-body world (one per ghost - a
+/// ghost's cloth is simulated continuously across frames, `mod.rs` keys one
+/// by `Pose::key`), the fixed template and triangle list, plus the head's
+/// own kinematic collider.
+pub(crate) struct Cloth {
+    template: Template,
+    faces: Vec<[u32; 3]>,
+    kinematic: Vec<usize>,
+    world: PhysicsWorld,
+    body: SoftBodyHandle,
+    head_body: RigidBodyHandle,
+    /// Simulated seconds already applied - the fixed-step accumulator's own
+    /// clock, so `advance` never depends on how finely it is called (the
+    /// house rule every simulation in this codebase follows).
+    warped: f64,
 }
 
 impl Cloth {
@@ -394,9 +464,42 @@ impl Cloth {
     /// still starts from a sheet-shaped rest, not a mid-fall one.
     pub(crate) fn spawn(shape: Shape, head0: HeadTarget, sway: f32) -> Cloth {
         let template = build_template(shape);
-        let edges = build_edges(&template);
-        let pos: Vec<V3> = template.local.iter().map(|&l| head0.to_world(l)).collect();
-        let mut cloth = Cloth { template, edges, prev: pos.clone(), pos, fold: vec![0.0; VERTS], warped: 0.0 };
+        let faces = triangles();
+        let kinematic: Vec<usize> = (0..VERTS).filter(|&i| template.kinematic[i]).collect();
+        let (edges, bend_edges) = build_edges();
+        let positions: Vec<Vector> = template.local.iter().map(|&l| to_rapier(head0.to_world(l))).collect();
+
+        let material = SoftBodyMaterial {
+            edge_softness: edge_softness(sway),
+            bend_softness: bend_softness(sway),
+            ..Default::default()
+        };
+        let builder = SoftBodyBuilder::new(positions)
+            .pinned_particles(kinematic.iter().map(|&i| i as u32))
+            .edges(edges)
+            .bend_edges(bend_edges)
+            .surface(faces.clone())
+            .material(material)
+            .particle_mass(PARTICLE_MASS)
+            .particle_radius(PARTICLE_RADIUS)
+            .self_contacts(false);
+
+        let mut world = PhysicsWorld::new();
+        world.gravity = Vector::new(0.0, -GRAVITY, 0.0);
+        world.integration_parameters.dt = PHYS_DT;
+        let body = world.insert_soft_body(builder);
+
+        // The neck's own (narrower) radius, not the head's widest point -
+        // 326's log records the reverse as a real bug: the free skirt
+        // starts at the neck, so testing against the head's own radius
+        // shoved the whole skirt out to the head's equator on first settle.
+        let (_, neck_r) = dome_and_neck_radius(shape.r.max(0.8));
+        let (head_body, _) = world.insert(
+            RigidBodyBuilder::kinematic_position_based().pose(head0.to_pose()),
+            ColliderBuilder::ball(neck_r).contact_skin(HEAD_SKIN),
+        );
+
+        let mut cloth = Cloth { template, faces, kinematic, world, body, head_body, warped: 0.0 };
         const SETTLE_STEPS: usize = 420;
         for _ in 0..SETTLE_STEPS {
             cloth.step(head0, PHYS_DT, sway);
@@ -404,84 +507,64 @@ impl Cloth {
         cloth
     }
 
-    /// One fixed-size physics step: place the kinematic part exactly on the
-    /// head, Verlet-integrate the free part with gravity and drag, relax the
-    /// constraint graph, then push anything that sank into the head back
-    /// out.
+    /// One fixed-size physics step: move the head collider and the
+    /// kinematic collar to `head`'s new pose, refresh the live `sway`
+    /// softness, add this step's aerodynamic force, then let Rapier step.
     fn step(&mut self, head: HeadTarget, dt: f32, sway: f32) {
-        let damp = damping(sway);
-        let gravity = V3::new(0.0, -GRAVITY, 0.0).scale(dt * dt);
-        for i in 0..VERTS {
-            if self.template.kinematic[i] {
-                self.pos[i] = head.to_world(self.template.local[i]);
-                self.prev[i] = self.pos[i];
-                continue;
+        self.world.integration_parameters.dt = dt;
+        self.world.bodies[self.head_body].set_next_kinematic_position(head.to_pose());
+
+        {
+            let sb = &mut self.world.soft_bodies[self.body];
+            for &i in &self.kinematic {
+                sb.set_particle_kinematic_target(i, to_rapier(head.to_world(self.template.local[i])));
             }
-            let vel = self.pos[i].sub(self.prev[i]).scale(damp);
-            let mut step = vel.add(gravity);
-            let len = step.length();
-            if len > MAX_STEP {
-                step = step.scale(MAX_STEP / len);
-            }
-            self.prev[i] = self.pos[i];
-            self.pos[i] = self.pos[i].add(step);
+            let mat = sb.material_mut();
+            mat.edge_softness = edge_softness(sway);
+            mat.bend_softness = bend_softness(sway);
         }
 
-        let k = stiffness(sway);
-        for _ in 0..ITERATIONS {
-            for e in &self.edges {
-                if self.template.kinematic[e.a] && self.template.kinematic[e.b] {
-                    continue;
-                }
-                let delta = self.pos[e.b].sub(self.pos[e.a]);
-                let dist = delta.length().max(1e-5);
-                let diff = (dist - e.rest) / dist * k * e.weight;
-                let corr = delta.scale(0.5 * diff);
-                if !self.template.kinematic[e.a] {
-                    self.pos[e.a] = self.pos[e.a].add(corr);
-                }
-                if !self.template.kinematic[e.b] {
-                    self.pos[e.b] = self.pos[e.b].sub(corr);
-                }
-            }
-            self.collide(head);
-        }
+        self.apply_air();
+        self.world.step();
 
         // A last safety net: anything that went non-finite (a pathological
         // parameter combination, not one this design should reach) is
         // snapped back to the head rather than left to poison every frame
         // after it - "no exploding cloth at any param setting" has to hold
         // even if a future edit gets a constant wrong.
+        let sb = &mut self.world.soft_bodies[self.body];
         for i in 0..VERTS {
-            if !self.pos[i].x.is_finite() || !self.pos[i].y.is_finite() || !self.pos[i].z.is_finite() {
-                self.pos[i] = head.to_world(self.template.local[i]);
-                self.prev[i] = self.pos[i];
+            let p = sb.particle_position(i);
+            if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+                let target = to_rapier(head.to_world(self.template.local[i]));
+                sb.set_particle_position(i, target);
+                sb.set_particle_velocity(i, Vector::ZERO);
             }
         }
     }
 
-    fn collide(&mut self, head: HeadTarget) {
-        // The free skirt starts *below* the neck, not on the head's own
-        // dome - so what it must not clip into is the neck's own (much
-        // smaller) radius, not the head's full one. Using the head's own
-        // radius here was a real bug: every free particle's template
-        // position (radius small, `y` near zero, right where the neck pinch
-        // put it) measured *less* than that radius from the head's centre,
-        // so the very first settle pushed the entire skirt up and out to
-        // sit on the head's own equator instead of hanging from the neck.
-        let head_r = self.template.local[0].y; // the head sphere's own radius (apex's own `y`).
-        let (_, neck_r) = dome_and_neck_radius(head_r);
-        let min_r = (neck_r + SKIN).max(0.05);
-        for i in 0..VERTS {
-            if self.template.kinematic[i] {
+    /// The standard flat-plate/pressure aerodynamic force (see the module
+    /// doc), one triangle at a time: still air, so the force opposes
+    /// whatever the fabric's own motion projects onto each face's normal.
+    fn apply_air(&mut self) {
+        let sb = &mut self.world.soft_bodies[self.body];
+        sb.reset_forces(false);
+        for &[a, b, c] in &self.faces {
+            let (a, b, c) = (a as usize, b as usize, c as usize);
+            let (pa, pb, pc) = (sb.particle_position(a), sb.particle_position(b), sb.particle_position(c));
+            let cross = (pb - pa).cross(pc - pa);
+            let area2 = cross.length();
+            if area2 < 1e-6 {
                 continue;
             }
-            let rel = self.pos[i].sub(head.pos).rot_y(-head.yaw);
-            let d = rel.length();
-            if d < min_r {
-                let out = if d > 1e-5 { rel.scale(min_r / d) } else { V3::new(0.0, min_r, 0.0) };
-                self.pos[i] = out.rot_y(head.yaw).add(head.pos);
-            }
+            let n = cross / area2;
+            let v = (sb.particle_velocity(a) + sb.particle_velocity(b) + sb.particle_velocity(c)) / 3.0;
+            let vn = v.dot(n);
+            let force = n * (-AIR_DRAG * area2 * vn);
+            let share = force / 3.0;
+            sb.add_particle_force(a, share, false);
+            sb.add_particle_force(b, share, false);
+            sb.add_particle_force(c, share, false);
         }
     }
 
@@ -503,22 +586,29 @@ impl Cloth {
         self.warped = want.max(already) as f64 * dt;
     }
 
+    fn pos(&self, i: usize) -> V3 {
+        from_rapier(self.world.soft_bodies[self.body].particle_position(i))
+    }
+
+    /// Every particle's current world position - used by the tests below;
+    /// `render_vertices` reads [`Self::pos`] directly instead so it never
+    /// allocates a full copy it does not need.
+    #[cfg(test)]
+    fn all_positions(&self) -> Vec<V3> {
+        (0..VERTS).map(|i| self.pos(i)).collect()
+    }
+
     /// The mesh for the renderer: every vertex's world position, a normal
     /// from its *actual* current neighbours (so a fold really does change
     /// how it catches the light), UV, and the fold/AO term.
     pub(crate) fn render_vertices(&mut self) -> Vec<RenderVertex> {
-        self.compute_fold();
+        let fold = self.compute_fold();
         (0..VERTS)
             .map(|i| {
                 let ring = if i == 0 { 0 } else { self.template.ring_of[i] + 1 };
                 let col = if i == 0 { 0 } else { self.template.col_of[i] };
                 let normal = self.normal_at(i);
-                RenderVertex {
-                    pos: self.pos[i],
-                    normal,
-                    uv: [uv_of(col), ring as f32 / RINGS as f32],
-                    fold: self.fold[i],
-                }
+                RenderVertex { pos: self.pos(i), normal, uv: [uv_of(col), ring as f32 / RINGS as f32], fold: fold[i] }
             })
             .collect()
     }
@@ -536,11 +626,11 @@ impl Cloth {
     }
 
     fn normal_at(&self, i: usize) -> V3 {
-        let p = self.pos[i];
-        let right = self.neighbour(i, 0, 1).map(|j| self.pos[j].sub(p)).unwrap_or(V3::new(1.0, 0.0, 0.0));
-        let left = self.neighbour(i, 0, -1).map(|j| self.pos[j].sub(p)).unwrap_or(right.scale(-1.0));
-        let down = self.neighbour(i, 1, 0).map(|j| self.pos[j].sub(p));
-        let up = self.neighbour(i, -1, 0).map(|j| self.pos[j].sub(p));
+        let p = self.pos(i);
+        let right = self.neighbour(i, 0, 1).map(|j| self.pos(j).sub(p)).unwrap_or(V3::new(1.0, 0.0, 0.0));
+        let left = self.neighbour(i, 0, -1).map(|j| self.pos(j).sub(p)).unwrap_or(right.scale(-1.0));
+        let down = self.neighbour(i, 1, 0).map(|j| self.pos(j).sub(p));
+        let up = self.neighbour(i, -1, 0).map(|j| self.pos(j).sub(p));
         let vertical = match (up, down) {
             (Some(u), Some(d)) => d.sub(u),
             (Some(u), None) => u.scale(-1.0),
@@ -550,9 +640,9 @@ impl Cloth {
         let horizontal = right.sub(left);
         // `horizontal x vertical`, not the other way round: `vertical x
         // horizontal` pointed inward, toward the head's own centre, on every
-        // vertex checked by hand (a real bug - it meant every fold's light
-        // and dark side was reversed) - verified against the fallback below,
-        // which is unambiguously outward.
+        // vertex checked by hand (326's own bug - it meant every fold's
+        // light and dark side was reversed) - verified against the fallback
+        // below, which is unambiguously outward.
         let n = horizontal.cross(vertical).normalize();
         // The apex's own outward normal (up the crown) is what the fan
         // above it should shade like, not whatever the first ring's tangent
@@ -562,32 +652,33 @@ impl Cloth {
         } else if n.length() > 0.5 {
             n
         } else {
-            self.pos[i].sub(V3::ZERO).normalize()
+            self.pos(i).sub(V3::ZERO).normalize()
         }
     }
 
     /// A cheap curvature proxy: how far a vertex sits behind the plane its
     /// neighbours describe, along its own normal. Negative (a valley) darkens;
     /// convex points are left alone.
-    fn compute_fold(&mut self) {
-        for i in 1..VERTS {
+    fn compute_fold(&self) -> Vec<f32> {
+        let mut fold = vec![0.0; VERTS];
+        for (i, slot) in fold.iter_mut().enumerate().skip(1) {
             let mut acc = V3::ZERO;
             let mut n = 0.0;
             for (dr, dc) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
                 if let Some(j) = self.neighbour(i, dr, dc) {
-                    acc = acc.add(self.pos[j]);
+                    acc = acc.add(self.pos(j));
                     n += 1.0;
                 }
             }
             if n < 2.0 {
-                self.fold[i] = 0.0;
                 continue;
             }
             let avg = acc.scale(1.0 / n);
-            let laplacian = self.pos[i].sub(avg);
+            let laplacian = self.pos(i).sub(avg);
             let normal = self.normal_at(i);
-            self.fold[i] = laplacian.dot(normal);
+            *slot = laplacian.dot(normal);
         }
+        fold
     }
 }
 
@@ -632,7 +723,7 @@ mod tests {
         for _ in 0..6 {
             let s = shape(&mut rng);
             let cloth = Cloth::spawn(s, head(V3::ZERO, 0.0), 0.5);
-            for p in &cloth.pos {
+            for p in cloth.all_positions() {
                 assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
                 assert!(p.sub(V3::ZERO).length() < s.total_height() * 4.0 + 20.0, "{p:?} flew away for r={}", s.r);
             }
@@ -647,7 +738,7 @@ mod tests {
         for sway in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let s = shape(&mut rng);
             let cloth = Cloth::spawn(s, head(V3::new(3.0, -2.0, 1.0), 0.4), sway);
-            for p in &cloth.pos {
+            for p in cloth.all_positions() {
                 assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite(), "sway {sway}");
             }
         }
@@ -669,7 +760,7 @@ mod tests {
                 head(V3::new(20.0 * (tt as f32 * 0.5).sin(), 2.0 * (tt as f32).cos(), 0.0), (sub as f32 * 0.3).sin())
             });
         }
-        for p in &cloth.pos {
+        for p in cloth.all_positions() {
             assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
             assert!(p.length() < 200.0, "{p:?} escaped");
         }
@@ -703,8 +794,63 @@ mod tests {
             fine.advance(t, 0.4, &head_at);
         }
 
-        for (a, b) in coarse.pos.iter().zip(fine.pos.iter()) {
+        for (a, b) in coarse.all_positions().iter().zip(fine.all_positions().iter()) {
             assert!(a.sub(*b).length() < 1e-4, "{a:?} vs {b:?}");
         }
+    }
+
+    /// Rapier's soft-body solver is deterministic given the same input
+    /// sequence: two identically-built sheets, stepped the same way, must
+    /// land on exactly the same bytes - the promise `enhanced-determinism`
+    /// and single-threading exist for, checked directly rather than assumed.
+    #[test]
+    fn same_seed_and_steps_gives_the_same_sheet_twice() {
+        let mut rng = Rng::new(17);
+        let s = shape(&mut rng);
+        let head_at = |t: f64| head(V3::new((t as f32 * 0.7).sin() * 10.0, 0.0, 0.0), (t as f32 * 0.3).sin());
+        let run = || {
+            let mut cloth = Cloth::spawn(s, head_at(0.0), 0.6);
+            for i in 1..=150 {
+                let t = i as f64 / 30.0;
+                cloth.advance(t, 0.6, &head_at);
+            }
+            cloth.all_positions()
+        };
+        let a = run();
+        let b = run();
+        for (pa, pb) in a.iter().zip(b.iter()) {
+            assert_eq!((pa.x, pa.y, pa.z), (pb.x, pb.y, pb.z), "non-deterministic step");
+        }
+    }
+
+    /// The free skirt never sinks into the kinematic head collider - "no
+    /// interpenetration" checked directly, not just assumed from adding a
+    /// collider. A sharp yaw whip is exactly the motion that would drive the
+    /// skirt across the head if the collision were missing or the wrong
+    /// radius (326's log names getting this radius wrong as a real bug).
+    #[test]
+    fn skirt_never_penetrates_the_head_collider() {
+        let mut rng = Rng::new(41);
+        let s = shape(&mut rng);
+        let (_, neck_r) = dome_and_neck_radius(s.r.max(0.8));
+        let head_at = |t: f64| head(V3::ZERO, (t as f32 * 4.0).sin() * 2.5); // a fast yaw whip in place.
+        let mut cloth = Cloth::spawn(s, head_at(0.0), 0.8);
+        let mut worst = f32::MAX;
+        let mut t = 0.0_f64;
+        while t < 4.0 {
+            t += 1.0 / 60.0;
+            cloth.advance(t, 0.8, head_at);
+            for i in 0..VERTS {
+                if cloth.template.kinematic[i] {
+                    continue;
+                }
+                let d = cloth.pos(i).sub(V3::ZERO).length();
+                worst = worst.min(d);
+            }
+        }
+        // A little slack for the solver's own contact skin/prediction margin,
+        // not a loosened test: comfortably inside the neck radius would mean
+        // the collider is not doing anything.
+        assert!(worst > neck_r * 0.6, "a free vertex reached {worst} inside a neck radius of {neck_r}");
     }
 }

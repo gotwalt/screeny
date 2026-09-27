@@ -127,23 +127,11 @@ struct Scene {
     eye_shape: [f32; 4],
 }
 
-/// `cloth::COLS`, `cloth::RINGS` and `cloth::VERTS`'s own connectivity,
-/// turned into a triangle index list once at pipeline start-up. Every ghost
-/// shares this - it is drawn `MAX_GHOSTS` times, once per slot, offset by
-/// `base_vertex`.
+/// The mesh's triangles, flattened for the GPU index buffer - one
+/// implementation ([`cloth::triangles`]) shared with the physics body's own
+/// collision surface, rather than two triangulations that could drift apart.
 fn build_indices() -> Vec<u32> {
-    let idx = |ring: usize, col: usize| -> u32 { 1 + (ring * cloth::COLS + col % cloth::COLS) as u32 };
-    let mut out = Vec::new();
-    for col in 0..cloth::COLS {
-        out.extend_from_slice(&[0, idx(0, col), idx(0, col + 1)]);
-    }
-    for ring in 0..cloth::RINGS - 1 {
-        for col in 0..cloth::COLS {
-            let (a, b, c, d) = (idx(ring, col), idx(ring + 1, col), idx(ring + 1, col + 1), idx(ring, col + 1));
-            out.extend_from_slice(&[a, b, d, b, c, d]);
-        }
-    }
-    out
+    cloth::triangles().into_iter().flatten().collect()
 }
 
 // ---------------------------------------------------------------- lighting
