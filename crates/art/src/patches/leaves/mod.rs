@@ -18,13 +18,21 @@
 //! **The picture is calm on purpose.** A handful of leaves in the air at
 //! once (`leaves`, default 3), true black behind them - the owner, 2026-09-26:
 //! "we'll prefer foreground animations against a black backdrop... The
-//! leaves are the only light in the frame" - so there is no sky, no ground
-//! plane and no heightfield pile any more (card 314's dropped `scheme` and
-//! `pile`): a leaf that lands simply stops and lies still, lit exactly as it
-//! was falling, until either the `rest` cap bumps it back into the air to
-//! make room for the next one to land, or a strong gust plucks it up in a
-//! swirl (both reusing card 314's respawn-through-a-pending-queue shape,
-//! `pending`/`respawn` below).
+//! leaves are the only light in the frame" - so there is still no sky and no
+//! heightfield pile (card 314's dropped `scheme` and `pile`, not brought
+//! back). There *is* a real ground now (card 323, [`ground_plane_y`]): not
+//! drawn (no floor colour, no grid, no horizon - the owner's rule holds), it
+//! exists only through the leaves lying on it. A leaf that comes within
+//! reach of it hands off to a real physical settle
+//! ([`landing::Landing`] - it may skid, tip or flip before coming to rest)
+//! rather than an aerodynamic leaf simply stopping wherever it happened to
+//! be; once settled it is an immutable [`landing::Litter`], lit exactly as
+//! it was falling and never touched by physics again. It leaves the ground
+//! two ways: a strong gust plucks it back into the air for another fall
+//! (reusing card 314's respawn-through-a-pending-queue shape, `pending`/
+//! `respawn` below), or - card 323, replacing 321/322's instant bump - the
+//! `rest` cap's own overflow fades the oldest out over several seconds
+//! rather than popping it away on the same frame a new one lands.
 //!
 //! **The frame is still indexed and exact** (brief section 2.3), the same
 //! promise every patch here makes - but the route there changed with the
