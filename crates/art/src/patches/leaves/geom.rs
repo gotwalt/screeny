@@ -116,6 +116,15 @@ impl Quat {
         }
     }
 
+    /// The inverse rotation of a unit quaternion: negating the vector part
+    /// undoes it (`q.conjugate().mul(q) == IDENTITY` for a unit `q`). Card
+    /// 322's echo reprojection uses this to take a world-space point back
+    /// into a leaf's own local, attachment-relative frame.
+    #[must_use]
+    pub fn conjugate(self) -> Quat {
+        Quat { w: self.w, x: -self.x, y: -self.y, z: -self.z }
+    }
+
     /// Rotate `v` by this quaternion (assumed unit): the standard
     /// `v + 2w(q_v x v) + 2(q_v x (q_v x v))` form, which is cheaper than
     /// building a matrix for a single vector.
@@ -170,6 +179,14 @@ mod tests {
             q = q.integrate(omega, 1.0 / 90.0);
         }
         assert!((q.len() - 1.0).abs() < 1e-5, "|q| drifted to {}", q.len());
+    }
+
+    #[test]
+    fn conjugate_undoes_a_rotation() {
+        let q = Quat::from_axis_angle(v3(0.3, 1.0, -0.4), 1.7);
+        let v = v3(1.3, -0.6, 2.1);
+        let back = q.conjugate().rotate(q.rotate(v));
+        assert!(back.sub(v).len() < 1e-5, "{back:?} vs {v:?}");
     }
 
     #[test]
