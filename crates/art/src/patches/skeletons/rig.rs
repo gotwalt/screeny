@@ -267,4 +267,19 @@ mod tests {
         assert!(j.ankle[1].y.abs() < 0.02, "right ankle at {}", j.ankle[1].y);
         assert!(j.skull.y > j.chest.y && j.chest.y > j.pelvis.y);
     }
+
+    /// `sit` (`actions::sit`) is meant to put the whole body down: a much
+    /// lower skull than standing, and the feet (nearly) on the floor with
+    /// the legs reaching towards the camera rather than floating at knee
+    /// height - the pose shipped once with the hip flexed the wrong way
+    /// round, which floated the feet a third of a metre up; this is that
+    /// bug, pinned.
+    #[test]
+    fn sitting_puts_the_feet_near_the_floor_and_the_head_down() {
+        let idle = super::super::actions::idle(3.0, 1.0).solve(v3(0.0, 0.0, 1.0), 0.0, 1.6);
+        let sit = super::super::actions::sit(1.0).solve(v3(0.0, 0.0, 1.0), 0.0, 1.6);
+        assert!(sit.skull.y < idle.skull.y * 0.75, "a seated head should be well below a standing one: {} vs {}", sit.skull.y, idle.skull.y);
+        assert!(sit.ankle[0].y < 0.12, "a seated foot should rest near the floor, not float: {}", sit.ankle[0].y);
+        assert!(sit.ankle[0].z < 1.0, "a seated leg should reach towards the camera, not away from it");
+    }
 }
