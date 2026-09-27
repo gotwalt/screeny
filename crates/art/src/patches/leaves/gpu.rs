@@ -254,34 +254,40 @@ fn push_shell_posed(
     alpha: f32,
 ) {
     let verts: Vec<RenderVertex> = shell.render_vertices().into_iter().map(repose).collect();
-    push_lit_mesh(out, &verts, shell.faces(), leaf.build.hue, leaf.pos.z, families, color, alpha);
+    push_lit_mesh(out, LitMesh { verts: &verts, faces: shell.faces(), hue: leaf.build.hue, z: leaf.pos.z }, families, color, alpha);
+}
+
+/// A finished leaf mesh, ready to append to a vertex buffer: already-final
+/// vertices (world space - or an echo's reposed ones), its own triangle
+/// list, which hue family lights it, and the depth its own fade reads from.
+/// Bundled into [`push_lit_mesh`]'s own argument rather than four more loose
+/// ones - `clippy::too_many_arguments`'s bar is real here (322's own
+/// precedent for `Falling`/`Resting` below), not a style nit to `#[allow]`
+/// past: every one of this function's callers already has all four at hand
+/// together, describing one finished mesh.
+struct LitMesh<'a> {
+    verts: &'a [RenderVertex],
+    faces: &'a [[u32; 3]],
+    hue: u8,
+    z: f32,
 }
 
 /// The shared core of every "append this leaf's already-final, world-space
 /// triangles to `out`" path (a falling leaf's live shell, a settling
 /// [`Landing`]'s current pose, or a frozen [`Litter`]): one lighting-family
-/// lookup and depth fade, then one vertex-emitting loop over `faces`. Card
-/// 323 pulled this out of [`push_shell_posed`] once card 323's own ground
-/// litter needed the exact same loop over already-baked vertices instead of
-/// a live shell - "the render can never triangulate a leaf two different
-/// ways" (322's own rule for a shell) extended to "...or emit its vertices
-/// two different ways" for every other source of a finished leaf mesh.
-fn push_lit_mesh(
-    out: &mut Vec<GVertex>,
-    verts: &[RenderVertex],
-    faces: &[[u32; 3]],
-    hue_idx: u8,
-    z: f32,
-    families: &[HueFamily; HUES],
-    color: f32,
-    alpha: f32,
-) {
-    let fam = &families[hue_idx as usize % HUES];
-    let fade = depth_fade(z);
+/// lookup and depth fade, then one vertex-emitting loop over `mesh.faces`.
+/// Card 323 pulled this out of [`push_shell_posed`] once card 323's own
+/// ground litter needed the exact same loop over already-baked vertices
+/// instead of a live shell - "the render can never triangulate a leaf two
+/// different ways" (322's own rule for a shell) extended to "...or emit its
+/// vertices two different ways" for every other source of a finished mesh.
+fn push_lit_mesh(out: &mut Vec<GVertex>, mesh: LitMesh, families: &[HueFamily; HUES], color: f32, alpha: f32) {
+    let fam = &families[mesh.hue as usize % HUES];
+    let fade = depth_fade(mesh.z);
     let (hue, chroma, top_l, bot_l) = (fam.hue, fam.chroma * color.max(0.0), fam.top_l * fade, fam.bot_l * fade);
-    for &[a, b, c] in faces {
+    for &[a, b, c] in mesh.faces {
         for &i in &[a, b, c] {
-            let v = verts[i as usize];
+            let v = mesh.verts[i as usize];
             out.push(GVertex {
                 pos: [v.pos.x, v.pos.y - super::EYE_Y, -v.pos.z],
                 normal: [v.normal.x, v.normal.y, -v.normal.z],
@@ -294,14 +300,6 @@ fn push_lit_mesh(
             });
         }
     }
-}
-
-/// A [`Litter`] leaf, or a still-settling [`Landing`]'s current pose: already
-/// world-space, already final (or as final as this frame's settle has
-/// reached) - no repose needed, unlike [`push_shell_posed`]'s falling-leaf
-/// echoes.
-fn push_baked(out: &mut Vec<GVertex>, verts: &[RenderVertex], faces: &[[u32; 3]], hue: u8, z: f32, families: &[HueFamily; HUES], color: f32, alpha: f32) {
-    push_lit_mesh(out, verts, faces, hue, z, families, color, alpha);
 }
 
 /// Every leaf currently falling: its recent rigid-motion history (newest
@@ -342,7 +340,7 @@ impl Live {
     /// the ground, and hand back the continuous, linear-light frame. The
     /// solid leaf drawn on top of a falling one is always its own shell's
     /// live, possibly-flexed shape ([`push_shell`]); a settled or settling
-    /// leaf is its own baked or live-posed mesh ([`push_baked`]) - never a
+    /// leaf is its own baked or live-posed mesh ([`push_lit_mesh`]) - never a
     /// second, re-derived shape.
     #[must_use]
     pub(crate) fn render(&self, falling: Falling, ground: Ground, sun_deg: f32, color: f32, families: &[HueFamily; HUES], blur_trail: usize) -> Frame {
@@ -357,11 +355,11 @@ impl Live {
             }
         }
         for litter in ground.resting {
-            push_baked(&mut opaque, &litter.verts, &litter.faces, litter.hue, litter.pos.z, families, color, 1.0);
+            push_lit_mesh(&mut opaque, LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z }, families, color, 1.0);
         }
         for settling in ground.landing {
             let verts = settling.render_vertices();
-            push_baked(&mut opaque, &verts, settling.faces(), settling.hue(), settling.depth(), families, color, 1.0);
+            push_lit_mesh(&mut opaque, LitMesh { verts: &verts, faces: settling.faces(), hue: settling.hue(), z: settling.depth() }, families, color, 1.0);
         }
 
         // The echoes: up to `blur_trail - 1` steps immediately before the
@@ -395,7 +393,7 @@ impl Live {
         // reads as *less there*, never wrongly occludes something nearer).
         for &(litter, alpha) in ground.fading {
             if alpha > 0.0 {
-                push_baked(&mut ghosts, &litter.verts, &litter.faces, litter.hue, litter.pos.z, families, color, alpha);
+                push_lit_mesh(&mut ghosts, LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z }, families, color, alpha);
             }
         }
 
