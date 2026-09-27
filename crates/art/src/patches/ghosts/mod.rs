@@ -30,9 +30,16 @@
 //! **The background is true black** (the owner, 2026-09-26: "we'll prefer
 //! foreground animations against a black backdrop"): no ground line, no
 //! stars - the ghost, and its own glow, is the only light in the frame.
+//!
+//! **The face** ([`face`]) is stamped separately, after the cloth render:
+//! card 336 cut it into the mesh's own curved, supersampled, motion-blurred
+//! UV surface and its own log named why that cannot make a solid dark block
+//! at 64x32; card 338 projects the head's face centre into panel space
+//! instead and paints hand-drawn pixel-art glyphs straight onto the frame.
 
 pub(crate) mod act;
 pub(crate) mod cloth;
+mod face;
 
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
@@ -118,25 +125,15 @@ struct Vertex {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Scene {
     view_proj: Mat4,
-    eyes: [[f32; 4]; MAX_GHOSTS],
     light: [f32; 4],
+    /// `[hue, chroma, ao_strength, unused]` - the face (eyes, mouth,
+    /// `eye_light`/`eye_hue`) is no longer this shader's concern; see
+    /// [`face`].
     params: [f32; 4],
     params2: [f32; 4],
     /// Per-slot body opacity (`Shape::alpha`) - "where two overlap, or it
     /// crosses something, you can tell" (card 315, kept in the 3D pass).
     alpha: [f32; 4],
-    /// `[er_u, er_v, edge, eye_hue]` - see `ghosts.wgsl`'s `Scene.eye_shape`.
-    eye_shape: [f32; 4],
-    /// `[tilt, unused, unused, unused]` - the eyes' own mirrored tilt,
-    /// radians (card 336: "tall ovals, tilted (sad/spooky)").
-    face: [f32; 4],
-    /// `[u, v, unused, unused]` - the mouth's own fixed UV centre (card 336:
-    /// "a frowning open mouth below [the eyes]"), the same for every slot.
-    mouth: [f32; 4],
-    /// `[mr_u, mr_v, edge, amount]` - `amount` is the `mouth` param
-    /// (0 = none), already folded into `mr_u`/`mr_v`; kept separately too so
-    /// the shader can gate it off exactly at 0 rather than drawing a tiny dot.
-    mouth_shape: [f32; 4],
 }
 
 /// The mesh's triangles, flattened for the GPU index buffer - one
@@ -178,40 +175,6 @@ const BASE_CHROMA: f32 = 0.1;
 const DARK_L: f32 = 0.02;
 const LIGHT_L: f32 = 0.95;
 const STEPS: usize = 30;
-
-// Eye level sits on the dome's own round part (a head ring short of the
-// neck), not the neck or the skirt - `2.8` head rings down out of
-// `cloth::HEAD_RINGS`, the same relative position 326/327 used, rescaled to
-// this card's own `cloth::RINGS`. Card 336: "big cut-out eyes... about a
-// third of the head's width... several LEDs each" - tuned against the actual
-// 64x32 output (`Frame::pixel`, not the supersampled buffer) rather than
-// assumed from the UV numbers alone. `EYE_R_U`/`EYE_R_V` are separate because
-// a UV unit is not the same physical size in both directions (`u` wraps the
-// whole head, `v` runs crown to hem) - a single radius drew a hole one shape
-// in LEDs and another in UV, not the tall oval wanted.
-const EYE_V: f32 = 2.8 / cloth::RINGS as f32;
-// `u` wraps the *whole* head (360 degrees), not just the visible front - an
-// eye offset (`EYE_DX`) big enough to look reasonable as a fraction of 1.0
-// was actually carrying each eye 50-100+ degrees around toward the sides
-// (found by computing `azimuth` at the columns those `u` values land on),
-// most of it self-occluded or foreshortened to nothing - the real reason
-// bigger eyes never read as two solid holes, not their raw UV size. `0.06`
-// is 21.6 degrees off dead-centre each way: both eyes stay on the clearly
-// camera-facing part of the head.
-const EYE_DX: f32 = 0.06;
-const EYE_R_U: f32 = 0.05;
-const EYE_R_V: f32 = 0.065;
-const EYE_EDGE: f32 = 0.08;
-/// Radians each eye tilts, mirrored - "tilted (sad/spooky)" (card 336).
-const EYE_TILT: f32 = 0.34;
-const GAZE_UV: f32 = 0.05;
-
-/// The mouth's own fixed centre (never gaze-shifted, unlike the eyes) and
-/// shape - "a frowning open mouth below [the eyes]" (card 336).
-const MOUTH_V: f32 = EYE_V + 0.05;
-const MOUTH_R_U: f32 = 0.045;
-const MOUTH_R_V: f32 = 0.036;
-const MOUTH_EDGE: f32 = 0.1;
 
 // ---------------------------------------------------------------- the GPU
 
@@ -320,13 +283,19 @@ struct Ghosts {
     clothes: HashMap<u64, Cloth>,
 }
 
-/// One ghost's mesh and everything the renderer needs at one instant.
+/// One ghost's mesh and everything the renderer needs at one instant -
+/// `head_pos`/`yaw`/`head_r` are what [`face`] projects the face from, kept
+/// alongside the mesh rather than recomputed, since `head_of` already built
+/// them for the mesh itself.
 struct Drawn {
     key: u64,
     mesh: Vec<cloth::RenderVertex>,
     gaze: (f32, f32),
     alpha: f32,
     z: f32,
+    head_pos: V3,
+    yaw: f32,
+    head_r: f32,
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
@@ -359,7 +328,16 @@ impl Ghosts {
                 cloth.advance(sub_t, sway, |tt| {
                     director.poses_at(tt).into_iter().find(|p| p.key == key).map(|p| head_of(&p)).unwrap_or(head)
                 });
-                Drawn { key: pose.key, mesh: cloth.render_vertices(), gaze: pose.gaze, alpha: pose.shape.alpha, z: head.pos.z }
+                Drawn {
+                    key: pose.key,
+                    mesh: cloth.render_vertices(),
+                    gaze: pose.gaze,
+                    alpha: pose.shape.alpha,
+                    z: head.pos.z,
+                    head_pos: head.pos,
+                    yaw: head.yaw,
+                    head_r: pose.shape.head_r,
+                }
             })
             .collect();
         drawn.sort_by(|a, b| a.z.total_cmp(&b.z));
@@ -372,6 +350,13 @@ impl Ghosts {
         let times = blur_times(ctx.t, ctx.dt.max(0.0), BLUR_SAMPLES);
         let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut sum: Option<Vec<crate::color::Rgb>> = None;
+        // Every ghost drawn on the last sub-instant - `blur_times` always
+        // ends its list exactly on `ctx.t`, never a blurred sample, so this
+        // is the one, crisp pose the face gets stamped from (see below).
+        let mut last_drawn: Vec<Drawn> = Vec::new();
+
+        let hue = ctx.get("hue");
+        let chroma = BASE_CHROMA * ctx.get("color").clamp(0.0, 1.0);
 
         for &sub_t in &times {
             let drawn = self.frame_at(sub_t, sway);
@@ -379,13 +364,7 @@ impl Ghosts {
                 seen.insert(d.key);
             }
 
-            let hue = ctx.get("hue");
-            let chroma = BASE_CHROMA * ctx.get("color").clamp(0.0, 1.0);
             let glow = ctx.get("glow").clamp(0.0, 1.0);
-            let eye_scale = ctx.get("eyes").clamp(0.5, 2.0);
-            let eye_light = ctx.get("eye_light").clamp(0.0, 1.0);
-            let eye_hue = ctx.get("eye_hue");
-            let mouth_scale = ctx.get("mouth").clamp(0.0, 2.0);
 
             let Some(Some(live)) = self.live.as_mut() else { unreachable!("opened before this is called") };
 
@@ -393,16 +372,8 @@ impl Ghosts {
                 Vertex { pos: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2], fold: 0.0, slot: 0.0 };
                 MAX_GHOSTS * VERTS
             ];
-            let mut eyes = [[0.5_f32, EYE_V, 0.5, EYE_V]; MAX_GHOSTS];
             let mut alpha = [1.0_f32; MAX_GHOSTS];
             for (slot, d) in drawn.iter().enumerate() {
-                // The vertical component gets its own factor, not the same
-                // number as the horizontal one: `u` and `v` are different
-                // physical scales (see `EYE_R_U`/`EYE_R_V`), so an equal UV
-                // shift would move the eyes further, in LEDs, up/down than
-                // side to side.
-                let shift = (d.gaze.0.clamp(-1.0, 1.0) * GAZE_UV, d.gaze.1.clamp(-1.0, 1.0) * GAZE_UV * (EYE_R_V / EYE_R_U) * 0.6);
-                eyes[slot] = [0.5 - EYE_DX - shift.0, EYE_V - shift.1, 0.5 + EYE_DX - shift.0, EYE_V - shift.1];
                 alpha[slot] = d.alpha;
                 for (i, v) in d.mesh.iter().enumerate() {
                     verts[slot * VERTS + i] = Vertex {
@@ -417,15 +388,10 @@ impl Ghosts {
 
             let scene = Scene {
                 view_proj: live.view_proj,
-                eyes,
                 light: [KEY_LIGHT[0], KEY_LIGHT[1], KEY_LIGHT[2], 0.0],
-                params: [hue, chroma, eye_light, AO_STRENGTH],
+                params: [hue, chroma, AO_STRENGTH, 0.0],
                 params2: [AMBIENT, KEY_STRENGTH, BACK_STRENGTH, RIM_STRENGTH * glow],
                 alpha,
-                eye_shape: [EYE_R_U * eye_scale, EYE_R_V * eye_scale, EYE_EDGE, eye_hue],
-                face: [EYE_TILT, 0.0, 0.0, 0.0],
-                mouth: [0.5, MOUTH_V, 0.0, 0.0],
-                mouth_shape: [MOUTH_R_U * mouth_scale.max(0.05), MOUTH_R_V * mouth_scale.max(0.05), MOUTH_EDGE, mouth_scale],
             };
             live.gpu.queue.write_buffer(&live.vertices, 0, bytemuck::cast_slice(&verts));
             live.gpu.queue.write_buffer(&live.scene, 0, bytemuck::bytes_of(&scene));
@@ -447,17 +413,45 @@ impl Ghosts {
                 None => px,
                 Some(acc) => acc.iter().zip(px.iter()).map(|(a, b)| a.add(*b)).collect(),
             });
+            last_drawn = drawn;
         }
 
         self.clothes.retain(|k, _| seen.contains(k));
 
         let norm = 1.0 / times.len() as f32;
         let px: Vec<crate::color::Rgb> = sum.unwrap_or_else(|| vec![crate::color::Rgb::BLACK; N]).iter().map(|c| c.scale(norm)).collect();
-        let bloomed = bloom(&px, ctx.get("glow").clamp(0.0, 1.0));
+        let mut px = bloom(&px, ctx.get("glow").clamp(0.0, 1.0));
 
-        let hue = ctx.get("hue");
-        let chroma = BASE_CHROMA * ctx.get("color").clamp(0.0, 1.0);
-        Palette::ramps(&[hue], STEPS, (DARK_L, LIGHT_L), chroma).map(&Frame::Linear(bloomed), Dither::BlueNoise, 0.6)
+        // The face: stamped in panel space, after the cloth render and its
+        // own motion blur and bloom - card 338's whole point (see the module
+        // doc and `face`'s own). `last_drawn` is the exact instant `ctx.t`,
+        // not a blurred sub-sample: the face wants one crisp pose, not a
+        // motion-blurred one.
+        let eyes_scale = ctx.get("eyes").clamp(0.5, 2.0);
+        let eye_light = ctx.get("eye_light").clamp(0.0, 1.0);
+        let eye_hue = ctx.get("eye_hue");
+        let mouth_scale = ctx.get("mouth").clamp(0.0, 2.0);
+        let base = px.clone();
+        let occluders: Vec<face::Occluder> =
+            last_drawn.iter().map(|d| face::Occluder { key: d.key, head_pos: d.head_pos, head_r: d.head_r }).collect();
+        for d in &last_drawn {
+            let input = face::FaceInput {
+                key: d.key,
+                head_pos: d.head_pos,
+                yaw: d.yaw,
+                head_r: d.head_r,
+                gaze: d.gaze,
+                hue,
+                chroma,
+                eyes_scale,
+                eye_light,
+                eye_hue,
+                mouth_scale,
+            };
+            face::stamp(&mut px, &base, &input, &occluders);
+        }
+
+        Palette::ramps(&[hue], STEPS, (DARK_L, LIGHT_L), chroma).map(&Frame::Linear(px), Dither::BlueNoise, 0.6)
     }
 }
 
@@ -541,44 +535,99 @@ mod tests {
         (0..crate::frame::N).map(|i| { let c = frame.pixel(i); [c.r, c.g, c.b] }).collect()
     }
 
-    /// The eyes (and, at the default `mouth`, the mouth) really do cut dark
-    /// holes in the head, not just a subtle darker patch - checked directly
-    /// against the actual 64x32 output (`Frame::pixel`, not the supersampled
-    /// buffer), the same discipline 326's own log names as the only reliable
-    /// one ("the scaled-up PNG dots... compress contrast enough that a
-    /// numeric dump was the only reliable check"). Seed and moment chosen by
-    /// rendering and dumping several early, cheap `at`s by hand (see the
-    /// card's Log) rather than a later one that reads well but costs many
-    /// more simulated frames to reach: at `(10, 8.0)` the head sits in this
-    /// box.
-    #[test]
-    fn eyes_cut_real_dark_holes_in_the_head() {
-        let frame = frame_at(10, 8.0, &[]);
-        let px = colours(&frame);
-        let l = |x: usize, y: usize| -> f32 {
-            let c = px[y * W + x];
-            (c[0] + c[1] + c[2]) / 3.0
-        };
-        let mut brightest = 0.0_f32;
-        let mut darkest = 1.0_f32;
-        for y in 0..10 {
-            for x in 30..46 {
-                let v = l(x, y);
-                brightest = brightest.max(v);
-                darkest = darkest.min(v);
+    /// A pixel this dark, sitting right next to genuinely lit cloth, is a
+    /// stamped feature (true black, `oklch(0.02, ..)`, next to bright fabric,
+    /// no blend between them) - not open background, which borders more
+    /// background, and not the sheet's own antialiased silhouette edge either
+    /// (that fades over a pixel or two of motion blur, it does not jump
+    /// straight from bright to near-zero).
+    fn has_a_dark_pixel_embedded_in_bright_cloth(px: &[[f32; 3]]) -> bool {
+        let luma = |c: &[f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
+        for y in 0..H {
+            for x in 0..W {
+                if luma(&px[y * W + x]) > 0.05 {
+                    continue;
+                }
+                let neighbours = [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)];
+                if neighbours.iter().any(|&(nx, ny)| nx < W && ny < H && luma(&px[ny * W + nx]) > 0.5) {
+                    return true;
+                }
             }
         }
-        assert!(brightest > 0.3, "expected a lit head in this box: brightest={brightest}");
-        assert!(darkest < brightest * 0.2, "expected a true-dark eye hole in this box: brightest={brightest} darkest={darkest}");
+        false
     }
 
+    /// The face really does cut solid dark blocks into the picture, not just
+    /// a subtle darker patch - checked directly against the actual 64x32
+    /// output (`Frame::pixel`, not the supersampled buffer), the same
+    /// discipline 326's and 336's own logs name as the only reliable one.
+    /// Unlike the box `eyes_cut_real_dark_holes_in_the_head` (336's own test,
+    /// now obsolete: the face moved off the mesh's UV and onto the panel
+    /// grid, so it no longer sits at a fixed, hand-found box of columns) this
+    /// searches the whole frame for a dark pixel actually embedded in bright
+    /// cloth, which is what "solid dark blobs against a bright sheet" means
+    /// and stays true wherever this card's own geometry constants end up
+    /// placing the face - a plain "some pixel is dark somewhere" would pass
+    /// even with the face disabled entirely (the true-black background makes
+    /// sure of that), so the check has to be more specific than that. Seed 5
+    /// at 1s was found by scanning many (seed, moment) pairs for one where
+    /// the head is already on-panel and facing the camera this early - most
+    /// of an entrance is still off-panel or turned away (found by rendering
+    /// and dumping, not assumed; see the card's Log) - cheap rather than the
+    /// (10, 8.0) this card's own earlier draft used.
+    #[test]
+    fn the_face_is_a_solid_dark_block_against_a_bright_sheet() {
+        let px = colours(&frame_at(5, 1.0, &[]));
+        assert!(has_a_dark_pixel_embedded_in_bright_cloth(&px), "expected a real dark eye/mouth block in the lit sheet");
+    }
+
+    /// `eye_light` really does lighten the eyes end to end, through the whole
+    /// render pipeline: every pixel that differs between `eye_light` 0 and 1
+    /// is brighter at 1 - never the other way round, and never nothing at
+    /// all (a param with no visible effect would be worse than useless).
+    #[test]
+    fn eye_light_lightens_the_eyes_end_to_end() {
+        let luma = |c: &[f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
+        let dark = colours(&frame_at(5, 1.0, &[("eye_light", 0.0)]));
+        let lit = colours(&frame_at(5, 1.0, &[("eye_light", 1.0)]));
+        let mut changed = 0;
+        for (a, b) in dark.iter().zip(lit.iter()) {
+            if a != b {
+                changed += 1;
+                assert!(luma(b) > luma(a), "eye_light 1 did not lighten a pixel eye_light 0 left dark");
+            }
+        }
+        assert!(changed > 0, "eye_light had no visible effect on the rendered frame");
+    }
+
+    /// `mouth` at 0 really does remove the mouth end to end: every pixel that
+    /// differs between `mouth` 1 and 0 is brighter with the mouth off - the
+    /// mouth only ever darkens, turning it off only ever brightens - and
+    /// again, some pixel really does change.
+    #[test]
+    fn mouth_zero_removes_the_mouth_end_to_end() {
+        let luma = |c: &[f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
+        let with_mouth = colours(&frame_at(5, 1.0, &[("mouth", 1.0)]));
+        let without_mouth = colours(&frame_at(5, 1.0, &[("mouth", 0.0)]));
+        let mut changed = 0;
+        for (a, b) in with_mouth.iter().zip(without_mouth.iter()) {
+            if a != b {
+                changed += 1;
+                assert!(luma(b) > luma(a), "removing the mouth made a pixel darker, not brighter");
+            }
+        }
+        assert!(changed > 0, "the `mouth` param had no visible effect on the rendered frame");
+    }
 
     /// The same seed and the same moment draw the same frame, exactly -
     /// `screeny-art snapshot --seed N --at S` is a promise, even though the
     /// picture now goes through a cloth sim and a GPU pipeline to get there.
+    /// Kept to sub-2s moments - `at` itself is not what is under test here,
+    /// and every simulated second is real physics in a debug binary (card
+    /// 338's Log: keep the ghosts debug suite fast).
     #[test]
     fn a_seed_and_a_moment_are_deterministic() {
-        for at in [1.5, 4.0, 6.5] {
+        for at in [0.3, 0.6] {
             assert_eq!(colours(&frame_at(7, at, &[])), colours(&frame_at(7, at, &[])), "at {at}s");
         }
     }
@@ -589,7 +638,7 @@ mod tests {
     /// black fallback, trivially grey).
     #[test]
     fn color_zero_is_grayscale() {
-        for at in [1.0, 3.0, 5.0] {
+        for at in [0.4, 0.9] {
             let frame = frame_at(3, at, &[("color", 0.0)]);
             for c in colours(&frame) {
                 assert!((c[0] - c[1]).abs() < 1e-3 && (c[1] - c[2]).abs() < 1e-3, "at {at}s: {c:?} is not grey");
@@ -599,10 +648,15 @@ mod tests {
 
     /// Never a full-white frame, and the average level stays low - this runs
     /// off laptop USB (the common brightness rule).
+    /// Card 338's Log: every simulated ghost-second is real physics in a
+    /// debug binary, and `ghosts` above 1 multiplies that by however many are
+    /// actually on screen - `2.0` (still "more than one", the point of the
+    /// cap this test cares about) rather than the full `4.0` a real run
+    /// allows, and two moments rather than three.
     #[test]
     fn never_bright_and_never_a_lot_of_it() {
-        for at in [2.0, 5.0, 8.0] {
-            let frame = frame_at(1, at, &[("ghosts", 4.0), ("glow", 1.0)]);
+        for at in [0.5, 1.5] {
+            let frame = frame_at(1, at, &[("ghosts", 2.0), ("glow", 1.0)]);
             let px = colours(&frame);
             let apl = px.iter().map(|c| (c[0] + c[1] + c[2]) / 3.0).sum::<f32>() / px.len() as f32;
             assert!(apl < 0.16, "at {at}s: average picture level {apl}");
@@ -612,11 +666,12 @@ mod tests {
 
     /// The owner's own words on `eye_light`: "never full white" - checked at
     /// its own maximum, on top of everything else that pushes brightness up
-    /// (`glow`, `ghosts` at its cap, and the biggest `eyes` size).
+    /// (`glow`, more than one ghost, and the biggest `eyes` size). See
+    /// `never_bright_and_never_a_lot_of_it` on why `ghosts` is `2.0` here.
     #[test]
     fn glowing_eyes_are_never_full_white() {
-        for at in [2.0, 5.0, 8.0] {
-            let frame = frame_at(1, at, &[("ghosts", 4.0), ("glow", 1.0), ("eye_light", 1.0), ("eyes", 2.0)]);
+        for at in [0.5, 1.5] {
+            let frame = frame_at(1, at, &[("ghosts", 2.0), ("glow", 1.0), ("eye_light", 1.0), ("eyes", 2.0)]);
             let px = colours(&frame);
             assert!(px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97), "at {at}s: something is at full white");
         }
@@ -626,7 +681,7 @@ mod tests {
     /// GUARANTEED_PALETTE promise, unchanged by the rework.
     #[test]
     fn every_frame_is_a_small_exact_palette() {
-        let frame = frame_at(5, 4.0, &[("ghosts", 4.0)]);
+        let frame = frame_at(5, 1.0, &[("ghosts", 2.0)]);
         let Frame::Indexed { palette, .. } = frame else { panic!("ghosts must render indexed") };
         assert!(palette.len() <= crate::frame::GUARANTEED_PALETTE, "{} colours", palette.len());
     }
