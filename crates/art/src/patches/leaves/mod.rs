@@ -374,7 +374,7 @@ impl LeavesPatch {
                 settled.omega = V3::ZERO;
                 settled.resting = true;
                 self.resting.push_back(settled);
-                if self.resting.len() > rest_cap.max(0) {
+                if self.resting.len() > rest_cap {
                     if let Some(bumped) = self.resting.pop_front() {
                         self.pending.push_back(bumped);
                     }

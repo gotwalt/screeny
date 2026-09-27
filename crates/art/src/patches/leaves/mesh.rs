@@ -174,7 +174,7 @@ mod tests {
         for shape in 0..SHAPES as u8 {
             let verts = build(shape, 0.15, 0.1);
             assert!(!verts.is_empty());
-            assert!(verts.len() % 3 == 0, "a triangle soup is a multiple of 3 vertices");
+            assert!(verts.len().is_multiple_of(3), "a triangle soup is a multiple of 3 vertices");
             for v in &verts {
                 assert!(v.pos.x.is_finite() && v.pos.y.is_finite() && v.pos.z.is_finite());
                 let n = v.normal.len();
