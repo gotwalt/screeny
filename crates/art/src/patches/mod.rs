@@ -6,6 +6,11 @@ pub(crate) mod bats;
 pub(crate) mod clocks;
 pub(crate) mod flock;
 pub(crate) mod ghosts;
+// Card 321: leaves became a mesh-based GPU patch (real lighting, a real depth
+// buffer, heavy supersampling - the owner's direction was to spend the GPU on
+// the picture, not avoid it), so it needs the adapter exactly as knot,
+// lattice and overland do, and is gated the same way.
+#[cfg(feature = "gpu")]
 pub(crate) mod leaves;
 #[cfg(feature = "gpu")]
 mod knot;
@@ -33,6 +38,7 @@ pub static ALL: &[PatchDef] = &[
     flock::DEF,
     bats::DEF,
     ghosts::DEF,
+    #[cfg(feature = "gpu")]
     leaves::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
@@ -51,6 +57,8 @@ pub static ALL: &[PatchDef] = &[
 /// without the feature they are not here at all and this is empty, which is
 /// the truth for that build.
 pub static NEEDS_GPU: &[&str] = &[
+    #[cfg(feature = "gpu")]
+    leaves::DEF.id,
     #[cfg(feature = "gpu")]
     overland::DEF.id,
     #[cfg(feature = "gpu")]

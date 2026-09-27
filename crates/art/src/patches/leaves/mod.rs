@@ -64,7 +64,7 @@ pub const DEF: PatchDef = PatchDef {
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("leaves", "How many leaves are aloft at once", 1.0, 8.0, 1.0, 3.0),
+    param("leaves", "How many leaves are aloft at once", 1.0, 8.0, 1.0, 4.0),
     param("wind", "Mean wind: the steady push downwind", 0.0, 2.5, 0.05, 0.5),
     param("gusts", "How strong the gusts are, and how often they hit", 0.0, 1.5, 0.05, 0.5),
     param("flutter", "How much a falling leaf rocks, glides or tumbles", 0.0, 2.0, 0.05, 1.0),
