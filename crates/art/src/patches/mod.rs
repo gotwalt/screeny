@@ -5,6 +5,7 @@ use crate::patch::PatchDef;
 pub(crate) mod bats;
 pub(crate) mod clocks;
 pub(crate) mod flock;
+#[cfg(feature = "gpu")]
 pub(crate) mod ghosts;
 pub(crate) mod leaves;
 #[cfg(feature = "gpu")]
@@ -32,6 +33,7 @@ pub static ALL: &[PatchDef] = &[
     metaballs::DEF,
     flock::DEF,
     bats::DEF,
+    #[cfg(feature = "gpu")]
     ghosts::DEF,
     leaves::DEF,
     #[cfg(feature = "gpu")]
@@ -51,6 +53,8 @@ pub static ALL: &[PatchDef] = &[
 /// without the feature they are not here at all and this is empty, which is
 /// the truth for that build.
 pub static NEEDS_GPU: &[&str] = &[
+    #[cfg(feature = "gpu")]
+    ghosts::DEF.id,
     #[cfg(feature = "gpu")]
     overland::DEF.id,
     #[cfg(feature = "gpu")]

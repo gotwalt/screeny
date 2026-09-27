@@ -2,20 +2,24 @@
 //! schedules them.
 //!
 //! **An act is a closed-form function of elapsed time.** Nothing here
-//! integrates: a ghost's whole path - where it is, how it is squashed, which
-//! way it looks - is a formula in `el` (seconds since the act began), decided
-//! the instant the act is drawn from the seed. That is what makes the
-//! schedule reproducible at any step size: [`Director::advance`] only ever
-//! asks "does the timeline reach this instant yet?", never "how many frames
-//! have we drawn?" - the same discipline `flock` uses for its physics
+//! integrates: a ghost's whole path - where its head is, which way it is
+//! looking - is a formula in `el` (seconds since the act began), decided the
+//! instant the act is drawn from the seed. That is what makes the schedule
+//! reproducible at any step size: [`Director::advance`] only ever asks "does
+//! the timeline reach this instant yet?", never "how many frames have we
+//! drawn?" - the same discipline `flock` uses for its physics
 //! ([`crate::patches::flock::Flock::advance`]), minus the physics, because
-//! nothing here needs it.
+//! nothing here needs it. `crate::patches::ghosts::cloth`'s cloth sim is the
+//! one thing in this patch that *is* an integration, and it is driven by the
+//! head positions this module hands it, not the other way round.
 //!
-//! **The vocabulary** (card 315's list): drift, bounce, peek, swoop, and two
-//! ways for a pair to share a moment - crossing paths, or one chasing
-//! another. [`Director`] draws from it with [`crate::variety::Variety`], the
-//! same tool the clocks' `dance` composer uses, so a long run keeps finding
-//! new combinations rather than favouring whichever the dice like.
+//! **The vocabulary** (card 315's list, card 326's proportions): drift,
+//! bounce, peek, swoop, and two ways for a pair to share a moment - crossing
+//! paths, or one chasing another. [`Director`] draws from it with
+//! [`crate::variety::Variety`], the same tool the clocks' `dance` composer
+//! uses, so a long run keeps finding new combinations rather than favouring
+//! whichever the dice like - weighted, since card 326, so bounce and chase
+//! stay rare accents against drift and peek's calm default.
 
 use crate::color::smoothstep;
 use crate::frame::W;
@@ -75,9 +79,13 @@ impl Kind {
     }
 }
 
-/// One ghost's silhouette, fixed for its whole appearance from the seed: a
-/// dome of radius `r`, straight sides for `hem_base` LEDs, then `humps`
-/// scalloped points that dip `hem_amp` further - see `mod.rs::body_sdf`.
+/// One ghost's silhouette and cloth, fixed for its whole appearance from the
+/// seed: a head of radius `r`, a collar at `hem_base` (where the sheet's
+/// rigid part gives way to the free-hanging skirt), a flare/waviness budget
+/// `hem_amp`, and `humps` low-frequency waves around the hem - see
+/// `cloth::build_template`. `turn_*` and `depth_*` are the slow, seeded
+/// oscillations behind "ghosts can come nearer and go further ... and turn"
+/// (card 326): each ghost breathes its own depth and turn at its own pace.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shape {
     pub r: f32,
@@ -85,18 +93,24 @@ pub(crate) struct Shape {
     pub hem_amp: f32,
     pub humps: f32,
     pub phase0: f32,
-    /// Ripple speed, radians a second: how fast the hem's wave travels.
-    pub ripple_rate: f32,
     /// How solid it is: where two overlap, or it crosses something, this is
     /// what lets you tell.
     pub alpha: f32,
+    /// Radians a second, and amplitude in radians, of the slow head-turn
+    /// that sometimes shows a three-quarter view.
+    pub turn_rate: f32,
+    pub turn_amp: f32,
+    /// Radians a second, and amplitude in world units, of the slow
+    /// nearer/further breathing.
+    pub depth_rate: f32,
+    pub depth_amp: f32,
 }
 
 impl Shape {
-    fn new(rng: &mut Rng, size: f32) -> Shape {
+    pub(crate) fn new(rng: &mut Rng, size: f32) -> Shape {
         // A little variety in size and proportion between ghosts, from the
         // seed (card 315's brief): a touch wider or narrower, a rounder or
-        // taller dome, three or four points on the hem.
+        // taller head, three or four low waves around the hem.
         let aspect = rng.range(0.6, 0.8);
         let r = (size * aspect * 0.5).max(1.4);
         let body = (size - r).max(size * 0.32);
@@ -108,8 +122,11 @@ impl Shape {
             hem_amp,
             humps: (3 + (rng.u64() % 2)) as f32,
             phase0: rng.range(0.0, TAU),
-            ripple_rate: rng.range(1.6, 2.6),
             alpha: rng.range(0.78, 0.94),
+            turn_rate: rng.range(0.15, 0.32),
+            turn_amp: rng.range(0.3, 0.65),
+            depth_rate: rng.range(0.1, 0.26),
+            depth_amp: rng.range(size * 0.18, size * 0.42),
         }
     }
 
@@ -127,17 +144,25 @@ impl Shape {
 /// Everything the picture needs to draw one ghost this frame.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Pose {
+    /// Identifies this ghost's *appearance*, stable for as long as it is on
+    /// screen and never reused: what the renderer keys a persistent
+    /// [`crate::patches::ghosts::cloth::Cloth`] on, so the sheet is simulated
+    /// continuously across frames rather than rebuilt from scratch.
+    pub key: u64,
     pub shape: Shape,
     pub cx: f32,
-    /// The shoulder - dome meets sides - not the ghost's midpoint: the dome
-    /// is measured upward from here and the hem downward.
+    /// The head's own centre - the old "shoulder" line, now the sphere's
+    /// middle - in panel/LED coordinates.
     pub cy: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
-    /// Where it is looking, as a unit vector (0, -1 is straight up the panel).
+    /// Nearer or further than the reference distance, in world units (card
+    /// 326: "come nearer and go further ... size by depth").
+    pub depth: f32,
+    /// Head turn around world up, radians (card 326: "turn, so you
+    /// sometimes see a ghost at three-quarter view").
+    pub yaw: f32,
+    /// Where it is looking, as a unit vector (0, -1 is straight up the panel)
+    /// - shifts the eyes within the cloth's own UV, not the head turn above.
     pub gaze: (f32, f32),
-    /// The hem wave's current phase.
-    pub ripple: f32,
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -183,24 +208,11 @@ pub(crate) struct Act {
     plans: Vec<Plan>,
 }
 
-/// How much a bounce's energy - squash landing, stretch in flight - answers
-/// to the `bounce` param, and how far a drifting or peeking ghost's float bob
-/// answers to its opposite: the same knob runs both, so "bouncy" and "floaty"
-/// are really one dial (card 315: "bounce (how bouncy vs floaty)").
-const STRETCH_K: f32 = 0.5;
-const SQUASH_K: f32 = 0.42;
-const CONTACT_W: f32 = 0.1;
-
-fn squash_stretch(p: f32, energy: f32) -> (f32, f32) {
-    let speed = (1.0 - 2.0 * p).abs();
-    let stretch = 1.0 + STRETCH_K * energy * speed;
-    let contact = smoothstep(CONTACT_W, 0.0, p.min(1.0 - p));
-    let squash = 1.0 - SQUASH_K * energy * contact;
-    let sy = (stretch * squash).max(0.4);
-    let sx = (1.0 / sy).clamp(0.55, 1.9);
-    (sx, sy)
-}
-
+/// How far a drifting or peeking ghost's float bob answers to `bounce`'s
+/// opposite: the same knob that governs the hop height below, so "bouncy"
+/// and "floaty" are really one dial (card 315). The 3D cloth does its own
+/// squash and billow physically now (card 326) - nothing here scales the
+/// mesh any more.
 impl Act {
     /// Every ghost's pose at engine time `t`. Ghosts not yet born or already
     /// gone (before `start` or after `start + duration`, and for a chased
@@ -213,42 +225,39 @@ impl Act {
         let el = el as f32;
         let dur = self.travel_dur.max(1.0 / 60.0) as f32;
 
-        // Pass one: where every ghost's centre and squash are, ignoring
-        // gaze - a follower's gaze at the leader needs the leader's centre
-        // already known, and vice versa for the ghosts who glance at a
-        // passer-by.
-        let centres: Vec<(f32, f32, f32, f32, f32)> = self
-            .plans
-            .iter()
-            .enumerate()
-            .map(|(i, p)| self.centre_of(i, p, el, dur))
-            .collect();
+        // Pass one: where every ghost's centre is, ignoring gaze - a
+        // follower's gaze at the leader needs the leader's centre already
+        // known, and vice versa for the ghosts who glance at a passer-by.
+        let centres: Vec<(f32, f32, f32)> =
+            self.plans.iter().enumerate().map(|(i, p)| self.centre_of(i, p, el, dur)).collect();
 
         (0..self.plans.len())
             .filter_map(|i| {
-                let (x, y, sx, sy, active_el) = centres[i];
+                let (x, y, active_el) = centres[i];
                 if active_el.is_nan() {
                     return None;
                 }
                 let p = &self.plans[i];
-                let ripple = active_el * p.shape.ripple_rate + p.shape.phase0;
+                let key = self.start.to_bits() ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let yaw = p.shape.turn_amp * (p.shape.turn_rate * active_el + p.shape.phase0 * 1.3).sin();
+                let depth = p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin();
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
-                Some(Pose { shape: p.shape, cx: x, cy: y, stretch_x: sx, stretch_y: sy, gaze, ripple })
+                Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze })
             })
             .collect()
     }
 
-    /// `(x, y, stretch_x, stretch_y, active_el)`. `active_el` is this ghost's
-    /// own elapsed time - `NAN` while a chased follower has not been let go
-    /// yet, which `poses_at` reads as "not born".
-    fn centre_of(&self, i: usize, p: &Plan, el: f32, dur: f32) -> (f32, f32, f32, f32, f32) {
+    /// `(x, y, active_el)`. `active_el` is this ghost's own elapsed time -
+    /// `NAN` while a chased follower has not been let go yet, which
+    /// `poses_at` reads as "not born".
+    fn centre_of(&self, i: usize, p: &Plan, el: f32, dur: f32) -> (f32, f32, f32) {
         let margin = p.shape.margin();
         match self.kind {
             Kind::Drift => {
                 let u = (el / dur).clamp(0.0, 1.0);
                 let x = travel(p.flip, u, margin);
                 let y = p.y + p.amp * (TAU * p.freq * el + p.shape.phase0).sin();
-                (x, y, 1.0, 1.0, el)
+                (x, y, el)
             }
             Kind::Bounce => {
                 let u = (el / dur).clamp(0.0, 1.0);
@@ -257,19 +266,17 @@ impl Act {
                 let hop = (u * hops).rem_euclid(1.0);
                 let height = 4.0 * hop * (1.0 - hop);
                 let y = p.y - p.amp * height;
-                let (sx, sy) = squash_stretch(hop, p.freq);
-                (x, y, sx, sy, el)
+                (x, y, el)
             }
             Kind::Peek => {
                 let (x, y) = peek_pos(p, el, dur, margin);
-                (x, y, 1.0, 1.0, el)
+                (x, y, el)
             }
             Kind::Swoop => {
                 let u = (el / dur).clamp(0.0, 1.0);
                 let x = travel(p.flip, u, margin);
                 let y = p.y + p.amp * (PI * u).sin();
-                let (sx, sy) = swoop_stretch(u, p.freq);
-                (x, y, sx, sy, el)
+                (x, y, el)
             }
             Kind::Cross => {
                 // Ghost 1 goes the opposite way to ghost 0 - its own `y`
@@ -278,29 +285,29 @@ impl Act {
                 let flip = if i == 1 { !p.flip } else { p.flip };
                 let u = (el / dur).clamp(0.0, 1.0);
                 let x = travel(flip, u, margin);
-                (x, p.y, 1.0, 1.0, el)
+                (x, p.y, el)
             }
             Kind::Chase => {
                 let el2 = if i == 1 { el - p.delay as f32 } else { el };
                 if el2 < 0.0 {
-                    return (0.0, 0.0, 1.0, 1.0, f32::NAN);
+                    return (0.0, 0.0, f32::NAN);
                 }
                 let u = (el2 / dur).clamp(0.0, 1.0);
                 let x = travel(p.flip, u, margin);
-                (x, p.y, 1.0, 1.0, el2)
+                (x, p.y, el2)
             }
         }
     }
 
     /// Look at the other ghost in `centres` when it is within `within` LEDs
     /// and actually born yet; otherwise look ahead.
-    fn glance_or_forward(&self, i: usize, forward: f32, centres: &[(f32, f32, f32, f32, f32)], within: f32) -> (f32, f32) {
+    fn glance_or_forward(&self, i: usize, forward: f32, centres: &[(f32, f32, f32)], within: f32) -> (f32, f32) {
         let j = 1 - i.min(1);
-        let (ox, oy, _, _, oel) = centres[j];
+        let (ox, oy, oel) = centres[j];
         if oel.is_nan() {
             return (forward, 0.0);
         }
-        let (mx, my, _, _, _) = centres[i];
+        let (mx, my, _) = centres[i];
         let (dx, dy) = (ox - mx, oy - my);
         let d = (dx * dx + dy * dy).sqrt();
         if d < within && d > 1e-3 {
@@ -310,7 +317,7 @@ impl Act {
         }
     }
 
-    fn gaze_of(&self, i: usize, el: f32, dur: f32, centres: &[(f32, f32, f32, f32, f32)]) -> (f32, f32) {
+    fn gaze_of(&self, i: usize, el: f32, dur: f32, centres: &[(f32, f32, f32)]) -> (f32, f32) {
         let p = &self.plans[i];
         let forward = if p.flip { -1.0 } else { 1.0 };
         match self.kind {
@@ -362,14 +369,6 @@ fn normalise((x, y): (f32, f32)) -> (f32, f32) {
     (x / d, y / d)
 }
 
-/// Squash/stretch for a swoop's arc: stretched at the fast middle of the dive,
-/// rounder at the still moments it enters and leaves on.
-fn swoop_stretch(u: f32, energy: f32) -> (f32, f32) {
-    let speed = (PI * u).cos().abs();
-    let sy = 1.0 + 0.22 * energy * speed;
-    (1.0 / sy.max(0.6), sy)
-}
-
 /// In from an edge, a slow look around, back out - never reaching the far
 /// side. `amp` is how far past the edge it comes, in LEDs.
 fn peek_pos(p: &Plan, el: f32, dur: f32, margin: f32) -> (f32, f32) {
@@ -389,12 +388,14 @@ fn peek_pos(p: &Plan, el: f32, dur: f32, margin: f32) -> (f32, f32) {
 
 // --------------------------------------------------------------------------
 
-/// Seconds of nothing on screen between beats - "empty moments between", the
-/// brief's own words.
-const REST: (f32, f32) = (1.2, 4.5);
+/// Seconds of nothing on screen between beats. Card 326, on top of card
+/// 315's "empty moments between": "long empty moments between visits are
+/// good" - widened from the first pass's (1.2, 4.5).
+const REST: (f32, f32) = (2.5, 7.5);
 /// How often a beat is more than a single ghost, when the `ghosts` param
-/// allows it - a livelier moment among the ordinary solo ones.
-const ENSEMBLE_CHANCE: f32 = 0.4;
+/// allows it. Card 326: "usually one ghost; two only as an occasional duet" -
+/// turned down hard from the first pass's 0.4.
+const ENSEMBLE_CHANCE: f32 = 0.14;
 
 pub(crate) struct Director {
     rng: Rng,
@@ -495,7 +496,14 @@ impl Director {
             }
             let tag = format!("kind:{}", k.name());
             let fresh = 1.0 - self.variety.staleness(std::slice::from_ref(&tag));
-            let score = 0.65 * fresh + 0.25 * bias(k) + self.rng.range(0.0, 0.3);
+            let mut score = 0.65 * fresh + 0.25 * bias(k) + self.rng.range(0.0, 0.3);
+            // Card 326: "bounce and chase become rare accents" - chase is
+            // already rare by needing two free slots (`ENSEMBLE_CHANCE`);
+            // bounce is a solo kind and needs its own down-weighting here to
+            // stay an accent rather than an equal member of the rotation.
+            if k == Kind::Bounce {
+                score *= 0.5;
+            }
             if best.is_none_or(|(s, _)| score > s) {
                 best = Some((score, k));
             }
@@ -554,9 +562,9 @@ impl Director {
             Kind::Bounce => {
                 let bounces = self.rng.range(2.0, 4.0).round().max(2.0);
                 let dur = (width / (base_speed * 1.05)) as f64;
-                // Ground contact near the bottom of the safe band - by the
-                // ground line, appropriately - with the hop clamped so its
-                // *peak* never lifts the dome off the top of the panel: the
+                // Ground contact near the bottom of the safe band, with the
+                // hop clamped so its *peak* never lifts the head off the top
+                // of the panel: the
                 // generic `y` band above only promises the ghost clears the
                 // top while sitting still, not after adding a hop on top.
                 let ground = y_hi;
