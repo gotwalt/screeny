@@ -127,7 +127,7 @@ combinations ... that might just be simpler to think about everywhere."* The stu
 keeps its named settings (card 151) - a patch on a named setting is what a mode used to
 be - and exposes every patch and named setting as one `select.screeny_picture` in Home
 Assistant; a schedule is now an HA automation that sets that select at the times the
-owner wants, and brightness is HA's `number.screeny_level` or `light.screeny`, following
+owner wants, and brightness is HA's `number.screeny_brightness` or `light.screeny`, following
 a room's light sensor if he likes. Card 311 then moved the Home Assistant setup itself
 off the environment and onto a Settings screen in the studio (the third screen, in the
 place the timetable's Schedule screen had), so there is one place - the page - to point

@@ -329,7 +329,7 @@ the Picture entity below.
 
 **Set up on the Settings screen** (`/settings`, card 311), not the environment: Connect
 switch, Broker, Port, Username, Password (write-only - the API only ever says whether
-one is set), and under "More" the Name in Home Assistant, the Id, the discovery prefix
+one is set), and under "More" the Device name, the Id, the discovery prefix
 and the resulting discovery topic and topic base. Saving restarts the connection with
 the new settings at once, and the screen reports how it is doing. The settings live in
 `state.json` under `home_assistant` (schema v7) - the password in the clear, on the
@@ -344,7 +344,7 @@ settings a test starts already connected with.
 | entity (default id) | platform | topics under `screeny/<id>/` | payload |
 |---|---|---|---|
 | `light.screeny` | light, JSON schema, brightness only | `brightness/state`, `brightness/set` | `{"state":"ON","brightness":96}`, 0-255, snapped to the panel's nearest real step (card 187). `OFF` is a dark panel (the studio carries on playing); a bare `ON` goes back to the last lit level (128 if there was none). |
-| `number.screeny_level` | number, "Brightness" | `level/state`, `level/set` | `0`-`100` in steps of 4 (one output-enable slot of the panel's 25, card 187 - every step is a real change). HA shows this inline on the device's own page, which it does not do for a light's brightness. |
+| `number.screeny_brightness` | number, "Brightness" | `level/state`, `level/set` | `0`-`100` in steps of 4 (one output-enable slot of the panel's 25, card 187 - every step is a real change). HA shows this inline on the device's own page, which it does not do for a light's brightness. |
 | `select.screeny_picture` | select, "Picture" | `picture/state`, `picture/set` | every playable patch, on Default and on each of its named settings: `Vesta`, `Vesta · Wall Clock`, ... The list follows the named settings (discovery is republished when one is saved, renamed or deleted). The state is the current patch and setting's label, or `None` (unknown) when the working copy has been modified since the setting was loaded. Picking one is a hand change with the usual 2 s fade. |
 | `sensor.screeny_patch` | sensor | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
 | `binary_sensor.screeny_panel_link` | binary sensor, `connectivity`, diagnostic | `panel/state` | `ON` while the studio is driving the panel and the link is up |
@@ -439,7 +439,7 @@ automation:
         entity_id: sensor.living_room_lux
     action:
       - service: number.set_value
-        target: { entity_id: number.screeny_level }
+        target: { entity_id: number.screeny_brightness }
         data: { value: "{{ (states('sensor.living_room_lux') | float / 10) | round(0) }}" }
 ```
 
