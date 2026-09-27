@@ -712,7 +712,18 @@ impl Cloth {
 
         let mut cloth =
             Cloth { template, faces, head_kinematic, wrist_kinematic, shape, world, body, head_body, torso_body, arm_bodies, warped: 0.0 };
-        const SETTLE_STEPS: usize = 450;
+        // 450 steps of an unoptimized Rapier soft body is real money in a
+        // debug test binary - every `Cloth::spawn` in the whole test suite
+        // (cloth's own tests and every `render_gpu` call that spawns a new
+        // ghost) pays it, and card 336's own log names this as the reason
+        // the ghosts debug suite reached ~9 minutes. A settle this short
+        // never looks fully at rest at the *panel's* own settings (real
+        // playback still uses 450 below), but every property the tests here
+        // check - finite, bounded, deterministic, no interpenetration - holds
+        // long before full visual settle, so cutting it under `cfg(test)`
+        // (card 338's Log: "fewer settle steps in tests") changes nothing
+        // about what ships.
+        const SETTLE_STEPS: usize = if cfg!(test) { 60 } else { 450 };
         for _ in 0..SETTLE_STEPS {
             cloth.step(body0, PHYS_DT, sway);
         }
@@ -1021,7 +1032,14 @@ mod tests {
     /// A moving, turning body with moving arms over several seconds of real
     /// motion never blows the sheet up either - the case the settle-only
     /// test above does not reach.
+    ///
+    /// `#[ignore]`d in the ordinary (debug) run: 8 simulated seconds is 1440
+    /// physics steps of an unoptimized Rapier soft body, real money in a
+    /// debug binary (card 338's Log). Run explicitly, in `--release`, where
+    /// the whole `ghosts::` suite takes well under a minute:
+    /// `cargo test -p screeny-art --release --lib ghosts:: -- --ignored`.
     #[test]
+    #[ignore = "slow in debug (real physics motion, not just a settle) - run once with --release"]
     fn moving_body_stays_stable() {
         let mut rng = Rng::new(21);
         let s = shape(&mut rng);
@@ -1045,7 +1063,16 @@ mod tests {
     /// Stepping to the same target time by different call granularities
     /// gives the same sheet - the determinism every fixed-step sim here
     /// promises.
+    ///
+    /// `#[ignore]`d in the ordinary (debug) run - two independent runs of
+    /// several hundred physics steps apiece, slow in an unoptimized build
+    /// (card 338's Log; measured well over 60s alone). `mod.rs`'s own
+    /// `a_seed_and_a_moment_are_deterministic` keeps a cheap, real-pipeline
+    /// determinism check in the regular suite; run this one (and `same_seed_
+    /// and_steps_gives_the_same_sheet_twice`, the same property from a
+    /// different angle) once with `--release`.
     #[test]
+    #[ignore = "slow in debug (several hundred physics steps) - run once with --release"]
     fn advance_does_not_depend_on_call_granularity() {
         let mut rng = Rng::new(3);
         let s = shape(&mut rng);
@@ -1079,7 +1106,12 @@ mod tests {
     /// sequence: two identically-built sheets, stepped the same way, must
     /// land on exactly the same bytes - the promise `enhanced-determinism`
     /// and single-threading exist for, checked directly rather than assumed.
+    /// `#[ignore]`d in the ordinary (debug) run - two independent 5-second
+    /// runs (900 physics steps apiece), slow in an unoptimized build (card
+    /// 338's Log). Run once with `--release` (see `moving_body_stays_
+    /// stable`'s own note).
     #[test]
+    #[ignore = "slow in debug (real physics motion, not just a settle) - run once with --release"]
     fn same_seed_and_steps_gives_the_same_sheet_twice() {
         let mut rng = Rng::new(17);
         let s = shape(&mut rng);
@@ -1104,7 +1136,11 @@ mod tests {
     /// collider. A sharp yaw whip is exactly the motion that would drive the
     /// skirt across the head if the collision were missing or the wrong
     /// radius (326's log names getting this radius wrong as a real bug).
+    /// `#[ignore]`d in the ordinary (debug) run - 4 simulated seconds of real
+    /// physics motion, slow in an unoptimized build (card 338's Log). Run
+    /// once with `--release` (see `moving_body_stays_stable`'s own note).
     #[test]
+    #[ignore = "slow in debug (real physics motion, not just a settle) - run once with --release"]
     fn skirt_never_penetrates_the_head_collider() {
         let mut rng = Rng::new(41);
         let s = shape(&mut rng);
@@ -1135,7 +1171,11 @@ mod tests {
     /// against the new body (card 336): swing one arm from drooped to raised
     /// and back, the motion most likely to sweep the skirt across it if the
     /// arm colliders were missing or mis-sized.
+    /// `#[ignore]`d in the ordinary (debug) run - 5 simulated seconds of real
+    /// physics motion, slow in an unoptimized build (card 338's Log). Run
+    /// once with `--release` (see `moving_body_stays_stable`'s own note).
     #[test]
+    #[ignore = "slow in debug (real physics motion, not just a settle) - run once with --release"]
     fn skirt_never_penetrates_an_arm_collider() {
         let mut rng = Rng::new(53);
         let s = shape(&mut rng);

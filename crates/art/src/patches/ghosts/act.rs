@@ -920,4 +920,42 @@ mod tests {
         let repeats = seq.windows(2).filter(|w| w[0] == w[1]).count();
         assert!((repeats as f32 / seq.len() as f32) < 0.35, "{repeats} of {} acts repeated the last kind", seq.len());
     }
+
+    /// Card 338: "the default hold should be near-symmetric... asymmetry
+    /// only in gestures". Outside a wave (`wave_rate`/`wave_phase` both at a
+    /// zero crossing) and at the gesture cycle's own rest point (`gesture_
+    /// rate`/`gesture_phase` likewise), both arms get the identical `pitch`/
+    /// `elbow` by construction (`arm_gesture` only ever writes a *different*
+    /// pose into whichever side `wave_side` picked) - checked directly, for
+    /// several shapes, rather than trusting that reading of the source: a
+    /// held-out ghost that is not mid-wave is exactly symmetric, matching
+    /// the reference. (336's own "one wrist higher" was a mid-wave/mid-sway
+    /// snapshot, not a static bug in the held-out pose itself.)
+    #[test]
+    fn the_default_hold_is_symmetric_outside_a_wave() {
+        let mut rng = Rng::new(41);
+        for _ in 0..8 {
+            let shape = Shape::new(&mut rng, 28.0);
+            // The instant, in the first 200s, closest to both cycles' own
+            // zero crossing - "a real held-out moment", not mid-gesture.
+            let mut best_el = 0.0_f32;
+            let mut best_score = f32::MAX;
+            let mut el = 0.0_f32;
+            while el < 200.0 {
+                let g = (shape.gesture_rate * el + shape.gesture_phase).sin();
+                let wg = (shape.wave_rate * el + shape.wave_phase).sin();
+                let score = g.abs() + wg.abs();
+                if score < best_score {
+                    best_score = score;
+                    best_el = el;
+                }
+                el += 0.05;
+            }
+            let arms = arm_gesture(shape, best_el);
+            assert!(
+                (arms.left.pitch - arms.right.pitch).abs() < 1e-4 && (arms.left.elbow - arms.right.elbow).abs() < 1e-4,
+                "asymmetric at a held-out moment: {arms:?}"
+            );
+        }
+    }
 }
