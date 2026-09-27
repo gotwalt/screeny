@@ -8,16 +8,14 @@ use crate::patch::Params;
 use crate::snapshot::{self, Shot};
 
 /// A camera for the sim-level tests: fixed axes, independent of `make`'s own
-/// seeded pitch, so these tests are about the flight and not about which way
-/// a particular seed happened to look.
+/// seeded placement, so these tests are about the flight and not about which
+/// way a particular seed happened to look.
 fn test_sim(seed: u64, birds: usize) -> Sim {
-    let elev = 17.0_f32.to_radians();
-    let fwd = v3(0.0, elev.sin(), elev.cos());
+    let fwd = v3(0.0, 0.0, 1.0);
     let world_up = v3(0.0, 1.0, 0.0);
     let right = world_up.cross(fwd).unit_or(v3(1.0, 0.0, 0.0));
     let up = fwd.cross(right).unit_or(world_up);
-    let roost = fwd.scale(0.85).add(v3(0.3, -0.35, 0.0)).unit_or(fwd).scale(9.0);
-    Sim::new(seed, fwd, right, up, roost, birds)
+    Sim::new(seed, fwd, right, up, birds)
 }
 
 fn reference_tuning() -> Tuning {
@@ -98,8 +96,8 @@ fn correlation(series: &[f32], lag: usize) -> f32 {
 /// about the fixed camera, sampled twice a second) must not correlate
 /// strongly with itself at any lag from thirty seconds out to five minutes -
 /// which is what "comes round again" would look like - and the colony's
-/// pour events, which are on their own semi-random timer, must not land at
-/// evenly spaced times either.
+/// group-streaming events, which are on their own semi-random timer, must
+/// not land at evenly spaced times either.
 #[test]
 fn ten_minutes_of_hunting_does_not_settle_into_a_loop() {
     for seed in [3, 41, 907] {
@@ -107,16 +105,16 @@ fn ten_minutes_of_hunting_does_not_settle_into_a_loop() {
         let tune = reference_tuning();
         let (fwd, right, _up) = sim.cam();
         let mut heading_az = Vec::new();
-        let mut pour_starts = Vec::new();
-        let mut was_pouring = false;
+        let mut group_starts = Vec::new();
+        let mut was_grouping = false;
         let steps = (600.0 / sim::STEP) as usize;
         for i in 0..steps {
             sim.step(&tune, sim::STEP);
-            let now = sim.pouring();
-            if now && !was_pouring {
-                pour_starts.push(i as f32 * sim::STEP);
+            let now = sim.grouping();
+            if now && !was_grouping {
+                group_starts.push(i as f32 * sim::STEP);
             }
-            was_pouring = now;
+            was_grouping = now;
             if i % 30 == 0 {
                 let h = sim.bats[0].heading();
                 heading_az.push(h.dot(right).atan2(h.dot(fwd)));
@@ -130,12 +128,16 @@ fn ten_minutes_of_hunting_does_not_settle_into_a_loop() {
             assert!(c < 0.85, "seed {seed}: heading repeats itself after {lag_s}s (r={c:.2})");
         }
 
-        assert!(pour_starts.len() >= 2, "seed {seed}: ten minutes at `stream` 0.45 should pour more than once, got {}", pour_starts.len());
-        let gaps: Vec<f32> = pour_starts.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            group_starts.len() >= 2,
+            "seed {seed}: ten minutes at `stream` 0.45 should group more than once, got {}",
+            group_starts.len()
+        );
+        let gaps: Vec<f32> = group_starts.windows(2).map(|w| w[1] - w[0]).collect();
         let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
         let spread = gaps.iter().map(|g| (g - mean).abs()).fold(0.0, f32::max);
-        eprintln!("seed {seed}: {} pours, gaps {gaps:?}, mean {mean:.1}s, spread {spread:.1}s", pour_starts.len());
-        assert!(spread > mean * 0.05, "seed {seed}: the colony pours on too regular a beat to be believed");
+        eprintln!("seed {seed}: {} groups, gaps {gaps:?}, mean {mean:.1}s, spread {spread:.1}s", group_starts.len());
+        assert!(spread > mean * 0.05, "seed {seed}: the colony groups up on too regular a beat to be believed");
     }
 }
 

@@ -1,90 +1,95 @@
-//! Bats: a loose colony hunting at dusk, seen from a camera on the ground
-//! looking up and out at a low, bright moon.
+//! Bats: a glowing moon in black space, and a few lit bats crossing it.
 //!
-//! Card 313's picture, in short: dark shapes crossing a big moon, erratic
-//! insect-hunting flight rather than a flock's smooth wheeling, a bare
-//! tree-line silhouette along the bottom few rows, and - now and then - the
-//! whole colony pouring out of a gap in that tree line and dispersing. The
-//! flight is [`sim`]; the bat's own silhouette is [`wing`]; this file is
-//! everything you can see - the sky, the moon, the tree line and the colony
-//! itself.
+//! Card 319 - the owner's second pass on card 313, 2026-09-26: "a form of
+//! visual poetry", "busyness is a thing we are trying to avoid", "we'll
+//! prefer foreground animations against a black backdrop." The dusk sky and
+//! tree line are gone; the moon is now the subject, not a small glow on a
+//! bigger picture - real surface ([`moon`]: maria and craters, lit at a
+//! phase, limb darkening, a faint halo), and the colony is small and calm,
+//! most of the time one bat or none. The flight is [`sim`]; the bat's own
+//! silhouette is [`wing`]; this file is everything you can see.
 //!
-//! **This is a sibling of `flock`, not a fork of it.** Both patches are a
-//! seeded, indexed CPU patch with a camera, an anti-aliased coverage buffer
-//! and a level-of-detail model, because that is the right shape for anything
-//! small and flying on this panel - but flock's camera flies inside the
-//! flock and steers by continuous boid forces, where this camera never moves
-//! and the bats steer by picking a point and snapping onto it. Sharing the
-//! *idea* is right; sharing the *code* is not, because flock has to keep
-//! rendering byte-identically and bending its `Coverage`, its `V3` or its
-//! `View` to fit a fixed-camera, event-driven flight would risk exactly that.
-//! So [`Coverage`] below and `sim::V3` are **copied** from `flock/mod.rs` and
-//! `flock/sim.rs` (generic rasterising and vector code, not flock-specific
-//! logic) rather than imported, and the camera and steering are written
-//! fresh. A follow-up card (see the Log) is the right place to lift the
-//! generic half of that - `Coverage`, `V3` - into a shared module once a
-//! third patch wants it too.
+//! **CPU, not GPU** - see the Log for the full reasoning, in short: the
+//! moon's shading (an analytic sphere, ray-traced per supersample sample) and
+//! the bats' coverage rasterising need no parallel throughput a 64x32 panel
+//! can't already get from the CPU in the time this has to run, and staying
+//! CPU keeps the "seeded, indexed, exact frame" promise the autumn set's
+//! rules ask for without writing a new WGSL pipeline and a palette-readback
+//! path for it. Nothing here touches `crates/art/src/gpu/` or `patches/mod.rs`'s
+//! `NEEDS_GPU` list.
+//!
+//! **This is a sibling of `flock`, not a fork of it** (card 313's own doc
+//! comment, carried forward): a seeded, indexed CPU patch with a camera, an
+//! anti-aliased coverage buffer and a level-of-detail model, but a fixed
+//! camera and event-driven jinking rather than flock's flying camera and
+//! continuous boid steering. [`Coverage`] below and `sim::V3` are copied from
+//! `flock/mod.rs` and `flock/sim.rs` (generic rasterising and vector code, not
+//! flock-specific logic) rather than imported, so flock never has to bend to
+//! fit a second patch's needs.
 
+pub(crate) mod moon;
 pub(crate) mod sim;
 pub(crate) mod wing;
 
 use crate::color::{oklch, smoothstep, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
-use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
-use sim::{v3, Sim, Tuning, V3, STEP};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use moon::Moon;
+use sim::{v3, Bat, Sim, Tuning, V3, STEP};
+use std::collections::VecDeque;
 
 pub const DEF: PatchDef = PatchDef {
     id: "bats",
     name: "Bats",
-    blurb: "A colony hunting at dusk, seen from the ground: erratic jinking flight against a big low moon, over a bare tree line.",
+    blurb: "A glowing moon in black space, and a few lit bats crossing it: calm, foreground motion against true black.",
     params: PARAMS,
     make,
-    // The world (the tree line, the moon's place and colour, the camera's
-    // own pitch) and the colony (who is in it, how it jinks, when it pours)
-    // all come from the seed, same promise flock makes.
+    // The moon's own placement, size-independent surface (craters, maria)
+    // and the colony's own placement and temperament all come from the
+    // seed, same promise flock and the first pass both made.
     seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[
-    param("bats", "How many bats", 4.0, 40.0, 1.0, 16.0),
+    // "bats (max at once, low default)" - card 319's own words: most of the
+    // time this patch shows the moon and nothing, or one bat.
+    param("bats", "How many bats live in the colony", 1.0, 10.0, 1.0, 3.0),
     param("pace", "How fast the flight moves", 0.3, 2.5, 0.05, 1.0),
     param("jink", "How often it changes its mind, and how sharply", 0.0, 1.0, 0.01, 0.85),
     param("loose", "How loosely the colony holds together", 0.0, 1.0, 0.01, 0.55),
-    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.8),
-    param("beat", "How fast the wings beat (Hz)", 4.0, 14.0, 0.5, 9.0),
-    param("moon", "How big the moon is", 0.5, 2.5, 0.05, 1.4),
-    param("dusk", "How far the sky has gone from a warm horizon to indigo night", 0.0, 1.0, 0.01, 0.10),
-    param("cycle", "How fast dusk drifts on its own; 0 holds it still", 0.0, 1.0, 0.01, 0.0),
-    param("stream", "How often the colony pours out of the roost", 0.0, 1.0, 0.01, 0.35),
-    // The card asked for both value structures tried and the better one said
-    // honestly (see the Log): pale bats on a near-black sky read more clearly
-    // as *bats* - wings and a scalloped edge actually show - than dark
-    // silhouettes on the lit dusk sky do, especially at `color` 0. Default to
-    // it; the dusk picture is one click away for whoever prefers the mood.
-    choice("scheme", "Pale bats on a near-black night, or dark silhouettes on a dusk sky", SCHEMES, 1.0),
-    param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
+    param("size", "How big the bats are drawn (a longer lens, not a closer camera)", 0.5, 3.0, 0.1, 1.6),
+    param("beat", "How fast the wings beat (Hz)", 4.0, 14.0, 0.5, 8.5),
+    param("moon", "How big the moon is", 0.4, 2.2, 0.05, 1.0),
+    param("phase", "The moon's phase: 0 and 1 are new, 0.5 is full", 0.0, 1.0, 0.01, 0.62),
+    param("stream", "How often a small group streams past together", 0.0, 1.0, 0.01, 0.2),
+    param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 0.45),
 ];
 
-/// The two value structures card 313 asks to try. Dark-on-mid-value is the
-/// classic dusk silhouette; light-on-near-black is its inverse - see the Log
-/// for which the author kept.
-const SCHEMES: &[&str] = &["dusk silhouettes", "night, pale bats"];
-
-/// Horizontal field of view - the same number flock uses, for the same
-/// reason: wide enough that the sky is around the camera, not a postcard.
-const FOV: f32 = 76.0;
+/// Horizontal field of view. Narrower than the first pass's 76 degrees: this
+/// is a long lens on one big subject, not a wide sky, and a longer lens is
+/// also what makes a distant bat cross more of the frame per metre of real
+/// flight - useful when the whole point is a slow, legible crossing.
+const FOV: f32 = 60.0;
 
 const SUPERSAMPLE: usize = 3;
 
-/// Sky bands, dark end to horizon.
-const SKY: usize = 10;
-/// Sky bands plus the moon's halo and its disc.
-const BANDS: usize = SKY + 2;
-/// Levels of bat over sky. Small on purpose: with a moon and a sky behind
-/// them, the ink axis is only ever anti-aliasing a thin wing edge, never
-/// carrying a depth cue the way flock's does on true black.
-const INK: usize = 6;
+/// How many moments across each frame's interval are rendered and averaged
+/// for the bats' motion blur (the moon does not move within a frame, so only
+/// the bats' coverage is resampled). Same reasoning and the same number as
+/// `skeletons` (card 328's Log, 2026-09-26): the owner lifted the
+/// compute-cost limit and asked by name for motion blur; four moments is
+/// enough that a wingbeat leaves a real, soft trail rather than a stutter.
+const BLUR_SAMPLES: usize = 4;
+
+/// The background/moon brightness ramp, quantised into this many steps -
+/// generous, since the moon's own terminator and craters are the patch's
+/// main subject and a coarse ramp would band across them.
+const BANDS: usize = 30;
+/// Levels of bat opacity over the background. Small on purpose, same
+/// reasoning as the first pass: the ink axis is mostly anti-aliasing a thin
+/// wing edge, never carrying its own depth cue.
+const INK: usize = 8;
 
 /// A colour as (lightness, chroma, hue in degrees).
 type Lch = (f32, f32, f32);
@@ -100,7 +105,7 @@ fn mix(a: Lch, b: Lch, t: f32) -> Lch {
 
 /// Below this the panel has a handful of levels and a colour cast; true black
 /// instead, same reasoning as flock's `FLOOR_L`.
-const FLOOR_L: f32 = 0.08;
+const FLOOR_L: f32 = 0.06;
 
 fn paint((l, c, h): Lch) -> Rgb {
     if l < FLOOR_L {
@@ -110,77 +115,70 @@ fn paint((l, c, h): Lch) -> Rgb {
     }
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
+/// "Well below full white, luxurious rather than flat" (card 319's picture):
+/// the brightest the ramp ever reaches, at the moon's own sub-solar point.
+const MAX_MOON_L: f32 = 0.80;
 
-/// The sky ramp, the moon's colour, and the bat's own silhouette colour, all
-/// for one scheme at one `dusk` position.
+/// Where [`Moon::value`]'s own scale stops being "only the halo" and starts
+/// being "the disc" in earnest - see [`band_colour`]'s doc for why the ramp
+/// treats the two halves differently.
+const DISC_U: f32 = 0.10;
+
+/// The background ramp at `u` (`0..1`, [`moon::Moon::value`]'s own scale):
+/// true black off the moon, up through the halo, up through the moon's own
+/// shaded, textured surface.
 ///
-/// `moon_elev` (degrees above the horizon) decides the moon's *own* colour
-/// independently of the sky - "harvest orange low, bone white higher"
-/// (card 313's picture) - because a low moon is seen through more air
-/// whatever the sky around it is doing.
-fn scheme(which: usize, dusk: f32, moon_elev: f32) -> ([Lch; BANDS], Lch) {
-    let night = which == 1;
-    let mut bands = [(0.0, 0.0, 0.0); BANDS];
-
-    // The horizon and the top of the ramp, at this `dusk`. Only the dusk
-    // scheme actually moves through hue with `dusk`; the night sky stays
-    // near-black throughout, since there is nothing left in it to move.
-    let (top, horizon): (Lch, Lch) = if night {
-        // The horizon needs enough lift over true black that the tree line
-        // (literal black, drawn as a flat matte) still reads as a shape cut
-        // out of *something* - a night sky that goes all the way to zero
-        // right down to the ground leaves nothing for the silhouette to sit
-        // against.
-        ((0.012, 0.015, 250.0), (0.20, 0.04, mix_hue(255.0, 235.0, dusk)))
-    } else {
-        (
-            (lerp(0.05, 0.02, dusk), lerp(0.035, 0.02, dusk), mix_hue(268.0, 250.0, dusk)),
-            // Hue wraps, and the short way from a warm horizon (28) to a
-            // violet one (275) runs down through red and magenta, not up
-            // through yellow and green - `mix_hue` takes the short way,
-            // where a plain `lerp` here would paint the whole colony an
-            // implausible green partway through the evening.
-            (lerp(0.50, 0.27, dusk), lerp(0.17, 0.10, dusk), mix_hue(58.0, 275.0, dusk)),
-        )
-    };
-    for (b, band) in bands.iter_mut().enumerate().take(SKY) {
-        let u = b as f32 / (SKY - 1) as f32;
-        let l = top.0 + (horizon.0 - top.0) * u.powf(0.85);
-        let c = top.1 + (horizon.1 - top.1) * u;
-        let h = mix_hue(top.2, horizon.2, u);
-        *band = (l, c, h);
-    }
-
-    // The moon: its own ramp from harvest orange to bone white, by elevation
-    // alone, not by the sky's hue - a low moon looks the same colour whatever
-    // the sky around it is doing.
-    let mt = smoothstep(6.0, 40.0, moon_elev);
-    let (ml, mc, mh) = (lerp(0.80, 0.975, mt), lerp(0.11, 0.02, mt), mix_hue(36.0, 220.0, mt));
-    bands[SKY] = (ml * 0.55, mc * 0.55, mh);
-    bands[SKY + 1] = (ml, mc, mh);
-
-    let bat = if night {
-        (0.84, 0.03, 222.0)
-    } else {
-        (0.045, 0.035, horizon.2)
-    };
-    (bands, bat)
+/// Above [`DISC_U`], `l` is a cube root of `u` (OKLCH lightness is roughly
+/// linear brightness cubed for a neutral colour - the same reasoning
+/// `skeletons::box_scene::bands` uses), which is what keeps the terminator
+/// and the craters' own shading from crushing into black before they have
+/// had their say. Below it - which is only ever the halo, and the smooth
+/// blend right at the limb - that same cube root would do the opposite of
+/// what a "faint halo" (card 319's picture) asks for: it stretches a tiny,
+/// physically near-zero glow into a lightness a person can still see, so a
+/// halo tuned to fade out within a few degrees of the limb instead lingered
+/// as a visible grey smear across a third of the panel (found by rendering
+/// and looking, not by inspection - the bug the "read your own renders"
+/// rule exists for). Below `DISC_U`, `l` is plain linear in `u` instead,
+/// continuous with the cube-root curve at the seam, so a faint glow actually
+/// reaches true black a short, honest distance from where it started.
+fn band_colour(u: f32, color: f32) -> Lch {
+    let u = u.clamp(0.0, 1.0);
+    let seam = MAX_MOON_L * DISC_U.cbrt();
+    let l = if u >= DISC_U { MAX_MOON_L * u.cbrt() } else { seam * (u / DISC_U) };
+    let h = mix_hue(48.0, 228.0, smoothstep(0.04, 0.6, u));
+    let c = color * (0.015 + 0.05 * smoothstep(0.0, 0.7, u));
+    (l, c, h)
 }
 
-/// `BANDS` x `INK` colours, plus one extra entry (index 0) for the tree line,
-/// which is drawn as a flat silhouette rather than through the sky/ink
-/// palette - see the module doc for why a dithered edge between it and the
-/// sky was not worth the complexity for a shape this size.
-fn palette(bands: &[Lch; BANDS], bat: Lch, colour: f32) -> Vec<Rgb> {
-    let desat = |c: Lch| (c.0, c.1 * colour, c.2);
-    let mut out = Vec::with_capacity(1 + BANDS * INK);
-    out.push(Rgb::BLACK);
-    for band in bands {
+/// What a bat's own surface looks like when it is fully opaque at background
+/// level `u`: a dark silhouette once the background itself is bright (over
+/// the moon's own disc - "dark silhouette when fully in front of the moon's
+/// disc", card 319's picture) fading to a pale, moonlit grey once the
+/// background is near black. The same `u` this pixel's background band was
+/// quantised from, so the flip from silhouette to pale happens exactly where
+/// the bat actually crosses the limb, not by a scene-wide switch the first
+/// pass needed (its "dusk" vs "night" `scheme` choice).
+fn bat_material(u: f32, color: f32) -> Lch {
+    let silhouette: Lch = (0.045, 0.0, 0.0);
+    let moonlit: Lch = (0.70, color * 0.045, 205.0);
+    // Steep on purpose: a bat is opaque, so it wants to read as a *clear*
+    // silhouette as soon as the background behind it is doing any real work
+    // (past the halo and the terminator's own dim shadow side), not a washy
+    // half-blend the first render revealed - a bat over the lit two thirds
+    // of the disc barely darker than the disc itself, easy to miss entirely
+    // among the crater texture already varying every dot around it.
+    mix(moonlit, silhouette, smoothstep(0.05, 0.16, u.clamp(0.0, 1.0)))
+}
+
+fn build_palette(color: f32) -> Vec<Rgb> {
+    let mut out = Vec::with_capacity(BANDS * INK);
+    for i in 0..BANDS {
+        let u = i as f32 / (BANDS - 1) as f32;
+        let band = band_colour(u, color);
+        let bat = bat_material(u, color);
         for k in 0..INK {
-            out.push(paint(desat(mix(*band, bat, k as f32 / (INK - 1) as f32))));
+            out.push(paint(mix(band, bat, k as f32 / (INK - 1) as f32)));
         }
     }
     out
@@ -190,7 +188,7 @@ fn palette(bands: &[Lch; BANDS], bat: Lch, colour: f32) -> Vec<Rgb> {
 // Copied from `flock::Coverage` (card 313's Log): the same anti-aliased
 // stroke/triangle rasteriser, unmodified in substance. Flock has to keep
 // rendering byte-identically, so this is a copy rather than a shared module -
-// see the file doc for the follow-up card that would fix that properly.
+// see the module doc for the follow-up card that would fix that properly.
 // --------------------------------------------------------------------------
 
 struct Coverage {
@@ -284,20 +282,13 @@ impl Coverage {
 
 // --------------------------------------------------------------------------
 
-/// The fixed camera: on the ground, looking up and out. Built once from the
-/// seed and never moved (unlike flock's, which flies).
+/// The fixed camera: level, on the ground or a stand, looking at the moon.
+/// Built once from the seed and never moved.
 struct View {
     right: V3,
     up: V3,
     fwd: V3,
     focal: f32,
-    moon: V3,
-    /// The moon disc's cosine radius (outer edge) and where it reaches full
-    /// strength (inner edge), and how sharply the halo falls off outside it -
-    /// all rebuilt each frame from the `moon` parameter.
-    disc_lo: f32,
-    disc_hi: f32,
-    halo_k: f32,
 }
 
 impl View {
@@ -315,26 +306,6 @@ impl View {
         let py = (0.5 * H as f32 - y) / self.focal;
         self.fwd.add(self.right.scale(px)).add(self.up.scale(py))
     }
-
-    /// Where on the sky ramp this direction falls, plus the moon's glow.
-    fn band_at(&self, dir: V3) -> f32 {
-        let inv = 1.0 / dir.len().max(1e-6);
-        let sine = dir.y * inv;
-        let warp = |a: f32| (a * a * a).sqrt().sqrt();
-        let a = sine.abs().min(1.0);
-        let v = if sine >= 0.0 {
-            1.0 - warp(a)
-        } else {
-            ((1.0 - 1.22 * warp(a)) * 0.88 - 0.05).max(0.0)
-        };
-        let sky = v * (SKY - 1) as f32;
-
-        let cos = dir.dot(self.moon) * inv;
-        let disc = smoothstep(self.disc_lo, self.disc_hi, cos);
-        let halo = 0.55 * (-self.halo_k * (1.0 - cos).max(0.0)).exp();
-        let glow = (disc + halo * (1.0 - disc)).clamp(0.0, 1.0);
-        sky + glow * ((BANDS - 1) as f32 - sky)
-    }
 }
 
 // --------------------------------------------------------------------------
@@ -343,89 +314,57 @@ struct Bats {
     sim: Sim,
     warped: f64,
     steps: i64,
-    /// The camera never moves, but it lives in `sim` (which needs it for the
-    /// spherical target sampling) rather than duplicated here - `sim.cam()`
-    /// is the one copy.
-    moon: V3,
-    moon_elev: f32,
-    tree: Vec<f32>,
+    moon: Moon,
     seen: usize,
-    dusk_seed: f32,
+    /// Every simulated state from roughly the last [`BLUR_WINDOW`] sim-seconds,
+    /// oldest first, persisted *across* render calls rather than rebuilt
+    /// inside one - see [`Bats::advance`]'s doc for why that persistence is
+    /// what makes the motion blur frame-rate independent.
+    history: VecDeque<(f64, Vec<Bat>)>,
 }
 
 /// Longest catch-up after a stall, in fixed steps - same reasoning as flock's
 /// `CATCHUP`: a paused studio resumes hunting, it does not fast-forward.
 const CATCHUP: i64 = 240;
 
-const HAZE_DUSK: f32 = 0.92;
-const HAZE_NIGHT: f32 = 0.38;
+/// How far back the motion blur looks, in *sim* seconds - a fixed quantity
+/// of simulated time, not of wall-clock frame time. `sim::Sim::step` always
+/// advances its own clock by exactly [`STEP`] regardless of `pace` or the
+/// render's frame rate (pace changes how many steps a render call takes,
+/// never what one step means), so a window measured in sim-seconds is
+/// automatically the same physical stretch of flight at 30 fps, 60 fps, or
+/// any `pace` - which is what keeps `the_flight_does_not_depend_on_the_frame_rate`
+/// true with blur turned on. Two steps: about one nominal video frame.
+const BLUR_WINDOW: f64 = 2.0 * STEP as f64;
+/// How many of [`Bats::history`]'s entries to keep. Only the last two or
+/// three are ever read (`BLUR_WINDOW`'s worth), but a generous cushion costs
+/// nothing (a `Vec<Bat>` of a handful of bats) and comfortably covers a
+/// stall's catch-up taking many steps in one render call.
+const HISTORY_CAP: usize = 16;
 
 fn make(seed: u64) -> Box<dyn Patch> {
     let mut rng = crate::rng::Rng::new(seed ^ 0x00ba_751e);
-    // The camera's own pitch: low enough that the horizon sits near the
-    // bottom of the frame and the tree line has a few rows to stand in.
-    let elev = rng.range(13.0, 21.0_f32).to_radians();
-    let fwd = v3(0.0, elev.sin(), elev.cos());
     let world_up = v3(0.0, 1.0, 0.0);
+    // A level camera: there is no ground or horizon left to pitch it
+    // against, only the moon, so its own placement carries the composition.
+    let fwd = v3(0.0, 0.0, 1.0);
     let right = world_up.cross(fwd).unit_or(v3(1.0, 0.0, 0.0));
     let up = fwd.cross(right).unit_or(world_up);
 
-    let moon_az = rng.range(-18.0_f32, 18.0).to_radians();
-    let moon_el = rng.range(9.0_f32, 32.0).to_radians();
+    // The moon, placed so it usually sits well inside the frame but is not
+    // glued to the centre - "it may sit partly off an edge if that composes
+    // better" (card 319's picture).
+    let moon_az = rng.range(-14.0_f32, 14.0).to_radians();
+    let moon_el = rng.range(-6.0_f32, 9.0).to_radians();
     let (sa, ca) = moon_az.sin_cos();
     let (se, ce) = moon_el.sin_cos();
-    let moon = fwd.scale(ca * ce).add(right.scale(sa * ce)).add(up.scale(se));
+    let moon_dir = fwd.scale(ca * ce).add(right.scale(sa * ce)).add(up.scale(se)).unit_or(fwd);
+    let moon = Moon::new(&mut rng, moon_dir);
 
-    let (tree, gap) = build_tree(&mut rng);
-
-    // The roost point the stream pours from: near the gap, at the top of the
-    // tree line there, a little way out - a real depth, not a screen
-    // coordinate, so the flight can fly towards it.
-    let edge_row = H as f32 - tree[gap] + 0.5;
-    let focal = 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan();
-    // Only `ray()` is used here, so the moon/disc fields are placeholders -
-    // this probe is never asked about the sky.
-    let probe = View { right, up, fwd, focal, moon, disc_lo: 0.0, disc_hi: 0.0, halo_k: 0.0 };
-    let roost = probe.ray(gap as f32 + 0.5, edge_row).unit_or(fwd).scale(9.0);
-
-    let dusk_seed = rng.range(0.0, 1.0);
-    Box::new(Bats {
-        sim: Sim::new(seed, fwd, right, up, roost, 16),
-        warped: 0.0,
-        steps: 0,
-        moon,
-        moon_elev: moon_el.to_degrees(),
-        tree,
-        seen: 0,
-        dusk_seed,
-    })
-}
-
-/// A jagged tree/roofline silhouette across the bottom of the frame, from the
-/// seed, with one gap - a real break in the line, wide enough to read as a
-/// gap and not a notch - for the colony to pour out of.
-fn build_tree(rng: &mut crate::rng::Rng) -> (Vec<f32>, usize) {
-    let mut h = vec![0.0_f32; W];
-    let mut cur = rng.range(2.2, 4.0);
-    for v in h.iter_mut() {
-        cur += rng.range(-0.85, 0.85);
-        if rng.f32() < 0.08 {
-            cur += rng.range(1.0, 2.2);
-        }
-        cur = cur.clamp(1.0, 6.5);
-        *v = cur;
-    }
-    let gap = rng.range(12.0, (W - 13) as f32) as usize;
-    let width = 5_i32;
-    for (x, v) in h.iter_mut().enumerate() {
-        let dx = x as i32 - gap as i32;
-        if dx.abs() <= width * 2 {
-            let t = (dx as f32 / (width * 2) as f32).clamp(-1.0, 1.0);
-            let dip = (1.0 - t * t).max(0.0);
-            *v = (*v - dip * 2.6).max(0.6);
-        }
-    }
-    (h, gap)
+    let sim = Sim::new(seed, fwd, right, up, 3);
+    let mut history = VecDeque::with_capacity(HISTORY_CAP);
+    history.push_back((sim.t(), sim.bats.clone()));
+    Box::new(Bats { sim, warped: 0.0, steps: 0, moon, seen: 0, history })
 }
 
 impl Bats {
@@ -439,6 +378,12 @@ impl Bats {
         }
     }
 
+    /// Steps the flight up to where this frame's clock has reached, appending
+    /// every simulated state it passes through to [`Bats::history`] - which
+    /// persists across calls, unlike a per-frame trace would, so the motion
+    /// blur can always look back a fixed [`BLUR_WINDOW`] of *sim* time even
+    /// when this particular render call took only one step or none (a high
+    /// frame rate, or a pause).
     fn advance(&mut self, ctx: &Ctx, tune: &Tuning) {
         self.warped += ctx.dt.clamp(0.0, 0.25) * f64::from(ctx.get("pace"));
         let target = (self.warped / f64::from(STEP) + 1e-6).floor() as i64;
@@ -446,16 +391,42 @@ impl Bats {
         while self.steps < target {
             self.sim.step(tune, STEP);
             self.steps += 1;
+            self.history.push_back((self.sim.t(), self.sim.bats.clone()));
+            if self.history.len() > HISTORY_CAP {
+                self.history.pop_front();
+            }
         }
     }
+}
+
+/// A bat state part-way through [`Bats::history`], at simulated time `t`
+/// (linear interpolation between the two bracketing recorded states - see
+/// `Bat::interpolate`'s doc for why that is a sound way to draw motion blur
+/// on top of a fixed-timestep simulation without re-simulating anything).
+/// `t` before the earliest recorded state clamps to it rather than
+/// extrapolating - only reachable right at start-up, before `history` has
+/// `BLUR_WINDOW`'s worth behind it.
+fn bats_at(history: &[(f64, Vec<Bat>)], t: f64) -> Vec<Bat> {
+    if history.len() < 2 {
+        return history[0].1.clone();
+    }
+    let mut idx = 1;
+    while idx < history.len() - 1 && history[idx].0 < t {
+        idx += 1;
+    }
+    let (t0, a) = &history[idx - 1];
+    let (t1, b) = &history[idx];
+    let span = (t1 - t0).max(1e-9);
+    let frac = ((t - t0) / span).clamp(0.0, 1.0) as f32;
+    a.iter().zip(b.iter()).map(|(pa, pb)| Bat::interpolate(pa, pb, frac)).collect()
 }
 
 impl Patch for Bats {
     fn playing(&self) -> Option<Playing> {
         Some(Playing {
             title: format!("{} bats", self.sim.bats.len()),
-            detail: if self.sim.pouring() {
-                format!("{} in frame, pouring out", self.seen)
+            detail: if self.sim.grouping() {
+                format!("{} in frame, a group streaming past", self.seen)
             } else {
                 format!("{} in frame, nearest {:.1} m", self.seen, self.sim.nearest())
             },
@@ -468,58 +439,64 @@ impl Patch for Bats {
         let tune = Bats::tuning(ctx);
         self.sim.resize(ctx.get("bats") as usize);
         self.advance(ctx, &tune);
+        let history: &[(f64, Vec<Bat>)] = self.history.make_contiguous();
 
-        // `dusk_seed` gives every seed a slightly different starting point on
-        // the ramp, so "another one like this" is a different evening and
-        // not just a different colony; `cycle` (0 holds it still) drifts it
-        // on from there, a full pass of the ramp every four minutes at 1.
-        let dusk = (ctx.get("dusk") + self.dusk_seed * 0.12 + ctx.get("cycle") * (ctx.t / 240.0) as f32)
-            .rem_euclid(1.0);
-        let which = ctx.get("scheme") as usize;
-        let (bands, bat_colour) = scheme(which, dusk, self.moon_elev);
-        let colours = palette(&bands, bat_colour, ctx.get("color"));
+        let color = ctx.get("color");
+        let palette = build_palette(color);
 
-        let moon_size = ctx.get("moon").max(0.05);
-        let disc_lo = 1.0 - (1.0 - 0.998_2) * moon_size;
-        let disc_hi = disc_lo + 0.0006 * moon_size;
-        let halo_k = 50.0 / moon_size;
         let focal = 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan();
         let (fwd, right, up) = self.sim.cam();
-        let view = View { right, up, fwd, focal, moon: self.moon, disc_lo, disc_hi, halo_k };
+        let view = View { right, up, fwd, focal };
 
-        let ss = SUPERSAMPLE;
-        let mut cover = Coverage::new(ss);
-        let night = which == 1;
+        let moon_size = ctx.get("moon").max(0.05);
+        // At `moon` 1.0 the disc is about two fifths of the panel's height -
+        // "a third to half the panel height or more" (card 319's picture).
+        const ANG_R_BASE: f32 = 7.0;
+        let ang_r = (ANG_R_BASE * moon_size).to_radians();
+        let phase = ctx.get("phase").rem_euclid(1.0);
+        let light = self.moon.light_for(phase);
+
         let size = ctx.get("size");
-        self.seen = draw_bats(&self.sim, &view, &mut cover, night, size);
+        let ss = SUPERSAMPLE;
+        let t1 = self.sim.t();
+        let t0 = t1 - BLUR_WINDOW;
+        let mut last_seen = 0;
+        let covers: Vec<Coverage> = (0..BLUR_SAMPLES)
+            .map(|i| {
+                let frac = (i as f64 + 0.5) / BLUR_SAMPLES as f64;
+                let t = t0 + (t1 - t0) * frac;
+                let bats = bats_at(history, t);
+                let mut cov = Coverage::new(ss);
+                last_seen = draw_bats(&bats, &view, &mut cov, light, size);
+                cov
+            })
+            .collect();
+        self.seen = last_seen;
 
+        let band_dither = Dither::Bayer4;
         let ink_dither = Dither::BlueNoise;
-        let sky_dither = Dither::Bayer4;
         let indices = (0..N)
             .map(|i| {
                 let (x, y) = (i % W, i / W);
-                if H as f32 - self.tree[x] <= y as f32 + 0.5 {
-                    return 0_u8;
-                }
-                let sky_bias = sky_dither.threshold(x, y);
-                let mut band = 0.0;
+                let mut u = 0.0;
                 for j in 0..ss {
                     for k in 0..ss {
                         let fx = x as f32 + (k as f32 + 0.5) / ss as f32;
                         let fy = y as f32 + (j as f32 + 0.5) / ss as f32;
-                        band += view.band_at(view.ray(fx, fy));
+                        u += self.moon.value(view.ray(fx, fy), ang_r, light);
                     }
                 }
-                band /= (ss * ss) as f32;
-                let b = (band + sky_bias).round().clamp(0.0, (BANDS - 1) as f32) as usize;
-                let bias = ink_dither.threshold(x, y);
-                let ink = cover.pixel(x, y) * (INK - 1) as f32;
-                let k = (ink + bias).round().clamp(0.0, (INK - 1) as f32) as usize;
-                (1 + b * INK + k) as u8
+                u /= (ss * ss) as f32;
+                let band_bias = band_dither.threshold(x, y);
+                let b = (u * (BANDS - 1) as f32 + band_bias).round().clamp(0.0, (BANDS - 1) as f32) as usize;
+                let ink = covers.iter().map(|c| c.pixel(x, y)).sum::<f32>() / BLUR_SAMPLES as f32;
+                let ink_bias = ink_dither.threshold(x, y);
+                let k = (ink * (INK - 1) as f32 + ink_bias).round().clamp(0.0, (INK - 1) as f32) as usize;
+                (b * INK + k) as u8
             })
             .collect();
 
-        Frame::Indexed { palette: colours, indices }
+        Frame::Indexed { palette, indices }
     }
 }
 
@@ -529,11 +506,27 @@ impl Patch for Bats {
 /// is allowed to grow in earlier than flock's birds do.
 const AREA: (f32, f32) = (3.0, 7.0);
 
-/// Every bat, far to near. Returns how many landed on the panel.
-fn draw_bats(sim: &Sim, view: &View, cover: &mut Coverage, night: bool, size: f32) -> usize {
-    let floor = if night { HAZE_NIGHT } else { HAZE_DUSK };
-    let mut order: Vec<(f32, usize)> = Vec::with_capacity(sim.bats.len());
-    for (i, b) in sim.bats.iter().enumerate() {
+/// A bat's base opacity never falls under this, however far off it is - a
+/// distant bat is still a small flutter, not a smudge merged into the black.
+const HAZE_FLOOR: f32 = 0.42;
+
+/// The wing membrane is drawn a little less opaque than the body: it is thin
+/// skin over finger bones, not solid like the body and skull, and letting a
+/// touch of whatever is behind it show through (background or moon alike)
+/// is this patch's stand-in for the card's "thin translucent glow where the
+/// membrane is backlit against the moon" - most legible exactly where that
+/// matters, over the bright disc, without needing a second material lane in
+/// an already fairly large palette.
+const WING_OPACITY: f32 = 0.86;
+
+/// Every bat, far to near, at one instant. Returns how many landed on the
+/// panel. `light` is the moon's current sun direction (see
+/// [`Moon::light_for`]): a wing's own facing against it is "moonlight
+/// catching the membrane's upper surface on the upstroke" (card 319's
+/// picture).
+fn draw_bats(bats: &[Bat], view: &View, cover: &mut Coverage, light: V3, size: f32) -> usize {
+    let mut order: Vec<(f32, usize)> = Vec::with_capacity(bats.len());
+    for (i, b) in bats.iter().enumerate() {
         if let Some((_, _, z)) = view.project(b.pos) {
             order.push((z, i));
         }
@@ -543,11 +536,11 @@ fn draw_bats(sim: &Sim, view: &View, cover: &mut Coverage, night: bool, size: f3
     let span_m = sim::SPAN * size;
     let mut seen = 0;
     for (z, i) in order {
-        let bat = sim.bats[i];
+        let bat = bats[i];
         let span = span_m * view.focal / z;
         let pose = wing::pose(bat, span_m, smoothstep(AREA.0, AREA.1, span));
 
-        let haze = floor + (1.0 - floor) * (-(z / 13.0).powf(1.5)).exp();
+        let haze = HAZE_FLOOR + (1.0 - HAZE_FLOOR) * (-(z / 13.0).powf(1.5)).exp();
         // Close-up fade, same reasoning as flock: a bat that swoops closer
         // than the camera's own personal space fades rather than filling the
         // panel.
@@ -565,13 +558,16 @@ fn draw_bats(sim: &Sim, view: &View, cover: &mut Coverage, night: bool, size: f3
         let Some(body) = pose.body.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else { continue };
         seen += 1;
 
-        let to_bat = pose.body[0];
-        let away = 1.0 / to_bat.len().max(1e-6);
         for w in &pose.wings {
             let Some(spar) = w.spar.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else { continue };
             let Some(trail) = w.trail.iter().map(|p| flat(*p)).collect::<Option<Vec<_>>>() else { continue };
-            let facing = (to_bat.dot(w.normal) * away).clamp(-1.0, 1.0);
-            let lit = (ink * (1.0 + if night { -0.14 } else { 0.14 } * facing)).min(1.0);
+            // `facing` is how squarely the membrane's own upper face is
+            // turned towards the sun - a real wingbeat sweeps this from lit
+            // (the upstroke's upper surface) to shadowed (the downstroke's
+            // underside) every cycle.
+            let facing = w.normal.dot(light).clamp(-1.0, 1.0);
+            let sheen = 0.5 + 0.5 * facing;
+            let lit = (ink * WING_OPACITY * (0.78 + 0.4 * sheen)).min(1.0);
             // Fanned from the shoulder across the scalloped trailing edge -
             // three small triangles instead of one, so each notch
             // anti-aliases on its own.
@@ -583,12 +579,17 @@ fn draw_bats(sim: &Sim, view: &View, cover: &mut Coverage, night: bool, size: f3
             // These two strokes are what a distant bat actually is: at low
             // LOD the wing surface has no chord (see `wing::pose`) and every
             // triangle above is degenerate, so the leading-edge spar is the
-            // whole picture. It needs the same kind of floor flock's wing
-            // strokes have (`(span * 0.13).clamp(0.38, 1.05)`) - without one,
-            // a two-LED bat's stroke width rounds to a fraction of a pixel
-            // and never reaches the coverage buffer at all.
+            // whole picture. It needs a floor (flock's wing strokes have the
+            // same kind: `(span * 0.13).clamp(0.38, 1.05)`) - without one, a
+            // two-LED bat's stroke width rounds to a fraction of a pixel and
+            // never reaches the coverage buffer at all.
             cover.stroke(spar[0], spar[1], (span * 0.11).clamp(0.36, 0.85), lit);
             cover.stroke(spar[1], spar[2], (span * 0.08).clamp(0.32, 0.65), lit);
+            if let Some([a, b]) = w.thumb {
+                if let (Some(a), Some(b)) = (flat(a), flat(b)) {
+                    cover.stroke(a, b, (span * 0.03).clamp(0.28, 0.5), ink);
+                }
+            }
         }
         let body_w = (span * 0.11).clamp(0.40, 1.0);
         cover.stroke(body[0], body[1], body_w, ink);
