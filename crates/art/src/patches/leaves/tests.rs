@@ -219,3 +219,34 @@ fn ten_minutes_does_not_repeat_itself() {
 fn leaves_is_registered() {
     assert!(crate::patch::find("leaves").is_some());
 }
+
+/// Not an acceptance check - a one-off dump of a single leaf's flight, gated
+/// behind an env var so it never runs in an ordinary `cargo test`, for making
+/// the card's trail render (`LEAF_TRAIL=1 cargo test -p screeny-art --
+/// dump_one_leaf_trail --nocapture`). Left in rather than a throwaway script
+/// outside the crate so it exercises the same `Leaf::step` the patch does.
+#[test]
+fn dump_one_leaf_trail_for_the_card_render() {
+    if std::env::var_os("LEAF_TRAIL").is_none() {
+        return;
+    }
+    let wind = wind::Wind::new(3);
+    let mut leaf = Leaf {
+        pos: (10.0, -2.0),
+        vel: (0.0, 0.0),
+        theta: 0.0,
+        omega: 0.0,
+        build: Build { size: 1.0, inertia: 1.0, hue: 0 },
+        aloft: 0.0,
+        shimmer: 0.5,
+    };
+    let mut t = 0.0_f32;
+    println!("t,x,y,theta,shimmer");
+    for i in 0..(9.0 / STEP) as usize {
+        leaf.step(&wind, t, 0.6, 0.5, 1.0);
+        t += STEP;
+        if i % 3 == 0 {
+            println!("{t},{},{},{},{}", leaf.pos.0, leaf.pos.1, leaf.theta, leaf.presented());
+        }
+    }
+}

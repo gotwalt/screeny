@@ -98,10 +98,12 @@ const MAX_ALOFT: f32 = 45.0;
 const PILE_MAX_ROWS: f32 = 5.0;
 /// One landed leaf's thickness, in rows, before its own `size` scales it.
 const LEAF_THICKNESS: f32 = 0.42;
-/// How fast the pile erodes on its own, rows per second at `pile = 1.0`'s
-/// cap: slow enough to hold a recognisable pile for a couple of minutes,
-/// fast enough that a run left alone for a long time is not a still life.
-const DRAIN_ROWS_PER_SEC: f32 = 0.03;
+/// How fast the pile erodes on its own, rows per second: slow enough that a
+/// column collecting a few leaves holds a recognisable pile for minutes,
+/// fast enough that a run left alone for a long time is not a still life. The
+/// cap itself (`PileCol::add`, not this) is what stops the pile ever filling
+/// the screen - drain is purely "it does not just sit there forever".
+const DRAIN_ROWS_PER_SEC: f32 = 0.006;
 
 /// How often the gust-relaunch condition is even checked, and how long after
 /// one relaunch before another may fire - so a sustained strong wind produces
@@ -399,13 +401,31 @@ impl LeavesPatch {
 
             let col = leaf.pos.0.round().clamp(0.0, (W - 1) as f32) as usize;
             let surface = H as f32 - self.pile[col].height();
-            let landed = leaf.vel.1 > 0.0 && leaf.pos.1 >= surface;
+            // The `aloft` guard (rather than requiring `vel.1 > 0.0`) is what
+            // stops a leaf just relaunched from a gust - spawned exactly at
+            // the surface, moving up - from "landing" again on its very next
+            // step; a settling leaf's vertical speed can wobble near zero or
+            // even briefly negative from lift as it flutters down, and that
+            // is still a landing, not a bounce.
+            let landed = leaf.pos.1 >= surface && leaf.aloft > 0.15;
             let off_side = leaf.pos.0 < -4.0 || leaf.pos.0 > W as f32 + 4.0;
             let stuck = leaf.aloft > MAX_ALOFT;
 
             if landed {
                 let tier = u8::from(leaf.pos.1 > H as f32 * FALL_AGE_FRAC);
-                self.pile[col].add(LEAF_THICKNESS * leaf.build.size, leaf.build.hue, tier, PILE_MAX_ROWS * pile_cap);
+                let hue = leaf.build.hue;
+                let cap = PILE_MAX_ROWS * pile_cap;
+                let total = LEAF_THICKNESS * leaf.build.size;
+                // A landed leaf spreads a little to either side instead of
+                // spiking a single column, so a drift reads as a drift and
+                // not a picket fence.
+                self.pile[col].add(total * 0.6, hue, tier, cap);
+                if col > 0 {
+                    self.pile[col - 1].add(total * 0.2, hue, tier, cap);
+                }
+                if col + 1 < W {
+                    self.pile[col + 1].add(total * 0.2, hue, tier, cap);
+                }
                 self.respawn(i, wind_mean);
             } else if off_side || stuck {
                 self.respawn(i, wind_mean);

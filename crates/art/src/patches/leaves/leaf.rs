@@ -55,7 +55,7 @@ pub const STEP: f32 = 1.0 / 90.0;
 /// there is no real leaf mass or air density here - chosen so a leaf crosses
 /// the panel's 32 rows in a handful of seconds once drag limits its fall,
 /// which is the "ambient, unhurried" pace the brief asks for.
-const GRAVITY: f32 = 34.0;
+const GRAVITY: f32 = 8.0;
 
 /// Flat-plate drag coefficients, edge-on and broadside (dimensionless,
 /// standard shapes for a thin plate; see e.g. Hoerner's drag data).
@@ -75,8 +75,8 @@ const AERO_K: f32 = 0.26;
 /// braked harder) and a small constant floor so a leaf becalmed in dead air
 /// still stops spinning rather than coasting forever.
 const TORQUE_K: f32 = 3.4;
-const DAMP_AERO: f32 = 0.95;
-const DAMP_FLOOR: f32 = 0.6;
+const DAMP_AERO: f32 = 0.15;
+const DAMP_FLOOR: f32 = 0.08;
 
 /// A leaf's own, unchanging build: how big it is drawn and how it responds to
 /// the torque law, both picked once at spawn from the seed so "another leaf"
