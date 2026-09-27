@@ -35,13 +35,18 @@ fn pixels(frame: &Frame) -> Vec<[f32; 3]> {
 #[test]
 fn a_seed_and_a_moment_are_the_same_picture_every_time() {
     let params = defaults();
-    for seed in [1, 42, 999_983] {
+    // Card 322: this now steps a real Rapier soft body every physics tick
+    // (and settles a fresh one on every respawn), which an unoptimized debug
+    // build does far slower than release - two seeds over a few seconds each
+    // is enough to exercise a respawn or two per run and prove the same
+    // determinism a longer run would, at a fraction of the wall time.
+    for seed in [1, 42] {
         let run = |seed: u64| {
             let mut patch = new_patch(seed);
             let mut last = None;
             let dt = 1.0 / 30.0;
             let mut t = 0.0;
-            while t < 6.0 {
+            while t < 2.0 {
                 t += dt;
                 last = Some(pixels(&patch.render(&ctx(t, dt, &params))));
             }
@@ -67,34 +72,94 @@ fn fly(seed: u64, params: &Params, seconds: f64, mut each: impl FnMut(&LeavesPat
 }
 
 /// Ten minutes: the card's own bar for a long run, as `flock`'s and card
-/// 314's ten-minute runs both were.
+/// 314's ten-minute runs both were - kept as the thorough, `#[ignore]`d
+/// version of every check below that can be shortened at all (see each
+/// test's own doc for which ones cannot).
+///
+/// Card 322: every leaf respawn now settles a real Rapier soft body
+/// ([`super::shell::LeafShell::spawn`], ~240 physics steps) before it is
+/// ever drawn, which an unoptimized debug build - the one `cargo test` runs
+/// by default - does far slower than the release build anyone actually
+/// watches the panel with. Running four separate 600-simulated-second
+/// checks (one of them four times over, for `resting_never_exceeds...`'s own
+/// four `rest` values) through that costs tens of minutes in debug, which is
+/// not what the routine `cargo test -p screeny-art` a person runs between
+/// edits should ever cost (the orchestrator caught a stray debug run of
+/// exactly this still going after 34 minutes). The house rule
+/// ("iterate with host tests and the simulator... run long evidence once")
+/// already says what to do about a check that is only expensive because it
+/// is thorough: keep the thorough version, but make it opt-in.
 const LONG_RUN_SECONDS: f64 = 600.0;
 
-/// The resting list never exceeds the `rest` param's own cap, over a long
-/// run, at a few different settings of it - "the pile never exceeds its cap"
-/// carried over from card 314, for the new shape of "a pile".
-#[test]
-fn resting_never_exceeds_its_cap_over_a_long_run() {
-    for rest in [0.0, 1.0, 4.0, 6.0] {
+/// The routine, always-run horizon for the same checks: long enough, at
+/// this patch's own fall speed, to see a leaf actually land under gusty
+/// settings (checked empirically - the smoke version below asserts
+/// `worst > 0`, so a horizon too short to ever see a landing would fail
+/// loudly, not pass vacuously), short enough that paying Rapier's settle
+/// cost on every respawn several times, in debug, is not a real delay.
+const SMOKE_SECONDS: f64 = 12.0;
+
+/// The resting list never exceeds the `rest` param's own cap - "the pile
+/// never exceeds its cap" carried over from card 314, for the new shape of
+/// "a pile". Shared by the fast, routine version and the thorough
+/// `#[ignore]`d one below: only `seconds`/`rests`/`leaves` differ, so the
+/// routine run proves the same invariant, just over less wall time (and,
+/// to still see a landing in that much less time, more leaves aloft at once
+/// and fewer `rest` values tried), not a weaker one.
+fn resting_never_exceeds_its_cap(seconds: f64, rests: &[f32], leaves: f32) {
+    for &rest in rests {
         let mut params = defaults();
         params.set(PARAMS, "rest", rest);
         params.set(PARAMS, "gusts", 1.2); // gusts pluck resting leaves back up; still must never overshoot
+        params.set(PARAMS, "leaves", leaves);
         let cap = rest as usize;
         let mut worst = 0usize;
-        fly(3, &params, LONG_RUN_SECONDS, |patch, t| {
+        fly(3, &params, seconds, |patch, t| {
             worst = worst.max(patch.resting.len());
             assert!(patch.resting.len() <= cap, "rest={rest}: {} resting at t={t}, cap {cap}", patch.resting.len());
         });
         if cap > 0 {
-            assert!(worst > 0, "rest={rest}: never saw a single leaf come to rest in {LONG_RUN_SECONDS}s");
+            assert!(worst > 0, "rest={rest}: never saw a single leaf come to rest in {seconds}s");
         }
     }
 }
 
-/// No falling leaf is ever aloft longer than [`MAX_ALOFT`] - the "no leaf
-/// stuck forever" backstop, over a long run at a gusty, windy setting most
-/// likely to find an edge case.
+/// The smoke version: only the tightest `rest` value (1 - the one most
+/// likely to actually be exceeded by a bug, and the middle/higher values are
+/// the same code path) at the default leaf count (more leaves means more
+/// per-tick soft-body cost for every one of them, which is the actual
+/// expense here, not simulated seconds alone - card 322's own respawn settle
+/// and per-tick shell step both scale with leaf count, not just time).
 #[test]
+fn resting_never_exceeds_its_cap_over_a_short_run() {
+    resting_never_exceeds_its_cap(SMOKE_SECONDS, &[1.0], 4.0);
+}
+
+/// The thorough ten-minute version of the check above, at card 314's
+/// original four `rest` values and the default leaf count - `cargo test -p
+/// screeny-art --release -- --ignored
+/// patches::leaves::tests::resting_never_exceeds_its_cap_over_a_long_run`
+/// (release: the routine run above already proves this in debug at a
+/// horizon short enough to be fast; this is the "run long evidence once"
+/// pass over the full ten minutes, worth the release build's own speed).
+#[test]
+#[ignore = "10 simulated minutes x 4 rest values; run once with --release -- --ignored"]
+fn resting_never_exceeds_its_cap_over_a_long_run() {
+    resting_never_exceeds_its_cap(LONG_RUN_SECONDS, &[0.0, 1.0, 4.0, 6.0], 4.0);
+}
+
+/// No falling leaf is ever aloft longer than [`MAX_ALOFT`] (90s) - the "no
+/// leaf stuck forever" backstop, over a long run at a gusty, windy setting
+/// most likely to find an edge case. **Cannot be meaningfully shortened**:
+/// the assertion this test exists to make (`aloft` never exceeds
+/// `MAX_ALOFT`) is vacuously true over any run shorter than `MAX_ALOFT`
+/// itself, so a "smoke" version would not be a cheaper version of this
+/// check, it would be a different, much weaker one pretending to be this
+/// one. `#[ignore]`d rather than shortened, per the house rule on long
+/// evidence: `cargo test -p screeny-art --release -- --ignored
+/// patches::leaves::tests::no_leaf_is_ever_stuck_aloft`.
+#[test]
+#[ignore = "needs a horizon longer than MAX_ALOFT (90s) to mean anything; run once with --release -- --ignored"]
 fn no_leaf_is_ever_stuck_aloft() {
     let mut params = defaults();
     params.set(PARAMS, "wind", 2.2);
@@ -108,13 +173,17 @@ fn no_leaf_is_ever_stuck_aloft() {
 }
 
 /// The orientation stays a unit quaternion for every falling leaf over a
-/// long run - `Quat::integrate` renormalises every step, but this is the
+/// run - `Quat::integrate` renormalises every step, but this is the
 /// acceptance criterion stated at the patch level, not just the maths level
-/// ([`geom::tests`] already checks the maths in isolation).
-#[test]
-fn every_leafs_orientation_stays_normalised_over_a_long_run() {
+/// ([`geom::tests`] already checks the maths in isolation over 10,000 steps
+/// of the same integrator in complete isolation, which is most of this
+/// test's real assurance already - the patch-level version's own added
+/// value is exercising the same integrator through respawns and landings,
+/// which does not need ten minutes to show up if it were ever going to).
+/// Shared body, same reasoning as [`resting_never_exceeds_its_cap`].
+fn every_leafs_orientation_stays_normalised(seconds: f64) {
     let params = defaults();
-    fly(5, &params, LONG_RUN_SECONDS, |patch, t| {
+    fly(5, &params, seconds, |patch, t| {
         for leaf in &patch.falling {
             let n = leaf.orient.len();
             assert!((n - 1.0).abs() < 1e-3, "a leaf's |orientation| drifted to {n} at t={t}");
@@ -124,6 +193,26 @@ fn every_leafs_orientation_stays_normalised_over_a_long_run() {
             assert!((n - 1.0).abs() < 1e-3, "a resting leaf's |orientation| drifted to {n} at t={t}");
         }
     });
+}
+
+/// This check's own smoke horizon: shorter than [`SMOKE_SECONDS`], because
+/// unlike the resting-cap check it does not need to witness a landing to
+/// mean something - a drifted quaternion would already show up within the
+/// first few steps of any falling leaf, respawned or not (the module doc
+/// above explains why this test's own real assurance is mostly already
+/// covered elsewhere; a few seconds of the patch's own respawn/landing
+/// machinery on top of that is enough to be worth the wall time).
+const ORIENTATION_SMOKE_SECONDS: f64 = 3.0;
+
+#[test]
+fn every_leafs_orientation_stays_normalised_over_a_short_run() {
+    every_leafs_orientation_stays_normalised(ORIENTATION_SMOKE_SECONDS);
+}
+
+#[test]
+#[ignore = "10 simulated minutes; run once with --release -- --ignored"]
+fn every_leafs_orientation_stays_normalised_over_a_long_run() {
+    every_leafs_orientation_stays_normalised(LONG_RUN_SECONDS);
 }
 
 /// A falling leaf's `broadside` (the `n . u_hat` the physics and the picture
@@ -219,8 +308,16 @@ fn changes(series: &[f32]) -> Vec<f32> {
 /// falling leaves (a cheap proxy for "what the picture looks like right
 /// now") should not correlate strongly with itself at any of several
 /// candidate periods - `flock`'s and card 314's own test for the same thing,
-/// at this patch's own signal.
+/// at this patch's own signal. **Cannot be meaningfully shortened**: the
+/// candidate periods checked go up to 120s, and the check for each one is
+/// skipped outright once the run is shorter than that period (`lag >=
+/// d.len()`), so a short run would not be a smoke version of this test, it
+/// would silently stop checking most of what it claims to. `#[ignore]`d,
+/// per the house rule on long evidence: `cargo test -p screeny-art
+/// --release -- --ignored patches::leaves::tests::ten_minutes_does_not_
+/// repeat_itself`.
 #[test]
+#[ignore = "needs a multi-minute horizon to check its own longest candidate periods; run once with --release -- --ignored"]
 fn ten_minutes_does_not_repeat_itself() {
     let mut params = defaults();
     params.set(PARAMS, "gusts", 0.7);

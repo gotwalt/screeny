@@ -28,10 +28,16 @@ use super::geom::{v3, V3};
 
 pub const SHAPES: usize = 3;
 
-/// One vertex, ready to hand to the renderer once it has been rotated,
-/// scaled and translated into world space.
+/// One vertex of [`build`]'s triangle soup - the flat rest shape's own
+/// position and baked normal. Card 322: [`indexed`] superseded this as the
+/// production mesh (a soft body needs shared, indexed vertices, and its
+/// normals are computed live from the flexed positions instead - see
+/// `shell::LeafShell::normal_at`), so this and [`build`] now exist only to
+/// keep testing the rest-shape formulas ([`ring`]/[`rings`]) directly, the
+/// way their own tests below always have.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
-pub struct Vertex {
+pub(crate) struct Vertex {
     pub pos: V3,
     pub normal: V3,
 }
@@ -165,7 +171,10 @@ pub(crate) fn indexed(shape: u8, cup: f32, curl: f32) -> (Vec<V3>, Vec<[u32; 3]>
 /// Central-difference normal at ring `i`, lateral slot `j` (`0` left, `1`
 /// midrib, `2` right): the actual surface's tangents, not an approximation
 /// from the flat width function - so the cup and the curl really shade as
-/// the curved surface they are.
+/// the curved surface they are. `#[cfg(test)]`: see [`Vertex`]'s own doc -
+/// this is [`build`]'s baked normal, superseded in production by the
+/// shell's live one.
+#[cfg(test)]
 fn normal_at(rings: &[[V3; 3]; RINGS], i: usize, j: usize) -> V3 {
     let dx = if i == 0 {
         rings[1][j].sub(rings[0][j])
@@ -184,18 +193,17 @@ fn normal_at(rings: &[[V3; 3]; RINGS], i: usize, j: usize) -> V3 {
 
 /// The fallback for a degenerate ring (should not happen outside a
 /// zero-length mesh, but a fallback beats a NaN normal reaching the
-/// renderer): the physics's own idea of "up" for a flat leaf.
+/// renderer): the physics's own idea of "up" for a flat leaf. `#[cfg(test)]`:
+/// only [`normal_at`] uses it.
+#[cfg(test)]
 const FALLBACK_NORMAL: V3 = v3(0.0, 0.0, 1.0);
 
-/// The whole leaf as a triangle soup, in leaf-local space, ready to be
-/// rotated, scaled by [`super::leaf::Build::size`] and translated to a
-/// world-space vertex buffer once a frame. No culling is asked of the
-/// renderer (the depth buffer sorts occlusion out, as `flock`'s and `knot`'s
-/// doc comments both note for their own meshes), so winding order here does
-/// not matter - only the normals, which are computed from the geometry
-/// itself and do not depend on it either.
+/// The whole leaf as a triangle soup, in leaf-local space - card 321's
+/// original production mesh, kept only for its own tests below (see
+/// [`Vertex`]'s doc: [`indexed`] is what actually gets drawn since card 322).
+#[cfg(test)]
 #[must_use]
-pub fn build(shape: u8, cup: f32, curl: f32) -> Vec<Vertex> {
+pub(crate) fn build(shape: u8, cup: f32, curl: f32) -> Vec<Vertex> {
     let shape = shape % SHAPES as u8;
     let r = rings(shape, cup, curl);
     let mut out = Vec::with_capacity((RINGS - 1) * 4 * 3);

@@ -205,39 +205,6 @@ pub(crate) fn open() -> Option<Live> {
     Some(Live { gpu, opaque_pipeline, ghost_pipeline, scene, bind_group, target: Offscreen::new(gpu, SAMPLES) })
 }
 
-/// One leaf's *rigid* mesh (the flat rest shape, card 321's own pipeline),
-/// transformed into the GPU's own view space (see [`super`]'s module doc:
-/// `x` and `y` as they are, world `z` (a positive depth, camera-forward)
-/// negated, which is what lets the vertex shader be a single matrix
-/// multiply) and appended to `out`. Used only for the fading motion-blur
-/// echoes ([`Live::render`]): the flex a real gust or landing gives the
-/// blade ([`push_shell`]) is a subtle, slow-moving thing next to a fast
-/// tumble's rotation, which is what the echoes exist to blur, so drawing
-/// them from the plain rest mesh at each historical step's rigid pose - not
-/// the shell's own deformation history, which is not kept per-step - is a
-/// deliberate, cheap simplification: it keeps the rotational smear the
-/// echoes are for while not pretending to a flex history nothing recorded.
-fn push_leaf(out: &mut Vec<GVertex>, leaf: &Leaf3D, families: &[HueFamily; HUES], color: f32, alpha: f32) {
-    let fam = &families[leaf.build.hue as usize % HUES];
-    let fade = depth_fade(leaf.pos.z);
-    let (hue, chroma, top_l, bot_l) = (fam.hue, fam.chroma * color.max(0.0), fam.top_l * fade, fam.bot_l * fade);
-    let scale = HALF_LEN_M * leaf.build.size;
-    for v in super::mesh::build(leaf.build.shape, leaf.build.cup, leaf.build.curl) {
-        let world = leaf.orient.rotate(v.pos.scale(scale)).add(leaf.pos);
-        let normal = leaf.orient.rotate(v.normal);
-        out.push(GVertex {
-            pos: [world.x, world.y - super::EYE_Y, -world.z],
-            normal: [normal.x, normal.y, -normal.z],
-            hue,
-            chroma,
-            top_l,
-            bot_l,
-            alpha,
-            fold: 0.0,
-        });
-    }
-}
-
 /// One leaf's *actual*, flexing shell ([`super::shell::LeafShell`], card
 /// 322), already in world space (its pinned particles track the leaf's rigid
 /// stem every physics step - see the module doc; nothing here rotates or
@@ -247,13 +214,50 @@ fn push_leaf(out: &mut Vec<GVertex>, leaf: &Leaf3D, families: &[HueFamily; HUES]
 /// body's own collision surface uses), so the picture and the simulation can
 /// never triangulate a leaf two different ways.
 fn push_shell(out: &mut Vec<GVertex>, leaf: &Leaf3D, shell: &super::shell::LeafShell, families: &[HueFamily; HUES], color: f32, alpha: f32) {
+    push_shell_posed(out, leaf, shell, |v| v, families, color, alpha);
+}
+
+/// [`push_shell`], with every vertex (position and normal) passed through
+/// `repose` first - used for the fading motion-blur echoes ([`Live::render`]):
+/// `repose` there takes the shell's *current* world-space shape back into
+/// its own attachment-local frame and re-poses it at an *older* physics
+/// step's rigid transform, so an echo shows the leaf's one true (currently
+/// flexed) shape at a past position/orientation, not a second, inconsistent
+/// shape.
+///
+/// **Why this needs to exist at all**: an early version of this card drew
+/// echoes from the plain rigid rest mesh (`mesh::build`) instead, reasoning
+/// that the flex is subtle and slow next to a fast tumble's rotation. That
+/// broke a real invariant instead: at this patch's glacial fall speed, an
+/// echo (one physics tick back) sits at almost exactly the same pose as the
+/// opaque draw, and 321's own design relied on that near-exact coincidence
+/// under the depth test to make the echo *invisible* rather than a visible
+/// double-exposure - which is why `crates/art/tests/rate.rs`'s 60-vs-30-fps
+/// comparison measured an exact `0.00000` for this patch before card 322.
+/// Once the opaque draw became the flexed shell while the echo stayed the
+/// unflexed rest mesh, that coincidence broke (same pose, different vertex
+/// positions), and the resulting always-slightly-visible echo turned out to
+/// vary with exactly how the fixed-step physics loop was chunked between 60
+/// and 30 fps render calls - a real, if small, "moves with the frame rate"
+/// signal `rate.rs` correctly caught. Reposing the *same* shell shape restores
+/// the coincidence at zero motion and keeps a genuine rotational smear
+/// wherever the leaf actually turned between steps.
+fn push_shell_posed(
+    out: &mut Vec<GVertex>,
+    leaf: &Leaf3D,
+    shell: &super::shell::LeafShell,
+    repose: impl Fn(super::shell::RenderVertex) -> super::shell::RenderVertex,
+    families: &[HueFamily; HUES],
+    color: f32,
+    alpha: f32,
+) {
     let fam = &families[leaf.build.hue as usize % HUES];
     let fade = depth_fade(leaf.pos.z);
     let (hue, chroma, top_l, bot_l) = (fam.hue, fam.chroma * color.max(0.0), fam.top_l * fade, fam.bot_l * fade);
     let verts = shell.render_vertices();
     for &[a, b, c] in shell.faces() {
         for &i in &[a, b, c] {
-            let v = verts[i as usize];
+            let v = repose(verts[i as usize]);
             out.push(GVertex {
                 pos: [v.pos.x, v.pos.y - super::EYE_Y, -v.pos.z],
                 normal: [v.normal.x, v.normal.y, -v.normal.z],
@@ -331,16 +335,26 @@ impl Live {
         // The echoes: up to `blur_trail - 1` steps immediately before the
         // newest one, nearest first (`age = 0` is one step back), each
         // faded by `BLUR_WEIGHTS`. `history`'s last entry is the newest/solid
-        // step, never an echo.
+        // step, never an echo. Each echo re-poses the *same* current shell
+        // shape at that older step's rigid transform (`push_shell_posed`'s
+        // own doc: drawing a second, unflexed shape here broke a real
+        // depth-coincidence invariant `rate.rs` caught), so a fast tumble's
+        // rotation still blurs while a becalmed leaf's echo stays exactly
+        // where the opaque draw already is.
         let mut ghosts = Vec::new();
         let history = falling.history;
         let n = history.len();
         let ghost_count = blur_trail.saturating_sub(1).min(n.saturating_sub(1));
-        for age in 0..ghost_count {
-            let idx = n - 2 - age;
-            let weight = BLUR_WEIGHTS.get(age).copied().unwrap_or(0.05);
-            for leaf in &history[idx] {
-                push_leaf(&mut ghosts, leaf, families, color, weight);
+        if let Some(newest) = history.last() {
+            for age in 0..ghost_count {
+                let idx = n - 2 - age;
+                let weight = BLUR_WEIGHTS.get(age).copied().unwrap_or(0.05);
+                for (i, leaf_then) in history[idx].iter().enumerate() {
+                    let (Some(leaf_now), Some(shell)) = (newest.get(i), falling.shells.get(i)) else { continue };
+                    let attach_now = super::shell::Attachment::of(leaf_now);
+                    let attach_then = super::shell::Attachment::of(leaf_then);
+                    push_shell_posed(&mut ghosts, leaf_then, shell, |v| v.reposed(attach_now, attach_then), families, color, weight);
+                }
             }
         }
 

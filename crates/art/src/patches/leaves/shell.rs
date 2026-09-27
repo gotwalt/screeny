@@ -89,6 +89,24 @@ pub(crate) struct RenderVertex {
     pub fold: f32,
 }
 
+impl RenderVertex {
+    /// This vertex, taken out of `from`'s attachment-relative frame and
+    /// re-posed into `to`'s: `to == from` is the identity. Used by
+    /// `gpu.rs::push_shell_posed` for the motion-blur echoes - re-deriving
+    /// the shell's own local (attachment-relative) shape once and re-posing
+    /// it at each historical step's rigid transform, rather than drawing a
+    /// second, geometrically inconsistent shape for echoes (see that
+    /// function's own doc for the bug this fixes). The fold scalar is a
+    /// curvature measure, not a position - pose-independent, passed through
+    /// unchanged.
+    pub(crate) fn reposed(self, from: Attachment, to: Attachment) -> RenderVertex {
+        let inv = from.orient.conjugate();
+        let local_pos = inv.rotate(self.pos.sub(from.pos));
+        let local_normal = inv.rotate(self.normal);
+        RenderVertex { pos: to.orient.rotate(local_pos).add(to.pos), normal: to.orient.rotate(local_normal), fold: self.fold }
+    }
+}
+
 /// Structural (ring-to-ring, across-ring, shear diagonal) and bending
 /// (skip-one along the length) edges, skipping any pair whose *both*
 /// endpoints are pinned stem particles - two rigid points never need a
