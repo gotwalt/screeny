@@ -83,6 +83,25 @@ async fn watch_studio(st: AppState, out: watch::Sender<Snapshot>) {
     }
 }
 
+/// The nearest real brightness stop to `level` (card 187), so the level HA
+/// is shown back is the one the panel really has. A tie goes to the dimmer
+/// stop.
+///
+/// **Zero is dark and nothing else is.** A nonzero level snaps to the nearest
+/// *nonzero* stop, as the firmware raises anything dim-but-nonzero to its
+/// floor: HA's 1% is "the dimmest the panel can show", never off.
+#[must_use]
+pub fn snap(level: u8) -> u8 {
+    if level == 0 {
+        return 0;
+    }
+    crate::page::brightness_stops()
+        .into_iter()
+        .filter(|s| *s > 0)
+        .min_by_key(|s| (i16::from(*s) - i16::from(level)).unsigned_abs())
+        .unwrap_or(level)
+}
+
 /// Carry out HA's commands, one at a time, until the client goes.
 async fn obey(st: AppState, mut commands: mpsc::Receiver<Command>) {
     while let Some(cmd) = commands.recv().await {
@@ -103,7 +122,7 @@ pub fn execute(st: &AppState, cmd: &Command) -> Result<(), String> {
         Command::SetBrightness(level) => {
             // The nearest real stop, so what HA is shown back is what the
             // panel does. The supervisor sends it within a second.
-            let level = schedule::snap_brightness(*level);
+            let level = snap(*level);
             st.page().configure(&PlayerChange { brightness: Some(Some(level)), ..PlayerChange::default() })?;
         }
         Command::ApplyScene(name) => {
@@ -129,4 +148,20 @@ pub fn execute(st: &AppState, cmd: &Command) -> Result<(), String> {
     st.publish_state(None, st.page_state());
     st.persist();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snap;
+
+    #[test]
+    fn snap_lands_on_a_real_stop_and_never_turns_a_level_off() {
+        let stops = crate::page::brightness_stops();
+        assert_eq!(snap(0), 0);
+        assert_eq!(snap(1), stops[1], "1 is the dimmest visible stop, not dark");
+        assert_eq!(snap(255), *stops.last().unwrap());
+        for level in 0..=255u8 {
+            assert!(stops.contains(&snap(level)), "{level} -> {}", snap(level));
+        }
+    }
 }
