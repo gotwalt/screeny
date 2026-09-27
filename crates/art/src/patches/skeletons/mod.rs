@@ -43,9 +43,12 @@ pub const DEF: PatchDef = PatchDef {
 
 const PARAMS: &[ParamSpec] = &[
     param("skeletons", "How many live in the box", 2.0, 3.0, 1.0, 2.0),
-    param("pace", "How fast they move (lower is slower, dreamier)", 0.4, 2.0, 0.05, 1.0),
+    // Defaults tuned calm, not lively (the owner, 2026-09-26: "this is a
+    // form of visual poetry... busyness is a thing we are trying to
+    // avoid") - `pace` and `sway` both sit below their own middle.
+    param("pace", "How fast they move (lower is slower, dreamier)", 0.4, 2.0, 0.05, 0.75),
     param("light", "How bright the bulb is", 0.5, 1.8, 0.05, 1.0),
-    param("sway", "How loose the idle motion is", 0.0, 1.6, 0.05, 1.0),
+    param("sway", "How loose the idle motion is", 0.0, 1.6, 0.05, 0.6),
     param("color", "How much colour (0 = grayscale)", 0.0, 1.0, 0.05, 0.4),
 ];
 
@@ -107,8 +110,13 @@ impl Skeletons {
     }
 }
 
-fn ink_at(p: geom::V3, light: f32) -> f32 {
-    (LIGHT_FLOOR + (1.0 - LIGHT_FLOOR) * box_scene::bone_light(p) * light).clamp(0.0, 1.0)
+/// A bone endpoint's ink: real cylindrical shading (see
+/// `box_scene::bone_shade`'s doc - the owner, 2026-09-26, lifted the
+/// compute-cost limit and asked by name for "proper shading of the bones"),
+/// floored so a skeleton is never less than a dim stick figure however far
+/// from the bulb or however deep in its own shadow side it is.
+fn ink_at(p: geom::V3, axis: geom::V3, eye: geom::V3, light: f32) -> f32 {
+    (LIGHT_FLOOR + (1.0 - LIGHT_FLOOR) * box_scene::bone_shade(p, axis, eye) * light).clamp(0.0, 1.0)
 }
 
 /// One capsule ready for the coverage buffer, in screen space with depth
@@ -123,10 +131,20 @@ struct CDraw {
     ink_b: f32,
 }
 
-fn project_capsule(cam: &Camera, a: geom::V3, b: geom::V3, ra: f32, rb: f32, ink_a: f32, ink_b: f32) -> Option<CDraw> {
+fn project_capsule(cam: &Camera, a: geom::V3, b: geom::V3, ra: f32, rb: f32, light: f32) -> Option<CDraw> {
     let (ax, ay, az) = cam.project(a, W, H)?;
     let (bx, by, bz) = cam.project(b, W, H)?;
+    let axis = b.sub(a);
+    let (ink_a, ink_b) = (ink_at(a, axis, cam.eye, light), ink_at(b, axis, cam.eye, light));
     Some(CDraw { depth: 0.5 * (az + bz), a: (ax, ay), b: (bx, by), ra: ra * cam.focal / az, rb: rb * cam.focal / bz, ink_a, ink_b })
+}
+
+/// A disc (the skull, an eye) has no axis of its own: shaded as if it
+/// squarely faced the camera (see `box_scene::bone_shade`).
+fn project_disc(cam: &Camera, centre: geom::V3, radius: f32, light: f32, ink_override: Option<f32>) -> Option<CDraw> {
+    let (x, y, z) = cam.project(centre, W, H)?;
+    let ink = ink_override.unwrap_or_else(|| ink_at(centre, geom::V3::ZERO, cam.eye, light));
+    Some(CDraw { depth: z, a: (x, y), b: (x, y), ra: radius * cam.focal / z, rb: radius * cam.focal / z, ink_a: ink, ink_b: ink })
 }
 
 fn mix_hue(a: f32, b: f32, t: f32) -> f32 {
@@ -160,6 +178,66 @@ fn build_palette(bg: &[Lch; box_scene::BANDS], bone: Lch, levels: usize) -> Vec<
     out
 }
 
+/// Every capsule for every actor at one instant `t`, far to near. Called
+/// several times per frame at different `t` within the frame's own interval
+/// for motion blur (see [`Skeletons::render`]'s `BLUR_SAMPLES`) - a pure
+/// function of the actors' *continuous* pose functions, never advancing the
+/// choreography itself (`Actor::pos_at`'s doc explains why that is sound).
+fn gather_draws(actors: &[actor::Actor], t: f64, sway: f32, light: f32, cam: &Camera) -> Vec<CDraw> {
+    let mut draws: Vec<CDraw> = Vec::new();
+    for a in actors {
+        let pose = a.pose(t, sway);
+        let (px, pz) = a.pos_at(t);
+        let ground = v3(px, 0.0, pz);
+        let mut joints = pose.solve(ground, a.heading, a.height);
+        let Some((_, _, z_ref)) = cam.project(joints.chest, W, H) else { continue };
+        let span = a.height * cam.focal / z_ref;
+        let detail = box_scene::smooth(AREA.0, AREA.1, span);
+
+        let mut bones = joints.bones(detail);
+        let head_off = a.head_off(t);
+        if head_off > 0.04 {
+            // Detached: drop the neck-skull bone rather than stretch it,
+            // and carry the skull (and everything hung off it) up and
+            // away along a small arc.
+            bones.remove(3);
+            let lift = joints.chest_frame.up.scale(0.55 * a.height * head_off);
+            let bob = joints.chest_frame.fwd.scale(0.10 * a.height * head_off * (t as f32 * 2.6).sin());
+            joints.skull = joints.skull.add(lift).add(bob);
+        }
+        for bone in &bones {
+            if let Some(d) = project_capsule(cam, bone.a, bone.b, bone.ra * a.height, bone.rb * a.height, light) {
+                draws.push(d);
+            }
+        }
+        if let Some(d) = project_disc(cam, joints.skull, rig::SKULL_R * a.height, light, None) {
+            draws.push(d);
+        }
+        if detail > 0.12 {
+            let jaw_open = if head_off > 0.04 { 0.4 } else { pose.jaw };
+            let jaw = joints.jaw_tip(jaw_open);
+            if let Some(d) = project_capsule(cam, joints.skull, jaw, 0.020 * a.height, 0.013 * a.height, light) {
+                draws.push(d);
+            }
+            for eye in joints.eyes() {
+                if let Some(d) = project_disc(cam, eye, rig::EYE_R * a.height, light, Some(EYE_INK)) {
+                    draws.push(d);
+                }
+            }
+        }
+    }
+    draws.sort_by(|p, q| q.depth.total_cmp(&p.depth));
+    draws
+}
+
+/// How many moments across each frame's interval are rendered and averaged
+/// for motion blur. Compute is no longer the constraint here (the owner,
+/// 2026-09-26: "spend it on image quality... motion blur"); four is enough
+/// that a hand swinging through a wave or a foot lifting through a stride
+/// leaves a real, soft trail rather than a stutter, without the cost
+/// climbing towards where it would ever matter for a background patch.
+const BLUR_SAMPLES: usize = 4;
+
 impl Patch for Skeletons {
     fn playing(&self) -> Option<Playing> {
         let title = format!("{} in the box", self.world.actors.len());
@@ -181,56 +259,22 @@ impl Patch for Skeletons {
         let bone = bone_lch(color);
         let palette = build_palette(&bg_bands, bone, BONE_LEVELS);
 
-        let mut draws: Vec<CDraw> = Vec::new();
-        for a in &self.world.actors {
-            let pose = a.pose(sim_t, sway);
-            let ground = v3(a.pos.0, 0.0, a.pos.1);
-            let mut joints = pose.solve(ground, a.heading, a.height);
-            let Some((_, _, z_ref)) = cam.project(joints.chest, W, H) else { continue };
-            let span = a.height * cam.focal / z_ref;
-            let detail = box_scene::smooth(AREA.0, AREA.1, span);
-
-            let mut bones = joints.bones(detail);
-            let head_off = a.head_off(sim_t);
-            if head_off > 0.04 {
-                // Detached: drop the neck-skull bone rather than stretch it,
-                // and carry the skull (and everything hung off it) up and
-                // away along a small arc.
-                bones.remove(3);
-                let lift = joints.chest_frame.up.scale(0.55 * a.height * head_off);
-                let sway = joints.chest_frame.fwd.scale(0.10 * a.height * head_off * (sim_t as f32 * 2.6).sin());
-                joints.skull = joints.skull.add(lift).add(sway);
-            }
-            for bone in &bones {
-                let (ia, ib) = (ink_at(bone.a, light), ink_at(bone.b, light));
-                if let Some(d) = project_capsule(&cam, bone.a, bone.b, bone.ra * a.height, bone.rb * a.height, ia, ib) {
-                    draws.push(d);
+        // Motion blur: `BLUR_SAMPLES` moments spread over the last fixed
+        // step, each its own fully sorted, fully anti-aliased render,
+        // averaged - a box filter over time, the same idea `Frame::supersample`
+        // already uses over space.
+        let covers: Vec<Coverage> = (0..BLUR_SAMPLES)
+            .map(|i| {
+                let frac = (i as f64 + 0.5) / BLUR_SAMPLES as f64;
+                let t = sim_t - STEP * (1.0 - frac);
+                let draws = gather_draws(&self.world.actors, t, sway, light, &cam);
+                let mut cov = Coverage::new(SUPERSAMPLE, W, H);
+                for d in &draws {
+                    cov.capsule(d.a, d.b, d.ra, d.rb, d.ink_a, d.ink_b);
                 }
-            }
-            let skull_ink = ink_at(joints.skull, light);
-            if let Some(d) = project_capsule(&cam, joints.skull, joints.skull, rig::SKULL_R * a.height, rig::SKULL_R * a.height, skull_ink, skull_ink) {
-                draws.push(d);
-            }
-            if detail > 0.12 {
-                let jaw_open = if head_off > 0.04 { 0.4 } else { pose.jaw };
-                let jaw = joints.jaw_tip(jaw_open);
-                let jaw_ink = ink_at(jaw, light);
-                if let Some(d) = project_capsule(&cam, joints.skull, jaw, 0.020 * a.height, 0.013 * a.height, skull_ink, jaw_ink) {
-                    draws.push(d);
-                }
-                for eye in joints.eyes() {
-                    if let Some(d) = project_capsule(&cam, eye, eye, rig::EYE_R * a.height, rig::EYE_R * a.height, EYE_INK, EYE_INK) {
-                        draws.push(d);
-                    }
-                }
-            }
-        }
-        draws.sort_by(|p, q| q.depth.total_cmp(&p.depth));
-
-        let mut cover = Coverage::new(SUPERSAMPLE, W, H);
-        for d in &draws {
-            cover.capsule(d.a, d.b, d.ra, d.rb, d.ink_a, d.ink_b);
-        }
+                cov
+            })
+            .collect();
 
         let bg_dither = Dither::Bayer4;
         let ink_dither = Dither::BlueNoise;
@@ -240,7 +284,8 @@ impl Patch for Skeletons {
                 let (x, y) = (i % W, i / W);
                 let raw = (box_scene::brightness_at(&cam, x as f32 + 0.5, y as f32 + 0.5, W, H, &shadows) * light).clamp(0.0, 1.0);
                 let band = (raw * (bands_n - 1) as f32 + bg_dither.threshold(x, y)).round().clamp(0.0, (bands_n - 1) as f32) as usize;
-                let k = (cover.pixel(x, y) * (BONE_LEVELS - 1) as f32 + ink_dither.threshold(x, y)).round().clamp(0.0, (BONE_LEVELS - 1) as f32) as usize;
+                let ink = covers.iter().map(|c| c.pixel(x, y)).sum::<f32>() / BLUR_SAMPLES as f32;
+                let k = (ink * (BONE_LEVELS - 1) as f32 + ink_dither.threshold(x, y)).round().clamp(0.0, (BONE_LEVELS - 1) as f32) as usize;
                 (band * BONE_LEVELS + k) as u8
             })
             .collect();

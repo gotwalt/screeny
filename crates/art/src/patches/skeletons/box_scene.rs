@@ -2,6 +2,16 @@
 //! sits just outside the front of it, which the panel is the window cut
 //! into. Reusable as it stands for card 333 (`thing`), which the card asks
 //! to share this box and this camera.
+//!
+//! The owner, 2026-09-26, on this and the other autumn patches: "we'll
+//! prefer foreground animations against a black backdrop. It suits the
+//! panel the best." So the box itself is not a lit set: the walls, the
+//! ceiling and the back wall are true black always (`brightness_at` returns
+//! `0` for every plane but the floor) - geometry that is never drawn is not
+//! a backdrop. The only light in the picture is a pool on the floor under
+//! the bulb, the skeletons' own bone-white, and the contact shadow each one
+//! casts. An earlier version of this file lit all five planes into a
+//! visible, perspective-converging room; that picture is gone.
 
 use super::geom::{v3, Angles, Frame, V3};
 use crate::color::smoothstep;
@@ -13,9 +23,12 @@ pub const DEPTH: f32 = 3.7;
 pub const CEIL_Y: f32 = 2.25;
 pub const FLOOR_Y: f32 = 0.0;
 
-/// Where a skeleton may stand, clear of the walls.
+/// Where a skeleton may stand, clear of the walls. `WALK_NEAR_Z` is also
+/// chosen so a full standing height fits in the panel there without the
+/// head clipping the top (see `FOV`'s Log entry): closer than this and only
+/// a deliberate close-up (`peer`) should go.
 pub const WALK_HALF_W: f32 = HALF_W - 0.22;
-pub const WALK_NEAR_Z: f32 = 0.14;
+pub const WALK_NEAR_Z: f32 = 0.30;
 pub const WALK_FAR_Z: f32 = DEPTH - 0.22;
 
 /// One bulb, hung low over the front third of the box - nearer the window
@@ -25,8 +38,12 @@ const LIGHT: V3 = v3(0.05, CEIL_Y - 0.30, DEPTH * 0.30);
 
 /// How fast the light falls off with distance. Chosen by eye: bright enough
 /// close to the bulb to read as a source, faded enough at the back wall
-/// that the box reads as deep and quiet.
-const ATT_K: f32 = 0.55;
+/// that the box reads as deep and quiet. Tight on purpose (card 328's Log):
+/// a slow, wide glow put most of the floor into a dim mid-grey the panel
+/// dithers visibly (brief 2.1.1's weak dark range); a small, quick-fading
+/// pool of light under the bulb reads better and matches "dark, quiet, low
+/// detail" besides.
+const ATT_K: f32 = 1.1;
 
 /// A point's light exposure, `0..1`, before anything else is done with it:
 /// how a surface with a normal shades it, and the floor a bone's own ink is
@@ -42,13 +59,54 @@ fn lambert(p: V3, normal: V3) -> f32 {
     normal.dot(to_light.scale(1.0 / d)).max(0.0)
 }
 
-/// A bone's own light exposure, `0..1`: distance-attenuation only, no
-/// surface normal (a bone has no one clean normal). The caller floors this
-/// before using it as ink, so a skeleton never reads as less than a dim
-/// stick figure even at the back of the box.
+/// A bone's shading at one of its ends, `0..1`, combining distance to the
+/// bulb with a real surface normal - the "shaded in a few value steps by
+/// the light (lit side, shadow side)" the card asks for (2026-09-26: the
+/// owner then lifted the compute-cost limit and asked by name for "proper
+/// shading of the bones", so this replaced a distance-only version).
+///
+/// A bone has no single normal - it is a cylinder - so the normal used is
+/// the one that actually matters for a capsule drawn as a silhouette: the
+/// component of the direction to the camera that is perpendicular to the
+/// bone's own axis, i.e. the outward normal of the cylinder at the point
+/// the camera is actually looking at. `axis` may be the zero vector (a
+/// disc: the skull, an eye), in which case the point is shaded as if it
+/// faced the camera squarely, which is the right answer for a small sphere.
 #[must_use]
-pub fn bone_light(p: V3) -> f32 {
-    atten(p)
+pub fn bone_shade(p: V3, axis: V3, eye: V3) -> f32 {
+    let view = eye.sub(p);
+    let view_len = view.len();
+    let view_u = if view_len > 1e-5 { view.scale(1.0 / view_len) } else { v3(0.0, 0.0, -1.0) };
+    let axis_len = axis.len();
+    let normal = if axis_len > 1e-5 {
+        let axis_u = axis.scale(1.0 / axis_len);
+        let perp = view_u.sub(axis_u.scale(axis_u.dot(view_u)));
+        let perp_len = perp.len();
+        if perp_len > 1e-5 {
+            perp.scale(1.0 / perp_len)
+        } else {
+            view_u
+        }
+    } else {
+        view_u
+    };
+    // A soft ambient floor within the shading itself (a bone's shadow side
+    // is dim, not lightless - nothing here is meant to vanish), on top of
+    // the ordinary distance falloff.
+    let lit = lambert(p, normal);
+    atten(p) * (0.35 + 0.65 * lit)
+}
+
+/// How occluded a floor point is by the walls either side of it, `0..1`
+/// (`1` = fully open). Not a real ambient-occlusion trace - a cheap,
+/// honest "distance to the nearest wall" stand-in - but it is what puts a
+/// soft dark seam along the floor's edge that a single point light alone
+/// does not (the owner, 2026-09-26: "soft shadows and ambient occlusion in
+/// the box"). The walls themselves are never drawn (`brightness_at` is
+/// black off the floor), so this only ever shades the floor.
+fn corner_ao(hit: V3) -> f32 {
+    let nearest = (hit.x - (-HALF_W)).min(HALF_W - hit.x).min(DEPTH - hit.z);
+    0.55 + 0.45 * smoothstep(0.0, 0.42, nearest)
 }
 
 /// The camera: fixed just outside the window, drifting very slightly (the
@@ -61,10 +119,13 @@ pub struct Camera {
     pub focal: f32,
 }
 
-/// Horizontal field of view: wide enough that the side walls' converging
-/// lines are visible and read as depth, narrow enough that a skeleton near
-/// the window still fills a real fraction of the panel.
-const FOV: f32 = 58.0;
+/// Horizontal field of view: wide, on purpose (card 328's Log). A narrower
+/// lens could not get a skeleton at the front of the box to "fill the
+/// height" (the card's own words) without a standing figure's head going
+/// off the top of the panel at the near end of the walkable floor - the
+/// maths is in the Log. Wide also means the side walls rush past in a
+/// strong, converging tunnel, which is the depth cue the card asks for.
+const FOV: f32 = 98.0;
 
 impl Camera {
     #[must_use]
@@ -74,7 +135,7 @@ impl Camera {
         // like a photograph, nowhere near enough to be a pan.
         let yaw = 0.018 * (t * 0.070).sin();
         let pitch = 0.11 + 0.010 * (t * 0.051).cos();
-        let eye = v3(0.04 * (t * 0.033).sin(), 1.02 + 0.02 * (t * 0.047).sin(), -2.05);
+        let eye = v3(0.04 * (t * 0.033).sin(), 1.02 + 0.02 * (t * 0.047).sin(), -1.55);
         let f = Frame::IDENTITY.rotate(Angles::new(yaw, pitch, 0.0));
         Camera { eye, right: f.right, up: f.up, fwd: f.fwd, focal: 0.5 * w as f32 / (0.5 * FOV.to_radians()).tan() }
     }
@@ -159,34 +220,55 @@ pub type Lch = (f32, f32, f32);
 /// Background brightness bands, darkest to brightest, before the bulb's own
 /// glow: a plain ramp, because the real shape of the box comes from
 /// `brightness_at`, not from the palette.
-pub const BANDS: usize = 12;
+pub const BANDS: usize = 14;
+
+/// OKLCH lightness is roughly a cube root of linear light (for a neutral
+/// colour, `linear == l.powi(3)` exactly - `color::oklab_to_linear`'s rows
+/// each sum to 1). A ramp meant to look linear in *brightness* - which is
+/// what `brightness_at`'s `raw` is - therefore wants an *expanding* curve
+/// (`l ~ u.cbrt()`), or the mid tones vanish into black long before the
+/// palette says they should (this shipped inverted once: card 328's own log
+/// has the fix). `MAX_L` is chosen so the brightest a raw ray realistically
+/// gets (close beside the bulb) lands at a lit, not blinding, linear ~0.35.
+///
+/// Below [`DARK_CUT`], `raw` is held to true black rather than ramped: the
+/// panel's dark range is its weakest (brief 2.1.1), and a slow grey gradient
+/// across most of the floor dithered visibly here (also card 328's Log) -
+/// most of a quiet, dark box is better off truly black, with the gradient's
+/// resolution spent on the pool of light under the bulb instead.
+const MAX_L: f32 = 0.705;
+const DARK_CUT: f32 = 0.16;
 
 #[must_use]
 pub fn bands(color: f32) -> [Lch; BANDS] {
     let mut out = [(0.0, 0.0, 0.0); BANDS];
     for (i, band) in out.iter_mut().enumerate() {
         let u = i as f32 / (BANDS - 1) as f32;
-        let l = 0.30 * u.powf(1.22);
-        let c = color * 0.045 * u;
+        let lit = smoothstep(DARK_CUT, 1.0, u);
+        let l = MAX_L * lit.cbrt();
+        let c = color * 0.05 * lit;
         *band = (l, c, 58.0);
     }
     out
 }
 
-/// This ray's brightness, `0..1` before quantising into [`bands`]: how the
-/// box's own lighting sees it, darkened under each skeleton's feet so their
-/// place in the box reads as depth rather than a cutout.
+/// This ray's brightness, `0..1` before quantising into [`bands`]: black
+/// backdrop, one pool of light on the floor (2026-09-26's Log entry - the
+/// walls, ceiling and back wall are never anything but `0`), darkened under
+/// each skeleton's feet so their place in the box reads as a contact
+/// shadow rather than a cutout.
 #[must_use]
 pub fn brightness_at(cam: &Camera, x: f32, y: f32, w: usize, h: usize, shadows: &[(f32, f32)]) -> f32 {
     let Some((hit, plane)) = intersect(cam.eye, cam.ray(x, y, w, h)) else {
         return 0.0;
     };
-    let mut b = lambert(hit, normal_of(plane)) * atten(hit);
-    if plane == Plane::Floor {
-        for &(sx, sz) in shadows {
-            let d2 = (hit.x - sx) * (hit.x - sx) + (hit.z - sz) * (hit.z - sz);
-            b *= 1.0 - 0.5 * (-d2 / 0.10).exp();
-        }
+    if plane != Plane::Floor {
+        return 0.0;
+    }
+    let mut b = lambert(hit, normal_of(plane)) * atten(hit) * corner_ao(hit);
+    for &(sx, sz) in shadows {
+        let d2 = (hit.x - sx) * (hit.x - sx) + (hit.z - sz) * (hit.z - sz);
+        b *= 1.0 - 0.62 * (-d2 / 0.16).exp();
     }
     b.clamp(0.0, 1.0)
 }

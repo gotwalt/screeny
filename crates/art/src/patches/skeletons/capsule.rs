@@ -9,10 +9,15 @@
 
 use crate::color::smoothstep;
 
-/// Coverage samples per panel pixel per axis. Three, as flock found: enough
-/// to anti-alias a bone's edge without smearing it, and cheap at the small
-/// number of capsules a couple of skeletons draw.
-pub const SUPERSAMPLE: usize = 3;
+/// Coverage samples per panel pixel per axis. flock found three was enough
+/// for a couple of dozen thin strokes; the owner then lifted the "cheap, CPU
+/// only" constraint entirely (2026-09-26: "unusually luxurious... doesn't
+/// cut corners") and asked for heavy supersampling by name, so this patch
+/// spends more of it - a few tens of capsules is still nothing to a modern
+/// CPU at eight samples a side (64 a pixel), and the extra smoothness shows
+/// most exactly where this patch needs it: a skull's round edge and a
+/// tapered bone's silhouette.
+pub const SUPERSAMPLE: usize = 8;
 
 pub struct Coverage {
     ss: usize,

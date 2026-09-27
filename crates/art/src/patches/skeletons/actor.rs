@@ -44,11 +44,25 @@ impl Kind {
 
 const MOTIFS: &[&str] = &["wander", "dance", "wave", "peer", "sit", "rattle", "headpop"];
 
-/// Metres a second: a leisurely amble, not a march.
-const WALK_SPEED: f32 = 0.55;
-/// Radians a second of gait phase: about one stride a second and a bit.
-const GAIT_OMEGA: f32 = 3.6;
-const DANCE_OMEGA: f32 = 3.4;
+/// Metres a second: a slow, deliberate amble - visual poetry, not a march
+/// (the owner, 2026-09-26: "busyness is a thing we are trying to avoid").
+const WALK_SPEED: f32 = 0.36;
+/// Radians a second of gait phase: an unhurried stride.
+const GAIT_OMEGA: f32 = 2.5;
+const DANCE_OMEGA: f32 = 2.2;
+
+/// How long a rest between motifs runs, seconds - deliberately long: one
+/// clear thing happens, then real stillness, not a queue of business. Every
+/// motif ends in one of these (see `choose_next`), not just `wander`.
+const REST: (f32, f32) = (7.0, 18.0);
+/// How long a courtesy wait is, when the other skeleton is already doing
+/// something and this one defers to it (see `Actor::advance`).
+const COURTESY: (f32, f32) = (3.0, 7.0);
+/// How often, when both are free to act, this one steps back and lets the
+/// other have the box to itself rather than starting something of its own.
+/// Not always - "rarely both busy", not "never together" - but most of the
+/// time.
+const COURTESY_CHANCE: f32 = 0.72;
 
 /// How close two skeletons may come before they are pushed apart - closer
 /// than a high five needs, not so close they merge into one shape.
@@ -155,30 +169,39 @@ impl Actor {
         }
     }
 
+    /// One motif's own steps - everything but the rest that follows it,
+    /// which `choose_next` adds to every motif alike, `wander` included.
+    fn plan_motif(pick: &str, rng: &mut Rng) -> Vec<Planned> {
+        match pick {
+            "dance" => vec![Planned { kind: Kind::Dance, target: None, dur: Some(f64::from(rng.range(4.0, 7.0))) }],
+            "wave" => vec![Planned { kind: Kind::Wave, target: None, dur: Some(f64::from(rng.range(2.2, 3.6))) }],
+            "peer" => {
+                let near = (rng.range(-0.30, 0.30), WALK_NEAR_Z + rng.range(0.0, 0.05));
+                let after = random_point(rng);
+                vec![
+                    Planned { kind: Kind::Walk, target: Some(near), dur: None },
+                    Planned { kind: Kind::PeerHold, target: None, dur: Some(f64::from(rng.range(2.5, 4.0))) },
+                    Planned { kind: Kind::Walk, target: Some(after), dur: None },
+                ]
+            }
+            // A held pose is the point, not the walk to it: sitting still
+            // is one of the calmest things in the vocabulary, so it gets to
+            // run long.
+            "sit" => vec![Planned { kind: Kind::Sit, target: None, dur: Some(f64::from(rng.range(6.0, 12.0))) }],
+            "rattle" => vec![Planned { kind: Kind::Rattle, target: None, dur: Some(f64::from(rng.range(1.2, 2.0))) }],
+            "headpop" => vec![Planned { kind: Kind::HeadPop, target: None, dur: Some(f64::from(rng.range(3.2, 3.8))) }],
+            _ => vec![Planned { kind: Kind::Walk, target: Some(random_point(rng)), dur: None }],
+        }
+    }
+
     fn choose_next(&mut self, t: f64) {
         let pick = pick_motif(&self.variety, &mut self.rng);
         self.variety.note(&pick, std::slice::from_ref(&pick));
         let mut rng = std::mem::replace(&mut self.rng, Rng::new(0));
-        let seq = match pick.as_str() {
-            "dance" => vec![Planned { kind: Kind::Dance, target: None, dur: Some(f64::from(rng.range(5.0, 9.0))) }],
-            "wave" => vec![Planned { kind: Kind::Wave, target: None, dur: Some(f64::from(rng.range(2.2, 3.6))) }],
-            "peer" => {
-                let near = (rng.range(-0.30, 0.30), WALK_NEAR_Z + rng.range(0.0, 0.05));
-                let after = random_point(&mut rng);
-                vec![
-                    Planned { kind: Kind::Walk, target: Some(near), dur: None },
-                    Planned { kind: Kind::PeerHold, target: None, dur: Some(f64::from(rng.range(2.2, 3.2))) },
-                    Planned { kind: Kind::Walk, target: Some(after), dur: None },
-                ]
-            }
-            "sit" => vec![Planned { kind: Kind::Sit, target: None, dur: Some(f64::from(rng.range(4.0, 6.5))) }],
-            "rattle" => vec![Planned { kind: Kind::Rattle, target: None, dur: Some(f64::from(rng.range(1.4, 2.4))) }],
-            "headpop" => vec![Planned { kind: Kind::HeadPop, target: None, dur: Some(f64::from(rng.range(3.2, 3.8))) }],
-            _ => vec![
-                Planned { kind: Kind::Walk, target: Some(random_point(&mut rng)), dur: None },
-                Planned { kind: Kind::Idle, target: None, dur: Some(f64::from(rng.range(1.5, 4.0))) },
-            ],
-        };
+        let mut seq = Actor::plan_motif(&pick, &mut rng);
+        // One clear thing, then real stillness: every motif ends here, not
+        // just `wander` (the owner, 2026-09-26 - see `REST`'s Log entry).
+        seq.push(Planned { kind: Kind::Idle, target: None, dur: Some(f64::from(rng.range(REST.0, REST.1))) });
         self.rng = rng;
         self.queue = seq.into();
         let first = self.queue.pop_front().expect("every motif plans at least one step");
@@ -186,16 +209,35 @@ impl Actor {
     }
 
     /// Advance the choreography: pop the queue or choose the next motif once
-    /// the current step has run its course.
-    fn advance(&mut self, t: f64) {
+    /// the current step has run its course. `others_busy` is whether anyone
+    /// else in the box is doing anything right now - most of the time, this
+    /// one lets them finish rather than starting something of its own, so
+    /// the two are rarely both busy at once (the owner, 2026-09-26).
+    fn advance(&mut self, t: f64, others_busy: bool) {
         if t < self.current.start + self.current.dur {
             return;
         }
         if let Some(next) = self.queue.pop_front() {
             self.start(t, next);
-        } else {
-            self.choose_next(t);
+            return;
         }
+        if others_busy && self.rng.f32() < COURTESY_CHANCE {
+            let wait = f64::from(self.rng.range(COURTESY.0, COURTESY.1));
+            self.start(t, Planned { kind: Kind::Idle, target: None, dur: Some(wait) });
+            return;
+        }
+        self.choose_next(t);
+    }
+
+    /// Where this actor's current action places it at any continuous moment
+    /// `t` within the fixed step it was chosen in - `current` only changes
+    /// at a fixed step boundary, so this is a genuine continuous function of
+    /// time in between them. That is what lets the renderer sample a few
+    /// moments across one frame's interval for motion blur without
+    /// re-running the choreography's own state machine.
+    #[must_use]
+    pub fn pos_at(&self, t: f64) -> (f32, f32) {
+        self.desired_pos(t)
     }
 
     /// This step's position, before any other actor is taken into account:
@@ -222,7 +264,7 @@ impl Actor {
     pub fn pose(&self, t: f64, sway: f32) -> Pose {
         let local = self.local(t);
         match self.current.kind {
-            Kind::Idle => actions::idle(local, 0.6 * sway),
+            Kind::Idle => actions::idle(local, 0.42 * sway),
             Kind::Walk => {
                 let speed = if self.current.dur > 0.05 {
                     let dist = (self.current.to.0 - self.current.from.0).hypot(self.current.to.1 - self.current.from.1);
@@ -273,7 +315,7 @@ pub struct World {
 impl World {
     pub fn new(seed: u64) -> World {
         let mut rng = Rng::new(seed ^ 0xd06_5eed);
-        World { actors: Vec::new(), rng: Rng::new(seed ^ 0x5ca1_ab1e), next_duet: f64::from(rng.range(20.0, 50.0)) }
+        World { actors: Vec::new(), rng: Rng::new(seed ^ 0x5ca1_ab1e), next_duet: f64::from(rng.range(40.0, 90.0)) }
     }
 
     fn resize(&mut self, want: usize, seed: u64) {
@@ -287,8 +329,13 @@ impl World {
     /// One fixed step, `dt` seconds, at engine time `t` (after the step).
     pub fn step(&mut self, t: f64, count: usize, seed: u64) {
         self.resize(count, seed);
-        for a in &mut self.actors {
-            a.advance(t);
+        // Whether *someone* is busy right now, one step stale (from before
+        // this step's own transitions) - which is exactly what "let the
+        // other one finish first" should look at.
+        let anyone_busy = self.actors.iter().any(|a| a.kind() != Kind::Idle);
+        for i in 0..self.actors.len() {
+            let others_busy = anyone_busy && self.actors[i].kind() == Kind::Idle;
+            self.actors[i].advance(t, others_busy);
         }
 
         // A duet: two skeletons walk in from opposite sides of a shared
@@ -326,7 +373,7 @@ impl World {
             }
             let (jx, jz) = self.actors[j].pos;
             let startled = snapshot.iter().enumerate().any(|(i, &(ix, iz, sudden))| i != j && sudden && (ix - jx).hypot(iz - jz) < STARTLE_RADIUS);
-            if startled && self.rng.f32() < 0.7 {
+            if startled && self.rng.f32() < 0.3 {
                 self.actors[j].force(t, vec![Planned { kind: Kind::Startle, target: None, dur: Some(1.0) }]);
             }
         }
@@ -408,6 +455,27 @@ mod tests {
         assert!(lo as f32 / hi as f32 > 0.25, "a motif is neglected against the rest: {counts:?}");
     }
 
+    /// Visual poetry, not busyness (the owner, 2026-09-26): over a long run
+    /// the two skeletons should rarely both be doing something at once.
+    /// Sampled with `World`, not a bare `Actor` pair, because the courtesy
+    /// wait in `Actor::advance` is the mechanism and `World::step` is what
+    /// wires `others_busy` up.
+    #[test]
+    fn the_two_skeletons_are_rarely_both_busy_at_once() {
+        let mut world = World::new(4090);
+        let total = 30 * 60 * 20_i64; // twenty minutes
+        let mut both_busy = 0;
+        for step in 1..=total {
+            let t = step as f64 / 30.0;
+            world.step(t, 2, 4090);
+            if world.actors.iter().all(|a| a.kind() != Kind::Idle) {
+                both_busy += 1;
+            }
+        }
+        let frac = f64::from(both_busy) / total as f64;
+        assert!(frac < 0.20, "both skeletons were busy at once {:.1}% of a twenty-minute run", frac * 100.0);
+    }
+
     #[test]
     fn a_new_actor_leaves_its_placeholder_action_on_the_first_step() {
         // The placeholder `Current` an actor is born with expires at once
@@ -415,7 +483,7 @@ mod tests {
         // only reaches it after a walk - so a real motif has begun by the
         // first fixed step.
         let mut a = Actor::new(1);
-        a.advance(1.0 / 30.0);
+        a.advance(1.0 / 30.0, false);
         assert_ne!(a.kind(), Kind::Idle, "still on the placeholder after the first step");
     }
 }
