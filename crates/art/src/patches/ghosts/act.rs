@@ -825,10 +825,13 @@ fn twirl_yaw(el: f32, dur: f32) -> f32 {
 
 // --------------------------------------------------------------------------
 
-/// Seconds of nothing on screen between beats. Card 326, on top of card
-/// 315's "empty moments between": "long empty moments between visits are
-/// good" - widened from the first pass's (1.2, 4.5).
-const REST: (f32, f32) = (2.5, 7.5);
+/// Seconds of nothing on screen between beats. Card 326 widened it to
+/// (2.5, 7.5) for "long empty moments"; the owner then saw the panel empty for
+/// many seconds at a time (2026-09-27: "they seem to frequently go offscreen
+/// for many seconds" - ~40% of frames empty, gaps over 6 s), because an act
+/// already spends real time crossing its own margin before it is on screen.
+/// Card 341 measured (0.6, 1.8) at ~88% of frames with a ghost, gaps ~2-3 s.
+const REST: (f32, f32) = (0.6, 1.8);
 /// How often a beat is more than a single ghost, when the `ghosts` param
 /// allows it. Card 326: "usually one ghost; two only as an occasional duet" -
 /// turned down hard from the first pass's 0.4.
