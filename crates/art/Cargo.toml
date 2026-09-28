@@ -6,12 +6,6 @@ description = "Generative art patches and the output pipeline for the screeny 64
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-# Card 333 (`thing`): clips are data files (`assets/thing/*.clip.json`),
-# embedded at compile time (`include_str!`, `patches/thing/clip.rs`) and
-# parsed once behind an `OnceLock`. Already in `Cargo.lock` (`crates/studio`,
-# `crates/sim`, `crates/probe`, `crates/device-api` all depend on it), so this
-# is enabling it for a fourth workspace member, not a new external crate.
-serde_json = "1"
 png = "0.17"
 wgpu = { version = "30.0.1", optional = true }
 pollster = { version = "1.0.1", optional = true }

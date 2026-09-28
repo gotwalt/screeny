@@ -6,11 +6,9 @@
 //! 313's rule that flock must stay byte-identical, and every patch here is
 //! its own thing rather than a shared dependency on another patch's private
 //! module). This patch needs the same generic vector algebra plus a
-//! quaternion, which nothing else in the tree has yet - card 328
-//! (`skeletons`) is building its own CPU 3D renderer in parallel and may want
-//! one too; if it does, lifting this into a shared `crate::geom3` (or
-//! similar) once both patches exist and agree what they need is worth doing
-//! later. Nothing here is leaves-specific.
+//! quaternion, which nothing else in the tree has yet; if another patch
+//! wants one, lifting this into a shared `crate::geom3` (or similar) is worth
+//! doing then. Nothing here is leaves-specific.
 
 /// A world-space vector, or a leaf-local one before it is rotated into world
 /// space - the type does not know which, same as `flock::sim::V3`.

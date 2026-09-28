@@ -84,9 +84,9 @@ const SUPERSAMPLE: usize = 3;
 /// How many moments across each frame's interval are rendered and averaged
 /// for the bats' motion blur (the moon does not move within a frame, so only
 /// the bats' coverage is resampled). Same reasoning and the same number as
-/// `skeletons` (card 328's Log, 2026-09-26): the owner lifted the
-/// compute-cost limit and asked by name for motion blur; four moments is
-/// enough that a wingbeat leaves a real, soft trail rather than a stutter.
+/// the since-removed `skeletons` patch (card 328's Log, 2026-09-26): the
+/// owner lifted the compute-cost limit and asked by name for motion blur;
+/// four moments is enough that a wingbeat leaves a real, soft trail rather than a stutter.
 const BLUR_SAMPLES: usize = 4;
 
 /// The background/moon brightness ramp, quantised into this many steps -
@@ -136,8 +136,7 @@ const DISC_U: f32 = 0.10;
 /// shaded, textured surface.
 ///
 /// Above [`DISC_U`], `l` is a cube root of `u` (OKLCH lightness is roughly
-/// linear brightness cubed for a neutral colour - the same reasoning
-/// `skeletons::box_scene::bands` uses), which is what keeps the terminator
+/// linear brightness cubed for a neutral colour), which is what keeps the terminator
 /// and the craters' own shading from crushing into black before they have
 /// had their say. Below it - which is only ever the halo, and the smooth
 /// blend right at the limb - that same cube root would do the opposite of

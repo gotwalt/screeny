@@ -20,13 +20,6 @@ mod lattice;
 mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
-pub(crate) mod skeletons;
-// Card 334: the hand's render became a GPU raymarched SDF (smooth-unioned
-// capsules and spheres, lit and shaded per-pixel in `thing.wgsl`), so `thing`
-// needs the adapter exactly as `ghosts`/`leaves`/`knot`/`lattice`/`overland`
-// do, and is gated the same way.
-#[cfg(feature = "gpu")]
-pub(crate) mod thing;
 pub(crate) mod vesta;
 
 /// Card 178 took two out of this list, at the author's word ("let's also kill
@@ -38,6 +31,12 @@ pub(crate) mod vesta;
 ///   `crates/art/tests/dark_ramp.rs` - card 102's acceptance, with the drawing
 ///   beside the tests that read it - so nothing that ships draws it and
 ///   nothing a person can play is a measuring instrument.
+///
+/// Two more went two more, at the owner's word ("let's kill the thing &
+/// skeletons patches - they require professional animation work that we're
+/// just not going to have time for"): **`skeletons`** (card 328) and
+/// **`thing`** (cards 333-337), with `thing`'s clip assets and
+/// `tools/thing-capture`. Both are in git history.
 pub static ALL: &[PatchDef] = &[
     clocks::DEF,
     clocks::dials::DEF,
@@ -49,9 +48,6 @@ pub static ALL: &[PatchDef] = &[
     ghosts::DEF,
     #[cfg(feature = "gpu")]
     leaves::DEF,
-    skeletons::DEF,
-    #[cfg(feature = "gpu")]
-    thing::DEF,
     #[cfg(feature = "gpu")]
     overland::DEF,
     #[cfg(feature = "gpu")]
@@ -73,8 +69,6 @@ pub static NEEDS_GPU: &[&str] = &[
     ghosts::DEF.id,
     #[cfg(feature = "gpu")]
     leaves::DEF.id,
-    #[cfg(feature = "gpu")]
-    thing::DEF.id,
     #[cfg(feature = "gpu")]
     overland::DEF.id,
     #[cfg(feature = "gpu")]
