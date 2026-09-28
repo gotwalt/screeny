@@ -102,12 +102,24 @@ fn every_patch_advances_by_time_and_not_by_frame_count() {
             skipped += 1;
             continue;
         }
-        let seed = 7;
-        let fast = run(def, seed, 1.0 / 60.0, (T * 60.0) as usize);
+        // A calm patch can be empty at both moments for one seed (the ghosts'
+        // rests between visits, card 340), which proves nothing either way. Try
+        // a few seeds and test the first whose picture moved; the rate
+        // comparison itself is unchanged.
+        let mut picked = None;
+        for seed in [7, 8, 9, 10] {
+            let fast = run(def, seed, 1.0 / 60.0, (T * 60.0) as usize);
+            // What a frame-counting patch would have drawn at 30: the same
+            // number of steps, half the time.
+            let counted = run(def, seed, 1.0 / 60.0, (T * 30.0) as usize);
+            let moved = diff(&fast, &counted) > 0.002 || peak(&fast, &counted) > 0.1;
+            picked = Some((seed, fast, counted));
+            if moved {
+                break;
+            }
+        }
+        let (seed, fast, counted) = picked.expect("at least one seed");
         let slow = run(def, seed, 1.0 / 30.0, (T * 30.0) as usize);
-        // What a frame-counting patch would have drawn at 30: the same number
-        // of steps, half the time.
-        let counted = run(def, seed, 1.0 / 60.0, (T * 30.0) as usize);
 
         let same_time = diff(&fast, &slow);
         let half_time = diff(&fast, &counted);
