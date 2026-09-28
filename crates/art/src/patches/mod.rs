@@ -32,7 +32,7 @@ pub(crate) mod vesta;
 ///   beside the tests that read it - so nothing that ships draws it and
 ///   nothing a person can play is a measuring instrument.
 ///
-/// Two more went two more, at the owner's word ("let's kill the thing &
+/// Two more went at the owner's word ("let's kill the thing &
 /// skeletons patches - they require professional animation work that we're
 /// just not going to have time for"): **`skeletons`** (card 328) and
 /// **`thing`** (cards 333-337), with `thing`'s clip assets and
