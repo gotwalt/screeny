@@ -449,7 +449,7 @@ body.settings-page .titleblock { max-width: 640px; }
 .row + .seg, .row + .slider, .slider + .slider, .seg + .seg, .seg + .switch, .switch + .switch,
 .switch + .slider, .seg + .row, .row + .hint, .hint + .slider, .switch + .row, .facts + .row,
 .hint + .facts, .hint + .row, .switch + .hint, .slider + .hint, .facts + .details, .row + .setup,
-.hint + .setup, .hint + .switch, .facts + .hint, .playing__notes + .patches { margin-top: 14px; }
+.hint + .setup, .hint + .switch, .facts + .hint, .playing__notes + .patches, .hint + .seg { margin-top: 14px; }
 /* Two hints in a row are one thought in two sentences, not two blocks. */
 .hint + .hint { margin-top: 6px; }
 .row label { flex: none; }
@@ -769,7 +769,7 @@ select:hover { border-color: var(--dim); }
   input[type="range"]::-webkit-slider-thumb { width: 22px; height: 28px; margin-top: -12px; border-radius: 3px; }
   input[type="range"]::-moz-range-thumb { width: 22px; height: 28px; border: 0; border-radius: 3px; background: var(--paper); }
 
-  .setup summary, .view summary { display: flex; align-items: center; min-height: 44px; }
+  .setup summary, .view summary { padding: 15px 0; margin: -15px 0; } /* 44 px to hit, the triangle kept */
   .pcard { min-height: 48px; }
   .same__one { min-height: 48px; }
   .playing__actions button { min-height: 44px; }

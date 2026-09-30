@@ -26,17 +26,19 @@ screen is still a *window* onto what the panels are doing - for when they are no
 eyesight: the frames the browser draws for a panel are the same decoded datagrams that
 panel is sent, and every control changes the panel it is about - a route or a socket
 names one with `panel`, and without one it means **the first panel** (the first one
-adopted). Card 351 gives the page its panel overview; until then it shows the first
-panel, as it always showed the one panel.
+adopted). The page (card 351) opens the Picture and Panel screens on a **row of panel
+cards** - a live thumbnail (Picture only), the name, the picture, a dot for the link - and
+the panel a screen is about is `?panel=<device id>` in its URL, carried across the nav;
+without one it is the first panel, so a studio with one panel reads as it always did.
 
 There are **three screens** onto that one studio (cards 198, 301, 311), tied together by
 one nav at the top of every one of them, because the work is three kinds of work:
 
 | | |
 |---|---|
-| **Picture**, `/` | the canvas, what is playing, its parameters, and its named settings. Everything that changes or judges what the picture looks like, and nothing else. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel, so it is not a panel setting either. |
-| **Panel**, `/panel` | which panel, whether the studio is even looking for one, the output switch, brightness, the panel model, the limiter, the link, what the device says about itself, identify / rename / reboot, "change which panel", and the studio's own health. |
-| **Settings**, `/settings` | the studio's own settings, starting with Home Assistant (card 311): the broker, the device's name and id, and removing it. Card 303's Schedule screen had this place until card 310 retired modes and the timetable; `/schedule` now redirects (307) to `/`. |
+| **Picture**, `/?panel=` | the panel row, then the chosen panel's canvas, what is playing, its parameters, and its named settings; which other panels share its picture ("Also on Kitchen", **Detach**) and **Same as** each other panel with a picture; an idle panel says so, and picking a patch starts it. Everything that changes or judges what the picture looks like, and nothing else. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel, so it is not a panel setting either. |
+| **Panel**, `/panel?panel=` | the panel row (no thumbnails), then for the chosen panel: whether the studio is even looking for panels, its output switch, brightness, the panel model, the limiter, the link, what the device says about itself, identify / rename / reboot / forget, "add a panel" by address, and the studio's own health. |
+| **Settings**, `/settings` | its chip is about every panel ("2 panels · 2 live", the fault tone and a link to the first panel that needs attention); the studio's own settings, starting with Home Assistant (card 311): the broker, the device's name and id, and removing it. Card 303's Schedule screen had this place until card 310 retired modes and the timetable; `/schedule` now redirects (307) to `/`. |
 
 Card 301 also simplified the Picture screen: Speed and the pause/restart controls
 are gone - "I don't think speed should be varyable and start/stop is baffling in
@@ -888,6 +890,13 @@ tidy URL.
 `aria-current="page"` - real navigation, so reload and the back button stay the
 browser's job, rather than tabs that swap what one document shows. Card 311 gave the
 third place to Settings; `/schedule` redirects (307) to `/` for an old bookmark.
+
+**Phones are first-class** (card 351, the owner: "check the studio web ui for mobile
+responsiveness"). At 390 px no screen scrolls sideways (the panel row scrolls within
+itself and snaps to a card); on a touch screen or anything under 700 px wide every control
+is 40-44 px to hit - buttons, selects, text boxes, segmented controls, the patch list,
+switches, slider thumbs, the nav; canvases keep square pixels (`image-rendering:
+pixelated`). Checked at 390x844, 768x1024 and 1440x900 against two `screeny-sim` panels.
 
 Each screen is a **scrolling column by default** - the Picture screen is picture, view,
 now playing, parameters... - and splits into two columns only above 1100 px, where

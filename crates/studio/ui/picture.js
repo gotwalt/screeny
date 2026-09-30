@@ -404,6 +404,9 @@ async function start() {
       ? `Also on ${others.map(panelName).join(', ')}. A change here changes ${others.length === 1 ? 'it' : 'them'} too.`
       : '';
 
+    // Said again here because the panel's name comes with the overview,
+    // which can arrive after the state that made it idle.
+    if (idle()) $('#patch-blurb').textContent = `${panelName(here())} is on its own screen. Pick a picture below to start it.`;
     $('#idle-note').hidden = !idle();
     $('#idle-note').textContent = idle() ? 'Nothing is being sent to this panel. Pick a picture to start it.' : '';
 
@@ -580,6 +583,13 @@ async function start() {
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === here()) : null) || null;
   /** The panel link, from the half-second heartbeat. Null when output is off. */
   let link = null;
+  /** Card 351: until the first heartbeat, the overview's word on this panel's
+   *  link, so the chip does not open on "away" for a panel that is live. */
+  const linkOrOverview = () => {
+    if (link) return link;
+    const mine = overview.find((p) => p.device === here());
+    return mine && mine.connected ? { connected: true } : null;
+  };
 
   /** The status chip in the title block: the one thing on this screen that is
    *  about the panel rather than the picture, and the way to the Panel screen.
@@ -603,7 +613,7 @@ async function start() {
     const device = attachedDevice();
     const chip = $('#ro-panel');
     const here = paintChip(chip, {
-      attachedId: attachedId(), device, on: state.on, link, rate: link ? link.fps : null, idle: idle(),
+      attachedId: attachedId(), device, on: state.on, link: linkOrOverview(), rate: link ? link.fps : null, idle: idle(),
     });
     chip.title = device && device.last_seen_ago !== null && device.last_seen_ago !== undefined
       ? `Heard ${ago(device.last_seen_ago)}. The panel screen has the rest.`
@@ -816,7 +826,7 @@ async function start() {
     frame: (buf) => { newest = buf; row.frame(buf); },
     state: (message) => sync(message.state),
     status: (message) => { link = message.panel; showPlaying(message.playing); showChip(); },
-    panels: (message) => { overview = message.panels || []; row.update(overview); showSharing(); },
+    panels: (message) => { overview = message.panels || []; row.update(overview); showSharing(); showChip(); },
     // The panel in the URL has been forgotten: go to the first one.
     error: () => forgetChoice(),
   }, undefined, { panel: chosen });

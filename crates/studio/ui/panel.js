@@ -34,6 +34,9 @@ async function start() {
   let picture = null;
   /** The panel link, from the half-second heartbeat. Null when output is off. */
   let link = null;
+  /** Card 351: the overview's word on this panel's link - what the state
+   *  pill goes by until the first heartbeat, so it does not open on "away". */
+  let overviewSaysUp = false;
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
@@ -165,7 +168,7 @@ async function start() {
         ? 'Idle: it is on its own screen. Switch it on below, or pick a picture for it on the Picture screen.'
       : !state.on
         ? 'The panel is on its own idle screen. The patch is still playing here.'
-        : link && link.connected
+        : here.key === 'live'
           ? `Sending to ${device ? (device.frame_addr || device.address || device.instance || device.id) : name}.`
           : `${name} is away. It will pick this up again by itself when it comes back.`;
 
@@ -182,7 +185,7 @@ async function start() {
 
   function showPanel() {
     const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link, idle: idle() });
+    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link: link || (overviewSaysUp ? { connected: true } : null), idle: idle() });
     showHead(here, device);
 
     // Card 351: an idle panel shows nothing whatever its output says, so the
@@ -517,7 +520,12 @@ async function start() {
   connect({
     state: (message) => { state = message.state; showPanel(); },
     status: (message) => { link = message.panel; showPanel(); },
-    panels: (message) => row.update(message.panels || []),
+    panels: (message) => {
+      const list = message.panels || [];
+      row.update(list);
+      overviewSaysUp = Boolean((list.find((p) => p.device === attachedId()) || {}).connected);
+      showPanel();
+    },
     // The panel in the URL has been forgotten: go to the first one.
     error: () => forgetChoice(),
   }, noFrames, { panel: chosen });
