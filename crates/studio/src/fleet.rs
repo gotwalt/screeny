@@ -284,7 +284,7 @@ fn probe_targets(st: &AppState) -> Vec<std::net::SocketAddr> {
 /// One `GET_INFO` to the broadcast address; every panel answers with its own
 /// `id=`; a known id at a new address is that panel, moved
 /// ([`devices::Registry::probed`]). The studio's registry is keyed by that id,
-/// so following it costs the panel nothing: same player, same patch, same
+/// so following it costs the panel nothing: same panel, same patch, same
 /// seed, new address.
 ///
 /// Bounded, and each bound is deliberate:

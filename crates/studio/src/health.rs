@@ -29,8 +29,8 @@
 //! nowhere else.
 //!
 //! Card 106 had a fourth - "the preview engine is wedged or dead" - and card
-//! 170 deleted the thing it was about. There is one engine now, the player for
-//! the attached panel, and a player that wedges is *recovered* by its own
+//! 170 deleted the thing it was about. The channels are the only things that render,
+//! and a channel that wedges is *recovered* by its own
 //! watchdog within [`WATCHDOG`] rather than waiting for somebody to restart
 //! the container.
 //!
@@ -78,15 +78,15 @@ pub struct Status {
     /// forgotten in a container should be able to say how much of its traffic
     /// is browsers, without anybody having to read `docker stats`.
     pub sockets: crate::page::PreviewCost,
-    /// One entry per device, whether or not it has a player or is reachable.
+    /// One entry per device, whether or not it is reachable.
     pub devices: Vec<DeviceStatus>,
 }
 
-/// The player the page is a window onto.
+/// The first panel: what a route without `panel` means.
 ///
 /// Card 106 called this the preview engine and read it from a cached view,
 /// because a wedged patch held the engine's lock and this route had to answer
-/// anyway. It is read straight from the player now: a player's core is owned
+/// anyway. It is read straight from the panel's channel now: a channel's core is owned
 /// by its own render thread and is behind no shared lock, so there is nothing
 /// left that a wedged patch could hold.
 #[derive(Serialize)]
@@ -116,7 +116,7 @@ pub struct PreviewStatus {
     pub panel: Option<PanelStatus>,
 }
 
-/// One device, its player and everything the device itself says.
+/// One device, its panel and everything the device itself says.
 #[derive(Serialize)]
 pub struct DeviceStatus {
     pub id: String,

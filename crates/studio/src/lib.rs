@@ -67,7 +67,7 @@ use crate::state::{SharedMemory, Store};
 const STATE_BACKLOG: usize = 32;
 /// How often the "now playing" and panel-link heartbeat goes out.
 const STATUS_EVERY: Duration = Duration::from_millis(500);
-/// How long after starting a player is allowed to not be running yet before
+/// How long after starting a channel is allowed to not be running yet before
 /// that counts against `/healthz`.
 pub const START_GRACE: Duration = Duration::from_secs(15);
 /// **The fastest a device's own HTTP status API may be read** (card 180).
@@ -180,7 +180,7 @@ pub struct AppState {
     pub overview: watch::Sender<Arc<Vec<PanelSummary>>>,
     pub ui: Arc<ui::Ui>,
     /// True once the studio has been asked to stop. Everything that would
-    /// otherwise run for ever - every player, the status task, every open
+    /// otherwise run for ever - every channel, the status task, every open
     /// preview socket - watches this, so a shutdown is not held up by a
     /// browser that is perfectly happy.
     pub stop: watch::Receiver<bool>,
@@ -196,7 +196,7 @@ pub struct AppState {
     pub memory: SharedMemory,
     pub cfg: Arc<Config>,
     /// When the process started, for `/api/v1/status` and for the grace period
-    /// `/healthz` gives a player that has not started yet.
+    /// `/healthz` gives a channel that has not started yet.
     pub started: Instant,
     /// Card 311: Home Assistant - its settings, and how the connection is
     /// doing.
@@ -332,7 +332,7 @@ pub struct Studio {
     ha: ha::client::Handle,
 }
 
-/// Stops the studio when dropped: every player ends, the panel link sends
+/// Stops the studio when dropped: every channel ends, every panel link sends
 /// `FINAL`, and the server stops accepting. Tests hold one of these so that a
 /// finished test leaves nothing running.
 pub struct Running {
@@ -518,7 +518,7 @@ async fn signalled() {
 
 /// The heartbeat: read once here however many browsers are watching.
 ///
-/// Since card 170 this cannot be held up by a wedged patch. A player's core is
+/// Since card 170 this cannot be held up by a wedged patch. A channel's core is
 /// owned by its own render thread and is behind no shared lock, so "what is it
 /// performing and what is the link doing" is always answerable - which is what
 /// card 106's `try_lock` dance around the design view's engine was for, and

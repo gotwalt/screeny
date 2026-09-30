@@ -15,11 +15,19 @@ cargo run -p screeny-studio -- --ui-dir crates/studio/ui    # edit the UI, reloa
 
 Use `--release` for anything that streams: a debug build's encoder will not hold 30 fps.
 
-**One panel, one picture.** A Studio is set up once against a panel and is then
-almost always connected to it, and every screen is a *window* onto what that panel is
-doing - for when the panel is not within eyesight. The frames the browser draws are
-the same decoded datagrams the panel is being sent, and every control on the page
-changes the panel: a patch, a slider, the setting a clock holds it to.
+**Several panels: channels** (cards 350-352, `docs/design/studio-vision.md`, "Several
+panels"). A Studio drives every panel it finds. A **channel** is a running picture - a
+patch, the named setting it came from, its working copy - rendered once per tick; a
+**panel** is a device and everything about the device - its link, on/off, brightness,
+output settings - and follows one channel, or none (**idle**: the device shows its own
+screen). The same picture can be on several panels, in sync, because they are on one
+channel; several pictures can play at once, because there are several channels. Every
+screen is still a *window* onto what the panels are doing - for when they are not within
+eyesight: the frames the browser draws for a panel are the same decoded datagrams that
+panel is sent, and every control changes the panel it is about - a route or a socket
+names one with `panel`, and without one it means **the first panel** (the first one
+adopted). Card 351 gives the page its panel overview; until then it shows the first
+panel, as it always showed the one panel.
 
 There are **three screens** onto that one studio (cards 198, 301, 311), tied together by
 one nav at the top of every one of them, because the work is three kinds of work:
@@ -69,38 +77,59 @@ Patches, the pipeline, the panel model and the studio's meters are documented in
 ## What it is made of
 
 ```
- state file ──> device registry ──> one player per panel ──> screeny::Link ──UDP──> panel
-      ^              ^                      │   ^
-      │       mDNS browse + typed addresses │   │
-      │                                     │   └── supervisor (1 Hz): watchdog,
-      └── every change ──────────────────── │       fallback, reconnect, brightness
-                                            │
-                                            └── the page's frame cell ──WS──> browsers
+ state file ──> device registry ──> panels (one per device, adopted idle)
+      ^              ^                  │ each follows one channel, or none
+      │  mDNS browse + typed addresses  v
+      │                            channels ── one render per tick, handed to every panel on it
+      │                                 │        │
+      │                                 │        └─> per panel: its pipeline ─> screeny::Link ──UDP──> device
+      │                                 │                                   └─> its frame cell ──WS ?panel=──> browsers
+      └── every change                  └── supervisor (1 Hz): watchdog, fallback, adoption,
+                                                               reconnect, brightness
 ```
 
-**There is one thing that renders**, and it is the player for the attached panel. The
-page reads its frames out of a one-slot cell and its controls go straight to it, so
-"what the browser is drawing" and "what the panel is showing" are the same bytes by
-construction rather than by agreement.
+**Channels render; panels show** (card 350, splitting card 106's player along the line
+that was already inside it - the cross-fade blends in linear light *before* the limiter).
+A channel renders one linear frame per tick and hands it to each panel on it; each panel
+puts it through **its own** pipeline (limiter, panel model, quantise), fills **its own**
+one-slot preview cell and sends it on **its own** link. So two panels on one channel move
+in lock-step and can still differ in dither or limiter, and "what the browser is drawing
+for a panel" and "what that panel is showing" are the same bytes by construction rather
+than by agreement.
 
 - **Devices are keyed by their own stable id** (the `id=` TXT key, or what `GET_INFO`
-  answers), never by IP. A panel that takes a new DHCP lease is the same panel with the
-  same player. A typed address is a *way of reaching* a panel and not a name for it: a
-  device added by address gets a provisional `pending:<what was typed>` id and adopts
-  its real one the first time it answers.
-- **One player per panel**, each rendering on its own thread. A collection from day
-  one even though one panel is the expected case; several panels get a plain chooser
-  and nothing more, and no multi-panel sync or fan-out is built (a possible later
-  addition, 091). The page shows the **focused** one.
-- **A studio always has a picture**, even before it has a panel. With none found yet
-  the player is *unbound*: it renders for the page and has no link. The first panel
-  found is **adopted into that same player** - renamed onto it, same thread, same
-  patch - so the picture the browser is watching simply starts reaching the panel
-  rather than restarting on it.
+  answers), never by IP. A panel that takes a new DHCP lease is the same panel. A typed
+  address is a *way of reaching* a panel and not a name for it: a device added by address
+  gets a provisional `pending:<what was typed>` id and adopts its real one the first time
+  it answers - the panel is renamed in place, keeping its channel and its place in line.
+- **Every device is a panel, adopted idle** (card 350): whatever the browse finds or a
+  human adds becomes a panel with no channel and no stream, named after its instance, so
+  the device shows its own screen until somebody gives it a picture. Panels are kept in
+  the order they were adopted; the first is what a route without `panel` means.
+- **Picking a picture for a panel** - a patch, a named setting, Home Assistant - goes by
+  three rules, in order: (1) another channel already shows exactly that picture (patch +
+  named setting, no unsaved tweaks): the panel **joins** it; (2) the panel is alone on its
+  channel: that channel **changes**, with its 2 s fade; (3) otherwise the panel **leaves**
+  its group for a new channel. **Same as** (`/same_as`) joins another panel's channel,
+  tweaks and all; **Detach** (`/detach`) gives a panel a copy of its channel with its own
+  clock from then on. A slider edits the **channel**, so every panel on it changes
+  together (the state says which others are on it: `shared_with`).
+- **A panel that changes channel fades** over 2 s, in its own output stage: it keeps the
+  old channel's frames while it fades (the old channel keeps rendering at full rate until
+  it has) and blends them with `crossfade::blend`, before its limiter. A panel joining a
+  channel follows that channel's clock; it does not restart it. A channel no panel follows
+  is dropped once the last one has faded away from it.
+- **A studio always has a picture**, even before it has a panel: with none found yet it is
+  on the *unbound* stand-in panel, which has no device and no link. The first panel
+  somebody **names** (`set_panel {"on":true,"to":...}`, `devices/add` with `play`) is
+  renamed onto the stand-in, so the picture the browser is watching simply starts reaching
+  the panel rather than restarting; a panel that is merely *found* is adopted idle and the
+  stand-in goes.
 - **Panel output off** (`POST /api/v1/set_panel {"on":false}`, or the switch on the
-  page) releases the link with `FINAL`. The panel goes back to its own idle screen
-  and **stops receiving frames**; the page carries on showing the patch. That is the
-  one way to look without touching the panel, and it is deliberately the only one.
+  page) releases the link with `FINAL` - every panel's, or one panel's with `panel`. The
+  device goes back to its own idle screen and **stops receiving frames**; the page carries
+  on showing the picture. That is the one way to look without touching a panel, and it is
+  deliberately the only one.
 - **Changes are drained, not thrown at a new thread.** A change goes into a one-slot
   mailbox that the render loop applies before its next frame, so dragging a slider -
   sixty changes a second - costs one re-read per frame. Only a panic or a stall
@@ -112,7 +141,7 @@ construction rather than by agreement.
   re-resolve anything, so when it has been unheard for longer than `stale_after` the
   studio sends one `GET_INFO` to the subnet broadcast address (spec 5.5) on the browse's
   own tick. Every panel answers with its own `id=`, the registry is keyed by that id, and
-  a known id at a new address is that panel: its address is updated and its player, patch
+  a known id at a new address is that panel: its address is updated and its channel, patch
   and seed carry on. One probe in flight, capped jittered backoff, one line in the log
   per panel followed and none per attempt, and off under `--no-discover`. A panel reached
   by name is left alone - it already follows itself - and an id this studio does not know
@@ -125,111 +154,113 @@ page, so:
 
 **Nothing grows without bound.** Preview frames live in a one-slot `watch` cell, state
 changes in a fixed-depth broadcast, and a socket that cannot take a message in three
-seconds is closed. There is one render thread per player, one link, one control request
-in flight, one browse and one probe at a time, a one-slot mailbox in front of the state
-file, and every fault is logged *once* rather than once a frame. A device that does not
-answer is polled on capped, jittered backoff. While a panel is away its player renders at
-5 fps instead of 30: a panel unplugged for a month must not cost a core for a month.
+seconds is closed. There is one render thread per channel - one per picture, not one per
+panel - one link per panel, one control request in flight, one browse and one probe at a
+time, a one-slot mailbox in front of the state file, and every fault is logged *once*
+rather than once a frame. A device that does not answer is polled on capped, jittered
+backoff. A channel none of whose panels is connected or watched renders at 5 fps instead
+of 30: a panel unplugged for a month must not cost a core for a month. A channel no panel
+follows does not exist at all.
 
 **A bad patch cannot take the process down.** A patch that panics is caught
 (`catch_unwind`), logged once and replaced by a safe fallback in milliseconds. A patch
 that *stalls* - a frame that never comes back - is caught by a five-second watchdog: the
 wedged thread is told to stop and abandoned (no thread can be killed in Rust) and a fresh
-core takes over. The panel link belongs to the player and not to the core, so abandoning
-one leaks a patch's render state and one thread, never a socket, a link thread or the
-panel's source lock. Three faults in a row and the player stops trying and says so:
-a restart loop is worse than a stopped player.
+core takes over. Links and pipelines belong to the panels and not to the core, so
+abandoning one leaks a patch's render state and one thread, never a socket, a link thread
+or a device's source lock. Three faults in a row and the channel stops trying and says so:
+a restart loop is worse than a stopped picture. A fault is the channel's, so it is every
+panel on it that falls back - and no other.
 
 **The state file.** One small JSON file, `state.json`, in the state directory: what
-devices are known, what each plays, and which one the page is showing. Written atomically
-(temp file, `fsync`, rename) by one thread, newest-wins, and not written at all when
-nothing has changed. It is versioned, and a version this build does not understand is
-moved aside rather than parsed or deleted. **Missing, empty, truncated, corrupt,
-wrong-typed or from the future all start a sane default and say why once** - a state
-file is never a reason for the server not to run.
+devices are known, which panel follows which channel, what each channel shows, and every
+named setting. Written atomically (temp file, `fsync`, rename) by one thread,
+newest-wins, and not written at all when nothing has changed. It is versioned, and a
+version this build does not understand is moved aside rather than parsed or deleted.
+**Missing, empty, truncated, corrupt, wrong-typed or from the future all start a sane
+default and say why once** - a state file is never a reason for the server not to run.
 
-**What each patch was left set to** (card 165, schema v2) is in that same file and
-**nowhere else**: no second file, nothing in the working directory, nothing in the
-browser's `localStorage`. That matters operationally - the container mounts a volume at
-`SCREENY_STATE_DIR` and only what is written there survives an image rebuild - and it is
-why switching patches and switching back gives you what you had, before and after a
-`docker restart`.
+**What each panel is showing, tuning and all, and every named setting** are in that
+same file and **nowhere else**: no second file, nothing in the working directory,
+nothing in the browser's `localStorage`. That matters operationally - the container
+mounts a volume at `SCREENY_STATE_DIR` and only what is written there survives an image
+rebuild - and it is why a `docker restart` comes back showing exactly what it showed.
 
 ```jsonc
-"version": 7,
-"devices": [ { "id": "c0ffee", "name": "Desk", ... } ],
-"players": [ { "device": "c0ffee", "patch": "metaballs", "on": true,
-               "paused": false, "speed": 1.0, ... } ],
-"focus": "c0ffee",                          // which panel the page is a window onto
-"patches": {                                // and how each patch is set, once
+"version": 8,
+"devices": [ { "id": "c0ffee", "name": "Desk", ... }, { "id": "d00d1e", ... } ],
+"panels": [                                 // card 350, in the order they were adopted
+  { "device": "c0ffee", "on": true, "channel": 3, "output": { ... }, "brightness": 96 },
+  { "device": "d00d1e", "on": true, "channel": 3, "output": { ... }, "brightness": null },
+  { "device": "beef01", "on": true, "output": { ... }, "brightness": null }  // no channel: idle
+],
+"channels": [                               // the pictures; one both panels above follow
+  { "id": 3, "patch": "metaballs", "setting": "Lava", "seed": 111, "params": { "size": 2.5 } }
+],
+"patches": {                                // named settings, one library per patch
   "metaballs": {
-    "seed": 111, "params": { "size": 2.5 }, "speed": 0.4,    // the working copy
-    "setting": "Lava",                                       // loaded from this
-    "settings": {                                            // card 151
-      "Lava":     { "seed": 111, "params": { "size": 2.5 }, "speed": 0.4 },
-      "Slow ink": { "seed": 222, "params": {},              "speed": 0.2 }
+    "settings": {                           // card 151
+      "Lava":     { "seed": 111, "params": { "size": 2.5 }, "speed": 1.0 },
+      "Slow ink": { "seed": 222, "params": {},              "speed": 1.0 }
     }
-  },
-  "clocks-dials": { "seed": 222, "params": { "dwell": 90 } }
+  }
 },
 "home_assistant": { "enabled": false, "host": "", "port": 1883, ... }   // card 311
 ```
 
-Schema **v7**: card 310 dropped `modes`, `schedule` and `schedule_run` - Home Assistant
-picks a patch and setting now, and keeps the time - and a file that had any of them says
-so once, in the `repaired` voice, naming what it lost (`note_retired_modes` in
-`src/state.rs`), so the owner can set the same up on the HA side. v7 also added
-`home_assistant` (card 311): the broker, the device's id and name, kept nowhere else.
-v6 (card 302) had added `modes`, `schedule` and `schedule_run` in the first place, and
-retired speed and pause - `speed` and `paused` keep their places in the file for an
-older build's sake, and every load puts them back to 1.0 and `false`. Card 151 (v5)
-added a patch's named settings and the `speed` that is part of them; card 150 renamed
-three keys - `pieces` -> `patches`, a player's `piece` -> `patch` and its `settings` ->
-`output` - and nothing else. Every old key is still read, and a file older than v5 is
-copied to `state.vN.json` before it is migrated, so an older build can be put back on
-the same volume.
+Schema **v8** (card 350): `players` became `panels` and `channels`, `focus` went - which
+panel a page looks at is the page's business now (`?panel=`) - and `patches` keeps the
+named settings and **no longer keeps a working copy per patch**: a picture's tuning is its
+channel's. A channel's `setting` is the name its working copy came from (absent is
+Default); whether it has been moved since is computed, as it always was. The migration
+gives every v7 player its own panel and channel, so the picture on each panel does not
+change across the upgrade, and puts the focused one first, so a route without `panel`
+still means the panel it meant. A patch whose working copy was showing nowhere and had
+moved away from its setting is **named once**, in the `repaired` voice - that tuning has
+nowhere to live in v8, and a named setting is what keeps one - and the v7 file is kept as
+`state.v7.json`, as every migration's is. A hand-edited v8 file that names a panel twice,
+points a panel at a channel that is not there, or puts a channel on a patch this build has
+not got costs exactly that, said once (`repair_panels` in `src/state.rs`).
 
-v1, v2, v3 and v4 files are migrated in place, never thrown away, and a v1 file comes all
-the way up in one start.
-v2's `preview` block - the design view's own patch, back when it had one - is merged
-into `patches` where the memory knows nothing about that patch, and dropped otherwise,
-because a player's tuning must not be overwritten by a context that no longer exists.
-`panel_on`/`panel_to` become the player's own `on`. A v2 file with **no** players, where
-the design view was the only thing playing, becomes a player rather than losing what it
+v7 (card 310) dropped `modes`, `schedule` and `schedule_run` - Home Assistant picks a
+patch and setting now, and keeps the time - and a file that had any of them says so once,
+naming what it lost (`note_retired_modes`), so the owner can set the same up on the HA
+side. v7 also added `home_assistant` (card 311): the broker, the device's id and name,
+kept nowhere else. v6 (card 302) had added modes and the schedule in the first place, and
+retired speed and pause - `speed` keeps its place in a named setting for an older build's
+sake, and every load puts it back to 1.0. Card 151 (v5) added a patch's named settings;
+card 150 renamed three keys - `pieces` -> `patches`, a player's `piece` -> `patch` and
+its `settings` -> `output` - and nothing else. Every old key is still read, and a file
+older than v8 is copied to `state.vN.json` before it is migrated, so an older build can be
+put back on the same volume.
+
+v1 to v7 files are migrated in place, never thrown away, and a v1 file comes all the way
+up in one start. v2's `preview` block - the design view's own patch, back when it had
+one - was merged into the per-patch memory where it knew nothing about that patch, and a
+v2 file with **no** players, where the design view was the only thing playing, becomes a
+panel (the unbound stand-in, or the device `panel_to` named) rather than losing what it
 was showing.
 
-There is **one** memory for the whole studio, not one per context: tuning a patch
-anywhere updates it, switching to a patch anywhere restores from it. (The card asked for
-one per context; that was reversed on 2026-09-19 because the browser is
-meant to be a window onto what the panel is doing, and card 170 unifies the preview and
-the player into one engine. A per-context memory would have been built for a distinction
-that is about to go away.) Which patch is showing where is still per context - the design
-view and a panel can be on different patches - it is only *how a patch is set* that is one
-fact.
+**Only what differs from the patch's defaults is stored**, on a channel and in a setting,
+so a later release's better default still reaches everybody who never moved that slider,
+and the file stays small. The seed is kept with the parameters; the pipeline `output`
+(panel model, dither, limiter) is not part of a picture - it is a panel's.
 
-**Only what differs from the patch's defaults is stored**, so a later release's better
-default still reaches everybody who never moved that slider, and the file stays small.
-The seed is remembered with the parameters, and since card 151 so is the **speed**,
-because a setting carries it; the pipeline `output` (panel model, dither, limiter) is not,
-and neither is `paused` - that is about playback, not about the patch. (`fps` was in
-this sentence until card 161, which made it not a setting of anything.)
-
-**A remembered value can never break a patch.** Patches gain, lose and re-range
-parameters between releases, so every value is checked against this build's own spec on
-the way in, one value at a time: a parameter that has gone away is ignored, one outside
-the range is clamped to it (which is what the slider would do), and one that is not a
-finite number at all goes back to the patch's default. One bad value never costs the
-rest of that patch's memory, and - this is the part worth stating, because it is the
-difference between a repair and card 106's `state.bad.json` - it never costs the rest of
-the file. An entry for a patch this build has not got is **kept**, so a patch that comes
-back in a later release comes back set up the way it was left; at most 64 such entries
-are kept, so a hand-edited file cannot grow for ever. Whatever had to be corrected is
-said once, on the way in, and appears under `state.repaired` in `/api/v1/status`. It is
-not a fault and never a 503.
+**A stored value can never break a patch.** Patches gain, lose and re-range parameters
+between releases, so every value is checked against this build's own spec on the way in,
+one value at a time: a parameter that has gone away is ignored, one outside the range is
+clamped to it (which is what the slider would do), and one that is not a finite number at
+all goes back to the patch's default. One bad value never costs the rest of a setting,
+and - this is the part worth stating, because it is the difference between a repair and
+card 106's `state.bad.json` - it never costs the rest of the file. The settings of a patch
+this build has not got are **kept**, so a patch that comes back in a later release comes
+back with them; at most 64 such entries are kept, so a hand-edited file cannot grow for
+ever. Whatever had to be corrected is said once, on the way in, and appears under
+`state.repaired` in `/api/v1/status`. It is not a fault and never a 503.
 
 "Reset" (`POST /reset_params`, or `player/set {reset_params: true}`) means *back to the
-defaults and stay there*: it forgets that patch's parameters rather than handing them
-back on the next switch. It leaves the seed alone, which is what Reset is about. On the
+defaults*: the channel's parameters go back to the patch's own. It leaves the seed alone,
+which is what Reset is about. On the
 page it is not a button any more: it is loading **Default**, which does the same and more
 (see below).
 
@@ -240,8 +271,8 @@ The model, in four words the rest of this section uses:
 | | |
 |---|---|
 | **patch** | metaballs. What plays. |
-| **working copy** | what it is set to *now*: its parameters, its seed and its speed. There is one per patch, it is what the page's sliders move, and it survives a restart - which it did before this card, as the per-patch memory. |
-| **setting** | a working copy saved under a name. A patch can have up to 64. They belong to the **patch**, not to a panel: attach a second panel and the same settings are there. |
+| **working copy** | what a picture is set to *now*: its parameters and its seed. Since card 350 there is one per **channel** - it is what the page's sliders move, so every panel on the channel moves with it - and it survives a restart. (Cards 151-310 kept one per patch; a patch picked afresh now arrives on its Default.) |
+| **setting** | a working copy saved under a name. A patch can have up to 64. They belong to the **patch**, one library for the whole studio, not to a panel or a channel: every panel has the same settings to pick from. |
 | **Default** | the setting every patch has and nobody can change: its declared parameter defaults, speed 1.00x and a fixed seed. Not stored - synthesised - so a release that improves a default improves Default for everybody. |
 
 **"Modified" is computed, never stored.** It is the working copy compared with the
@@ -271,13 +302,16 @@ Names are trimmed, 1 to 40 characters, unique within a patch however they are sp
 (`Lava` and `lava` are one setting), and `Default` is reserved in any case. A refusal is a
 **400 with a sentence**, which the page puts on the line beside the control.
 
+Each takes `panel` (card 350): the setting is about that panel's channel.
+
 | route | body | answer |
 |---|---|---|
-| `POST /settings/load` | `{name}` - `Default`, or empty for the one it is on ("Revert") | the new state |
-| `POST /settings/save` | `{name?}` - a name is "Save as...", no name overwrites the one it is on | the new state |
-| `POST /settings/rename` | `{from?, to}` - no `from` is the one it is on | the new state |
-| `POST /settings/delete` | `{name?}` | the new state |
-| `POST /player/set` | `{device, setting}` | the same load, on a panel other than the page's |
+| `POST /settings/load` | `{name, panel?}` - `Default`, or empty for the one it is on ("Revert"). **A picture pick**: card 350's three rules, so a panel sharing its channel that loads something else splits off, and one that loads what another channel is already showing joins it | the panel's new state |
+| `POST /settings/save` | `{name?, panel?}` - a name is "Save as...", no name overwrites the one its channel is on | the panel's new state |
+| `POST /settings/rename` | `{from?, to, panel?}` - no `from` is the one its channel is on; every channel on it follows the name | the panel's new state |
+| `POST /settings/delete` | `{name?, panel?}` - every channel that was on it is then on Default, and reads as modified | the panel's new state |
+| `POST /set_picture` | `{patch, setting?, panel?}` | a patch on one of its settings, in one step (card 350) |
+| `POST /player/set` | `{device, setting}` | the same load, by device |
 
 ```sh
 curl -s -X POST -H 'content-type: application/json' \
@@ -288,12 +322,11 @@ curl -s -X POST -H 'content-type: application/json' \
 The **list**, the **current name** and **`modified`** travel in `StudioState`, so every
 answer and every broadcast carries them and no browser needs a second read: a save, a
 load, a rename or a delete in one browser shows in another at once. **Loading is one
-change** - the parameters, the seed and the speed move together, one broadcast and one
-write - so the panel follows in one step rather than through a burst of half-loaded
-pictures.
+change** - the parameters and the seed move together, one broadcast and one write - so
+the panel follows in one step rather than through a burst of half-loaded pictures.
 
 Deleting a setting **does not change what is playing**: the values stay, the name goes,
-so the patch is on Default and honestly marked modified.
+so every channel that was on it is on Default and honestly marked modified.
 
 > The panel's own firmware serves a `POST /api/v1/settings` of its own
 > ([`docs/design/device-web.md`](../../docs/design/device-web.md)) for its WiFi and its
@@ -304,10 +337,9 @@ Putting a good setting into the repo as a factory setting was offered to the aut
 chosen, so it is not built. A setting is plain data in `state.json`, so nothing stops it
 later.
 
-A **v1** state file - what a service deployed before this card has - is migrated: what
-the design view and each panel were playing is merged into the one map, so nobody loses
-the tuning they have. Where the design view and a panel were on the same patch with
-different values, **the panel's win**: the panel is what was being looked at.
+A **v1** state file - what a service deployed before card 151 has - is migrated: what
+each panel was playing comes up on its channel, tuning and all (the design view's own
+patch, showing nowhere, is named once; see the state file above).
 
 **Stopping is clean.** Ctrl-C and `SIGTERM` (what `docker stop` sends) release every
 panel with `FINAL` and flush the state file, rather than leaving the panels on the last
@@ -317,6 +349,12 @@ Card 302's modes and timetable - a schedule built and run inside the studio - we
 retired by card 310: Home Assistant picks a patch and setting and keeps the time now.
 
 ## Home Assistant (cards 308, 310, 311)
+
+**Card 350 left this on the first panel.** The studio has several panels now; Home
+Assistant still sees one device, and it is the **first panel** - the one a route without
+`panel` means - with the same topics, discovery id and `unique_id`s as before, so current
+automations keep working. Picking a picture there goes by the three rules like any other
+pick. Card 352 gives every panel an HA device of its own.
 
 The studio shows up in Home Assistant through **MQTT discovery**: HA's own MQTT
 integration, no custom component, no YAML on the HA side. HA can see what is playing,
@@ -468,10 +506,11 @@ does fix:
 
 1. **the state file cannot be written** - a studio that cannot save will not come back
    as itself;
-2. **a player has given up** - three panics or stalls in a row, so it is no longer
+2. **a channel has given up** - three panics or stalls in a row, so it is no longer
    trying;
-3. **a player is not running**, and has not been for longer than the fifteen-second
-   start grace - a render thread that died and was not replaced.
+3. **a channel is not running**, and has not been for longer than the fifteen-second
+   start grace - a render thread that died and was not replaced. An idle panel has no
+   channel and is not this: it has nothing to render.
 
 A **missing graphics adapter is not one of them** (card 145). A studio with no GPU plays
 every CPU patch perfectly well and no restart conjures one, so it is reported as `gpu` on
@@ -479,7 +518,7 @@ every CPU patch perfectly well and no restart conjures one, so it is reported as
 
 Card 106 had a fourth, "the preview engine is wedged", and card 170 deleted the thing
 it was about. A patch that stops returning is now caught by the same five-second
-watchdog every panel has, abandoned, and replaced by the fallback - so it is recovered
+watchdog every channel has, abandoned, and replaced by the fallback - so it is recovered
 in seconds rather than waiting for somebody to restart the container. (That was card
 143, closed by construction.)
 
@@ -489,7 +528,7 @@ and what it is playing - and, since card 180, `facts`: what only the panel knows
 from **the panel's own** `GET /api/v1/status` over HTTP. **Both answer even while a patch is wedged**, because that
 is the moment somebody wants them. Card 106 had to work at this - the design view's
 engine lived behind a `Mutex` that a stuck patch held for ever, so the heartbeat cached
-the last readable view. A player's core is owned by its own render thread and is behind
+the last readable view. A channel's core is owned by its own render thread and is behind
 no shared lock at all, so there is nothing left for a stuck patch to hold.
 
 ### Reading the panel's own status (card 180)
@@ -598,36 +637,81 @@ reports panics, `panic` becomes a reason of its own and this gets simpler.
 
 ## The API
 
-Everything the two screens do is one of these, under `/api/v1`. Reads are `GET`, changes
+Everything the screens do is one of these, under `/api/v1`. Reads are `GET`, changes
 are `POST` with a JSON body. A failed change is a 400 with `{"error": "..."}`; an unknown
-device is a 404; a device that is known but cannot be reached right now is a **409**,
-which is a fact about the panel and not a fault in the server.
+device or panel is a 404; a device that is known but cannot be reached right now - or,
+card 350, a panel that is **idle** and so has no picture to change - is a **409**, which
+is a fact about the panel and not a fault in the server.
+
+### Which panel (card 350)
+
+**Every route that acts on "the picture" or "the panel" takes `panel`** - a device id -
+as a field of the JSON body or as `?panel=` in the query string (the body wins). Without
+one it means **the first panel**: the first one adopted, or the unbound stand-in when
+there is none. So a page or a script written before there were several panels keeps
+working, and keeps changing the panel it always changed. Channels are never addressed
+directly: a client always says which panel it means, and a picture route acts on that
+panel's channel - so an edit reaches every panel on the channel, which is what
+`shared_with` in the state is for.
 
 ### What is playing (card 105's routes; card 170 pointed them at the panel)
 
-These are unchanged in name and shape. What changed is *what they act on*: there is no
-design-view engine any more, so they configure the player for the attached panel - the
-one the page is a window onto. A script written against card 105 still works, and now
-it changes the panel, which is the point of card 170.
+These are unchanged in name and shape, plus `panel`. Every "the new state" below is that
+panel's `StudioState`: `patch`, `seed`, `params` (every parameter at its effective value),
+`output`, `on`, `device`, `setting`, `settings`, `modified`, `fps`, `paused`/`speed`
+(retired, always `false`/`1.0`) and, since card 350, `channel` (its id, `null` when the
+panel is idle - `patch` is then empty) and `shared_with` (the other panels' device ids on
+that channel, in the order they joined).
 
 | route | body | answer |
 |---|---|---|
-| `GET /bootstrap` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`), which are worth asking "another one like this" of (`seeded`, card 151), the payload budget, the current state, and the adapter outcome (`gpu`) |
-| `GET /frame` | | one frame packet: 52-byte header + 64x32 sRGB = 6196 bytes |
-| `GET /patch_playing` | | what a composing patch is performing, or `null` |
-| `GET /panel_status` | | the preview's panel link, or `null` |
-| `POST /set_patch` | `{id}` | the new state |
-| `POST /set_param` | `{id, value}` | the new state |
-| `POST /reset_params` | `{}` | the new state |
-| `POST /set_seed` | `{seed}` (`null` = a new one) | the new state |
-| `POST /set_output` | `{output}` | the new state |
+| `GET /bootstrap?panel=` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`), which are worth asking "another one like this" of (`seeded`, card 151), the payload budget, the panel's state, and the adapter outcome (`gpu`) |
+| `GET /frame?panel=` | | one frame packet: 52-byte header + 64x32 sRGB = 6196 bytes - what that panel was last sent |
+| `GET /patch_playing?panel=` | | what a composing patch is performing, or `null` |
+| `GET /panel_status?panel=` | | the panel's link, or `null` |
+| `POST /set_patch` | `{id, panel?}` | a patch on its Default, by the three rules; the patch the panel is already on changes nothing |
+| `POST /set_picture` | `{patch, setting?, panel?}` | card 350: a patch on one of its named settings (absent: Default), by the three rules |
+| `POST /set_param` | `{id, value, panel?}` | an edit of the panel's channel |
+| `POST /reset_params` | `{panel?}` | likewise |
+| `POST /set_seed` | `{seed, panel?}` (`null` = a new one) | likewise |
+| `POST /restart` | `{panel?}` | likewise |
+| `POST /set_output` | `{output, panel?}` | the panel's own output stage - not the channel's |
+| `POST /same_as` | `{as, panel?}` | card 350: put the panel on `as`'s channel, tweaks and all; 409 if `as` is idle |
+| `POST /detach` | `{panel?}` | card 350: a copy of the channel for this panel alone (same patch, setting and working copy, its own clock from then on); a panel already alone is left as it is |
 | `POST /set_playback` | anything | **retired** (card 302): speed and pause are not settings any more. Still a 200 with the whole state, plus `ignored` saying it changed nothing (`api::PLAYBACK_RETIRED`). Card 161 had already removed `fps` from the same body the same way |
-| `POST /patch_act` | `{action, device?}` | what it is performing; `device` names a panel other than the page's (card 140) |
-| `POST /restart` | `{}` | the new state |
-| `POST /set_panel` | `{on, to?}` | `{on, device, label, panel, state}` |
-| `POST /settings/load\|save\|rename\|delete` | | the patch's named settings; see above |
+| `POST /patch_act` | `{action, panel?}` | what it is performing; `device` is still taken for `panel` (card 140) |
+| `POST /set_panel` | `{on, to?, panel?}` | `{on, device, label, panel, state}`; see below |
+| `POST /settings/load\|save\|rename\|delete` | `+ panel?` | the patch's named settings; see above |
+| `GET /panels` | | card 350: the overview, `{"panels": [PanelSummary...]}`, first first; see below |
 | `GET /home_assistant`, `POST /home_assistant/set\|forget` | | Home Assistant (card 311); see above |
-| `GET /ws` | | the frame socket |
+| `GET /ws?panel=` | | the frame socket; see below |
+
+A picture pick (`set_patch`, `set_picture`, `settings/load`, `player/set` with a patch or
+a setting) is **card 350's three rules**: join a channel that already shows exactly that
+picture unmodified; else, alone on its channel, change it (the 2 s fade); else a new
+channel of its own. A panel that moves between channels fades over 2 s. An idle panel
+given a picture this way gets a channel (joining one, or a new one) and starts streaming
+if its output is on.
+
+A `PanelSummary` - one card of the overview (`panels::PanelSummary`):
+
+```jsonc
+{
+  "device": "c0ffee",           // what every `panel` takes; "" for the unbound stand-in
+  "name": "Kitchen",            // the name set here, else the device's own, else its instance
+  "unbound": false,             // true for the stand-in of a studio with no panel yet
+  "first": true,                // what a route without `panel` means
+  "on": true,                   // panel output
+  "brightness": 96,             // the policy, 0-255, or null
+  "link": "up",                 // "idle" (no picture), "off" (output off), "none" (stand-in),
+                                //   or the link's own: "up", "connecting", "waiting", "closed"
+  "connected": true,            // only while "up"
+  "channel": 3,                 // null when idle
+  "picture": { "patch": "metaballs", "patch_name": "Metaballs",
+               "setting": "Lava", "modified": false },   // null when idle
+  "shared_with": ["d00d1e"]     // the other panels on the same channel
+}
+```
 
 **The old names still work on the way in** (card 150). `POST /set_piece`,
 `POST /set_settings`, `GET /piece_playing` and `POST /piece_act` are the same handlers
@@ -641,48 +725,71 @@ vocabulary coming back.
 ```sh
 curl -s -X POST -H 'content-type: application/json' \
      -d '{"on":false}' localhost:8787/api/v1/set_panel
-#  -> {"on":false,"panel":null,...}   FINAL is sent, the panel goes to its own idle
-#     screen and stops receiving frames. The page carries on showing the patch.
+#  -> {"on":false,"panel":null,...}   FINAL is sent to every panel; each goes to its own
+#     idle screen and stops receiving frames. The page carries on showing the picture.
 
 curl -s -X POST -H 'content-type: application/json' \
      -d '{"on":true,"to":"screeny-c0ffee"}' localhost:8787/api/v1/set_panel
 #  -> {"on":true,"device":"c0ffee","panel":{...},...}
 ```
 
-Off is off for **every** player, not only the one the page shows. The answer says what
-happened rather than `null`, because a 200 that means "I have let it go" and a 200 that
-means "I am still streaming to it at 30 fps" must not look the same. (They did, until
-card 170: a firmware conformance suite ran against a panel it believed it had borrowed.)
+Off is off for **every** panel, not only the first; `{"on":false,"panel":ID}` lets just
+that one go (card 350). The answer says what happened rather than `null`, because a 200
+that means "I have let it go" and a 200 that means "I am still streaming to it at 30 fps"
+must not look the same. (They did, until card 170: a firmware conformance suite ran
+against a panel it believed it had borrowed.)
 
 `to` is a device id, an mDNS instance name (`screeny-c0ffee`), a host name or an address
 (`192.168.1.50`, `127.0.0.1:49374`); one this studio has not heard of is added, exactly
 as `POST /devices/add` would. It is looked up in the background, so attaching answers at
-once whether or not the panel is there. Every change is persisted.
+once whether or not the panel is there. A panel that is idle is given a picture: a studio
+still on its unbound stand-in hands it that (the stand-in is renamed onto the device, so
+nothing restarts); otherwise the default patch on Default, by the three rules. Card 170's
+`to` also moved "the page" onto that panel; since card 350 the page chooses its panel
+itself (`?panel=`) and `to` drives the device and nothing else. Every change is persisted.
 
-### Panels, players and health (card 106)
+### Panels, devices and health (card 106)
 
 | route | body | answer |
 |---|---|---|
-| `GET /status` | | everything: health, the state file, discovery, the graphics adapter or why there is none (`gpu`, card 145 - never a reason for a 503), what the page is showing (still keyed `preview`, for scripts written against card 106), every device |
-| `GET /devices` | | the device half of `/status` on its own |
-| `POST /devices/add` | `{to, name?, play?}` | `{id}` - a new panel, by name or address |
+| `GET /status` | | everything: health, the state file, discovery, the graphics adapter or why there is none (`gpu`, card 145 - never a reason for a 503), what the first panel is showing (still keyed `preview`, for scripts written against card 106), the overview (`panels`, card 350), every device |
+| `GET /devices` | | the device half of `/status` on its own. Each device's `player` is its panel and its panel's picture - card 106's shape, plus `channel`, `setting`, `modified` and `shared_with`; `health.ticks` is its channel's renders, the same number on every panel sharing it. `attached` / `player.focused` mean "the first panel" |
+| `POST /devices/add` | `{to, name?, play?}` | `{id}` - a new panel, by name or address, **idle** unless `play` (then as `set_panel {"on":true,"to":...}`) |
 | `POST /devices/add` | `{to, device}` | `{id, moved}` - **this** panel is somewhere else now |
-| `POST /devices/forget` | `{device}` | the player goes with it |
+| `POST /devices/forget` | `{device}` | the panel goes with it, and its channel if nobody else is on it |
 | `POST /devices/refresh` | `{}` | ask every unresolved panel who it is, now |
-| `POST /player/set` | `{device, on?, patch?, seed?, param?, reset_params?, setting?, output?, brightness?, restart?}` | the player. `fps?` (card 161), `paused?` and `speed?` (card 302) were here; still accepted, still ignored |
-| `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the policy |
+| `POST /player/set` | `{device, on?, patch?, setting?, seed?, param?, reset_params?, restart?, output?, brightness?}` | the panel's `player` view. A patch or a setting is a picture pick (three rules; one that also carries a seed, a parameter or a reset never *joins* another panel's channel, since the edit would land on them); a seed, a parameter, a reset or a restart edits the channel it is then on (an idle panel is first given the default patch); `on`, `output` and `brightness` are the panel's. `fps?` (card 161), `paused?` and `speed?` (card 302) were here; still accepted, still ignored |
+| `POST /device/brightness` | `{device, level}` | `{asked, applied}` - and it becomes the panel's policy |
 | `POST /device/identify` | `{device, ms?}` | |
 | `POST /device/name` | `{device, name}` | renames it here, and on the device when it can be reached |
 | `POST /device/reboot` | `{device, confirm}` | `confirm: true` is required |
 | `POST /device/stats` | `{device}` | telemetry, read now rather than from the poll |
 
-Three kinds of message come out of the frame socket:
+### The frame socket, `GET /ws`
 
-- **binary**: one frame packet, as `GET /api/v1/frame` returns - the attached panel's,
-  and the same bytes it is being sent;
-- `{"type":"state","rev":N,"from":"<client>"|null,"state":{...}}` whenever anything
-  changes, so several browsers stay in step;
-- `{"type":"status","playing":...,"panel":...}` twice a second.
+A socket is about **one panel**: `?panel=<device id>`, or - without it - the first panel,
+which it keeps following (a studio whose unbound stand-in gives way to a real panel moves
+the socket along within a heartbeat, with a fresh `state`). What comes out of it:
+
+- **binary**: one frame packet, as `GET /api/v1/frame?panel=` returns - that panel's, and
+  the same bytes it is being sent;
+- `{"type":"state","rev":N,"from":"<client>"|null,"panel":"<device id>","state":{...}}`
+  whenever anything changes, so several browsers stay in step - the socket's own panel's
+  state, read at the moment it is sent (an edit to a shared channel changes every panel on
+  it, so every socket hears of every change and speaks for its own panel);
+- `{"type":"status","playing":...,"panel":...}` twice a second, for that panel;
+- `{"type":"panels","panels":[PanelSummary...]}` - the overview, when the socket opens and
+  whenever it changes (a picture, a link coming up or going, output, brightness).
+  `?overview=false` asks for none;
+- `{"type":"error","error":"no panel `x`"}` and a close, for a socket that named a panel
+  the studio does not have. A socket whose panel is forgotten is closed.
+
+**One socket per panel is cheap on purpose**, and it is how the overview's live
+thumbnails are meant to be fed (card 351): `?panel=X&fps=4&repeat=false&overview=false`
+is at most four 6 KB frames a second, fewer while the picture holds still, one state
+message per change and two small heartbeats a second. Nothing is multiplexed: every
+socket is the same simple thing, and pacing, the watcher count and the stall timeout stay
+per panel. The page's own socket, without `panel`, carries the overview.
 
 A browser identifies itself with an `X-Studio-Client` header on changes and
 `?client=<id>` on the socket; the server does not echo a browser its own change.
@@ -720,18 +827,18 @@ The page asks for 30 while visible, 10 when `navigator.connection` says the link
 or the owner has asked for less data, and 0 when hidden. Anything else a browser sends is
 ignored, so an old page and a new server understand each other in both directions.
 
-Asking for frames is also how the server knows somebody is watching: a player whose panel
-is away and whose page nobody is **looking at** drops to 5 fps rather than rendering 30
-for a month - a hidden tab is not a watcher, or a phone left on the page in a pocket
-would hold a core open. Nothing a browser does can slow a player down: the frame cell has
-one slot, the render loop never waits for a reader, and pacing is done by dropping a
-frame where it stands rather than by holding one.
+Asking for frames is also how the server knows somebody is watching: a channel none of
+whose panels is connected, and none of whose panels anybody is **looking at**, drops to
+5 fps rather than rendering 30 for a month - a hidden tab is not a watcher, or a phone
+left on the page in a pocket would hold a core open. Nothing a browser does can slow a
+channel down: every frame cell has one slot, the render loop never waits for a reader,
+and pacing is done by dropping a frame where it stands rather than by holding one.
 
 `GET /status` says what all this is costing, under `sockets`: `open`, `watching`,
-`frames_sent`, `bytes_sent`. That is what the *browsers* cost; what the *panels* cost is
-per device under `traffic` (card 164, above), and the two are deliberately not added
-together - one is a LAN and the other is a Wi-Fi link with a 64x32 panel on the end of
-it.
+`frames_sent`, `bytes_sent`, across every panel's sockets. That is what the *browsers*
+cost; what the *panels* cost is per device under `traffic` (card 164, above), and the two
+are deliberately not added together - one is a LAN and the other is a Wi-Fi link with a
+64x32 panel on the end of it.
 
 **Brightness** is a policy, not a one-off: it is re-applied whenever the link comes back,
 and whenever the panel's own telemetry disagrees with what it last said it applied - a
@@ -803,7 +910,7 @@ control it wants by how it declares the parameter, and never by putting a key in
 
 **Nothing on any screen may say something that is not so.** The output switch says
 what it really does when there is no panel (181); the Panel screen says whether the
-studio is even looking for panels (173); "Reconnects" is a player-lifetime count that
+studio is even looking for panels (173); "Reconnects" is a panel-lifetime count that
 survives the link being rebuilt (171); a patch that needs a graphics adapter there is
 none for is struck through with the reason rather than offered and then black (145);
 and the brightness slider says out loud that it is the panel's own brightness, which is
@@ -837,15 +944,16 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/api.rs` | the page's routes, the frame socket, two browsers in step, the heartbeat, a frame packet's shape, and a studio with no panel at all |
 | `tests/preview.rs` | card 120: a hidden tab is sent no pictures, keeps its heartbeat and comes straight back; a socket is paced to what it asked for, and asking for more than is rendered means "everything" (161); an unchanged picture is not sent again; **a hidden tab is not a watcher**, so a studio with no panel and only hidden tabs idles at 5 fps; and `sockets` on `/status` counts at least what a browser received |
 | `tests/pacing.rs` | card 196: with two browsers open and one of them dragging a slider at 60 Hz, the other is sent a bounded number of state messages a second (measured 19.3-19.7/s and 8.0 KB/s, against 60.0/s and 24.9 KB/s before the card) and the dragging one is sent none; a single deliberate change still crosses in a few milliseconds; and the value a drag **ended on** always arrives, within one gap of the drag stopping |
-| `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a player nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
-| `tests/fleet.rs` | devices, players, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
+| `tests/panel.rs` | what the browser draws is what `screeny-sim` shows, byte for byte; a stalled browser holding up neither a channel nor the link; **`set_panel` really hands the panel over and takes it back**, asserted on what the device sees; and a panel stopped and started twice reading **2 reconnects**, across a link rebuild (171) |
+| `tests/channels.rs` | **card 350's acceptance**, against two `screeny-sim` panels on loopback: the same picture on both is one channel - one render per tick handed to both (counted: renders against each panel's presents) and the same picture on both devices; different pictures are two channels and the sims disagree; **Same as** puts them back in sync, **Detach** separates an edit; a route without `panel` is the first panel's and `set_panel {"on":false}` lets both go; a socket scoped with `?panel=&fps=4` is sent that panel's state at that rate, one without `panel` is the first's and carries the overview, one naming no panel is told so; a device the registry learns about becomes an idle panel and the stand-in goes |
+| `tests/fleet.rs` | devices, panels, containment, health, the device controls - and **the card's acceptance**: kill the simulator, the server, or both in either order, and the panel comes back playing what it was playing |
 | `tests/soak.rs` | a bounded soak at accelerated time: frame loss, the panel going away, the panel moving, a run of changes; flat memory, nothing dead, recovery after every fault. `SCREENY_SOAK_SECS` lengthens it |
 | `tests/device_status.rs` | card 180: with the panel's HTTP API on, the page has heap, free stack, slot and WiFi beside the UDP telemetry; with it off, nothing complains and `/healthz` stays 200; a simulator restarted on the same ports is counted as **one** reboot, from `boot_id`; **at most one connection open to a device at a time**, measured by a server that counts them; and a reply that never ends is refused rather than read |
 | `tests/device_health.rs` | card 195: the rows nobody ever sees, driven on a **running** simulator with `SimHandle::set_health` - a stack of 6000 warns and 3000 faults, a 90% heap faults and the 60% measured with the setup AP up does not, a brownout / store errors / a `pending_verify` slot stand out, a reboot asked for through the studio's own control is not counted and the ask is used up, one taken behind its back is, and the real panel's readings show nothing at all |
 | `tests/ssid.rs` | the network name is on `/api/v1/status`, where the page needs it, and in neither the studio's log (checked by running the real binary as a subprocess and reading its stderr) nor `state.json` |
 | `tests/traffic.rs` | card 164: against a simulator, the KB/s out is `frames sent x mean frame bytes + 28 B a datagram` (measured 1.4% out); the http counters move both ways on every poll and the control ones when somebody presses Identify or moves brightness; the totals only grow, **including across the panel being taken away and given back**, which rebuilds the link and resets its own counters; two reads inside one tick are identical, which is what "one rate, every browser" means; and a panel that is away counts nothing |
 | `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/settings`/`/settings.js`) are not the same thing, `/dashboard` and `/schedule` redirect, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301), and **one nav with the current screen marked** is on every one of them (301, 311) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Settings screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
-| `tests/memory.rs` | card 165: switch away and back, on the page and on a panel; a second browser sees the restored values; two panels share one memory; Reset stays reset; **a fresh process on the same state directory restores a patch that is not the one showing**; a hand-edited file with garbage values; a v1 file |
+| `tests/memory.rs` | cards 165 and 350: a patch picked afresh is on its Default and **a named setting brings a tuning back**, from any patch, on the page, on a panel and in a second browser; Reset; **a fresh process on the same state directory is showing what it was, tuning and all, and has every setting - including one for a patch that is not showing**; one library of settings for two panels (and the second joins the first's channel); a hand-edited file with garbage values in a setting; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `tests/ha_mqtt.rs` | cards 308-311, **ignored by default** - needs a broker (`SCREENY_TEST_MQTT=HOST:PORT`, see above): the picture select and its options following the named settings, the brightness light and the percent slider, the settings routes (`GET`/`POST /home_assistant/set\|forget`), reconnecting after a broker restart and after HA's own restart, and forgetting clearing every retained topic |
-| `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, the player's configuration, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |
+| `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, a channel's edits and its fade, **card 350's topology** (`src/panels.rs`: adoption idle, the three picking rules, Same as, Detach, a setting renamed or deleted under every channel on it, a channel dropped once nothing is on it or fading away from it, one render handed to two panels and two channels apart, the stand-in taken over by the first panel named), a panel's fade from one channel to another (`src/panel.rs`), **v7 -> v8** with the v7 file kept and v8 files whose panels and channels disagree, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |

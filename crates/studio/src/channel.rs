@@ -6,7 +6,7 @@
 //! (`docs/design/studio-vision.md`, "Several panels"):
 //!
 //! - a **channel** (this file) is a running picture: a patch, the named setting
-//!   it came from, its working copy (seed and parameters) and its [`Deck`]. It
+//!   it came from, its working copy (seed and parameters) and its `Deck`. It
 //!   renders **linear** frames once per tick, and hands each one to every panel
 //!   that follows it;
 //! - a **panel** ([`crate::panel`]) is a device and everything about the
@@ -30,7 +30,7 @@
 //!   the channel stops trying, says so once, and `/healthz` goes 503.
 //!
 //! **Changes are drained, not thrown at a new thread.** A slider is sixty
-//! changes a second; a change goes into a one-slot [`Pending`] that the render
+//! changes a second; a change goes into a one-slot `Pending` that the render
 //! loop applies between frames.
 //!
 //! A channel renders at [`screeny_art::FPS`] while any panel on it is connected
@@ -225,7 +225,7 @@ struct Fade {
     clock: Crossfade,
 }
 
-/// The picture a player renders: the current core and, during a fade, the one
+/// The picture a channel renders: the current core and, during a fade, the one
 /// on its way out. Everything the render loop does between "a change arrived"
 /// and "a frame for the pipeline" is here, so the tests can drive it with a
 /// fake clock and no thread.
@@ -282,7 +282,7 @@ impl Deck {
     /// The next frame for the pipeline, `wall` seconds after the last.
     ///
     /// The current core renders outside any `catch_unwind` of this deck's: a
-    /// panic there is the player's fault path, as it always was. The
+    /// panic there is the channel's fault path, as it always was. The
     /// *outgoing* core's render is caught here, because a patch that is on
     /// its way out must not take the one coming in with it - a failing
     /// outgoing core becomes a still of the last frame shown, and the fade
@@ -658,7 +658,7 @@ impl Channel {
     /// Change the picture in place. Everything `None` is left alone.
     ///
     /// Nothing here stops a thread: what has to change is written into the
-    /// one-slot [`Pending`] and applied by the render loop before its next
+    /// one-slot `Pending` and applied by the render loop before its next
     /// frame. A new seed or a restart cross-fades over [`FADE_MANUAL`];
     /// parameter edits never fade.
     ///

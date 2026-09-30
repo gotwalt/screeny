@@ -14,7 +14,7 @@
 //! changes in a broadcast channel of fixed capacity whose overflow is handled
 //! by sending the current state instead of the missed ones. A browser that
 //! stops reading therefore cannot make the server hold anything on its
-//! behalf, and cannot slow a player or the panel link down: the render loop
+//! behalf, and cannot slow a channel or a panel link down: the render loop
 //! writes into the cell and never waits for a reader. If a single send
 //! cannot complete within [`STALL`] the socket is closed and forgotten.
 //!

@@ -2,7 +2,7 @@
 //! list a browser draws itself from.
 //!
 //! This was `engine.rs` until card 170. There is no design-view engine any
-//! more - the player for the attached panel is the only thing that renders,
+//! more - the channels are the only things that render (card 350),
 //! and the page is a window onto it - so what is left here is the *vocabulary*
 //! the browser and the server share, and nothing that runs.
 //!
@@ -337,7 +337,7 @@ pub struct StudioState {
 pub struct Bootstrap {
     pub patches: Vec<PatchInfo>,
     pub payload_bytes: u32,
-    /// The player's state.
+    /// The panel's state: the first panel's, or `?panel=`'s.
     pub state: StudioState,
     /// Card 145: whether this process has a graphics adapter, so the page can
     /// say why the GPU patches are not available instead of showing black.

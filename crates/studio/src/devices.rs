@@ -12,12 +12,12 @@
 //! - **manual**: a human typing a name or an address.
 //!
 //! **Keyed by the device's own stable id**, never by IP. A panel that takes a
-//! new DHCP lease is the same panel with the same player; an address is a way
+//! new DHCP lease is the same panel; an address is a way
 //! of reaching it, not a name for it. A manually added address is not known by
 //! id until the studio has spoken to it, so it gets a *provisional* id
 //! ([`PENDING`]`:<what was typed>`) and adopts its real one on the first
 //! answer - the one moment when a device's key changes, and the one place that
-//! has to be handled ([`Registry::resolved`] returns the rename so the player
+//! has to be handled ([`Registry::resolved`] returns the rename so the panel
 //! can follow it).
 //!
 //! Bounded by construction: one browse at a time, one control request in
@@ -756,7 +756,7 @@ pub struct Registry {
     discovery: Mutex<DiscoveryHealth>,
 }
 
-/// What changed, so the caller can move a player and persist.
+/// What changed, so the caller can move a panel and persist.
 #[derive(Clone, Debug, Default)]
 pub struct Changes {
     /// Devices whose key changed when their real id arrived: `(old, new)`.
@@ -877,7 +877,7 @@ impl Registry {
     /// panel moves something has to say where to: a human
     /// (`POST /api/v1/devices/add`), or - card 141 - a `GET_INFO` probe that
     /// heard the panel's own `id=` at a new address ([`Registry::probed`]).
-    /// The device keeps its id, and therefore its player and everything it was
+    /// The device keeps its id, and therefore its panel and everything it was
     /// playing; only the way there changes. Clearing the resolution makes the
     /// next poll ask the new address who it is, which is also how a wrong
     /// address is caught.
@@ -910,7 +910,7 @@ impl Registry {
         }
     }
 
-    /// Forget a device entirely. The caller stops its player.
+    /// Forget a device entirely. The caller removes its panel.
     pub fn forget(&self, id: &str) -> bool {
         self.lock().remove(id).is_some()
     }
@@ -1012,7 +1012,7 @@ impl Registry {
 
     // ----------------------------- card 164: what this panel costs the net ----
 
-    /// **Read a player's link totals into this device's counters.**
+    /// **Read a panel's link totals into this device's counters.**
     ///
     /// The link's figure is a lifetime one and only ever grows, so the
     /// ordinary case is a difference. The exception is a link the studio threw
@@ -1021,7 +1021,7 @@ impl Registry {
     /// below the last one is exactly that, and is taken whole.
     ///
     /// Called once a second from the supervisor, which is the one place that
-    /// already walks every player. Nothing on the frame path touches this.
+    /// already walks every panel. Nothing on the frame path touches this.
     pub fn metered_link(&self, id: &str, now: screeny::LinkTraffic) {
         let mut devices = self.lock();
         let Some(d) = devices.get_mut(id) else { return };
@@ -1085,7 +1085,7 @@ impl Registry {
     ///
     /// The supervisor calls this on its own tick and nothing else does, which
     /// is what makes the figure the same in every browser: `/api/v1/status`
-    /// only reads it. Every device is sampled, including one with no player
+    /// only reads it. Every device is sampled, including one with no panel
     /// and one that has gone away, so a panel that stops being sent frames
     /// *decays to zero* rather than freezing at whatever it was last doing.
     pub fn sample_traffic(&self) {
@@ -1303,7 +1303,7 @@ impl Registry {
     ///
     /// * *same id, new address* - the same panel, somewhere else. Its address
     ///   is updated by [`Registry::set_address`], so it keeps its id, its
-    ///   player, its patch and its seed, and the next telemetry poll confirms
+    ///   panel, its patch and its seed, and the next telemetry poll confirms
     ///   the new address with a `GET_INFO` of its own.
     /// * *an id nobody here knows* - not this studio's business. Discovery and
     ///   a human adding a device are how panels arrive; a probe only follows
@@ -1810,7 +1810,7 @@ mod tests {
     }
 
     /// The property the whole registry is for: a device that moves address is
-    /// the same device, with the same player.
+    /// the same device, with the same panel.
     #[test]
     fn a_device_that_changes_address_keeps_its_id() {
         let reg = Registry::new();
@@ -1855,7 +1855,7 @@ mod tests {
     }
 
     /// **The card**: a panel that answers a probe from somewhere else is the
-    /// same panel. Its id, and so its player, survives; the address is the
+    /// same panel. Its id, and so its panel, survives; the address is the
     /// only thing that changes; and the HTTP polling follows the new IP by
     /// itself once the next poll has confirmed it.
     #[test]
