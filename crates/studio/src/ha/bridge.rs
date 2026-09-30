@@ -2,15 +2,20 @@
 //! [`Snapshot`] out of the studio and carries a [`Command`] back in, through
 //! the same functions the page's routes use.
 //!
-//! **Card 350 left this on the first panel.** The studio has several panels
-//! now; Home Assistant still sees one device, and it is the first panel - the
-//! one a route without `panel` means - with the same topics, discovery id and
-//! `unique_id`s as before. Card 352 gives every panel an HA device of its own.
+//! **One HA device per panel (card 352).** The first panel - the one a route
+//! without `panel` means - is the device every earlier build announced, with
+//! the same topics, discovery id and `unique_id`s; every later panel is a
+//! device of its own, named after the panel. A panel adopted while connected
+//! gets its discovery published, and a forgotten one's is removed, on the next
+//! look (a state event, or the once-a-second tick): the studio needs no
+//! notification hooks for that.
 
 use super::client::{self, Handle};
-use super::{Command, PatchState, Picture, Snapshot};
+use super::{fleet, Command, Fleet, Order, PanelView, PatchState, Picture, Snapshot};
 use crate::state::DEFAULT_SETTING;
+use crate::panel::Panel;
 use crate::AppState;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -24,20 +29,57 @@ const LOOK_EVERY: Duration = Duration::from_secs(1);
 /// connects - or does not - as [`crate::ha::Ha`]'s settings say, from now on.
 #[must_use]
 pub fn start(st: &AppState) -> Handle {
-    let (snap_tx, snap_rx) = watch::channel(snapshot(st));
+    let (snap_tx, snap_rx) = watch::channel(fleet_of(st));
     let (cmd_tx, cmd_rx) = mpsc::channel(client::COMMANDS);
     tokio::spawn(watch_studio(st.clone(), snap_tx));
     tokio::spawn(obey(st.clone(), cmd_rx));
     client::supervise(std::sync::Arc::clone(&st.ha), snap_rx, cmd_tx, st.stop.clone())
 }
 
-/// What HA should be shown now.
+/// What HA should be shown now: every panel's device, first panel first.
+#[must_use]
+pub fn fleet_of(st: &AppState) -> Fleet {
+    // `first` makes the unbound stand-in if there is no panel at all, so a
+    // studio always has one device to show.
+    let _ = st.first();
+    let panels = st.panels.all();
+    let pictures = pictures(st);
+    let devices: Vec<String> = panels.iter().map(|p| p.device()).collect();
+    let keys = fleet::keys(&devices);
+    panels
+        .iter()
+        .zip(keys)
+        .map(|(panel, key)| PanelView {
+            device: panel.device(),
+            name: match &key {
+                // The first panel's device is named on the Settings screen.
+                None => String::new(),
+                Some(_) => st.devices.get(&panel.device()).map_or_else(|| panel.device(), |d| d.label()),
+            },
+            key,
+            snapshot: snapshot_of(st, panel, pictures.clone()),
+        })
+        .collect()
+}
+
+/// The keys of every panel's HA device now, first (`None`) first: what
+/// "Remove from Home Assistant" clears.
+#[must_use]
+pub fn panel_keys(st: &AppState) -> Vec<Option<String>> {
+    let devices: Vec<String> = st.panels.all().iter().map(|p| p.device()).collect();
+    fleet::keys(&devices)
+}
+
+/// What HA should be shown of the first panel: the single-device studio's
+/// snapshot.
 #[must_use]
 pub fn snapshot(st: &AppState) -> Snapshot {
-    let first = st.first();
-    let page = st.state_of(&first);
-    let status = st.panels.status_of(&first);
-    let pictures = pictures(st);
+    snapshot_of(st, &st.first(), pictures(st))
+}
+
+fn snapshot_of(st: &AppState, panel: &Arc<Panel>, pictures: Vec<Picture>) -> Snapshot {
+    let page = st.state_of(panel);
+    let status = st.panels.status_of(panel);
     // The working copy changed since its setting was loaded is not a picture
     // in the list: HA shows it as unknown rather than naming something the
     // panel is not showing.
@@ -74,7 +116,7 @@ pub fn pictures(st: &AppState) -> Vec<Picture> {
 
 /// Take a snapshot on every state event and once a second, and pass it on
 /// when it differs from the last.
-async fn watch_studio(st: AppState, out: watch::Sender<Snapshot>) {
+async fn watch_studio(st: AppState, out: watch::Sender<Fleet>) {
     let mut states = st.states.subscribe();
     let mut stop = st.stop.clone();
     let mut ticker = tokio::time::interval(LOOK_EVERY);
@@ -90,7 +132,7 @@ async fn watch_studio(st: AppState, out: watch::Sender<Snapshot>) {
             _ = ticker.tick() => {}
             () = async { drop(stop.wait_for(|s| *s).await) } => break,
         }
-        let now = snapshot(&st);
+        let now = fleet_of(&st);
         out.send_if_modified(|was| {
             if *was == now {
                 return false;
@@ -121,27 +163,29 @@ pub fn snap(level: u8) -> u8 {
 }
 
 /// Carry out HA's commands, one at a time, until the client goes.
-async fn obey(st: AppState, mut commands: mpsc::Receiver<Command>) {
-    while let Some(cmd) = commands.recv().await {
-        if let Err(why) = execute(&st, &cmd) {
-            eprintln!("studio: home assistant: {cmd:?}: {why}");
+async fn obey(st: AppState, mut orders: mpsc::Receiver<Order>) {
+    while let Some(order) = orders.recv().await {
+        if let Err(why) = execute(&st, &order) {
+            eprintln!("studio: home assistant: {order:?}: {why}");
         }
     }
 }
 
-/// One command, through the same paths the page takes. Every change reaches
+/// One command for one panel, through the same paths the page takes. Every change reaches
 /// the browsers and the state file, like any other.
 ///
 /// # Errors
 ///
 /// What the studio said no with, in a sentence.
-pub fn execute(st: &AppState, cmd: &Command) -> Result<(), String> {
-    match cmd {
+pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
+    // The panel it was for; the unbound stand-in (an empty id) is the first.
+    let panel = st.panel(Some(&order.device))?;
+    match &order.command {
         Command::SetBrightness(level) => {
             // The nearest real stop, so what HA is shown back is what the
             // panel does. The supervisor sends it within a second.
             let level = snap(*level);
-            st.first().set_brightness(Some(level));
+            panel.set_brightness(Some(level));
         }
         Command::ShowPicture { patch, setting } => {
             if !st.memory.setting_names(patch).iter().any(|n| n == setting) && !crate::state::is_default_name(setting) {
@@ -150,7 +194,6 @@ pub fn execute(st: &AppState, cmd: &Command) -> Result<(), String> {
             // A hand change, like picking a patch and a setting on the page:
             // card 350's three rules, and the manual cross-fade (card 304).
             let def = crate::channel::find_patch(patch, st.cfg.fault_patches).ok_or_else(|| format!("no patch called `{patch}`"))?;
-            let panel = st.first();
             let channel = st.panels.pick(&panel, def, setting, false, None)?;
             channel.ensure_running();
             crate::fleet::aim_at_device(st, &panel);

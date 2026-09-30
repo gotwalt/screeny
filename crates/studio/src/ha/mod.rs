@@ -10,6 +10,12 @@
 //!      └──────bridge<── mpsc<Command> <── parse `.../set`  <──────────────── broker <── HA
 //! ```
 //!
+//! **One HA device per panel (card 352).** A [`Fleet`] - a [`Snapshot`] per
+//! panel - goes in and an [`Order`] (a [`Command`] and the panel it is for)
+//! comes out. The first panel keeps the topics, discovery id and `unique_id`s
+//! every earlier build had; later ones are keyed by their device id
+//! ([`topics::Topics::for_panel`]).
+//!
 //! **The studio does not know about topics** and this module does not know
 //! about the studio: [`Snapshot`] goes in, [`Command`] comes out, and
 //! [`bridge`] is the one file that holds both ends. Everything between -
@@ -26,6 +32,7 @@
 pub mod bridge;
 pub mod client;
 pub mod discovery;
+pub mod fleet;
 pub mod payload;
 pub mod topics;
 
@@ -352,6 +359,31 @@ impl Picture {
             format!("{patch_name} · {setting}")
         }
     }
+}
+
+/// One panel's HA device: who it is, what to call it, and what it shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PanelView {
+    /// The studio's device id: what an [`Order`] is addressed to. Empty for
+    /// the unbound stand-in.
+    pub device: String,
+    /// `None` for the first panel, whose topics and ids are the ones every
+    /// earlier build had; otherwise the sanitised, unique key that goes in
+    /// its topics and ids.
+    pub key: Option<String>,
+    /// The HA device's name.
+    pub name: String,
+    pub snapshot: Snapshot,
+}
+
+/// Every panel's HA device, first panel first (card 352).
+pub type Fleet = Vec<PanelView>;
+
+/// A command, and the panel it is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Order {
+    pub device: String,
+    pub command: Command,
 }
 
 /// What HA asks for, validated. The only thing that leaves this module.

@@ -21,9 +21,9 @@
 //! - stopping: a retained `offline`, then a clean disconnect.
 
 use super::discovery;
-use super::payload::{self, Message};
+use super::payload;
 use super::topics::Topics;
-use super::{Command, Ha, MqttConfig, Snapshot, Status};
+use super::{fleet, Fleet, Ha, MqttConfig, Order, Status};
 use rumqttc::{AsyncClient, ConnectionError, Event, EventLoop, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,14 +68,14 @@ impl Handle {
     }
 }
 
-/// Start talking to the broker. `snapshots` is what to show, `commands` is
-/// where HA's requests go, `status` is told how it is going, and `stop` ends
+/// Start talking to the broker. `snapshots` is what to show - every panel's
+/// HA device -, `commands` is where HA's requests go, each with its panel, `status` is told how it is going, and `stop` ends
 /// it.
 #[must_use]
 pub fn spawn(
     cfg: MqttConfig,
-    snapshots: watch::Receiver<Snapshot>,
-    commands: mpsc::Sender<Command>,
+    snapshots: watch::Receiver<Fleet>,
+    commands: mpsc::Sender<Order>,
     status: watch::Sender<Status>,
     stop: watch::Receiver<bool>,
 ) -> Handle {
@@ -86,7 +86,7 @@ pub fn spawn(
 /// it again whenever the settings change it. Runs until the studio stops;
 /// the returned handle finishes when the last client has said goodbye.
 #[must_use]
-pub fn supervise(ha: std::sync::Arc<Ha>, snapshots: watch::Receiver<Snapshot>, commands: mpsc::Sender<Command>, mut stop: watch::Receiver<bool>) -> Handle {
+pub fn supervise(ha: std::sync::Arc<Ha>, snapshots: watch::Receiver<Fleet>, commands: mpsc::Sender<Order>, mut stop: watch::Receiver<bool>) -> Handle {
     let task = tokio::spawn(async move {
         let mut want = ha.want.subscribe();
         loop {
@@ -140,8 +140,8 @@ struct Link {
 
 async fn run(
     cfg: MqttConfig,
-    mut snapshots: watch::Receiver<Snapshot>,
-    commands: mpsc::Sender<Command>,
+    mut snapshots: watch::Receiver<Fleet>,
+    commands: mpsc::Sender<Order>,
     status: watch::Sender<Status>,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -281,23 +281,36 @@ struct Session {
     /// The last payload that went out on each retained topic, so a state is
     /// sent when it changes and not on every snapshot.
     said: HashMap<String, String>,
-    /// What a bare "on" restores.
-    last_lit: Option<u8>,
+    /// Card 352: the panels whose devices are announced now, by device id
+    /// (`screeny_<instance>[_<key>]`), so one that has gone can be cleared.
+    published: Vec<Topics>,
+    /// What a bare "on" restores, per panel (by the same id).
+    last_lit: HashMap<String, Option<u8>>,
     refused: Quiet,
     full: Quiet,
 }
 
 impl Session {
     fn new(cfg: MqttConfig, topics: Topics, client: AsyncClient) -> Session {
-        Session { cfg, topics, client, up: false, said: HashMap::new(), last_lit: None, refused: Quiet::default(), full: Quiet::default() }
+        Session {
+            cfg,
+            topics,
+            client,
+            up: false,
+            said: HashMap::new(),
+            published: Vec::new(),
+            last_lit: HashMap::new(),
+            refused: Quiet::default(),
+            full: Quiet::default(),
+        }
     }
 
     /// A ConnAck: subscribe again, then say everything.
-    fn connected(&mut self, snap: &Snapshot) {
-        let mut topics: Vec<&str> = self.topics.command_topics().to_vec();
-        topics.push(&self.topics.ha_status);
+    fn connected(&mut self, fleet: &Fleet) {
+        let mut topics: Vec<String> = self.topics.command_wildcards().to_vec();
+        topics.push(self.topics.ha_status.clone());
         for topic in topics {
-            if let Err(e) = self.client.try_subscribe(topic, QoS::AtLeastOnce) {
+            if let Err(e) = self.client.try_subscribe(&topic, QoS::AtLeastOnce) {
                 eprintln!("studio: home assistant: subscribing to {topic}: {e}");
             }
         }
@@ -306,55 +319,82 @@ impl Session {
         for topic in self.topics.retired_state_topics() {
             let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
         }
-        self.announce(snap);
+        self.announce(fleet);
     }
 
-    /// The discovery config, `online`, and every state, whatever was said
+    /// The discovery configs, `online`, and every state, whatever was said
     /// before.
-    fn announce(&mut self, snap: &Snapshot) {
+    fn announce(&mut self, fleet: &Fleet) {
         self.said.clear();
-        self.show(snap, true);
+        self.show(fleet, true);
+    }
+
+    /// Publish one retained message, remembering it.
+    fn say(&mut self, topic: String, payload: String) {
+        match self.client.try_publish(&topic, QoS::AtLeastOnce, true, payload.clone()) {
+            Ok(()) => {
+                self.said.insert(topic, payload);
+            }
+            Err(e) => self.full.say(|n| format!("studio: home assistant: {n} message(s) not sent: {e}")),
+        }
     }
 
     /// Everything that differs from what was last said - or everything, with
     /// `all`. Only while the link is up: a reconnect says it all anyway.
-    fn show(&mut self, snap: &Snapshot, all: bool) {
-        self.last_lit = payload::lit(self.last_lit, snap);
+    ///
+    /// A panel that has gone since the last time - forgotten, or renamed to a
+    /// new id - has its device removed: an empty retained config, and every
+    /// state cleared.
+    fn show(&mut self, fleet: &Fleet, all: bool) {
+        for view in fleet {
+            let id = fleet::topics_of(&self.cfg, view).device_id;
+            let lit = self.last_lit.get(&id).copied().flatten();
+            self.last_lit.insert(id, payload::lit(lit, &view.snapshot));
+        }
         if !self.up {
             return;
         }
-        let config = discovery::payload(&self.cfg, &self.topics, snap).to_string();
+        let now: Vec<Topics> = fleet.iter().map(|v| fleet::topics_of(&self.cfg, v)).collect();
+        for gone in std::mem::take(&mut self.published) {
+            if now.iter().any(|t| t.device_id == gone.device_id) {
+                continue;
+            }
+            for topic in fleet::retained_topics(&gone) {
+                self.said.remove(&topic);
+                let _ = self.client.try_publish(&topic, QoS::AtLeastOnce, true, Vec::new());
+            }
+            self.last_lit.remove(&gone.device_id);
+        }
+        self.published = now;
         // The config before anything that refers to it, and `online` before
         // the states, so HA never sees an entity's state without the entity.
-        let mut out = vec![
-            Message { topic: self.topics.discovery.clone(), payload: config },
-            Message { topic: self.topics.status.clone(), payload: ONLINE.to_string() },
-        ];
-        out.extend(payload::state_messages(&self.topics, snap));
-        for m in out {
+        for m in fleet::announce(&self.cfg, fleet) {
             if !all && self.said.get(&m.topic) == Some(&m.payload) {
                 continue;
             }
-            match self.client.try_publish(&m.topic, QoS::AtLeastOnce, true, m.payload.clone()) {
-                Ok(()) => {
-                    self.said.insert(m.topic, m.payload);
-                }
-                Err(e) => self.full.say(|n| format!("studio: home assistant: {n} message(s) not sent: {e}")),
-            }
+            self.say(m.topic, m.payload);
         }
     }
 
     /// Something arrived on a topic this subscribed to.
-    fn message(&mut self, topic: &str, payload: &[u8], snap: &Snapshot, commands: &mpsc::Sender<Command>) {
+    fn message(&mut self, topic: &str, payload: &[u8], fleet: &Fleet, commands: &mpsc::Sender<Order>) {
         if topic == self.topics.ha_status {
             if payload == ONLINE.as_bytes() {
-                self.announce(snap);
+                self.announce(fleet);
             }
             return;
         }
-        match payload::parse_command(&self.topics, topic, payload, snap, self.last_lit) {
-            Ok(cmd) => {
-                if commands.try_send(cmd).is_err() {
+        // Whose topic is it? Only a panel this studio has owns one; a
+        // command for one that has gone is stale and dropped.
+        let owner = fleet.iter().find(|v| fleet::topics_of(&self.cfg, v).command_topics().contains(&topic));
+        let Some(view) = owner else {
+            return;
+        };
+        let topics = fleet::topics_of(&self.cfg, view);
+        let last_lit = self.last_lit.get(&topics.device_id).copied().flatten();
+        match payload::parse_command(&topics, topic, payload, &view.snapshot, last_lit) {
+            Ok(command) => {
+                if commands.try_send(Order { device: view.device.clone(), command }).is_err() {
                     self.full.say(|n| format!("studio: home assistant: {n} command(s) dropped, the studio is behind"));
                 }
             }
@@ -375,10 +415,14 @@ impl Session {
 /// Assistant", which switches the integration off first - this connects as
 /// the same client, and two of those would take turns throwing each other off.
 ///
+/// `panels` are the keys of every panel's HA device now (`None` is the
+/// first): each one's config and states are cleared. A panel forgotten
+/// earlier cleared its own when it went.
+///
 /// # Errors
 ///
 /// The broker could not be reached, or refused us, within `within`.
-pub async fn forget(cfg: &MqttConfig, within: Duration) -> Result<(), String> {
+pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], within: Duration) -> Result<(), String> {
     let topics = Topics::new(cfg);
     let (client, mut eventloop) = AsyncClient::new(options(cfg, &topics, false), REQUESTS);
     let work = async {
@@ -389,10 +433,15 @@ pub async fn forget(cfg: &MqttConfig, within: Duration) -> Result<(), String> {
                 Err(e) => return Err(describe(&e)),
             }
         }
-        let (discovery_topic, empty) = discovery::remove_device(&topics);
-        let mut clear = vec![discovery_topic, topics.status.clone()];
-        clear.extend(payload::state_messages(&topics, &Snapshot::default()).into_iter().map(|m| m.topic));
+        let empty = discovery::remove_device(&topics).1;
+        let mut clear = vec![topics.status.clone()];
         clear.extend(topics.retired_state_topics());
+        // The first panel always, whatever `panels` says.
+        let mut keys: Vec<Option<String>> = vec![None];
+        keys.extend(panels.iter().filter(|k| k.is_some()).cloned());
+        for key in keys {
+            clear.extend(fleet::retained_topics(&Topics::for_panel(cfg, key.as_deref())));
+        }
         for topic in clear {
             client.publish(topic, QoS::AtLeastOnce, true, empty.clone()).await.map_err(|e| e.to_string())?;
         }
