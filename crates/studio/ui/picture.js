@@ -499,6 +499,7 @@ async function start() {
       : 'Deleting it moves its panels to Channel 1.';
   }
   bind({ refresh: showChannel });
+  showChannel(); // from the bootstrap state, before the socket has said anything
 
   $('#bring').addEventListener('change', () => {
     const panel = $('#bring').value;
@@ -773,6 +774,7 @@ async function start() {
     sayIfBlack();
   }
   bind({ refresh: showChip });
+  showChip();
 
   // ---- view ----
 

@@ -454,7 +454,7 @@ body.settings-page .titleblock { max-width: 640px; }
 
 /* The Panel screen's Channel readout is the way to that channel's picture. */
 .readouts__link { color: var(--paper); text-decoration: none; border-bottom: 1px solid var(--rule); }
-.readouts__link::after { content: " ›"; color: var(--dim); }
+.readouts__link::after { content: "›"; margin-left: 0.3em; color: var(--dim); }
 .readouts__link:hover { border-color: var(--paper); }
 
 /* Card 354: the channel section - its panels, each with where to move it;
@@ -831,6 +831,8 @@ select:hover { border-color: var(--dim); }
   .setup summary, .view summary { padding: 15px 0; margin: -15px 0; } /* 44 px to hit, the triangle kept */
   .pcard, .ccard { min-height: 48px; }
   .readouts__link { display: inline-flex; align-items: center; min-height: 44px; }
+  .member__name { display: inline-flex; align-items: center; min-height: 44px; }
+  .member { padding-top: 2px; }
   .playing__actions button { min-height: 44px; }
 }
 
