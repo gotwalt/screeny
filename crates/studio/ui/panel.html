@@ -15,6 +15,14 @@
     <a href="/settings">Settings</a>
   </nav>
 
+  <!-- Card 351: the same panel row as the Picture screen, without the
+       thumbnails - this screen draws no pictures (card 120, 198). Every
+       control below acts on the panel picked here, which is in the URL
+       (`/panel?panel=<device id>`). -->
+  <section class="panels panels--compact" aria-label="Panels">
+    <div class="panels__row" id="panels"></div>
+  </section>
+
   <header class="titleblock">
     <div class="titleblock__patch">
       <h1 id="panel-name">Looking for a panel…</h1>
@@ -79,21 +87,25 @@
         <button type="button" id="identify">Identify</button>
         <button type="button" id="rename">Rename</button>
         <button type="button" id="reboot" class="danger">Reboot</button>
+        <button type="button" id="forget" class="danger">Forget</button>
       </div>
 
+      <!-- Card 351: this used to choose which one panel the studio drove.
+           Every panel it finds is adopted now (card 350), idle, and shows up
+           in the row above; what is left to do by hand is add one discovery
+           cannot see. -->
       <details class="setup" id="setup">
-        <summary>Change which panel</summary>
+        <summary>Add a panel</summary>
         <div class="setup__body">
-          <div class="found" id="found"></div>
           <div class="row row--fill">
             <label for="add-to">Panel</label>
             <input id="add-to" type="text" spellcheck="false" autocomplete="off" placeholder="screeny-c0ffee, panel.local or 192.168.1.50">
           </div>
           <div class="row row--actions">
-            <button type="button" id="add">Use this panel</button>
+            <button type="button" id="add">Add this panel</button>
             <button type="button" id="look" class="quiet">Look again</button>
           </div>
-          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not.</p>
+          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not. A new panel starts idle, on its own screen, until it is given a picture.</p>
         </div>
       </details>
     </section>

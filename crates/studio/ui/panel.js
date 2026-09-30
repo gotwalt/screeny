@@ -21,13 +21,14 @@
 'use strict';
 
 import {
-  $, ago, bindBrightness, bindRadios, bindSlider, bindSwitch, busy, connect, duration, facts,
-  IDLE, invoke, kb, kbs, makeAttempt, netSize, nf, noFrames, notice, panelState, pct, pollStatus,
-  size, wifiLine, words,
+  $, ago, bindBrightness, bindRadios, bindSlider, bindSwitch, bootstrapFor, busy, carryPanel, chosenPanel,
+  connect, duration, facts, forgetChoice, IDLE, invoke, kb, kbs, makeAttempt, netSize, nf, noFrames, notice,
+  panelHref, panelRow, panelState, pct, pollStatus, size, wifiLine, words,
 } from './common.js';
 
 async function start() {
-  const boot = await invoke('bootstrap');
+  const chosen = chosenPanel();
+  const boot = await bootstrapFor(chosen);
   let state = boot.state;
   /** The last GET /api/v1/status. */
   let picture = null;
@@ -36,8 +37,15 @@ async function start() {
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
-  const attachedId = () => (picture ? picture.preview.device : state.device) || '';
-  const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
+  // Card 351: the panel this screen is about is the one in the URL, or the
+  // first without one - the socket's own, whose state says which device it
+  // is. `''` is the unbound stand-in of a studio with no panel yet.
+  const attachedId = () => state.device || '';
+  const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === attachedId()) : null) || null;
+  /** An idle panel: no picture, no channel, its own screen (card 350). */
+  const idle = () => state.channel === null || state.channel === undefined;
+  carryPanel(attachedId());
+  const row = panelRow($('#panels'), { path: '/panel', current: attachedId });
 
   const attempt = makeAttempt(() => readStatus());
 
@@ -48,7 +56,7 @@ async function start() {
   const bind = (control) => { refreshers.push(control); return control; };
 
   const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  const pushOutput = () => call('set_output', { output: state.output });
+  const pushOutput = () => call('set_output', { output: state.output, panel: attachedId() });
   const s = () => state.output;
 
   // ---- output, brightness, the device's own controls ----
@@ -56,7 +64,10 @@ async function start() {
   const outSwitch = $('#panel-out');
   outSwitch.addEventListener('change', async () => {
     const want = outSwitch.checked;
-    const done = await invoke('set_panel', want ? { on: true, to: '' } : { on: false })
+    // Card 351: this panel's output, not every panel's - a `set_panel` with
+    // no `panel` switches all of them off.
+    const panel = attachedId();
+    const done = await invoke('set_panel', want ? { on: true, to: '', panel } : { on: false, panel })
       .catch((e) => { notice(`set_panel failed: ${e.message || e}`, 'say'); return null; });
     if (done) { state = done.state; showPanel(); }
     readStatus();
@@ -95,7 +106,7 @@ async function start() {
 
   const needPanel = () => {
     const id = attachedId();
-    if (!id) { notice('No panel is attached yet. Open "Change which panel" to pick one.', 'say'); }
+    if (!id) { notice('No panel yet. Open "Add a panel" to add one by address.', 'say'); }
     return id;
   };
 
@@ -119,11 +130,25 @@ async function start() {
     attempt(`Rebooting ${name}`, () => invoke('device/reboot', { device, confirm: true }));
   });
 
+  $('#forget').addEventListener('click', () => {
+    const device = needPanel();
+    if (!device) return;
+    const name = $('#panel-name').textContent;
+    if (!window.confirm(`Forget ${name}? It goes back to its own screen, and comes back idle if the studio finds it again.`)) return;
+    attempt(`Forgot ${name}`, async () => {
+      await invoke('devices/forget', { device });
+      location.assign('/panel');
+      return `Forgot ${name}`;
+    });
+  });
+
+  // Card 351: a new panel is added idle (card 350) and this screen moves to
+  // it, so the next thing done is to it.
   $('#add').addEventListener('click', async () => {
     const to = $('#add-to').value.trim();
     if (!to) { notice('Type an address, a host name, or the panel’s name first.'); return; }
-    const done = await attempt(`Using ${to}`, () => invoke('set_panel', { on: true, to }));
-    if (done) { $('#add-to').value = ''; state = done.state; showPanel(); }
+    const done = await attempt(`Added ${to}`, () => invoke('devices/add', { to }));
+    if (done && done.id) { $('#add-to').value = ''; location.assign(panelHref('/panel', done.id)); }
   });
   $('#look').addEventListener('click', () => attempt('Asked every panel who it is', () => invoke('devices/refresh', {})));
 
@@ -136,6 +161,8 @@ async function start() {
     $('#panel-name').textContent = name || 'No panel yet';
     $('#panel-help').textContent = !attachedId()
       ? 'Nothing is being sent. The studio is still playing the patch; the Picture screen shows it.'
+      : idle()
+        ? 'Idle: it is on its own screen. Switch it on below, or pick a picture for it on the Picture screen.'
       : !state.on
         ? 'The panel is on its own idle screen. The patch is still playing here.'
         : link && link.connected
@@ -147,18 +174,20 @@ async function start() {
     pill.dataset.state = here.tone;
 
     const patch = patchById[state.patch];
-    $('#ro-playing').textContent = patch ? patch.name : state.patch;
+    $('#ro-playing').textContent = idle() ? 'Nothing' : patch ? patch.name : state.patch;
     // Card 151: which of the patch's settings this panel is on, and whether it
     // has been moved since. The Picture screen is where they are changed.
-    $('#ro-setting').textContent = state.modified ? `${state.setting}, modified` : state.setting;
+    $('#ro-setting').textContent = idle() ? '–' : state.modified ? `${state.setting}, modified` : state.setting;
   }
 
   function showPanel() {
     const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link });
+    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link, idle: idle() });
     showHead(here, device);
 
-    if (!busy(outSwitch)) outSwitch.checked = Boolean(state.on);
+    // Card 351: an idle panel shows nothing whatever its output says, so the
+    // switch reads off; switching it on gives it a picture (`set_panel`).
+    if (!busy(outSwitch)) outSwitch.checked = Boolean(state.on) && !idle();
     // Card 181: the switch is still live with no panel attached, and it still
     // means something - `state.on` is what makes the first panel found start
     // playing without anybody pressing anything. What it cannot say while
@@ -179,7 +208,6 @@ async function start() {
     showLink(device);
     showDevice(device);
     showStudio();
-    showFound();
   }
 
   /** What the studio sees of the link and the player: the device list is
@@ -453,7 +481,7 @@ async function start() {
   function discoveryLine(attached) {
     const d = picture && picture.discovery;
     if (!d) return '';
-    const type = 'Type an address under “Change which panel”.';
+    const type = 'Type an address under “Add a panel”.';
     if (!d.enabled) {
       return attached
         ? 'Not looking for other panels: this studio was started with --no-discover.'
@@ -471,52 +499,17 @@ async function start() {
       : `Looking: ${browses}, nothing found yet. ${type}`;
   }
 
-  /** Every panel this studio knows about: the chooser, folded away. */
-  function showFound() {
-    const devices = picture ? picture.devices : [];
-    const attached = attachedId();
-    // With no panel at all, the chooser is the point of the screen: open it.
-    if (!attached && !$('#setup').open && !$('#setup').dataset.nudged) {
+  /** With no panel at all, adding one is the point of the screen: open it. */
+  function nudgeSetup() {
+    if (!attachedId() && !$('#setup').open && !$('#setup').dataset.nudged) {
       $('#setup').open = true;
       $('#setup').dataset.nudged = 'yes';
     }
-    $('#found').replaceChildren(...devices.map((d) => {
-      const row = document.createElement('div');
-      row.className = 'found__one';
-      row.dataset.attached = d.id === attached ? 'yes' : 'no';
-      const what = document.createElement('div');
-      what.className = 'found__what';
-      what.append(
-        Object.assign(document.createElement('div'), { className: 'found__name', textContent: d.label }),
-        Object.assign(document.createElement('div'), {
-          className: 'found__where',
-          textContent: d.frame_addr || d.address || d.instance || d.id,
-        }),
-      );
-      row.append(what);
-      if (d.id === attached) {
-        row.append(Object.assign(document.createElement('span'), { className: 'pill', textContent: 'This one' }));
-      } else {
-        const use = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Use this' });
-        use.addEventListener('click', async () => {
-          const out = await attempt(`Now showing ${d.label}`, () => invoke('set_panel', { on: true, to: d.id }));
-          if (out) { state = out.state; showPanel(); }
-        });
-        row.append(use);
-      }
-      const forget = Object.assign(document.createElement('button'), { type: 'button', className: 'quiet', textContent: 'Forget' });
-      forget.addEventListener('click', () => {
-        if (!window.confirm(`Forget ${d.label}? Its player goes with it.`)) return;
-        attempt(`Forgot ${d.label}`, () => invoke('devices/forget', { device: d.id }));
-      });
-      row.append(forget);
-      return row;
-    }));
   }
 
   // ---- the studio's and the panel's facts, polled ----
 
-  const readStatus = pollStatus((next) => { picture = next; showPanel(); });
+  const readStatus = pollStatus((next) => { picture = next; showPanel(); nudgeSetup(); });
 
   // The same stream the Picture screen is on - a change made there shows here
   // at once - but with `noFrames` for a pace: this screen draws no pictures,
@@ -524,7 +517,10 @@ async function start() {
   connect({
     state: (message) => { state = message.state; showPanel(); },
     status: (message) => { link = message.panel; showPanel(); },
-  }, noFrames);
+    panels: (message) => row.update(message.panels || []),
+    // The panel in the URL has been forgotten: go to the first one.
+    error: () => forgetChoice(),
+  }, noFrames, { panel: chosen });
 
   showPanel();
 }

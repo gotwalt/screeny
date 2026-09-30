@@ -25,16 +25,21 @@
 // The page asks for only as many frames as it can use (`previewFps`), and for
 // none at all while the tab is hidden. It never asks for a *different* picture:
 // what arrives is the panel's own frames, paced.
+//
+// Card 351: a studio drives several panels, and this screen opens on a row of
+// them (`panelRow`, common.js) - a thumbnail, a name, a picture and a link
+// dot each. The one in the URL (`/?panel=<device id>`, the first without it)
+// is the one this screen is about: its frames on the canvas, its channel in
+// the editor, and every change sent with its `panel`. Editing is per channel,
+// so the editor says which other panels share it ("Also on Kitchen") and
+// offers Detach; the picker offers "Same as <panel>" for the others.
 
 'use strict';
 
 import {
-  $, ago, bindRadios, bindSlider, bindSwitch, busy, connect,
-  invoke, notice, pct, pollStatus, showChip as paintChip, trim,
+  $, ago, bindRadios, bindSlider, bindSwitch, bootstrapFor, busy, carryPanel, chosenPanel, connect,
+  forgetChoice, H, HEADER, invoke, notice, panelRow, pct, pictureLine, pollStatus, showChip as paintChip, trim, W,
 } from './common.js';
-
-const W = 64, H = 32;
-const HEADER = 52; // keep in step with studio/src/page.rs
 const PITCH_MM = 3; // LED pitch: the lit area is 192 x 96 mm
 
 // ---------- per-viewer view options (never sent to the server) ----------
@@ -186,10 +191,19 @@ function sizeCanvas(canvas) {
 async function start() {
   const canvas = $('#panel');
   const renderer = createRenderer(canvas);
-  const boot = await invoke('bootstrap');
+  const chosen = chosenPanel();
+  const boot = await bootstrapFor(chosen);
   let state = boot.state;
   /** The last GET /api/v1/status. */
   let picture = null;
+  /** The last overview, `{"type":"panels"}`: every panel, first first. */
+  let overview = [];
+  /** The panel this screen is about: the socket's own, which is the one in the
+   *  URL or - without one - the first. `''` is the unbound stand-in. */
+  const here = () => state.device || '';
+  carryPanel(here());
+  /** A picture with no channel: an idle panel, on its own screen. */
+  const idle = () => state.channel === null || state.channel === undefined;
 
   // Controls that show a value from `state`. Another browser changing
   // something is the same thing as this one doing it, so both paths end here.
@@ -197,7 +211,10 @@ async function start() {
   let paramControls = [];             // rebuilt whenever the patch changes
   const bind = (control) => { refreshers.push(control); return control; };
 
-  const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
+  // Every change names the panel it is for (card 350's `panel`); `''` is the
+  // first, which is what the server takes an absent one to mean anyway.
+  const forHere = (args) => ({ ...(args || {}), panel: here() });
+  const call = (cmd, args) => invoke(cmd, forHere(args)).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
   // `state.output` is read-only here: the limiter's numbers feed the meters
   // below, but the controls that set it (panel model, dither, the limiter
   // itself) moved to the Panel screen with card 301, along with brightness.
@@ -342,8 +359,13 @@ async function start() {
     if (!next) return;
     state = next;
     const patch = patchById[state.patch];
-    $('#patch-name').textContent = patch ? patch.name : state.patch;
-    $('#patch-blurb').textContent = patch ? patch.blurb : '';
+    // Card 351: an idle panel has no patch. It says so, and every patch below
+    // is a way to start it; there are no parameters or settings to show.
+    $('#patch-name').textContent = idle() ? 'Idle' : patch ? patch.name : state.patch;
+    $('#patch-blurb').textContent = idle()
+      ? `${panelName(here())} is on its own screen. Pick a picture below to start it.`
+      : patch ? patch.blurb : '';
+    $('#sec-params').hidden = idle();
     document.querySelectorAll('#patches input').forEach((i) => { i.checked = i.value === state.patch; });
 
     paramControls = [];
@@ -358,10 +380,54 @@ async function start() {
   // does not have to be rebuilt, so a slider being dragged here keeps its grip.
   function sync(next) {
     if (!next) return;
-    if (next.patch !== state.patch) { adopt(next); return; }
+    if (next.patch !== state.patch || next.channel !== state.channel) { adopt(next); return; }
     state = next;
     for (const control of [...refreshers, ...paramControls]) control.refresh();
   }
+
+  // ---- which panel, and who else is on its picture (card 351) ----
+
+  /** A panel's name, from the overview; its id until the overview arrives. */
+  function panelName(id) {
+    const p = overview.find((q) => q.device === id);
+    return (p && p.name) || id || 'This panel';
+  }
+
+  const row = panelRow($('#panels'), { path: '/', current: here, thumbs: true });
+
+  /** "Also on Kitchen" with Detach, the idle line, and "Same as <panel>" for
+   *  every other panel with a picture this one is not already on. */
+  function showSharing() {
+    const others = state.shared_with || [];
+    $('#shared').hidden = idle() || others.length === 0;
+    $('#shared-who').textContent = others.length
+      ? `Also on ${others.map(panelName).join(', ')}. A change here changes ${others.length === 1 ? 'it' : 'them'} too.`
+      : '';
+
+    $('#idle-note').hidden = !idle();
+    $('#idle-note').textContent = idle() ? 'Nothing is being sent to this panel. Pick a picture to start it.' : '';
+
+    const candidates = overview.filter((p) => p.device !== here() && p.picture && !others.includes(p.device));
+    $('#same-as').hidden = candidates.length === 0;
+    const key = candidates.map((p) => `${p.device}\u0000${p.name}\u0000${pictureLine(p)}`).join('\u0001');
+    if ($('#same-list').dataset.key === key) return;
+    $('#same-list').dataset.key = key;
+    $('#same-list').replaceChildren(...candidates.map((p) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'same__one' });
+      b.append(
+        Object.assign(document.createElement('span'), { className: 'same__name', textContent: p.name || p.device }),
+        Object.assign(document.createElement('span'), { className: 'same__pic', textContent: pictureLine(p) }),
+      );
+      b.addEventListener('click', async () => sync(await call('same_as', { as: p.device })));
+      return b;
+    }));
+  }
+  bind({ refresh: showSharing });
+
+  $('#detach').addEventListener('click', async () => {
+    const next = await call('detach', {});
+    if (next) { notice(`${panelName(here())} has a picture of its own now.`, 'say'); sync(next); }
+  });
 
   // ---- settings (card 151) ----
   //
@@ -406,7 +472,7 @@ async function start() {
   async function settingCall(cmd, args) {
     saySetting('');
     try {
-      sync(await invoke(cmd, args));
+      sync(await invoke(cmd, forHere(args)));
       return true;
     } catch (e) {
       saySetting(e.message || String(e));
@@ -510,8 +576,8 @@ async function start() {
   // gone), so what is left here about the panel is only the chip below - the
   // one thing on this screen that is about the panel rather than the picture.
 
-  const attachedId = () => (picture ? picture.preview.device : state.device) || '';
-  const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
+  const attachedId = here;
+  const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === here()) : null) || null;
   /** The panel link, from the half-second heartbeat. Null when output is off. */
   let link = null;
 
@@ -537,7 +603,7 @@ async function start() {
     const device = attachedDevice();
     const chip = $('#ro-panel');
     const here = paintChip(chip, {
-      attachedId: attachedId(), device, on: state.on, link, rate: link ? link.fps : null,
+      attachedId: attachedId(), device, on: state.on, link, rate: link ? link.fps : null, idle: idle(),
     });
     chip.title = device && device.last_seen_ago !== null && device.last_seen_ago !== undefined
       ? `Heard ${ago(device.last_seen_ago)}. The panel screen has the rest.`
@@ -747,10 +813,13 @@ async function start() {
   // Everything the server pushes: frames, somebody else's changes, and the
   // half-second heartbeat that carries "now playing" and the panel link.
   connect({
-    frame: (buf) => { newest = buf; },
+    frame: (buf) => { newest = buf; row.frame(buf); },
     state: (message) => sync(message.state),
     status: (message) => { link = message.panel; showPlaying(message.playing); showChip(); },
-  });
+    panels: (message) => { overview = message.panels || []; row.update(overview); showSharing(); },
+    // The panel in the URL has been forgotten: go to the first one.
+    error: () => forgetChoice(),
+  }, undefined, { panel: chosen });
 }
 
 start().catch((e) => notice(String(e.message || e)));

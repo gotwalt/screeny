@@ -16,6 +16,16 @@
     <a href="/settings">Settings</a>
   </nav>
 
+  <!-- Card 351: the panel overview. One card per panel - a live thumbnail of
+       what it is showing, its name, its picture and a dot for its link - each
+       a link to `/?panel=<device id>`, which puts that panel's picture in the
+       editor below. The selected panel is in the URL, so a reload or a
+       bookmark keeps it. With one panel it is one card and the page reads as
+       it always did. Filled by `panelRow` in common.js. -->
+  <section class="panels" aria-label="Panels">
+    <div class="panels__row" id="panels"></div>
+  </section>
+
   <header class="titleblock">
     <div class="titleblock__patch">
       <h1 id="patch-name">&nbsp;</h1>
@@ -89,11 +99,28 @@
   <aside class="inspector" aria-label="Controls">
     <section id="sec-now">
       <h2>Now playing</h2>
+      <!-- Card 351: an idle panel has no picture: it says so, and picking one
+           below starts it. -->
+      <p class="hint" id="idle-note" hidden></p>
+      <!-- Card 351: editing is per channel, so the editor says which other
+           panels are on it - a slider here moves them too - and offers to
+           give this panel a copy of its own. -->
+      <div class="shared" id="shared" hidden>
+        <p class="shared__who" id="shared-who"></p>
+        <button type="button" id="detach">Detach</button>
+      </div>
       <p class="playing__title" id="playing-title" hidden></p>
       <p class="playing__detail" id="playing-detail" hidden></p>
       <div class="playing__actions" id="playing-actions"></div>
       <ul class="playing__notes" id="playing-notes"></ul>
       <div class="patches" id="patches" role="radiogroup" aria-label="Patch"></div>
+      <!-- Card 351: "Same as <panel>" - join another panel's picture, tweaks
+           and all, in sync with it. One per other panel that has a picture
+           this one is not already sharing. -->
+      <div class="same" id="same-as" hidden>
+        <h3>Same as</h3>
+        <div class="same__list" id="same-list"></div>
+      </div>
       <!-- Card 145: why the GPU patches are greyed out, said once, here rather
            than only on stderr. -->
       <p class="hint" id="gpu-note" hidden></p>

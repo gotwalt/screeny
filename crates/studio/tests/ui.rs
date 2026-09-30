@@ -199,7 +199,7 @@ fn the_screens_hold_what_the_split_says_they_do() {
     // them was on the one page before this card.
     for gone in [
         "discovery-note", "panel-out", "panel-out-label", "panel-facts", "device-block",
-        "device-facts", "device-note", "identify", "rename", "reboot", "setup", "found", "add-to",
+        "device-facts", "device-note", "identify", "rename", "reboot", "setup", "add-to",
     ] {
         assert!(!INDEX_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} belongs on the Panel screen");
         assert!(PANEL_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} has to still exist somewhere");
@@ -230,7 +230,7 @@ fn the_screens_hold_what_the_split_says_they_do() {
     // frames asked for (card 120's rule, restated for a screen that draws
     // none).
     assert!(!PANEL_HTML.contains("<canvas"), "the Panel screen draws no picture");
-    assert!(PANEL_JS.contains("}, noFrames);"), "so it must ask the socket for none");
+    assert!(PANEL_JS.contains("}, noFrames, { panel: chosen });"), "so it must ask the socket for none");
     assert!(COMMON_JS.contains("export const noFrames = () => 0;"), "fps 0 is what asks for none");
     assert!(!PANEL_JS.contains("requestAnimationFrame"), "and it has no frame pump");
 }
@@ -598,7 +598,12 @@ fn the_output_switch_says_what_it_does_when_there_is_no_panel() {
     assert!(PANEL_JS.contains("'Show it on the panel'"), "and with one attached it says so again");
     // Still live, and still the same two bodies a script drives it with.
     assert!(!PANEL_JS.contains("outSwitch.disabled"), "the switch still decides what the first panel found does");
-    assert!(PANEL_JS.contains("{ on: true, to: '' } : { on: false }"), "`set_panel`'s two bodies are unchanged");
+    // Card 351: both name the panel, since `{"on":false}` alone lets every
+    // panel go, and this switch is about the one the screen is on.
+    assert!(
+        PANEL_JS.contains("{ on: true, to: '', panel } : { on: false, panel }"),
+        "`set_panel`'s two bodies, each for this panel"
+    );
 }
 
 /// The same fact over the API, which is what the line is drawn from: with
@@ -1007,6 +1012,8 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
     // changes the picture. Card 301 took brightness, the panel model, the
     // limiter, Speed and pause/restart off this screen entirely.
     order("the Picture screen", INDEX_HTML, &[
+        // Card 351: the panel row heads it, then the chosen panel's picture.
+        ("the panel row", "id=\"panels\""),
         ("the picture", "id=\"stage\""),
         ("view", "id=\"sec-view\""),
         ("now playing", "id=\"sec-now\""),
@@ -1017,6 +1024,7 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
     // The Panel screen: the things the owner touches - the switch, brightness,
     // output settings - then what it says about itself, then the studio.
     order("the Panel screen", PANEL_HTML, &[
+        ("the panel row", "id=\"panels\""),
         ("the panel's name", "id=\"panel-name\""),
         ("the panel's controls", "id=\"sec-panel\""),
         ("output settings", "id=\"sec-output\""),
@@ -1052,4 +1060,89 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
         let tag = &html[html[..at].rfind('<').expect("the tag it is on")..html[at..].find("</a>").map(|n| at + n).expect("its close")];
         assert!(tag.contains(current), "{what}: the marked nav item should say {current}, not: {tag}");
     }
+}
+
+/// Card 351: several panels on the page. The Picture and Panel screens open on
+/// a row of them, filled by one shared function; which panel a screen is about
+/// is `?panel=` and nothing stored; everything the screen changes names it;
+/// thumbnails are the README's cheap recipe and the Panel screen still asks
+/// for no pictures.
+#[test]
+fn the_page_has_a_row_of_panels_and_acts_on_the_one_chosen() {
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML)] {
+        assert!(html.contains(r#"<div class="panels__row" id="panels">"#), "{what} carries the panel row");
+    }
+    assert!(!SETTINGS_HTML.contains(r#"id="panels""#), "Settings is about the studio, not a panel");
+    assert!(COMMON_JS.contains("export function panelRow("), "one row, shared");
+    assert!(PICTURE_JS.contains("panelRow($('#panels'), { path: '/', current: here, thumbs: true })"), "the Picture screen's has thumbnails");
+    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: '/panel', current: attachedId })"), "the Panel screen's does not");
+
+    // Thumbnails: a socket per other panel, four frames a second at most, no
+    // repeats, no overview, and the screen's own pace - 0 in a hidden tab.
+    let row = &COMMON_JS[COMMON_JS.find("export function panelRow(").unwrap()..];
+    assert!(row.contains("const THUMB_FPS = 4;"), "thumbnails at a low rate");
+    assert!(row.contains("Math.min(THUMB_FPS, pace())"), "and none while the tab is hidden");
+    assert!(row.contains("overview: false, quiet: true"), "a thumbnail's socket carries no overview");
+    assert!(row.contains("!mine && Boolean(p.picture)"), "no socket for the panel on screen, nor for an idle one");
+    assert!(COMMON_JS.contains("url.searchParams.set('panel', panel)"), "a socket names its panel");
+    assert!(COMMON_JS.contains("url.searchParams.set('overview', 'false')"), "and can decline the overview");
+    assert!(COMMON_JS.contains("url.searchParams.set('repeat', 'false')"), "and never asks for a repeat");
+
+    // The panel is in the URL, both screens open their socket on it, and a
+    // forgotten one lands on the first rather than on an error.
+    assert!(COMMON_JS.contains("new URLSearchParams(location.search).get('panel')"), "the choice is the URL's");
+    for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
+        assert!(js.contains("bootstrapFor(chosen)"), "{what} bootstraps the chosen panel");
+        assert!(js.contains("{ panel: chosen });"), "{what} opens its socket on it");
+        assert!(js.contains("error: () => forgetChoice()"), "{what} leaves a forgotten panel");
+        assert!(js.contains("carryPanel("), "{what} carries the panel across the nav");
+        assert!(!js.contains("d.attached"), "{what} must not mean 'the first panel' by `attached` any more");
+    }
+    assert!(!SETTINGS_JS.contains("d.attached"), "nor Settings");
+    assert!(SETTINGS_JS.contains("showStudioChip("), "Settings' chip is about every panel");
+
+    // Every change on the Picture screen names its panel; the editor says who
+    // shares the picture, offers Detach and "Same as".
+    assert!(PICTURE_JS.contains("invoke(cmd, forHere(args))"), "calls carry `panel`");
+    for id in ["shared", "shared-who", "detach", "same-as", "same-list", "idle-note"] {
+        assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "#{id} on the Picture screen");
+    }
+    assert!(PICTURE_JS.contains("call('same_as', { as: p.device })"), "Same as joins that panel's channel");
+    assert!(PICTURE_JS.contains("call('detach', {})"), "Detach splits this one off");
+    // The Panel screen's controls act on its panel, never on all of them.
+    assert!(PANEL_JS.contains("call('set_output', { output: state.output, panel: attachedId() })"), "output settings are this panel's");
+    assert!(PANEL_HTML.contains("<summary>Add a panel</summary>"), "'Change which panel' is gone with the stored focus");
+    assert!(!PANEL_HTML.contains("Change which panel"), "and nothing still says it");
+}
+
+/// Card 351: the owner asked for every screen to work on a phone. What a text
+/// file can hold of that: thumb-sized targets on a touch screen or a narrow
+/// one, crisp pixels on every canvas, and a panel row that scrolls sideways
+/// instead of pushing the page wider.
+#[test]
+fn every_screen_is_sized_for_a_thumb() {
+    let touch = STYLE_CSS.find("@media (pointer: coarse), (max-width: 700px)").expect("a touch block");
+    let block = &STYLE_CSS[touch..touch + STYLE_CSS[touch..].find("\n}\n").expect("closed")];
+    for needle in ["min-height: 44px", "height: 44px", "::-webkit-slider-thumb", ".seg span", ".patches span", ".switch input"] {
+        assert!(block.contains(needle), "the touch block should size {needle}");
+    }
+    assert!(STYLE_CSS.contains(".pcard__thumb"), "thumbnails are styled");
+    assert!(STYLE_CSS.matches("image-rendering: pixelated").count() >= 2, "the main canvas and the thumbnails keep crisp pixels");
+    let row = STYLE_CSS.find(".panels__row {").expect("the row");
+    assert!(STYLE_CSS[row..row + 200].contains("overflow-x: auto"), "the row scrolls sideways rather than widening the page");
+    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
+        assert!(html.contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#), "{what} is laid out for the device's width");
+    }
+}
+
+/// What the page relies on the server for when a bookmark names a panel that
+/// has gone: bootstrap says 404, and the page goes to the first panel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_panel_that_is_not_there_is_a_404_the_page_can_leave() {
+    let studio = studio().await;
+    let at = studio.addr;
+    assert_eq!(get(at, "/api/v1/bootstrap").await.status, 200);
+    assert_eq!(get(at, "/api/v1/bootstrap?panel=nosuchpanel").await.status, 404);
+    let panels = get(at, "/api/v1/panels").await.json();
+    assert!(panels["panels"].as_array().is_some_and(|p| !p.is_empty()), "the overview always has a card: {panels}");
 }

@@ -10,29 +10,29 @@
 
 'use strict';
 
-import { $, bindSwitch, busy, connect, facts, invoke, noFrames, notice, pollStatus, showChip as paintChip } from './common.js';
+import { $, bindSwitch, busy, carryPanel, chosenPanel, connect, facts, invoke, noFrames, notice, pollStatus, showStudioChip } from './common.js';
 
 /** How often to ask how the connection is doing. It changes on its own - a
  *  broker going away, a reconnect - so this screen asks rather than waits. */
 const HA_MS = 2000;
 
 async function start() {
-  const boot = await invoke('bootstrap');
-  let state = boot.state;
   /** The last GET /api/v1/status. */
   let picture = null;
-  /** The panel link, from the half-second heartbeat. Null when output is off. */
-  let link = null;
+  /** The overview, `{"type":"panels"}` (card 350): every panel, first first. */
+  let panels = [];
   /** The last GET /api/v1/home_assistant: `crate::ha::HaView`. */
   let ha = await invoke('home_assistant');
 
-  const attachedId = () => (picture ? picture.preview.device : state.device) || '';
-  const attachedDevice = () => (picture ? picture.devices.find((d) => d.attached) : null) || null;
+  // Card 351: this screen is about the studio, not one panel; a `?panel=`
+  // it was opened with is only carried on to the other two screens.
+  carryPanel(chosenPanel());
 
   /** The same chip every screen carries, so trouble is never hidden behind
-   *  this tab either. No canvas, so no rate (card 198, 301). */
+   *  this tab either - here about every panel at once (card 351), since
+   *  nothing on this screen is about one of them. No canvas, so no rate. */
   function showChip() {
-    paintChip($('#ro-panel'), { attachedId: attachedId(), device: attachedDevice(), on: state.on, link, rate: null });
+    showStudioChip($('#ro-panel'), { panels, devices: picture ? picture.devices : [] });
   }
 
   // ------------------------------------------------------ home assistant ----
@@ -149,11 +149,10 @@ async function start() {
 
   // ------------------------------------------------------------- render ----
 
-  pollStatus((next) => { picture = next; showChip(); });
+  pollStatus((next) => { picture = next; if (!panels.length) panels = next.panels || []; showChip(); });
 
   connect({
-    state: (message) => { state = message.state; showChip(); },
-    status: (message) => { link = message.panel; showChip(); },
+    panels: (message) => { panels = message.panels || []; showChip(); },
   }, noFrames);
 
   showChip();

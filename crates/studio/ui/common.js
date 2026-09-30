@@ -161,16 +161,25 @@ export function makeAttempt(after) {
 // back to us: adopting them would fight with the slider still under the mouse.
 export const CLIENT = crypto.randomUUID?.() ?? `c${Math.random().toString(36).slice(2)}`;
 
-// Reads; everything else is a POST carrying its arguments as JSON.
-const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices', 'home_assistant']);
+// Reads; everything else is a POST carrying its arguments as JSON. A read's
+// arguments go in the query string instead - `?panel=` (card 351) is the one
+// any of them takes.
+const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices', 'home_assistant', 'panels']);
 
 export async function invoke(cmd, args) {
-  const init = GETS.has(cmd) ? {} : {
+  const read = GETS.has(cmd);
+  const init = read ? {} : {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-studio-client': CLIENT },
     body: JSON.stringify(args ?? {}),
   };
-  const response = await fetch(`/api/v1/${cmd}`, init);
+  const url = new URL(`/api/v1/${cmd}`, location.href);
+  if (read && args) {
+    for (const [k, v] of Object.entries(args)) {
+      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
+    }
+  }
+  const response = await fetch(url, init);
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try { detail = (await response.json()).error ?? detail; } catch { /* not JSON */ }
@@ -212,7 +221,15 @@ export const noFrames = () => 0;
 // says not to send a picture identical to the last one this socket got - a
 // clock holding the time is the same 6196 bytes for fifteen seconds - which the
 // server honours without letting the meters freeze.
-export function connect(handlers, pace = previewFps) {
+//
+// Card 351: a socket is about one panel. `panel` is the device id it names
+// (`''` follows the first panel, as a socket always did); `overview: false`
+// asks it to leave out the `{"type":"panels"}` messages, which only a screen's
+// own socket needs; `quiet` keeps a thumbnail's socket off the notice line,
+// which the screen's own socket already speaks on. The answer is a handle
+// whose `close()` stops it for good - a thumbnail whose panel is forgotten, or
+// has gone idle, is closed rather than left reconnecting.
+export function connect(handlers, pace = previewFps, { panel = '', overview = true, quiet = false } = {}) {
   // Root-absolute rather than relative to the document: `/panel` and `/panel/`
   // are the same page, and a relative URL would aim the socket at
   // `/panel/api/v1/ws` from the second of them.
@@ -220,8 +237,12 @@ export function connect(handlers, pace = previewFps) {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('client', CLIENT);
   url.searchParams.set('repeat', 'false');
+  if (panel) url.searchParams.set('panel', panel);
+  if (!overview) url.searchParams.set('overview', 'false');
   let wait = 250;
   let live = null;
+  let closed = false;
+  let timer = null;
   const ask = () => {
     // The rate goes in the query string too, so a page loaded in a background
     // tab never costs a frame - not even the one between opening and asking.
@@ -231,10 +252,11 @@ export function connect(handlers, pace = previewFps) {
     }
   };
   const open = () => {
+    if (closed) return;
     ask();
     const socket = new WebSocket(url);
     socket.binaryType = 'arraybuffer';
-    socket.addEventListener('open', () => { wait = 250; live = socket; notice(''); });
+    socket.addEventListener('open', () => { wait = 250; live = socket; if (!quiet) notice(''); });
     socket.addEventListener('message', (e) => {
       if (e.data instanceof ArrayBuffer) { handlers.frame?.(e.data); return; }
       const message = JSON.parse(e.data);
@@ -242,8 +264,9 @@ export function connect(handlers, pace = previewFps) {
     });
     socket.addEventListener('close', () => {
       if (live === socket) live = null;
-      notice('Lost contact with the studio. Reconnecting…');
-      setTimeout(open, wait);
+      if (closed) return;
+      if (!quiet) notice('Lost contact with the studio. Reconnecting…');
+      timer = setTimeout(open, wait);
       wait = Math.min(wait * 2, 5000);
     });
     socket.addEventListener('error', () => socket.close());
@@ -251,6 +274,184 @@ export function connect(handlers, pace = previewFps) {
   document.addEventListener('visibilitychange', ask);
   navigator.connection?.addEventListener('change', ask);
   open();
+  return {
+    close() {
+      closed = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', ask);
+      navigator.connection?.removeEventListener('change', ask);
+      live?.close();
+    },
+  };
+}
+
+// ---------- which panel (card 351) ----------
+//
+// A studio drives several panels (card 350), and which one a screen is about
+// is **the page's** business: `?panel=<device id>` in the URL, so a reload or
+// a bookmark keeps it and the back button is the browser's job. No `?panel=`
+// means the first panel, which is what every route and socket means without
+// one - so a studio with one panel reads exactly as it did.
+
+/** The panel this page was opened on: the device id in `?panel=`, or `''`. */
+export const chosenPanel = () => new URLSearchParams(location.search).get('panel') || '';
+
+/** `path` about panel `id` - no query at all for `''`, the first panel. */
+export function panelHref(path, id) {
+  return id ? `${path}?panel=${encodeURIComponent(id)}` : path;
+}
+
+/** Carry the panel across the nav and the status chip, so the Panel screen
+ *  opens on the panel the Picture screen was showing, and back again. Only
+ *  once a panel was chosen: without one every screen means the first. */
+export function carryPanel(id) {
+  if (!chosenPanel() || !id) return;
+  document.querySelectorAll('.nav a, a.pill--link').forEach((a) => {
+    a.href = panelHref(new URL(a.href, location.href).pathname, id);
+  });
+}
+
+/** A `?panel=` naming a panel the studio has not got - forgotten since the
+ *  bookmark was made - lands on the first panel rather than on an error. */
+export function forgetChoice() {
+  if (chosenPanel()) location.replace(location.pathname);
+}
+
+/** Bootstrap for the chosen panel. A chosen panel the studio has not got is
+ *  the server's 404, and the page goes to the first panel instead. */
+export async function bootstrapFor(panel) {
+  try {
+    return await invoke('bootstrap', { panel });
+  } catch (e) {
+    if (panel) forgetChoice();
+    throw e;
+  }
+}
+
+/** A frame packet: this header, then 64x32 sRGB (keep in step with
+ *  studio/src/page.rs). */
+export const HEADER = 52;
+export const W = 64;
+export const H = 32;
+
+/** Card 351: the overview's link word (`PanelSummary.link`) as a person reads
+ *  it, and the tone of the dot beside it. */
+const LINK_WORDS = {
+  up: ['Live', 'on'],
+  connecting: ['Connecting', 'away'],
+  waiting: ['Waiting', 'away'],
+  closed: ['Away', 'away'],
+  off: ['Output off', 'off'],
+  idle: ['Idle', 'idle'],
+  none: ['No panel', 'off'],
+};
+export const linkWords = (link) => LINK_WORDS[link] || [words(link || ''), 'away'];
+
+/** One line for what a panel is showing: "Metaballs · Lava", and
+ *  "modified" when its channel has been moved since. */
+export function pictureLine(p) {
+  if (!p.picture) return 'Idle: no picture yet';
+  const pic = p.picture;
+  return [pic.patch_name || pic.patch, pic.setting, pic.modified ? 'modified' : ''].filter(Boolean).join(' · ');
+}
+
+/** **The panel row** (card 351): one card per panel - a live thumbnail of
+ *  what it is showing, its name, its picture and a dot for its link - each a
+ *  link to `path?panel=<id>`. The Picture screen gives it thumbnails; the
+ *  Panel screen, which draws no pictures (card 120, 198), does not.
+ *
+ *  Thumbnails are cheap on purpose: every panel but the one the screen is
+ *  about gets its own socket at four frames a second (`?fps=4&repeat=false
+ *  &overview=false`, the README's recipe), and none while the tab is hidden -
+ *  `pace` is the screen's own, so a hidden tab asks 0 here too. The one the
+ *  screen is about is drawn from frames the screen already has (`frame()`),
+ *  so it is the only panel at full rate and costs no second socket. An idle
+ *  panel has no picture, and so no socket either.
+ *
+ *  `root` is the element to fill; `current()` the device id the screen is
+ *  about. `update(panels)` takes the overview (`{"type":"panels"}`). */
+export function panelRow(root, { path, current, thumbs = false, pace = previewFps }) {
+  /** device id -> the card's elements and its socket */
+  const cards = new Map();
+  const THUMB_FPS = 4;
+  const thumbPace = () => Math.min(THUMB_FPS, pace());
+
+  const paint = (card, buf) => {
+    if (!card.ctx || buf.byteLength < HEADER + W * H * 3) return;
+    const rgb = new Uint8Array(buf, HEADER, W * H * 3);
+    const px = card.image.data;
+    for (let i = 0, j = 0; i < W * H * 3; i += 3, j += 4) {
+      px[j] = rgb[i]; px[j + 1] = rgb[i + 1]; px[j + 2] = rgb[i + 2]; px[j + 3] = 255;
+    }
+    card.ctx.putImageData(card.image, 0, 0);
+  };
+
+  const span = (className) => Object.assign(document.createElement('span'), { className });
+
+  const make = (id) => {
+    const el = document.createElement('a');
+    el.className = 'pcard';
+    el.href = panelHref(path, id);
+    const card = { el, socket: null };
+    if (thumbs) {
+      const face = span('pcard__face');
+      const canvas = Object.assign(document.createElement('canvas'), { className: 'pcard__thumb', width: W, height: H });
+      face.append(canvas);
+      el.append(face);
+      card.ctx = canvas.getContext('2d');
+      card.image = card.ctx.createImageData(W, H);
+    }
+    card.name = span('pcard__name');
+    card.pic = span('pcard__pic');
+    card.state = span('pcard__state');
+    el.append(card.name, card.pic, card.state);
+    return card;
+  };
+
+  const text = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+
+  function update(panels) {
+    const here = current();
+    const byId = new Map(panels.map((p) => [p.device, p]));
+    const name = (id) => { const p = byId.get(id); return (p && p.name) || id || 'Panel'; };
+    for (const [id, card] of cards) {
+      if (!byId.has(id)) { card.socket?.close(); card.el.remove(); cards.delete(id); }
+    }
+    panels.forEach((p, i) => {
+      let card = cards.get(p.device);
+      if (!card) { card = make(p.device); cards.set(p.device, card); }
+      if (root.children[i] !== card.el) root.insertBefore(card.el, root.children[i] || null);
+      const mine = p.device === here;
+      if (mine) { card.el.setAttribute('aria-current', 'page'); } else { card.el.removeAttribute('aria-current'); }
+      card.el.dataset.idle = p.picture ? 'no' : 'yes';
+      text(card.name, name(p.device));
+      text(card.pic, pictureLine(p));
+      const [said, tone] = linkWords(p.link);
+      const shared = (p.shared_with || []).map(name);
+      text(card.state, shared.length ? `${said} · with ${shared.join(', ')}` : said);
+      card.state.dataset.state = tone;
+      card.el.title = `${name(p.device)}: ${pictureLine(p)}`;
+      // Its own socket for every other panel that has a picture to show.
+      const wants = thumbs && !mine && Boolean(p.picture);
+      if (wants && !card.socket) {
+        card.socket = connect({ frame: (buf) => paint(card, buf) }, thumbPace, { panel: p.device, overview: false, quiet: true });
+      } else if (!wants && card.socket) {
+        card.socket.close();
+        card.socket = null;
+      }
+      if (thumbs && !p.picture) card.ctx.clearRect(0, 0, W, H);
+    });
+    root.dataset.count = String(panels.length);
+  }
+
+  return {
+    update,
+    /** A frame of the panel this screen is about, from the screen's own socket. */
+    frame(buf) {
+      const card = cards.get(current());
+      if (card) paint(card, buf);
+    },
+  };
 }
 
 /** The panel's own facts, polled: `GET /api/v1/status` every couple of seconds
@@ -292,10 +493,13 @@ export function pollStatus(got) {
  *  It is given the half-second heartbeat's link rather than the two-second
  *  poll, so a panel going away shows up in half a second and the answer does
  *  not depend on a read that may not have happened yet. */
-export function panelState({ attached, device, on, link }) {
+export function panelState({ attached, device, on, link, idle = false }) {
   const player = (device || {}).player;
   if (!attached) return { key: 'none', label: 'No panel', tone: 'away' };
   if (player && player.health.gave_up) return { key: 'stopped', label: 'Stopped', tone: 'bad' };
+  // Card 350/351: a panel with no picture - no channel, no stream - is idle,
+  // on its own status screen, and that is not "away".
+  if (idle) return { key: 'idle', label: 'Idle', tone: 'away' };
   if (!on) return { key: 'off', label: 'Output off', tone: 'away' };
   if (link && link.connected) return { key: 'live', label: 'On the panel', tone: 'on' };
   return { key: 'away', label: 'Panel away', tone: 'away' };
@@ -349,19 +553,46 @@ export function attention(device) {
  *  `rate` is the fps to show while live, or `null`/`undefined` where there is
  *  none worth showing - a screen with no canvas has no rate (card 198,
  *  301); the Picture screen passes the heartbeat's `link.fps`. */
-export function showChip(chip, { attachedId, device, on, link, rate }) {
-  const here = panelState({ attached: Boolean(attachedId), device, on, link });
+export function showChip(chip, { attachedId, device, on, link, rate, idle = false }) {
+  const here = panelState({ attached: Boolean(attachedId), device, on, link, idle });
   const name = device ? device.label : attachedId;
   const doing = here.key === 'live'
     ? (rate === null || rate === undefined ? 'live' : `live · ${rate.toFixed(0)} fps`)
     : here.key === 'off' ? 'output off'
       : here.key === 'away' ? 'away'
-        : here.key === 'stopped' ? 'stopped' : '';
+        : here.key === 'stopped' ? 'stopped'
+          : here.key === 'idle' ? 'idle' : '';
   const needs = attention(device);
   const label = here.key === 'none' ? 'No panel' : [name || 'Panel', doing, needs].filter(Boolean).join(' · ');
   if (chip.textContent !== label) chip.textContent = label;
   chip.dataset.state = needs ? 'bad' : here.tone;
   return here;
+}
+
+/** Card 351: the chip on a screen that is about the whole studio rather than
+ *  one panel (Settings). With one panel it is that panel's chip, as it always
+ *  was; with several it says how many and how many are live, and takes the
+ *  fault tone - and points at - the first panel that needs attention, so
+ *  trouble on any panel is still never hidden behind this tab. `panels` is
+ *  the overview, `devices` the status poll's list. */
+export function showStudioChip(chip, { panels, devices }) {
+  const real = (panels || []).filter((p) => !p.unbound);
+  const deviceOf = (id) => (devices || []).find((d) => d.id === id) || null;
+  if (real.length <= 1) {
+    const p = real[0];
+    const device = p ? deviceOf(p.device) : null;
+    const link = p && p.connected ? { connected: true } : null;
+    showChip(chip, { attachedId: p ? p.device : '', device, on: p ? p.on : false, link, rate: null, idle: Boolean(p && !p.picture) });
+    chip.href = panelHref('/panel', chosenPanel());
+    return;
+  }
+  const trouble = real.find((p) => attention(deviceOf(p.device)));
+  const live = real.filter((p) => p.connected).length;
+  const label = [`${real.length} panels`, live ? `${live} live` : 'none live', trouble ? `${trouble.name}: ${attention(deviceOf(trouble.device))}` : '']
+    .filter(Boolean).join(' · ');
+  if (chip.textContent !== label) chip.textContent = label;
+  chip.dataset.state = trouble ? 'bad' : live ? 'on' : 'away';
+  chip.href = panelHref('/panel', trouble ? trouble.device : chosenPanel());
 }
 
 // ---------- small control helpers ----------
