@@ -611,7 +611,7 @@ mod tests {
     }
 
     fn channel(id: u32) -> Arc<Channel> {
-        Channel::new(StoredChannel { id, ..StoredChannel::default() }, false, &Arc::new(SocketMeter::default()))
+        Channel::new(StoredChannel { id, ..StoredChannel::default() }, false, &Arc::new(SocketMeter::default()), &crate::channel::shared_output(Output::default()))
     }
 
     /// Mix one frame of `incoming` through the panel's fade, as `present`

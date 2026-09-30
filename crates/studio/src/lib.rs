@@ -342,6 +342,7 @@ impl AppState {
             devices: self.devices.stored(),
             panels,
             channels,
+            output: self.panels.output(),
             players: Vec::new(),
             focus: String::new(),
             // Card 151's named settings. They live here and nowhere else: the
@@ -425,6 +426,7 @@ impl Studio {
         // One library of named settings for the whole studio.
         let memory = SharedMemory::new(saved.patches);
         let panels = Arc::new(Panels::new(memory, cfg.fault_patches));
+        panels.set_output(saved.output);
         panels.load(saved.panels, saved.channels);
         // Every device the registry knows is a panel - on Channel 1 if the
         // file did not already have it (card 353).

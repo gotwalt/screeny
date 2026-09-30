@@ -91,10 +91,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   panel follows is kept. The migration keeps v8's channels in id order,
 ///   numbered 1, 2, ... and named "Channel N", gives each its first member's
 ///   output, and puts every idle panel on Channel 1 ([`migrate_to_v9`]).
+/// - **v10** (card 356) makes **output one studio-wide setting**: `output` is
+///   a top-level key and a channel no longer has one (it is read from an older
+///   file, never written). The migration takes Channel 1's output
+///   ([`migrate_to_v10`]); the owner never needed to change it per channel.
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Card 353: **Channel 1** - the channel that always exists and cannot be
 /// deleted, the one a route without `channel` means and the one a new panel
@@ -287,6 +291,9 @@ pub struct Persisted {
     /// v9 there is always Channel 1 ([`HOME_CHANNEL`]) and a channel no panel
     /// follows is kept.
     pub channels: Vec<StoredChannel>,
+    /// Card 356: how every channel's frames are finished - Dithered / Bit
+    /// planes, the limiter, the panel model. One for the studio since v10.
+    pub output: Output,
     /// **Read, never written** (v7 and older): one per device. [`migrate_to_v8`]
     /// turns each into a panel and a channel.
     #[serde(skip_serializing)]
@@ -317,6 +324,7 @@ impl Default for Persisted {
             devices: Vec::new(),
             panels: Vec::new(),
             channels: Vec::new(),
+            output: Output::default(),
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
@@ -408,9 +416,10 @@ pub struct StoredChannel {
     /// Only the values that differ from the patch's defaults.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, f32>,
-    /// Card 353: how its frames are finished - Dithered / Bit planes, the
-    /// limiter, the panel model. A channel's since v9, because it shapes the
-    /// bytes every panel on it is sent.
+    /// **Read, never written** (v9 only, cards 353 and 356): how its frames
+    /// were finished. The studio's `output` has it since v10; the migration
+    /// takes Channel 1's ([`migrate_to_v10`]).
+    #[serde(skip_serializing)]
     pub output: Output,
 }
 
@@ -1362,6 +1371,15 @@ fn load(path: &Path) -> Loaded {
     if was < 9 {
         migrate_to_v9(&mut state);
     }
+    // Card 356: output is the studio's.
+    if was < 10 {
+        migrate_to_v10(&mut state);
+    }
+    // Every load: a channel's own output is never kept, so what a file has
+    // there is forgotten rather than carried around unwritten.
+    for c in &mut state.channels {
+        c.output = Output::default();
+    }
     repair_panels(&mut state, &mut repaired);
     strip_working_copies(&mut state);
     repaired.truncate(MAX_REPAIRS);
@@ -1576,6 +1594,16 @@ fn migrate_to_v9(state: &mut Persisted) {
     state.panels.retain(|p| p.device != UNBOUND);
     if state.channels.is_empty() {
         state.channels.push(StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() });
+    }
+}
+
+/// v9 -> v10 (card 356): **output is one setting for the studio**, and it is
+/// Channel 1's - the channel everything joins, and the one the owner had set
+/// the way he wanted. The other channels' outputs are dropped. (A file with no
+/// Channel 1 is repaired afterwards and gets the defaults.)
+fn migrate_to_v10(state: &mut Persisted) {
+    if let Some(home) = state.channels.iter().find(|c| c.id == HOME_CHANNEL) {
+        state.output = home.output;
     }
 }
 
@@ -2261,7 +2289,7 @@ mod tests {
             patch: c.map(|c| c.patch.clone()).unwrap_or_default(),
             seed: c.map_or(0, |c| c.seed),
             params: c.map(|c| c.params.clone()).unwrap_or_default(),
-            output: c.map(|c| c.output).unwrap_or_default(),
+            output: state.output,
             brightness: p.brightness,
             paused: false,
             speed: 1.0,
@@ -3638,7 +3666,7 @@ mod tests {
         let first = player(&loaded, 1);
         assert_eq!((first.patch.as_str(), first.seed, first.brightness, first.on), ("clocks-dials", 4242, Some(96), true));
         assert_eq!(first.params, BTreeMap::from([("mood".to_string(), 3.0)]));
-        assert_eq!(first.output.dither, screeny_art::dither::Dither::Bayer4, "the output stage is the panel's");
+        assert_eq!(loaded.output, Output::default(), "output is the studio's since v10: Channel 1's (the focused panel's), so the second panel's bayer4 is dropped");
         assert_eq!(setting_of(&loaded, 1), "Evening", "and its channel is on the setting it was on");
         assert_eq!(setting_of(&loaded, 0), "", "Default");
 
@@ -3736,22 +3764,23 @@ mod tests {
         let vesta = if screeny_art::patch::find("vesta").is_some() { "vesta" } else { default_patch() };
         assert_eq!((c[0].0, c[0].1, c[0].2, c[0].3), (1, "Channel 1", bats, 11), "{c:?}");
         assert_eq!((c[1].0, c[1].1, c[1].2), (2, "Channel 2", vesta));
-        assert_eq!(loaded.channels[0].output.dither, screeny_art::dither::Dither::Bayer4, "Channel 1 has its member's output");
-        assert!(!loaded.channels[1].output.panel_model, "and so does Channel 2");
+        assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer4, "the studio has Channel 1's output (from its first member)");
+        assert!(loaded.output.panel_model, "and Channel 2's panel_model=false is dropped");
         assert_eq!(loaded.panels.iter().map(|p| p.channel).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(loaded.panels[0].brightness, Some(96), "brightness stays the panel's");
         assert!(loaded.panels.iter().all(|p| p.output.is_none()));
 
-        // Written as v9: the output on the channels, none on the panels.
+        // Written as v10: the output on the studio, none on panels or channels.
         store.save(loaded.clone());
         store.flush();
         store.stop();
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
         let back: serde_json::Value = serde_json::from_str(&text).expect("json");
-        assert_eq!(back["version"], 9);
+        assert_eq!(back["version"], 10);
+        assert_eq!(back["output"]["dither"], "bayer4", "{text}");
         assert!(back["panels"][0].get("output").is_none(), "{text}");
         assert_eq!(back["channels"][1]["name"], "Channel 2");
-        assert!(back["channels"][0].get("output").is_some(), "{text}");
+        assert!(back["channels"][0].get("output").is_none(), "{text}");
     }
 
     /// v8 -> v9: ids renumbered in order from 1, an idle panel put on Channel
@@ -3772,10 +3801,51 @@ mod tests {
         let (_store, loaded) = Store::open(Some(&dir.0));
         let c: Vec<(u32, &str)> = loaded.channels.iter().map(|c| (c.id, c.patch.as_str())).collect();
         assert_eq!(c, [(1, "metaballs"), (2, "flock")], "in id order, numbered from 1");
-        assert_eq!(loaded.channels[0].output.dither, screeny_art::dither::Dither::Bayer8, "the page's output, from its stand-in");
-        assert_eq!(loaded.channels[1].output.dither, screeny_art::dither::Dither::Bayer4, "a's, the first member");
+        assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer8, "Channel 1's output, from the page's stand-in, is the studio's");
         let p: Vec<(&str, u32)> = loaded.panels.iter().map(|p| (p.device.as_str(), p.channel)).collect();
         assert_eq!(p, [("a", 2), ("b", 2), ("idle", 1)], "the stand-in is gone; the idle panel is on Channel 1");
+    }
+
+    /// **v9 -> v10 (card 356)**: the studio's output is Channel 1's; a v10 file
+    /// carries it at the top, reads back as itself, and ignores a channel's.
+    #[test]
+    fn a_v9_file_migrates_to_one_studio_output() {
+        let dir = Temp::new("v9-v10");
+        let v9 = r#"{"version":9,
+          "panels":[{"device":"a","on":true,"channel":1},{"device":"b","on":true,"channel":2}],
+          "channels":[
+            {"id":1,"name":"Kitchen","patch":"bats","output":{"panel":"dithered","dither":"bayer8","limiter":{"enabled":true,"apl_cap":0.3,"max_rise_per_s":1.5}}},
+            {"id":2,"name":"Hall","patch":"vesta","output":{"panel_model":false,"dither":"bayer4"}}
+          ]}"#;
+        std::fs::write(dir.0.join(FILE), v9).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v9") && w.contains("state.v9.json")));
+        assert_eq!(std::fs::read_to_string(dir.0.join("state.v9.json")).expect("the v9 file is kept"), v9);
+        assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer8, "Channel 1's");
+        assert_eq!(loaded.output.panel, screeny_art::panel::Panel::Dithered);
+        assert!(loaded.output.limiter.enabled && loaded.output.panel_model, "all of it, and not Hall's panel_model=false");
+        assert_eq!(loaded.channels[1].name, "Hall", "the channels are as they were");
+
+        store.save(loaded.clone());
+        store.flush();
+        store.stop();
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        let back: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(back["version"], 10);
+        assert_eq!(back["output"]["dither"], "bayer8", "{text}");
+        assert!(back["channels"].as_array().expect("channels").iter().all(|c| c.get("output").is_none()), "{text}");
+        let (again, reread) = Store::open(Some(&dir.0));
+        assert!(again.health().recovered.is_none(), "not migrated twice");
+        assert_eq!(reread, loaded);
+    }
+
+    /// A file with no output at all - a fresh studio - is the live defaults.
+    #[test]
+    fn the_studio_output_defaults_to_aligned_dark_and_blue_noise() {
+        let o = Persisted::default().output;
+        assert_eq!(o.panel, screeny_art::panel::Panel::DEVICE);
+        assert_eq!(o.dither, screeny_art::dither::Dither::default());
     }
 
     /// Card 310: a v6 file written by card 302's build - modes with card 309's

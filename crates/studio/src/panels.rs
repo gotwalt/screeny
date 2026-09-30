@@ -35,7 +35,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::channel::{fade_len, find_patch, Channel, ChannelId, FADE_MANUAL};
+use crate::channel::{fade_len, find_patch, shared_output, Channel, ChannelId, SharedOutput, FADE_MANUAL};
 use crate::devices::Registry;
 use crate::page::{SocketMeter, StudioState};
 use crate::panel::{Panel, SendCounts};
@@ -192,6 +192,8 @@ pub struct Panels {
     inner: Mutex<Inner>,
     memory: SharedMemory,
     meter: Arc<SocketMeter>,
+    /// Card 356: the studio's one output stage, shared with every channel.
+    output: SharedOutput,
     faults: bool,
     /// Start a channel's render thread as soon as it is made. Off only in the
     /// unit tests that look at the topology and nothing else.
@@ -205,6 +207,7 @@ impl Panels {
             inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
             memory,
             meter: Arc::new(SocketMeter::default()),
+            output: shared_output(Output::default()),
             faults,
             autostart: true,
         };
@@ -220,6 +223,18 @@ impl Panels {
     #[must_use]
     pub fn memory(&self) -> SharedMemory {
         self.memory.clone()
+    }
+
+    /// **The studio's output settings** (card 356): how every channel's
+    /// frames are finished.
+    #[must_use]
+    pub fn output(&self) -> Output {
+        *self.output.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Change it for every channel; picked up on the next frame.
+    pub fn set_output(&self, output: Output) {
+        *self.output.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = output;
     }
 
     /// What every preview socket has cost.
@@ -305,7 +320,7 @@ impl Panels {
 
     fn insert_locked(&self, inner: &mut Inner, stored: StoredChannel) -> Arc<Channel> {
         inner.next = inner.next.max(stored.id.saturating_add(1));
-        let c = Channel::new(stored, self.faults, &self.meter);
+        let c = Channel::new(stored, self.faults, &self.meter, &self.output);
         inner.channels.insert(c.id(), Arc::clone(&c));
         if self.autostart {
             c.ensure_running();
@@ -323,7 +338,7 @@ impl Panels {
                     continue;
                 }
                 inner.next = inner.next.max(c.id.saturating_add(1));
-                if let Some(old) = inner.channels.insert(c.id, Channel::new(c, self.faults, &self.meter)) {
+                if let Some(old) = inner.channels.insert(c.id, Channel::new(c, self.faults, &self.meter, &self.output)) {
                     old.shutdown();
                 }
             }
@@ -428,8 +443,8 @@ impl Panels {
 
     // ------------------------------------------------------ the channels ---
 
-    /// **A new channel**: a copy of `from` - its picture, its working copy and
-    /// its output settings, so moving a panel onto it is seamless - or of
+    /// **A new channel**: a copy of `from` - its picture and its working copy,
+    /// so moving a panel onto it is seamless - or of
     /// Channel 1 without one, called `name` or "Channel <id>". It has no
     /// panels until somebody moves one onto it.
     ///
@@ -572,7 +587,7 @@ impl Panels {
             patch: stored.patch,
             seed: stored.seed,
             params,
-            output: stored.output,
+            output: self.output(),
             paused: false,
             speed: 1.0,
             fps: screeny_art::FPS,
@@ -625,7 +640,7 @@ impl Panels {
             paused: false,
             speed: 1.0,
             brightness: cfg.brightness,
-            output: s.stored.output,
+            output: self.output(),
             running: s.running,
             focused: self.is_first(panel),
             fps_measured: s.fps_measured,
@@ -694,7 +709,7 @@ impl Panels {
                 name: c.name(),
                 home: c.id() == HOME_CHANNEL,
                 picture: self.picture_of(c),
-                output: c.output(),
+                output: self.output(),
                 panels: c.follower_ids(),
             })
             .collect()
@@ -707,6 +722,7 @@ impl Panels {
             inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
             memory,
             meter: Arc::new(SocketMeter::default()),
+            output: shared_output(Output::default()),
             faults: true,
             autostart: false,
         };
@@ -761,12 +777,13 @@ mod tests {
         let home = panels.home();
         panels.pick(&home, def("clocks-dials"), "", None).expect("dials");
         home.edit(&crate::channel::Edit { seed: Some(77), ..Default::default() }).expect("seed");
-        home.set_output(Output { panel_model: false, ..Output::default() });
+        panels.set_output(Output { panel_model: false, ..Output::default() });
 
         let second = panels.new_channel(None, None).expect("a new channel");
         assert_eq!((second.id(), second.name().as_str()), (2, "Channel 2"));
         let s = second.stored();
-        assert_eq!((s.patch.as_str(), s.seed, s.output.panel_model), ("clocks-dials", 77, false), "a copy of Channel 1, output and all");
+        assert_eq!((s.patch.as_str(), s.seed), ("clocks-dials", 77), "a copy of Channel 1");
+        assert!(!second.output().panel_model && !home.output().panel_model, "the output is the studio's, one for both");
         assert!(second.follower_ids().is_empty(), "with no panels");
 
         let kitchen = panels.new_channel(Some("  Kitchen "), Some(&second)).expect("named");

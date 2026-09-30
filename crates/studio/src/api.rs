@@ -306,7 +306,7 @@ struct NewChannel {
     /// Absent or empty is "Channel <id>".
     #[serde(default)]
     name: Option<String>,
-    /// The channel to copy - picture, working copy, output. Absent is
+    /// The channel to copy - picture and working copy. Absent is
     /// Channel 1.
     #[serde(default)]
     from: Option<ChannelId>,
@@ -464,11 +464,12 @@ struct SetOutput {
     at: Target,
 }
 
-/// **The channel's output stage** (card 353: a channel's, not a panel's,
-/// because it shapes the bytes every panel on it is sent).
+/// **The studio's output stage** (card 356): one setting for every channel.
+/// A `channel` or `panel` (an older client's) is accepted, and only chooses
+/// which state the answer describes - falling back to Channel 1 if it is gone.
 async fn set_output(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
-    let aim = target(&st, &req.at, &q)?;
-    aim.channel.set_output(req.output);
+    st.panels.set_output(req.output);
+    let aim = target(&st, &req.at, &q).unwrap_or_else(|_| Aim { channel: st.panels.home(), from: None });
     Ok(Json(publish(&st, &headers, &aim)))
 }
 
@@ -974,7 +975,7 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
         panel.set_on(on);
     }
     if let Some(output) = req.output {
-        channel.set_output(output);
+        st.panels.set_output(output);
     }
     if let Some(b) = req.brightness {
         panel.set_brightness(b);

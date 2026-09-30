@@ -95,6 +95,16 @@ struct Stage {
     tick: u64,
 }
 
+/// **The studio's output settings** (card 356): one cell, shared by every
+/// channel, so a change to it reaches every stage on the next frame.
+pub type SharedOutput = Arc<Mutex<Output>>;
+
+/// A cell holding `output`.
+#[must_use]
+pub fn shared_output(output: Output) -> SharedOutput {
+    Arc::new(Mutex::new(output))
+}
+
 /// A channel's id: stable across restarts, never reused within a file.
 pub type ChannelId = u32;
 
@@ -512,6 +522,8 @@ impl Edit {
 pub struct Channel {
     id: ChannelId,
     cfg: Mutex<StoredChannel>,
+    /// Card 356: the studio's output, not the channel's.
+    output: SharedOutput,
     paused: AtomicBool,
     core: Mutex<Option<Arc<CoreHandle>>>,
     health: Mutex<ChannelHealth>,
@@ -546,10 +558,12 @@ pub struct Channel {
 
 impl Channel {
     #[must_use]
-    pub fn new(stored: StoredChannel, faults: bool, meter: &Arc<SocketMeter>) -> Arc<Channel> {
-        let stage = Stage { pipeline: Pipeline::new(stored.output), tick: 0 };
+    pub fn new(stored: StoredChannel, faults: bool, meter: &Arc<SocketMeter>, output: &SharedOutput) -> Arc<Channel> {
+        let first = *output.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stage = Stage { pipeline: Pipeline::new(first), tick: 0 };
         Arc::new(Channel {
             id: stored.id,
+            output: Arc::clone(output),
             stage: Mutex::new(stage),
             encodes: AtomicU64::new(0),
             screen: Screen::new(Arc::clone(meter)),
@@ -611,16 +625,11 @@ impl Channel {
         self.cfg().name = name.to_string();
     }
 
-    /// How its frames are finished (card 353: the channel's, so every member
-    /// is sent the same bytes).
+    /// How its frames are finished: the studio's output (card 356), so every
+    /// member is sent the same bytes.
     #[must_use]
     pub fn output(&self) -> Output {
-        self.cfg().output
-    }
-
-    /// Picked up by the pipeline on the next frame.
-    pub fn set_output(&self, output: Output) {
-        self.cfg().output = output;
+        *self.output.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Its preview cell: the encoded frames, decoded.
@@ -1225,7 +1234,7 @@ mod tests {
     }
 
     fn idle_channel() -> Arc<Channel> {
-        Channel::new(StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() }, true, &Arc::new(SocketMeter::default()))
+        Channel::new(StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() }, true, &Arc::new(SocketMeter::default()), &shared_output(Output::default()))
     }
 
     #[test]
