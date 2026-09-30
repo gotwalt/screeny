@@ -191,7 +191,7 @@ async fn two_panels_share_a_picture_then_differ_then_share_again() {
     let (fa, fb) = a_second_of(&a, &b).await;
     let same = overlap(&fa, &fb);
     eprintln!("different pictures: sim a showed {}, sim b {}; {:.0}% shared; nearest {:.2}", fa.len(), fb.len(), same * 100.0, nearest(&fa, &fb));
-    assert!(fa.len() >= 20 && fb.len() >= 1, "both still streaming: {} and {}", fa.len(), fb.len());
+    assert!(fa.len() >= 20 && fb.len() >= 20, "both still streaming: {} and {}", fa.len(), fb.len());
     assert!(nearest(&fa, &fb) > 10.0, "two different pictures: {:.2}", nearest(&fa, &fb));
 
     // A route without `panel` is the first panel's.

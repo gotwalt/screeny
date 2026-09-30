@@ -557,13 +557,6 @@ impl Panel {
         }
         slot.out = None;
     }
-
-    /// Test only: fade from the channel it follows now to `next`, without the
-    /// registry, so a test can drive [`Panel::present`] by hand.
-    #[cfg(test)]
-    pub(crate) fn fading(&self) -> bool {
-        self.stage_mut().fading()
-    }
 }
 
 /// A device id for a log line.

@@ -974,6 +974,70 @@ mod tests {
         assert_eq!((s.setting.as_str(), s.modified), ("Default", true), "on Default, and honestly modified");
     }
 
+    /// Run each channel's render thread for a moment, with somebody watching
+    /// so it runs at the full rate, then stop it and wait for it to finish.
+    fn render_a_while(panels: &Panels, watch: &Arc<Panel>) {
+        let mut viewer = watch.screen().viewer();
+        viewer.set_wants_frames(true);
+        panels.start();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while panels.channels().iter().any(|c| c.ticks() < 10) {
+            assert!(std::time::Instant::now() < deadline, "the channels never rendered");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        for c in panels.channels() {
+            c.shutdown();
+        }
+        // `shutdown` lets go of the core at once; the thread finishes the frame
+        // it is on (one frame period at most) and then stops ticking.
+        let mut last: Vec<u64> = Vec::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let now: Vec<u64> = panels.channels().iter().map(|c| c.ticks()).collect();
+            if now == last {
+                break;
+            }
+            last = now;
+        }
+    }
+
+    /// **Two panels on one channel get identical frames from one render**:
+    /// every tick of the channel is presented to both, exactly once, and the
+    /// last frame each put in its preview cell is the same picture.
+    #[test]
+    fn two_panels_on_one_channel_get_the_same_frames_from_one_render() {
+        let panels = Panels::quiet(SharedMemory::default());
+        let (a, b) = two_on_one(&panels);
+        render_a_while(&panels, &a);
+        let ticks = channel_of(&a).ticks();
+        assert!(ticks >= 10);
+        assert_eq!((a.presents(), b.presents()), (ticks, ticks), "one render, handed to both");
+        let (pa, pb) = (a.screen().newest(), b.screen().newest());
+        assert_eq!(pa[crate::page::HEADER..], pb[crate::page::HEADER..], "the same picture on both");
+    }
+
+    /// **Two channels render independently**: each panel is presented its own
+    /// channel's frames, as many as that channel rendered, and they differ.
+    #[test]
+    fn two_channels_render_independently() {
+        let panels = Panels::quiet(SharedMemory::default());
+        panels.adopt("a");
+        panels.adopt("b");
+        let a = panels.get("a").expect("a");
+        let b = panels.get("b").expect("b");
+        panels.pick(&a, def("metaballs"), "", false, None).expect("a");
+        panels.pick(&b, def("clocks-dials"), "", false, None).expect("b");
+        let mut viewer = b.screen().viewer();
+        viewer.set_wants_frames(true);
+        render_a_while(&panels, &a);
+        let (ca, cb) = (channel_of(&a), channel_of(&b));
+        assert!(!Arc::ptr_eq(&ca, &cb));
+        assert_eq!(a.presents(), ca.ticks(), "a sees its own channel's renders");
+        assert_eq!(b.presents(), cb.ticks(), "b sees its own channel's renders");
+        let (pa, pb) = (a.screen().newest(), b.screen().newest());
+        assert_ne!(pa[crate::page::HEADER..], pb[crate::page::HEADER..], "two pictures");
+    }
+
     /// The file round-trips: panels in their order, each on its channel.
     #[test]
     fn what_is_stored_loads_back_the_same() {
