@@ -352,11 +352,34 @@ retired by card 310: Home Assistant picks a patch and setting and keeps the time
 
 ## Home Assistant (cards 308, 310, 311)
 
-**Card 350 left this on the first panel.** The studio has several panels now; Home
-Assistant still sees one device, and it is the **first panel** - the one a route without
-`panel` means - with the same topics, discovery id and `unique_id`s as before, so current
-automations keep working. Picking a picture there goes by the three rules like any other
-pick. Card 352 gives every panel an HA device of its own.
+**One HA device per panel (card 352).** Every panel the studio has is a device in Home
+Assistant, each with the five entities below. The **first panel** - the one a route
+without `panel` means, the first adopted - is the device every earlier build announced,
+with **the same discovery id, topics and `unique_id`s, byte for byte** (a test pins them
+against the strings the single-device build published: `ha::fleet::tests`), so current
+automations and dashboards keep working, and it is still named by the Device name on the
+Settings screen. Every **later** panel is a device of its own, named after the panel
+(what the Devices list calls it), keyed by its device id. Picking a picture in HA goes by
+the three picking rules like any other pick (`Panels::pick`, the page's own path): two
+panels set to the same picture share a channel and stay in sync.
+
+| | first panel | later panel (key = its device id, made safe for a topic: `[a-zA-Z0-9_-]`) |
+|---|---|---|
+| discovery | `homeassistant/device/screeny_<id>/config` | `homeassistant/device/screeny_<id>_<key>/config` |
+| device identifier, `unique_id` stem | `screeny_<id>` / `screeny_<id>_<entity>` | `screeny_<id>_<key>` / `screeny_<id>_<key>_<entity>` |
+| entity topics | `screeny/<id>/<entity>/state\|set` | `screeny/<id>/<key>/<entity>/state\|set` |
+| availability | `screeny/<id>/status` | the same one: an MQTT connection has one Last Will |
+| device name | Device name (Settings) | the panel's name; a rename updates the device |
+
+A panel adopted while the studio is connected gets its discovery published within a
+second, a **forgotten panel's device is removed** (an empty retained config, and every
+one of its retained states cleared - HA drops the device), and a rename is a new config
+with the same identifier, so HA renames the device and keeps its entities. The studio is
+watched, not notified: the snapshot is taken on every state event and once a second, so
+none of that needs a hook. "Remove from Home Assistant" clears every panel's device.
+Limits: a panel's key follows its device id, so a manually typed address that later
+resolves to its real id (`addr_...` -> `screeny-4a00a4`) is a new HA device; and if the
+first panel is forgotten the next one becomes the first and takes over the plain ids.
 
 The studio shows up in Home Assistant through **MQTT discovery**: HA's own MQTT
 integration, no custom component, no YAML on the HA side. HA can see what is playing,
@@ -378,8 +401,9 @@ environment variables an earlier build read (`SCREENY_MQTT_*`), the `--mqtt-forg
 flag and the compose secret are gone with them; `Config::mqtt` remains only as the
 settings a test starts already connected with.
 
-**Entities.** One device (`screeny_<id>`), one retained config at
-`homeassistant/device/screeny_<id>/config`, with every entity in its `components` map:
+**Entities**, per panel - shown here as the first panel's, one device (`screeny_<id>`),
+one retained config at `homeassistant/device/screeny_<id>/config`, with every entity in
+its `components` map (a later panel's are the same under the layout above):
 
 | entity (default id) | platform | topics under `screeny/<id>/` | payload |
 |---|---|---|---|
@@ -389,7 +413,7 @@ settings a test starts already connected with.
 | `sensor.screeny_patch` | sensor | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
 | `binary_sensor.screeny_panel_link` | binary sensor, `connectivity`, diagnostic | `panel/state` | `ON` while the studio is driving the panel and the link is up |
 
-Availability for all of them is `screeny/<id>/status`: `online` / `offline`, retained,
+Availability for all of them, on every panel, is `screeny/<id>/status`: `online` / `offline`, retained,
 with `offline` as the Last Will. Every state is retained, so HA has the right values after
 its own restart. A command that is not valid for its entity (a picture that is not in the
 list, brightness above 255) is refused and logged, and changes nothing.
@@ -403,7 +427,9 @@ still cleans up after itself; their retained state topics are cleared on every c
 too (`Topics::retired_state_topics`).
 
 **Lifecycle.** On every connect, first or after a broker restart, the studio
-resubscribes to the command topics and to `homeassistant/status`, then publishes the
+resubscribes to the command topics (`screeny/<id>/+/set` and `screeny/<id>/+/+/set`, so a
+panel adopted later needs no new subscription; a command for a panel that is gone is
+dropped) and to `homeassistant/status`, then publishes the
 config, `online`, and every state. When HA says `online` there (HA restarted), it
 publishes the config and every state again. A lost broker is retried with a backoff up
 to 30 s, for as long as the studio runs, and logged once rather than once per retry.
@@ -438,11 +464,18 @@ curl -s -X POST -H 'content-type: application/json' \
 #     screeny/studio/brightness/state {"state":null}      (until something sets one)
 #     screeny/studio/picture/state None
 #     ...
+#  with a second panel (device id screeny-4a00a5) adopted, as well:
+#     homeassistant/device/screeny_studio_screeny-4a00a5/config {...}
+#     screeny/studio/screeny-4a00a5/picture/state None
+#     ...
 mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/level/set -m '40'
 #  -> screeny/studio/brightness/state {"state":"ON","brightness":97,"color_mode":"brightness"}
 #     screeny/studio/level/state 40
 mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/picture/set -m 'Vesta'
 #  -> screeny/studio/picture/state Vesta               (the panel cross-fades to it over 2 s)
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/screeny-4a00a5/picture/set -m 'Vesta'
+#  -> screeny/studio/screeny-4a00a5/picture/state Vesta  (the second panel; it joins the
+#     first panel's channel, one picture in sync on both)
 # Ctrl-C the studio:
 #  -> screeny/studio/status offline
 docker stop screeny-mqtt
@@ -487,9 +520,13 @@ The same broker runs the end-to-end test, which is ignored by default because it
 `SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored`.
 It uses the discovery prefix `screeny_test`, so it cannot put entities in front of a real
 HA even when pointed at the house broker. It covers the picture select, the brightness
-slider, the settings routes, reconnecting, and forgetting. The module is `src/ha/`:
+slider, the settings routes, reconnecting, and forgetting - and, against two
+`screeny-sim` panels, `every_panel_is_an_ha_device` (card 352): two discovery configs,
+the first panel's ids unchanged, a pick on panel 2 leaving panel 1 alone, the same picture
+on both being one channel, a rename and a forget. The module is `src/ha/`:
 `discovery.rs` (the config, as types), `payload.rs` (states out, commands in), `client.rs`
-(the connection and its lifecycle), and `bridge.rs`, the one file that knows the studio.
+(the connection and its lifecycle), `fleet.rs` (card 352: what several panels look like on the broker, pure), and
+`bridge.rs`, the one file that knows the studio.
 The payload snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a
 change that is meant.
 
@@ -964,5 +1001,5 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/ui.rs` | **all three screens** and their eight files are served, `/panel` and `/panel.js` (and `/settings`/`/settings.js`) are not the same thing, `/dashboard` and `/schedule` redirect, every element each screen's script reaches for exists in that screen (and every element `common.js` reaches for exists in **all three**), every route they call exists, each screen's narrow layout stays the default, each screen's sections stack in the order they should (301), and **one nav with the current screen marked** is on every one of them (301, 311) - and, since the truth-telling cards, that the split holds (198: nothing about devices on the Picture screen, no canvas and no frames asked for on the Panel or Settings screens; 301: brightness, the panel model and the limiter bound once, on the Panel screen only now), that the Panel screen can say whether discovery is on (173), that the adapter outcome is on both routes and is never a 503 (145), that **no control on any screen offers a frame rate** and an old body that still carries one is accepted and ignored (161, which removed card 172's rate slider), that **no slider declares stops any more** and the drawing mechanism went with Speed, its last caller (183, 197, retired by 301), that a parameter with named stops carries them (163), that **the seed is not a control anywhere** (151, 301), and - run under `node` when the machine has one, skipped cleanly when it does not - that the brightness slider's hold-then-release rule releases the moment a reading agrees and otherwise at its deadline, never later, never earlier (126) |
 | `tests/memory.rs` | cards 165 and 350: a patch picked afresh is on its Default and **a named setting brings a tuning back**, from any patch, on the page, on a panel and in a second browser; Reset; **a fresh process on the same state directory is showing what it was, tuning and all, and has every setting - including one for a patch that is not showing**; one library of settings for two panels (and the second joins the first's channel); a hand-edited file with garbage values in a setting; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
-| `tests/ha_mqtt.rs` | cards 308-311, **ignored by default** - needs a broker (`SCREENY_TEST_MQTT=HOST:PORT`, see above): the picture select and its options following the named settings, the brightness light and the percent slider, the settings routes (`GET`/`POST /home_assistant/set\|forget`), reconnecting after a broker restart and after HA's own restart, and forgetting clearing every retained topic |
+| `tests/ha_mqtt.rs` | cards 308-311 and 352 (one HA device per panel, two sims), **ignored by default** - needs a broker (`SCREENY_TEST_MQTT=HOST:PORT`, see above): the picture select and its options following the named settings, the brightness light and the percent slider, the settings routes (`GET`/`POST /home_assistant/set\|forget`), reconnecting after a broker restart and after HA's own restart, and forgetting clearing every retained topic |
 | `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, a channel's edits and its fade, **card 350's topology** (`src/panels.rs`: adoption idle, the three picking rules, Same as, Detach, a setting renamed or deleted under every channel on it, a channel dropped once nothing is on it or fading away from it, one render handed to two panels and two channels apart, the stand-in taken over by the first panel named), a panel's fade from one channel to another (`src/panel.rs`), **v7 -> v8** with the v7 file kept and v8 files whose panels and channels disagree, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |

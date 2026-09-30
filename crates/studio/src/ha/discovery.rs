@@ -231,6 +231,10 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
 #[must_use]
 pub fn payload(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> serde_json::Value {
     let mut value = serde_json::to_value(build(cfg, topics, snap)).unwrap_or_default();
+    // Only the first panel was ever announced by a build that had them.
+    if !topics.is_first() {
+        return value;
+    }
     if let Some(map) = value.get_mut("components").and_then(|c| c.as_object_mut()) {
         for (key, platform) in RETIRED {
             map.insert((*key).to_string(), serde_json::json!({ "platform": platform }));
