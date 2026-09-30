@@ -360,7 +360,15 @@ impl Session {
             return;
         }
         let now = fleet::devices(&self.cfg, fleet);
-        for gone in std::mem::take(&mut self.published) {
+        let before = std::mem::take(&mut self.published);
+        // A device that is new to this session: what card 352 (a later
+        // panel's picture and patch) or card 310 left retained for it goes.
+        for new in now.iter().filter(|t| !before.iter().any(|b| b.device_id == t.device_id)) {
+            for topic in new.retired_state_topics() {
+                let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+            }
+        }
+        for gone in before {
             if now.iter().any(|t| t.device_id == gone.device_id) {
                 continue;
             }
