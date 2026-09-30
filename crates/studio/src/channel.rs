@@ -923,8 +923,8 @@ impl Channel {
     }
 
     /// **Finish one tick, once, for every member** (card 353): the linear
-    /// frame through this channel's pipeline - limiter, panel model, quantise
-    /// - and its encoder, pointed at the most constrained member's limits.
+    /// frame through this channel's pipeline (limiter, panel model, quantise)
+    /// and its encoder, pointed at the most constrained member's limits.
     /// Fills the preview cell with the encoded frame decoded, and hands back
     /// what every member is sent.
     fn finish(&self, linear: Arc<Frame>, members: &[Arc<Panel>], wall: f64, t: f64, fps: f32) -> ChannelFrame {

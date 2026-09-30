@@ -31,9 +31,12 @@ const LAST_PORT: u16 = 51_100;
 /// What one simulated panel was sent - every `FRAME` datagram's sequence
 /// number, codec and pixel payload, exactly as it arrived - and what it put
 /// up, decoded. Bounded.
+/// One frame datagram as a sim received it: sequence number, codec, payload.
+type Datagram = (u16, u8, Vec<u8>);
+
 #[derive(Clone, Default)]
 struct Seen {
-    wire: Arc<Mutex<Vec<(u16, u8, Vec<u8>)>>>,
+    wire: Arc<Mutex<Vec<Datagram>>>,
     shown: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 

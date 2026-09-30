@@ -262,7 +262,7 @@ impl Panel {
     pub(crate) fn switch_channel(self: &Arc<Self>, next: &Arc<Channel>, fade: f64) -> Option<Arc<Channel>> {
         let old = {
             let mut slot = self.channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *slot, Some(Arc::clone(next)))
+            slot.replace(Arc::clone(next))
         };
         if let Some(o) = &old {
             o.remove_follower(self);

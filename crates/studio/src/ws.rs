@@ -18,32 +18,34 @@
 //! writes into the cell and never waits for a reader. If a single send
 //! cannot complete within [`STALL`] the socket is closed and forgotten.
 //!
-//! The frames are **one panel's**: the same decoded datagrams that panel is
-//! being sent, so what the browser draws and what the panel shows are the same
-//! bytes by construction. That is not negotiable and nothing here re-renders or
-//! re-encodes anything for a browser; the only question card 120 lets a
-//! browser answer is **which** of those frames it is sent.
+//! The frames are **one channel's**: its encoded frames, decoded - the same
+//! bytes every panel on it is sent - so what the browser draws and what the
+//! panels show are the same bytes by construction. That is not negotiable and
+//! nothing here re-renders or re-encodes anything for a browser; the only
+//! question card 120 lets a browser answer is **which** of those frames it is
+//! sent.
 //!
-//! # Which panel (card 350)
+//! # Which channel (card 353)
 //!
-//! `?panel=<device id>` scopes a socket to one panel: its frames, its state
-//! and its heartbeat. Without it the socket follows **the first panel** - and
-//! keeps following it, so a studio whose unbound stand-in gives way to a real
-//! panel moves the socket along within a heartbeat. A socket that names a
-//! panel the studio does not have is sent one `{"type":"error",...}` and
-//! closed; one whose panel is forgotten while it is open is closed too.
+//! `?channel=<id>` scopes a socket to one channel: its frames, its state and
+//! its heartbeat. `?panel=<device id>` means that panel's channel, and follows
+//! the panel when it is moved to another. With neither it is Channel 1. A
+//! socket that names a channel or a panel the studio does not have is sent one
+//! `{"type":"error",...}` and closed; one whose channel is deleted or whose
+//! panel is forgotten while it is open is closed too.
 //!
-//! **One socket per panel is cheap on purpose**, and it is how the overview's
-//! thumbnails are meant to be fed: `?panel=X&fps=4&repeat=false` is at most
-//! four 6 KB frames a second (fewer while the picture holds still), one state
-//! message per change and two small heartbeats a second. Nothing is
-//! multiplexed: every socket is the same simple thing, and pacing, the
-//! watcher count and the stall timeout stay per panel.
+//! **One socket per channel is cheap on purpose**, and it is how thumbnails
+//! are meant to be fed: `?channel=N&fps=4&repeat=false` is at most four 6 KB
+//! frames a second (fewer while the picture holds still), one state message
+//! per change and two small heartbeats a second. Nothing is multiplexed: every
+//! socket is the same simple thing, and pacing, the watcher count and the
+//! stall timeout stay per socket.
 //!
-//! Every socket is also sent `{"type":"panels","panels":[...]}` - the overview,
-//! one card per panel (`panels::PanelSummary`, the same list as
-//! `GET /api/v1/panels`) - when it opens and whenever it changes. A thumbnail
-//! socket that has no use for it says `overview=false`.
+//! Every socket is also sent `{"type":"panels","panels":[...]}` and
+//! `{"type":"channels","channels":[...]}` - every panel and every channel, the
+//! same lists as `GET /api/v1/panels` and `/channels` - when it opens and
+//! whenever either changes. A thumbnail socket that has no use for them says
+//! `overview=false`.
 //!
 //! # What a browser may ask for (card 120)
 //!

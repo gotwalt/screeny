@@ -58,10 +58,11 @@ pub fn blank_packet() -> Vec<u8> {
     vec![0; PACKET_BYTES]
 }
 
-/// One panel's frame cell: what the browsers watching that panel are looking
-/// at. Card 350 gave every panel its own, filled by its channel's render
-/// thread with the frames **that panel** is sent (after its own pipeline), so
-/// "what is on screen is what the device is showing" holds per panel.
+/// One channel's frame cell: what the browsers watching that channel are
+/// looking at. Card 353 gave every channel one, filled by its render thread
+/// with its **encoded frame, decoded** - the bytes every panel on it is sent -
+/// so "what is on screen is what the devices are showing" holds by
+/// construction.
 ///
 /// **One slot, newest wins.** The render loop writes into it and never waits
 /// for a reader, so a browser that has stopped reading misses frames and costs
@@ -70,9 +71,9 @@ pub fn blank_packet() -> Vec<u8> {
 ///
 /// It is also how a channel knows whether anybody is looking:
 /// [`Screen::watchers`] is the number of preview sockets **being sent
-/// frames** from this panel, and a channel none of whose panels is connected
-/// or watched drops to `channel::IDLE_FPS`. A hidden tab is not a watcher
-/// (card 120).
+/// frames** from this channel; a channel none of whose panels is connected and
+/// that nobody watches drops to `channel::IDLE_FPS`, and one with no panel at
+/// all stops rendering. A hidden tab is not a watcher (card 120).
 pub struct Screen {
     frames: watch::Sender<Arc<Vec<u8>>>,
     /// Of the sockets on this panel, the ones being sent frames right now.
