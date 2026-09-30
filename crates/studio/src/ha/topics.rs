@@ -34,9 +34,23 @@ pub struct Pair {
     pub set: String,
 }
 
+/// Whose topics these are (card 355).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// The first panel's device: the original ids, plus **Channel 1's**
+    /// picture and patch.
+    First,
+    /// A later panel's device: light, brightness, link and a channel select.
+    Panel,
+    /// A channel other than Channel 1: a picture select and a patch sensor.
+    Channel,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Topics {
-    /// `None` for the first panel, `Some(<key>)` for a later one.
+    pub role: Role,
+    /// `None` for the first panel, `Some(<key>)` for a later one, and
+    /// `Some("ch<id>")` for a channel.
     pub key: Option<String>,
     /// `screeny/<instance>` (first panel), `screeny/<instance>/<key>` (later).
     pub base: String,
@@ -58,6 +72,20 @@ pub struct Topics {
     pub level: Pair,
     pub picture: Pair,
     pub panel: Pair,
+    /// Card 355: which channel the panel is on, as a select of channel names.
+    pub channel: Pair,
+}
+
+/// The key a channel's device and topics carry: `ch<id>`.
+#[must_use]
+pub fn channel_key(id: u32) -> String {
+    format!("ch{id}")
+}
+
+/// Is this a key [`channel_key`] could make? A panel's key may not be one.
+#[must_use]
+pub fn is_channel_key(key: &str) -> bool {
+    key.strip_prefix("ch").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 impl Topics {
@@ -70,11 +98,23 @@ impl Topics {
     /// keeps the layout every earlier build had.
     #[must_use]
     pub fn for_panel(cfg: &MqttConfig, key: Option<&str>) -> Topics {
+        Topics::with_role(cfg, key, if key.is_none() { Role::First } else { Role::Panel })
+    }
+
+    /// The topics of the HA device of a channel other than Channel 1:
+    /// `screeny/<instance>/ch<id>/...`, discovery id `screeny_<instance>_ch<id>`.
+    #[must_use]
+    pub fn for_channel(cfg: &MqttConfig, id: u32) -> Topics {
+        Topics::with_role(cfg, Some(&channel_key(id)), Role::Channel)
+    }
+
+    fn with_role(cfg: &MqttConfig, key: Option<&str>, role: Role) -> Topics {
         let root = format!("{APP}/{}", cfg.instance);
         let base = key.map_or_else(|| root.clone(), |k| format!("{root}/{k}"));
         let pair = |entity: &str| Pair { state: format!("{base}/{entity}/state"), set: format!("{base}/{entity}/set") };
         let device_id = key.map_or_else(|| format!("{APP}_{}", cfg.instance), |k| format!("{APP}_{}_{k}", cfg.instance));
         Topics {
+            role,
             key: key.map(str::to_string),
             status: format!("{root}/status"),
             root,
@@ -85,15 +125,22 @@ impl Topics {
             level: pair("level"),
             picture: pair("picture"),
             panel: pair("panel"),
+            channel: pair("channel"),
             device_id,
             base,
         }
     }
 
-    /// Every topic HA may send a command on. Subscribed on every connect.
+    /// Every topic HA may send a command on to this device: a channel takes a
+    /// picture; a panel a brightness and a channel; the first panel, which
+    /// also carries Channel 1, all of it.
     #[must_use]
-    pub fn command_topics(&self) -> [&str; 3] {
-        [&self.brightness.set, &self.level.set, &self.picture.set]
+    pub fn command_topics(&self) -> Vec<&str> {
+        match self.role {
+            Role::First => vec![&self.brightness.set, &self.level.set, &self.picture.set, &self.channel.set],
+            Role::Panel => vec![&self.brightness.set, &self.level.set, &self.channel.set],
+            Role::Channel => vec![&self.picture.set],
+        }
     }
 
     /// What to subscribe to so every panel's commands arrive, however many
@@ -110,15 +157,20 @@ impl Topics {
     /// announced.
     #[must_use]
     pub fn is_first(&self) -> bool {
-        self.key.is_none()
+        self.role == Role::First
     }
 
-    /// Card 310: the retained state topics of the entities modes and the
-    /// timetable took with them. Cleared on every connect, so nothing stale
-    /// is left retained. Only the first panel ever had them.
+    /// The retained state topics of entities this device no longer has, to be
+    /// cleared on every connect so nothing stale is left on the broker. The
+    /// first panel's are card 310's (modes and the timetable); a later
+    /// panel's are card 355's (its picture and patch became its channel's).
     #[must_use]
-    pub fn retired_state_topics(&self) -> [String; 3] {
-        ["schedule", "scheduled", "scene"].map(|e| format!("{}/{e}/state", self.base))
+    pub fn retired_state_topics(&self) -> Vec<String> {
+        match self.role {
+            Role::First => ["schedule", "scheduled", "scene"].iter().map(|e| format!("{}/{e}/state", self.base)).collect(),
+            Role::Panel => vec![self.picture.state.clone(), self.patch.state.clone()],
+            Role::Channel => Vec::new(),
+        }
     }
 
     /// `screeny_<instance>_<entity>`.
@@ -183,5 +235,32 @@ mod tests {
         assert_eq!(t.unique_id("panel"), "screeny_studio_screeny-4a00a5_panel");
         assert_eq!(t.command_wildcards(), ["screeny/studio/+/set", "screeny/studio/+/+/set"]);
         assert!(!t.is_first() && Topics::new(&cfg).is_first());
+        assert_eq!(t.channel.set, "screeny/studio/screeny-4a00a5/channel/set");
+        assert_eq!(t.command_topics().len(), 3, "brightness, level and a channel: no picture");
+    }
+
+    #[test]
+    fn a_channel_has_its_own_device_with_a_picture_and_nothing_else_to_command() {
+        let cfg = MqttConfig {
+            host: "b".into(),
+            port: 1883,
+            username: None,
+            password: None,
+            discovery_prefix: "homeassistant".into(),
+            instance: "studio".into(),
+            name: "Screeny".into(),
+        };
+        let t = Topics::for_channel(&cfg, 2);
+        assert_eq!(t.discovery, "homeassistant/device/screeny_studio_ch2/config");
+        assert_eq!(t.device_id, "screeny_studio_ch2");
+        assert_eq!(t.picture.set, "screeny/studio/ch2/picture/set");
+        assert_eq!(t.patch.state, "screeny/studio/ch2/patch/state");
+        assert_eq!(t.command_topics(), ["screeny/studio/ch2/picture/set"]);
+        assert!(is_channel_key("ch12") && !is_channel_key("ch") && !is_channel_key("chx2") && !is_channel_key("ch2a"));
+        // Channel 1's picture is where it always was, on the first panel.
+        let first = Topics::new(&cfg);
+        assert_eq!(first.picture.set, "screeny/studio/picture/set");
+        assert_eq!(first.channel.set, "screeny/studio/channel/set");
+        assert_eq!(first.command_topics().len(), 4);
     }
 }
