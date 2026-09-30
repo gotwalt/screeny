@@ -105,6 +105,15 @@ pub const SCHEMA_VERSION: u32 = 10;
 /// joins.
 pub const HOME_CHANNEL: u32 = 1;
 
+/// **The studio's output until somebody chooses** (card 356): Aligned dark and
+/// Blue noise, which is what the owner runs and has never wanted to change.
+/// (`Output::default()` is the pipeline's own: Dithered, for the art crate's
+/// benches and tests.)
+#[must_use]
+pub fn default_output() -> Output {
+    Output { panel: screeny_art::panel::Panel::AlignedDark, ..Output::default() }
+}
+
 /// A channel's name as a person typed it, as it will be kept - or the sentence
 /// to show them. Trimmed, 1..=[`MAX_NAME_CHARS`] characters, no control
 /// characters.
@@ -324,7 +333,7 @@ impl Default for Persisted {
             devices: Vec::new(),
             panels: Vec::new(),
             channels: Vec::new(),
-            output: Output::default(),
+            output: default_output(),
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
@@ -3844,7 +3853,7 @@ mod tests {
     #[test]
     fn the_studio_output_defaults_to_aligned_dark_and_blue_noise() {
         let o = Persisted::default().output;
-        assert_eq!(o.panel, screeny_art::panel::Panel::DEVICE);
+        assert_eq!(o.panel, screeny_art::panel::Panel::AlignedDark);
         assert_eq!(o.dither, screeny_art::dither::Dither::default());
     }
 

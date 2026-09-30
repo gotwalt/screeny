@@ -18,7 +18,7 @@ Use `--release` for anything that streams: a debug build's encoder will not hold
 **Several panels: channels own the picture** (cards 350-355, `docs/design/studio-vision.md`,
 "Several panels: channels own the picture"). A Studio drives every panel it finds. A
 **channel** is explicit - an id and a name ("Channel 1") - and owns everything that decides
-the frames: patch, named setting, working copy, **output settings**, and one render, one
+the frames: patch, named setting, working copy, and one render, one
 pipeline and **one encode** per tick. A **panel** is a member of exactly one channel - a
 device, on/off, brightness, a link - and is sent that channel's encoded frames **byte for
 byte**, so panels on one channel are frame-for-frame identical and no panel is the master
@@ -35,9 +35,9 @@ one nav at the top of every one of them, because the work is three kinds of work
 
 | | |
 |---|---|
-| **Picture**, `/?channel=` | about a **channel** (card 354) - the picture, which every panel on it is sent frame for frame. The channel row (a live thumbnail, name, patch · setting and the panels on it as chips per channel, "New channel" last), then the chosen channel's canvas with "On: Kitchen, Hallway" under the title, what is playing, its parameters and named settings, **Panels on this channel** (each with a Move to select, "Move a panel here", inline Rename / Delete - Channel 1 cannot be deleted), and the channel's **Output** (panel model, dither, limiter - they shape every member's frames). An empty channel says so and still edits and previews. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel. |
+| **Picture**, `/?channel=` | about a **channel** (card 354) - the picture, which every panel on it is sent frame for frame. The channel row (a live thumbnail, name, patch · setting and the panels on it as chips per channel, "New channel" last), then the chosen channel's canvas with "On: Kitchen, Hallway" under the title, what is playing, its parameters and named settings, and, after the parameters, a **Manage channel** disclosure, closed by default (card 356): **Panels on this channel** (each with a Move to select, "Move a panel here", inline Rename / Delete - Channel 1 cannot be deleted). Output is not here any more - it is the studio's, on Settings. An empty channel says so and still edits and previews. View - how *this browser* draws the panel - is a closed disclosure under the canvas: it never reaches the panel. |
 | **Panel**, `/panel?panel=` | about one **panel**: a compact panel row (name, the channel it is on, its picture, a link dot; no thumbnails), then for the chosen panel: which **Channel** it is on (a select, with "New channel"), whether the studio is even looking for panels, its output switch, brightness, the link, what the device says about itself, identify / rename / reboot / forget, "add a panel" by address, and the studio's own health. |
-| **Settings**, `/settings` | its chip is about every panel ("2 panels · 2 live", the fault tone and a link to the first panel that needs attention); the studio's own settings, starting with Home Assistant (card 311): the broker, the device's name and id, and removing it. Card 303's Schedule screen had this place until card 310 retired modes and the timetable; `/schedule` now redirects (307) to `/`. |
+| **Settings**, `/settings` | its chip is about every panel ("2 panels · 2 live", the fault tone and a link to the first panel that needs attention); the studio's own settings: **Output** (card 356; panel model - Dithered / Bit planes / Aligned dark - dither, quantise, codec preview and the limiter; **one setting for every channel and every panel**, defaulting to Aligned dark and Blue noise, which is what the owner runs), and Home Assistant (card 311): the broker, the device's name and id, and removing it. Card 303's Schedule screen had this place until card 310 retired modes and the timetable; `/schedule` now redirects (307) to `/`. |
 
 Card 301 also simplified the Picture screen: Speed and the pause/restart controls
 are gone - "I don't think speed should be varyable and start/stop is baffling in
@@ -118,7 +118,7 @@ its channel handed it), `shared` (sent as the channel's bytes) and `own`.
 - **Channels are explicit.** There is always **Channel 1** (id 1): it cannot be deleted,
   it is what a picture route without `channel` means, and new panels join it. **New
   channel** (`/channels/new`) makes another - a copy of Channel 1, or of `from`: picture,
-  working copy and output, so moving a panel onto it is seamless - with no panels; a
+  working copy, so moving a panel onto it is seamless - with no panels; a
   channel can be renamed, and deleting one moves its panels to Channel 1. A channel with
   no panels is kept, and **renders only while somebody watches it**. Ids are never reused.
 - **Picking a picture changes the channel** - every panel on it, which is the point.
@@ -129,7 +129,7 @@ its channel handed it), `shared` (sent as the channel's bytes) and `own`.
   seconds, and only for that panel, its frames are its own - the old channel's frames and
   the new one's blended with `crossfade::blend` in linear light, through an output stage
   that carries on from the old channel's limiter (`Pipeline::fork`) and is finished with
-  the new channel's output settings - and then it is on the new channel's shared bytes.
+  the studio's output settings - and then it is on the new channel's shared bytes.
   The old channel keeps rendering at the full rate until the fade is over. A panel joining
   a channel follows that channel's clock; it does not restart it.
 - **A studio always has a picture**, even before it has a panel: Channel 1's, which the
@@ -205,10 +205,11 @@ rebuild - and it is why a `docker restart` comes back showing exactly what it sh
 ],
 "channels": [                               // card 353: explicit; always a Channel 1
   { "id": 1, "name": "Channel 1", "patch": "metaballs", "setting": "Lava", "seed": 111,
-    "params": { "size": 2.5 }, "output": { "dither": "blue_noise", ... } },
-  { "id": 3, "name": "Kitchen", "patch": "vesta", "seed": 1, "output": { ... } },
-  { "id": 4, "name": "Spare", "patch": "flock", "seed": 1, "output": { ... } }   // no panel: kept
+    "params": { "size": 2.5 } },
+  { "id": 3, "name": "Kitchen", "patch": "vesta", "seed": 1 },
+  { "id": 4, "name": "Spare", "patch": "flock", "seed": 1 }   // no panel: kept
 ],
+"output": { "panel": "aligned_dark", "dither": "blue_noise", ... },   // card 356: the studio's, one for every channel
 "patches": {                                // named settings, one library per patch
   "metaballs": {
     "settings": {                           // card 151
@@ -219,6 +220,14 @@ rebuild - and it is why a `docker restart` comes back showing exactly what it sh
 },
 "home_assistant": { "enabled": false, "host": "", "port": 1883, ... }   // card 311
 ```
+
+Schema **v10** (card 356): **output is one studio-wide setting** - a top-level `output`,
+the same block a channel carried in v9 - and a channel has none (a file that still has one
+is read, never written). The migration takes **Channel 1's output** as the studio's and
+drops the others'; on the workbench's file that is the output Channel 1 had, and a channel
+that had its own now follows it. Frames are unchanged for every channel that had Channel
+1's settings (card 353's byte-identity test is unchanged). A fresh studio starts on Aligned
+dark and Blue noise. The v9 file is kept as `state.v9.json`.
 
 Schema **v9** (card 353): a channel gains `name` and `output` - the pipeline settings,
 which were a panel's - and a panel loses `output` and always has a `channel`: there is no
@@ -794,7 +803,7 @@ channel's `StudioState`:
 {
   "patch": "metaballs", "seed": 111,
   "params": { "size": 2.5, ... },     // every parameter at its effective value
-  "output": { "panel": "dithered", "dither": "blue_noise", "limiter": {...}, ... },  // the channel's
+  "output": { "panel": "aligned_dark", "dither": "blue_noise", "limiter": {...}, ... },  // the studio's (card 356)
   "setting": "Lava", "settings": ["Lava", "Slow ink"], "modified": false,
   "fps": 30.0, "paused": false, "speed": 1.0,   // reported; speed and pause are retired (card 302)
   "channel": 1,                        // card 353: always a channel, never null
@@ -818,12 +827,12 @@ channel's `StudioState`:
 | `POST /reset_params` | `{channel?}` | likewise |
 | `POST /set_seed` | `{seed, channel?}` (`null` = a new one) | likewise |
 | `POST /restart` | `{channel?}` | likewise |
-| `POST /set_output` | `{output, channel?}` | **the channel's** output stage (card 353: it shapes every member's bytes) |
+| `POST /set_output` | `{output, channel?}` | **the studio's** output stage (card 356): one setting for every channel. `channel` / `panel` are accepted and ignored (an older client's); they only pick which state the answer describes. Card 353 had it per channel |
 | `POST /set_playback` | anything | **retired** (card 302): speed and pause are not settings any more. Still a 200 with the whole state, plus `ignored` saying it changed nothing (`api::PLAYBACK_RETIRED`). Card 161 had already removed `fps` from the same body the same way |
 | `POST /patch_act` | `{action, channel?}` | what it is performing; `panel` and `device` (card 140) are still taken, for that panel's channel |
 | `POST /settings/load\|save\|rename\|delete` | `+ channel?` | the patch's named settings; see above |
 | `GET /channels` | | card 353: `{"channels": [ChannelSummary...]}`, Channel 1 first; see below |
-| `POST /channels/new` | `{name?, from?}` | a new channel, a copy of `from` (absent: Channel 1) - picture, working copy and output - with no panels; named `name` or "Channel <id>". Its state |
+| `POST /channels/new` | `{name?, from?}` | a new channel, a copy of `from` (absent: Channel 1) - picture and working copy - with no panels; named `name` or "Channel <id>". Its state |
 | `POST /channels/rename` | `{channel, name}` | its state; a name is 1-40 characters, trimmed |
 | `POST /channels/delete` | `{channel}` | its panels move to Channel 1 (each fading); Channel 1 is a 400. Channel 1's state |
 | `POST /panel/channel` | `{panel, channel}` | move a panel: it fades 2 s, alone, then is on that channel's shared bytes. The channel's state, seen from the panel |
@@ -840,7 +849,7 @@ A `ChannelSummary` - one channel (`panels::ChannelSummary`):
   "id": 1, "name": "Channel 1",
   "home": true,                 // Channel 1: cannot be deleted; new panels join it
   "picture": { "patch": "metaballs", "patch_name": "Metaballs", "setting": "Lava", "modified": false },
-  "output": { ... },            // every member's
+  "output": { ... },            // the studio's (card 356), on every channel
   "panels": ["c0ffee", "d00d1e"]  // in the order they joined; [] is a channel nobody is on
 }
 ```
@@ -1120,4 +1129,4 @@ and `state_dir` is `None` there too so a test cannot leave a file behind.
 | `tests/memory.rs` | cards 165 and 350: a patch picked afresh is on its Default and **a named setting brings a tuning back**, from any patch, on the page, on a panel and in a second browser; Reset; **a fresh process on the same state directory is showing what it was, tuning and all, and has every setting - including one for a patch that is not showing**; one library of settings for two panels (and the second joins the first's channel); a hand-edited file with garbage values in a setting; a v1 file |
 | `tests/ui.rs`, `src/state.rs` | card 151: save / load / rename / delete over the API with the list, the name and the mark travelling in the state; every refusal a 400 in words; a setting older than the patch; Default read-only in any spelling; the name rules and the 64 bound; a realistic v4 file migrated to v5 with its speed carried and the v4 file kept; a v5 file that does **not** run the migration again; a hand-edited `settings` block where every way of being wrong costs that value alone; and the seed's number gone from both screens |
 | `tests/ha_mqtt.rs` | cards 308-311 and 352 (one HA device per panel, two sims), **ignored by default** - needs a broker (`SCREENY_TEST_MQTT=HOST:PORT`, see above): the picture select and its options following the named settings, the brightness light and the percent slider, the settings routes (`GET`/`POST /home_assistant/set\|forget`), reconnecting after a broker restart and after HA's own restart, and forgetting clearing every retained topic |
-| `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, a channel's edits and its fade, **card 353's topology** (`src/panels.rs`: Channel 1 always there and new panels joining it, new / rename / delete, a pick changing every panel on the channel, moving a panel, **one encode per tick for two panels**, an empty channel rendering only while watched, the file round-tripping with an empty channel), a panel's fade from one channel to another and in from black (`src/panel.rs`), **v7 -> v8** and **v8 -> v9** (the workbench's shape of 2026-09-30, renumbering, idle panels, the stand-in dropped, first member's output) with the old file kept, and v9 files whose panels and channels disagree or have lost Channel 1, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |
+| `src/*` unit tests | the state file's failure modes - including card 310's `note_retired_modes`, said once when a v6 file's modes and timetable are dropped - the registry's keying, a channel's edits and its fade, **card 353's topology** (`src/panels.rs`: Channel 1 always there and new panels joining it, new / rename / delete, a pick changing every panel on the channel, moving a panel, **one encode per tick for two panels**, an empty channel rendering only while watched, the file round-tripping with an empty channel), a panel's fade from one channel to another and in from black (`src/panel.rs`), **v7 -> v8**, **v8 -> v9** and **v9 -> v10** (card 356: Channel 1's output becomes the studio's, the v9 file kept, written without a per-channel output, reread without a second migration) (the workbench's shape of 2026-09-30, renumbering, idle panels, the stand-in dropped, first member's output) with the old file kept, and v9 files whose panels and channels disagree or have lost Channel 1, the argument and environment precedence, and (`src/ha/`) the discovery payload, the topic layout, and command parsing against fixed snapshots |

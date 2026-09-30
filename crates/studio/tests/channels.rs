@@ -320,7 +320,7 @@ async fn channels_are_made_renamed_and_deleted() {
     // Card 356: output is the studio's - one setting, for every channel. A
     // `channel` (an older client's) is accepted and does not scope it.
     let mut output = dials["output"].clone();
-    assert_eq!(output["dither"], "blue_noise", "the live default");
+    assert_eq!((output["panel"].as_str(), output["dither"].as_str()), (Some("aligned_dark"), Some("blue_noise")), "the live default");
     output["dither"] = "bayer4".into();
     let out = ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "channel": 3 }).to_string()).await;
     assert_eq!(out["output"]["dither"], "bayer4");

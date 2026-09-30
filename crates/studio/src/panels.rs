@@ -207,7 +207,7 @@ impl Panels {
             inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
             memory,
             meter: Arc::new(SocketMeter::default()),
-            output: shared_output(Output::default()),
+            output: shared_output(state::default_output()),
             faults,
             autostart: true,
         };
@@ -722,7 +722,7 @@ impl Panels {
             inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
             memory,
             meter: Arc::new(SocketMeter::default()),
-            output: shared_output(Output::default()),
+            output: shared_output(state::default_output()),
             faults: true,
             autostart: false,
         };
