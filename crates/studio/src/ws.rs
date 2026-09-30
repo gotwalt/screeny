@@ -18,12 +18,32 @@
 //! writes into the cell and never waits for a reader. If a single send
 //! cannot complete within [`STALL`] the socket is closed and forgotten.
 //!
-//! Since card 170 the frames are the **attached panel's**: the same decoded
-//! datagrams the panel is being sent, so what the browser draws and what the
-//! panel shows are the same bytes by construction. That is not negotiable and
-//! nothing here re-renders or re-encodes anything for a browser; the only
-//! question card 120 lets a browser answer is **which** of those frames it is
-//! sent.
+//! The frames are **one panel's**: the same decoded datagrams that panel is
+//! being sent, so what the browser draws and what the panel shows are the same
+//! bytes by construction. That is not negotiable and nothing here re-renders or
+//! re-encodes anything for a browser; the only question card 120 lets a
+//! browser answer is **which** of those frames it is sent.
+//!
+//! # Which panel (card 350)
+//!
+//! `?panel=<device id>` scopes a socket to one panel: its frames, its state
+//! and its heartbeat. Without it the socket follows **the first panel** - and
+//! keeps following it, so a studio whose unbound stand-in gives way to a real
+//! panel moves the socket along within a heartbeat. A socket that names a
+//! panel the studio does not have is sent one `{"type":"error",...}` and
+//! closed; one whose panel is forgotten while it is open is closed too.
+//!
+//! **One socket per panel is cheap on purpose**, and it is how the overview's
+//! thumbnails are meant to be fed: `?panel=X&fps=4&repeat=false` is at most
+//! four 6 KB frames a second (fewer while the picture holds still), one state
+//! message per change and two small heartbeats a second. Nothing is
+//! multiplexed: every socket is the same simple thing, and pacing, the
+//! watcher count and the stall timeout stay per panel.
+//!
+//! Every socket is also sent `{"type":"panels","panels":[...]}` - the overview,
+//! one card per panel (`panels::PanelSummary`, the same list as
+//! `GET /api/v1/panels`) - when it opens and whenever it changes. A thumbnail
+//! socket that has no use for it says `overview=false`.
 //!
 //! # What a browser may ask for (card 120)
 //!
@@ -57,9 +77,9 @@
 //! browser can.
 //!
 //! **A hidden tab is not a watcher.** `fps: 0` gives up this socket's claim on
-//! [`crate::page::Screen::watchers`], which is what a player reads to decide
-//! whether anybody is looking - so a studio whose panel is away and whose only
-//! tabs are hidden idles at `player::IDLE_FPS` instead of rendering for
+//! [`crate::page::Screen::watchers`], which is what a channel reads to decide
+//! whether anybody is looking - so a studio whose panels are away and whose
+//! only tabs are hidden idles at `channel::IDLE_FPS` instead of rendering for
 //! nobody.
 //!
 //! # And the state is paced too (card 196)
@@ -94,8 +114,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::api::StateEvent;
-use crate::page::{Viewer, HEADER};
+use crate::api::{Changed, StateEvent};
+use crate::page::{SocketMeter, Viewer, HEADER};
+use crate::panel::Panel;
+use crate::panels::PanelSummary;
 use crate::AppState;
 
 /// How long one message may take to reach a browser before the connection is
@@ -138,6 +160,12 @@ pub struct WsQuery {
     /// with changes: its own changes are not echoed back to it.
     #[serde(default)]
     client: Option<String>,
+    /// Card 350: the panel this socket is about. Absent follows the first.
+    #[serde(default)]
+    panel: Option<String>,
+    /// Card 350: whether to be sent the overview. Default true.
+    #[serde(default)]
+    overview: Option<bool>,
     /// The opening pace, so a tab that is already hidden when the page loads
     /// never costs a frame. Changed later with a `preview` message.
     #[serde(default)]
@@ -233,18 +261,22 @@ impl Pace {
 /// Unlike [`Pace`] this **holds** rather than drops, because the last change of
 /// a burst is the value the other browser is left resting on. See the module
 /// docs for the three edges.
+///
+/// Card 350: what is held is only *that* something changed (and who changed
+/// it); the state itself is read for this socket's panel at the moment it is
+/// sent, so what goes out is always the newest there is.
 #[derive(Default)]
 struct Gate {
     /// When a state message was last sent on this socket. `None` until the
     /// first one, so the first change of all is immediate.
     last_at: Option<Instant>,
-    /// The newest state this socket has not been told about yet.
-    held: Option<StateEvent>,
+    /// The newest change this socket has not been told about yet.
+    held: Option<Changed>,
 }
 
 impl Gate {
     /// A change to send now, or `None` when it is held for the trailing edge.
-    fn offer(&mut self, ev: StateEvent, now: Instant) -> Option<StateEvent> {
+    fn offer(&mut self, ev: Changed, now: Instant) -> Option<Changed> {
         if self.last_at.is_none_or(|t| now.duration_since(t) >= STATE_GAP) {
             self.last_at = Some(now);
             self.held = None;
@@ -258,16 +290,12 @@ impl Gate {
         None
     }
 
-    /// This socket's **own** change, which it is never told about - but which
-    /// does make anything held for it stale, since the held message carries a
-    /// whole state and would put this browser's own control back where it was.
-    /// So the state goes on, and whose change it was does not.
-    fn skip_own(&mut self, ev: StateEvent) {
+    /// This socket's **own** change, which it is never told about. Anything
+    /// held for it is still sent - with the state as it is by then, which
+    /// includes this browser's own change, so its control is not put back.
+    fn skip_own(&mut self, ev: &Changed) {
         if let Some(held) = &mut self.held {
-            if held.rev <= ev.rev {
-                held.rev = ev.rev;
-                held.state = ev.state;
-            }
+            held.rev = held.rev.max(ev.rev);
         }
     }
 
@@ -278,7 +306,7 @@ impl Gate {
     }
 
     /// The held change, once it is due.
-    fn release(&mut self, now: Instant) -> Option<StateEvent> {
+    fn release(&mut self, now: Instant) -> Option<Changed> {
         let ev = self.held.take()?;
         self.last_at = Some(now);
         Some(ev)
@@ -295,29 +323,58 @@ pub async fn upgrade(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(st): 
     ws.on_upgrade(move |socket| run(socket, st, q))
 }
 
+/// The panel a socket means: the one it named, or the first.
+fn resolve(st: &AppState, named: Option<&str>) -> Option<Arc<Panel>> {
+    match named {
+        Some(id) => st.panels.get(id),
+        None => Some(st.first()),
+    }
+}
+
+/// This socket's panel's state, for a change.
+fn state_message(st: &AppState, panel: &Arc<Panel>, ev: &Changed) -> Option<Message> {
+    as_text(&StateEvent { kind: "state", rev: ev.rev, from: ev.from.clone(), panel: panel.device(), state: st.state_of(panel) })
+}
+
+/// The overview, as a message.
+fn overview_message(list: &[PanelSummary]) -> Option<Message> {
+    as_text(&serde_json::json!({ "type": "panels", "panels": list }))
+}
+
 async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
-    let mut frames = st.screen.watch();
+    let named = q.panel.clone().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let meter = st.panels.meter();
+    let _claim = meter.socket();
+    let Some(mut panel) = resolve(&st, named.as_deref()) else {
+        let msg = serde_json::json!({ "type": "error", "error": format!("no panel `{}`", named.unwrap_or_default()) });
+        if let Some(m) = as_text(&msg) {
+            let _ = tokio::time::timeout(STALL, socket.send(m)).await;
+        }
+        let _ = socket.send(Message::Close(None)).await;
+        return;
+    };
     let mut states = st.states.subscribe();
     let mut status = st.status.subscribe();
+    let mut overview = st.overview.subscribe();
+    let want_overview = q.overview.unwrap_or(true);
     let mut stop = st.stop.clone();
     let me = q.client;
 
-    // Opening the socket is *not* what makes a player render at full rate;
+    // Opening the socket is *not* what makes a channel render at full rate;
     // asking for frames is. See the module docs.
-    let mut viewer = st.screen.viewer();
+    let mut viewer = panel.screen().viewer();
+    let mut frames = viewer.screen().watch();
     let mut pace = Pace::new(q.fps.unwrap_or(DEFAULT_FPS), q.repeat.unwrap_or(true));
     let mut gate = Gate::default();
     viewer.set_wants_frames(pace.wants_frames());
 
     // What the browser would otherwise have to ask for on connecting.
-    let hello = st.state_event(None, st.page_state());
-    match as_text(&hello) {
-        Some(msg) => {
-            if !send(&mut socket, msg, &viewer, false).await {
-                return;
-            }
+    let hello = state_message(&st, &panel, &st.stamp(None));
+    let first_look = if want_overview { overview_message(&overview.borrow_and_update()) } else { None };
+    for msg in [hello, first_look].into_iter().flatten() {
+        if !send(&mut socket, msg, &meter, false).await {
+            return;
         }
-        None => return,
     }
 
     loop {
@@ -334,14 +391,14 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
             r = states.recv() => match r {
                 // Skip the change this very browser made.
                 Ok(ev) if ev.from.is_some() && ev.from == me => {
-                    gate.skip_own(ev);
+                    gate.skip_own(&ev);
                     None
                 }
-                Ok(ev) => gate.offer(ev, Instant::now()).as_ref().and_then(as_text),
+                Ok(ev) => gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &panel, &ev)),
                 // Too far behind to know what it missed: give it the truth.
                 Err(RecvError::Lagged(_)) => {
-                    let ev = st.state_event(None, st.page_state());
-                    gate.offer(ev, Instant::now()).as_ref().and_then(as_text)
+                    let ev = st.stamp(None);
+                    gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &panel, &ev))
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -352,11 +409,31 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
                     Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
                     None => std::future::pending().await,
                 }
-            } => gate.release(Instant::now()).as_ref().and_then(as_text),
+            } => gate.release(Instant::now()).and_then(|ev| state_message(&st, &panel, &ev)),
             r = status.changed() => {
                 if r.is_err() { break }
-                let msg = status.borrow_and_update().clone();
-                as_text(&*msg)
+                // Card 350: is this still the panel this socket is about? A
+                // socket that named one whose panel is gone is closed; one that
+                // follows the first moves along with it, with a fresh state.
+                match resolve(&st, named.as_deref()) {
+                    None => break,
+                    Some(now) if !Arc::ptr_eq(&now, &panel) => {
+                        panel = now;
+                        viewer = panel.screen().viewer();
+                        viewer.set_wants_frames(pace.wants_frames());
+                        frames = viewer.screen().watch();
+                        state_message(&st, &panel, &st.stamp(None))
+                    }
+                    Some(_) => {
+                        let board = status.borrow_and_update().clone();
+                        board.get(&panel.device()).and_then(as_text)
+                    }
+                }
+            }
+            r = overview.changed(), if want_overview => {
+                if r.is_err() { break }
+                let list = overview.borrow_and_update().clone();
+                overview_message(&list)
             }
             // The browser talking back: the pace, or the close it sends on its
             // way out. Reading it is also how a tab being switched away from
@@ -378,7 +455,7 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
         };
         if let Some(msg) = out {
             let frame = matches!(msg, Message::Binary(_));
-            if !send(&mut socket, msg, &viewer, frame).await {
+            if !send(&mut socket, msg, &meter, frame).await {
                 break;
             }
         }
@@ -417,7 +494,7 @@ fn as_text<T: serde::Serialize>(value: &T) -> Option<Message> {
 }
 
 /// False when the browser is gone, or so far behind that it may as well be.
-async fn send(socket: &mut WebSocket, msg: Message, viewer: &Viewer, frame: bool) -> bool {
+async fn send(socket: &mut WebSocket, msg: Message, meter: &SocketMeter, frame: bool) -> bool {
     let bytes = match &msg {
         Message::Text(t) => t.len(),
         Message::Binary(b) => b.len(),
@@ -425,7 +502,7 @@ async fn send(socket: &mut WebSocket, msg: Message, viewer: &Viewer, frame: bool
     };
     match tokio::time::timeout(STALL, socket.send(msg)).await {
         Ok(Ok(())) => {
-            viewer.sent(bytes, frame);
+            meter.sent(bytes, frame);
             true
         }
         Ok(Err(_)) => false,

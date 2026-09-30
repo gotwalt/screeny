@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::devices::{self, Reach, PENDING};
-use crate::player::{BrightnessJob, Player, PlayerChange};
-use crate::state::{unix_now, StoredPlayer, UNBOUND};
+use crate::panel::{BrightnessJob, Panel};
+use crate::state::{unix_now, UNBOUND};
 use crate::AppState;
 
 /// The longest a failing device's poll is backed off to, as a multiple of the
@@ -30,66 +30,46 @@ const MAX_BACKOFF: u32 = 12;
 
 // ----------------------------------------------------------- attachment ----
 
-/// **Attach the page to a panel**, and hand back the player that drives it.
+/// **Drive a panel somebody has named**: output on, and - if it is idle - a
+/// picture, which is the default patch on Default by card 350's rules (so it
+/// joins a channel already showing that, if there is one).
 ///
-/// This is the one place a panel becomes "the panel this studio is connected
-/// to", and the rule that matters is the middle branch: if the page is showing
-/// the *unbound* player - a studio that has not met a panel yet - that same
-/// player is renamed onto the device. The thread, the core and the patch carry
-/// on, so the picture the browser is watching simply starts reaching the
-/// panel instead of restarting on it.
-pub fn attach(st: &AppState, device: &str) -> Arc<Player> {
-    if let Some(p) = st.players.get(device) {
-        st.players.set_focus(device);
-        return p;
+/// If the studio is still on its unbound stand-in, the stand-in is renamed
+/// onto the device instead ([`crate::panels::Panels::attach`]): the picture
+/// the page was showing simply starts reaching the panel.
+pub fn drive(st: &AppState, device: &str) -> Arc<Panel> {
+    let panel = st.panels.attach(device);
+    panel.set_on(true);
+    if panel.channel().is_none() {
+        if let Some(def) = crate::channel::find_patch(crate::state::default_patch(), false) {
+            if let Err(e) = st.panels.pick(&panel, def, "", false, None) {
+                eprintln!("studio: panel {device}: {e}");
+            }
+        }
     }
-    if st.players.get(UNBOUND).is_some() {
-        st.players.rekey(UNBOUND, device);
-    } else {
-        st.players.ensure(device, st.cfg.fault_patches, StoredPlayer::default);
+    aim_at_device(st, &panel);
+    if let Some(c) = panel.channel() {
+        c.ensure_running();
     }
-    st.players.set_focus(device);
-    st.players.get(device).unwrap_or_else(|| st.page())
+    panel
 }
 
-/// The player for one device, for a caller naming a panel rather than asking
-/// for the page's.
-///
-/// A studio that has never been attached to anything treats this as the
-/// attachment - it is the first panel somebody has named, and leaving the page
-/// showing an unbound player beside it would be two pictures and a puzzle.
-/// Once there is an attached panel, this simply makes a second player.
-pub fn player_for(st: &AppState, device: &str) -> Arc<Player> {
-    if st.players.bound().is_empty() {
-        return attach(st, device);
-    }
-    st.players.ensure(device, st.cfg.fault_patches, StoredPlayer::default)
+/// Point a panel's link at wherever its device is now, or at nothing.
+pub fn aim_at_device(st: &AppState, panel: &Arc<Panel>) {
+    let reach = st.devices.get(&panel.device()).map_or(Reach::Unknown, |r| r.reach());
+    panel.aim(&reach);
 }
 
-/// Point a player's link at wherever its device is now, or at nothing.
-pub fn aim_at_device(st: &AppState, player: &Arc<Player>) {
-    let reach = st.devices.get(&player.device()).map_or(Reach::Unknown, |r| r.reach());
-    player.aim(&reach);
-}
-
-/// The watchdog, the aim of every link, and the brightness policy. Once a
-/// second.
+/// The watchdog, the aim of every link, the brightness policy, and - card
+/// 350 - adopting every device the registry knows as a panel. Once a second.
 pub fn spawn_supervisor(st: AppState) {
     let mut stop = st.stop.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(st.cfg.supervise_every);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // If the state file already had a panel, the studio is not fresh and
-        // must not adopt anything on its own.
-        let mut adopted = !st.players.bound().is_empty();
         loop {
             tokio::select! {
-                _ = ticker.tick() => {
-                    if !adopted {
-                        adopted = adopt_first_device(&st);
-                    }
-                    supervise(&st).await;
-                }
+                _ = ticker.tick() => supervise(&st).await,
                 // The borrow `wait_for` hands back is not `Send` and this
                 // future has to be: discard it inside the block.
                 () = async { drop(stop.wait_for(|s| *s).await) } => break,
@@ -98,51 +78,48 @@ pub fn spawn_supervisor(st: AppState) {
     });
 }
 
-/// A studio that has never been attached to a panel attaches itself to the
-/// first one it finds. That is the zero-click case the author asked for: plug
-/// the panel in, open the page, and the picture the page was already showing
-/// is on the panel.
-///
-/// It happens **once** per process: a human who detaches the only panel has
-/// detached it.
-fn adopt_first_device(st: &AppState) -> bool {
-    if !st.players.bound().is_empty() {
-        return true;
+/// **Every device is a panel** (card 350, replacing card 106's "adopt the
+/// first device found"): one the registry knows and the studio has no panel
+/// for is adopted, **idle** - no channel, no stream, so the device shows its
+/// own screen until somebody gives it a picture. Named after its instance,
+/// which is what the registry's label falls back to. True if any was new.
+fn adopt_devices(st: &AppState, known: &[String]) -> bool {
+    let mut any = false;
+    for id in known {
+        if st.panels.adopt(id) {
+            eprintln!("studio: `{id}` is a panel now; it is idle until it is given a picture");
+            any = true;
+        }
     }
-    let Some(first) = st.devices.ids().into_iter().next() else { return false };
-    let player = attach(st, &first);
-    let _ = player.configure(&PlayerChange { on: Some(true), ..PlayerChange::default() });
-    aim_at_device(st, &player);
-    player.ensure_running();
-    eprintln!("studio: attaching to the first panel found: `{}` will play `{}`", first, player.stored().patch);
-    st.persist();
-    true
+    any
 }
 
 async fn supervise(st: &AppState) {
     let known = st.devices.ids();
-    // A player whose device has been forgotten goes with it. The unbound
-    // player is nobody's device and stays.
-    for player in st.players.all() {
-        let device = player.device();
+    // A panel whose device has been forgotten goes with it. The unbound
+    // stand-in is nobody's device and stays while it is needed.
+    let mut changed = false;
+    for device in st.panels.ids() {
         if device != UNBOUND && !known.contains(&device) {
-            st.players.remove(&device);
+            st.panels.remove(&device);
+            changed = true;
         }
     }
-    // The page always has something to show, whatever just happened.
-    st.players.ensure_page(st.cfg.fault_patches);
+    changed |= adopt_devices(st, &known);
+    // There is always a first panel, whatever just happened.
+    st.panels.ensure_first();
 
     let mut jobs: Vec<BrightnessJob> = Vec::new();
-    for player in st.players.all() {
-        aim_at_device(st, &player);
-        let device = player.device();
+    for panel in st.panels.all() {
+        aim_at_device(st, &panel);
+        let device = panel.device();
         // Card 164: the frame path's counters, read once a second off the link
         // the supervisor is already holding. The render loop does not know
         // this exists.
         if device != UNBOUND {
-            st.devices.metered_link(&device, player.link_traffic());
+            st.devices.metered_link(&device, panel.link_traffic());
         }
-        match player.supervise() {
+        match panel.supervise() {
             Some(job) => jobs.push(job),
             // The link noticing a new session is not the only way a panel
             // comes back at its own brightness: a power cut short enough that
@@ -151,7 +128,7 @@ async fn supervise(st: &AppState) {
             // comparing against what it *said it applied* - not what was asked
             // for - is what stops this retrying for ever against a cap.
             None if device != UNBOUND => {
-                if let (Some(want), Some(applied)) = player.brightness_policy() {
+                if let (Some(want), Some(applied)) = panel.brightness_policy() {
                     let heard = st
                         .devices
                         .get(&device)
@@ -165,6 +142,17 @@ async fn supervise(st: &AppState) {
             }
             None => {}
         }
+    }
+
+    // Every channel's watchdog; then let go of any nobody needs (card 350: a
+    // channel whose last panel has finished fading away from it).
+    for channel in st.panels.channels() {
+        channel.supervise();
+    }
+    st.panels.drop_unused();
+    if changed {
+        st.persist();
+        st.changed(None);
     }
 
     // Brightness is a control request: off this task, and never on a render
@@ -198,7 +186,7 @@ async fn apply_brightness(st: &AppState, job: &BrightnessJob) {
     };
     match done {
         Ok(Ok(applied)) => {
-            if let Some(p) = st.players.get(&job.device) {
+            if let Some(p) = st.panels.get(&job.device) {
                 p.brightness_applied(level, applied);
             }
             if applied != level {
@@ -242,7 +230,7 @@ pub fn spawn_discovery(st: AppState) {
                         };
                         let changes = st.devices.browsed(&list, err);
                         for (from, to) in &changes.renamed {
-                            st.players.rekey(from, to);
+                            st.panels.rekey(from, to);
                         }
                         if !changes.renamed.is_empty() || !changes.added.is_empty() {
                             for id in &changes.added {
@@ -356,7 +344,7 @@ async fn probe_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
         let from = if m.from.is_empty() { "nowhere we knew of".to_string() } else { m.from.clone() };
         eprintln!("studio: `{}` answered a probe at {} (it was at {from}); following it", m.id, m.to);
     }
-    // The player is already keyed by the id, so nothing here touches it: the
+    // The panel is already keyed by the id, so nothing here touches it: the
     // supervisor re-aims its link at the new address on its next tick.
     backoff.remove(PROBE);
     st.persist();
@@ -439,7 +427,7 @@ async fn poll_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
                 Ok(Ok(dev)) => {
                     let (new_id, renamed) = st.devices.resolved(&dev);
                     if let Some(from) = renamed {
-                        st.players.rekey(&from, &new_id);
+                        st.panels.rekey(&from, &new_id);
                         eprintln!("studio: `{from}` is `{new_id}` ({})", dev.label());
                     }
                     backoff.remove(&id);
@@ -682,7 +670,7 @@ fn fail(backoff: &mut BTreeMap<String, (u32, u32)>, id: &str) {
     entry.0 = entry.0.saturating_mul(2).clamp(1, MAX_BACKOFF);
     // Jitter: 0 or 1 extra pass, from the clock rather than a random number
     // generator this crate does not otherwise need.
-    let jitter = u32::from(crate::player::unix_millis().is_multiple_of(2));
+    let jitter = u32::from(crate::channel::unix_millis().is_multiple_of(2));
     entry.1 = entry.0 + jitter;
 }
 

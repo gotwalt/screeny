@@ -71,10 +71,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   It also gains `home_assistant` (card 311): the integration as set up on
 ///   the Settings screen, password included - the file is the studio's own,
 ///   on its own volume - and never sent back out by the API.
+/// - **v8** (card 350) splits a player into a **panel** and a **channel**, so
+///   the same picture can play on several panels and several pictures at
+///   once. `players` becomes `panels` (`device`, `on`, `channel`, `output`,
+///   `brightness`) and `channels` (`id`, `patch`, `setting`, `seed`,
+///   `params`); `focus` goes - which panel a page is looking at is the
+///   page's own business now (`?panel=`); and `patches` keeps the named
+///   settings and **loses the per-patch working copy** (`seed`, `params`,
+///   `speed`, `setting`) to the channels. Every v7 player becomes its own
+///   panel on its own channel, so what is on a panel does not change across
+///   the upgrade; the focused one comes first, so a route without `panel`
+///   still means the panel it meant. A working copy that was *not* playing
+///   and had moved away from its setting is said once in the `repaired`
+///   voice, naming the patch ([`migrate_to_v8`]).
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -225,14 +238,24 @@ pub struct Persisted {
     /// Devices, keyed by their stable id. A collection from day one even
     /// though one panel is the expected case (`studio-vision.md`, decision 3).
     pub devices: Vec<StoredDevice>,
-    /// One per device. A player may exist for a device that is not currently
-    /// reachable - that is the normal case after a power cut - and exactly one
-    /// may be [`UNBOUND`], which is the studio that has not met a panel yet.
+    /// Card 350: one per device, **in the order they were adopted** - the
+    /// first is the one a route without `panel` means. A panel may exist for
+    /// a device that is not currently reachable - the normal case after a
+    /// power cut - and one may be [`UNBOUND`]: the stand-in a studio that has
+    /// found no panel yet shows its picture on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<StoredPanel>,
+    /// Card 350: the pictures the panels follow. A channel no panel follows is
+    /// not kept.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<StoredChannel>,
+    /// **Read, never written** (v7 and older): one per device. [`migrate_to_v8`]
+    /// turns each into a panel and a channel.
+    #[serde(skip_serializing)]
     pub players: Vec<StoredPlayer>,
-    /// Which player the page is a window onto. [`UNBOUND`] (the empty string)
-    /// while no panel is attached. With one panel - the expected case - this
-    /// is that panel's id and nobody ever has to think about it.
-    #[serde(default)]
+    /// **Read, never written** (v3-v7): which player the page was a window
+    /// onto. [`migrate_to_v8`] puts it first among the panels.
+    #[serde(skip_serializing)]
     pub focus: String,
     /// What every patch was last left set to, anywhere in the studio
     /// (card 165). One map for the whole studio, keyed by patch id.
@@ -254,6 +277,8 @@ impl Default for Persisted {
         Persisted {
             version: SCHEMA_VERSION,
             devices: Vec::new(),
+            panels: Vec::new(),
+            channels: Vec::new(),
             players: Vec::new(),
             focus: UNBOUND.to_string(),
             patches: Memory::new(),
@@ -294,8 +319,77 @@ pub struct StoredDevice {
     pub manual: bool,
 }
 
-/// What one panel plays - and, since card 170, what the page shows, because
-/// they are the same thing.
+/// One panel, as the file keeps it (card 350): the device and everything that
+/// is about the device, and which channel it follows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredPanel {
+    /// The device id, or [`UNBOUND`] for the stand-in.
+    pub device: String,
+    /// **Panel output.** False releases the link - the panel goes back to its
+    /// own idle screen - and the picture carries on for the page.
+    pub on: bool,
+    /// The channel it follows. `None` is **idle**: no picture and no stream,
+    /// so the device shows its own screen. A new panel starts here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u32>,
+    /// How a frame is finished for this panel.
+    pub output: Output,
+    /// Brightness policy: a fixed level to apply whenever the link comes up,
+    /// or `None` to leave whatever the device has.
+    pub brightness: Option<u8>,
+}
+
+impl Default for StoredPanel {
+    fn default() -> Self {
+        StoredPanel { device: String::new(), on: true, channel: None, output: Output::default(), brightness: None }
+    }
+}
+
+/// One channel, as the file keeps it (card 350): a running picture - a patch,
+/// the named setting its working copy came from, and the working copy itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoredChannel {
+    pub id: u32,
+    pub patch: String,
+    /// The named setting the working copy was loaded from; empty is
+    /// [`DEFAULT_SETTING`]. Whether it has been moved since is computed.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub setting: String,
+    pub seed: u32,
+    /// Only the values that differ from the patch's defaults.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, f32>,
+}
+
+impl Default for StoredChannel {
+    fn default() -> Self {
+        StoredChannel { id: 0, patch: default_patch().to_string(), setting: String::new(), seed: DEFAULT_SEED, params: BTreeMap::new() }
+    }
+}
+
+/// How a setting's name is kept on a channel: trimmed, and Default as empty.
+#[must_use]
+pub fn setting_key(name: &str) -> String {
+    let name = name.trim();
+    if is_default_name(name) {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Whether two ways of naming a setting name the same one (`""` and
+/// `"Default"` are both Default).
+#[must_use]
+pub fn same_setting(a: &str, b: &str) -> bool {
+    setting_key(a) == setting_key(b)
+}
+
+/// What one panel played, up to v7 - a player was a renderer welded to one
+/// link. **Read, never written**: [`migrate_to_v8`] splits each into a
+/// [`StoredPanel`] and a [`StoredChannel`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredPlayer {
@@ -397,10 +491,13 @@ pub struct PatchMemory {
     /// switching to it then puts it on [`DEFAULT_SEED`] - which is to say, on
     /// Default, where a patch nobody has touched belongs (card 151; before it,
     /// the patch kept whatever seed the previous one happened to be on).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// **Read, never written, since v8** (card 350), like the three fields
+    /// after it: the working copy is a channel's now.
+    #[serde(skip_serializing)]
     pub seed: Option<u32>,
     /// Parameter values that differ from the defaults, by param id.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(skip_serializing)]
     pub params: BTreeMap<String, f32>,
     /// How fast this patch was last played (card 151, v5). `None` means "never
     /// said", and switching to it leaves the player's speed alone.
@@ -409,7 +506,7 @@ pub struct PatchMemory {
     /// carries it: without this, loading a setting that plays at 0.4x and
     /// switching patch and back would quietly lose the 0.4x, and the setting
     /// would then read as modified for ever.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     pub speed: Option<f64>,
     /// The named setting the working copy was loaded from. Empty means
     /// [`DEFAULT_SETTING`], which is where everything starts.
@@ -417,7 +514,7 @@ pub struct PatchMemory {
     /// **Whether it has been changed since is not stored**: that is the working
     /// copy above compared with this setting ([`modified`]), so it cannot be
     /// left behind by a change that forgot to clear a flag.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing)]
     pub setting: String,
     /// This patch's named settings, by name as it was typed.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -468,22 +565,6 @@ impl SharedMemory {
         self.lock().clone()
     }
 
-    /// See [`remember`].
-    pub fn remember(&self, def: &PatchDef, params: &BTreeMap<String, f32>, seed: u32, speed: f64) {
-        remember(&mut self.lock(), def, params, seed, speed);
-    }
-
-    /// See [`recall`].
-    #[must_use]
-    pub fn recall(&self, def: &PatchDef, who: &str) -> Recalled {
-        recall(&mut self.lock(), def, who)
-    }
-
-    /// See [`forget_params`].
-    pub fn forget_params(&self, patch: &str) {
-        forget_params(&mut self.lock(), patch);
-    }
-
     /// Whether anything is remembered for this patch at all.
     #[must_use]
     pub fn knows(&self, patch: &str) -> bool {
@@ -499,13 +580,6 @@ impl SharedMemory {
         self.lock().get(patch).map(|e| e.settings.keys().cloned().collect()).unwrap_or_default()
     }
 
-    /// The name the working copy was loaded from; [`DEFAULT_SETTING`] when it
-    /// has not been loaded from anything.
-    #[must_use]
-    pub fn current_setting(&self, patch: &str) -> String {
-        current_setting(&self.lock(), patch)
-    }
-
     /// See [`usable_setting`].
     ///
     /// # Errors
@@ -515,28 +589,13 @@ impl SharedMemory {
         usable_setting(&self.lock(), def, name)
     }
 
-    /// Put the working copy on a setting: what to play, and whatever had to be
-    /// repaired on the way (said once by the caller, in `repaired` style).
-    ///
-    /// # Errors
-    ///
-    /// If this patch has no setting by that name.
-    pub fn load_setting(&self, def: &PatchDef, name: &str) -> Result<(Working, Vec<String>), String> {
-        let mut memory = self.lock();
-        let (work, repaired) = usable_setting(&memory, def, name)?;
-        remember(&mut memory, def, &work.params, work.seed, work.speed);
-        let entry = memory.entry(def.id.to_string()).or_default();
-        entry.setting = if is_default_name(name) { String::new() } else { name.to_string() };
-        Ok((work, repaired))
-    }
-
     /// See [`save_setting`].
     ///
     /// # Errors
     ///
     /// If the name is not one a setting may have, is already taken by another
     /// setting, or there are already [`MAX_SETTINGS`] of them.
-    pub fn save_setting(&self, def: &PatchDef, name: Option<&str>, work: &Working) -> Result<String, String> {
+    pub fn save_setting(&self, def: &PatchDef, name: &str, work: &Working) -> Result<String, String> {
         save_setting(&mut self.lock(), def, name, work)
     }
 
@@ -546,7 +605,7 @@ impl SharedMemory {
     ///
     /// If there is no such setting, it is Default, or the new name is not one
     /// a setting may have.
-    pub fn rename_setting(&self, def: &PatchDef, from: Option<&str>, to: &str) -> Result<String, String> {
+    pub fn rename_setting(&self, def: &PatchDef, from: &str, to: &str) -> Result<String, String> {
         rename_setting(&mut self.lock(), def, from, to)
     }
 
@@ -555,14 +614,14 @@ impl SharedMemory {
     /// # Errors
     ///
     /// If there is no such setting, or it is Default.
-    pub fn delete_setting(&self, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
+    pub fn delete_setting(&self, def: &PatchDef, name: &str) -> Result<String, String> {
         delete_setting(&mut self.lock(), def, name)
     }
 
     /// See [`modified`].
     #[must_use]
-    pub fn modified(&self, def: &PatchDef, work: &Working) -> bool {
-        modified(&self.lock(), def, work)
+    pub fn modified(&self, def: &PatchDef, setting: &str, work: &Working) -> bool {
+        modified(&self.lock(), def, setting, work)
     }
 }
 
@@ -691,16 +750,6 @@ pub fn usable_params(remembered: &BTreeMap<String, f32>, specs: &[ParamSpec]) ->
 
 // ------------------------------------ named settings (card 151) ------------
 
-/// The name the working copy of `patch` was loaded from, or
-/// [`DEFAULT_SETTING`].
-#[must_use]
-pub fn current_setting(memory: &Memory, patch: &str) -> String {
-    match memory.get(patch).map(|e| e.setting.as_str()) {
-        Some(name) if !name.is_empty() => name.to_string(),
-        _ => DEFAULT_SETTING.to_string(),
-    }
-}
-
 /// The setting `name` **as this build can use it**, and one sentence per value
 /// it could not use as written.
 ///
@@ -712,13 +761,13 @@ pub fn current_setting(memory: &Memory, patch: &str) -> String {
 ///
 /// It is also what `modified` compares against, rather than the raw stored
 /// setting - otherwise a setting that needed repairing would read as modified
-/// from the moment it was loaded, for ever.
+/// from the moment it was loaded, for ever. Empty is Default.
 ///
 /// # Errors
 ///
 /// If this patch has no setting by that name.
 pub fn usable_setting(memory: &Memory, def: &PatchDef, name: &str) -> Result<(Working, Vec<String>), String> {
-    if is_default_name(name) {
+    if name.trim().is_empty() || is_default_name(name) {
         return Ok((Working { params: BTreeMap::new(), seed: DEFAULT_SEED, speed: 1.0 }, Vec::new()));
     }
     let stored = memory
@@ -740,50 +789,59 @@ pub fn usable_setting(memory: &Memory, def: &PatchDef, name: &str) -> Result<(Wo
     Ok((Working { params, seed: stored.seed, speed }, repaired))
 }
 
-/// **Is the working copy still the setting it says it is?**
+/// **Is a working copy still the setting it says it is?**
 ///
 /// Computed, never stored (the card's word). Both sides go through the same
 /// two funnels - [`sparse`] for the values and [`usable_setting`] for the
 /// stored one - so this is an honest comparison and not a flag anybody has to
 /// remember to clear. A setting that has gone missing under the working copy's
 /// feet counts as modified: there is nothing left to be equal to.
+///
+/// Since card 350 the working copy is a channel's, so the caller says which
+/// setting it came from; empty is Default.
 #[must_use]
-pub fn modified(memory: &Memory, def: &PatchDef, work: &Working) -> bool {
-    let name = current_setting(memory, def.id);
-    match usable_setting(memory, def, &name) {
+pub fn modified(memory: &Memory, def: &PatchDef, setting: &str, work: &Working) -> bool {
+    match usable_setting(memory, def, setting) {
         Ok((was, _)) => was != *work,
         Err(_) => true,
     }
 }
 
-/// Save the working copy as a setting.
+/// Which setting a Save, a Rename or a Delete is about: the one named, or -
+/// with no name - `current`, the one the working copy is on. Never Default,
+/// which is nobody's to change; `save` picks the sentence that says so.
 ///
-/// `name` of `None` is **Save**: overwrite the one the working copy was loaded
-/// from. A name is **Save as...**, and a name that is already a setting's,
-/// exactly, overwrites it. Either way the working copy ends up loaded from the
-/// setting just written, so it is not modified the moment it is saved.
+/// # Errors
+///
+/// When that is Default.
+pub fn own_setting(asked: Option<&str>, current: &str, save: bool) -> Result<String, String> {
+    let name = match asked.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => n.to_string(),
+        None => current.trim().to_string(),
+    };
+    if name.is_empty() || is_default_name(&name) {
+        return Err(if save {
+            format!("`{DEFAULT_SETTING}` is the patch's own setting and cannot be written over; save this under a name of your own.")
+        } else {
+            format!("`{DEFAULT_SETTING}` is the patch's own setting: it cannot be renamed or deleted.")
+        });
+    }
+    Ok(name)
+}
+
+/// Save a working copy as the setting `name` (already resolved by the caller:
+/// "Save" is the name the working copy is on, "Save as..." a new one). A name
+/// that is already a setting's, exactly, overwrites it.
 ///
 /// Returns the name it was saved under.
 ///
 /// # Errors
 ///
 /// If the name is not one a setting may have ([`check_name`]), if another
-/// setting has it but spelled differently, if there is nothing to overwrite
-/// (Default, which is read-only), or if there are already [`MAX_SETTINGS`].
-pub fn save_setting(memory: &mut Memory, def: &PatchDef, name: Option<&str>, work: &Working) -> Result<String, String> {
-    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
-        Some(asked) => check_name(asked)?,
-        // Save with no name: the one it is on.
-        None => {
-            let current = current_setting(memory, def.id);
-            if is_default_name(&current) {
-                return Err(format!(
-                    "`{DEFAULT_SETTING}` is the patch's own setting and cannot be written over; save this under a name of your own."
-                ));
-            }
-            current
-        }
-    };
+/// setting has it but spelled differently, or if there are already
+/// [`MAX_SETTINGS`].
+pub fn save_setting(memory: &mut Memory, def: &PatchDef, name: &str, work: &Working) -> Result<String, String> {
+    let name = check_name(name)?;
     let entry = memory.entry(def.id.to_string()).or_default();
     // A name that differs only in case from one already here is a second
     // setting nobody could tell from the first.
@@ -794,22 +852,22 @@ pub fn save_setting(memory: &mut Memory, def: &PatchDef, name: Option<&str>, wor
         return Err(format!("`{}` already has {MAX_SETTINGS} settings, which is as many as it may have.", def.name));
     }
     entry.settings.insert(name.clone(), work.to_setting());
-    entry.setting.clone_from(&name);
     Ok(name)
 }
 
-/// Rename a setting. `from` of `None` is the one the working copy is on.
-///
-/// Returns the new name.
+/// Rename a setting. Returns the new name; the caller moves every channel
+/// that was on the old one.
 ///
 /// # Errors
 ///
 /// If there is no such setting, if it is Default (which is not yours to
 /// rename), or if the new name is not one a setting may have.
-pub fn rename_setting(memory: &mut Memory, def: &PatchDef, from: Option<&str>, to: &str) -> Result<String, String> {
-    let from = named_setting(memory, def, from)?;
+pub fn rename_setting(memory: &mut Memory, def: &PatchDef, from: &str, to: &str) -> Result<String, String> {
+    let from = own_setting(Some(from), "", false)?;
     let to = check_name(to)?;
-    let entry = memory.entry(def.id.to_string()).or_default();
+    let Some(entry) = memory.get_mut(def.id) else {
+        return Err(format!("`{}` has no setting called `{from}`.", def.name));
+    };
     if to != from {
         if let Some(clash) = entry.settings.keys().find(|k| k.eq_ignore_ascii_case(&to) && **k != from) {
             return Err(format!("There is already a setting called `{clash}`."));
@@ -819,47 +877,27 @@ pub fn rename_setting(memory: &mut Memory, def: &PatchDef, from: Option<&str>, t
         return Err(format!("`{}` has no setting called `{from}`.", def.name));
     };
     entry.settings.insert(to.clone(), setting);
-    if entry.setting == from {
-        entry.setting.clone_from(&to);
-    }
     Ok(to)
 }
 
-/// Delete a setting. `name` of `None` is the one the working copy is on.
+/// Delete a setting. Returns the name deleted.
 ///
-/// **What is playing does not change.** The values stay exactly where they
-/// are; what goes is the name they came from, so the working copy is then on
-/// Default and reads as modified - which is the truth.
-///
-/// Returns the name deleted.
+/// **What is playing does not change.** The caller puts every channel that
+/// was on it on Default, where it reads as modified - which is the truth.
 ///
 /// # Errors
 ///
 /// If there is no such setting, or it is Default.
-pub fn delete_setting(memory: &mut Memory, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
-    let name = named_setting(memory, def, name)?;
-    let entry = memory.entry(def.id.to_string()).or_default();
+pub fn delete_setting(memory: &mut Memory, def: &PatchDef, name: &str) -> Result<String, String> {
+    let name = own_setting(Some(name), "", false)?;
+    let Some(entry) = memory.get_mut(def.id) else {
+        return Err(format!("`{}` has no setting called `{name}`.", def.name));
+    };
     if entry.settings.remove(&name).is_none() {
         return Err(format!("`{}` has no setting called `{name}`.", def.name));
     }
-    if entry.setting == name {
-        entry.setting.clear();
-    }
     if entry.is_empty() {
         memory.remove(def.id);
-    }
-    Ok(name)
-}
-
-/// Which setting a rename or a delete is about: the one named, or the one the
-/// working copy is on - and never Default, which is nobody's to change.
-fn named_setting(memory: &Memory, def: &PatchDef, name: Option<&str>) -> Result<String, String> {
-    let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
-        Some(n) => n.to_string(),
-        None => current_setting(memory, def.id),
-    };
-    if is_default_name(&name) {
-        return Err(format!("`{DEFAULT_SETTING}` is the patch's own setting: it cannot be renamed or deleted."));
     }
     Ok(name)
 }
@@ -1256,6 +1294,13 @@ fn load(path: &Path) -> Loaded {
     // Every load, not only the v5 -> v6 migration: a hand-edited or older file
     // must not bring back a control the page no longer has.
     retire_playback(&mut state, &mut repaired);
+    // Card 350, last: the players the steps above have put right become
+    // panels and channels.
+    if was < 8 {
+        migrate_to_v8(&mut state, &mut repaired);
+    }
+    repair_panels(&mut state, &mut repaired);
+    strip_working_copies(&mut state);
     repaired.truncate(MAX_REPAIRS);
     let recovered = (was != SCHEMA_VERSION).then(|| {
         let where_ = kept.map_or(String::new(), |k| format!("; the v{was} file is kept as {k}"));
@@ -1365,6 +1410,120 @@ fn migrate(state: &mut Persisted, preview: &LegacyPreview, was: u32) {
     // start empty, and the speed and pause it retired are put right by
     // `retire_playback` on every load, of every version. v6 -> v7 (card 310)
     // is `load`'s own lookup.
+}
+
+/// v7 -> v8 (card 350): **every player becomes a panel on a channel of its
+/// own**, so the picture on each panel does not change across the upgrade.
+///
+/// - The focused player comes first, because the first panel is what a route
+///   without `panel` means - so a script that drove "the panel" before this
+///   card drives the same one after it.
+/// - Each channel takes its player's patch, seed and parameters, and the name
+///   of the setting that patch's working copy was loaded from.
+/// - `focus` goes: which panel a page is looking at is the page's own
+///   business (`?panel=`).
+/// - The per-patch **working copies** go with the next save
+///   ([`strip_working_copies`]) - a picture's tuning lives on the channel
+///   showing it. One that was not showing anywhere and had moved away from its
+///   setting would be lost without a word, so it is named once, in the
+///   `repaired` voice; the v7 file is kept as `state.v7.json` in any case.
+fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
+    let mut players = std::mem::take(&mut state.players);
+    let focus = std::mem::take(&mut state.focus);
+    if let Some(i) = players.iter().position(|p| p.device == focus) {
+        let first = players.remove(i);
+        players.insert(0, first);
+    }
+    let mut next = state.channels.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+    let mut showing = std::collections::BTreeSet::new();
+    for p in players {
+        if state.panels.iter().any(|x| x.device == p.device) {
+            continue;
+        }
+        let setting = state.patches.get(&p.patch).map(|e| e.setting.clone()).unwrap_or_default();
+        showing.insert(p.patch.clone());
+        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params: p.params });
+        state.panels.push(StoredPanel { device: p.device, on: p.on, channel: Some(next), output: p.output, brightness: p.brightness });
+        next += 1;
+    }
+    let mut lost = Vec::new();
+    for (patch, entry) in &state.patches {
+        if showing.contains(patch) || (entry.seed.is_none() && entry.params.is_empty()) {
+            continue;
+        }
+        let moved = match screeny_art::patch::find(patch) {
+            Some(def) => {
+                let work = Working { params: sparse(def, &entry.params), seed: entry.seed.unwrap_or(DEFAULT_SEED), speed: 1.0 };
+                modified(&state.patches, def, &entry.setting, &work)
+            }
+            // A patch this build has not got cannot be compared with anything;
+            // what it had is what it had.
+            None => true,
+        };
+        if moved {
+            lost.push(format!("`{patch}`"));
+        }
+    }
+    if !lost.is_empty() {
+        repaired.push(format!(
+            "how {} had been left set is not kept any more: since card 350 a picture's tuning belongs to the channel \
+             showing it, nothing was showing {}, and a named setting is what keeps one",
+            lost.join(", "),
+            if lost.len() == 1 { "it" } else { "them" }
+        ));
+    }
+}
+
+/// Every load: panels and channels that make sense together (card 350).
+///
+/// A hand-edited or damaged file can name a panel twice, point a panel at a
+/// channel that is not there, or put a channel on a patch this build has not
+/// got. Each costs exactly that and is said once; a channel no panel follows
+/// is simply not kept, as it would not be at runtime.
+fn repair_panels(state: &mut Persisted, repaired: &mut Vec<String>) {
+    let mut seen = std::collections::BTreeSet::new();
+    state.panels.retain(|p| seen.insert(p.device.clone()));
+    let mut ids = std::collections::BTreeSet::new();
+    state.channels.retain(|c| ids.insert(c.id));
+    for p in &mut state.panels {
+        if let Some(id) = p.channel {
+            if !ids.contains(&id) {
+                let who = if p.device == UNBOUND { "the page".to_string() } else { format!("panel {}", p.device) };
+                repaired.push(format!("{who} followed channel {id}, which is not in the file; it is idle"));
+                p.channel = None;
+            }
+        }
+    }
+    let followed: std::collections::BTreeSet<u32> = state.panels.iter().filter_map(|p| p.channel).collect();
+    state.channels.retain(|c| followed.contains(&c.id));
+    let Some(def) = screeny_art::patch::find(default_patch()) else { return };
+    for c in &mut state.channels {
+        if screeny_art::patch::find(&c.patch).is_some() {
+            continue;
+        }
+        let was = std::mem::replace(&mut c.patch, def.id.to_string());
+        c.setting.clear();
+        c.seed = DEFAULT_SEED;
+        c.params.clear();
+        repaired.push(format!(
+            "`{was}` is not a patch this build has, so channel {} is playing `{}`; its named settings are kept, in case it comes back",
+            c.id, def.id
+        ));
+    }
+}
+
+/// Card 350: the per-patch working copy is a channel's now. Whatever a file
+/// had of it has been carried onto the channels by [`migrate_to_v8`] (or was
+/// never there, in a v8 file), so it is dropped here, and an entry left with no
+/// named settings goes with it.
+fn strip_working_copies(state: &mut Persisted) {
+    for entry in state.patches.values_mut() {
+        entry.seed = None;
+        entry.params.clear();
+        entry.speed = None;
+        entry.setting.clear();
+    }
+    state.patches.retain(|_, e| !e.is_empty());
 }
 
 /// Card 310: **modes and the timetable are retired** - Home Assistant picks
@@ -2831,38 +2990,36 @@ mod tests {
         Working { params: BTreeMap::from([("hue".to_string(), hue)]), seed, speed }
     }
 
-    /// Save, load, and the mark that says it has been moved since.
+    /// Save, load, and the mark that says it has been moved since. Since card
+    /// 350 the working copy - and the name it came from - is a channel's, so
+    /// the caller says which setting a working copy is on.
     #[test]
     fn a_setting_is_saved_loaded_and_says_when_it_has_been_moved() {
         let def = metaballs();
         let mut memory = Memory::new();
         let lava = work(111, 2.5, 1.0);
-        remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
+        assert!(modified(&memory, def, "", &lava), "a tuned patch is not Default any more");
 
-        assert_eq!(current_setting(&memory, "metaballs"), DEFAULT_SETTING, "everything starts on Default");
-        assert!(modified(&memory, def, &lava), "and a tuned patch is not Default any more");
-
-        assert_eq!(save_setting(&mut memory, def, Some("Lava"), &lava).expect("saved"), "Lava");
-        assert_eq!(current_setting(&memory, "metaballs"), "Lava", "saving puts the working copy on what was saved");
-        assert!(!modified(&memory, def, &lava), "which is not modified the moment it is written");
+        assert_eq!(save_setting(&mut memory, def, "Lava", &lava).expect("saved"), "Lava");
+        assert!(!modified(&memory, def, "Lava", &lava), "which is not modified the moment it is written");
 
         // Move something: the mark comes back, and the setting is untouched.
         let moved = work(111, 3.5, 1.0);
-        assert!(modified(&memory, def, &moved));
+        assert!(modified(&memory, def, "Lava", &moved));
         let (stored, repaired) = usable_setting(&memory, def, "Lava").expect("still there");
         assert_eq!(stored, lava, "the saved setting did not move with the working copy");
         assert!(repaired.is_empty());
 
         // A second setting, and loading the first one back.
         let ink = work(222, 1.5, 1.0);
-        save_setting(&mut memory, def, Some("Slow ink"), &ink).expect("saved");
+        save_setting(&mut memory, def, "Slow ink", &ink).expect("saved");
         assert_eq!(memory["metaballs"].settings.len(), 2);
         let (back, _) = usable_setting(&memory, def, "Lava").expect("still there");
         assert_eq!(back, lava);
 
-        // Save with no name is "overwrite the one it is on".
-        save_setting(&mut memory, def, None, &moved).expect("overwritten");
-        assert_eq!(current_setting(&memory, "metaballs"), "Slow ink");
+        // "Save" with no name is the one the working copy is on - never Default.
+        assert_eq!(own_setting(None, "Slow ink", true).expect("its own"), "Slow ink");
+        save_setting(&mut memory, def, "Slow ink", &moved).expect("overwritten");
         assert_eq!(usable_setting(&memory, def, "Slow ink").expect("there").0, moved);
     }
 
@@ -2877,17 +3034,18 @@ mod tests {
         assert!(default.params.is_empty(), "the patch's own defaults, not a copy of them");
         assert_eq!(default.seed, DEFAULT_SEED, "a fixed seed, so Default is one picture");
         assert_eq!(default.speed, 1.0);
-        // In any case, and never in the file.
-        for spelling in ["default", "DEFAULT", " Default "] {
+        // In any case, empty too, and never in the file.
+        for spelling in ["default", "DEFAULT", " Default ", ""] {
             assert!(usable_setting(&memory, def, spelling).is_ok(), "{spelling}");
         }
         assert!(memory.is_empty(), "and asking for it wrote nothing down");
 
-        assert!(save_setting(&mut memory, def, None, &default).is_err(), "Save on Default is Save as...");
-        assert!(save_setting(&mut memory, def, Some("Default"), &default).is_err());
-        assert!(rename_setting(&mut memory, def, None, "Mine").is_err());
-        assert!(delete_setting(&mut memory, def, None).is_err());
-        assert!(delete_setting(&mut memory, def, Some("default")).is_err(), "in any case");
+        let why = own_setting(None, "", true).expect_err("Save on Default is Save as...");
+        assert!(why.contains("cannot be written over"), "{why}");
+        assert!(save_setting(&mut memory, def, "Default", &default).is_err());
+        assert!(own_setting(None, "Default", false).is_err());
+        assert!(rename_setting(&mut memory, def, "Default", "Mine").is_err());
+        assert!(delete_setting(&mut memory, def, "default").is_err(), "in any case");
     }
 
     /// The name rules, in one place, as a person would meet them.
@@ -2908,12 +3066,12 @@ mod tests {
 
         // Saving trims, and a name that differs only in case is refused rather
         // than made into a second setting nobody could tell from the first.
-        save_setting(&mut memory, def, Some("  Lava  "), &w).expect("saved");
+        save_setting(&mut memory, def, "  Lava  ", &w).expect("saved");
         assert!(memory["metaballs"].settings.contains_key("Lava"));
-        let why = save_setting(&mut memory, def, Some("lava"), &w).expect_err("a near-duplicate");
+        let why = save_setting(&mut memory, def, "lava", &w).expect_err("a near-duplicate");
         assert!(why.contains("already a setting called `Lava`"), "{why}");
         // ...but the same name, exactly, is an overwrite, which is the point.
-        save_setting(&mut memory, def, Some("Lava"), &work(9, 3.0, 1.0)).expect("overwritten");
+        save_setting(&mut memory, def, "Lava", &work(9, 3.0, 1.0)).expect("overwritten");
         assert_eq!(memory["metaballs"].settings.len(), 1);
         assert_eq!(memory["metaballs"].settings["Lava"].seed, 9);
     }
@@ -2926,51 +3084,40 @@ mod tests {
         let mut memory = Memory::new();
         let w = work(1, 2.5, 1.0);
         for i in 0..MAX_SETTINGS {
-            save_setting(&mut memory, def, Some(&format!("one {i}")), &w).unwrap_or_else(|e| panic!("{i}: {e}"));
+            save_setting(&mut memory, def, &format!("one {i}"), &w).unwrap_or_else(|e| panic!("{i}: {e}"));
         }
-        let why = save_setting(&mut memory, def, Some("one more"), &w).expect_err("that is enough");
+        let why = save_setting(&mut memory, def, "one more", &w).expect_err("that is enough");
         assert!(why.contains(&format!("{MAX_SETTINGS}")), "{why}");
         // Overwriting one of the ones already there is still fine: it is not a
         // new setting.
-        save_setting(&mut memory, def, Some("one 0"), &w).expect("an overwrite is not a new one");
+        save_setting(&mut memory, def, "one 0", &w).expect("an overwrite is not a new one");
         assert_eq!(memory["metaballs"].settings.len(), MAX_SETTINGS);
     }
 
-    /// Rename and delete, including what happens to the name the working copy
-    /// is on.
+    /// Rename and delete. Which channels follow the name is
+    /// `panels::Panels`'s business (card 350); this is the library's half.
     #[test]
-    fn renaming_follows_the_working_copy_and_deleting_leaves_it_playing() {
+    fn renaming_and_deleting_a_setting() {
         let def = metaballs();
         let mut memory = Memory::new();
         let lava = work(111, 2.5, 1.0);
-        save_setting(&mut memory, def, Some("Lava"), &lava).expect("saved");
-        remember(&mut memory, def, &lava.params, lava.seed, lava.speed);
+        save_setting(&mut memory, def, "Lava", &lava).expect("saved");
 
-        assert_eq!(rename_setting(&mut memory, def, None, "Lava lamp").expect("renamed"), "Lava lamp");
-        assert_eq!(current_setting(&memory, "metaballs"), "Lava lamp", "the working copy followed its name");
-        assert!(!modified(&memory, def, &lava), "and is still not modified");
-        assert!(rename_setting(&mut memory, def, Some("Lava"), "Anything").is_err(), "the old name is gone");
+        assert_eq!(rename_setting(&mut memory, def, "Lava", "Lava lamp").expect("renamed"), "Lava lamp");
+        assert!(!modified(&memory, def, "Lava lamp", &lava), "the same values under the new name");
+        assert!(rename_setting(&mut memory, def, "Lava", "Anything").is_err(), "the old name is gone");
         // A re-spelling of its own name is not a clash with itself.
-        assert_eq!(rename_setting(&mut memory, def, None, "Lava Lamp").expect("re-spelled"), "Lava Lamp");
+        assert_eq!(rename_setting(&mut memory, def, "Lava lamp", "Lava Lamp").expect("re-spelled"), "Lava Lamp");
 
-        // A second setting. Saving it moves the working copy onto it, so what
-        // follows is about deleting one it is *not* on and then one it is.
-        save_setting(&mut memory, def, Some("Other"), &work(2, 1.0, 1.0)).expect("saved");
-        let why = rename_setting(&mut memory, def, Some("Other"), "lava lamp").expect_err("taken");
+        save_setting(&mut memory, def, "Other", &work(2, 1.0, 1.0)).expect("saved");
+        let why = rename_setting(&mut memory, def, "Other", "lava lamp").expect_err("taken");
         assert!(why.contains("already a setting called `Lava Lamp`"), "{why}");
 
-        let before = memory["metaballs"].params.clone();
-        assert_eq!(delete_setting(&mut memory, def, Some("Lava Lamp")).expect("deleted"), "Lava Lamp");
-        assert_eq!(current_setting(&memory, "metaballs"), "Other", "deleting another one does not move the name");
-        assert_eq!(memory["metaballs"].params, before, "nor what is playing");
-        assert!(delete_setting(&mut memory, def, Some("Lava Lamp")).is_err(), "and it is really gone");
-
-        // Deleting the one it *is* on leaves the values playing and the name on
-        // Default - which is then honestly "modified".
-        assert_eq!(delete_setting(&mut memory, def, None).expect("deleted"), "Other");
-        assert_eq!(memory["metaballs"].params, before, "what is playing did not change");
-        assert_eq!(current_setting(&memory, "metaballs"), DEFAULT_SETTING);
-        assert!(modified(&memory, def, &lava), "values nothing is holding any more");
+        assert_eq!(delete_setting(&mut memory, def, "Lava Lamp").expect("deleted"), "Lava Lamp");
+        assert!(delete_setting(&mut memory, def, "Lava Lamp").is_err(), "and it is really gone");
+        assert!(modified(&memory, def, "Lava Lamp", &lava), "a working copy still naming it is modified");
+        assert_eq!(delete_setting(&mut memory, def, "Other").expect("deleted"), "Other");
+        assert!(memory.is_empty(), "an entry with nothing left in it goes");
     }
 
     /// The case the card is built for: a patch's parameters change between
@@ -3013,11 +3160,9 @@ mod tests {
         assert_eq!(repaired.len(), 2, "one sentence each, and never an error: {repaired:?}");
         assert!(repaired.iter().all(|r| r.contains("From before")), "each says which setting: {repaired:?}");
 
-        // Load it, and it is not modified - although the file still holds the
+        // Loaded, it is not modified - although the file still holds the
         // values this build cannot use.
-        memory.get_mut("metaballs").expect("there").setting = "From before".into();
-        remember(&mut memory, def, &usable.params, usable.seed, usable.speed);
-        assert!(!modified(&memory, def, &usable), "a repaired setting must not read as modified for ever");
+        assert!(!modified(&memory, def, "From before", &usable), "a repaired setting must not read as modified for ever");
         assert!(memory["metaballs"].settings["From before"].params.contains_key("gone"), "and the file is left as it was");
     }
 
@@ -3026,13 +3171,12 @@ mod tests {
     #[test]
     fn asking_for_a_setting_that_is_not_there_says_so() {
         let def = metaballs();
-        let mut memory = Memory::new();
+        let memory = Memory::new();
         let why = usable_setting(&memory, def, "Nope").expect_err("no such setting");
         assert!(why.contains("no setting called `Nope`"), "{why}");
         // A working copy pointed at a name nothing answers to is modified: there
         // is nothing left for it to be equal to.
-        memory.insert("metaballs".into(), PatchMemory { setting: "Ghost".into(), ..PatchMemory::default() });
-        assert!(modified(&memory, def, &work(1, 2.5, 1.0)));
+        assert!(modified(&memory, def, "Ghost", &work(1, 2.5, 1.0)));
     }
 
     /// v4 -> v5: a realistic v4 file - the shape the live service writes today,
@@ -3289,7 +3433,7 @@ mod tests {
         // And the named setting still loads as itself - not modified.
         let def = screeny_art::patch::find("clocks-dials").expect("clocks-dials");
         let work = Working { params: sparse(def, &p.params), seed: p.seed, speed: p.speed };
-        assert!(!modified(&loaded.patches, def, &work), "Evening is still Evening, unmodified, after the retirement");
+        assert!(!modified(&loaded.patches, def, "Evening", &work), "Evening is still Evening, unmodified, after the retirement");
     }
 
     /// Card 310: a v6 file written by card 302's build - modes with card 309's

@@ -50,7 +50,7 @@ pub fn pack(seq: u32, t: f64, stats: &Stats, fps: f32, preview: &[u8]) -> Vec<u8
     p
 }
 
-/// A packet for a player that has not rendered anything yet, so a browser
+/// A packet for a panel that has not been sent anything yet, so a browser
 /// connecting during the first frame is handed a black panel rather than
 /// nothing at all.
 #[must_use]
@@ -58,31 +58,81 @@ pub fn blank_packet() -> Vec<u8> {
     vec![0; PACKET_BYTES]
 }
 
-/// The page's one frame cell: what the browsers are looking at.
+/// One panel's frame cell: what the browsers watching that panel are looking
+/// at. Card 350 gave every panel its own, filled by its channel's render
+/// thread with the frames **that panel** is sent (after its own pipeline), so
+/// "what is on screen is what the device is showing" holds per panel.
 ///
-/// **One slot, newest wins.** The focused player writes into it and never
-/// waits for a reader, so a browser that has stopped reading misses frames and
-/// costs nothing - it cannot slow the render loop or the panel link down.
-/// That property is card 105's and the whole server rests on it.
+/// **One slot, newest wins.** The render loop writes into it and never waits
+/// for a reader, so a browser that has stopped reading misses frames and costs
+/// nothing - it cannot slow the render loop or the panel link down. That
+/// property is card 105's and the whole server rests on it.
 ///
-/// It is also how a player knows whether anybody is looking: [`Screen::watchers`]
-/// is the number of preview sockets **being sent frames**, and a player whose
-/// panel is away and whose page nobody is looking at drops to
-/// `player::IDLE_FPS`.
-///
-/// Card 120: "open a socket" and "want frames" came apart, because a tab that
-/// has been switched away from asks for none. A hidden tab is therefore *not* a
-/// watcher - it must not hold a panel-less studio at the full rate for a phone
-/// in a pocket - so the count is kept here by [`Viewer`] rather than read off the
-/// `watch` channel's receiver count.
+/// It is also how a channel knows whether anybody is looking:
+/// [`Screen::watchers`] is the number of preview sockets **being sent
+/// frames** from this panel, and a channel none of whose panels is connected
+/// or watched drops to `channel::IDLE_FPS`. A hidden tab is not a watcher
+/// (card 120).
 pub struct Screen {
     frames: watch::Sender<Arc<Vec<u8>>>,
+    /// Of the sockets on this panel, the ones being sent frames right now.
+    watching: AtomicUsize,
+    /// What every preview socket in the studio has cost, shared.
+    meter: Arc<SocketMeter>,
+}
+
+/// What the preview sockets have cost, across every panel: `sockets` on
+/// `/api/v1/status`. One of these per studio, shared by every panel's
+/// [`Screen`].
+#[derive(Default)]
+pub struct SocketMeter {
     /// Preview sockets open, whether or not they want frames.
     sockets: AtomicUsize,
-    /// Of those, the ones being sent frames right now.
+    /// Of those, the ones being sent frames.
     watching: AtomicUsize,
     frames_sent: AtomicU64,
     bytes_sent: AtomicU64,
+}
+
+impl SocketMeter {
+    /// What the preview is costing.
+    #[must_use]
+    pub fn cost(&self) -> PreviewCost {
+        PreviewCost {
+            open: self.sockets.load(Ordering::Relaxed),
+            watching: self.watching.load(Ordering::Relaxed),
+            frames_sent: self.frames_sent.load(Ordering::Relaxed),
+            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
+        }
+    }
+
+    /// A socket that is not (yet) on any panel's frames - one scoped to a
+    /// panel that does not exist - still costs its state messages.
+    #[must_use]
+    pub fn socket(self: &Arc<Self>) -> SocketClaim {
+        self.sockets.fetch_add(1, Ordering::Relaxed);
+        SocketClaim { meter: Arc::clone(self) }
+    }
+
+    /// One message went out: `frame` distinguishes a frame packet from the
+    /// JSON.
+    pub fn sent(&self, bytes: usize, frame: bool) {
+        self.bytes_sent.fetch_add(bytes as u64, Ordering::Relaxed);
+        if frame {
+            self.frames_sent.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// One open preview socket, counted for as long as it is held.
+pub struct SocketClaim {
+    meter: Arc<SocketMeter>,
+}
+
+impl Drop for SocketClaim {
+    fn drop(&mut self) {
+        self.meter.sockets.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// What the preview has cost, on `/api/v1/status` as `sockets`.
@@ -97,7 +147,7 @@ pub struct PreviewCost {
     /// Of those, the ones being sent frames. A hidden tab is not one.
     pub watching: usize,
     /// Frame packets sent to browsers since the process started, across every
-    /// socket - not frames rendered, which is `preview.ticks`.
+    /// socket - not frames rendered.
     pub frames_sent: u64,
     /// What they weighed, payload only (WebSocket framing is 2-4 bytes more).
     /// Includes the JSON: state changes and the twice-a-second heartbeat.
@@ -106,14 +156,8 @@ pub struct PreviewCost {
 
 impl Screen {
     #[must_use]
-    pub fn new() -> Arc<Screen> {
-        Arc::new(Screen {
-            frames: watch::Sender::new(Arc::new(blank_packet())),
-            sockets: AtomicUsize::new(0),
-            watching: AtomicUsize::new(0),
-            frames_sent: AtomicU64::new(0),
-            bytes_sent: AtomicU64::new(0),
-        })
+    pub fn new(meter: Arc<SocketMeter>) -> Arc<Screen> {
+        Arc::new(Screen { frames: watch::Sender::new(Arc::new(blank_packet())), watching: AtomicUsize::new(0), meter })
     }
 
     /// Replace the newest frame. Never blocks, never fails.
@@ -132,37 +176,25 @@ impl Screen {
         self.frames.subscribe()
     }
 
-    /// How many browsers are being sent frames. A tab that has said it is
-    /// hidden is not one of them.
+    /// How many browsers are being sent this panel's frames. A tab that has
+    /// said it is hidden is not one of them.
     #[must_use]
     pub fn watchers(&self) -> usize {
         self.watching.load(Ordering::Relaxed)
     }
 
-    /// What the preview is costing.
-    #[must_use]
-    pub fn cost(&self) -> PreviewCost {
-        PreviewCost {
-            open: self.sockets.load(Ordering::Relaxed),
-            watching: self.watching.load(Ordering::Relaxed),
-            frames_sent: self.frames_sent.load(Ordering::Relaxed),
-            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
-        }
-    }
-
-    /// Register one preview socket. It counts as a watcher only once it says it
-    /// wants frames.
+    /// Register one preview socket on this panel. It counts as a watcher only
+    /// once it says it wants frames.
     #[must_use]
     pub fn viewer(self: &Arc<Self>) -> Viewer {
-        self.sockets.fetch_add(1, Ordering::Relaxed);
         Viewer { screen: Arc::clone(self), wants: false }
     }
 }
 
-/// One preview socket's claim on the picture, and its share of the bill.
+/// One preview socket's claim on a panel's picture.
 ///
 /// Dropping it gives the claim back, however the socket ended - so a browser
-/// that vanishes cannot leave a studio rendering at full rate for ever.
+/// that vanishes cannot leave a channel rendering at full rate for ever.
 pub struct Viewer {
     screen: Arc<Screen>,
     wants: bool,
@@ -175,6 +207,12 @@ impl Viewer {
         self.wants
     }
 
+    /// Which panel's cell this is a claim on.
+    #[must_use]
+    pub fn screen(&self) -> &Arc<Screen> {
+        &self.screen
+    }
+
     /// Say whether this socket wants frames. Idempotent.
     pub fn set_wants_frames(&mut self, wants: bool) {
         if wants == self.wants {
@@ -183,17 +221,10 @@ impl Viewer {
         self.wants = wants;
         if wants {
             self.screen.watching.fetch_add(1, Ordering::Relaxed);
+            self.screen.meter.watching.fetch_add(1, Ordering::Relaxed);
         } else {
             self.screen.watching.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-
-    /// One message went out: `frame` distinguishes a frame packet from the
-    /// JSON, because only the frames are worth pacing.
-    pub fn sent(&self, bytes: usize, frame: bool) {
-        self.screen.bytes_sent.fetch_add(bytes as u64, Ordering::Relaxed);
-        if frame {
-            self.screen.frames_sent.fetch_add(1, Ordering::Relaxed);
+            self.screen.meter.watching.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
@@ -201,7 +232,6 @@ impl Viewer {
 impl Drop for Viewer {
     fn drop(&mut self) {
         self.set_wants_frames(false);
-        self.screen.sockets.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -249,9 +279,10 @@ pub struct PatchInfo {
     pub seeded: bool,
 }
 
-/// What the page is showing, which is what the panel is showing.
+/// What one panel is showing (card 350: every panel has one of these; a route
+/// or a socket without `panel` is the first panel's).
 ///
-/// Unchanged in shape from card 105 apart from two additive fields, so the
+/// Unchanged in shape from card 105 apart from additive fields, so the
 /// browser's `sync()` and every script that reads `/api/v1/bootstrap` keep
 /// working: `patch`, `seed`, `params`, `output`, `paused`, `speed`, `fps`.
 ///
@@ -292,6 +323,13 @@ pub struct StudioState {
     /// Computed on every read from the values themselves, never stored, so it
     /// cannot be left set by a change that forgot to clear it.
     pub modified: bool,
+    /// Card 350: the channel this panel follows, or `null` when it is idle -
+    /// no picture, no stream, the device on its own screen. `patch` is empty
+    /// then, and there are no parameters.
+    pub channel: Option<crate::channel::ChannelId>,
+    /// The other panels on the same channel, by device id, in the order they
+    /// joined it: *"Also on Kitchen"*. An edit here changes them too.
+    pub shared_with: Vec<String>,
 }
 
 /// Everything the UI needs to draw itself once.
@@ -338,7 +376,7 @@ pub fn brightness_stops() -> Vec<u8> {
 /// Every patch this build offers, with its parameters.
 #[must_use]
 pub fn patches(faults: bool) -> Vec<PatchInfo> {
-    let extra = if faults { crate::player::FAULT_PATCHES } else { &[] };
+    let extra = if faults { crate::channel::FAULT_PATCHES } else { &[] };
     patches::ALL
         .iter()
         .chain(extra.iter())

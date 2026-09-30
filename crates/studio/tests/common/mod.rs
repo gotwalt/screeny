@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use screeny_studio::player::PlayerChange;
+use screeny_studio::channel::Edit;
 use screeny_studio::{AppState, Config, Running, Studio};
 use std::path::{Path, PathBuf};
 
@@ -35,12 +35,13 @@ pub async fn studio_and_state() -> (Running, AppState) {
     (studio.spawn(), st)
 }
 
-/// **Pause the page's player, in process.** Card 302 retired pause from every
-/// route - nothing a browser or a script sends can pause the panel any more -
-/// but the player itself still has it, and a test that needs a still picture
-/// (every frame the same frame) holds it here rather than hoping for one.
+/// **Pause the first panel's picture, in process.** Card 302 retired pause
+/// from every route - nothing a browser or a script sends can pause a panel
+/// any more - but a channel itself still has it, and a test that needs a still
+/// picture (every frame the same frame) holds it here rather than hoping for
+/// one.
 pub fn pause(st: &AppState) {
-    st.page().configure(&PlayerChange { paused: Some(true), ..PlayerChange::default() }).expect("pause the player");
+    st.first().channel().expect("the first panel has a picture").edit(&Edit { paused: Some(true), ..Edit::default() }).expect("pause the channel");
 }
 
 /// The configuration every test in this crate starts from.

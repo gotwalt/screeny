@@ -1,10 +1,14 @@
 //! The one place that knows both the studio and this module: it reads a
 //! [`Snapshot`] out of the studio and carries a [`Command`] back in, through
 //! the same functions the page's routes use.
+//!
+//! **Card 350 left this on the first panel.** The studio has several panels
+//! now; Home Assistant still sees one device, and it is the first panel - the
+//! one a route without `panel` means - with the same topics, discovery id and
+//! `unique_id`s as before. Card 352 gives every panel an HA device of its own.
 
 use super::client::{self, Handle};
 use super::{Command, PatchState, Picture, Snapshot};
-use crate::player::PlayerChange;
 use crate::state::DEFAULT_SETTING;
 use crate::AppState;
 use std::time::Duration;
@@ -30,8 +34,9 @@ pub fn start(st: &AppState) -> Handle {
 /// What HA should be shown now.
 #[must_use]
 pub fn snapshot(st: &AppState) -> Snapshot {
-    let page = st.page_state();
-    let status = st.page().status();
+    let first = st.first();
+    let page = st.state_of(&first);
+    let status = st.panels.status_of(&first);
     let pictures = pictures(st);
     // The working copy changed since its setting was loaded is not a picture
     // in the list: HA shows it as unknown rather than naming something the
@@ -136,21 +141,22 @@ pub fn execute(st: &AppState, cmd: &Command) -> Result<(), String> {
             // The nearest real stop, so what HA is shown back is what the
             // panel does. The supervisor sends it within a second.
             let level = snap(*level);
-            st.page().configure(&PlayerChange { brightness: Some(Some(level)), ..PlayerChange::default() })?;
+            st.first().set_brightness(Some(level));
         }
         Command::ShowPicture { patch, setting } => {
             if !st.memory.setting_names(patch).iter().any(|n| n == setting) && !crate::state::is_default_name(setting) {
                 return Err(format!("`{patch}` has no setting called `{setting}` any more"));
             }
             // A hand change, like picking a patch and a setting on the page:
-            // the manual cross-fade (card 304), in one step.
-            let change = PlayerChange { patch: Some(patch.clone()), load_setting: Some(setting.clone()), ..PlayerChange::default() };
-            let player = st.page();
-            player.configure(&change)?;
-            player.ensure_running();
+            // card 350's three rules, and the manual cross-fade (card 304).
+            let def = crate::channel::find_patch(patch, st.cfg.fault_patches).ok_or_else(|| format!("no patch called `{patch}`"))?;
+            let panel = st.first();
+            let channel = st.panels.pick(&panel, def, setting, false, None)?;
+            channel.ensure_running();
+            crate::fleet::aim_at_device(st, &panel);
         }
     }
-    st.publish_state(None, st.page_state());
+    st.changed(None);
     st.persist();
     Ok(())
 }

@@ -4,35 +4,57 @@
 //! `invoke('set_patch', {id})` became `POST /api/v1/set_patch {"id": ...}` and
 //! nothing else had to move. Reads are `GET`, changes are `POST`.
 //!
-//! **Card 170 changed what these act on, not what they are.** There is no
-//! design-view engine any more: `set_patch`, `set_param`, `set_seed`,
-//! `set_output`, `set_playback`, `patch_act` and `restart` act on the player
-//! for the attached panel, which is what the page is a window onto. So a
-//! script that spoke to the design view still works, and now it changes the
-//! panel - which is the whole point of the card.
+//! **Card 350: every route that acts on "the picture" or "the panel" takes a
+//! `panel`** - a device id - in the JSON body or as `?panel=` in the query
+//! string (the body wins). Without one it means **the first panel**, the one
+//! adopted first, so a page or a script written before there were several
+//! panels keeps working and keeps changing the panel it always changed.
+//! Channels are never addressed directly: a client always says which panel it
+//! means, and the picture routes act on that panel's channel - so an edit on a
+//! panel that shares its channel reaches every panel on it, which is what
+//! *"Also on Kitchen"* on the page is for.
 //!
-//! Every change is published to [`crate::AppState::states`] so that the other
+//! Picking a picture (`set_patch`, `set_picture`, `settings/load`,
+//! `player/set` with a patch or a setting) goes through card 350's three rules
+//! ([`crate::panels::Panels::pick`]); `same_as` and `detach` are the two
+//! explicit ways of joining and leaving a channel.
+//!
+//! Every change is announced on [`crate::AppState::states`] so that the other
 //! browsers watching stay in step; the sender's own socket is skipped, which
 //! is what the `X-Studio-Client` header is for.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use screeny_art::output::PanelStatus;
-use screeny_art::patch::Playing;
+use screeny_art::patch::{PatchDef, Playing};
 use screeny_art::Output;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::channel::{find_patch, Channel, Edit};
 use crate::page::{self, Bootstrap, StudioState};
-use crate::player::{Player, PlayerChange};
+use crate::panel::Panel;
+use crate::panels::{PanelSummary, PlayerStatus};
 use crate::AppState;
 
 /// The header a browser tags its own changes with, so the state it just made
 /// is not echoed back to it over the WebSocket while a slider is moving.
 pub const CLIENT_HEADER: &str = "x-studio-client";
+
+/// "Something changed", as the broadcast carries it. Each socket turns it
+/// into a [`StateEvent`] for its own panel when it sends it (card 350): one
+/// change can move several panels' states at once - an edit to a shared
+/// channel - and a socket only ever speaks for one panel.
+#[derive(Clone, Debug)]
+pub struct Changed {
+    /// Increases by one per change.
+    pub rev: u64,
+    /// Which browser made the change, if it said.
+    pub from: Option<String>,
+}
 
 /// A state change, as the WebSocket delivers it.
 #[derive(Clone, Serialize)]
@@ -46,6 +68,8 @@ pub struct StateEvent {
     /// Which browser made the change, if it said. `None` means "everyone
     /// should adopt this", which is what a resync sends.
     pub from: Option<String>,
+    /// Card 350: which panel this is the state of - the socket's own.
+    pub panel: String,
     pub state: StudioState,
 }
 
@@ -67,13 +91,14 @@ impl ApiError {
         ApiError(StatusCode::BAD_REQUEST, message)
     }
 
-    /// No device with that id. The page's list is stale; reload it.
+    /// No device or panel with that id. The page's list is stale; reload it.
     fn not_found(message: String) -> Self {
         ApiError(StatusCode::NOT_FOUND, message)
     }
 
-    /// The device is known but cannot be reached right now, which is a normal
-    /// state for a panel and not an error in the server.
+    /// The device is known but cannot be reached right now - or, card 350,
+    /// the panel is idle and has no picture to change. A fact about the panel
+    /// and not a fault in the server.
     fn unreachable(message: String) -> Self {
         ApiError(StatusCode::CONFLICT, message)
     }
@@ -102,6 +127,11 @@ pub fn routes() -> Router<AppState> {
         .route("/patch_act", post(patch_act))
         .route("/restart", post(restart))
         .route("/set_panel", post(set_panel))
+        // ---- card 350: several panels ----
+        .route("/panels", get(panels_list))
+        .route("/set_picture", post(set_picture))
+        .route("/same_as", post(same_as))
+        .route("/detach", post(detach))
         // ---- card 151: a patch's named settings ----
         .route("/settings/load", post(settings_load))
         .route("/settings/save", post(settings_save))
@@ -116,7 +146,7 @@ pub fn routes() -> Router<AppState> {
         .route("/set_piece", post(set_patch))
         .route("/set_settings", post(set_output))
         .route("/piece_act", post(patch_act))
-        // ---- card 106: devices, players and health ----
+        // ---- card 106: devices, panels and health ----
         .route("/status", get(crate::health::status))
         .route("/devices", get(devices_list))
         .route("/devices/add", post(devices_add))
@@ -130,50 +160,116 @@ pub fn routes() -> Router<AppState> {
         .route("/device/stats", post(device_stats))
 }
 
-/// Apply a change to the player the page is a window onto, tell the other
-/// browsers, and write it down.
-fn on_page(st: &AppState, headers: &HeaderMap, change: &PlayerChange) -> ApiResult<Json<StudioState>> {
-    let player = st.page();
-    player.configure(change).map_err(ApiError::bad_request)?;
-    player.ensure_running();
-    Ok(Json(publish(st, headers, &player)))
+// ---------------- which panel ----------------
+
+/// `?panel=<device id>`, on any route.
+#[derive(Default, Deserialize)]
+pub struct Which {
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-/// Publish the page's new state to every browser but the one that caused it,
-/// and write it down.
-fn publish(st: &AppState, headers: &HeaderMap, _player: &Arc<Player>) -> StudioState {
-    let state = st.page_state();
+/// The panel a request means: the body's `panel`, else the query's, else the
+/// first panel.
+fn target(st: &AppState, body: Option<&str>, query: &Which) -> ApiResult<Arc<Panel>> {
+    let which = body.filter(|b| !b.trim().is_empty()).or(query.panel.as_deref());
+    st.panel(which).map_err(ApiError::not_found)
+}
+
+/// For the routes that take no arguments and read their body only so the
+/// connection closes cleanly: the `panel` in it, if it has one.
+fn body_panel(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Which>(body).ok().and_then(|w| w.panel)
+}
+
+/// The channel a panel follows, or the refusal for an idle one.
+fn channel_of(panel: &Arc<Panel>) -> ApiResult<Arc<Channel>> {
+    panel.channel().ok_or_else(|| {
+        ApiError::unreachable(format!("`{}` is idle: it has no picture yet, so pick one for it first.", panel.device()))
+    })
+}
+
+/// Tell the other browsers, write it down, and answer with the panel's state.
+fn publish(st: &AppState, headers: &HeaderMap, panel: &Arc<Panel>) -> StudioState {
     let from = headers.get(CLIENT_HEADER).and_then(|v| v.to_str().ok()).map(str::to_owned);
-    st.publish_state(from, state.clone());
+    st.changed(from);
     st.persist();
-    state
+    st.state_of(panel)
+}
+
+/// An edit to the picture a panel shows: its channel, so every panel on it.
+fn edit(st: &AppState, headers: &HeaderMap, panel: &Arc<Panel>, change: &Edit) -> ApiResult<Json<StudioState>> {
+    let channel = channel_of(panel)?;
+    channel.edit(change).map_err(ApiError::bad_request)?;
+    channel.ensure_running();
+    Ok(Json(publish(st, headers, panel)))
+}
+
+/// A patch this build has, or the sentence a typo gets.
+fn patch_def(st: &AppState, id: &str) -> ApiResult<&'static PatchDef> {
+    find_patch(id, st.cfg.fault_patches).ok_or_else(|| ApiError::bad_request(format!("no patch called `{id}`")))
+}
+
+/// **Pick a picture for a panel** by card 350's rules, then make sure it is
+/// being rendered and streamed. `setting` of `None` means "just the patch":
+/// asking for the patch the panel is already on changes nothing (it keeps its
+/// tweaks, as it always has), except that it is a human saying "try it" to a
+/// patch its channel had given up on.
+fn pick(st: &AppState, panel: &Arc<Panel>, def: &'static PatchDef, setting: Option<&str>, exclusive: bool) -> ApiResult<()> {
+    if setting.is_none() {
+        if let Some(c) = panel.channel().filter(|c| c.patch() == def.id) {
+            if c.status().health.gave_up.is_some() {
+                if let Some((def, work)) = c.working() {
+                    c.show(def, &c.setting(), work, None);
+                }
+            }
+            c.ensure_running();
+            return Ok(());
+        }
+    }
+    let channel = st.panels.pick(panel, def, setting.unwrap_or(""), exclusive, None).map_err(ApiError::bad_request)?;
+    channel.ensure_running();
+    crate::fleet::aim_at_device(st, panel);
+    Ok(())
 }
 
 // ---------------- reads ----------------
 
-async fn bootstrap(State(st): State<AppState>) -> Json<Bootstrap> {
-    Json(Bootstrap {
+async fn bootstrap(State(st): State<AppState>, Query(q): Query<Which>) -> ApiResult<Json<Bootstrap>> {
+    let panel = target(&st, None, &q)?;
+    Ok(Json(Bootstrap {
         patches: page::patches(st.cfg.fault_patches),
         payload_bytes: screeny_art::meter::PAYLOAD_BYTES,
-        state: st.page_state(),
+        state: st.state_of(&panel),
         gpu: screeny_art::gpu_status(),
         brightness_stops: page::brightness_stops(),
-    })
+    }))
 }
 
-/// The newest frame packet, for a client that would rather poll than open a
-/// WebSocket (and for tests, which then need no WebSocket at all).
-async fn frame(State(st): State<AppState>) -> impl IntoResponse {
-    let packet: Arc<Vec<u8>> = st.screen.newest();
-    ([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], packet.to_vec())
+/// The newest frame packet a panel was sent, for a client that would rather
+/// poll than open a WebSocket (and for tests, which then need no WebSocket).
+async fn frame(State(st): State<AppState>, Query(q): Query<Which>) -> ApiResult<impl IntoResponse> {
+    let packet = target(&st, None, &q)?.screen().newest();
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], packet.to_vec()))
 }
 
-async fn patch_playing(State(st): State<AppState>) -> Json<Option<Playing>> {
-    Json(st.page().playing())
+async fn patch_playing(State(st): State<AppState>, Query(q): Query<Which>) -> ApiResult<Json<Option<Playing>>> {
+    Ok(Json(target(&st, None, &q)?.channel().and_then(|c| c.playing())))
 }
 
-async fn panel_status(State(st): State<AppState>) -> Json<Option<PanelStatus>> {
-    Json(st.page().status().panel)
+async fn panel_status(State(st): State<AppState>, Query(q): Query<Which>) -> ApiResult<Json<Option<PanelStatus>>> {
+    Ok(Json(target(&st, None, &q)?.link_status()))
+}
+
+/// Card 350: the overview - every panel, first first.
+#[derive(Serialize)]
+struct PanelsAnswer {
+    panels: Vec<PanelSummary>,
+}
+
+async fn panels_list(State(st): State<AppState>) -> Json<PanelsAnswer> {
+    let _ = st.first();
+    Json(PanelsAnswer { panels: st.summaries() })
 }
 
 // ---------------- changes ----------------
@@ -185,27 +281,87 @@ struct SetPatch {
     /// 150 send.
     #[serde(alias = "patch", alias = "piece")]
     id: String,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn set_patch(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { patch: Some(req.id), ..PlayerChange::default() })
+/// A patch, on its Default - by the three rules.
+async fn set_patch(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let def = patch_def(&st, &req.id)?;
+    pick(&st, &panel, def, None, false)?;
+    Ok(Json(publish(&st, &headers, &panel)))
+}
+
+#[derive(Deserialize)]
+struct SetPicture {
+    #[serde(alias = "id", alias = "piece")]
+    patch: String,
+    /// A named setting of that patch; absent or empty is Default.
+    #[serde(default)]
+    setting: String,
+    #[serde(default)]
+    panel: Option<String>,
+}
+
+/// Card 350: **a picture** - a patch on one of its named settings - for a
+/// panel, in one step, by the three rules. What Home Assistant's picture
+/// select does, as a route.
+async fn set_picture(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPicture>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let def = patch_def(&st, &req.patch)?;
+    pick(&st, &panel, def, Some(&req.setting), false)?;
+    Ok(Json(publish(&st, &headers, &panel)))
+}
+
+#[derive(Deserialize)]
+struct SameAs {
+    /// The panel whose channel to join.
+    #[serde(rename = "as")]
+    other: String,
+    #[serde(default)]
+    panel: Option<String>,
+}
+
+/// Card 350: **"Same as <panel>"** - put this panel on that one's channel,
+/// tweaks and all, in sync.
+async fn same_as(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SameAs>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let other = st.panels.get(req.other.trim()).ok_or_else(|| ApiError::not_found(format!("no panel `{}`", req.other.trim())))?;
+    let channel = st.panels.same_as(&panel, &other).map_err(ApiError::unreachable)?;
+    channel.ensure_running();
+    crate::fleet::aim_at_device(&st, &panel);
+    Ok(Json(publish(&st, &headers, &panel)))
+}
+
+/// Card 350: **Detach** - a copy of the channel for this panel alone, so an
+/// edit to it stops reaching the others. Body: `{panel?}`.
+async fn detach(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, body_panel(&body).as_deref(), &q)?;
+    let channel = st.panels.detach(&panel).map_err(ApiError::unreachable)?;
+    channel.ensure_running();
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
 #[derive(Deserialize)]
 struct SetParam {
     id: String,
     value: f32,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn set_param(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetParam>) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { param: Some((req.id, req.value)), ..PlayerChange::default() })
+async fn set_param(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetParam>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    edit(&st, &headers, &panel, &Edit { param: Some((req.id, req.value)), ..Edit::default() })
 }
 
-/// Takes no arguments - but reads the body anyway, because the UI sends `{}`
-/// and a server that closes a connection with a request body still unread
-/// gets a TCP reset rather than a clean close.
-async fn reset_params(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { reset_params: true, ..PlayerChange::default() })
+/// Takes no arguments but `panel` - and reads the body anyway, because the
+/// UI sends `{}` and a server that closes a connection with a request body
+/// still unread gets a TCP reset rather than a clean close.
+async fn reset_params(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, body_panel(&body).as_deref(), &q)?;
+    edit(&st, &headers, &panel, &Edit { reset_params: true, ..Edit::default() })
 }
 
 #[derive(Deserialize)]
@@ -213,11 +369,14 @@ struct SetSeed {
     /// Absent or null picks a new one.
     #[serde(default)]
     seed: Option<u32>,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn set_seed(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetSeed>) -> ApiResult<Json<StudioState>> {
+async fn set_seed(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetSeed>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
     let seed = req.seed.unwrap_or_else(page::fresh_seed);
-    on_page(&st, &headers, &PlayerChange { seed: Some(seed), ..PlayerChange::default() })
+    edit(&st, &headers, &panel, &Edit { seed: Some(seed), ..Edit::default() })
 }
 
 #[derive(Deserialize)]
@@ -225,10 +384,16 @@ struct SetOutput {
     /// `settings` up to card 150.
     #[serde(alias = "settings")]
     output: Output,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn set_output(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { output: Some(req.output), ..PlayerChange::default() })
+/// The panel's own output stage (card 350: a panel's, not its channel's, so
+/// two panels on one picture can differ in dither or limiter).
+async fn set_output(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    panel.set_output(req.output);
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
 /// What `set_playback` says instead of doing anything (card 302).
@@ -239,50 +404,52 @@ pub const PLAYBACK_RETIRED: &str = "speed and pause are not settings any more (c
 /// 2026-09-26). The route still answers 200 - a page or a script that still
 /// sends `{paused, speed}` is not broken by it - but it **changes nothing**,
 /// and says so: the answer is the whole state, as before, with one more key,
-/// `ignored`, holding [`PLAYBACK_RETIRED`]. Card 161 retired `fps` from this
-/// body the same way (`StudioState::fps` still reports the one rate); any body
-/// at all is accepted.
-async fn set_playback(State(st): State<AppState>, _body: axum::body::Bytes) -> Json<serde_json::Value> {
-    let mut answer = serde_json::to_value(st.page_state()).unwrap_or_default();
+/// `ignored`, holding [`PLAYBACK_RETIRED`]. Any body at all is accepted.
+async fn set_playback(State(st): State<AppState>, Query(q): Query<Which>, body: axum::body::Bytes) -> ApiResult<Json<serde_json::Value>> {
+    let panel = target(&st, body_panel(&body).as_deref(), &q)?;
+    let mut answer = serde_json::to_value(st.state_of(&panel)).unwrap_or_default();
     if let Some(o) = answer.as_object_mut() {
         o.insert("ignored".into(), PLAYBACK_RETIRED.into());
     }
-    Json(answer)
+    Ok(Json(answer))
 }
 
 #[derive(Deserialize)]
 struct PatchAct {
     action: String,
-    /// Which panel's patch to act on. Absent means the one on the page, which
-    /// is what a browser sends. (Card 140: a panel's composing patch can be
-    /// acted on, through a one-slot mailbox its render loop drains - never by
-    /// reaching into a running patch from another thread.)
-    #[serde(default)]
-    device: String,
+    /// Which panel's patch to act on. `device` is card 140's name for it and
+    /// is still taken; absent means the first panel.
+    #[serde(default, alias = "device")]
+    panel: Option<String>,
 }
 
-async fn patch_act(State(st): State<AppState>, Json(req): Json<PatchAct>) -> ApiResult<Json<Option<Playing>>> {
-    let player = if req.device.is_empty() {
-        st.page()
-    } else {
-        st.players.get(&req.device).ok_or_else(|| ApiError::not_found(format!("no player for `{}`", req.device)))?
-    };
-    player
-        .configure(&PlayerChange { act: Some(req.action), ..PlayerChange::default() })
-        .map_err(ApiError::bad_request)?;
+async fn patch_act(State(st): State<AppState>, Query(q): Query<Which>, Json(req): Json<PatchAct>) -> ApiResult<Json<Option<Playing>>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let channel = channel_of(&panel)?;
+    channel.edit(&Edit { act: Some(req.action), ..Edit::default() }).map_err(ApiError::bad_request)?;
     // A patch's own action changes the patch, not the studio's state, so there
     // is nothing to publish: the half-second status push carries it. What is
-    // returned is what it was performing *before* the action is drained - the
-    // page redraws from the next heartbeat.
-    Ok(Json(player.playing()))
+    // returned is what it was performing *before* the action is drained.
+    Ok(Json(channel.playing()))
+}
+
+/// Takes no arguments but `panel`; reads the body for the reason
+/// `reset_params` does.
+async fn restart(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, body_panel(&body).as_deref(), &q)?;
+    edit(&st, &headers, &panel, &Edit { restart: true, ..Edit::default() })
 }
 
 // ---------------- card 151: a patch's named settings ----------------
 //
 // Four changes in the same shape as every other one on this page: act, tell the
 // other browsers, write it down. The **list**, the current name and `modified`
-// travel in `StudioState`, which every one of these answers with, so a browser
-// needs no extra `GET` and a second browser sees a save the moment it happens.
+// travel in `StudioState`, which every one of these answers with.
+//
+// Since card 350 the working copy is a **channel's**, and the library of named
+// settings is still one per patch for the whole studio. So a save saves the
+// panel's channel's working copy; a rename or a delete moves every channel that
+// was on that setting; and a load is *picking a picture*, by the three rules.
 //
 // Note for anyone reading both APIs: the **panel's own** firmware serves a
 // `POST /api/v1/settings` (`docs/design/device-web.md`) for its WiFi and name.
@@ -295,21 +462,20 @@ struct LoadSetting {
     /// which is what "Revert" sends.
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-/// Put the working copy back on a setting.
-///
-/// **One change**: the parameters, the seed and the speed move together, so
-/// there is one broadcast and one write, and the panel follows in one step
-/// rather than through a burst of half-loaded pictures (card 196's pacing is
-/// about a burst; a load must not be one).
-async fn settings_load(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<StudioState>> {
-    let name = if req.name.trim().is_empty() {
-        st.page().state().setting
-    } else {
-        req.name
-    };
-    on_page(&st, &headers, &PlayerChange { load_setting: Some(name), ..PlayerChange::default() })
+/// Put the panel on a setting of the patch it is showing - picking a picture,
+/// by the three rules, in one change: the parameters and the seed move
+/// together, one broadcast and one write.
+async fn settings_load(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let channel = channel_of(&panel)?;
+    let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&channel)))?;
+    let name = if req.name.trim().is_empty() { channel.setting() } else { req.name };
+    pick(&st, &panel, def, Some(&name), false)?;
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
 #[derive(Deserialize)]
@@ -318,15 +484,21 @@ struct SaveSetting {
     /// working copy is on ("Save"), which `Default` never is.
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn settings_save(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<StudioState>> {
-    let player = st.page();
-    let (def, work) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
-    st.memory
-        .save_setting(def, req.name.as_deref(), &work)
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &player)))
+async fn settings_save(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let channel = channel_of(&panel)?;
+    let (def, work) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&channel)))?;
+    let name = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some(asked) => asked.to_string(),
+        None => crate::state::own_setting(None, &channel.setting(), true).map_err(ApiError::bad_request)?,
+    };
+    let saved = st.memory.save_setting(def, &name, &work).map_err(ApiError::bad_request)?;
+    channel.set_setting_name(&saved);
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
 #[derive(Deserialize)]
@@ -335,40 +507,46 @@ struct RenameSetting {
     #[serde(default, alias = "name")]
     from: String,
     to: String,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
-async fn settings_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<StudioState>> {
-    let player = st.page();
-    let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
-    st.memory
-        .rename_setting(def, Some(req.from.as_str()).filter(|f| !f.trim().is_empty()), &req.to)
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &player)))
+async fn settings_rename(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let channel = channel_of(&panel)?;
+    let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&channel)))?;
+    let from = crate::state::own_setting(Some(&req.from), &channel.setting(), false).map_err(ApiError::bad_request)?;
+    let to = st.memory.rename_setting(def, &from, &req.to).map_err(ApiError::bad_request)?;
+    st.panels.setting_renamed(def.id, &from, &to);
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
 #[derive(Deserialize)]
 struct DeleteSetting {
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    panel: Option<String>,
 }
 
 /// Delete a setting. **What is playing does not change**: the values stay, and
-/// what goes is the name they came from - so the answer says `Default`, and
-/// `modified`, which is the truth about values nothing is holding any more.
-async fn settings_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<StudioState>> {
-    let player = st.page();
-    let (def, _) = player.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&player)))?;
-    st.memory
-        .delete_setting(def, Some(req.name.as_str()).filter(|n| !n.trim().is_empty()))
-        .map_err(ApiError::bad_request)?;
-    Ok(Json(publish(&st, &headers, &player)))
+/// what goes is the name they came from - so every channel that was on it says
+/// `Default`, and `modified`, which is the truth.
+async fn settings_delete(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<StudioState>> {
+    let panel = target(&st, req.panel.as_deref(), &q)?;
+    let channel = channel_of(&panel)?;
+    let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&channel)))?;
+    let name = crate::state::own_setting(Some(&req.name), &channel.setting(), false).map_err(ApiError::bad_request)?;
+    let gone = st.memory.delete_setting(def, &name).map_err(ApiError::bad_request)?;
+    st.panels.setting_deleted(def.id, &gone);
+    Ok(Json(publish(&st, &headers, &panel)))
 }
 
-/// The one refusal these four share: a state file naming a patch this build
-/// has not got. There is no spec to measure values against, so there is
-/// nothing honest to save them as.
-fn unknown_patch(player: &Arc<Player>) -> String {
-    format!("`{}` is not a patch this build has, so it has no settings.", player.stored().patch)
+/// The one refusal these four share: a channel on a patch this build has not
+/// got. There is no spec to measure values against, so there is nothing
+/// honest to save them as.
+fn unknown_patch(channel: &Arc<Channel>) -> String {
+    format!("`{}` is not a patch this build has, so it has no settings.", channel.patch())
 }
 
 // ------------------------- card 311: Home Assistant -------------------------
@@ -433,16 +611,20 @@ async fn ha_forget(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiR
     Ok(Json(st.ha.view()))
 }
 
-/// Takes no arguments; reads the body for the reason `reset_params` does.
-async fn restart(State(st): State<AppState>, headers: HeaderMap, _body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
-    on_page(&st, &headers, &PlayerChange { restart: true, ..PlayerChange::default() })
-}
+// ------------------------------ panel output ------------------------------
 
 #[derive(Deserialize)]
 struct SetPanel {
     on: bool,
+    /// A panel to find (or add) and drive: a device id, an mDNS instance name
+    /// or an address.
     #[serde(default)]
     to: String,
+    /// Card 350: the panel to switch, by device id. With neither this nor
+    /// `to`, `on: true` means the first panel and `on: false` means **every**
+    /// panel.
+    #[serde(default)]
+    panel: Option<String>,
 }
 
 /// What `set_panel` answers: what happened, in a form a script can read.
@@ -450,71 +632,69 @@ struct SetPanel {
 /// Card 106 answered `null` for "off", which was true and useless: another
 /// session drove `{"on":false}` from a shell script to borrow the panel for
 /// firmware tests, got a 200, and ran a conformance suite against a panel the
-/// studio was still streaming to at 30 fps - because back then this route only
-/// switched the *preview's* link and the device's own player carried on. The
-/// answer now says whether the panel is being driven, which panel, and what
-/// the page is showing, like every other change route.
+/// studio was still streaming to at 30 fps. The answer says whether the panel
+/// is being driven, which panel, and what it is showing.
 #[derive(Serialize)]
 struct PanelOutcome {
     /// Panel output, after this change. **False means the panel has been let
     /// go**: `FINAL` has been sent and it is back on its own idle screen.
     on: bool,
-    /// Which panel, by id. Empty when none is attached.
+    /// Which panel, by id. Empty for the unbound stand-in.
     device: String,
     /// What to call it.
     label: String,
     /// The link, or `null` when output is off.
     panel: Option<PanelStatus>,
-    /// What the page is showing, which carries on either way.
+    /// What the panel is showing, which carries on either way.
     state: StudioState,
 }
 
-/// **Panel output**, and which panel the page is attached to.
+/// **Panel output.**
 ///
-/// Two bodies matter and are kept exactly, because a conformance script drives
+/// The bodies that matter, kept exactly because a conformance script drives
 /// them to borrow the panel for firmware tests:
 ///
-/// - `{"on":false}` - the link is released with `FINAL`, the panel goes back to
-///   its own idle screen and **stops receiving frames**, and the page carries
-///   on showing the patch.
-/// - `{"on":true,"to":"screeny-c0ffee"}` - attach to that panel and drive it.
-///   `to` may be a device id from the registry, an mDNS instance name or an
-///   address; one that is not known yet is added, exactly as
-///   `POST /devices/add` would. An empty `to` means "the panel already
-///   attached", so `{"on":true}` simply turns output back on.
-///
-/// Off is off for **every** player, not only the one on the page: a script
-/// that says "let the panel go" means the panel, and a second panel's player
-/// quietly holding the first one's lock would be exactly the surprise this is
-/// here to prevent.
-async fn set_panel(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<SetPanel>) -> ApiResult<Json<PanelOutcome>> {
-    let player = if req.on {
-        let device = match req.to.trim() {
-            "" => st.page().device(),
-            to => find_or_add(&st, to)?,
-        };
-        crate::fleet::attach(&st, &device)
+/// - `{"on":false}` - **every** panel's link is released with `FINAL`, each
+///   goes back to its own idle screen and **stops receiving frames**, and the
+///   pictures carry on for the page. Off is off for every panel: a script that
+///   says "let the panel go" means the panel, and a second panel quietly
+///   holding the first one's lock would be exactly the surprise this is here
+///   to prevent. `{"on":false,"panel":ID}` lets just that one go (card 350).
+/// - `{"on":true,"to":"screeny-c0ffee"}` - find that panel (adding it, exactly
+///   as `POST /devices/add` would, if it is new) and drive it. `to` may be a
+///   device id, an mDNS instance name or an address. A panel that is idle is
+///   given a picture: the unbound stand-in's, if the studio has not had a
+///   panel before, else the default patch on Default by the three rules.
+/// - `{"on":true}` - output back on, for `panel` or the first panel.
+async fn set_panel(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPanel>) -> ApiResult<Json<PanelOutcome>> {
+    let panel = if req.on {
+        match req.to.trim() {
+            "" => {
+                let panel = target(&st, req.panel.as_deref(), &q)?;
+                crate::fleet::drive(&st, &panel.device())
+            }
+            to => {
+                let device = find_or_add(&st, to)?;
+                crate::fleet::drive(&st, &device)
+            }
+        }
     } else {
-        // Everything stops driving a panel, and the page's player is the one
-        // whose answer comes back.
-        for p in st.players.all() {
-            let _ = p.configure(&PlayerChange { on: Some(false), ..PlayerChange::default() });
+        let only = req.panel.as_deref().or(q.panel.as_deref()).filter(|p| !p.trim().is_empty());
+        let answer = target(&st, only, &q)?;
+        let off: Vec<Arc<Panel>> = if only.is_some() { vec![Arc::clone(&answer)] } else { st.panels.all() };
+        for p in off {
+            p.set_on(false);
             crate::fleet::aim_at_device(&st, &p);
         }
-        st.page()
+        answer
     };
-    player
-        .configure(&PlayerChange { on: Some(req.on), ..PlayerChange::default() })
-        .map_err(ApiError::bad_request)?;
-    crate::fleet::aim_at_device(&st, &player);
-    player.ensure_running();
-    let state = publish(&st, &headers, &player);
-    let status = player.status();
+    let state = publish(&st, &headers, &panel);
+    let device = panel.device();
     Ok(Json(PanelOutcome {
-        on: status.on,
-        device: status.device.clone(),
-        label: st.devices.get(&status.device).map(|d| d.label()).unwrap_or_default(),
-        panel: status.panel,
+        on: panel.cfg().on,
+        label: st.devices.get(&device).map(|d| d.label()).unwrap_or_default(),
+        device,
+        panel: panel.link_status(),
         state,
     }))
 }
@@ -539,7 +719,7 @@ fn find_or_add(st: &AppState, to: &str) -> ApiResult<String> {
     st.devices.add_manual(to, "").map_err(ApiError::bad_request)
 }
 
-// ------------------ card 106: devices, players and health ------------------
+// ------------------ card 106: devices, panels and health ------------------
 
 /// The device list on its own, for a client that only wants that much.
 async fn devices_list(State(st): State<AppState>) -> Json<Vec<crate::health::DeviceStatus>> {
@@ -552,13 +732,14 @@ struct AddDevice {
     to: String,
     #[serde(default)]
     name: String,
-    /// Attach to it and start playing straight away. With no panel attached
-    /// yet this adopts the player the page is already showing, so the picture
-    /// does not restart - it simply starts reaching the panel.
+    /// Drive it straight away. A studio that has not had a panel before hands
+    /// it the picture the page is already showing, so nothing restarts; any
+    /// other idle panel is given the default patch. Without `play` a new
+    /// panel is adopted idle (card 350).
     #[serde(default)]
     play: bool,
     /// A device id: this panel has *moved*, rather than being a new one.
-    /// It keeps its id, its player and everything it was playing; only the
+    /// It keeps its id, its panel and everything it was playing; only the
     /// way there changes.
     #[serde(default)]
     device: String,
@@ -574,12 +755,12 @@ async fn devices_add(State(st): State<AppState>, Json(req): Json<AddDevice>) -> 
     }
     let id = st.devices.add_manual(&req.to, &req.name).map_err(ApiError::bad_request)?;
     if req.play {
-        let player = crate::fleet::attach(&st, &id);
-        let _ = player.configure(&PlayerChange { on: Some(true), ..PlayerChange::default() });
-        crate::fleet::aim_at_device(&st, &player);
-        player.ensure_running();
+        crate::fleet::drive(&st, &id);
+    } else {
+        st.panels.adopt(&id);
     }
     st.persist();
+    st.changed(None);
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
@@ -592,11 +773,13 @@ async fn devices_forget(State(st): State<AppState>, Json(req): Json<DeviceRef>) 
     if !st.devices.forget(&req.device) {
         return Err(ApiError::not_found(format!("no device `{}`", req.device)));
     }
-    st.players.remove(&req.device);
-    // The page never goes blank: whatever is left becomes what it shows, and
-    // with nothing left that is an unbound player with no link.
-    st.page().ensure_running();
+    st.panels.remove(&req.device);
+    // There is always a first panel: with nothing left that is the unbound
+    // stand-in, on a picture of its own and with no link.
+    let _ = st.first();
+    st.panels.start();
     st.persist();
+    st.changed(None);
     Ok(Json(serde_json::json!({ "forgotten": req.device })))
 }
 
@@ -621,7 +804,7 @@ async fn devices_refresh(State(st): State<AppState>, _body: axum::body::Bytes) -
             Ok(Ok(dev)) => {
                 let (new_id, renamed) = st.devices.resolved(&dev);
                 if let Some(from) = renamed {
-                    st.players.rekey(&from, &new_id);
+                    st.panels.rekey(&from, &new_id);
                 }
             }
             Ok(Err(e)) => st.devices.control_failed(&id, e),
@@ -644,15 +827,13 @@ struct SetPlayer {
     seed: Option<u32>,
     #[serde(default)]
     param: Option<ParamChange>,
-    /// "Reset": this patch back to its defaults on this panel, and forget what
-    /// was remembered for it (card 165). The page's equivalent is
-    /// `POST /reset_params`.
+    /// "Reset": this picture back to its patch's defaults. The page's
+    /// equivalent is `POST /reset_params`.
     #[serde(default)]
     reset_params: bool,
     // Card 161: `fps` was here, and card 302 took `paused` and `speed` the
     // same way. None is declared any more and serde ignores unknown keys, so a
-    // script that still sends them is accepted and they do nothing - which is
-    // the whole of what they can mean now.
+    // script that still sends them is accepted and they do nothing.
     /// `settings` before card 150; both are taken.
     #[serde(default, alias = "settings")]
     output: Option<Output>,
@@ -662,9 +843,8 @@ struct SetPlayer {
     /// Start the patch again from its seed.
     #[serde(default)]
     restart: bool,
-    /// Card 151: put this panel's patch on one of its named settings, or on
-    /// `Default`. The page uses `POST /settings/load`, which is the same change
-    /// on the panel the page is a window onto.
+    /// Card 151: a named setting of the patch - the one given, or the one the
+    /// panel is on. With `patch` or on its own, a picture: the three rules.
     #[serde(default)]
     setting: Option<String>,
 }
@@ -683,36 +863,56 @@ where
     Option::<u8>::deserialize(d).map(Some)
 }
 
-async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> ApiResult<Json<crate::player::PlayerStatus>> {
+/// **One panel, everything at once** - card 106's route for a script naming a
+/// device rather than going through the page. A patch or a setting is a
+/// picture, picked by card 350's rules; a seed, a parameter, a reset or a
+/// restart is an edit of the channel the panel is then on (so a request that
+/// picks *and* edits never joins another panel's channel - its edit would land
+/// on them); `on`, `output` and `brightness` are the panel's own.
+async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> ApiResult<Json<PlayerStatus>> {
     if st.devices.get(&req.device).is_none() {
         return Err(ApiError::not_found(format!("no device `{}`", req.device)));
     }
-    let player = crate::fleet::player_for(&st, &req.device);
-    player
-        .configure(&PlayerChange {
-            on: req.on,
-            patch: req.patch,
-            seed: req.seed,
-            param: req.param.map(|p| (p.id, p.value)),
-            reset_params: req.reset_params,
-            paused: None,
-            speed: None,
-            output: req.output,
-            brightness: req.brightness,
-            restart: req.restart,
-            act: None,
-            load_setting: req.setting,
-        })
-        .map_err(ApiError::bad_request)?;
-    crate::fleet::aim_at_device(&st, &player);
-    player.ensure_running();
-    // The page is showing this player if it is the focused one, and the other
-    // browsers have to hear about it either way.
-    if player.is_focused() {
-        st.publish_state(None, st.page_state());
+    let panel = st.panels.attach(&req.device);
+    let change = Edit {
+        seed: req.seed,
+        param: req.param.map(|p| (p.id, p.value)),
+        reset_params: req.reset_params,
+        restart: req.restart,
+        ..Edit::default()
+    };
+    let exclusive = change.changes_the_picture();
+    match (req.patch.as_deref(), req.setting.as_deref()) {
+        (Some(id), setting) => pick(&st, &panel, patch_def(&st, id)?, setting, exclusive)?,
+        (None, Some(setting)) => {
+            let channel = channel_of(&panel)?;
+            let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(&channel)))?;
+            let name = if setting.trim().is_empty() { channel.setting() } else { setting.to_string() };
+            pick(&st, &panel, def, Some(&name), exclusive)?;
+        }
+        (None, None) => {}
     }
+    if exclusive || change.restart {
+        // An edit on a shared channel is an edit for everybody on it: that is
+        // what sharing a channel means (card 350, "editing is per channel").
+        channel_of(&panel)?.edit(&change).map_err(ApiError::bad_request)?;
+    }
+    if let Some(on) = req.on {
+        panel.set_on(on);
+    }
+    if let Some(output) = req.output {
+        panel.set_output(output);
+    }
+    if let Some(b) = req.brightness {
+        panel.set_brightness(b);
+    }
+    crate::fleet::aim_at_device(&st, &panel);
+    if let Some(c) = panel.channel() {
+        c.ensure_running();
+    }
+    st.changed(None);
     st.persist();
-    Ok(Json(player.status()))
+    Ok(Json(st.panels.status_of(&panel)))
 }
 
 // ---- the control port, proxied: brightness, identify, name, stats, reboot ----
@@ -764,12 +964,12 @@ struct SetBrightness {
 async fn device_brightness(State(st): State<AppState>, Json(req): Json<SetBrightness>) -> ApiResult<Json<serde_json::Value>> {
     let level = req.level;
     let applied = on_device(&st, &req.device, "setting brightness", move |c| c.set_brightness(level).map_err(|e| e.to_string())).await?;
-    if let Some(p) = st.players.get(&req.device) {
-        p.configure(&PlayerChange { brightness: Some(Some(level)), ..PlayerChange::default() })
-            .map_err(ApiError::bad_request)?;
+    if let Some(p) = st.panels.get(&req.device) {
+        p.set_brightness(Some(level));
         p.brightness_applied(level, applied);
     }
     st.persist();
+    st.changed(None);
     Ok(Json(serde_json::json!({ "asked": level, "applied": applied })))
 }
 

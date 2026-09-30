@@ -128,7 +128,7 @@ async fn a_picture_that_has_not_changed_is_not_sent_again() {
     pause(&st);
     // Card 304: a patch change cross-fades, and a fade is a moving picture
     // even when the patch is paused. Measure the still one after it.
-    tokio::time::sleep(Duration::from_secs_f32(screeny_studio::player::FADE_MANUAL + 0.5)).await;
+    tokio::time::sleep(Duration::from_secs_f32(screeny_studio::channel::FADE_MANUAL + 0.5)).await;
 
     let mut plain = Ws::connect_asking(at, "client=plain&fps=30").await;
     let mut lean = Ws::connect_asking(at, "client=lean&fps=30&repeat=false").await;

@@ -15,11 +15,12 @@
 //!
 //! 1. **The state file cannot be written.** A studio that cannot save will not
 //!    come back as itself, which is the whole promise of card 106.
-//! 2. **A player has given up**: [`crate::player::MAX_FAULTS`] panics or stalls
-//!    in a row, so it is no longer trying. A restart loop is worse than a
-//!    stopped player, but a stopped player is not healthy either.
-//! 3. **A player is not running**, and has not been for longer than
+//! 2. **A channel has given up**: [`crate::channel::MAX_FAULTS`] panics or
+//!    stalls in a row, so it is no longer trying. A restart loop is worse than
+//!    a stopped channel, but a stopped channel is not healthy either.
+//! 3. **A channel is not running**, and has not been for longer than
 //!    [`crate::START_GRACE`] - a render thread that died and was not replaced.
+//!    An idle panel has no channel, and is not this: it has nothing to render.
 //!
 //! A **missing graphics adapter is not one of them** (card 145). A studio with
 //! no GPU plays every CPU patch perfectly well, no restart conjures an adapter,
@@ -45,7 +46,8 @@ use serde::Serialize;
 
 use crate::devices::{DeviceFacts, DiscoveryHealth, HttpHealth, PanicFacts, Telem, Traffic};
 
-use crate::player::{PlayerStatus, WATCHDOG};
+use crate::channel::WATCHDOG;
+use crate::panels::PlayerStatus;
 use crate::state::{unix_now, StoreHealth};
 use crate::{AppState, START_GRACE};
 
@@ -65,10 +67,13 @@ pub struct Status {
     /// and a restart does not conjure an adapter. It is here so that a black
     /// `overland` has a reason a person can read.
     pub gpu: screeny_art::GpuStatus,
-    /// What the page is showing - which, since card 170, is what the attached
-    /// panel is showing. The key is still `preview` so that scripts written
+    /// What the first panel is showing - the panel a route without `panel`
+    /// means (card 350). The key is still `preview` so that scripts written
     /// against card 106's shape keep working.
     pub preview: PreviewStatus,
+    /// Card 350: the overview, one card per panel - the same list as
+    /// `GET /api/v1/panels`.
+    pub panels: Vec<crate::panels::PanelSummary>,
     /// Card 120: what the preview sockets are costing. A studio meant to be
     /// forgotten in a container should be able to say how much of its traffic
     /// is browsers, without anybody having to read `docker stats`.
@@ -160,10 +165,11 @@ pub struct DeviceStatus {
     /// `/healthz`: it is an account, not a judgement.
     pub traffic: Traffic,
     pub last_error: Option<String>,
-    /// What it plays, and how that is going. `None` when no player is
-    /// configured for this device.
+    /// What it plays, and how that is going: its panel and its panel's
+    /// channel (card 350). `None` only in the moment between a device being
+    /// found and the supervisor adopting it.
     pub player: Option<PlayerStatus>,
-    /// True when this is the panel the page is a window onto.
+    /// True when this is the first panel: what a route without `panel` means.
     pub attached: bool,
 }
 
@@ -177,15 +183,25 @@ pub fn problems(st: &AppState) -> Vec<String> {
     }
 
     let young = st.started.elapsed() < START_GRACE;
-    for p in st.players.all() {
-        let s = p.status();
-        let who = if s.device.is_empty() { "the page".to_string() } else { format!("player `{}`", s.device) };
+    for c in st.panels.channels() {
+        let followers = c.follower_ids();
+        // A channel nobody follows any more is on its way out, not a fault.
+        if followers.is_empty() {
+            continue;
+        }
+        let s = c.status();
+        let who = if followers.iter().all(String::is_empty) {
+            "the page".to_string()
+        } else {
+            let names: Vec<String> = followers.iter().map(|d| format!("`{d}`")).collect();
+            format!("the picture on {}", names.join(", "))
+        };
         if let Some(why) = &s.health.gave_up {
             out.push(format!("{who} has given up: {why}"));
         } else if !s.running && !young {
-            out.push(format!("{who} should be playing `{}` and is not running", s.patch));
-        } else if s.health.last_tick_ago.is_some_and(|a| a > WATCHDOG.as_secs_f64() * 2.0) && !young {
-            out.push(format!("{who} has not produced a frame for {:.0} s", s.health.last_tick_ago.unwrap_or(0.0)));
+            out.push(format!("{who} should be playing `{}` and is not running", s.stored.patch));
+        } else if s.last_tick_ago.is_some_and(|a| a > WATCHDOG.as_secs_f64() * 2.0) && !young {
+            out.push(format!("{who} has not produced a frame for {:.0} s", s.last_tick_ago.unwrap_or(0.0)));
         }
     }
     out
@@ -210,7 +226,8 @@ pub async fn status(State(st): State<AppState>) -> Json<Status> {
 #[must_use]
 pub fn collect(st: &AppState) -> Status {
     let problems = problems(st);
-    let page = st.page().status();
+    let first = st.first();
+    let page = st.panels.status_of(&first);
     let now = unix_now();
 
     let attached = page.device.clone();
@@ -275,7 +292,7 @@ pub fn collect(st: &AppState) -> Status {
                 http: d.http.clone(),
                 traffic: d.traffic.reported(),
                 last_error: d.last_error.clone(),
-                player: st.players.get(&d.stored.id).map(|p| p.status()),
+                player: st.panels.get(&d.stored.id).map(|p| st.panels.status_of(&p)),
             }
         })
         .collect();
@@ -289,7 +306,8 @@ pub fn collect(st: &AppState) -> Status {
         discovery: st.devices.discovery_health(),
         gpu: screeny_art::gpu_status(),
         preview,
-        sockets: st.screen.cost(),
+        panels: st.summaries(),
+        sockets: st.panels.meter().cost(),
         devices,
     }
 }
