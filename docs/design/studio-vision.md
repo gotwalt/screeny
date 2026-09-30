@@ -64,9 +64,8 @@ Properties that matter:
 - **Streaming does not depend on a browser.** Players belong to the server. The UI is
   a remote control and a window. Restart the container and it resumes what it was
   playing (state store).
-- **One player per device.** Same patch to several panels, or different ones. The
-  multi-device sender (a possible later addition, 091) and the patch runner/scheduler (card 104)
-  land here, as parts of the server rather than as separate programs.
+- **Channels and panels** (since 2026-09-29, cards 350-352; see "Several panels"
+  below): a channel renders a picture once, and every panel on it gets those frames.
 - **Device controls** (brightness, identify, name, stats, reboot) are proxied through
   the existing control client. The device's own future captive-portal/HTTP settings
   page is a separate thing, for WiFi setup only.
@@ -82,7 +81,9 @@ Properties that matter:
   card 311) Settings - tied together by one nav, because "the picture", "the panel's own
   affairs" and "the studio's own setup" are three different kinds of work and reload-safe
   URLs beat tabs in one document. The data model stays a collection (decision 3 below);
-  the UI assumes one.
+  the UI assumes one. *Superseded in part on 2026-09-29 by "Several panels" below: a
+  Studio now drives every panel it finds. What survives is the principle: the page is a
+  live window onto what the panels are showing, not a preview with its own state.*
 
 ## Built to be forgotten
 
@@ -136,6 +137,89 @@ the studio at a broker.
 How it is built - state v7 (`home_assistant`, `modes`/`schedule`/`schedule_run` dropped
 and said once), the entities, the topics and the Settings screen's routes - is in
 [`crates/studio/README.md`](../../crates/studio/README.md#home-assistant-cards-308-310-311).
+
+## Several panels: channels (cards 350-352)
+
+The owner, 2026-09-29, with a second Tidbyt on the bench: *"rethink studio so that the
+same patch can be sent to one or more devices, and more than one patch can be active at
+a time, eg an N:N arrangement."* His answers to the question batch that followed:
+panels on the same picture show **the identical picture, in sync**; the Picture screen
+becomes **a panel overview with an editor below**; new panels are **auto-adopted and
+idle**; Home Assistant gets **one HA device per panel**.
+
+**Two things, where there was one.** Today a player is a renderer welded to one link.
+It splits along the line that already exists inside it: the cross-fade blends in linear
+light *before* the limiter.
+
+- A **channel** is a running picture: a patch, the named setting it came from, its
+  working copy (seed and params) and its `Deck` (the core, and the one fading out when
+  its patch changes). It renders linear frames once per tick, on the shared GPU. A
+  channel with no panel and no one watching it does not exist: channels are created
+  when a panel needs one and dropped when the last panel leaves.
+- A **panel** is a device plus everything that is about the device: its link, on/off,
+  brightness, its output settings (Dithered / Bit planes, the limiter - Panel screen),
+  its own `Pipeline` (limiter, panel model, quantise) and the channel it follows. A
+  panel's frames are its channel's linear frames through its own pipeline, so two panels
+  on one channel can differ in output settings and still move in lock-step.
+
+**Picking a picture for a panel** (the picture select, the page's patch list, a named
+setting, or Home Assistant) resolves to a channel by three rules, in order:
+
+1. Another channel already shows exactly that picture (patch + named setting, no
+   unsaved tweaks): the panel joins it. That is how two panels end up in sync without
+   anyone saying "mirror".
+2. The panel is alone on its channel: that channel changes patch, with the 2 s fade it
+   has today.
+3. Otherwise the panel leaves its group for a new channel showing the picture.
+
+A panel that moves between channels fades from the old channel's picture to the new
+one's over the same 2 s, in its own output stage (it keeps both channels' linear frames
+for the length of the fade and blends them with `crossfade::blend`). The page also
+offers **"Same as <panel>"** to join a panel's channel explicitly, which is the way to
+share a picture with tweaks nobody has saved as a setting.
+
+**Editing is per channel.** A slider on the editor changes the channel, so every panel
+on it changes together; the editor says which other panels are on it (*"Also on
+Kitchen"*) and offers **Detach**, which gives the edited panel a copy of the channel
+(same patch, setting and working copy, its own clock from then on). Named settings stay
+one library per patch, shared by the whole studio; the working copy moves from
+per-patch to per-channel.
+
+**The page.** The Picture screen opens on a row of panel cards: a live thumbnail of what
+each panel is showing, its name, its picture, a dot for its link. Picking a card puts
+that panel's channel in the editor below, which is today's Picture screen. The selected
+panel is in the URL (`/?panel=<device id>`), so a reload or a bookmark keeps it; there
+is no stored "focus" any more. With one panel the row is a single card and the page
+reads as it does today. The Panel screen gets the same panel row and acts on the chosen
+panel. Each panel's preview is the frames it is sent (after its own pipeline), so
+"what is on screen is what the device is showing" still holds, per panel.
+
+**New panels.** Every screeny the mDNS browse finds, or that is added by address, is
+adopted as a panel, named after its instance, and is **idle**: no channel, no stream,
+so the device shows its own status screen until someone gives it a picture. Forgetting
+a panel drops it. (Today only the first device is adopted, `adopt_first_device`.)
+
+**API.** Every route that acts on "the picture" or "the panel" takes a `panel` (device
+id); without one it means the first panel, so older clients and scripts keep working.
+Channels are not addressed directly: a client always says which panel it means.
+`set_panel {"on":false}` without a `panel` still releases every panel. The websocket
+takes `?panel=` for one panel's frames and state; the overview's thumbnails come from
+the same socket at a low frame rate.
+
+**Home Assistant.** One HA device per panel, each with the entities the studio has
+today (light, brightness, picture select, patch sensor, link sensor). The **first**
+panel keeps the existing discovery id and `unique_id`s, so current automations and
+dashboards keep working; later panels get `screeny_<instance>_<device id>`. Picking a
+picture in HA follows the three rules above.
+
+**State v8.** `players` becomes `panels` (device, on, channel, output, brightness) and
+`channels` (id, patch, setting, seed, params); `focus` goes; `patches` keeps the named
+settings and loses the per-patch working copy to the channels. The migration gives each
+v7 player its own panel and channel, so the picture on the panel does not change across
+the upgrade; the v7 file is kept as `state.v7.json` as usual.
+
+**Cost.** One render per channel, not per panel; a pipeline per panel is a 64x32 quantise.
+A second panel on the same picture costs a link and a few hundred microseconds a frame.
 
 ## Deployment target: `studio-host.local` (surveyed 2026-09-19)
 
