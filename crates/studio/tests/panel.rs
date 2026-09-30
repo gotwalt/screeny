@@ -100,11 +100,14 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
 
     // The link is deferred, so it comes up on its own; the status route is
     // what the UI's status line reads.
+    // Card 353: a new panel fades in from black - two seconds of frames of its
+    // own, blended and so not indexed - and is then on its channel's shared,
+    // exact frames.
     let mut status = serde_json::Value::Null;
-    for _ in 0..50 {
+    for _ in 0..80 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         status = get(at, "/api/v1/panel_status").await.json();
-        if status["connected"] == true && status["frames_sent"].as_u64().unwrap_or(0) > 5 {
+        if status["connected"] == true && status["frames_sent"].as_u64().unwrap_or(0) > 5 && status["indexed_exact"].as_u64().unwrap_or(0) > 0 {
             break;
         }
     }
@@ -117,6 +120,9 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     // Frames the engine offered while the deferred link was still finding the
     // device are counted as dropped, by design. Once it is up, nothing is.
     let dropped_while_connecting = status["frames_dropped"].as_u64().expect("a count");
+
+    // Only frames from here on: the fade in is behind us.
+    while rx.try_recv().is_ok() {}
 
     // What the browser is drawing.
     let mut ws = Ws::connect(at, None).await;

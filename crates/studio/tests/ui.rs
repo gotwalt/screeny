@@ -1143,6 +1143,11 @@ async fn a_panel_that_is_not_there_is_a_404_the_page_can_leave() {
     let at = studio.addr;
     assert_eq!(get(at, "/api/v1/bootstrap").await.status, 200);
     assert_eq!(get(at, "/api/v1/bootstrap?panel=nosuchpanel").await.status, 404);
+    // Card 353: a studio with no panel has none to list - and always has
+    // Channel 1.
     let panels = get(at, "/api/v1/panels").await.json();
-    assert!(panels["panels"].as_array().is_some_and(|p| !p.is_empty()), "the overview always has a card: {panels}");
+    assert_eq!(panels["panels"], serde_json::json!([]), "{panels}");
+    let channels = get(at, "/api/v1/channels").await.json();
+    assert_eq!(channels["channels"][0]["name"], "Channel 1", "{channels}");
+    assert_eq!(get(at, "/api/v1/bootstrap?channel=9").await.status, 404);
 }

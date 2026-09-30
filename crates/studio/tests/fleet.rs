@@ -13,7 +13,7 @@
 
 mod common;
 
-use common::{get, post, studio_in, until, until_json, Temp, PATIENCE};
+use common::{get, post, studio_in, until, until_json, Temp, Ws, PATIENCE};
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -337,6 +337,9 @@ async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
         s["devices"].as_array().is_some_and(|d| d.len() == 2 && d.iter().all(|x| x["resolved"] == true))
     })
     .await;
+    // Card 353: both joined Channel 1; the good one gets a channel of its own.
+    post(at, "/api/v1/channels/new", r#"{"name":"Good"}"#).await;
+    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"good01","channel":2}"#).await.status, 200);
     post(at, "/api/v1/player/set", r#"{"device":"good01","patch":"vesta"}"#).await;
 
     for (bad, kind) in [("fault-panic", "panicking"), ("fault-stall", "stalling")] {
@@ -480,6 +483,9 @@ async fn a_wedged_patch_is_replaced_and_the_status_route_never_stalls() {
         started.elapsed() / 5
     };
 
+    // Card 353: Channel 1 has no panel here, so it renders only while it is
+    // watched - and a patch has to render to stall.
+    let _watching = Ws::connect_asking(at, "fps=30").await;
     let set = post(at, "/api/v1/set_patch", r#"{"id":"fault-stall"}"#).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
 

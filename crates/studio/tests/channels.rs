@@ -1,12 +1,14 @@
-//! Card 350's acceptance: **several panels**, end to end, against two
+//! Card 353's acceptance: **channels own the picture**, end to end, against two
 //! `screeny-sim` panels on loopback.
 //!
-//! One picture on two panels is one channel - one render per tick, the same
-//! frames on both devices, in sync. Different pictures are different
-//! channels. "Same as" puts them back together. A route without `panel` is the
-//! first panel's; `set_panel {"on":false}` without one lets every panel go. A
-//! socket can be scoped to one panel, cheaply. A device the registry learns
-//! about becomes a panel, idle.
+//! The owner, 2026-09-30: *"most of the time I'm going to want multiple panels
+//! to be frame-for-frame identical."* So: two panels on one channel are sent
+//! **byte-identical pixel payloads** for the same ticks - checked on the
+//! datagrams the two simulators received, not on anything the studio says
+//! about itself - and the channel encodes once per tick however many panels
+//! are on it. A new channel and a panel moved onto it differ; moved back,
+//! after its fade, they are identical again. Routes without `channel` are
+//! Channel 1's, and `panel` is an alias for that panel's channel.
 //!
 //! **No test in this file may touch the bench device.** Loopback only, a port
 //! band well away from the spec's, mDNS off, and every wait has a deadline.
@@ -14,7 +16,7 @@
 mod common;
 
 use common::{get, post, studio_and_state, until_json, Ws, PATIENCE};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -26,24 +28,32 @@ use screeny_sim::{Config as SimConfig, SimDevice};
 const FIRST_PORT: u16 = 51_000;
 const LAST_PORT: u16 = 51_100;
 
-/// What one simulated panel has put up, newest last, bounded.
+/// What one simulated panel was sent - every `FRAME` datagram's sequence
+/// number, codec and pixel payload, exactly as it arrived - and what it put
+/// up, decoded. Bounded.
 #[derive(Clone, Default)]
-struct Seen(Arc<Mutex<Vec<Vec<u8>>>>);
+struct Seen {
+    wire: Arc<Mutex<Vec<(u16, u8, Vec<u8>)>>>,
+    shown: Arc<Mutex<Vec<Vec<u8>>>>,
+}
 
 impl Seen {
-    fn count(&self) -> usize {
-        self.0.lock().expect("seen").len()
+    fn mark(&self) -> (usize, usize) {
+        (self.wire.lock().expect("wire").len(), self.shown.lock().expect("shown").len())
     }
 
-    /// The frames that arrived after `from`.
-    fn since(&self, from: usize) -> Vec<Vec<u8>> {
-        self.0.lock().expect("seen")[from..].to_vec()
+    fn wire_since(&self, from: (usize, usize)) -> Vec<(u16, u8, Vec<u8>)> {
+        self.wire.lock().expect("wire")[from.0..].to_vec()
+    }
+
+    fn shown_since(&self, from: (usize, usize)) -> Vec<Vec<u8>> {
+        self.shown.lock().expect("shown")[from.1..].to_vec()
     }
 }
 
 /// A simulator with its own id on **consecutive** loopback ports (an
 /// `IP:PORT` a human types resolves with the control port taken to be frame +
-/// 1), recording every frame it shows.
+/// 1), recording every datagram on its frame port and every frame it shows.
 fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16, Seen) {
     let seen = Seen::default();
     for port in (FIRST_PORT..LAST_PORT).step_by(2) {
@@ -51,14 +61,26 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16, Seen) {
             continue;
         }
         let cfg = SimConfig { frame_port: port, control_port: port + 1, id: id.to_string(), instance: format!("sim-{id}"), ..SimConfig::for_test() };
-        let log = seen.clone();
+        let shown = Arc::clone(&seen.shown);
         let sink = Box::new(move |f: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
-            let mut v = log.0.lock().expect("seen");
+            let mut v = shown.lock().expect("shown");
             if v.len() < 20_000 {
                 v.push(f.to_vec());
             }
         });
-        if let Ok(dev) = SimDevice::start_with(cfg, Some(sink)) {
+        let wire = Arc::clone(&seen.wire);
+        let tap = Box::new(move |datagram: &[u8]| {
+            if let Ok(f) = screeny_proto::FramePacket::parse(datagram) {
+                if f.flags & screeny_proto::F_FINAL != 0 {
+                    return;
+                }
+                let mut v = wire.lock().expect("wire");
+                if v.len() < 20_000 {
+                    v.push((f.seq, f.codec, f.payload.to_vec()));
+                }
+            }
+        });
+        if let Ok(dev) = SimDevice::start_tapped(cfg, Some(sink), Some(tap)) {
             return (dev, port, seen);
         }
     }
@@ -76,22 +98,46 @@ fn card<'a>(panels: &'a serde_json::Value, device: &str) -> &'a serde_json::Valu
     panels["panels"].as_array().expect("panels").iter().find(|p| p["device"] == device).unwrap_or_else(|| panic!("no `{device}` in {panels}"))
 }
 
-/// How many of `a`'s frames `b` also showed, byte for byte, as a fraction.
-fn overlap(a: &[Vec<u8>], b: &[Vec<u8>]) -> f64 {
-    let bs: HashSet<&Vec<u8>> = b.iter().collect();
-    let shared = a.iter().filter(|f| bs.contains(f)).count();
-    shared as f64 / a.len().max(1) as f64
+/// **Byte for byte**: pair the two panels' datagrams by sequence number - each
+/// link numbers its own, from wherever its session started, so the pairing is
+/// the offset at which the first of `b`'s payloads appears in `a` - and count
+/// the pairs whose codec and payload are identical. Returns (pairs,
+/// identical).
+fn identical_pairs(a: &[(u16, u8, Vec<u8>)], b: &[(u16, u8, Vec<u8>)]) -> (usize, usize) {
+    // The offset every identical payload agrees on (the most common one), so
+    // one frame repeated by a still picture cannot mislead it.
+    let by_payload: BTreeMap<(u8, &[u8]), u16> = a.iter().map(|(s, c, p)| ((*c, p.as_slice()), *s)).collect();
+    let mut offsets: BTreeMap<u16, usize> = BTreeMap::new();
+    for (s, c, p) in b {
+        if let Some(sa) = by_payload.get(&(*c, p.as_slice())) {
+            *offsets.entry(sa.wrapping_sub(*s)).or_default() += 1;
+        }
+    }
+    let Some((&offset, _)) = offsets.iter().max_by_key(|(_, n)| **n) else { return (0, 0) };
+    let a_by_seq: BTreeMap<u16, (u8, &[u8])> = a.iter().map(|(s, c, p)| (*s, (*c, p.as_slice()))).collect();
+    let mut pairs = 0;
+    let mut same = 0;
+    for (s, c, p) in b {
+        if let Some((ca, pa)) = a_by_seq.get(&s.wrapping_add(offset)) {
+            pairs += 1;
+            if *ca == *c && *pa == p.as_slice() {
+                same += 1;
+            }
+        }
+    }
+    (pairs, same)
 }
 
-/// For each of `a`'s frames, how far the nearest of `b`'s is - the mean
-/// absolute difference per byte - and the median of those.
-///
-/// Byte-for-byte equality is too strict a test of "the same picture" on two
-/// panels whose histories differ: each panel has its own output stage, and
-/// its encoder prefers the codec it used last (a small hysteresis), so the
-/// same linear frame can reach two devices through two different lossy
-/// codecs. This is the looser question: is every frame one panel shows
-/// *nearly* one the other showed?
+/// How many of `b`'s payloads `a` was also sent, as a fraction.
+fn shared_payloads(a: &[(u16, u8, Vec<u8>)], b: &[(u16, u8, Vec<u8>)]) -> f64 {
+    let set: HashSet<(u8, &[u8])> = a.iter().map(|(_, c, p)| (*c, p.as_slice())).collect();
+    let n = b.iter().filter(|(_, c, p)| set.contains(&(*c, p.as_slice()))).count();
+    n as f64 / b.len().max(1) as f64
+}
+
+/// For each of `a`'s decoded frames, how far the nearest of `b`'s is - the
+/// mean absolute difference per byte - and the median of those. For "these
+/// are two different pictures".
 fn nearest(a: &[Vec<u8>], b: &[Vec<u8>]) -> f64 {
     let mut d: Vec<f64> = a
         .iter()
@@ -105,184 +151,250 @@ fn nearest(a: &[Vec<u8>], b: &[Vec<u8>]) -> f64 {
     d.get(d.len() / 2).copied().unwrap_or(f64::INFINITY)
 }
 
-/// Both panels streaming, limiter off on both (so each panel's output stage is
-/// a pure function of the frame it is handed), on a moving patch.
+/// Both panels added, streaming, on Channel 1, on a moving patch.
 async fn two_panels(at: SocketAddr, a_port: u16, b_port: u16) {
     for port in [a_port, b_port] {
         ok(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","play":true}}"#)).await;
     }
-    until_json(at, PATIENCE * 2, "both panels known by their own ids", "/api/v1/panels", |p| {
+    until_json(at, PATIENCE * 2, "both panels known by their own ids and connected", "/api/v1/panels", |p| {
         let ids: Vec<&str> = p["panels"].as_array().map(|a| a.iter().filter_map(|x| x["device"].as_str()).collect()).unwrap_or_default();
-        ids == ["aa0001", "bb0002"]
+        ids == ["aa0001", "bb0002"] && p["panels"].as_array().is_some_and(|a| a.iter().all(|x| x["connected"] == true))
     })
     .await;
-    for panel in ["aa0001", "bb0002"] {
-        let state = ok(at, "/api/v1/set_patch", &format!(r#"{{"id":"metaballs","panel":"{panel}"}}"#)).await;
-        let mut output = state["output"].clone();
-        output["limiter"]["enabled"] = false.into();
-        ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "panel": panel }).to_string()).await;
-    }
+    ok(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
 }
 
-/// Wait out a channel change's fade, and give both sims time to show frames.
+/// Wait out a fade (a panel moving, or arriving), and a little more.
 async fn settle() {
     tokio::time::sleep(Duration::from_secs_f32(screeny_studio::channel::FADE_MANUAL + 1.0)).await;
 }
 
-/// A second of what both sims showed.
-async fn a_second_of(a: &Seen, b: &Seen) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-    let (fa, fb) = (a.count(), b.count());
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    (a.since(fa), b.since(fb))
-}
-
-/// **The card's acceptance**: the same picture on two panels, then different
-/// pictures, then "same as" - and each sim shows what it should.
+/// **The card's acceptance.** Two panels on Channel 1 are sent byte-identical
+/// payloads, from one encode per tick; a new channel with one of them moved
+/// onto it is different; moved back, after its fade, identical again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_panels_share_a_picture_then_differ_then_share_again() {
+async fn panels_on_one_channel_are_sent_the_same_bytes() {
     let (_a_dev, a_port, a) = start_sim("aa0001", 0);
     let (_b_dev, b_port, b) = start_sim("bb0002", a_port);
     let (studio, st) = studio_and_state().await;
     let at = studio.addr;
     two_panels(at, a_port, b_port).await;
-
-    // 1. The same picture: rule 1 put the second panel on the first one's
-    //    channel. One channel, one render per tick handed to both panels,
-    //    and both sims show the same picture.
     settle().await;
+
+    // 1. Both on Channel 1: the same bytes, one encode per tick.
     let panels = get(at, "/api/v1/panels").await.json();
     let (ca, cb) = (card(&panels, "aa0001"), card(&panels, "bb0002"));
-    assert_eq!(ca["channel"], cb["channel"], "one picture, one channel: {panels}");
-    assert_eq!(ca["shared_with"], serde_json::json!(["bb0002"]));
-    assert_eq!((ca["connected"].as_bool(), cb["connected"].as_bool()), (Some(true), Some(true)), "{panels}");
-    let channels = st.panels.channels();
-    assert_eq!(channels.len(), 1, "one render for both");
+    assert_eq!((ca["channel"].as_u64(), cb["channel"].as_u64()), (Some(1), Some(1)), "new panels join Channel 1: {panels}");
+    assert_eq!((ca["fading"].as_bool(), cb["fading"].as_bool()), (Some(false), Some(false)), "their fades in are over: {panels}");
+    let home = st.panels.home();
     let pa = st.panels.get("aa0001").expect("a");
     let pb = st.panels.get("bb0002").expect("b");
-    let (t0, a0, b0) = (channels[0].ticks(), pa.presents(), pb.presents());
-    let (fa, fb) = a_second_of(&a, &b).await;
-    let (t1, a1, b1) = (channels[0].ticks(), pa.presents(), pb.presents());
-    let renders = t1 - t0;
-    assert!(renders >= 20, "the channel renders at the full rate while both are connected: {renders}");
-    assert!((a1 - a0).abs_diff(renders) <= 1 && (b1 - b0).abs_diff(renders) <= 1, "every render reaches both panels: {renders} renders, {} and {} presents", a1 - a0, b1 - b0);
-    let same = overlap(&fa, &fb);
+    let (t0, e0, sa0, sb0) = (home.ticks(), home.encodes(), pa.sends(), pb.sends());
+    let (ma, mb) = (a.mark(), b.mark());
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (t1, e1, sa1, sb1) = (home.ticks(), home.encodes(), pa.sends(), pb.sends());
+    let (wa, wb) = (a.wire_since(ma), b.wire_since(mb));
+    let ticks = t1 - t0;
+    let encodes = e1 - e0;
+    let (pairs, same) = identical_pairs(&wa, &wb);
     eprintln!(
-        "same picture: {renders} renders in 1 s; sim a showed {}, sim b {}; {:.0}% of a's frames also on b, byte for byte; nearest {:.2}",
-        fa.len(),
-        fb.len(),
-        same * 100.0,
-        nearest(&fa, &fb)
+        "one channel: {ticks} ticks, {encodes} encodes; a sent {} shared / {} own, b {} shared / {} own; \
+         sims got {} and {} datagrams; {same} of {pairs} seq-paired payloads byte-identical",
+        sa1.shared - sa0.shared,
+        sa1.own - sa0.own,
+        sb1.shared - sb0.shared,
+        sb1.own - sb0.own,
+        wa.len(),
+        wb.len()
     );
-    assert!(fa.len() >= 20 && fb.len() >= 20, "both panels are streaming: {} and {}", fa.len(), fb.len());
-    // The same picture on both devices, to within what two independently
-    // chosen lossy codecs make of one frame (measured 0.0-1.2; two different
-    // patches measure ~50).
-    assert!(nearest(&fa, &fb) < 3.0, "the same picture on both panels: {:.2}", nearest(&fa, &fb));
+    assert!(ticks >= 40, "the channel renders at the full rate while its panels are connected: {ticks}");
+    assert!(encodes.abs_diff(ticks) <= 1, "**one encode per tick**, for two panels: {encodes} encodes, {ticks} ticks");
+    for (who, s0, s1) in [("a", sa0, sa1), ("b", sb0, sb1)] {
+        assert_eq!(s1.own - s0.own, 0, "{who}: not one frame of its own once it is on the channel");
+        assert!((s1.shared - s0.shared).abs_diff(ticks) <= 1, "{who}: every tick's shared frame: {} for {ticks} ticks", s1.shared - s0.shared);
+    }
+    assert!(wa.len() >= 40 && wb.len() >= 40, "both sims were sent frames: {} and {}", wa.len(), wb.len());
+    assert!(pairs + 2 >= wb.len().min(wa.len()), "the two streams pair up by sequence: {pairs} pairs of {} and {}", wa.len(), wb.len());
+    assert_eq!(same, pairs, "**byte-identical pixel payloads for the same ticks**: {same} of {pairs}");
 
-    // 2. Different pictures: the second panel splits off (rule 3); two
-    //    channels, each rendering, and the sims no longer agree.
-    let dials = ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","panel":"bb0002"}"#).await;
-    assert_eq!((dials["patch"].as_str(), dials["shared_with"].as_array().map(Vec::len)), (Some("clocks-dials"), Some(0)));
+    // 2. A new channel (a copy of Channel 1), a different picture on it, and
+    //    b moved there: b fades, alone, and then the two differ.
+    let hall = ok(at, "/api/v1/channels/new", r#"{"name":"Hall"}"#).await;
+    assert_eq!((hall["channel"].as_u64(), hall["channel_name"].as_str()), (Some(2), Some("Hall")), "{hall}");
+    assert_eq!(hall["patch"], "metaballs", "a copy of Channel 1");
+    assert_eq!(hall["panels"], serde_json::json!([]), "with no panels");
+    ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","channel":2}"#).await;
+    let moved = ok(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await;
+    assert_eq!((moved["channel"].as_u64(), moved["device"].as_str()), (Some(2), Some("bb0002")), "{moved}");
+    assert_eq!(moved["panels"], serde_json::json!(["bb0002"]));
+    assert!(pb.fading(), "b fades onto its new channel, frames of its own");
+    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["patch"], "metaballs", "Channel 1 is as it was");
     settle().await;
-    let panels = get(at, "/api/v1/panels").await.json();
-    assert_ne!(card(&panels, "aa0001")["channel"], card(&panels, "bb0002")["channel"], "{panels}");
-    assert_eq!(card(&panels, "aa0001")["picture"]["patch"], "metaballs", "the first is where it was");
-    assert_eq!(st.panels.channels().len(), 2, "two pictures, two renders");
-    let (fa, fb) = a_second_of(&a, &b).await;
-    let same = overlap(&fa, &fb);
-    eprintln!("different pictures: sim a showed {}, sim b {}; {:.0}% shared; nearest {:.2}", fa.len(), fb.len(), same * 100.0, nearest(&fa, &fb));
-    assert!(fa.len() >= 20 && fb.len() >= 20, "both still streaming: {} and {}", fa.len(), fb.len());
-    assert!(nearest(&fa, &fb) > 10.0, "two different pictures: {:.2}", nearest(&fa, &fb));
+    let (ma, mb) = (a.mark(), b.mark());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (wa, wb) = (a.wire_since(ma), b.wire_since(mb));
+    let (fa, fb) = (a.shown_since(ma), b.shown_since(mb));
+    eprintln!("two channels: {:.0}% of b's payloads also sent to a; decoded nearest {:.2}", shared_payloads(&wa, &wb) * 100.0, nearest(&fa, &fb));
+    assert!(wa.len() >= 20 && wb.len() >= 20, "both still streaming: {} and {}", wa.len(), wb.len());
+    assert!(shared_payloads(&wa, &wb) < 0.05, "two pictures, two sets of bytes");
+    assert!(nearest(&fa, &fb) > 10.0, "and the sims show two different pictures: {:.2}", nearest(&fa, &fb));
 
-    // A route without `panel` is the first panel's.
+    // 3. b moved back: after its fade it is on the shared bytes again.
+    let own_before = pb.sends().own;
+    ok(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":1}"#).await;
+    settle().await;
+    let own_after_fade = pb.sends().own;
+    assert!(own_after_fade > own_before, "the fade back was frames of its own");
+    let (ma, mb) = (a.mark(), b.mark());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (wa, wb) = (a.wire_since(ma), b.wire_since(mb));
+    let (pairs, same) = identical_pairs(&wa, &wb);
+    eprintln!("moved back: {same} of {pairs} seq-paired payloads byte-identical");
+    assert_eq!(pb.sends().own, own_after_fade, "and none since");
+    assert!(pairs >= 20, "{pairs}");
+    assert_eq!(same, pairs, "identical again: {same} of {pairs}");
+
+    // Routes without `channel` are Channel 1's - every panel on it - and a
+    // `panel` is that panel's channel.
     let seeded = ok(at, "/api/v1/set_seed", r#"{"seed":4242}"#).await;
-    assert_eq!(seeded["device"], "aa0001", "the first panel: {seeded}");
-    let b_state = get(at, "/api/v1/bootstrap?panel=bb0002").await.json();
-    assert_ne!(b_state["state"]["seed"], 4242, "and not the second: {b_state}");
+    assert_eq!((seeded["channel"].as_u64(), seeded["panels"].as_array().map(Vec::len)), (Some(1), Some(2)), "{seeded}");
+    ok(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await;
+    let via_panel = ok(at, "/api/v1/set_seed", r#"{"seed":7,"panel":"bb0002"}"#).await;
+    assert_eq!((via_panel["channel"].as_u64(), via_panel["seed"].as_u64()), (Some(2), Some(7)), "{via_panel}");
+    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["seed"], 4242, "Channel 1 untouched");
+    assert_eq!(get(at, "/api/v1/bootstrap?channel=2").await.json()["state"]["seed"], 7);
+    assert_eq!(get(at, "/api/v1/bootstrap?panel=bb0002").await.json()["state"]["channel"], 2);
 
-    // 3. "Same as": the second panel joins the first's channel, tweaks (the
-    //    seed) and all.
-    let joined = ok(at, "/api/v1/same_as", r#"{"panel":"bb0002","as":"aa0001"}"#).await;
-    assert_eq!((joined["patch"].as_str(), joined["seed"].as_u64()), (Some("metaballs"), Some(4242)));
-    assert_eq!(joined["modified"], true, "a tweaked picture, honestly marked");
-    settle().await;
-    assert_eq!(st.panels.channels().len(), 1, "the channel it left is dropped once its fade is over");
-    let (fa, fb) = a_second_of(&a, &b).await;
-    let same = overlap(&fa, &fb);
-    eprintln!("same as: sim a showed {}, sim b {}; {:.0}% of a's frames also on b; nearest {:.2}", fa.len(), fb.len(), same * 100.0, nearest(&fa, &fb));
-    assert!(fa.len() >= 20 && fb.len() >= 20, "both panels are streaming: {} and {}", fa.len(), fb.len());
-    assert!(nearest(&fa, &fb) < 3.0, "the same picture again: {:.2}", nearest(&fa, &fb));
-
-    // Detach: a copy of its own; an edit to it does not reach the first.
-    let detached = ok(at, "/api/v1/detach", r#"{"panel":"bb0002"}"#).await;
-    assert_eq!(detached["shared_with"], serde_json::json!([]));
-    assert_eq!(detached["seed"], 4242, "the same working copy");
-    ok(at, "/api/v1/set_seed", r#"{"seed":7,"panel":"bb0002"}"#).await;
-    let first = get(at, "/api/v1/bootstrap").await.json();
-    assert_eq!(first["state"]["seed"], 4242, "the edit stayed on the detached panel");
+    // Deleting Channel 2 puts b back on Channel 1; Channel 1 cannot go.
+    assert_eq!(post(at, "/api/v1/channels/delete", r#"{"channel":1}"#).await.status, 400);
+    let after = ok(at, "/api/v1/channels/delete", r#"{"channel":2}"#).await;
+    assert_eq!(after["channel"], 1);
+    let channels = get(at, "/api/v1/channels").await.json();
+    assert_eq!(channels["channels"].as_array().map(Vec::len), Some(1), "{channels}");
+    assert_eq!(channels["channels"][0]["panels"], serde_json::json!(["aa0001", "bb0002"]));
 
     // `set_panel {"on":false}` without a panel lets every panel go.
     let off = ok(at, "/api/v1/set_panel", r#"{"on":false}"#).await;
     assert_eq!(off["on"], false);
-    let panels = until_json(at, PATIENCE, "both panels let go", "/api/v1/panels", |p| {
-        p["panels"].as_array().is_some_and(|a| a.iter().all(|x| x["link"] == "off"))
+    until_json(at, PATIENCE, "both panels let go", "/api/v1/panels", |p| {
+        p["panels"].as_array().is_some_and(|a| a.iter().all(|x| x["link"] == "off" && x["connected"] == false))
     })
     .await;
-    assert!(panels["panels"].as_array().expect("panels").iter().all(|x| x["connected"] == false));
-    let (fa, fb) = a_second_of(&a, &b).await;
-    assert!(fa.len() <= 1 && fb.len() <= 1, "no more frames once let go: {} and {}", fa.len(), fb.len());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (ma, mb) = (a.mark(), b.mark());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(a.wire_since(ma).is_empty() && b.wire_since(mb).is_empty(), "no more frames once let go");
     studio.stop().await;
 }
 
-/// A socket scoped to one panel is sent that panel's state and frames, at the
-/// rate it asked for - which is how the overview's thumbnails are fed.
+/// Channels as the API has them: new, rename, delete, the retired routes, and
+/// what is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channels_are_made_renamed_and_deleted() {
+    let (studio, _st) = studio_and_state().await;
+    let at = studio.addr;
+    let list = get(at, "/api/v1/channels").await.json();
+    assert_eq!(list["channels"].as_array().map(Vec::len), Some(1), "a fresh studio has Channel 1: {list}");
+    assert_eq!((list["channels"][0]["id"].as_u64(), list["channels"][0]["name"].as_str(), list["channels"][0]["home"].as_bool()), (Some(1), Some("Channel 1"), Some(true)));
+
+    ok(at, "/api/v1/set_seed", r#"{"seed":31}"#).await;
+    let two = ok(at, "/api/v1/channels/new", "{}").await;
+    assert_eq!((two["channel"].as_u64(), two["channel_name"].as_str(), two["seed"].as_u64()), (Some(2), Some("Channel 2"), Some(31)), "a copy of Channel 1: {two}");
+    let three = ok(at, "/api/v1/channels/new", r#"{"name":"Kitchen","from":2}"#).await;
+    assert_eq!((three["channel"].as_u64(), three["channel_name"].as_str()), (Some(3), Some("Kitchen")));
+    assert_eq!(post(at, "/api/v1/channels/new", r#"{"from":9}"#).await.status, 404);
+    assert_eq!(post(at, "/api/v1/channels/rename", r#"{"channel":3,"name":"   "}"#).await.status, 400);
+    let renamed = ok(at, "/api/v1/channels/rename", r#"{"channel":3,"name":"Hall"}"#).await;
+    assert_eq!(renamed["channel_name"], "Hall");
+    assert_eq!(post(at, "/api/v1/channels/rename", r#"{"channel":9,"name":"x"}"#).await.status, 404);
+
+    // Picture routes by channel, and one that is not there.
+    let dials = ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","channel":3}"#).await;
+    assert_eq!((dials["channel"].as_u64(), dials["patch"].as_str()), (Some(3), Some("clocks-dials")));
+    assert_eq!(get(at, "/api/v1/bootstrap?channel=1").await.json()["state"]["patch"], "clocks-numerals", "Channel 1 as it was");
+    assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"channel":9}"#).await.status, 404);
+    assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"panel":"nope"}"#).await.status, 404);
+    // Output settings are the channel's.
+    let mut output = dials["output"].clone();
+    output["dither"] = "bayer4".into();
+    let out = ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "channel": 3 }).to_string()).await;
+    assert_eq!(out["output"]["dither"], "bayer4");
+    assert_ne!(get(at, "/api/v1/bootstrap").await.json()["state"]["output"]["dither"], "bayer4", "not Channel 1's");
+
+    // Card 350's implicit ways of sharing are retired, and say what to use.
+    for route in ["/api/v1/same_as", "/api/v1/detach"] {
+        let r = post(at, route, r#"{"as":"x"}"#).await;
+        assert_eq!(r.status, 410, "{route}");
+        assert!(r.json()["error"].as_str().is_some_and(|e| e.contains("/channels/new")), "{route}");
+    }
+
+    let gone = ok(at, "/api/v1/channels/delete", r#"{"channel":2}"#).await;
+    assert_eq!(gone["channel"], 1);
+    let ids: Vec<u64> = get(at, "/api/v1/channels").await.json()["channels"].as_array().expect("list").iter().filter_map(|c| c["id"].as_u64()).collect();
+    assert_eq!(ids, [1, 3]);
+    assert_eq!(ok(at, "/api/v1/channels/new", "{}").await["channel"], 4, "ids are never reused");
+    studio.stop().await;
+}
+
+/// Sockets are about a channel: `?channel=`, or `?panel=` as that panel's
+/// channel - following it when it moves - and they are sent the channels.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_socket_can_be_about_one_panel() {
+async fn a_socket_is_about_a_channel() {
     let (_a_dev, a_port, _a) = start_sim("aa0001", 0);
     let (_b_dev, b_port, _b) = start_sim("bb0002", a_port);
     let (studio, _st) = studio_and_state().await;
     let at = studio.addr;
     two_panels(at, a_port, b_port).await;
-    ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","panel":"bb0002"}"#).await;
+    ok(at, "/api/v1/channels/new", r#"{"name":"Hall"}"#).await;
+    ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","channel":2}"#).await;
 
-    let mut thumb = Ws::connect_asking(at, "panel=bb0002&fps=4&overview=false").await;
+    let mut thumb = Ws::connect_asking(at, "channel=2&fps=4&overview=false").await;
     let hello = thumb.event("state").await;
-    assert_eq!(hello["panel"], "bb0002");
-    assert_eq!(hello["state"]["patch"], "clocks-dials", "{hello}");
+    assert_eq!((hello["channel"].as_u64(), hello["state"]["patch"].as_str()), (Some(2), Some("clocks-dials")), "{hello}");
     thumb.frame().await;
     let t = thumb.measure(Duration::from_secs(2)).await;
-    assert!((5..=10).contains(&t.frames), "about four frames a second: {} in 2 s", t.frames);
+    assert!((5..=10).contains(&t.frames), "about four frames a second of an empty, watched channel: {} in 2 s", t.frames);
 
-    // A change to that panel reaches it; one to the other panel's picture
-    // arrives as a state message that is still about this one.
-    ok(at, "/api/v1/set_seed", r#"{"seed":99,"panel":"bb0002"}"#).await;
-    let ev = thumb.event("state").await;
-    assert_eq!((ev["panel"].as_str(), ev["state"]["seed"].as_u64()), (Some("bb0002"), Some(99)), "{ev}");
+    // A socket about a panel is about its channel, and follows it.
+    let mut b_sock = Ws::connect_asking(at, "panel=bb0002&fps=0&overview=false").await;
+    let hello = b_sock.event("state").await;
+    assert_eq!((hello["channel"].as_u64(), hello["panel"].as_str()), (Some(1), Some("bb0002")), "{hello}");
+    ok(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await;
+    let on_two = |t: &str| serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v["type"] == "state" && v["channel"] == 2);
+    let moved = b_sock.next_matching(|m| matches!(m, common::Msg::Text(t) if on_two(t))).await;
+    if let common::Msg::Text(t) = moved {
+        let v: serde_json::Value = serde_json::from_str(&t).expect("json");
+        assert_eq!((v["state"]["patch"].as_str(), v["panel"].as_str()), (Some("clocks-dials"), Some("bb0002")), "{v}");
+    }
 
-    // The page's socket, without `panel`, is the first panel's and is sent the
-    // overview.
+    // The page's socket, without either, is Channel 1's and is sent every
+    // panel and every channel.
     let mut page = Ws::connect_asking(at, "fps=0").await;
     let hello = page.event("state").await;
-    assert_eq!(hello["panel"], "aa0001");
-    let overview = page.event("panels").await;
-    assert_eq!(overview["panels"].as_array().map(Vec::len), Some(2), "{overview}");
+    assert_eq!(hello["channel"], 1);
+    let channels = page.event("channels").await;
+    let names: Vec<&str> = channels["channels"].as_array().expect("channels").iter().filter_map(|c| c["name"].as_str()).collect();
+    assert_eq!(names, ["Channel 1", "Hall"], "{channels}");
 
-    // A socket about a panel that is not there is told so and closed.
+    // A socket about a channel or a panel that is not there is told so.
+    let mut nobody = Ws::connect_asking(at, "channel=9").await;
+    let err = nobody.event("error").await;
+    assert!(err["error"].as_str().is_some_and(|e| e.contains("channel 9")), "{err}");
     let mut nobody = Ws::connect_asking(at, "panel=nope").await;
     let err = nobody.event("error").await;
     assert!(err["error"].as_str().is_some_and(|e| e.contains("nope")), "{err}");
     studio.stop().await;
 }
 
-/// **Auto-adopt**: a device the registry learns about - here added straight
-/// to it, as a browse would - becomes a panel within a supervisor tick, idle:
-/// no channel, no link, and the studio's first picture is not handed to it.
+/// **A new panel joins Channel 1**: a device the registry learns about - here
+/// added straight to it, as a browse would - becomes a panel within a
+/// supervisor tick, on Channel 1 and lit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_device_the_registry_learns_about_becomes_an_idle_panel() {
+async fn a_device_the_registry_learns_about_joins_channel_1() {
     let (studio, st) = studio_and_state().await;
     let at = studio.addr;
     let before = get(at, "/api/v1/panels").await.json();
-    assert_eq!(before["panels"][0]["unbound"], true, "a fresh studio shows its picture on the stand-in: {before}");
+    assert_eq!(before["panels"], serde_json::json!([]), "a fresh studio has no panel: {before}");
 
     // Nothing listens on port 9 of loopback: the device is known, never heard.
     let id = st.devices.add_manual("127.0.0.1:9", "").expect("added");
@@ -291,20 +403,9 @@ async fn a_device_the_registry_learns_about_becomes_an_idle_panel() {
     })
     .await;
     let p = card(&panels, &id);
-    assert_eq!(p["link"], "idle", "{panels}");
-    assert_eq!(p["channel"], serde_json::Value::Null);
-    assert_eq!(p["picture"], serde_json::Value::Null);
-    assert_eq!(panels["panels"].as_array().map(Vec::len), Some(1), "and the stand-in has gone: {panels}");
-    assert!(st.panels.channels().is_empty(), "no panel is on a picture, so there is no channel");
-
-    // An idle panel has no picture to edit, and says so.
-    let refused = post(at, "/api/v1/set_param", r#"{"id":"size","value":2.0}"#).await;
-    assert_eq!(refused.status, 409, "{}", String::from_utf8_lossy(&refused.body));
-    // Picking one gives it a channel of its own.
-    let picked = ok(at, "/api/v1/set_patch", r#"{"id":"metaballs"}"#).await;
-    assert_eq!((picked["device"].as_str(), picked["patch"].as_str()), (Some(id.as_str()), Some("metaballs")));
-    assert!(picked["channel"].is_u64());
-    // And a route naming a panel that is not there is a 404.
-    assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"panel":"nope"}"#).await.status, 404);
+    assert_eq!((p["channel"].as_u64(), p["channel_name"].as_str(), p["on"].as_bool()), (Some(1), Some("Channel 1"), Some(true)), "{panels}");
+    assert_ne!(p["link"], "off");
+    let state = get(at, "/api/v1/bootstrap").await.json();
+    assert_eq!(state["state"]["panels"], serde_json::json!([id]), "{state}");
     studio.stop().await;
 }

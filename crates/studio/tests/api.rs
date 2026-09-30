@@ -13,6 +13,9 @@ use std::time::Duration;
 async fn the_api_round_trips() {
     let studio = studio().await;
     let at = studio.addr;
+    // Card 353: a channel with no panel renders only while it is watched, and
+    // `patch_playing` below needs a rendered frame.
+    let _watching = Ws::connect_asking(at, "fps=30").await;
 
     // bootstrap: every patch, the payload budget, the current state.
     let boot = get(at, "/api/v1/bootstrap").await;
@@ -105,18 +108,21 @@ async fn the_api_round_trips() {
     assert_eq!(frame.body.len(), screeny_studio::page::PACKET_BYTES);
 }
 
-/// The studio renders whether or not a browser is watching; the frame it
-/// serves keeps moving. (Slowly: with no panel connected and no socket open a
-/// player drops to `player::IDLE_FPS`, which is the whole point - a panel that
-/// is away for a month with nobody looking must not cost a core for a month.
-/// A second is several frames at that rate.)
+/// Card 353: **a channel with no panel renders only while it is watched.**
+/// Channels are explicit and persist; an empty one nobody is looking at costs
+/// nothing at all, and the moment a browser asks for frames it renders.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_player_renders_with_nobody_watching() {
+async fn an_empty_channel_renders_only_while_watched() {
     let studio = studio().await;
     let first = seq_of(&get(studio.addr, "/api/v1/frame").await.body);
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     let later = seq_of(&get(studio.addr, "/api/v1/frame").await.body);
-    assert!(later > first, "the render loop stopped: {first} -> {later}");
+    assert_eq!(later, first, "no panel and nobody watching: parked");
+    let mut ws = Ws::connect_asking(studio.addr, "fps=30").await;
+    ws.frame().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let watched = seq_of(&get(studio.addr, "/api/v1/frame").await.body);
+    assert!(watched > later + 5, "a watched channel renders: {later} -> {watched}");
 }
 
 /// ...and it speeds up the moment somebody is. With nobody there a player

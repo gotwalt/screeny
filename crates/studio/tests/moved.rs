@@ -151,7 +151,10 @@ async fn a_panel_that_moved_is_followed_and_the_other_is_left_alone() {
     wait_streaming(at, "sta002", "the panel that stays to start playing").await;
 
     // Something specific on each, so "it kept what it was playing" is a thing
-    // a test can check rather than a hope.
+    // a test can check rather than a hope. Card 353: both joined Channel 1,
+    // so the one that stays gets a channel of its own first.
+    post(at, "/api/v1/channels/new", r#"{"name":"Home"}"#).await;
+    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"sta002","channel":2}"#).await.status, 200);
     post(at, "/api/v1/player/set", r#"{"device":"mov001","patch":"metaballs","seed":4242}"#).await;
     post(at, "/api/v1/player/set", r#"{"device":"sta002","patch":"flock","seed":1717}"#).await;
     let before = until_json(at, PATIENCE, "both panels to take their patch", "/api/v1/status", |s| {

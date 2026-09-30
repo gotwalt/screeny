@@ -35,13 +35,13 @@ pub async fn studio_and_state() -> (Running, AppState) {
     (studio.spawn(), st)
 }
 
-/// **Pause the first panel's picture, in process.** Card 302 retired pause
+/// **Pause Channel 1's picture, in process** - where every new panel is. Card 302 retired pause
 /// from every route - nothing a browser or a script sends can pause a panel
 /// any more - but a channel itself still has it, and a test that needs a still
 /// picture (every frame the same frame) holds it here rather than hoping for
 /// one.
 pub fn pause(st: &AppState) {
-    st.first().channel().expect("the first panel has a picture").edit(&Edit { paused: Some(true), ..Edit::default() }).expect("pause the channel");
+    st.panels.home().edit(&Edit { paused: Some(true), ..Edit::default() }).expect("pause the channel");
 }
 
 /// The configuration every test in this crate starts from.

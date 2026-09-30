@@ -187,7 +187,7 @@ async fn a_panel_is_tuned_through_player_set_and_the_page_says_so() {
     let off = set(format!(r#"{{"device":"{id}","on":false}}"#)).await;
     assert_eq!(off["on"], false);
     assert_eq!(off["panel"], serde_json::Value::Null, "no link while output is off");
-    assert_eq!(off["channel"], serde_json::Value::Null, "and a panel added without `play` is idle (card 350)");
+    assert_eq!(off["channel"], 1, "and a new panel is on Channel 1 (card 353)");
 
     set(format!(r#"{{"device":"{id}","patch":"metaballs","seed":11}}"#)).await;
     let tuned = set(format!(r#"{{"device":"{id}","param":{{"id":"size","value":2.5}}}}"#)).await;
@@ -353,5 +353,6 @@ async fn a_v1_state_file_comes_up_with_what_it_had() {
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
     assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION);
     assert_eq!(file["channels"][0]["params"]["size"], 2.5, "{text}");
-    assert_eq!(file["panels"][0]["device"], "", "on the unbound stand-in: {text}");
+    assert!(file.get("panels").is_none(), "no panel - the picture is Channel 1's (card 353): {text}");
+    assert_eq!(file["channels"][0]["id"], 1, "{text}");
 }

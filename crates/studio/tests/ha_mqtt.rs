@@ -151,6 +151,12 @@ async fn home_assistant_sees_and_drives_the_studio() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(seen.get(&t("patch", "state")).unwrap().contains(r#""setting":"Busy""#));
 
+    // Brightness is a panel's (card 353: a studio with no panel has Channel 1
+    // and nothing to dim), so one arrives - on Channel 1, the first panel.
+    let (_panel, panel_port) = start_sim("aa0001", 0);
+    assert_eq!(post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{panel_port}","play":true}}"#)).await.status, 200);
+    common::until_json(at, PATIENCE, "the panel known by its own id", "/api/v1/panels", |p| p["panels"][0]["device"] == "aa0001").await;
+    tokio::time::sleep(Duration::from_millis(1500)).await; // HA's look at the studio, once a second
     // Brightness, snapped to a real stop; off is dark; a bare on comes back.
     ha.publish(t("brightness", "set"), QoS::AtLeastOnce, false, r#"{"state":"ON","brightness":100}"#).await.unwrap();
     let lit = seen.until_json(&t("brightness", "state"), "lit", |v| v["state"] == "ON").await;
@@ -236,8 +242,8 @@ async fn channels(at: std::net::SocketAddr) -> (Value, Value) {
 /// **Card 352: one HA device per panel**, against a real broker and two sims.
 ///
 /// The first panel is the device every earlier build announced; the second is
-/// its own device named after the panel; a pick on one does not touch the
-/// other; the same picture on both is one channel; renaming a panel renames
+/// its own device named after the panel; a pick on one (on a channel of its
+/// own) does not touch the other; renaming a panel renames
 /// its device; forgetting it removes the device.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a broker: SCREENY_TEST_MQTT=HOST:PORT (see the top of this file)"]
@@ -293,7 +299,11 @@ async fn every_panel_is_an_ha_device() {
         seen.until(&two(entity, "state"), "the second panel's state", |_| true).await;
     }
 
-    // A pick on panel 2 leaves panel 1 alone: different pictures, two channels.
+    // Card 353: both joined Channel 1, and a panel's picture select changes
+    // its channel - every panel on it. With panel 2 on a channel of its own, a
+    // pick on it leaves panel 1 alone: different pictures, two channels.
+    assert_eq!(post(at, "/api/v1/channels/new", r#"{"name":"Two"}"#).await.status, 200);
+    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await.status, 200);
     ha.publish(one("picture", "set"), QoS::AtLeastOnce, false, "Flock").await.unwrap();
     seen.until_json(&one("patch", "state"), "flock on the first", |v| v["id"] == "flock").await;
     ha.publish(two("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
@@ -304,11 +314,15 @@ async fn every_panel_is_an_ha_device() {
     let (a, b) = channels(at).await;
     assert!(a.is_number() && b.is_number() && a != b, "two channels: {a} {b}");
 
-    // The same picture on both: one channel, by the page's own rules.
+    // The same picture on both is still two channels: nothing joins by itself
+    // any more (card 353); moving panel 2 back is what puts them together.
     ha.publish(one("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
     seen.until_json(&one("patch", "state"), "vesta on the first", |v| v["id"] == "vesta").await;
     let (a, b) = channels(at).await;
-    assert_eq!(a, b, "one channel for one picture");
+    assert_ne!(a, b, "two channels showing one picture");
+    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":1}"#).await.status, 200);
+    let (a, b) = channels(at).await;
+    assert_eq!(a, b, "one channel");
 
     // Brightness is per panel.
     ha.publish(two("level", "set"), QoS::AtLeastOnce, false, "8").await.unwrap();
