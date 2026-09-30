@@ -1,18 +1,31 @@
-//! Channels: **the only thing in the studio that renders** (cards 350-352).
+//! Channels: **the thing that owns the picture** (cards 350-355).
 //!
-//! Until card 350 a *player* was a renderer welded to one panel link. It split
-//! along the line that was already inside it - the cross-fade blends in linear
-//! light *before* the limiter - into two things
-//! (`docs/design/studio-vision.md`, "Several panels"):
+//! The owner, 2026-09-30: *"most of the time I'm going to want multiple panels
+//! to be frame-for-frame identical."* So since card 353 a channel owns the
+//! whole frame path (`docs/design/studio-vision.md`, "Several panels: channels
+//! own the picture"):
 //!
-//! - a **channel** (this file) is a running picture: a patch, the named setting
-//!   it came from, its working copy (seed and parameters) and its `Deck`. It
-//!   renders **linear** frames once per tick, and hands each one to every panel
-//!   that follows it;
-//! - a **panel** ([`crate::panel`]) is a device and everything about the
-//!   device: its link, on/off, brightness, its output settings and its own
-//!   `Pipeline`. So two panels on one channel move in lock-step and can still
-//!   differ in dither or limiter.
+//! ```text
+//!   Deck (patch, 2 s fade) -> Pipeline (limiter, panel model, quantise)
+//!        -> encoder (the pipeline's own meter)  -> ONE encoded frame per tick
+//!             -> every panel on the channel: the same payload bytes, only the
+//!                datagram header (sequence number, flags) its link's own
+//!             -> the channel's preview cell: that encoded frame, decoded
+//! ```
+//!
+//! A channel has an id and a name, a patch, the named setting it came from,
+//! its working copy (seed and parameters), its **output** settings (Dithered /
+//! Bit planes, the limiter, the panel model), its `Deck` and its `Pipeline`.
+//! Each tick it renders, limits, quantises and encodes **once**, and every
+//! panel on it is handed the same [`ChannelFrame`]. No panel is the master:
+//! panels on one channel are identical by construction. A panel
+//! ([`crate::panel`]) is a member - a device, on/off, brightness, a link.
+//!
+//! The encoder's budget and codec set are the **most constrained member's**
+//! (smallest budget, the codecs all of them accept), read from the members'
+//! live links every tick; a member whose session cannot take the shared
+//! payload for a moment (it has just connected to a smaller budget) encodes
+//! that frame itself, and says so in its counters.
 //!
 //! A channel is the thing that is meant to be forgotten. It renders on its own
 //! OS thread and survives its own patch:
@@ -22,8 +35,8 @@
 //! - **a patch that stalls** - a frame that never comes back - is noticed by a
 //!   watchdog. The wedged thread is told to stop and **abandoned**, because no
 //!   thread can be killed in Rust, and a *new* core is started on the fallback.
-//!   Panel links and pipelines belong to the panels, not to the core, so
-//!   abandoning a core leaks a patch's render state and one thread and never a
+//!   The pipeline and the panels' links do not belong to the core, so
+//!   abandoning one leaks a patch's render state and one thread and never a
 //!   socket, a link thread or the device itself (card 143, closed by
 //!   construction);
 //! - **a patch that does either repeatedly** is refused: after [`MAX_FAULTS`]
@@ -34,23 +47,53 @@
 //! loop applies between frames.
 //!
 //! A channel renders at [`screeny_art::FPS`] while any panel on it is connected
-//! **or** being watched (or is fading away from it), and at [`IDLE_FPS`]
-//! otherwise: a panel that is unplugged for a month, with nobody looking,
-//! should not cost a core for a month. A channel with no panel does not exist:
-//! [`crate::panels::Panels`] makes one when a panel needs it and drops it when
-//! the last panel has left.
+//! **or** somebody watches it (or a panel is fading away from it), and at
+//! [`IDLE_FPS`] otherwise. A channel with **no panels** renders only while it
+//! is watched (card 353: channels are explicit and persist; an empty one
+//! nobody is looking at costs nothing).
 
 use screeny_art::crossfade::{blend, Crossfade};
 use screeny_art::patch::{local_now, Ctx, Params, Patch, PatchDef, Playing};
-use screeny_art::Frame;
+use screeny_art::{Encoded, Frame, Output, Pipeline, WireFrame};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::page::{self, Screen, SocketMeter};
 use crate::panel::Panel;
 use crate::state::{StoredChannel, Working, DEFAULT_SEED};
+
+/// **One tick of a channel, finished**: what every panel on it is handed
+/// (card 353). The encoded frame is the one thing that goes on every member's
+/// wire; the rest is for a panel that cannot use it as it is.
+pub struct ChannelFrame {
+    /// The channel's own frame counter: one per render.
+    pub tick: u64,
+    /// The frame as the deck rendered it, in linear light and before the
+    /// limiter: what a panel fading *onto* this channel mixes in its own
+    /// output stage for its two seconds.
+    pub linear: Arc<Frame>,
+    /// The frame as it was handed to the encoder: what a member whose session
+    /// cannot take the shared payload encodes for itself.
+    pub wire: WireFrame,
+    /// **The encoded frame**: codec and payload, sent byte for byte to every
+    /// member.
+    pub encoded: Encoded,
+    /// Whether the panels will show exactly `wire`.
+    pub exact: bool,
+    /// Whether it was encoded from an index plane.
+    pub indexed: bool,
+}
+
+/// A channel's output stage: the pipeline its frames are finished in, and the
+/// encoder inside it. Owned by the channel, not by a core, so a core that is
+/// abandoned never costs the limiter its history.
+struct Stage {
+    pipeline: Pipeline,
+    tick: u64,
+}
 
 /// A channel's id: stable across restarts, never reused within a file.
 pub type ChannelId = u32;
@@ -68,6 +111,23 @@ pub const MAX_FAULTS: u32 = 3;
 /// sees, it is what a forgotten panel costs. Everything else is
 /// [`screeny_art::FPS`].
 pub const IDLE_FPS: f64 = 5.0;
+/// How often a parked channel - no panel on it, nobody watching - looks again
+/// (card 353).
+const PARKED: Duration = Duration::from_millis(100);
+
+/// The limits every member can take (card 353): the smallest payload budget
+/// and the codecs all of them accept, over the members whose links are up.
+/// `None` when none is connected, which leaves the encoder where it was.
+fn most_constrained(members: &[Arc<Panel>]) -> Option<(usize, Vec<u8>)> {
+    let mut out: Option<(usize, Vec<u8>)> = None;
+    for lim in members.iter().filter_map(|p| p.link_limits()) {
+        out = Some(match out {
+            None => (lim.budget, lim.codecs),
+            Some((budget, codecs)) => (budget.min(lim.budget), codecs.into_iter().filter(|c| lim.codecs.contains(c)).collect()),
+        });
+    }
+    out
+}
 
 /// Seconds a picture change **made by hand** cross-fades over (card 304): a
 /// patch change, a named setting loaded, a new seed, a restart - and, since
@@ -465,22 +525,34 @@ pub struct Channel {
     ticks: Arc<AtomicU64>,
     /// Faults since the last good run: the brake on a restart loop.
     consecutive: AtomicU64,
-    /// The panels this channel renders for, in the order they joined. The
-    /// render loop hands every frame to each of them.
+    /// The panels on this channel, in the order they joined. The render loop
+    /// hands every frame to each of them.
     followers: Mutex<Vec<Arc<Panel>>>,
     /// Panels still fading **away** from this channel (card 350): they read
     /// [`Channel::latest`] for up to [`FADE_MANUAL`], so this keeps rendering
-    /// at the full rate, and is not dropped, until they have finished.
+    /// at the full rate, and is not shut down, until they have finished.
     leaving: AtomicUsize,
     /// The newest linear frame, for a panel fading away from this channel.
     latest: Mutex<Option<Arc<Frame>>>,
+    /// Card 353: the pipeline and encoder - once per tick, for every member.
+    stage: Mutex<Stage>,
+    /// Frames encoded since the channel was made: one per tick, however many
+    /// panels are on it. Card 353's measure of "encode once".
+    encodes: AtomicU64,
+    /// The channel's preview cell: its encoded frames, decoded - what every
+    /// member panel shows.
+    screen: Arc<Screen>,
 }
 
 impl Channel {
     #[must_use]
-    pub fn new(stored: StoredChannel, faults: bool) -> Arc<Channel> {
+    pub fn new(stored: StoredChannel, faults: bool, meter: &Arc<SocketMeter>) -> Arc<Channel> {
+        let stage = Stage { pipeline: Pipeline::new(stored.output), tick: 0 };
         Arc::new(Channel {
             id: stored.id,
+            stage: Mutex::new(stage),
+            encodes: AtomicU64::new(0),
+            screen: Screen::new(Arc::clone(meter)),
             cfg: Mutex::new(stored),
             paused: AtomicBool::new(false),
             core: Mutex::new(None),
@@ -526,6 +598,49 @@ impl Channel {
     #[must_use]
     pub fn stored(&self) -> StoredChannel {
         self.cfg().clone()
+    }
+
+    /// What people call it.
+    #[must_use]
+    pub fn name(&self) -> String {
+        self.cfg().name.clone()
+    }
+
+    /// Call it something else. The caller has checked the name.
+    pub fn set_name(&self, name: &str) {
+        self.cfg().name = name.to_string();
+    }
+
+    /// How its frames are finished (card 353: the channel's, so every member
+    /// is sent the same bytes).
+    #[must_use]
+    pub fn output(&self) -> Output {
+        self.cfg().output
+    }
+
+    /// Picked up by the pipeline on the next frame.
+    pub fn set_output(&self, output: Output) {
+        self.cfg().output = output;
+    }
+
+    /// Its preview cell: the encoded frames, decoded.
+    #[must_use]
+    pub fn screen(&self) -> Arc<Screen> {
+        Arc::clone(&self.screen)
+    }
+
+    /// Frames encoded since it was made - one per tick, whoever is on it.
+    #[must_use]
+    pub fn encodes(&self) -> u64 {
+        self.encodes.load(Ordering::Relaxed)
+    }
+
+    /// A pipeline that carries on from this channel's brightness history, for
+    /// a panel fading away from it (card 353): the panel's two seconds of
+    /// frames of its own start where the channel's limiter is.
+    #[must_use]
+    pub fn fork_pipeline(&self) -> Pipeline {
+        self.stage.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pipeline.fork()
     }
 
     /// The patch it is on.
@@ -799,12 +914,44 @@ impl Channel {
     /// Who this channel is, for a log line: the panels on it.
     fn who(&self) -> String {
         let ids = self.follower_ids();
+        let name = self.name();
         if ids.is_empty() {
-            format!("channel {}", self.id)
+            format!("channel {} `{name}`", self.id)
         } else {
-            let names: Vec<&str> = ids.iter().map(|d| if d.is_empty() { "(no panel yet)" } else { d.as_str() }).collect();
-            format!("channel {} ({})", self.id, names.join(", "))
+            format!("channel {} `{name}` ({})", self.id, ids.join(", "))
         }
+    }
+
+    /// **Finish one tick, once, for every member** (card 353): the linear
+    /// frame through this channel's pipeline - limiter, panel model, quantise
+    /// - and its encoder, pointed at the most constrained member's limits.
+    /// Fills the preview cell with the encoded frame decoded, and hands back
+    /// what every member is sent.
+    fn finish(&self, linear: Arc<Frame>, members: &[Arc<Panel>], wall: f64, t: f64, fps: f32) -> ChannelFrame {
+        let output = self.output();
+        // Read before the stage is locked: a member's link has a lock of its
+        // own, which the render thread takes again below, one at a time.
+        let limits = most_constrained(members);
+        let mut stage = self.stage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if stage.pipeline.output != output {
+            stage.pipeline.output = output;
+        }
+        // Members with no codec in common (not a thing any firmware does) keep
+        // the encoder where it was, and each encodes for itself.
+        if let Some((budget, codecs)) = limits.filter(|(_, c)| !c.is_empty()) {
+            stage.pipeline.meter().set_limits(budget, codecs);
+        }
+        let out = stage.pipeline.process((*linear).clone(), wall);
+        stage.tick += 1;
+        let tick = stage.tick;
+        let meter = stage.pipeline.meter();
+        let encoded = meter.encoded().clone();
+        let indexed = meter.was_indexed();
+        drop(stage);
+        self.encodes.fetch_add(1, Ordering::Relaxed);
+        // The frame counter in the packet header is a u32 on the page.
+        self.screen.show(page::pack(tick as u32, t, &out.stats, fps, &out.preview));
+        ChannelFrame { tick, linear, wire: out.wire, encoded, exact: out.stats.exact, indexed }
     }
 
     // ---- internals ----
@@ -900,12 +1047,18 @@ impl Channel {
     }
 
     /// Put a frame where a panel fading away from this channel can find it.
-    fn publish_latest(&self, frame: &Frame) {
-        // Only kept while somebody is leaving: nobody else reads it, and a
-        // 64x32 frame a tick is not worth copying for nobody.
+    fn publish_latest(&self, frame: &Arc<Frame>) {
+        // Only kept while somebody is leaving: nobody else reads it.
         let keep = self.leaving.load(Ordering::Relaxed) > 0;
         let mut slot = self.latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot = keep.then(|| Arc::new(frame.clone()));
+        *slot = keep.then(|| Arc::clone(frame));
+    }
+
+    /// Whether anything needs this channel's frames right now: a member, a
+    /// panel fading away from it, or somebody watching it. An empty channel
+    /// nobody watches does not render (card 353).
+    fn needed(&self) -> bool {
+        !self.followers_mut().is_empty() || self.leaving.load(Ordering::Relaxed) > 0 || self.screen.watchers() > 0
     }
 
     /// Test only: what a channel that is not running would have shown.
@@ -919,9 +1072,9 @@ impl Channel {
 ///
 /// Everything that can change about the picture arrives through the
 /// channel's one-slot [`Pending`] and is applied here, between frames. Each
-/// frame is rendered **once** and handed, linear, to every panel on the
-/// channel, which puts it through its own pipeline, its own preview cell and
-/// its own link (card 350).
+/// frame is rendered, limited, quantised and encoded **once**
+/// ([`Channel::finish`]) and the one encoded frame is handed to every panel
+/// on the channel (card 353).
 ///
 /// The first core of a channel starts on its picture at once: a panel that
 /// arrives on a channel fades in its own output stage, so a fade here would be
@@ -938,6 +1091,16 @@ fn run_core(channel: &Arc<Channel>, handle: &Arc<CoreHandle>, core: Core) {
 
     while !handle.stop.load(Ordering::Relaxed) && !channel.stop.load(Ordering::Relaxed) {
         handle.beat.store(unix_millis(), Ordering::Relaxed);
+        // Card 353: a channel with no panel on it and nobody watching it has
+        // nothing to render for. It waits - ticking the watchdog's heartbeat,
+        // so a parked channel is not a stalled one - and picks up the moment
+        // a panel joins or a browser looks, with its clock where it was.
+        if !channel.needed() {
+            std::thread::sleep(PARKED);
+            last = Instant::now();
+            next = last;
+            continue;
+        }
         let paused = channel.paused.load(Ordering::Relaxed);
 
         // Apply whatever has been asked for since the last frame, then render.
@@ -974,14 +1137,20 @@ fn run_core(channel: &Arc<Channel>, handle: &Arc<CoreHandle>, core: Core) {
         if let Ok(mut p) = handle.playing.lock() {
             *p = (deck.core.def.id, deck.core.patch.playing());
         }
+        let frame = Arc::new(frame);
         channel.publish_latest(&frame);
 
-        // Every panel on the channel gets this one frame. Each present is a
-        // 64x32 pipeline pass and a non-blocking send, and never waits for a
-        // browser or the network.
-        let mut busy = channel.leaving.load(Ordering::Relaxed) > 0;
-        for panel in channel.followers() {
-            busy |= panel.present(&frame, wall, deck.core.t, fps);
+        // **Once per tick**: limit, quantise and encode, for everybody.
+        let members = channel.followers();
+        let shared = channel.finish(frame, &members, wall, deck.core.t, fps);
+
+        // Every panel on the channel is sent this one encoded frame. Each
+        // present is a non-blocking send and never waits for a browser or the
+        // network.
+        let mut busy = channel.leaving.load(Ordering::Relaxed) > 0 || channel.screen.watchers() > 0;
+        let output = channel.output();
+        for panel in &members {
+            busy |= panel.present(&shared, wall, output);
         }
 
         // A run of good frames clears the fault brake.
@@ -1056,7 +1225,7 @@ mod tests {
     }
 
     fn idle_channel() -> Arc<Channel> {
-        Channel::new(StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() }, true)
+        Channel::new(StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() }, true, &Arc::new(SocketMeter::default()))
     }
 
     #[test]

@@ -227,10 +227,11 @@ pub async fn status(State(st): State<AppState>) -> Json<Status> {
 pub fn collect(st: &AppState) -> Status {
     let problems = problems(st);
     let first = st.first();
-    let page = st.panels.status_of(&first);
     let now = unix_now();
-
-    let attached = page.device.clone();
+    // `preview` is the first panel's picture, or Channel 1's with no panel.
+    let home = st.panels.home().status();
+    let first_status = first.as_ref().map(|p| st.panels.status_of(p));
+    let attached = first_status.as_ref().map(|s| s.device.clone()).unwrap_or_default();
     let panel_to = st
         .devices
         .get(&attached)
@@ -245,22 +246,41 @@ pub fn collect(st: &AppState) -> Status {
         })
         .unwrap_or_default();
 
-    let preview = PreviewStatus {
-        patch: page.patch.clone(),
-        seed: page.seed,
-        fps: page.fps,
-        paused: page.paused,
-        ticks: page.health.ticks,
-        panics: page.health.panics,
-        alive: page.running,
-        last_tick_ago: page.health.last_tick_ago.unwrap_or(0.0),
-        wedged: page.health.last_tick_ago.is_some_and(|a| a > WATCHDOG.as_secs_f64()),
-        gave_up: page.health.gave_up.clone(),
-        fell_back_from: page.health.fell_back_from.clone(),
-        panel_on: page.on,
-        panel_to,
-        device: attached.clone(),
-        panel: page.panel.clone(),
+    let preview = match &first_status {
+        Some(page) => PreviewStatus {
+            patch: page.patch.clone(),
+            seed: page.seed,
+            fps: page.fps,
+            paused: page.paused,
+            ticks: page.health.ticks,
+            panics: page.health.panics,
+            alive: page.running,
+            last_tick_ago: page.health.last_tick_ago.unwrap_or(0.0),
+            wedged: page.health.last_tick_ago.is_some_and(|a| a > WATCHDOG.as_secs_f64()),
+            gave_up: page.health.gave_up.clone(),
+            fell_back_from: page.health.fell_back_from.clone(),
+            panel_on: page.on,
+            panel_to,
+            device: attached.clone(),
+            panel: page.panel.clone(),
+        },
+        None => PreviewStatus {
+            patch: home.stored.patch.clone(),
+            seed: home.stored.seed,
+            fps: screeny_art::FPS,
+            paused: false,
+            ticks: home.ticks,
+            panics: home.health.panics,
+            alive: home.running,
+            last_tick_ago: home.last_tick_ago.unwrap_or(0.0),
+            wedged: false,
+            gave_up: home.health.gave_up.clone(),
+            fell_back_from: home.health.fell_back_from.clone(),
+            panel_on: false,
+            panel_to,
+            device: String::new(),
+            panel: None,
+        },
     };
 
     let devices = st

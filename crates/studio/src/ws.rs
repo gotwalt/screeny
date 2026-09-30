@@ -114,10 +114,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::api::{Changed, StateEvent};
+use crate::api::{Changed, StateEvent, StatusEvent};
+use crate::channel::{Channel, ChannelId};
 use crate::page::{SocketMeter, Viewer, HEADER};
 use crate::panel::Panel;
-use crate::panels::PanelSummary;
+use crate::{Overview, StatusBoard};
 use crate::AppState;
 
 /// How long one message may take to reach a browser before the connection is
@@ -160,7 +161,12 @@ pub struct WsQuery {
     /// with changes: its own changes are not echoed back to it.
     #[serde(default)]
     client: Option<String>,
-    /// Card 350: the panel this socket is about. Absent follows the first.
+    /// Card 353: the channel this socket is about. Absent is Channel 1 -
+    /// unless `panel` names one.
+    #[serde(default)]
+    channel: Option<ChannelId>,
+    /// Card 350: a panel - the socket is then about **that panel's channel**,
+    /// and follows the panel if it moves to another.
     #[serde(default)]
     panel: Option<String>,
     /// Card 350: whether to be sent the overview. Default true.
@@ -323,30 +329,76 @@ pub async fn upgrade(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(st): 
     ws.on_upgrade(move |socket| run(socket, st, q))
 }
 
-/// The panel a socket means: the one it named, or the first.
-fn resolve(st: &AppState, named: Option<&str>) -> Option<Arc<Panel>> {
-    match named {
-        Some(id) => st.panels.get(id),
-        None => Some(st.first()),
+/// What a socket is about (card 353): a channel by id, a panel's channel
+/// (following the panel), or Channel 1.
+enum Scope {
+    Channel(ChannelId),
+    Panel(String),
+    Home,
+}
+
+/// Where a socket is looking now: its channel, and the panel it named.
+/// `None` when what it named is gone.
+fn resolve(st: &AppState, scope: &Scope) -> Option<(Arc<Channel>, Option<Arc<Panel>>)> {
+    match scope {
+        Scope::Channel(id) => st.panels.channel(*id).map(|c| (c, None)),
+        Scope::Panel(dev) => {
+            let p = st.panels.get(dev)?;
+            let c = p.channel()?;
+            Some((c, Some(p)))
+        }
+        Scope::Home => Some((st.panels.home(), None)),
     }
 }
 
-/// This socket's panel's state, for a change.
-fn state_message(st: &AppState, panel: &Arc<Panel>, ev: &Changed) -> Option<Message> {
-    as_text(&StateEvent { kind: "state", rev: ev.rev, from: ev.from.clone(), panel: panel.device(), state: st.state_of(panel) })
+/// This socket's channel's state, for a change.
+fn state_message(st: &AppState, channel: &Arc<Channel>, from: Option<&Arc<Panel>>, ev: &Changed) -> Option<Message> {
+    as_text(&StateEvent {
+        kind: "state",
+        rev: ev.rev,
+        from: ev.from.clone(),
+        channel: channel.id(),
+        panel: from.map(|p| p.device()).unwrap_or_default(),
+        state: st.state_of(channel, from),
+    })
 }
 
-/// The overview, as a message.
-fn overview_message(list: &[PanelSummary]) -> Option<Message> {
-    as_text(&serde_json::json!({ "type": "panels", "panels": list }))
+/// The overview, as two messages: every panel, and every channel.
+fn overview_messages(overview: &Overview) -> [Option<Message>; 2] {
+    [
+        as_text(&serde_json::json!({ "type": "panels", "panels": overview.panels })),
+        as_text(&serde_json::json!({ "type": "channels", "channels": overview.channels })),
+    ]
+}
+
+/// The heartbeat for this socket: its channel's performance, and the link of
+/// its panel (or its channel's first member).
+fn status_message(board: &StatusBoard, channel: &Arc<Channel>, from: Option<&Arc<Panel>>) -> Option<Message> {
+    let who = from.cloned().or_else(|| channel.followers().into_iter().next());
+    as_text(&StatusEvent {
+        kind: "status",
+        channel: channel.id(),
+        playing: board.channels.get(&channel.id()).cloned().flatten(),
+        panel: who.and_then(|p| board.panels.get(&p.device()).cloned().flatten()),
+    })
 }
 
 async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
     let named = q.panel.clone().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let scope = match (q.channel, named) {
+        (Some(id), _) => Scope::Channel(id),
+        (None, Some(p)) => Scope::Panel(p),
+        (None, None) => Scope::Home,
+    };
     let meter = st.panels.meter();
     let _claim = meter.socket();
-    let Some(mut panel) = resolve(&st, named.as_deref()) else {
-        let msg = serde_json::json!({ "type": "error", "error": format!("no panel `{}`", named.unwrap_or_default()) });
+    let Some((mut channel, mut from)) = resolve(&st, &scope) else {
+        let what = match &scope {
+            Scope::Channel(id) => format!("no channel {id}"),
+            Scope::Panel(p) => format!("no panel `{p}`"),
+            Scope::Home => String::new(),
+        };
+        let msg = serde_json::json!({ "type": "error", "error": what });
         if let Some(m) = as_text(&msg) {
             let _ = tokio::time::timeout(STALL, socket.send(m)).await;
         }
@@ -362,20 +414,21 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
 
     // Opening the socket is *not* what makes a channel render at full rate;
     // asking for frames is. See the module docs.
-    let mut viewer = panel.screen().viewer();
+    let mut viewer = channel.screen().viewer();
     let mut frames = viewer.screen().watch();
     let mut pace = Pace::new(q.fps.unwrap_or(DEFAULT_FPS), q.repeat.unwrap_or(true));
     let mut gate = Gate::default();
     viewer.set_wants_frames(pace.wants_frames());
 
     // What the browser would otherwise have to ask for on connecting.
-    let hello = state_message(&st, &panel, &st.stamp(None));
-    let first_look = if want_overview { overview_message(&overview.borrow_and_update()) } else { None };
-    for msg in [hello, first_look].into_iter().flatten() {
+    let hello = state_message(&st, &channel, from.as_ref(), &st.stamp(None));
+    let [first_panels, first_channels] = if want_overview { overview_messages(&overview.borrow_and_update()) } else { [None, None] };
+    for msg in [hello, first_panels, first_channels].into_iter().flatten() {
         if !send(&mut socket, msg, &meter, false).await {
             return;
         }
     }
+    let mut pending: Vec<Message> = Vec::new();
 
     loop {
         // Each arm decides what to send; the sending happens below, outside the
@@ -394,11 +447,11 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
                     gate.skip_own(&ev);
                     None
                 }
-                Ok(ev) => gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &panel, &ev)),
+                Ok(ev) => gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &channel, from.as_ref(), &ev)),
                 // Too far behind to know what it missed: give it the truth.
                 Err(RecvError::Lagged(_)) => {
                     let ev = st.stamp(None);
-                    gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &panel, &ev))
+                    gate.offer(ev, Instant::now()).and_then(|ev| state_message(&st, &channel, from.as_ref(), &ev))
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -409,31 +462,35 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
                     Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
                     None => std::future::pending().await,
                 }
-            } => gate.release(Instant::now()).and_then(|ev| state_message(&st, &panel, &ev)),
+            } => gate.release(Instant::now()).and_then(|ev| state_message(&st, &channel, from.as_ref(), &ev)),
             r = status.changed() => {
                 if r.is_err() { break }
-                // Card 350: is this still the panel this socket is about? A
-                // socket that named one whose panel is gone is closed; one that
-                // follows the first moves along with it, with a fresh state.
-                match resolve(&st, named.as_deref()) {
+                // Is this still the channel this socket is about? One that
+                // named a channel that was deleted, or a panel that was
+                // forgotten, is closed; one that named a panel that moved to
+                // another channel moves with it, with a fresh state.
+                match resolve(&st, &scope) {
                     None => break,
-                    Some(now) if !Arc::ptr_eq(&now, &panel) => {
-                        panel = now;
-                        viewer = panel.screen().viewer();
+                    Some((now, who)) if !Arc::ptr_eq(&now, &channel) => {
+                        channel = now;
+                        from = who;
+                        viewer = channel.screen().viewer();
                         viewer.set_wants_frames(pace.wants_frames());
                         frames = viewer.screen().watch();
-                        state_message(&st, &panel, &st.stamp(None))
+                        state_message(&st, &channel, from.as_ref(), &st.stamp(None))
                     }
                     Some(_) => {
                         let board = status.borrow_and_update().clone();
-                        board.get(&panel.device()).and_then(as_text)
+                        status_message(&board, &channel, from.as_ref())
                     }
                 }
             }
             r = overview.changed(), if want_overview => {
                 if r.is_err() { break }
-                let list = overview.borrow_and_update().clone();
-                overview_message(&list)
+                let now = overview.borrow_and_update().clone();
+                let [panels, channels] = overview_messages(&now);
+                pending.extend(channels);
+                panels
             }
             // The browser talking back: the pace, or the close it sends on its
             // way out. Reading it is also how a tab being switched away from
@@ -453,11 +510,16 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
             // has to be: discard it inside the block rather than in the arm.
             () = async { drop(stop.wait_for(|s| *s).await) } => break,
         };
-        if let Some(msg) = out {
+        let mut gone = false;
+        for msg in out.into_iter().chain(pending.drain(..)) {
             let frame = matches!(msg, Message::Binary(_));
             if !send(&mut socket, msg, &meter, frame).await {
+                gone = true;
                 break;
             }
+        }
+        if gone {
+            break;
         }
     }
     let _ = socket.send(Message::Close(None)).await;

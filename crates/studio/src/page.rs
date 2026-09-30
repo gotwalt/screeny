@@ -306,9 +306,12 @@ pub struct StudioState {
     pub fps: f64,
     /// Card 170: whether the panel is being driven. False means the link is
     /// released and the panel is on its own idle screen; the page carries on
-    /// showing the patch.
+    /// showing the patch. Since card 353 this is the panel the request named
+    /// (`?panel=`), else the channel's first member - and false for a channel
+    /// with no panel.
     pub on: bool,
-    /// Which panel this is, or empty while no panel is attached.
+    /// Which panel `on` is about: the one the request named, else the
+    /// channel's first member, else empty.
     pub device: String,
     /// Card 151: the setting the working copy was loaded from. Always a name;
     /// `"Default"` ([`crate::state::DEFAULT_SETTING`]) when it is on the
@@ -323,12 +326,16 @@ pub struct StudioState {
     /// Computed on every read from the values themselves, never stored, so it
     /// cannot be left set by a change that forgot to clear it.
     pub modified: bool,
-    /// Card 350: the channel this panel follows, or `null` when it is idle -
-    /// no picture, no stream, the device on its own screen. `patch` is empty
-    /// then, and there are no parameters.
-    pub channel: Option<crate::channel::ChannelId>,
-    /// The other panels on the same channel, by device id, in the order they
-    /// joined it: *"Also on Kitchen"*. An edit here changes them too.
+    /// Card 353: **the channel this is the state of** - every state is a
+    /// channel's now, and never `null`: there is no idle panel.
+    pub channel: crate::channel::ChannelId,
+    /// Its name ("Channel 1").
+    pub channel_name: String,
+    /// Every panel on it, by device id, in the order they joined: what an
+    /// edit here reaches.
+    pub panels: Vec<String>,
+    /// `panels` without `device`: *"Also on Kitchen"*. Kept for the page
+    /// card 351 built; card 354 reads `panels`.
     pub shared_with: Vec<String>,
 }
 

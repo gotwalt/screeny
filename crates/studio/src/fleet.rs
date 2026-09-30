@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::devices::{self, Reach, PENDING};
 use crate::panel::{BrightnessJob, Panel};
-use crate::state::{unix_now, UNBOUND};
+use crate::state::unix_now;
 use crate::AppState;
 
 /// The longest a failing device's poll is backed off to, as a multiple of the
@@ -30,23 +30,11 @@ const MAX_BACKOFF: u32 = 12;
 
 // ----------------------------------------------------------- attachment ----
 
-/// **Drive a panel somebody has named**: output on, and - if it is idle - a
-/// picture, which is the default patch on Default by card 350's rules (so it
-/// joins a channel already showing that, if there is one).
-///
-/// If the studio is still on its unbound stand-in, the stand-in is renamed
-/// onto the device instead ([`crate::panels::Panels::attach`]): the picture
-/// the page was showing simply starts reaching the panel.
+/// **Drive a panel somebody has named**: output on, its link aimed now. A
+/// panel this studio did not have joins Channel 1 (card 353).
 pub fn drive(st: &AppState, device: &str) -> Arc<Panel> {
     let panel = st.panels.attach(device);
     panel.set_on(true);
-    if panel.channel().is_none() {
-        if let Some(def) = crate::channel::find_patch(crate::state::default_patch(), false) {
-            if let Err(e) = st.panels.pick(&panel, def, "", false, None) {
-                eprintln!("studio: panel {device}: {e}");
-            }
-        }
-    }
     aim_at_device(st, &panel);
     if let Some(c) = panel.channel() {
         c.ensure_running();
@@ -80,14 +68,14 @@ pub fn spawn_supervisor(st: AppState) {
 
 /// **Every device is a panel** (card 350, replacing card 106's "adopt the
 /// first device found"): one the registry knows and the studio has no panel
-/// for is adopted, **idle** - no channel, no stream, so the device shows its
-/// own screen until somebody gives it a picture. Named after its instance,
-/// which is what the registry's label falls back to. True if any was new.
+/// for is adopted **onto Channel 1** (card 353), lit, mirroring it. Named after
+/// its instance, which is what the registry's label falls back to. True if any
+/// was new.
 fn adopt_devices(st: &AppState, known: &[String]) -> bool {
     let mut any = false;
     for id in known {
         if st.panels.adopt(id) {
-            eprintln!("studio: `{id}` is a panel now; it is idle until it is given a picture");
+            eprintln!("studio: `{id}` is a panel now, on Channel 1");
             any = true;
         }
     }
@@ -96,18 +84,15 @@ fn adopt_devices(st: &AppState, known: &[String]) -> bool {
 
 async fn supervise(st: &AppState) {
     let known = st.devices.ids();
-    // A panel whose device has been forgotten goes with it. The unbound
-    // stand-in is nobody's device and stays while it is needed.
+    // A panel whose device has been forgotten goes with it.
     let mut changed = false;
     for device in st.panels.ids() {
-        if device != UNBOUND && !known.contains(&device) {
+        if !known.contains(&device) {
             st.panels.remove(&device);
             changed = true;
         }
     }
     changed |= adopt_devices(st, &known);
-    // There is always a first panel, whatever just happened.
-    st.panels.ensure_first();
 
     let mut jobs: Vec<BrightnessJob> = Vec::new();
     for panel in st.panels.all() {
@@ -116,9 +101,7 @@ async fn supervise(st: &AppState) {
         // Card 164: the frame path's counters, read once a second off the link
         // the supervisor is already holding. The render loop does not know
         // this exists.
-        if device != UNBOUND {
-            st.devices.metered_link(&device, panel.link_traffic());
-        }
+        st.devices.metered_link(&device, panel.link_traffic());
         match panel.supervise() {
             Some(job) => jobs.push(job),
             // The link noticing a new session is not the only way a panel
@@ -127,7 +110,7 @@ async fn supervise(st: &AppState) {
             // at full. The device's own telemetry is the honest check, and
             // comparing against what it *said it applied* - not what was asked
             // for - is what stops this retrying for ever against a cap.
-            None if device != UNBOUND => {
+            None => {
                 if let (Some(want), Some(applied)) = panel.brightness_policy() {
                     let heard = st
                         .devices
@@ -140,16 +123,15 @@ async fn supervise(st: &AppState) {
                     }
                 }
             }
-            None => {}
         }
     }
 
-    // Every channel's watchdog; then let go of any nobody needs (card 350: a
-    // channel whose last panel has finished fading away from it).
+    // Every channel's watchdog; then shut down any deleted channel the last
+    // panel has finished fading away from (card 353).
     for channel in st.panels.channels() {
         channel.supervise();
     }
-    st.panels.drop_unused();
+    st.panels.sweep();
     if changed {
         st.persist();
         st.changed(None);

@@ -1,38 +1,34 @@
-//! Panels: a device, and everything that is about the device (card 350).
+//! Panels: a device, and what is about the device alone (cards 350, 353).
 //!
-//! A panel is its link, on/off, brightness, its output settings (Dithered /
-//! Bit planes, the limiter - the Panel screen's), its own [`Pipeline`] and the
-//! [`Channel`] it follows. Its frames are its channel's linear frames through
-//! its own pipeline, so two panels on one channel can differ in output
-//! settings and still move in lock-step (`docs/design/studio-vision.md`,
-//! "Several panels").
-//!
-//! A panel does not render. Its channel's render thread calls
-//! [`Panel::present`] once per frame with the one linear frame it rendered for
-//! everybody; the panel mixes it (while it is fading from another channel),
-//! puts it through its pipeline, fills its own preview cell, and hands it to
-//! its link. A panel with no channel is **idle**: no link, no stream, and the
-//! device shows its own status screen.
+//! A panel is a **member of a channel**: its device, its name (the registry's),
+//! the [`Channel`] it is on - always one - on/off, its brightness and its link.
+//! It does not render, limit, quantise or encode: its channel does all of that
+//! once per tick and hands every member the same [`ChannelFrame`], whose
+//! encoded payload the panel's link sends **byte for byte**
+//! (`docs/design/studio-vision.md`, "Several panels: channels own the
+//! picture"). Brightness is applied on the device, so it never changes the
+//! frames: two mirrored panels can run at different levels.
 //!
 //! **Moving between channels fades.** A panel that changes channel keeps the
-//! old channel's frames for [`FADE_MANUAL`] and blends them into the new one's
-//! with `crossfade::blend`, in its own output stage, in linear light before its
-//! limiter - the same place a patch change is blended, one level up. A change
-//! mid-fade fades from a still of what was showing, never chaining a second
-//! fade onto the first. The old channel is told a panel is leaving it, so it
-//! keeps rendering at the full rate and is not dropped until the fade is over.
+//! old channel's frames for [`crate::channel::FADE_MANUAL`] and blends them into the new one's
+//! with `crossfade::blend`, in linear light, through an output stage of its
+//! own that carries on from the old channel's limiter ([`Pipeline::fork`]) and
+//! is finished with the new channel's output settings. For those two seconds,
+//! and only for that panel, its frames are its own; then it is back on the
+//! shared bytes. A change mid-fade fades from a still of what was showing,
+//! never chaining a second fade onto the first. The old channel is told a
+//! panel is leaving it, so it keeps rendering at the full rate until the fade
+//! is over. A new panel fades in from black the same way.
 
 use screeny_art::crossfade::{blend, Crossfade};
 use screeny_art::output::{Output as FrameSink, PanelStatus, SenderOutput};
 use screeny_art::{Frame, Output, Pipeline};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
-use crate::channel::{Channel, FADE_MANUAL};
+use crate::channel::{Channel, ChannelFrame};
 use crate::devices::Reach;
-use crate::page::{self, Screen, SocketMeter};
-use crate::state::{unix_now, StoredPanel, UNBOUND};
+use crate::state::{unix_now, StoredPanel};
 
 /// A brightness the caller should apply, off the render thread.
 pub struct BrightnessJob {
@@ -40,18 +36,16 @@ pub struct BrightnessJob {
     pub level: u8,
 }
 
-/// What a panel is set to, as persisted - less the channel it follows, which
-/// is [`Panel::channel`].
+/// What a panel is set to, as persisted - less the channel it is on, which is
+/// [`Panel::channel`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct PanelCfg {
-    /// The device id, or [`UNBOUND`] for the stand-in panel a studio that has
-    /// found no panel yet shows its picture on.
+    /// The device id.
     pub device: String,
     /// **Panel output.** False releases the link - the panel goes back to its
-    /// own idle screen - and the channel keeps rendering, because the page is
-    /// still showing the picture.
+    /// own idle screen - and the channel carries on for the page and for the
+    /// other panels on it.
     pub on: bool,
-    pub output: Output,
     /// Brightness policy: a fixed level to apply whenever the link comes up,
     /// or `None` to leave whatever the device has.
     pub brightness: Option<u8>,
@@ -76,6 +70,22 @@ pub struct LinkHealth {
     pub last_error: Option<String>,
     /// Seconds since a frame last reached the wire.
     pub last_frame_ago: Option<f64>,
+}
+
+/// Card 353: how this panel's frames were made - the proof, in counters, that
+/// panels on one channel are sent the same bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct SendCounts {
+    /// Frames its channel handed it.
+    pub presented: u64,
+    /// Of those, frames sent as the channel's **shared encoded payload**, byte
+    /// for byte.
+    pub shared: u64,
+    /// Frames it encoded for itself: its two seconds of fade when it changes
+    /// channel (or arrives), and any frame its live session could not take as
+    /// the channel encoded it (a smaller budget, for the moment before the
+    /// channel's encoder is pointed at it).
+    pub own: u64,
 }
 
 #[derive(Default)]
@@ -119,8 +129,8 @@ impl LinkSlot {
     }
 }
 
-/// Holds a channel open while a panel fades away from it (card 350): the
-/// channel keeps rendering at the full rate and is not dropped until this is.
+/// Holds a channel at the full rate while a panel fades away from it (card
+/// 350): it keeps rendering, and is not shut down, until this is dropped.
 pub struct Leaving(Arc<Channel>);
 
 impl Leaving {
@@ -145,58 +155,27 @@ enum FadeFrom {
     Still(Frame),
 }
 
+/// A panel's two seconds of frames of its own (card 353).
 struct PanelFade {
     from: FadeFrom,
     clock: Crossfade,
-}
-
-/// A panel's output stage: everything between "a channel's linear frame" and
-/// "the wire". Owned by the panel, not by any render thread, so a core that is
-/// abandoned or a channel that is changed never costs the limiter its history.
-struct Stage {
+    /// Its own output stage for the fade: carried on from the channel it left,
+    /// finished with the output settings of the channel it is going to.
     pipeline: Pipeline,
-    fade: Option<PanelFade>,
-    /// The last mixed frame, kept only while a fade runs: the still a change
-    /// mid-fade fades from.
+    /// The last mixed frame: the still a change mid-fade fades from.
     last: Option<Frame>,
-    limits_at: Instant,
 }
 
-impl Stage {
-    /// Start fading from what this panel was showing, over `len` seconds.
-    fn fade_from(&mut self, old: Option<Arc<Channel>>, len: f64) {
-        let clock = Crossfade::new(len);
-        if clock.done() {
-            self.fade = None;
-            self.last = None;
-            return;
+impl PanelFade {
+    /// The frame to finish: `incoming` mixed with what this panel is fading
+    /// from. `None` once the fade is over.
+    fn mix(&mut self, incoming: &Frame, wall: f64) -> Option<Frame> {
+        self.clock.advance(wall);
+        if self.clock.done() {
+            return None;
         }
-        let from = match (self.fade.take(), old) {
-            // Fades never chain: a change mid-fade holds what is showing.
-            (Some(_), _) => FadeFrom::Still(self.last.take().unwrap_or_else(Frame::black)),
-            (None, Some(channel)) => FadeFrom::Channel(Leaving::new(channel)),
-            (None, None) => FadeFrom::Still(Frame::black()),
-        };
-        self.fade = Some(PanelFade { from, clock });
-    }
-
-    /// The frame for the pipeline: `incoming`, or `incoming` mixed with what
-    /// this panel is fading from.
-    fn mix(&mut self, incoming: &Frame, wall: f64) -> Frame {
-        let Some(fade) = self.fade.as_mut() else {
-            return incoming.clone();
-        };
-        fade.clock.advance(wall);
-        if fade.clock.done() {
-            // Over: the incoming frame goes through untouched, so an indexed
-            // patch is exact again from this frame on - and the channel it
-            // left is let go.
-            self.fade = None;
-            self.last = None;
-            return incoming.clone();
-        }
-        let w = fade.clock.weight();
-        let out = match &fade.from {
+        let w = self.clock.weight();
+        let out = match &self.from {
             FadeFrom::Still(still) => blend(still, incoming, w),
             FadeFrom::Channel(Leaving(old)) => match old.latest() {
                 Some(from) => blend(&from, incoming, w),
@@ -206,46 +185,39 @@ impl Stage {
             },
         };
         self.last = Some(out.clone());
-        out
-    }
-
-    #[cfg(test)]
-    fn fading(&self) -> bool {
-        self.fade.is_some()
+        Some(out)
     }
 }
 
 /// One panel.
 pub struct Panel {
     cfg: Mutex<PanelCfg>,
-    /// The channel it follows; `None` is idle. Changed only by
-    /// [`crate::panels::Panels`], which also keeps the channel's follower list.
+    /// The channel it is on. Always one while the panel is in the studio;
+    /// `None` only once it has been forgotten. Changed only by
+    /// [`crate::panels::Panels`], which also keeps the channels' member lists.
     channel: Mutex<Option<Arc<Channel>>>,
-    stage: Mutex<Stage>,
+    /// Its own frames, while it fades onto a channel.
+    fade: Mutex<Option<PanelFade>>,
     link: Mutex<LinkSlot>,
-    /// This panel's preview cell: the frames it is sent, for the browsers.
-    screen: Arc<Screen>,
-    /// The frame packet's sequence number.
-    seq: AtomicU32,
-    /// Frames presented to this panel since it was made.
-    presents: AtomicU64,
+    presented: AtomicU64,
+    shared: AtomicU64,
+    own: AtomicU64,
 }
 
 impl Panel {
-    /// A panel as the state file has it. Its first picture fades in from
-    /// black, which is the studio's first picture and a new panel's alike.
+    /// A panel as the state file has it, on no channel yet: the caller puts
+    /// it on one with [`Panel::switch_channel`], which fades it in from
+    /// black.
     #[must_use]
-    pub fn new(stored: &StoredPanel, meter: &Arc<SocketMeter>) -> Arc<Panel> {
-        let mut stage = Stage { pipeline: Pipeline::new(stored.output), fade: None, last: None, limits_at: Instant::now() - Duration::from_secs(10) };
-        stage.fade_from(None, f64::from(FADE_MANUAL));
+    pub fn new(stored: &StoredPanel) -> Arc<Panel> {
         Arc::new(Panel {
-            cfg: Mutex::new(PanelCfg { device: stored.device.clone(), on: stored.on, output: stored.output, brightness: stored.brightness }),
+            cfg: Mutex::new(PanelCfg { device: stored.device.clone(), on: stored.on, brightness: stored.brightness }),
             channel: Mutex::new(None),
-            stage: Mutex::new(stage),
+            fade: Mutex::new(None),
             link: Mutex::new(LinkSlot::default()),
-            screen: Screen::new(Arc::clone(meter)),
-            seq: AtomicU32::new(0),
-            presents: AtomicU64::new(0),
+            presented: AtomicU64::new(0),
+            shared: AtomicU64::new(0),
+            own: AtomicU64::new(0),
         })
     }
 
@@ -257,20 +229,14 @@ impl Panel {
         self.link.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn stage_mut(&self) -> MutexGuard<'_, Stage> {
-        self.stage.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn fade_mut(&self) -> MutexGuard<'_, Option<PanelFade>> {
+        self.fade.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The device this is. [`UNBOUND`] for the stand-in.
+    /// The device this is.
     #[must_use]
     pub fn device(&self) -> String {
         self.cfg_mut().device.clone()
-    }
-
-    /// True for the stand-in panel of a studio that has found no panel yet.
-    #[must_use]
-    pub fn is_unbound(&self) -> bool {
-        self.cfg_mut().device == UNBOUND
     }
 
     #[must_use]
@@ -278,27 +244,44 @@ impl Panel {
         self.cfg_mut().clone()
     }
 
-    /// The channel it follows, if it is not idle.
+    /// The channel it is on.
     #[must_use]
     pub fn channel(&self) -> Option<Arc<Channel>> {
         self.channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
-    /// Follow `next` instead of what it follows now, fading from the old
-    /// picture over `fade` seconds. Only [`crate::panels::Panels`] calls this,
-    /// under its own lock, and keeps the channels' follower lists with it.
-    pub(crate) fn switch_channel(self: &Arc<Self>, next: Option<Arc<Channel>>, fade: f64) -> Option<Arc<Channel>> {
+    /// True while it is fading onto its channel: its frames are its own.
+    #[must_use]
+    pub fn fading(&self) -> bool {
+        self.fade_mut().is_some()
+    }
+
+    /// Go onto `next`, fading from what it was showing over `fade` seconds.
+    /// Only [`crate::panels::Panels`] calls this, under its own lock, and
+    /// keeps the channels' member lists with it.
+    pub(crate) fn switch_channel(self: &Arc<Self>, next: &Arc<Channel>, fade: f64) -> Option<Arc<Channel>> {
         let old = {
             let mut slot = self.channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *slot, next.clone())
+            std::mem::replace(&mut *slot, Some(Arc::clone(next)))
         };
         if let Some(o) = &old {
             o.remove_follower(self);
         }
-        if let Some(n) = &next {
-            n.add_follower(self);
+        next.add_follower(self);
+        let clock = Crossfade::new(fade);
+        let mut slot = self.fade_mut();
+        if clock.done() {
+            *slot = None;
+            return old;
         }
-        self.stage_mut().fade_from(old.clone(), fade);
+        let (from, pipeline) = match (slot.take(), &old) {
+            // Fades never chain: a change mid-fade holds what is showing, and
+            // keeps the output stage that was showing it.
+            (Some(prev), _) => (FadeFrom::Still(prev.last.unwrap_or_else(Frame::black)), prev.pipeline),
+            (None, Some(channel)) => (FadeFrom::Channel(Leaving::new(Arc::clone(channel))), channel.fork_pipeline()),
+            (None, None) => (FadeFrom::Still(Frame::black()), Pipeline::new(next.output())),
+        };
+        *slot = Some(PanelFade { from, clock, pipeline, last: None });
         old
     }
 
@@ -308,33 +291,31 @@ impl Panel {
         if let Some(o) = old {
             o.remove_follower(self);
         }
-        let mut stage = self.stage_mut();
-        stage.fade = None;
-        stage.last = None;
+        *self.fade_mut() = None;
     }
 
     /// The panel as the state file keeps it.
     #[must_use]
     pub fn stored(&self) -> StoredPanel {
         let cfg = self.cfg();
-        StoredPanel { device: cfg.device, on: cfg.on, channel: self.channel().map(|c| c.id()), output: cfg.output, brightness: cfg.brightness }
+        StoredPanel {
+            device: cfg.device,
+            on: cfg.on,
+            channel: self.channel().map_or(crate::state::HOME_CHANNEL, |c| c.id()),
+            output: None,
+            brightness: cfg.brightness,
+        }
     }
 
-    /// Rename this panel onto a device: the stand-in adopted by the first
-    /// panel somebody named, or a `pending:` id becoming the device's real
-    /// one. **Nothing else is touched**, so the picture carries straight on.
+    /// Rename this panel onto a device: a `pending:` id becoming the device's
+    /// real one. **Nothing else is touched**, so the picture carries straight
+    /// on.
     pub fn rename(&self, device: &str) {
         self.cfg_mut().device = device.to_string();
     }
 
     pub fn set_on(&self, on: bool) {
         self.cfg_mut().on = on;
-    }
-
-    /// The output stage's settings. Picked up by the pipeline on the next
-    /// frame.
-    pub fn set_output(&self, output: Output) {
-        self.cfg_mut().output = output;
     }
 
     /// `None` clears the brightness policy; `Some(n)` sets it, to be applied
@@ -345,82 +326,103 @@ impl Panel {
         self.slot().reapply_brightness = true;
     }
 
-    /// This panel's preview cell.
+    /// Card 353: how its frames were made - shared, or its own.
     #[must_use]
-    pub fn screen(&self) -> Arc<Screen> {
-        Arc::clone(&self.screen)
+    pub fn sends(&self) -> SendCounts {
+        SendCounts {
+            presented: self.presented.load(Ordering::Relaxed),
+            shared: self.shared.load(Ordering::Relaxed),
+            own: self.own.load(Ordering::Relaxed),
+        }
     }
 
     /// Frames its channel has handed it.
     #[must_use]
     pub fn presents(&self) -> u64 {
-        self.presents.load(Ordering::Relaxed)
+        self.presented.load(Ordering::Relaxed)
     }
 
-    /// **One frame of its channel's**, `wall` seconds after the last one:
-    /// mixed while fading, through this panel's pipeline, into its preview
-    /// cell and onto its link. Called by the channel's render thread; never
-    /// blocks on a browser or the network.
-    ///
-    /// True when this panel wants the full frame rate: its link is up, or
-    /// somebody is watching its preview.
-    pub fn present(&self, frame: &Frame, wall: f64, t: f64, fps: f32) -> bool {
-        let output = self.cfg_mut().output;
-        let mut stage = self.stage_mut();
-        if stage.pipeline.output != output {
-            stage.pipeline.output = output;
-        }
-        let mixed = stage.mix(frame, wall);
-        let out = stage.pipeline.process(mixed, wall);
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-        // One slot, replaced in place: a browser that is not keeping up misses
-        // frames and costs nothing.
-        self.screen.show(page::pack(seq, t, &out.stats, fps, &out.preview));
-        self.presents.fetch_add(1, Ordering::Relaxed);
+    /// The limits of its link, while the link is up: what its channel's
+    /// encoder has to fit (card 353).
+    #[must_use]
+    pub fn link_limits(&self) -> Option<screeny::Limits> {
+        let slot = self.slot();
+        let lim = slot.out.as_ref()?.limits();
+        lim.connected.then_some(lim)
+    }
 
-        let connected = {
-            let mut slot = self.slot();
-            let mut landed = false;
-            let mut failed = None;
-            let up = match slot.out.as_mut() {
-                Some(link) => {
-                    if stage.limits_at.elapsed() >= Duration::from_secs(1) {
-                        stage.limits_at = Instant::now();
-                        let lim = link.limits();
-                        if lim.connected {
-                            stage.pipeline.meter().set_limits(lim.budget, lim.codecs.clone());
-                        }
+    /// **One tick of its channel's**, `wall` seconds after the last one:
+    /// the channel's shared encoded frame onto this panel's link, byte for
+    /// byte - or, while this panel is fading onto the channel, a frame of its
+    /// own (mixed, finished with `output`, encoded by its link). Called by the
+    /// channel's render thread; never blocks on a browser or the network.
+    ///
+    /// True when this panel's link is up, which is a reason for its channel
+    /// to render at the full rate.
+    pub fn present(&self, frame: &ChannelFrame, wall: f64, output: Output) -> bool {
+        self.presented.fetch_add(1, Ordering::Relaxed);
+        // The fade, if there is one: a frame of this panel's own.
+        let own = {
+            let mut slot = self.fade_mut();
+            let mixed = slot.as_mut().and_then(|f| f.mix(&frame.linear, wall).map(|m| (m, f)));
+            match mixed {
+                Some((mixed, fade)) => {
+                    if fade.pipeline.output != output {
+                        fade.pipeline.output = output;
                     }
-                    let before = link.link().stats().frames_sent;
-                    if let Err(e) = link.send(&out.wire) {
-                        // Only our own errors can get here; the network cannot
-                        // fail a send.
-                        failed = Some(format!("sending to the panel: {e}"));
-                    }
-                    landed = link.link().stats().frames_sent > before;
-                    link.link().state().is_up()
+                    Some(fade.pipeline.process(mixed, wall).wire)
                 }
-                None => false,
-            };
-            if landed {
-                slot.last_frame_unix = Some(unix_now());
-            }
-            if let Some(msg) = failed {
-                // Logged once, not once a frame.
-                if slot.health.last_error.as_deref() != Some(msg.as_str()) {
-                    eprintln!("studio: panel {}: {msg}", label(&self.device()));
+                None => {
+                    // Over (or there was none): back on the shared bytes.
+                    *slot = None;
+                    None
                 }
-                slot.health.last_error = Some(msg);
             }
-            up
         };
-        connected || self.screen.watchers() > 0
+
+        let mut slot = self.slot();
+        let mut landed = false;
+        let mut failed = None;
+        let up = match slot.out.as_mut() {
+            Some(link) => {
+                let before = link.link().stats().frames_sent;
+                let sent = match &own {
+                    Some(wire) => link.send(wire).map(|()| false),
+                    None => link.send_shared(&frame.wire, &frame.encoded, frame.exact, frame.indexed),
+                };
+                match sent {
+                    Ok(true) => {
+                        self.shared.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(false) => {
+                        self.own.fetch_add(1, Ordering::Relaxed);
+                    }
+                    // Only our own errors can get here; the network cannot
+                    // fail a send.
+                    Err(e) => failed = Some(format!("sending to the panel: {e}")),
+                }
+                landed = link.link().stats().frames_sent > before;
+                link.link().state().is_up()
+            }
+            None => false,
+        };
+        if landed {
+            slot.last_frame_unix = Some(unix_now());
+        }
+        if let Some(msg) = failed {
+            // Logged once, not once a frame.
+            if slot.health.last_error.as_deref() != Some(msg.as_str()) {
+                eprintln!("studio: panel {}: {msg}", self.device());
+            }
+            slot.health.last_error = Some(msg);
+        }
+        up
     }
 
     /// Point the link at a device, or at nothing. A link exists only while
-    /// output is on **and** the panel has a picture (an idle panel streams
-    /// nothing, so the device shows its own screen). Rebuilds it only when
-    /// what it is aimed at has actually changed.
+    /// output is on **and** the panel is on a channel (which it always is,
+    /// until it is forgotten). Rebuilds it only when what it is aimed at has
+    /// actually changed.
     ///
     /// Card 171: this is also where the reconnect count is kept honest.
     pub fn aim(&self, reach: &Reach) {
@@ -559,14 +561,7 @@ impl Panel {
     }
 }
 
-/// A device id for a log line.
-fn label(device: &str) -> &str {
-    if device.is_empty() {
-        "(no panel yet)"
-    } else {
-        device
-    }
-}
+
 
 /// Build the link for a way of reaching a device.
 fn open_link(reach: &Reach) -> SenderOutput {
@@ -594,6 +589,8 @@ fn reach_key(reach: &Reach) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channel::FADE_MANUAL;
+    use crate::page::SocketMeter;
     use crate::state::StoredChannel;
     use screeny_art::{Rgb, N};
 
@@ -610,44 +607,52 @@ mod tests {
     }
 
     fn panel(device: &str) -> Arc<Panel> {
-        Panel::new(&StoredPanel { device: device.into(), on: false, ..StoredPanel::default() }, &Arc::new(SocketMeter::default()))
+        Panel::new(&StoredPanel { device: device.into(), on: false, ..StoredPanel::default() })
     }
 
-    /// Card 350: **a panel that changes channel fades** from the old
-    /// channel's picture to the new one's over the manual length, in its own
-    /// output stage - and lands exactly on the new one when it is over, with
-    /// the old channel let go.
+    fn channel(id: u32) -> Arc<Channel> {
+        Channel::new(StoredChannel { id, ..StoredChannel::default() }, false, &Arc::new(SocketMeter::default()))
+    }
+
+    /// Mix one frame of `incoming` through the panel's fade, as `present`
+    /// does: `None` once the fade is over and the panel is back on the shared
+    /// bytes.
+    fn mix(p: &Panel, incoming: &Frame) -> Option<Frame> {
+        let mut slot = p.fade_mut();
+        let out = slot.as_mut().and_then(|f| f.mix(incoming, DT));
+        if out.is_none() {
+            *slot = None;
+        }
+        out
+    }
+
+    /// Card 350, kept by 353: **a panel that changes channel fades** from the
+    /// old channel's picture to the new one's over the manual length - frames
+    /// of its own - and then is back on the channel's shared frames, with the
+    /// old channel let go.
     #[test]
     fn a_panel_changing_channel_fades_from_the_old_picture_to_the_new() {
-        let red = Channel::new(StoredChannel { id: 1, ..StoredChannel::default() }, false);
-        let blue = Channel::new(StoredChannel { id: 2, ..StoredChannel::default() }, false);
+        let red = channel(1);
+        let blue = channel(2);
         red.set_latest(flat(RED));
         let p = panel("abc");
-        // On red, with its first fade in from black already over.
-        p.switch_channel(Some(Arc::clone(&red)), 0.0);
-        let mut stage = p.stage_mut();
-        assert!(!stage.fading());
-        drop(stage);
+        // On red, with no fade.
+        p.switch_channel(&red, 0.0);
+        assert!(!p.fading());
 
-        p.switch_channel(Some(Arc::clone(&blue)), f64::from(FADE_MANUAL));
-        assert!(!red.unused(), "a panel fading away keeps the old channel alive");
+        p.switch_channel(&blue, f64::from(FADE_MANUAL));
+        assert!(p.fading(), "its frames are its own while it fades");
+        assert!(!red.unused(), "a panel fading away keeps the old channel going");
         assert!(red.follower_ids().is_empty() && blue.follower_ids() == vec!["abc".to_string()]);
         let mut frames = 0;
-        loop {
-            stage = p.stage_mut();
-            let f = stage.mix(&flat(BLUE), DT);
-            let fading = stage.fading();
-            drop(stage);
+        while let Some(f) = mix(&p, &flat(BLUE)) {
             frames += 1;
-            if !fading {
-                assert!(matches!(f, Frame::Indexed { .. }), "after the fade the new channel's frame goes through untouched");
-                break;
-            }
             let w = screeny_art::crossfade::ease((frames as f64 * DT / f64::from(FADE_MANUAL)) as f32);
             assert!(close(f.pixel(7), RED.lerp(BLUE, w)), "frame {frames}: {:?} is not {w} of the way", f.pixel(7));
             assert!(frames < 100, "the fade never ended");
         }
-        assert!((59..=61).contains(&frames), "two seconds at 30 fps, not {frames} frames");
+        assert!((58..=61).contains(&frames), "two seconds at 30 fps, not {frames} frames");
+        assert!(!p.fading(), "and then it is back on the shared bytes");
         assert!(red.unused(), "and the old channel is let go once the fade is over");
     }
 
@@ -655,36 +660,42 @@ mod tests {
     /// than chaining fades, and lets go of the first channel at once.
     #[test]
     fn a_second_change_mid_fade_fades_from_a_still() {
-        let red = Channel::new(StoredChannel { id: 1, ..StoredChannel::default() }, false);
-        let blue = Channel::new(StoredChannel { id: 2, ..StoredChannel::default() }, false);
-        let green = Channel::new(StoredChannel { id: 3, ..StoredChannel::default() }, false);
+        let red = channel(1);
+        let blue = channel(2);
+        let green = channel(3);
         red.set_latest(flat(RED));
         let p = panel("abc");
-        p.switch_channel(Some(Arc::clone(&red)), 0.0);
-        p.switch_channel(Some(Arc::clone(&blue)), 2.0);
+        p.switch_channel(&red, 0.0);
+        p.switch_channel(&blue, 2.0);
         let mut shown = Frame::black();
         for _ in 0..30 {
-            shown = p.stage_mut().mix(&flat(BLUE), DT);
+            shown = mix(&p, &flat(BLUE)).expect("still fading");
         }
-        p.switch_channel(Some(Arc::clone(&green)), 2.0);
+        p.switch_channel(&green, 2.0);
         assert!(red.unused(), "the first channel is not held by a fade from a still");
-        let f = p.stage_mut().mix(&flat(Rgb::new(0.02, 0.2, 0.03)), DT);
+        let f = mix(&p, &flat(Rgb::new(0.02, 0.2, 0.03))).expect("fading again");
         let w = screeny_art::crossfade::ease((DT / 2.0) as f32);
         assert!(close(f.pixel(0), shown.pixel(0).lerp(Rgb::new(0.02, 0.2, 0.03), w)), "from the still that was showing");
     }
 
-    /// An idle panel's link is never built, whatever `on` says: it has nothing
-    /// to send, so the device shows its own screen.
+    /// A new panel fades in from black - frames of its own - onto its channel.
     #[test]
-    fn an_idle_panel_has_no_link() {
+    fn a_new_panel_fades_in_from_black() {
+        let blue = channel(1);
+        let p = panel("abc");
+        p.switch_channel(&blue, f64::from(FADE_MANUAL));
+        let first = mix(&p, &flat(BLUE)).expect("fading in");
+        assert!(first.pixel(0).b < BLUE.b * 0.01, "the first frame is all but black: {:?}", first.pixel(0));
+    }
+
+    /// Output off releases the link; on, with a channel, builds one.
+    #[test]
+    fn output_off_releases_the_link() {
         let p = panel("abc");
         p.set_on(true);
+        p.switch_channel(&channel(1), 0.0);
         p.aim(&Reach::Addr("127.0.0.1:50999".parse().expect("an address")));
-        assert!(p.link_status().is_none(), "idle: no channel, no link");
-        let c = Channel::new(StoredChannel { id: 1, ..StoredChannel::default() }, false);
-        p.switch_channel(Some(c), 0.0);
-        p.aim(&Reach::Addr("127.0.0.1:50999".parse().expect("an address")));
-        assert!(p.link_status().is_some(), "a picture and output on: a link");
+        assert!(p.link_status().is_some(), "on a channel and output on: a link");
         p.set_on(false);
         p.aim(&Reach::Addr("127.0.0.1:50999".parse().expect("an address")));
         assert!(p.link_status().is_none(), "output off releases it");

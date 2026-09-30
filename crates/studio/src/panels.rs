@@ -1,43 +1,32 @@
-//! Every panel and every channel, and the rules that tie them (card 350).
+//! Every panel and every channel, and what ties them (cards 350, 353).
 //!
-//! **Several panels: channels** (`docs/design/studio-vision.md`, normative).
-//! The owner, 2026-09-29: *"the same patch can be sent to one or more devices,
-//! and more than one patch can be active at a time"*. A [`Channel`] renders a
-//! picture once; a [`Panel`] follows one channel, or none (idle). This type
-//! owns both collections and is the only thing that changes which panel
-//! follows which channel, so the topology has one lock and one set of rules:
+//! **Channels own the picture** (`docs/design/studio-vision.md`, "Several
+//! panels: channels own the picture", normative). A [`Channel`] is explicit:
+//! an id and a name, a picture, its output settings, and one render, one
+//! pipeline and one encode per tick. A [`Panel`] is a member of exactly one
+//! channel and is sent that channel's encoded frames byte for byte, so panels
+//! on one channel are frame-for-frame identical and none of them is the
+//! master. This type owns both collections and is the only thing that changes
+//! which panel is on which channel, so the topology has one lock:
 //!
-//! **Picking a picture for a panel** ([`Panels::pick`]) - the patch list, a
-//! named setting, Home Assistant - resolves to a channel by three rules, in
-//! order:
-//!
-//! 1. another channel already shows exactly that picture (patch + named
-//!    setting, no unsaved tweaks): the panel **joins** it;
-//! 2. the panel is alone on its channel: that channel **changes** picture,
-//!    with the 2 s fade it has always had;
-//! 3. otherwise the panel **leaves** its group for a new channel showing the
-//!    picture.
-//!
-//! **Same as** ([`Panels::same_as`]) joins another panel's channel, tweaks and
-//! all; **Detach** ([`Panels::detach`]) gives a panel a copy of its channel,
-//! with its own clock from then on. A panel that moves between channels fades
-//! over [`FADE_MANUAL`] in its own output stage; a panel joining a channel
-//! follows that channel's clock, it does not restart it.
-//!
-//! **Panels are adopted, idle** ([`Panels::adopt`]): every device the registry
-//! knows becomes a panel with no channel and no stream. A studio that has
-//! found no panel at all still has a picture, on the **unbound** stand-in
-//! ([`UNBOUND`]), which exists only while there is no real panel: the first
-//! panel somebody *names* (`set_panel {"on":true,"to":...}`, `devices/add`
-//! with `play`) is renamed onto it, so the picture the page was showing simply
-//! starts reaching the panel.
-//!
-//! **The first panel** is the one a route or a socket without `panel` means:
-//! panels are kept in the order they were adopted.
+//! - there is always **Channel 1** ([`HOME_CHANNEL`]); it cannot be deleted,
+//!   it is what a route without `channel` means, and **a new panel joins it**
+//!   and lights up straight away, mirroring it;
+//! - **"New channel"** ([`Panels::new_channel`]) makes another, a copy of an
+//!   existing one by default so moving a panel onto it is seamless; a channel
+//!   can be renamed and deleted, and deleting one moves its panels to
+//!   Channel 1. A channel with no panels is kept, and renders only while
+//!   somebody watches it;
+//! - **moving a panel** ([`Panels::move_panel`]) fades that panel alone from
+//!   the old channel's picture to the new one's over [`FADE_MANUAL`];
+//! - **picking a picture changes the channel** ([`Panels::pick`]) - every
+//!   panel on it, which is the point. There are no implicit rules any more:
+//!   card 350's join / change / split, *Same as* and *Detach* are retired.
 //!
 //! Lock order, everywhere: this type's lock, then a panel's channel slot, then
-//! a channel's follower list, then a panel's output stage. A render thread
-//! only ever takes the last two, and never while holding a follower list.
+//! a channel's member list, then a panel's fade, then a channel's stage. A
+//! render thread only ever takes the last three, never while holding a
+//! member list.
 
 use screeny_art::output::PanelStatus;
 use screeny_art::patch::{Params, PatchDef, Playing};
@@ -49,24 +38,21 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::channel::{fade_len, find_patch, Channel, ChannelId, FADE_MANUAL};
 use crate::devices::Registry;
 use crate::page::{SocketMeter, StudioState};
-use crate::panel::Panel;
-use crate::state::{self, SharedMemory, StoredChannel, StoredPanel, DEFAULT_SETTING, UNBOUND};
+use crate::panel::{Panel, SendCounts};
+use crate::state::{self, SharedMemory, StoredChannel, StoredPanel, DEFAULT_SETTING, HOME_CHANNEL};
 
 /// What `/api/v1/status` says about one panel and the picture it shows.
 ///
 /// Card 106's per-device `player`, kept in shape so that scripts and tests
-/// written against it keep working, and made of two halves since card 350: the
-/// picture's (the channel's) and the device's (the panel's). A panel on a
-/// shared channel reports the shared picture - the same `ticks` as the other
-/// panels on it, because it is the same render.
+/// written against it keep working: the picture's half is the channel's, the
+/// device's half the panel's. Panels on one channel report the same picture,
+/// the same `ticks`, because it is the same render.
 #[derive(Clone, Debug, Serialize)]
 pub struct PlayerStatus {
-    /// The device id, or empty for the unbound stand-in.
     pub device: String,
     /// Panel output: false means the link is released and the panel is on its
     /// own idle screen.
     pub on: bool,
-    /// Empty while the panel is idle.
     pub patch: String,
     pub patch_name: String,
     pub seed: u32,
@@ -79,28 +65,32 @@ pub struct PlayerStatus {
     /// Retired (card 302); always 1.0.
     pub speed: f64,
     pub brightness: Option<u8>,
+    /// Its channel's output settings (card 353: the channel's, not the panel's).
     pub output: Output,
-    /// True when its channel's render thread is alive and ticking. False for
-    /// an idle panel, which has nothing to render.
+    /// True when its channel's render thread is alive and ticking.
     pub running: bool,
-    /// True when this is the first panel: the one a route without `panel`
-    /// means, and what the page shows before card 351 lets it choose.
+    /// True when this is the first panel (the first adopted).
     pub focused: bool,
     /// The rate its channel's render loop is actually achieving.
     pub fps_measured: f32,
     /// What a composing patch says it is performing.
     pub playing: Option<Playing>,
     pub health: PlayerHealth,
-    /// The link, or `None` when there is none (output off, or idle).
+    /// The link, or `None` when there is none (output off).
     pub panel: Option<PanelStatus>,
-    /// Card 350: the channel it follows, `null` when idle.
-    pub channel: Option<ChannelId>,
+    /// The channel it is on.
+    pub channel: ChannelId,
+    /// That channel's name.
+    pub channel_name: String,
     /// The named setting the picture came from.
     pub setting: String,
     /// Whether the picture has moved away from that setting.
     pub modified: bool,
     /// The other panels on the same channel.
     pub shared_with: Vec<String>,
+    /// Card 353: how its frames were made - the channel's shared bytes, or
+    /// its own (its fade; a frame its session could not take as encoded).
+    pub sends: SendCounts,
 }
 
 /// Everything a panel and its picture have been through, as one block.
@@ -128,37 +118,53 @@ pub struct PlayerHealth {
     pub last_error: Option<String>,
 }
 
-/// One card in the overview (card 350): what the page draws a panel's card
-/// from, and what `GET /api/v1/panels` and the socket's `panels` message
-/// carry.
+/// One panel, as the Panel screen and the overview draw it (cards 350, 353):
+/// `GET /api/v1/panels` and the socket's `panels` message.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PanelSummary {
-    /// The device id: what every `panel` parameter takes. Empty for the
-    /// unbound stand-in.
+    /// The device id: what every `panel` parameter takes.
     pub device: String,
     /// What to call it: the name set here, else the device's own, else its
     /// instance name, else the id.
     pub name: String,
-    /// True for the stand-in of a studio that has found no panel yet.
-    pub unbound: bool,
-    /// True for the first panel: what a route without `panel` means.
+    /// True for the first panel adopted.
     pub first: bool,
     /// Panel output.
     pub on: bool,
     /// The brightness policy, 0-255, or `null` for "whatever the device has".
     pub brightness: Option<u8>,
-    /// `idle` (no picture), `off` (output switched off), `none` (the unbound
-    /// stand-in, which has no device), or the link's own state: `up`,
+    /// `off` (output switched off), or the link's own state: `up`,
     /// `connecting`, `waiting`, `closed`.
     pub link: String,
     /// True only while the link is `up`.
     pub connected: bool,
-    /// The channel it follows; `null` when idle.
-    pub channel: Option<ChannelId>,
-    /// What it shows; `null` when idle.
-    pub picture: Option<PictureSummary>,
+    /// The channel it is on - always one (card 353).
+    pub channel: ChannelId,
+    /// That channel's name.
+    pub channel_name: String,
+    /// What its channel shows.
+    pub picture: PictureSummary,
     /// The other panels on the same channel, by device id.
     pub shared_with: Vec<String>,
+    /// True for the two seconds it fades onto its channel, when its frames
+    /// are its own.
+    pub fading: bool,
+}
+
+/// One channel, as the Picture screen's row draws it (card 353):
+/// `GET /api/v1/channels` and the socket's `channels` message.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ChannelSummary {
+    pub id: ChannelId,
+    pub name: String,
+    /// True for Channel 1: the one that cannot be deleted, and the one a new
+    /// panel joins.
+    pub home: bool,
+    pub picture: PictureSummary,
+    /// How its frames are finished - every member's.
+    pub output: Output,
+    /// The panels on it, by device id, in the order they joined.
+    pub panels: Vec<String>,
 }
 
 /// A picture, in the overview's words.
@@ -172,11 +178,13 @@ pub struct PictureSummary {
 }
 
 struct Inner {
-    /// In the order they were adopted: the first is the one a route without
-    /// `panel` means.
+    /// In the order they were adopted.
     panels: Vec<Arc<Panel>>,
     channels: BTreeMap<ChannelId, Arc<Channel>>,
     next: ChannelId,
+    /// Deleted channels that a panel is still fading away from: shut down
+    /// once nothing needs them ([`Panels::sweep`]).
+    retired: Vec<Arc<Channel>>,
 }
 
 /// Every panel and every channel.
@@ -193,13 +201,15 @@ pub struct Panels {
 impl Panels {
     #[must_use]
     pub fn new(memory: SharedMemory, faults: bool) -> Self {
-        Panels {
-            inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: 1 }),
+        let panels = Panels {
+            inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
             memory,
             meter: Arc::new(SocketMeter::default()),
             faults,
             autostart: true,
-        }
+        };
+        panels.ensure_home();
+        panels
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -226,7 +236,7 @@ impl Panels {
 
     // ---------------------------------------------------------- reading ---
 
-    /// The first panel, if there is any: what a route without `panel` means.
+    /// The first panel adopted, if there is any.
     #[must_use]
     pub fn first(&self) -> Option<Arc<Panel>> {
         self.lock().panels.first().cloned()
@@ -237,7 +247,7 @@ impl Panels {
         self.lock().panels.iter().find(|p| p.device() == device).cloned()
     }
 
-    /// Every panel, first first.
+    /// Every panel, in the order they were adopted.
     #[must_use]
     pub fn all(&self) -> Vec<Arc<Panel>> {
         self.lock().panels.clone()
@@ -249,10 +259,22 @@ impl Panels {
         self.lock().panels.iter().map(|p| p.device()).collect()
     }
 
-    /// Every channel, by id.
+    /// Every channel, by id - Channel 1 first.
     #[must_use]
     pub fn channels(&self) -> Vec<Arc<Channel>> {
         self.lock().channels.values().cloned().collect()
+    }
+
+    /// A channel by id.
+    #[must_use]
+    pub fn channel(&self, id: ChannelId) -> Option<Arc<Channel>> {
+        self.lock().channels.get(&id).cloned()
+    }
+
+    /// **Channel 1**, which always exists.
+    #[must_use]
+    pub fn home(&self) -> Arc<Channel> {
+        self.ensure_home()
     }
 
     /// Is this the first panel?
@@ -272,25 +294,53 @@ impl Panels {
 
     // ---------------------------------------------------- the collection ---
 
+    fn ensure_home(&self) -> Arc<Channel> {
+        let mut inner = self.lock();
+        if let Some(c) = inner.channels.get(&HOME_CHANNEL) {
+            return Arc::clone(c);
+        }
+        let stored = StoredChannel { id: HOME_CHANNEL, name: state::default_channel_name(HOME_CHANNEL), ..StoredChannel::default() };
+        self.insert_locked(&mut inner, stored)
+    }
+
+    fn insert_locked(&self, inner: &mut Inner, stored: StoredChannel) -> Arc<Channel> {
+        inner.next = inner.next.max(stored.id.saturating_add(1));
+        let c = Channel::new(stored, self.faults, &self.meter);
+        inner.channels.insert(c.id(), Arc::clone(&c));
+        if self.autostart {
+            c.ensure_running();
+        }
+        c
+    }
+
     /// Adopt what the state file had. Render threads start with
     /// [`Panels::start`].
     pub fn load(&self, panels: Vec<StoredPanel>, channels: Vec<StoredChannel>) {
-        let mut inner = self.lock();
-        for c in channels {
-            inner.next = inner.next.max(c.id.saturating_add(1));
-            inner.channels.insert(c.id, Channel::new(c, self.faults));
+        {
+            let mut inner = self.lock();
+            for c in channels {
+                if c.id == 0 {
+                    continue;
+                }
+                inner.next = inner.next.max(c.id.saturating_add(1));
+                if let Some(old) = inner.channels.insert(c.id, Channel::new(c, self.faults, &self.meter)) {
+                    old.shutdown();
+                }
+            }
         }
+        let home = self.ensure_home();
+        let mut inner = self.lock();
         for sp in panels {
-            if inner.panels.iter().any(|p| p.device() == sp.device) {
+            if sp.device.is_empty() || inner.panels.iter().any(|p| p.device() == sp.device) {
                 continue;
             }
-            let panel = Panel::new(&sp, &self.meter);
-            if let Some(c) = sp.channel.and_then(|id| inner.channels.get(&id).cloned()) {
-                panel.switch_channel(Some(c), f64::from(FADE_MANUAL));
-            }
+            let panel = Panel::new(&sp);
+            let channel = inner.channels.get(&sp.channel).cloned().unwrap_or_else(|| Arc::clone(&home));
+            // Every panel comes up fading in from black, as a studio's first
+            // picture always has.
+            panel.switch_channel(&channel, f64::from(FADE_MANUAL));
             inner.panels.push(panel);
         }
-        Self::drop_unused_locked(&mut inner);
     }
 
     /// Start every channel's render thread that is not running.
@@ -300,60 +350,34 @@ impl Panels {
         }
     }
 
-    /// Make sure there is a first panel. With no panel at all, that is the
-    /// unbound stand-in, on a picture of its own: a studio always has a
-    /// picture, even before it has a panel.
-    pub fn ensure_first(&self) -> Arc<Panel> {
-        let mut inner = self.lock();
-        if let Some(first) = inner.panels.first() {
-            return Arc::clone(first);
-        }
-        let panel = Panel::new(&StoredPanel { device: UNBOUND.to_string(), ..StoredPanel::default() }, &self.meter);
-        let channel = self.new_channel_locked(&mut inner, StoredChannel::default());
-        panel.switch_channel(Some(channel), f64::from(FADE_MANUAL));
-        inner.panels.push(Arc::clone(&panel));
-        panel
-    }
-
-    /// **Adopt a device as a panel, idle**: no channel, no stream, so the
-    /// device shows its own screen until somebody gives it a picture. The
-    /// unbound stand-in goes the moment there is a real panel. True when the
-    /// panel is new.
+    /// **Adopt a device as a panel** (card 353: on Channel 1, lit, fading in
+    /// from black and then mirroring it). True when the panel is new.
     pub fn adopt(&self, device: &str) -> bool {
-        if device == UNBOUND {
+        if device.is_empty() {
             return false;
         }
+        let home = self.ensure_home();
         let mut inner = self.lock();
         if inner.panels.iter().any(|p| p.device() == device) {
             return false;
         }
-        inner.panels.push(Panel::new(&StoredPanel { device: device.to_string(), ..StoredPanel::default() }, &self.meter));
-        if let Some(i) = inner.panels.iter().position(|p| p.is_unbound()) {
-            let stand_in = inner.panels.remove(i);
-            stand_in.drop_channel();
-            stand_in.shutdown();
-        }
-        Self::drop_unused_locked(&mut inner);
+        let panel = Panel::new(&StoredPanel { device: device.to_string(), ..StoredPanel::default() });
+        panel.switch_channel(&home, f64::from(FADE_MANUAL));
+        inner.panels.push(panel);
         true
     }
 
-    /// **The panel for a device somebody has named** - to drive it, or to
-    /// configure it. If there is no panel for it yet and the studio is still on
-    /// its unbound stand-in, the stand-in is renamed onto the device: the
-    /// picture the page was showing carries straight on to the panel instead
-    /// of restarting on it. Otherwise it is adopted, idle.
+    /// **The panel for a device somebody has named**: the one there is, or a
+    /// new one on Channel 1.
     pub fn attach(&self, device: &str) -> Arc<Panel> {
-        let mut inner = self.lock();
-        if let Some(p) = inner.panels.iter().find(|p| p.device() == device) {
-            return Arc::clone(p);
-        }
-        if let Some(stand_in) = inner.panels.iter().find(|p| p.is_unbound()) {
-            stand_in.rename(device);
-            return Arc::clone(stand_in);
-        }
-        let panel = Panel::new(&StoredPanel { device: device.to_string(), ..StoredPanel::default() }, &self.meter);
-        inner.panels.push(Arc::clone(&panel));
-        panel
+        self.adopt(device);
+        self.get(device).unwrap_or_else(|| {
+            // Unreachable: `adopt` just made it, and only an empty id is refused
+            // - which no caller names. A panel on Channel 1 all the same.
+            let p = Panel::new(&StoredPanel { device: device.to_string(), ..StoredPanel::default() });
+            p.switch_channel(&self.home(), 0.0);
+            p
+        })
     }
 
     /// A device told us its real id, or a typed address resolved: the panel
@@ -376,11 +400,9 @@ impl Panels {
         if let Some(p) = inner.panels.iter().find(|p| p.device() == from) {
             p.rename(to);
         }
-        Self::drop_unused_locked(&mut inner);
     }
 
-    /// Forget a panel: its link is released and its channel goes with it if
-    /// nobody else is on it.
+    /// Forget a panel: its link is released. Its channel stays.
     pub fn remove(&self, device: &str) {
         let mut inner = self.lock();
         if let Some(i) = inner.panels.iter().position(|p| p.device() == device) {
@@ -388,144 +410,107 @@ impl Panels {
             p.drop_channel();
             p.shutdown();
         }
-        Self::drop_unused_locked(&mut inner);
     }
 
-    /// Drop every channel nothing needs any more (card 350: *"channels with no
-    /// panels are dropped"*). A channel a panel is still fading away from is
-    /// kept until the fade is over.
-    pub fn drop_unused(&self) {
-        Self::drop_unused_locked(&mut self.lock());
-    }
-
-    fn drop_unused_locked(inner: &mut Inner) {
-        let gone: Vec<ChannelId> = inner.channels.iter().filter(|(_, c)| c.unused()).map(|(id, _)| *id).collect();
-        for id in gone {
-            if let Some(c) = inner.channels.remove(&id) {
+    /// Shut down every deleted channel nothing needs any more: no panel is
+    /// still fading away from it.
+    pub fn sweep(&self) {
+        let mut inner = self.lock();
+        inner.retired.retain(|c| {
+            if c.unused() {
                 c.shutdown();
+                false
+            } else {
+                true
             }
-        }
+        });
     }
 
-    fn new_channel_locked(&self, inner: &mut Inner, mut stored: StoredChannel) -> Arc<Channel> {
-        stored.id = inner.next;
-        inner.next = inner.next.saturating_add(1);
-        let c = Channel::new(stored, self.faults);
-        inner.channels.insert(c.id(), Arc::clone(&c));
-        if self.autostart {
-            c.ensure_running();
-        }
-        c
-    }
+    // ------------------------------------------------------ the channels ---
 
-    /// Move a panel onto `next`, fading, and drop whatever that leaves unused.
-    fn follow_locked(inner: &mut Inner, panel: &Arc<Panel>, next: Option<Arc<Channel>>, fade: Option<f32>) {
-        panel.switch_channel(next, fade_len(fade));
-        Self::drop_unused_locked(inner);
-    }
-
-    // --------------------------------------------------------- the rules ---
-
-    /// **Pick a picture for a panel**: `def` on the setting named `setting`
-    /// (empty or `Default` is Default), by card 350's three rules - join a
-    /// channel already showing exactly that, else change the panel's own
-    /// channel if it is alone on it, else split off onto a new one.
+    /// **A new channel**: a copy of `from` - its picture, its working copy and
+    /// its output settings, so moving a panel onto it is seamless - or of
+    /// Channel 1 without one, called `name` or "Channel <id>". It has no
+    /// panels until somebody moves one onto it.
     ///
-    /// `exclusive` is for a request that goes on to *edit* the picture (a seed,
-    /// a parameter): it must not join somebody else's channel, or the edit
-    /// would land on them too, so rule 1 is skipped and a shared channel is
-    /// left rather than changed.
+    /// # Errors
     ///
-    /// Returns the channel the panel is on afterwards.
+    /// A name that cannot be a name.
+    pub fn new_channel(&self, name: Option<&str>, from: Option<&Arc<Channel>>) -> Result<Arc<Channel>, String> {
+        let name = name.map(str::trim).filter(|n| !n.is_empty()).map(state::check_channel_name).transpose()?;
+        let from = from.cloned().unwrap_or_else(|| self.home());
+        let mut inner = self.lock();
+        let id = inner.next;
+        let stored = StoredChannel { id, name: name.unwrap_or_else(|| state::default_channel_name(id)), ..from.stored() };
+        Ok(self.insert_locked(&mut inner, stored))
+    }
+
+    /// Call a channel something else.
+    ///
+    /// # Errors
+    ///
+    /// A name that cannot be a name.
+    pub fn rename_channel(&self, channel: &Arc<Channel>, name: &str) -> Result<(), String> {
+        let name = state::check_channel_name(name)?;
+        channel.set_name(&name);
+        Ok(())
+    }
+
+    /// **Delete a channel**: its panels move to Channel 1 (each with its
+    /// fade), and it goes. Channel 1 cannot be deleted.
+    ///
+    /// # Errors
+    ///
+    /// For Channel 1.
+    pub fn delete_channel(&self, channel: &Arc<Channel>) -> Result<(), String> {
+        if channel.id() == HOME_CHANNEL {
+            return Err("Channel 1 is the one every new panel joins, so it cannot be deleted.".into());
+        }
+        let home = self.home();
+        let mut inner = self.lock();
+        let Some(gone) = inner.channels.remove(&channel.id()) else {
+            return Ok(());
+        };
+        for panel in gone.followers() {
+            panel.switch_channel(&home, f64::from(FADE_MANUAL));
+        }
+        // Kept until the panels that were on it have faded away from it.
+        inner.retired.push(gone);
+        Ok(())
+    }
+
+    /// **Move a panel to another channel**: it fades from the old channel's
+    /// picture to the new one's over `fade` (absent: [`FADE_MANUAL`]), and is
+    /// then on the new channel's shared bytes. The same channel changes
+    /// nothing.
+    pub fn move_panel(&self, panel: &Arc<Panel>, to: &Arc<Channel>, fade: Option<f32>) {
+        let _inner = self.lock();
+        if panel.channel().is_some_and(|c| Arc::ptr_eq(&c, to)) {
+            return;
+        }
+        panel.switch_channel(to, fade_len(fade));
+    }
+
+    /// **Pick a picture for a channel**: `def` on the setting named `setting`
+    /// (empty or `Default` is Default). Every panel on the channel changes,
+    /// with the channel's 2 s fade - that is the point. A channel already
+    /// showing exactly that, untouched, is left alone.
     ///
     /// # Errors
     ///
     /// If the patch has no setting by that name.
-    pub fn pick(
-        &self,
-        panel: &Arc<Panel>,
-        def: &'static PatchDef,
-        setting: &str,
-        exclusive: bool,
-        fade: Option<f32>,
-    ) -> Result<Arc<Channel>, String> {
+    pub fn pick(&self, channel: &Arc<Channel>, def: &'static PatchDef, setting: &str, fade: Option<f32>) -> Result<(), String> {
         let (work, repaired) = self.memory.usable_setting(def, setting)?;
         if !repaired.is_empty() {
             // The `repaired` voice, said once per load rather than per value:
             // a setting older than the patch is what this is for.
             eprintln!("studio: `{}` loading `{}`: {}", def.id, setting.trim(), repaired.join("; "));
         }
-        let mut inner = self.lock();
-        let current = panel.channel();
-        let alone = current.as_ref().is_some_and(|c| c.followers().len() <= 1);
-        // Already showing exactly that: nothing to do.
-        if let Some(c) = &current {
-            if c.shows(def.id, setting, &self.memory) && (alone || !exclusive) {
-                return Ok(Arc::clone(c));
-            }
+        if channel.shows(def.id, setting, &self.memory) {
+            return Ok(());
         }
-        // Rule 1: join a channel that already shows it.
-        if !exclusive {
-            let other = inner
-                .channels
-                .values()
-                .find(|c| current.as_ref().is_none_or(|cur| !Arc::ptr_eq(cur, c)) && !c.unused() && c.shows(def.id, setting, &self.memory))
-                .cloned();
-            if let Some(other) = other {
-                Self::follow_locked(&mut inner, panel, Some(Arc::clone(&other)), fade);
-                return Ok(other);
-            }
-        }
-        // Rule 2: alone on its channel, so the channel changes.
-        if let Some(c) = current.filter(|_| alone) {
-            c.show(def, setting, work, fade);
-            return Ok(c);
-        }
-        // Rule 3: a channel of its own.
-        let stored = StoredChannel { id: 0, patch: def.id.to_string(), setting: state::setting_key(setting), seed: work.seed, params: work.params };
-        let c = self.new_channel_locked(&mut inner, stored);
-        Self::follow_locked(&mut inner, panel, Some(Arc::clone(&c)), fade);
-        Ok(c)
-    }
-
-    /// **"Same as"**: put `panel` on `other`'s channel, tweaks and all - the
-    /// way to share a picture nobody has saved as a setting. It fades there,
-    /// and follows that channel's clock from then on.
-    ///
-    /// # Errors
-    ///
-    /// If `other` is idle: it has no picture to share.
-    pub fn same_as(&self, panel: &Arc<Panel>, other: &Arc<Panel>) -> Result<Arc<Channel>, String> {
-        let mut inner = self.lock();
-        let Some(target) = other.channel() else {
-            return Err(format!("`{}` is idle: it has no picture to share.", other.device()));
-        };
-        if panel.channel().is_some_and(|c| Arc::ptr_eq(&c, &target)) {
-            return Ok(target);
-        }
-        Self::follow_locked(&mut inner, panel, Some(Arc::clone(&target)), None);
-        Ok(target)
-    }
-
-    /// **Detach**: give `panel` a copy of its channel - same patch, setting and
-    /// working copy, its own clock from then on - so an edit to it no longer
-    /// reaches the others. A panel already alone on its channel is left as it
-    /// is.
-    ///
-    /// # Errors
-    ///
-    /// If the panel is idle.
-    pub fn detach(&self, panel: &Arc<Panel>) -> Result<Arc<Channel>, String> {
-        let mut inner = self.lock();
-        let Some(current) = panel.channel() else {
-            return Err(format!("`{}` is idle: it has no picture to detach from.", panel.device()));
-        };
-        if current.followers().len() <= 1 {
-            return Ok(current);
-        }
-        let copy = self.new_channel_locked(&mut inner, current.stored());
-        Self::follow_locked(&mut inner, panel, Some(Arc::clone(&copy)), None);
-        Ok(copy)
+        channel.show(def, setting, work, fade);
+        Ok(())
     }
 
     /// A setting was renamed: every channel on it follows the name.
@@ -547,7 +532,7 @@ impl Panels {
     /// with `FINAL`.
     pub fn shutdown(&self) {
         let inner = self.lock();
-        for c in inner.channels.values() {
+        for c in inner.channels.values().chain(inner.retired.iter()) {
             c.shutdown();
         }
         for p in &inner.panels {
@@ -557,29 +542,15 @@ impl Panels {
 
     // ------------------------------------------------------------ views ---
 
-    /// What the page draws itself from, for one panel.
+    /// What the page draws itself from, for one channel - seen from `from`, a
+    /// panel on it, when the request named one (it decides `device` and `on`;
+    /// otherwise they are the channel's first member's).
     #[must_use]
-    pub fn state_of(&self, panel: &Arc<Panel>) -> StudioState {
-        let cfg = panel.cfg();
-        let channel = panel.channel();
-        let base = StudioState {
-            patch: String::new(),
-            seed: 0,
-            params: BTreeMap::new(),
-            output: cfg.output,
-            paused: false,
-            speed: 1.0,
-            fps: screeny_art::FPS,
-            on: cfg.on,
-            device: cfg.device.clone(),
-            setting: DEFAULT_SETTING.to_string(),
-            settings: Vec::new(),
-            modified: false,
-            channel: None,
-            shared_with: Vec::new(),
-        };
-        let Some(channel) = channel else { return base };
+    pub fn state_of(&self, channel: &Arc<Channel>, from: Option<&Arc<Panel>>) -> StudioState {
         let stored = channel.stored();
+        let members = channel.follower_ids();
+        let who = from.cloned().or_else(|| channel.followers().into_iter().next());
+        let (device, on) = who.map_or((String::new(), false), |p| (p.device(), p.cfg().on));
         let def = find_patch(&stored.patch, self.faults);
         // Every parameter at its effective value: the page draws one control
         // per parameter and reads its position from here.
@@ -601,12 +572,19 @@ impl Panels {
             patch: stored.patch,
             seed: stored.seed,
             params,
+            output: stored.output,
+            paused: false,
+            speed: 1.0,
+            fps: screeny_art::FPS,
+            on,
+            shared_with: members.iter().filter(|d| **d != device).cloned().collect(),
+            device,
             setting: if stored.setting.is_empty() { DEFAULT_SETTING.to_string() } else { stored.setting },
             settings,
             modified,
-            channel: Some(channel.id()),
-            shared_with: channel.follower_ids().into_iter().filter(|d| *d != cfg.device).collect(),
-            ..base
+            channel: channel.id(),
+            channel_name: stored.name,
+            panels: members,
         }
     }
 
@@ -615,71 +593,65 @@ impl Panels {
     pub fn status_of(&self, panel: &Arc<Panel>) -> PlayerStatus {
         let cfg = panel.cfg();
         let link = panel.link_health();
-        let channel = panel.channel().map(|c| (c.status(), c.follower_ids(), c.modified(&self.memory)));
-        let mut health = PlayerHealth {
+        let channel = panel.channel().unwrap_or_else(|| self.home());
+        let s = channel.status();
+        let h = s.health;
+        let health = PlayerHealth {
+            ticks: s.ticks,
+            panics: h.panics,
+            stalls: h.stalls,
+            restarts: h.restarts,
+            abandoned: h.abandoned,
+            fell_back_from: h.fell_back_from,
+            refused: h.refused,
+            gave_up: h.gave_up,
+            last_tick_ago: s.last_tick_ago,
             last_frame_ago: link.last_frame_ago,
             sessions: link.sessions,
             link_ups: link.link_ups,
             reconnects: link.reconnects,
             brightness_applied: link.brightness_applied,
             brightness_cap: link.brightness_cap,
-            last_error: link.last_error.clone(),
-            ..PlayerHealth::default()
+            last_error: link.last_error.clone().or(h.last_error),
         };
-        let mut out = PlayerStatus {
+        PlayerStatus {
             device: cfg.device.clone(),
             on: cfg.on,
-            patch: String::new(),
-            patch_name: String::new(),
-            seed: 0,
-            params: BTreeMap::new(),
+            patch_name: find_patch(&s.stored.patch, self.faults).map_or("", |d| d.name).to_string(),
+            patch: s.stored.patch,
+            seed: s.stored.seed,
+            params: s.stored.params,
             fps: screeny_art::FPS,
             paused: false,
             speed: 1.0,
             brightness: cfg.brightness,
-            output: cfg.output,
-            running: false,
+            output: s.stored.output,
+            running: s.running,
             focused: self.is_first(panel),
-            fps_measured: 0.0,
-            playing: None,
-            health: PlayerHealth::default(),
+            fps_measured: s.fps_measured,
+            playing: s.playing,
+            health,
             panel: panel.link_status(),
-            channel: None,
-            setting: DEFAULT_SETTING.to_string(),
-            modified: false,
-            shared_with: Vec::new(),
-        };
-        if let Some((s, followers, modified)) = channel {
-            let h = s.health;
-            health.ticks = s.ticks;
-            health.panics = h.panics;
-            health.stalls = h.stalls;
-            health.restarts = h.restarts;
-            health.abandoned = h.abandoned;
-            health.fell_back_from = h.fell_back_from;
-            health.refused = h.refused;
-            health.gave_up = h.gave_up;
-            health.last_tick_ago = s.last_tick_ago;
-            if health.last_error.is_none() {
-                health.last_error = h.last_error;
-            }
-            out.patch_name = find_patch(&s.stored.patch, self.faults).map_or("", |d| d.name).to_string();
-            out.patch = s.stored.patch;
-            out.seed = s.stored.seed;
-            out.params = s.stored.params;
-            out.setting = if s.stored.setting.is_empty() { DEFAULT_SETTING.to_string() } else { s.stored.setting };
-            out.modified = modified;
-            out.running = s.running;
-            out.fps_measured = s.fps_measured;
-            out.playing = s.playing;
-            out.channel = Some(s.id);
-            out.shared_with = followers.into_iter().filter(|d| *d != cfg.device).collect();
+            channel: s.id,
+            channel_name: s.stored.name,
+            setting: if s.stored.setting.is_empty() { DEFAULT_SETTING.to_string() } else { s.stored.setting },
+            modified: channel.modified(&self.memory),
+            shared_with: channel.follower_ids().into_iter().filter(|d| *d != cfg.device).collect(),
+            sends: panel.sends(),
         }
-        out.health = health;
-        out
     }
 
-    /// The overview: one [`PanelSummary`] per panel, first first.
+    fn picture_of(&self, channel: &Arc<Channel>) -> PictureSummary {
+        let s = channel.stored();
+        PictureSummary {
+            patch_name: find_patch(&s.patch, self.faults).map_or("", |d| d.name).to_string(),
+            patch: s.patch,
+            setting: if s.setting.is_empty() { DEFAULT_SETTING.to_string() } else { s.setting },
+            modified: channel.modified(&self.memory),
+        }
+    }
+
+    /// Every panel, first adopted first.
     #[must_use]
     pub fn summaries(&self, devices: &Registry) -> Vec<PanelSummary> {
         let all = self.all();
@@ -687,46 +659,43 @@ impl Panels {
             .enumerate()
             .map(|(i, p)| {
                 let cfg = p.cfg();
-                let unbound = cfg.device == UNBOUND;
-                let channel = p.channel();
+                let channel = p.channel().unwrap_or_else(|| self.home());
                 let link = p.link_status();
-                let link_word = match (&channel, &link) {
-                    _ if unbound => "none".to_string(),
-                    (None, _) => "idle".to_string(),
+                let link_word = match &link {
                     _ if !cfg.on => "off".to_string(),
-                    (Some(_), Some(l)) => l.state.to_string(),
-                    (Some(_), None) => "connecting".to_string(),
-                };
-                let picture = channel.as_ref().map(|c| {
-                    let s = c.stored();
-                    PictureSummary {
-                        patch_name: find_patch(&s.patch, self.faults).map_or("", |d| d.name).to_string(),
-                        patch: s.patch,
-                        setting: if s.setting.is_empty() { DEFAULT_SETTING.to_string() } else { s.setting },
-                        modified: c.modified(&self.memory),
-                    }
-                });
-                let name = if unbound {
-                    "No panel yet".to_string()
-                } else {
-                    devices.get(&cfg.device).map_or_else(|| cfg.device.clone(), |d| d.label())
+                    Some(l) => l.state.to_string(),
+                    None => "connecting".to_string(),
                 };
                 PanelSummary {
-                    name,
-                    unbound,
+                    name: devices.get(&cfg.device).map_or_else(|| cfg.device.clone(), |d| d.label()),
                     first: i == 0,
                     on: cfg.on,
                     brightness: cfg.brightness,
                     connected: link.as_ref().is_some_and(|l| l.connected),
                     link: link_word,
-                    channel: channel.as_ref().map(|c| c.id()),
-                    picture,
-                    shared_with: channel
-                        .as_ref()
-                        .map(|c| c.follower_ids().into_iter().filter(|d| *d != cfg.device).collect())
-                        .unwrap_or_default(),
+                    channel: channel.id(),
+                    channel_name: channel.name(),
+                    picture: self.picture_of(&channel),
+                    shared_with: channel.follower_ids().into_iter().filter(|d| *d != cfg.device).collect(),
+                    fading: p.fading(),
                     device: cfg.device,
                 }
+            })
+            .collect()
+    }
+
+    /// Every channel, Channel 1 first.
+    #[must_use]
+    pub fn channel_summaries(&self) -> Vec<ChannelSummary> {
+        self.channels()
+            .iter()
+            .map(|c| ChannelSummary {
+                id: c.id(),
+                name: c.name(),
+                home: c.id() == HOME_CHANNEL,
+                picture: self.picture_of(c),
+                output: c.output(),
+                panels: c.follower_ids(),
             })
             .collect()
     }
@@ -734,7 +703,15 @@ impl Panels {
     /// Test only: a collection whose channels never start a render thread.
     #[cfg(test)]
     fn quiet(memory: SharedMemory) -> Self {
-        Panels { autostart: false, ..Panels::new(memory, true) }
+        let panels = Panels {
+            inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
+            memory,
+            meter: Arc::new(SocketMeter::default()),
+            faults: true,
+            autostart: false,
+        };
+        panels.ensure_home();
+        panels
     }
 }
 
@@ -748,248 +725,144 @@ mod tests {
     }
 
     fn channel_of(p: &Arc<Panel>) -> Arc<Channel> {
-        p.channel().expect("not idle")
+        p.channel().expect("on a channel")
     }
 
-    /// Two panels on one channel, the way a studio gets there: both adopted
-    /// idle, both asked for the same picture.
-    fn two_on_one(panels: &Panels) -> (Arc<Panel>, Arc<Panel>) {
+    /// Two panels, both adopted: both on Channel 1.
+    fn two(panels: &Panels) -> (Arc<Panel>, Arc<Panel>) {
         panels.adopt("a");
         panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "", false, None).expect("a picks");
-        panels.pick(&b, def("metaballs"), "", false, None).expect("b picks");
-        (a, b)
+        (panels.get("a").expect("a"), panels.get("b").expect("b"))
     }
 
-    /// **Auto-adopt**: a device becomes a panel that is idle - no channel, so
-    /// no link and no stream - and the unbound stand-in goes when the first
-    /// real one arrives.
+    /// **There is always Channel 1**, and **a new panel joins it**: on, and
+    /// fading in from black before it is on the shared bytes.
     #[test]
-    fn adopting_makes_an_idle_panel_and_retires_the_stand_in() {
+    fn a_new_panel_joins_channel_1() {
         let panels = Panels::quiet(SharedMemory::default());
-        let stand_in = panels.ensure_first();
-        assert!(stand_in.is_unbound());
-        assert!(stand_in.channel().is_some(), "a studio always has a picture");
-        assert_eq!(panels.channels().len(), 1);
-
+        assert_eq!(panels.channels().len(), 1, "a studio with no panel has Channel 1");
+        assert_eq!(panels.home().id(), HOME_CHANNEL);
+        assert_eq!(panels.home().name(), "Channel 1");
         assert!(panels.adopt("4a00a4"));
         assert!(!panels.adopt("4a00a4"), "once");
         let p = panels.get("4a00a4").expect("adopted");
-        assert!(p.channel().is_none(), "a new panel is idle");
-        assert!(p.cfg().on, "and will stream the moment it has a picture");
-        assert_eq!(panels.ids(), vec!["4a00a4".to_string()], "the stand-in is gone");
-        assert!(panels.channels().is_empty(), "and its channel with it: a channel with no panel is dropped");
+        assert_eq!(channel_of(&p).id(), HOME_CHANNEL);
+        assert!(p.cfg().on, "and lit");
+        assert!(p.fading(), "fading in from black");
+        assert_eq!(panels.home().follower_ids(), vec!["4a00a4".to_string()]);
     }
 
-    /// **Rule 1**: two panels asking for the same unmodified picture end up on
-    /// one channel - in sync without anybody saying "mirror".
+    /// **New, rename, delete.** A new channel is a copy of the one it came
+    /// from (Channel 1 by default) and has no panels; a name is checked;
+    /// deleting moves its panels to Channel 1; Channel 1 cannot go.
     #[test]
-    fn the_same_picture_joins_the_channel_showing_it() {
+    fn channels_are_made_renamed_and_deleted() {
         let panels = Panels::quiet(SharedMemory::default());
-        let (a, b) = two_on_one(&panels);
-        assert!(Arc::ptr_eq(&channel_of(&a), &channel_of(&b)), "one channel for one picture");
-        assert_eq!(panels.channels().len(), 1);
-        assert_eq!(panels.state_of(&a).shared_with, vec!["b".to_string()]);
-        assert_eq!(panels.state_of(&b).shared_with, vec!["a".to_string()]);
+        let home = panels.home();
+        panels.pick(&home, def("clocks-dials"), "", None).expect("dials");
+        home.edit(&crate::channel::Edit { seed: Some(77), ..Default::default() }).expect("seed");
+        home.set_output(Output { panel_model: false, ..Output::default() });
+
+        let second = panels.new_channel(None, None).expect("a new channel");
+        assert_eq!((second.id(), second.name().as_str()), (2, "Channel 2"));
+        let s = second.stored();
+        assert_eq!((s.patch.as_str(), s.seed, s.output.panel_model), ("clocks-dials", 77, false), "a copy of Channel 1, output and all");
+        assert!(second.follower_ids().is_empty(), "with no panels");
+
+        let kitchen = panels.new_channel(Some("  Kitchen "), Some(&second)).expect("named");
+        assert_eq!((kitchen.id(), kitchen.name().as_str()), (3, "Kitchen"));
+        assert!(panels.new_channel(Some(&"x".repeat(41)), None).is_err(), "too long");
+        assert!(panels.rename_channel(&kitchen, "   ").is_err(), "a name is needed");
+        panels.rename_channel(&kitchen, "Hall").expect("rename");
+        assert_eq!(kitchen.name(), "Hall");
+
+        let (a, b) = two(&panels);
+        panels.move_panel(&a, &kitchen, None);
+        panels.move_panel(&b, &kitchen, None);
+        assert_eq!(kitchen.follower_ids(), vec!["a".to_string(), "b".to_string()]);
+        assert!(panels.delete_channel(&panels.home()).is_err(), "Channel 1 stays");
+        panels.delete_channel(&kitchen).expect("delete");
+        assert!(panels.channel(3).is_none(), "gone");
+        assert_eq!(channel_of(&a).id(), HOME_CHANNEL, "its panels are on Channel 1");
+        assert_eq!(channel_of(&b).id(), HOME_CHANNEL);
+        assert!(a.fading(), "and fade there");
+        let again = panels.new_channel(None, None).expect("another");
+        assert_eq!(again.id(), 4, "ids are never reused");
     }
 
-    /// Rule 1 is for **unmodified** pictures only: a channel somebody has
-    /// tweaked is not "that picture" any more.
+    /// **Picking a picture changes the channel** - every panel on it. There
+    /// is no join, split or detach any more.
     #[test]
-    fn a_tweaked_picture_is_not_joined() {
+    fn picking_changes_the_channel_for_every_panel_on_it() {
         let panels = Panels::quiet(SharedMemory::default());
-        panels.adopt("a");
-        panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "", false, None).expect("a");
-        channel_of(&a).edit(&crate::channel::Edit { param: Some(("size".into(), 2.5)), ..Default::default() }).expect("size");
-        panels.pick(&b, def("metaballs"), "", false, None).expect("b");
-        assert!(!Arc::ptr_eq(&channel_of(&a), &channel_of(&b)));
+        let (a, b) = two(&panels);
+        panels.pick(&channel_of(&a), def("metaballs"), "", None).expect("pick");
+        assert!(Arc::ptr_eq(&channel_of(&a), &channel_of(&b)), "still one channel");
+        assert_eq!(channel_of(&b).patch(), "metaballs", "b changed with it");
+        assert_eq!(panels.channels().len(), 1, "no channel was made by a pick");
     }
 
-    /// **Rule 2**: a panel alone on its channel changes that channel - the
-    /// same channel, so the patch change is the channel's own 2 s fade.
-    #[test]
-    fn a_panel_alone_changes_its_own_channel() {
-        let panels = Panels::quiet(SharedMemory::default());
-        panels.adopt("a");
-        let a = panels.get("a").expect("a");
-        let first = panels.pick(&a, def("metaballs"), "", false, None).expect("metaballs");
-        let second = panels.pick(&a, def("clocks-dials"), "", false, None).expect("dials");
-        assert!(Arc::ptr_eq(&first, &second), "the same channel, changed");
-        assert_eq!(second.patch(), "clocks-dials");
-        assert_eq!(panels.channels().len(), 1);
-    }
-
-    /// **Rule 3**: a panel sharing its channel that asks for something else
-    /// leaves the group for a channel of its own; the other stays put.
-    #[test]
-    fn a_panel_in_a_group_splits_off() {
-        let panels = Panels::quiet(SharedMemory::default());
-        let (a, b) = two_on_one(&panels);
-        let shared = channel_of(&a);
-        panels.pick(&b, def("clocks-dials"), "", false, None).expect("dials");
-        assert!(Arc::ptr_eq(&channel_of(&a), &shared), "a is where it was");
-        assert_eq!(shared.patch(), "metaballs", "and still showing what it was");
-        assert_eq!(channel_of(&b).patch(), "clocks-dials");
-        assert_eq!(panels.channels().len(), 2);
-    }
-
-    /// A request that goes on to edit the picture must not join another
-    /// panel's channel, or its edit would reach them too.
-    #[test]
-    fn an_exclusive_pick_never_shares() {
-        let panels = Panels::quiet(SharedMemory::default());
-        let (a, b) = two_on_one(&panels);
-        panels.pick(&b, def("metaballs"), "", true, None).expect("exclusive");
-        assert!(!Arc::ptr_eq(&channel_of(&a), &channel_of(&b)), "b has a metaballs of its own");
-    }
-
-    /// A named setting is a picture too: the three rules apply to loading one.
+    /// A named setting is a picture too.
     #[test]
     fn a_named_setting_is_a_picture() {
         let memory = SharedMemory::default();
         let lava = Working { params: BTreeMap::from([("size".to_string(), 2.5)]), seed: 7, speed: 1.0 };
         memory.save_setting(def("metaballs"), "Lava", &lava).expect("save");
         let panels = Panels::quiet(memory);
-        panels.adopt("a");
-        panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "Lava", false, None).expect("a");
-        panels.pick(&b, def("metaballs"), "", false, None).expect("b on Default");
-        assert!(!Arc::ptr_eq(&channel_of(&a), &channel_of(&b)), "Default is not Lava");
-        assert!(panels.pick(&b, def("metaballs"), "lava ", false, None).is_err(), "names are exact after trimming");
-        panels.pick(&b, def("metaballs"), " Lava", false, None).expect("b on Lava");
-        assert!(Arc::ptr_eq(&channel_of(&a), &channel_of(&b)), "Lava is Lava");
-        let s = panels.state_of(&b);
+        let home = panels.home();
+        panels.pick(&home, def("metaballs"), "Lava", None).expect("Lava");
+        assert!(panels.pick(&home, def("metaballs"), "lava ", None).is_err(), "names are exact after trimming");
+        let s = panels.state_of(&home, None);
         assert_eq!((s.setting.as_str(), s.seed, s.params["size"], s.modified), ("Lava", 7, 2.5, false));
     }
 
-    /// **Same as** shares a picture nobody has saved - tweaks and all.
+    /// Moving a panel: it fades, alone; the other stays; moving back is on
+    /// the shared channel again.
     #[test]
-    fn same_as_joins_another_panels_channel_tweaks_and_all() {
+    fn moving_a_panel_moves_that_panel_only() {
         let panels = Panels::quiet(SharedMemory::default());
-        panels.adopt("a");
-        panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "", false, None).expect("a");
-        channel_of(&a).edit(&crate::channel::Edit { seed: Some(4242), ..Default::default() }).expect("seed");
-        assert!(panels.same_as(&b, &a).is_ok());
-        assert!(Arc::ptr_eq(&channel_of(&a), &channel_of(&b)));
-        assert_eq!(panels.state_of(&b).seed, 4242);
-        assert!(panels.state_of(&b).modified, "and says honestly that it is tweaked");
-        let idle = panels.attach("c");
-        assert!(panels.same_as(&a, &idle).is_err(), "an idle panel has nothing to share");
+        let (a, b) = two(&panels);
+        let other = panels.new_channel(Some("Other"), None).expect("new");
+        panels.move_panel(&b, &other, None);
+        assert!(Arc::ptr_eq(&channel_of(&b), &other));
+        assert_eq!(channel_of(&a).id(), HOME_CHANNEL, "a stays");
+        let s = panels.state_of(&other, Some(&b));
+        assert_eq!((s.channel, s.channel_name.as_str(), s.device.as_str()), (other.id(), "Other", "b"));
+        assert_eq!(s.panels, vec!["b".to_string()]);
+        panels.move_panel(&b, &panels.home(), None);
+        assert_eq!(panels.home().follower_ids(), vec!["a".to_string(), "b".to_string()]);
     }
 
-    /// **Detach** gives a panel a copy of its channel; an edit to the copy no
-    /// longer reaches the others.
-    #[test]
-    fn detach_gives_a_panel_a_copy_of_its_own() {
-        let panels = Panels::quiet(SharedMemory::default());
-        let (a, b) = two_on_one(&panels);
-        channel_of(&a).edit(&crate::channel::Edit { seed: Some(99), ..Default::default() }).expect("seed");
-        let copy = panels.detach(&b).expect("detach");
-        assert!(!Arc::ptr_eq(&channel_of(&a), &copy));
-        assert_eq!(copy.stored().seed, 99, "the same working copy");
-        assert_eq!(copy.patch(), "metaballs");
-        copy.edit(&crate::channel::Edit { seed: Some(5), ..Default::default() }).expect("edit the copy");
-        assert_eq!(channel_of(&a).stored().seed, 99, "the edit stays on b");
-        let again = panels.detach(&b).expect("alone");
-        assert!(Arc::ptr_eq(&again, &copy), "a panel alone on its channel is left as it is");
-    }
-
-    /// A channel no panel follows is dropped - here, once a panel that joined
-    /// another has finished fading away from its old one.
-    #[test]
-    fn a_channel_with_no_panels_is_dropped() {
-        let panels = Panels::quiet(SharedMemory::default());
-        panels.adopt("a");
-        panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "", false, None).expect("a");
-        panels.pick(&b, def("clocks-dials"), "", false, None).expect("b");
-        assert_eq!(panels.channels().len(), 2);
-        // Two seconds of frames through b's stage: its first fade, in from
-        // black, is over.
-        let frame = screeny_art::Frame::black();
-        let settle = || {
-            for _ in 0..70 {
-                b.present(&frame, 1.0 / 30.0, 0.0, 30.0);
-            }
-        };
-        settle();
-        // b joins a (rule 1): its old channel has nobody on it, but b is still
-        // fading away from it.
-        panels.pick(&b, def("metaballs"), "", false, None).expect("b joins");
-        panels.drop_unused();
-        assert_eq!(panels.channels().len(), 2, "kept while b fades away from it");
-        settle();
-        panels.drop_unused();
-        assert_eq!(panels.channels().len(), 1, "and dropped once the fade is over");
-        panels.remove("a");
-        panels.remove("b");
-        assert!(panels.channels().is_empty(), "forgetting the last panel on a channel drops it");
-    }
-
-    /// The panel somebody names first takes over the stand-in, so the picture
-    /// the page was showing carries on to it; `rekey` keeps a panel's place.
-    #[test]
-    fn attaching_the_first_panel_keeps_the_picture_and_the_order_holds() {
-        let panels = Panels::quiet(SharedMemory::default());
-        let stand_in = panels.ensure_first();
-        let picture = channel_of(&stand_in);
-        let p = panels.attach("pending:127.0.0.1:9");
-        assert!(Arc::ptr_eq(&p, &stand_in), "the same panel, renamed");
-        assert!(Arc::ptr_eq(&channel_of(&p), &picture), "on the same picture");
-        panels.adopt("zz");
-        panels.rekey("pending:127.0.0.1:9", "aa0001");
-        assert_eq!(panels.ids(), vec!["aa0001".to_string(), "zz".to_string()], "adoption order, not id order");
-        assert!(panels.is_first(&p));
-    }
-
-    /// Renaming or deleting a setting moves every channel that was on it.
+    /// A setting renamed or deleted follows every channel on it.
     #[test]
     fn a_setting_renamed_or_deleted_follows_every_channel_on_it() {
         let memory = SharedMemory::default();
         let lava = Working { params: BTreeMap::from([("size".to_string(), 2.5)]), seed: 7, speed: 1.0 };
         memory.save_setting(def("metaballs"), "Lava", &lava).expect("save");
         let panels = Panels::quiet(memory.clone());
-        panels.adopt("a");
-        let a = panels.get("a").expect("a");
-        panels.pick(&a, def("metaballs"), "Lava", false, None).expect("a");
+        let home = panels.home();
+        panels.pick(&home, def("metaballs"), "Lava", None).expect("Lava");
         memory.rename_setting(def("metaballs"), "Lava", "Lava lamp").expect("rename");
         panels.setting_renamed("metaballs", "Lava", "Lava lamp");
-        assert_eq!(panels.state_of(&a).setting, "Lava lamp");
-        assert!(!panels.state_of(&a).modified);
+        assert_eq!(panels.state_of(&home, None).setting, "Lava lamp");
         memory.delete_setting(def("metaballs"), "Lava lamp").expect("delete");
         panels.setting_deleted("metaballs", "Lava lamp");
-        let s = panels.state_of(&a);
+        let s = panels.state_of(&home, None);
         assert_eq!((s.setting.as_str(), s.modified), ("Default", true), "on Default, and honestly modified");
     }
 
-    /// Run each channel's render thread for a moment, with somebody watching
-    /// so it runs at the full rate, then stop it and wait for it to finish.
-    fn render_a_while(panels: &Panels, watch: &Arc<Panel>) {
-        let mut viewer = watch.screen().viewer();
-        viewer.set_wants_frames(true);
+    /// Run every channel's render thread for a while - the given panels'
+    /// fades over - then stop them and wait for them to finish.
+    fn render_a_while(panels: &Panels, ticks: u64) {
         panels.start();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while panels.channels().iter().any(|c| c.ticks() < 10) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while panels.channels().iter().filter(|c| !c.follower_ids().is_empty()).any(|c| c.ticks() < ticks) {
             assert!(std::time::Instant::now() < deadline, "the channels never rendered");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         for c in panels.channels() {
             c.shutdown();
         }
-        // `shutdown` lets go of the core at once; the thread finishes the frame
-        // it is on (one frame period at most) and then stops ticking.
         let mut last: Vec<u64> = Vec::new();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1001,55 +874,58 @@ mod tests {
         }
     }
 
-    /// **Two panels on one channel get identical frames from one render**:
-    /// every tick of the channel is presented to both, exactly once, and the
-    /// last frame each put in its preview cell is the same picture.
+    /// **Encode once**: a channel with two panels encodes exactly once per
+    /// tick - not once per panel - and each panel is handed every tick.
     #[test]
-    fn two_panels_on_one_channel_get_the_same_frames_from_one_render() {
+    fn a_channel_encodes_once_per_tick_whoever_is_on_it() {
         let panels = Panels::quiet(SharedMemory::default());
-        let (a, b) = two_on_one(&panels);
-        render_a_while(&panels, &a);
-        let ticks = channel_of(&a).ticks();
-        assert!(ticks >= 10);
-        assert_eq!((a.presents(), b.presents()), (ticks, ticks), "one render, handed to both");
-        let (pa, pb) = (a.screen().newest(), b.screen().newest());
-        assert_eq!(pa[crate::page::HEADER..], pb[crate::page::HEADER..], "the same picture on both");
+        let (a, b) = two(&panels);
+        let home = panels.home();
+        render_a_while(&panels, 90);
+        let ticks = home.ticks();
+        assert!(ticks >= 90);
+        assert_eq!(home.encodes(), ticks, "one encode per tick, for two panels");
+        assert_eq!((a.presents(), b.presents()), (ticks, ticks), "every tick handed to both");
+        assert!(!a.fading() && !b.fading(), "their fades in are over");
     }
 
-    /// **Two channels render independently**: each panel is presented its own
-    /// channel's frames, as many as that channel rendered, and they differ.
+    /// An empty channel nobody watches does not render; one that is watched
+    /// does.
     #[test]
-    fn two_channels_render_independently() {
+    fn an_empty_channel_renders_only_while_watched() {
         let panels = Panels::quiet(SharedMemory::default());
-        panels.adopt("a");
-        panels.adopt("b");
-        let a = panels.get("a").expect("a");
-        let b = panels.get("b").expect("b");
-        panels.pick(&a, def("metaballs"), "", false, None).expect("a");
-        panels.pick(&b, def("clocks-dials"), "", false, None).expect("b");
-        let mut viewer = b.screen().viewer();
+        let home = panels.home();
+        home.ensure_running();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert_eq!(home.ticks(), 0, "no panel, nobody watching: parked");
+        let mut viewer = home.screen().viewer();
         viewer.set_wants_frames(true);
-        render_a_while(&panels, &a);
-        let (ca, cb) = (channel_of(&a), channel_of(&b));
-        assert!(!Arc::ptr_eq(&ca, &cb));
-        assert_eq!(a.presents(), ca.ticks(), "a sees its own channel's renders");
-        assert_eq!(b.presents(), cb.ticks(), "b sees its own channel's renders");
-        let (pa, pb) = (a.screen().newest(), b.screen().newest());
-        assert_ne!(pa[crate::page::HEADER..], pb[crate::page::HEADER..], "two pictures");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while home.ticks() < 5 {
+            assert!(std::time::Instant::now() < deadline, "a watched channel never rendered");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        home.shutdown();
     }
 
-    /// The file round-trips: panels in their order, each on its channel.
+    /// The file round-trips: panels in their order, each on its channel, and
+    /// an empty channel kept.
     #[test]
     fn what_is_stored_loads_back_the_same() {
         let panels = Panels::quiet(SharedMemory::default());
-        let (_a, b) = two_on_one(&panels);
+        let (_a, b) = two(&panels);
         panels.adopt("c");
-        panels.pick(&b, def("clocks-dials"), "", true, None).expect("b");
+        let other = panels.new_channel(Some("Other"), None).expect("new");
+        panels.pick(&other, def("clocks-dials"), "", None).expect("dials");
+        panels.move_panel(&b, &other, None);
+        panels.new_channel(Some("Empty"), None).expect("empty");
         let (sp, sc) = panels.stored();
+        assert_eq!(sc.len(), 3, "the empty channel is kept");
         let again = Panels::quiet(SharedMemory::default());
         again.load(sp.clone(), sc.clone());
         assert_eq!(again.stored(), (sp, sc));
         assert_eq!(again.ids(), vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-        assert!(again.get("c").expect("c").channel().is_none(), "idle stays idle");
+        assert_eq!(again.get("b").and_then(|p| p.channel()).map(|c| c.id()), Some(2));
+        assert_eq!(again.new_channel(None, None).expect("next").id(), 4, "the next id carries on");
     }
 }

@@ -39,11 +39,13 @@ pub fn start(st: &AppState) -> Handle {
 /// What HA should be shown now: every panel's device, first panel first.
 #[must_use]
 pub fn fleet_of(st: &AppState) -> Fleet {
-    // `first` makes the unbound stand-in if there is no panel at all, so a
-    // studio always has one device to show.
-    let _ = st.first();
     let panels = st.panels.all();
     let pictures = pictures(st);
+    // Card 353 (until card 355 reworks this): with no panel at all, the one
+    // device HA is shown is Channel 1's picture, with no light behind it.
+    if panels.is_empty() {
+        return vec![PanelView { device: String::new(), key: None, name: String::new(), snapshot: snapshot_of(st, None, pictures) }];
+    }
     let devices: Vec<String> = panels.iter().map(|p| p.device()).collect();
     let keys = fleet::keys(&devices);
     panels
@@ -57,7 +59,7 @@ pub fn fleet_of(st: &AppState) -> Fleet {
                 Some(_) => st.devices.get(&panel.device()).map_or_else(|| panel.device(), |d| d.label()),
             },
             key,
-            snapshot: snapshot_of(st, panel, pictures.clone()),
+            snapshot: snapshot_of(st, Some(panel), pictures.clone()),
         })
         .collect()
 }
@@ -67,6 +69,9 @@ pub fn fleet_of(st: &AppState) -> Fleet {
 #[must_use]
 pub fn panel_keys(st: &AppState) -> Vec<Option<String>> {
     let devices: Vec<String> = st.panels.all().iter().map(|p| p.device()).collect();
+    if devices.is_empty() {
+        return vec![None];
+    }
     fleet::keys(&devices)
 }
 
@@ -74,27 +79,26 @@ pub fn panel_keys(st: &AppState) -> Vec<Option<String>> {
 /// snapshot.
 #[must_use]
 pub fn snapshot(st: &AppState) -> Snapshot {
-    snapshot_of(st, &st.first(), pictures(st))
+    snapshot_of(st, st.first().as_ref(), pictures(st))
 }
 
-fn snapshot_of(st: &AppState, panel: &Arc<Panel>, pictures: Vec<Picture>) -> Snapshot {
-    let page = st.state_of(panel);
-    let status = st.panels.status_of(panel);
+/// A panel's device, as HA sees it: **its channel's picture** (card 353), and
+/// its own brightness and link. `None` is Channel 1 with no panel.
+fn snapshot_of(st: &AppState, panel: Option<&Arc<Panel>>, pictures: Vec<Picture>) -> Snapshot {
+    let channel = panel.and_then(|p| p.channel()).unwrap_or_else(|| st.panels.home());
+    let page = st.state_of(&channel, panel);
+    let patch_name = crate::channel::find_patch(&page.patch, st.cfg.fault_patches).map_or("", |d| d.name).to_string();
+    let status = panel.map(|p| st.panels.status_of(p));
     // The working copy changed since its setting was loaded is not a picture
     // in the list: HA shows it as unknown rather than naming something the
     // panel is not showing.
-    let picture = (!page.modified).then(|| Picture::label(&status.patch_name, &page.setting));
+    let picture = (!page.modified).then(|| Picture::label(&patch_name, &page.setting));
     Snapshot {
-        patch: PatchState {
-            id: page.patch.clone(),
-            name: status.patch_name.clone(),
-            setting: page.setting.clone(),
-            modified: page.modified,
-        },
-        brightness: status.brightness,
+        patch: PatchState { id: page.patch.clone(), name: patch_name, setting: page.setting.clone(), modified: page.modified },
+        brightness: status.as_ref().and_then(|s| s.brightness),
         picture: picture.filter(|l| pictures.iter().any(|p| &p.label == l)),
         pictures,
-        panel_connected: status.on && status.panel.as_ref().is_some_and(|p| p.connected),
+        panel_connected: status.is_some_and(|s| s.on && s.panel.as_ref().is_some_and(|p| p.connected)),
     }
 }
 
@@ -178,10 +182,12 @@ async fn obey(st: AppState, mut orders: mpsc::Receiver<Order>) {
 ///
 /// What the studio said no with, in a sentence.
 pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
-    // The panel it was for; the unbound stand-in (an empty id) is the first.
-    let panel = st.panel(Some(&order.device))?;
+    // The panel it was for: an empty id is the first panel, or - with none -
+    // Channel 1 alone.
+    let panel = if order.device.is_empty() { st.first() } else { Some(st.panel(Some(&order.device))?) };
     match &order.command {
         Command::SetBrightness(level) => {
+            let panel = panel.ok_or_else(|| "there is no panel yet".to_string())?;
             // The nearest real stop, so what HA is shown back is what the
             // panel does. The supervisor sends it within a second.
             let level = snap(*level);
@@ -191,12 +197,12 @@ pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
             if !st.memory.setting_names(patch).iter().any(|n| n == setting) && !crate::state::is_default_name(setting) {
                 return Err(format!("`{patch}` has no setting called `{setting}` any more"));
             }
-            // A hand change, like picking a patch and a setting on the page:
-            // card 350's three rules, and the manual cross-fade (card 304).
+            // Card 353 (until card 355): a panel's picture select changes **its
+            // channel** - every panel on it - with the manual cross-fade.
             let def = crate::channel::find_patch(patch, st.cfg.fault_patches).ok_or_else(|| format!("no patch called `{patch}`"))?;
-            let channel = st.panels.pick(&panel, def, setting, false, None)?;
+            let channel = panel.as_ref().and_then(|p| p.channel()).unwrap_or_else(|| st.panels.home());
+            st.panels.pick(&channel, def, setting, None)?;
             channel.ensure_running();
-            crate::fleet::aim_at_device(st, &panel);
         }
     }
     st.changed(None);

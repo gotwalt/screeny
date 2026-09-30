@@ -5,31 +5,31 @@
 //! laptop with a browser tab open on `127.0.0.1:8787`, or in a container on
 //! the network. There is no desktop window.
 //!
-//! **Channels and panels** (cards 350-352). A *channel* renders a picture once
-//! per tick; every *panel* that follows it puts those frames through its own
-//! pipeline and link. The same picture can be on several panels, in sync, and
-//! several pictures can play at once (`docs/design/studio-vision.md`, "Several
-//! panels"). The web page is a window onto what the panels are doing: the
-//! frames a browser draws for a panel are the same decoded datagrams that panel
-//! is being sent.
+//! **Channels own the picture** (cards 350-355). A *channel* renders, limits,
+//! quantises and encodes a picture **once** per tick; every *panel* on it is
+//! sent that one encoded frame byte for byte, so panels on one channel are
+//! frame-for-frame identical and none of them is the master. Several channels
+//! can play at once (`docs/design/studio-vision.md`, "Several panels: channels
+//! own the picture"). The web page is a window onto a channel: the frames a
+//! browser draws are that channel's encoded frames, decoded - what every panel
+//! on it shows.
 //!
 //! ```text
-//!   state file (atomic, versioned) ──> device registry ──> a panel per device (adopted idle)
-//!                                            ^                     │ follows
+//!   state file (atomic, versioned) ──> device registry ──> a panel per device (joins Channel 1)
+//!                                            ^                     │ is on one channel
 //!   mDNS browse + manual addresses ──────────┘                     v
-//!   supervisor (1 Hz): watchdog, fallback,           channels: one render per tick, fanned out
-//!   reconnect, brightness, adoption                        │ per panel: pipeline ─> screeny::Link ──UDP──> panel
-//!                                                          │                    └─> that panel's frame cell
-//!   HTTP /api/v1/*?panel= ──> a panel (absent: the first)  │                            │ (one slot, newest wins)
-//!                              ──state broadcast──────────────────> /api/v1/ws?panel= ──> browsers
+//!   supervisor (1 Hz): watchdog, fallback,     channels: render ─> pipeline ─> encode, once per tick
+//!   reconnect, brightness, adoption                  │ the same payload ─> each panel's screeny::Link ──UDP──> panel
+//!                                                    └─> the channel's frame cell (one slot, newest wins)
+//!   HTTP /api/v1/*?channel= ──> a channel (absent: Channel 1)    │
+//!                              ──state broadcast──────────> /api/v1/ws?channel= ──> browsers
 //! ```
 //!
 //! Nothing in that picture can grow without bound, and nothing a browser does
 //! (or stops doing) can slow a channel or a panel link down.
 //!
-//! A studio always has a picture: with no panel found yet it is on the
-//! *unbound* stand-in, which has no link, and the first panel somebody names
-//! takes it over without the picture restarting.
+//! A studio always has a picture: Channel 1 exists before any panel does, and
+//! renders while somebody watches it.
 
 pub mod api;
 pub mod channel;
@@ -54,12 +54,15 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
-use crate::api::{Changed, StatusEvent};
+use crate::api::Changed;
+use crate::channel::{Channel, ChannelId};
 use crate::devices::Registry;
 use crate::page::StudioState;
 use crate::panel::Panel;
-use crate::panels::{PanelSummary, Panels};
+use crate::panels::{ChannelSummary, PanelSummary, Panels};
 use crate::state::{SharedMemory, Store};
+use screeny_art::output::PanelStatus;
+use screeny_art::patch::Playing;
 
 /// State changes a browser may be behind by before it is resynced instead.
 /// Small on purpose: the newest state is always the right answer, so there is
@@ -161,10 +164,24 @@ impl Default for Config {
     }
 }
 
-/// The half-second heartbeat for every panel at once, by device id: one read
-/// per tick however many browsers are watching, and each socket picks out its
-/// own panel's.
-pub type StatusBoard = std::collections::BTreeMap<String, StatusEvent>;
+/// The half-second heartbeat for every channel and every panel at once: one
+/// read per tick however many browsers are watching, and each socket picks out
+/// its own channel's and panel's.
+#[derive(Default)]
+pub struct StatusBoard {
+    /// What each channel's patch is performing.
+    pub channels: std::collections::BTreeMap<ChannelId, Option<Playing>>,
+    /// Each panel's link, by device id.
+    pub panels: std::collections::BTreeMap<String, Option<PanelStatus>>,
+}
+
+/// Everything the page's rows are drawn from (cards 350, 353): every panel and
+/// every channel, in one slot, replaced only when it differs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Overview {
+    pub panels: Vec<PanelSummary>,
+    pub channels: Vec<ChannelSummary>,
+}
 
 /// Everything a request handler can reach. Cheap to clone.
 #[derive(Clone)]
@@ -175,9 +192,9 @@ pub struct AppState {
     pub states: broadcast::Sender<Changed>,
     /// The half-second heartbeat, in one slot for the same reason as frames.
     pub status: watch::Sender<Arc<StatusBoard>>,
-    /// Card 350: the overview - one card per panel - in one slot, replaced
+    /// Cards 350, 353: every panel and every channel, in one slot, replaced
     /// only when it differs.
-    pub overview: watch::Sender<Arc<Vec<PanelSummary>>>,
+    pub overview: watch::Sender<Arc<Overview>>,
     pub ui: Arc<ui::Ui>,
     /// True once the studio has been asked to stop. Everything that would
     /// otherwise run for ever - every channel, the status task, every open
@@ -186,8 +203,8 @@ pub struct AppState {
     pub stop: watch::Receiver<bool>,
     /// Every panel this studio knows about, keyed by its own stable id.
     pub devices: Arc<Registry>,
-    /// Card 350: every panel and every channel. One panel per device, plus
-    /// the unbound stand-in while there is none.
+    /// Every panel and every channel: one panel per device, each on a
+    /// channel, and always Channel 1.
     pub panels: Arc<Panels>,
     /// The state file.
     pub store: Arc<Store>,
@@ -217,8 +234,8 @@ impl AppState {
         let memory = panels.memory();
         AppState {
             states: broadcast::Sender::new(STATE_BACKLOG),
-            status: watch::Sender::new(Arc::new(StatusBoard::new())),
-            overview: watch::Sender::new(Arc::new(Vec::new())),
+            status: watch::Sender::new(Arc::new(StatusBoard::default())),
+            overview: watch::Sender::new(Arc::new(Overview::default())),
             ui: Arc::new(ui),
             stop,
             devices,
@@ -232,46 +249,78 @@ impl AppState {
         }
     }
 
-    /// **The first panel**: what a route or a socket without `panel` means.
-    /// With no panel at all, the unbound stand-in.
+    /// The first panel adopted, if there is one: what a panel route without
+    /// `panel` means.
     #[must_use]
-    pub fn first(&self) -> Arc<Panel> {
-        self.panels.ensure_first()
+    pub fn first(&self) -> Option<Arc<Panel>> {
+        self.panels.first()
     }
 
     /// The panel a request named, or the first one when it named none.
     ///
     /// # Errors
     ///
-    /// When it names a panel this studio does not have.
+    /// When it names a panel this studio does not have, or names none and
+    /// there is no panel at all.
     pub fn panel(&self, which: Option<&str>) -> Result<Arc<Panel>, String> {
         match which.map(str::trim).filter(|w| !w.is_empty()) {
-            None => Ok(self.first()),
+            None => self.first().ok_or_else(|| "there is no panel yet".to_string()),
             Some(id) => self.panels.get(id).ok_or_else(|| format!("no panel `{id}`")),
         }
     }
 
-    /// What one panel is showing.
-    #[must_use]
-    pub fn state_of(&self, panel: &Arc<Panel>) -> StudioState {
-        self.panels.state_of(panel)
+    /// **The channel a request means** (card 353): the `channel` it named;
+    /// else the channel of the `panel` it named - which is also handed back,
+    /// as the panel the state is seen from; else Channel 1.
+    ///
+    /// # Errors
+    ///
+    /// When it names a channel or a panel this studio does not have.
+    pub fn channel(&self, channel: Option<ChannelId>, panel: Option<&str>) -> Result<(Arc<Channel>, Option<Arc<Panel>>), String> {
+        if let Some(id) = channel {
+            let c = self.panels.channel(id).ok_or_else(|| format!("no channel {id}"))?;
+            // A panel named as well is only the point of view, if it is on it.
+            let from = panel.and_then(|p| self.panels.get(p.trim())).filter(|p| p.channel().is_some_and(|pc| Arc::ptr_eq(&pc, &c)));
+            return Ok((c, from));
+        }
+        match panel.map(str::trim).filter(|w| !w.is_empty()) {
+            Some(id) => {
+                let p = self.panels.get(id).ok_or_else(|| format!("no panel `{id}`"))?;
+                let c = p.channel().unwrap_or_else(|| self.panels.home());
+                Ok((c, Some(p)))
+            }
+            None => Ok((self.panels.home(), None)),
+        }
     }
 
-    /// What the first panel is showing.
+    /// What one channel is showing, seen from `from` when a request named a
+    /// panel on it.
+    #[must_use]
+    pub fn state_of(&self, channel: &Arc<Channel>, from: Option<&Arc<Panel>>) -> StudioState {
+        self.panels.state_of(channel, from)
+    }
+
+    /// What Channel 1 is showing.
     #[must_use]
     pub fn page_state(&self) -> StudioState {
-        self.state_of(&self.first())
+        self.state_of(&self.panels.home(), None)
     }
 
-    /// The overview, now.
+    /// Every panel, now.
     #[must_use]
     pub fn summaries(&self) -> Vec<PanelSummary> {
         self.panels.summaries(&self.devices)
     }
 
+    /// Every panel and every channel, now.
+    #[must_use]
+    pub fn overview(&self) -> Overview {
+        Overview { panels: self.summaries(), channels: self.panels.channel_summaries() }
+    }
+
     /// Put the overview in its cell, if it has changed.
     pub fn refresh_overview(&self) {
-        let now = self.summaries();
+        let now = self.overview();
         self.overview.send_if_modified(|was| {
             if **was == now {
                 return false;
@@ -377,13 +426,11 @@ impl Studio {
         let memory = SharedMemory::new(saved.patches);
         let panels = Arc::new(Panels::new(memory, cfg.fault_patches));
         panels.load(saved.panels, saved.channels);
-        // Card 350: every device the registry knows is a panel - adopted
-        // idle if the file did not already have it.
+        // Every device the registry knows is a panel - on Channel 1 if the
+        // file did not already have it (card 353).
         for id in devices.ids() {
             panels.adopt(&id);
         }
-        // There is always a picture, even before there is a panel.
-        panels.ensure_first();
 
         let (stop, _) = watch::channel(false);
         let cfg = Arc::new(cfg);
@@ -531,15 +578,10 @@ fn spawn_status(st: AppState) {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let board: StatusBoard = st
-                        .panels
-                        .all()
-                        .iter()
-                        .map(|p| {
-                            let playing = p.channel().and_then(|c| c.playing());
-                            (p.device(), StatusEvent { kind: "status", playing, panel: p.link_status() })
-                        })
-                        .collect();
+                    let board = StatusBoard {
+                        channels: st.panels.channels().iter().map(|c| (c.id(), c.playing())).collect(),
+                        panels: st.panels.all().iter().map(|p| (p.device(), p.link_status())).collect(),
+                    };
                     st.status.send_replace(Arc::new(board));
                     // Links come and go without a state change; the overview
                     // says so within a heartbeat.

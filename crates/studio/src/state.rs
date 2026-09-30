@@ -84,10 +84,50 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///   still means the panel it meant. A working copy that was *not* playing
 ///   and had moved away from its setting is said once in the `repaired`
 ///   voice, naming the patch ([`migrate_to_v8`]).
+/// - **v9** (card 353) makes **the channel own the picture**, whole: a channel
+///   gains `name` and `output` (the pipeline settings, which were a panel's),
+///   and a panel loses `output` and always has a `channel` - there is no idle
+///   panel any more, and there is always a Channel 1 (id 1). A channel no
+///   panel follows is kept. The migration keeps v8's channels in id order,
+///   numbered 1, 2, ... and named "Channel N", gives each its first member's
+///   output, and puts every idle panel on Channel 1 ([`migrate_to_v9`]).
 ///
 /// Older files are migrated, never thrown away, and are copied aside first.
 /// See [`migrate`] and [`back_up`].
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
+
+/// Card 353: **Channel 1** - the channel that always exists and cannot be
+/// deleted, the one a route without `channel` means and the one a new panel
+/// joins.
+pub const HOME_CHANNEL: u32 = 1;
+
+/// A channel's name as a person typed it, as it will be kept - or the sentence
+/// to show them. Trimmed, 1..=[`MAX_NAME_CHARS`] characters, no control
+/// characters.
+///
+/// # Errors
+///
+/// If it is empty, too long, or has a control character in it.
+pub fn check_channel_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A channel needs a name.".into());
+    }
+    let chars = name.chars().count();
+    if chars > MAX_NAME_CHARS {
+        return Err(format!("A channel's name can be at most {MAX_NAME_CHARS} characters; that one is {chars}."));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("A channel's name cannot have line breaks or control characters in it.".into());
+    }
+    Ok(name.to_string())
+}
+
+/// The name a channel has until somebody gives it one: "Channel 2".
+#[must_use]
+pub fn default_channel_name(id: u32) -> String {
+    format!("Channel {id}")
+}
 /// The file, inside the state directory.
 pub const FILE: &str = "state.json";
 /// Where the last unreadable state file is kept. One fixed name: a server that
@@ -238,16 +278,14 @@ pub struct Persisted {
     /// Devices, keyed by their stable id. A collection from day one even
     /// though one panel is the expected case (`studio-vision.md`, decision 3).
     pub devices: Vec<StoredDevice>,
-    /// Card 350: one per device, **in the order they were adopted** - the
-    /// first is the one a route without `panel` means. A panel may exist for
-    /// a device that is not currently reachable - the normal case after a
-    /// power cut - and one may be [`UNBOUND`]: the stand-in a studio that has
-    /// found no panel yet shows its picture on.
+    /// Card 350: one per device, **in the order they were adopted**. A panel
+    /// may exist for a device that is not currently reachable - the normal
+    /// case after a power cut. Since v9 (card 353) every one is on a channel.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub panels: Vec<StoredPanel>,
-    /// Card 350: the pictures the panels follow. A channel no panel follows is
-    /// not kept.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The channels, by id: each owns a picture and how it is finished. Since
+    /// v9 there is always Channel 1 ([`HOME_CHANNEL`]) and a channel no panel
+    /// follows is kept.
     pub channels: Vec<StoredChannel>,
     /// **Read, never written** (v7 and older): one per device. [`migrate_to_v8`]
     /// turns each into a panel and a channel.
@@ -319,39 +357,48 @@ pub struct StoredDevice {
     pub manual: bool,
 }
 
-/// One panel, as the file keeps it (card 350): the device and everything that
-/// is about the device, and which channel it follows.
+/// One panel, as the file keeps it (cards 350, 353): the device and what is
+/// about the device alone, and which channel it is on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredPanel {
-    /// The device id, or [`UNBOUND`] for the stand-in.
+    /// The device id.
     pub device: String,
     /// **Panel output.** False releases the link - the panel goes back to its
     /// own idle screen - and the picture carries on for the page.
     pub on: bool,
-    /// The channel it follows. `None` is **idle**: no picture and no stream,
-    /// so the device shows its own screen. A new panel starts here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<u32>,
-    /// How a frame is finished for this panel.
-    pub output: Output,
+    /// The channel it is on. Always one, since v9. Absent in a file - a v8
+    /// panel that was idle - reads as `0`, which [`migrate_to_v9`] and
+    /// [`repair_panels`] put on Channel 1.
+    #[serde(default)]
+    pub channel: u32,
+    /// **Read, never written** (v8): how a frame was finished for this panel.
+    /// Since v9 that is the channel's ([`StoredChannel::output`]), and
+    /// [`migrate_to_v9`] gives each channel its first member's.
+    #[serde(skip_serializing)]
+    pub output: Option<Output>,
     /// Brightness policy: a fixed level to apply whenever the link comes up,
-    /// or `None` to leave whatever the device has.
+    /// or `None` to leave whatever the device has. Applied on the device, so
+    /// it never changes the frames: it stays a panel's own.
     pub brightness: Option<u8>,
 }
 
 impl Default for StoredPanel {
     fn default() -> Self {
-        StoredPanel { device: String::new(), on: true, channel: None, output: Output::default(), brightness: None }
+        StoredPanel { device: String::new(), on: true, channel: HOME_CHANNEL, output: None, brightness: None }
     }
 }
 
-/// One channel, as the file keeps it (card 350): a running picture - a patch,
-/// the named setting its working copy came from, and the working copy itself.
+/// One channel, as the file keeps it (cards 350, 353): a running picture - a
+/// patch, the named setting its working copy came from, the working copy
+/// itself - and how its frames are finished, which every panel on it shares.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StoredChannel {
     pub id: u32,
+    /// What people call it ("Channel 1", "Kitchen"). Empty in a file is
+    /// "Channel <id>".
+    pub name: String,
     pub patch: String,
     /// The named setting the working copy was loaded from; empty is
     /// [`DEFAULT_SETTING`]. Whether it has been moved since is computed.
@@ -361,11 +408,23 @@ pub struct StoredChannel {
     /// Only the values that differ from the patch's defaults.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, f32>,
+    /// Card 353: how its frames are finished - Dithered / Bit planes, the
+    /// limiter, the panel model. A channel's since v9, because it shapes the
+    /// bytes every panel on it is sent.
+    pub output: Output,
 }
 
 impl Default for StoredChannel {
     fn default() -> Self {
-        StoredChannel { id: 0, patch: default_patch().to_string(), setting: String::new(), seed: DEFAULT_SEED, params: BTreeMap::new() }
+        StoredChannel {
+            id: 0,
+            name: String::new(),
+            patch: default_patch().to_string(),
+            setting: String::new(),
+            seed: DEFAULT_SEED,
+            params: BTreeMap::new(),
+            output: Output::default(),
+        }
     }
 }
 
@@ -1299,6 +1358,10 @@ fn load(path: &Path) -> Loaded {
     if was < 8 {
         migrate_to_v8(&mut state, &mut repaired);
     }
+    // Card 353: the channel owns the picture, whole.
+    if was < 9 {
+        migrate_to_v9(&mut state);
+    }
     repair_panels(&mut state, &mut repaired);
     strip_working_copies(&mut state);
     repaired.truncate(MAX_REPAIRS);
@@ -1448,8 +1511,8 @@ fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
             Some(def) => sparse(def, &p.params),
             None => p.params,
         };
-        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params });
-        state.panels.push(StoredPanel { device: p.device, on: p.on, channel: Some(next), output: p.output, brightness: p.brightness });
+        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params, ..StoredChannel::default() });
+        state.panels.push(StoredPanel { device: p.device, on: p.on, channel: next, output: Some(p.output), brightness: p.brightness });
         next += 1;
     }
     let mut lost = Vec::new();
@@ -1480,28 +1543,80 @@ fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
     }
 }
 
-/// Every load: panels and channels that make sense together (card 350).
+/// v8 -> v9 (card 353): **the channel owns the picture, whole.**
+///
+/// - v8's channels are kept, in id order, and **numbered 1, 2, ...** - so the
+///   first of them is Channel 1, the one that always exists - and named
+///   "Channel N". (Ids were never shown to anybody and v8 never reused one, so
+///   nothing outside this file knew them.)
+/// - Each channel takes **its first member's `output`** - the panel that
+///   joined it first, in the order the panels were adopted. A channel whose
+///   members disagreed now has one output, which is the point of the card.
+/// - A panel that was **idle** (no channel) goes on Channel 1; the unbound
+///   stand-in, which was only ever a way of showing a picture with no panel,
+///   goes, and its picture stays on its channel.
+/// - A file with no channel at all gets Channel 1 on the default patch.
+///
+/// The v8 file is kept as `state.v8.json`, as every migration's is.
+fn migrate_to_v9(state: &mut Persisted) {
+    state.channels.sort_by_key(|c| c.id);
+    let mut dedup = std::collections::BTreeSet::new();
+    state.channels.retain(|c| dedup.insert(c.id));
+    let renumber: BTreeMap<u32, u32> = state.channels.iter().zip(1..).map(|(c, n)| (c.id, n)).collect();
+    for c in &mut state.channels {
+        let first = state.panels.iter().find(|p| p.channel == c.id && p.channel != 0).and_then(|p| p.output);
+        c.output = first.unwrap_or_default();
+        c.id = renumber[&c.id];
+        c.name = default_channel_name(c.id);
+    }
+    for p in &mut state.panels {
+        p.channel = renumber.get(&p.channel).copied().unwrap_or(HOME_CHANNEL);
+        p.output = None;
+    }
+    state.panels.retain(|p| p.device != UNBOUND);
+    if state.channels.is_empty() {
+        state.channels.push(StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() });
+    }
+}
+
+/// Every load: panels and channels that make sense together (cards 350, 353).
 ///
 /// A hand-edited or damaged file can name a panel twice, point a panel at a
-/// channel that is not there, or put a channel on a patch this build has not
-/// got. Each costs exactly that and is said once; a channel no panel follows
-/// is simply not kept, as it would not be at runtime.
+/// channel that is not there, lose Channel 1, or put a channel on a patch this
+/// build has not got. Each costs exactly that and is said once. A channel no
+/// panel follows is kept (card 353: channels are explicit).
 fn repair_panels(state: &mut Persisted, repaired: &mut Vec<String>) {
     let mut seen = std::collections::BTreeSet::new();
-    state.panels.retain(|p| seen.insert(p.device.clone()));
+    state.panels.retain(|p| p.device != UNBOUND && seen.insert(p.device.clone()));
     let mut ids = std::collections::BTreeSet::new();
-    state.channels.retain(|c| ids.insert(c.id));
-    for p in &mut state.panels {
-        if let Some(id) = p.channel {
-            if !ids.contains(&id) {
-                let who = if p.device == UNBOUND { "the page".to_string() } else { format!("panel {}", p.device) };
-                repaired.push(format!("{who} followed channel {id}, which is not in the file; it is idle"));
-                p.channel = None;
-            }
+    state.channels.retain(|c| c.id != 0 && ids.insert(c.id));
+    if !ids.contains(&HOME_CHANNEL) {
+        if !state.channels.is_empty() {
+            repaired.push("Channel 1 was not in the file; it is back, on the default patch".to_string());
+        }
+        state.channels.insert(0, StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() });
+        ids.insert(HOME_CHANNEL);
+    }
+    state.channels.sort_by_key(|c| c.id);
+    for c in &mut state.channels {
+        if c.name.trim().is_empty() {
+            c.name = default_channel_name(c.id);
+        } else if let Ok(name) = check_channel_name(&c.name) {
+            c.name = name;
+        } else {
+            repaired.push(format!("channel {}'s name could not be used; it is `{}`", c.id, default_channel_name(c.id)));
+            c.name = default_channel_name(c.id);
         }
     }
-    let followed: std::collections::BTreeSet<u32> = state.panels.iter().filter_map(|p| p.channel).collect();
-    state.channels.retain(|c| followed.contains(&c.id));
+    for p in &mut state.panels {
+        p.output = None;
+        if !ids.contains(&p.channel) {
+            if p.channel != 0 {
+                repaired.push(format!("panel {} was on channel {}, which is not in the file; it is on Channel 1", p.device, p.channel));
+            }
+            p.channel = HOME_CHANNEL;
+        }
+    }
     let Some(def) = screeny_art::patch::find(default_patch()) else { return };
     for c in &mut state.channels {
         if screeny_art::patch::find(&c.patch).is_some() {
@@ -2032,9 +2147,11 @@ mod tests {
 
         let mut want = Persisted::default();
         want.devices.push(StoredDevice { id: "abc123".into(), name: "desk".into(), ..StoredDevice::default() });
-        want.channels.push(StoredChannel { id: 4, patch: "metaballs".into(), seed: 7, ..StoredChannel::default() });
-        want.panels.push(StoredPanel { device: "abc123".into(), channel: Some(4), ..StoredPanel::default() });
-        want.panels.push(StoredPanel { device: "idle01".into(), ..StoredPanel::default() });
+        want.channels.push(StoredChannel { id: 1, name: "Channel 1".into(), ..StoredChannel::default() });
+        want.channels.push(StoredChannel { id: 4, name: "Kitchen".into(), patch: "metaballs".into(), seed: 7, ..StoredChannel::default() });
+        want.channels.push(StoredChannel { id: 5, name: "Nobody".into(), ..StoredChannel::default() });
+        want.panels.push(StoredPanel { device: "abc123".into(), channel: 4, ..StoredPanel::default() });
+        want.panels.push(StoredPanel { device: "home01".into(), ..StoredPanel::default() });
         store.save(want.clone());
         store.flush();
         assert_eq!(store.health().writes, 1);
@@ -2137,14 +2254,14 @@ mod tests {
     /// below were written against, and what every migration must preserve.
     fn player(state: &Persisted, i: usize) -> StoredPlayer {
         let p = &state.panels[i];
-        let c = p.channel.and_then(|id| state.channels.iter().find(|c| c.id == id));
+        let c = state.channels.iter().find(|c| c.id == p.channel);
         StoredPlayer {
             device: p.device.clone(),
             on: p.on,
             patch: c.map(|c| c.patch.clone()).unwrap_or_default(),
             seed: c.map_or(0, |c| c.seed),
             params: c.map(|c| c.params.clone()).unwrap_or_default(),
-            output: p.output,
+            output: c.map(|c| c.output).unwrap_or_default(),
             brightness: p.brightness,
             paused: false,
             speed: 1.0,
@@ -2156,7 +2273,7 @@ mod tests {
 
     /// The named setting panel `i`'s channel is on; empty is Default.
     fn setting_of(state: &Persisted, i: usize) -> String {
-        let id = state.panels[i].channel.expect("not idle");
+        let id = state.panels[i].channel;
         state.channels.iter().find(|c| c.id == id).expect("its channel").setting.clone()
     }
 
@@ -2288,12 +2405,13 @@ mod tests {
         );
         want.channels.push(StoredChannel {
             id: 1,
+            name: "Channel 1".into(),
             patch: "metaballs".into(),
             seed: 9,
             params: BTreeMap::from([("count".into(), 8.0)]),
             ..StoredChannel::default()
         });
-        want.panels.push(StoredPanel { device: "abc".into(), channel: Some(1), ..StoredPanel::default() });
+        want.panels.push(StoredPanel { device: "abc".into(), channel: 1, ..StoredPanel::default() });
         store.save(want.clone());
         store.flush();
         store.stop();
@@ -2508,7 +2626,7 @@ mod tests {
                 dir.0.join(FILE),
                 // v7: the last schema with `players` (card 350).
                 format!(
-                    r#"{{"version":7,"players":[{{"device":"","piece":"metaballs","seed":9,
+                    r#"{{"version":7,"players":[{{"device":"abc123","piece":"metaballs","seed":9,
                        "settings":{{"levels":{level},"dither":"bayer8","panel_model":false}}}}]}}"#
                 ),
             )
@@ -2548,7 +2666,7 @@ mod tests {
                 dir.0.join(FILE),
                 // v7: the last schema with `players` (card 350).
                 format!(
-                    r#"{{"version":7,"focus":"","players":[{{"device":"","patch":"metaballs","seed":9,
+                    r#"{{"version":7,"focus":"abc123","players":[{{"device":"abc123","patch":"metaballs","seed":9,
                        "fps":{rate},"paused":true,"speed":0.5,
                        "output":{{"dither":"bayer8","panel_model":false}}}}]}}"#
                 ),
@@ -2650,10 +2768,10 @@ mod tests {
         assert_eq!(loaded.panels[0].device, "4a00a4");
     }
 
-    /// The same, with nothing to point at: the player is unbound rather than
-    /// aimed at a device the file has never heard of.
+    /// The same, with nothing to point at: the picture is Channel 1's (card
+    /// 353; it was the unbound stand-in's until then), and there is no panel.
     #[test]
-    fn a_v2_preview_with_no_panel_becomes_an_unbound_player() {
+    fn a_v2_preview_with_no_panel_becomes_channel_1() {
         let dir = Temp::new("v2-unbound");
         std::fs::write(
             dir.0.join(FILE),
@@ -2661,11 +2779,8 @@ mod tests {
         )
         .expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.panels.len(), 1);
-        assert_eq!(player(&loaded, 0).device, UNBOUND);
-        assert_eq!(player(&loaded, 0).patch, "metaballs");
-        assert!(!player(&loaded, 0).on, "nothing to send to");
-        assert_eq!(loaded.panels[0].device, UNBOUND);
+        assert!(loaded.panels.is_empty(), "no device, no panel");
+        assert_eq!((loaded.channels[0].id, loaded.channels[0].patch.as_str()), (HOME_CHANNEL, "metaballs"));
     }
 
     /// A hand-edited file full of rubbish in the memory. Every one of these is
@@ -2795,9 +2910,8 @@ mod tests {
         )
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.panels.len(), 1, "a studio always has a picture to show");
-        assert_eq!(player(&loaded, 0).patch, default_patch());
-        assert_eq!(player(&loaded, 0).device, UNBOUND);
+        assert!(loaded.panels.is_empty(), "no device, no panel (card 353)");
+        assert_eq!(loaded.channels[0].patch, default_patch(), "a studio always has a picture to show: Channel 1's");
         assert!(store.health().repaired.iter().any(|s| s.contains("plasma")), "{:?}", store.health().repaired);
         // The v1 merge wrote nothing for it - `migrate_to_v3` skips a patch it
         // does not know - so there is nothing to keep and nothing is invented.
@@ -2832,7 +2946,7 @@ mod tests {
         for i in 0..20 {
             let mut p = Persisted::default();
             p.channels.push(StoredChannel { id: 1, seed: i, ..StoredChannel::default() });
-            p.panels.push(StoredPanel { device: "abc".into(), channel: Some(1), ..StoredPanel::default() });
+            p.panels.push(StoredPanel { device: "abc".into(), channel: 1, ..StoredPanel::default() });
             store.save(p);
         }
         store.flush();
@@ -3552,29 +3666,116 @@ mod tests {
         assert_eq!(reread, loaded);
     }
 
-    /// Every way a v8 file's panels and channels can disagree costs exactly
+    /// Every way a v9 file's panels and channels can disagree costs exactly
     /// that, and is said.
     #[test]
     fn panels_and_channels_that_disagree_are_put_right() {
-        let dir = Temp::new("v8-repair");
+        let dir = Temp::new("v9-repair");
         std::fs::write(
             dir.0.join(FILE),
             format!(
                 r#"{{"version":{SCHEMA_VERSION},
-                     "panels":[{{"device":"a","channel":1}},{{"device":"a","channel":2}},{{"device":"b","channel":9}},{{"device":"c","channel":2}}],
-                     "channels":[{{"id":1,"patch":"metaballs","seed":3}},{{"id":2,"patch":"plasma","seed":4}},{{"id":3,"patch":"flock"}}]}}"#
+                     "panels":[{{"device":"a","channel":1}},{{"device":"a","channel":2}},{{"device":"b","channel":9}},{{"device":"c","channel":2}},{{"device":"","channel":1}}],
+                     "channels":[{{"id":1,"patch":"metaballs","seed":3}},{{"id":2,"patch":"plasma","seed":4,"name":"Hall"}},{{"id":3,"patch":"flock","name":"\n"}}]}}"#
             ),
         )
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.panels.len(), 3, "a panel named twice is kept once");
+        assert_eq!(loaded.panels.len(), 3, "a panel named twice is kept once, and one with no device not at all");
         assert_eq!(player(&loaded, 0).seed, 3);
-        assert_eq!(loaded.panels[1].channel, None, "b followed a channel that is not there: idle");
+        assert_eq!(loaded.panels[1].channel, HOME_CHANNEL, "b was on a channel that is not there: Channel 1");
         assert_eq!(player(&loaded, 2).patch, default_patch(), "a channel on a patch that is gone plays the default");
-        assert_eq!(loaded.channels.len(), 2, "a channel nobody follows is not kept");
+        assert_eq!(loaded.channels.len(), 3, "a channel nobody is on is kept (card 353)");
+        let names: Vec<&str> = loaded.channels.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Channel 1", "Hall", "Channel 3"], "an empty or unusable name is `Channel N`");
         let said = store.health().repaired.join(" | ");
-        assert!(said.contains("panel b followed channel 9"), "{said}");
+        assert!(said.contains("panel b was on channel 9"), "{said}");
         assert!(said.contains("`plasma` is not a patch this build has"), "{said}");
+    }
+
+    /// A v9 file that has lost Channel 1 gets it back, and says so.
+    #[test]
+    fn channel_1_is_always_there() {
+        let dir = Temp::new("v9-home");
+        std::fs::write(
+            dir.0.join(FILE),
+            format!(r#"{{"version":{SCHEMA_VERSION},"panels":[{{"device":"a","channel":2}}],"channels":[{{"id":2,"patch":"flock","name":"Two"}}]}}"#),
+        )
+        .expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        let ids: Vec<u32> = loaded.channels.iter().map(|c| c.id).collect();
+        assert_eq!(ids, [1, 2]);
+        assert_eq!(loaded.panels[0].channel, 2, "and the panel stays where it was");
+        assert!(store.health().repaired.join(" ").contains("Channel 1 was not in the file"));
+    }
+
+    /// **v8 -> v9 (card 353)**, on the shape the workbench had on
+    /// 2026-09-30: two channels (1: bats on one panel, 2: vesta on the other),
+    /// each panel with its own output. Channels keep their pictures, are named
+    /// "Channel N", and take their first member's output; the v8 file is kept.
+    #[test]
+    fn a_v8_file_migrates_to_v9_like_the_workbench() {
+        let dir = Temp::new("v8-v9-bench");
+        let v8 = r#"{"version":8,
+          "devices":[{"id":"screeny-4a00a4"},{"id":"screeny-3ba9a8"}],
+          "panels":[
+            {"device":"screeny-4a00a4","on":true,"channel":1,"output":{"dither":"bayer4"},"brightness":96},
+            {"device":"screeny-3ba9a8","on":true,"channel":2,"output":{"panel_model":false},"brightness":null}
+          ],
+          "channels":[
+            {"id":1,"patch":"bats","seed":11},
+            {"id":2,"patch":"vesta","setting":"Wall Clock","seed":22}
+          ]}"#;
+        std::fs::write(dir.0.join(FILE), v8).expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v8") && w.contains("state.v8.json")));
+        assert!(dir.0.join("state.v8.json").exists(), "the v8 file is kept");
+        let c: Vec<(u32, &str, &str, u32)> = loaded.channels.iter().map(|c| (c.id, c.name.as_str(), c.patch.as_str(), c.seed)).collect();
+        let bats = if screeny_art::patch::find("bats").is_some() { "bats" } else { default_patch() };
+        let vesta = if screeny_art::patch::find("vesta").is_some() { "vesta" } else { default_patch() };
+        assert_eq!((c[0].0, c[0].1, c[0].2, c[0].3), (1, "Channel 1", bats, 11), "{c:?}");
+        assert_eq!((c[1].0, c[1].1, c[1].2), (2, "Channel 2", vesta));
+        assert_eq!(loaded.channels[0].output.dither, screeny_art::dither::Dither::Bayer4, "Channel 1 has its member's output");
+        assert!(!loaded.channels[1].output.panel_model, "and so does Channel 2");
+        assert_eq!(loaded.panels.iter().map(|p| p.channel).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(loaded.panels[0].brightness, Some(96), "brightness stays the panel's");
+        assert!(loaded.panels.iter().all(|p| p.output.is_none()));
+
+        // Written as v9: the output on the channels, none on the panels.
+        store.save(loaded.clone());
+        store.flush();
+        store.stop();
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        let back: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(back["version"], 9);
+        assert!(back["panels"][0].get("output").is_none(), "{text}");
+        assert_eq!(back["channels"][1]["name"], "Channel 2");
+        assert!(back["channels"][0].get("output").is_some(), "{text}");
+    }
+
+    /// v8 -> v9: ids renumbered in order from 1, an idle panel put on Channel
+    /// 1, the unbound stand-in dropped (its picture stays on its channel), and
+    /// a channel's output is its **first** member's.
+    #[test]
+    fn a_v8_file_with_idle_panels_and_gaps_migrates() {
+        let dir = Temp::new("v8-v9-gaps");
+        let v8 = r#"{"version":8,
+          "panels":[
+            {"device":"","on":true,"channel":3,"output":{"dither":"bayer8"}},
+            {"device":"a","on":true,"channel":7,"output":{"dither":"bayer4"}},
+            {"device":"b","on":true,"channel":7,"output":{"panel_model":false}},
+            {"device":"idle","on":true}
+          ],
+          "channels":[{"id":7,"patch":"flock","seed":5},{"id":3,"patch":"metaballs","seed":4}]}"#;
+        std::fs::write(dir.0.join(FILE), v8).expect("write");
+        let (_store, loaded) = Store::open(Some(&dir.0));
+        let c: Vec<(u32, &str)> = loaded.channels.iter().map(|c| (c.id, c.patch.as_str())).collect();
+        assert_eq!(c, [(1, "metaballs"), (2, "flock")], "in id order, numbered from 1");
+        assert_eq!(loaded.channels[0].output.dither, screeny_art::dither::Dither::Bayer8, "the page's output, from its stand-in");
+        assert_eq!(loaded.channels[1].output.dither, screeny_art::dither::Dither::Bayer4, "a's, the first member");
+        let p: Vec<(&str, u32)> = loaded.panels.iter().map(|p| (p.device.as_str(), p.channel)).collect();
+        assert_eq!(p, [("a", 2), ("b", 2), ("idle", 1)], "the stand-in is gone; the idle panel is on Channel 1");
     }
 
     /// Card 310: a v6 file written by card 302's build - modes with card 309's
