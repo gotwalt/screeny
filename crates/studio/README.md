@@ -375,35 +375,67 @@ frame until their stream timeout.
 Card 302's modes and timetable - a schedule built and run inside the studio - were
 retired by card 310: Home Assistant picks a patch and setting and keeps the time now.
 
-## Home Assistant (cards 308, 310, 311)
+## Home Assistant (cards 308, 310, 311, 352, 355)
 
-**One HA device per panel (card 352).** Every panel the studio has is a device in Home
-Assistant, each with the five entities below. The **first panel** - the one a route
-without `panel` means, the first adopted - is the device every earlier build announced,
-with **the same discovery id, topics and `unique_id`s, byte for byte** (a test pins them
-against the strings the single-device build published: `ha::fleet::tests`), so current
-automations and dashboards keep working, and it is still named by the Device name on the
-Settings screen. Every **later** panel is a device of its own, named after the panel
-(what the Devices list calls it), keyed by its device id. **Card 353, until card 355
-reworks this:** a panel's picture select shows and changes **its channel's** picture -
-every panel on that channel, the page's own path (`Panels::pick`) - and nothing joins a
-channel by itself any more; with no panel at all, the first device is Channel 1's picture
-with no light behind it. Ids and topics are unchanged.
+**Channels own the picture, so HA picks it per channel (card 355).** Home Assistant sees
+one device per panel (card 352) and one per channel other than Channel 1:
 
-| | first panel | later panel (key = its device id, made safe for a topic: `[a-zA-Z0-9_-]`) |
-|---|---|---|
-| discovery | `homeassistant/device/screeny_<id>/config` | `homeassistant/device/screeny_<id>_<key>/config` |
-| device identifier, `unique_id` stem | `screeny_<id>` / `screeny_<id>_<entity>` | `screeny_<id>_<key>` / `screeny_<id>_<key>_<entity>` |
-| entity topics | `screeny/<id>/<entity>/state\|set` | `screeny/<id>/<key>/<entity>/state\|set` |
-| availability | `screeny/<id>/status` | the same one: an MQTT connection has one Last Will |
-| device name | Device name (Settings) | the panel's name; a rename updates the device |
+- The **first panel** - the one a route without `panel` means, the first adopted - is the
+  device every earlier build announced, with **the same discovery id, topics and
+  `unique_id`s, byte for byte**, and it is still named by the Device name on the Settings
+  screen. Its **`select.screeny_picture` and `sensor.screeny_patch` now mean Channel 1**:
+  picking a picture there changes Channel 1 and so every panel on it (the API's own path,
+  `Panels::pick`, with the channel's 2 s fade). Its light, brightness slider and panel
+  link stay the first panel's. It gains one entity, **`select.screeny_channel`**, which
+  channel *this panel* is on.
+- Every **later panel** keeps the device card 352 gave it (light, brightness, link,
+  named after the panel, keyed by its device id), gains the same **channel select**, and
+  **loses its picture and patch** - they are its channel's now. The two entities are
+  removed from HA (see below).
+- Every **other channel** is a device of its own, `screeny_<id>_ch<channel id>`, named
+  after the channel (rename it and the device follows), with a **Picture select** and a
+  **Patch sensor**. Channel 1 has no device of its own: it is the first panel's.
+- Picking a channel in a panel's channel select moves that panel: the same function
+  `POST /panel/channel` calls (`fleet::move_to_channel`), so it fades there over 2 s,
+  alone, and is then on that channel's shared bytes. The select's options are the
+  channels' names (two channels with one name are told apart as `Name (<id>)`); creating,
+  renaming or deleting a channel republishes every select within a second, and a deleted
+  channel's device is removed, its panels having gone to Channel 1.
 
-A panel adopted while the studio is connected gets its discovery published within a
-second, a **forgotten panel's device is removed** (an empty retained config, and every
+The first device's ids are guaranteed three ways: `Topics::new` and `discovery::build` are
+unchanged for its five entities; `ha::fleet::tests` compares its discovery config and
+states with the snapshot files the single-device build wrote (`src/ha/snapshots/`,
+untouched by card 355) **after taking the one new entity out**, and spells out every
+topic and `unique_id`; and a role (`topics::Role`) decides what each kind of device
+carries, so a later panel or channel cannot leak into the first.
+
+| | first panel | later panel (key = its device id, made safe for a topic: `[a-zA-Z0-9_-]`) | channel 2, 3, ... |
+|---|---|---|---|
+| discovery | `homeassistant/device/screeny_<id>/config` | `.../screeny_<id>_<key>/config` | `.../screeny_<id>_ch<n>/config` |
+| device identifier, `unique_id` stem | `screeny_<id>` / `screeny_<id>_<entity>` | `screeny_<id>_<key>` / `..._<key>_<entity>` | `screeny_<id>_ch<n>` / `..._ch<n>_<entity>` |
+| entity topics | `screeny/<id>/<entity>/state\|set` | `screeny/<id>/<key>/<entity>/state\|set` | `screeny/<id>/ch<n>/<entity>/state\|set` |
+| entities | light, brightness, **Channel 1's** picture + patch, link, channel select | light, brightness, link, channel select | picture select, patch sensor |
+| availability | `screeny/<id>/status` | the same one: an MQTT connection has one Last Will | the same |
+| device name | Device name (Settings) | the panel's name | the channel's name |
+
+(A panel whose key would be `ch<digits>` gets `_panel` added, so a panel's topics never
+collide with a channel's.) With no panel at all the first device is still Channel 1's
+picture with no light behind it.
+
+**What card 352 gave the second panel is removed.** The live HA has
+`select.screeny_<key>_picture` and `sensor.screeny_<key>_patch` from card 352. A later
+panel's config now lists them as bare `{"platform": "select"}` / `{"platform": "sensor"}`
+(`discovery::PICTURE_MOVED_TO_CHANNEL`) - which is how device discovery removes a
+component while keeping the rest - and their retained state topics are cleared the first
+time this session sees the panel (`Topics::retired_state_topics`), so HA drops both and
+nothing stale stays on the broker.
+
+A panel or channel added while the studio is connected gets its discovery published within a
+second, a **forgotten panel's, or deleted channel's, device is removed** (an empty retained config, and every
 one of its retained states cleared - HA drops the device), and a rename is a new config
 with the same identifier, so HA renames the device and keeps its entities. The studio is
 watched, not notified: the snapshot is taken on every state event and once a second, so
-none of that needs a hook. "Remove from Home Assistant" clears every panel's device.
+none of that needs a hook. "Remove from Home Assistant" clears every panel's and every channel's device.
 Limits: a panel's key follows its device id, so a manually typed address that later
 resolves to its real id (`addr_...` -> `screeny-4a00a4`) is a new HA device; and if the
 first panel is forgotten the next one becomes the first and takes over the plain ids.
@@ -428,16 +460,18 @@ environment variables an earlier build read (`SCREENY_MQTT_*`), the `--mqtt-forg
 flag and the compose secret are gone with them; `Config::mqtt` remains only as the
 settings a test starts already connected with.
 
-**Entities**, per panel - shown here as the first panel's, one device (`screeny_<id>`),
-one retained config at `homeassistant/device/screeny_<id>/config`, with every entity in
-its `components` map (a later panel's are the same under the layout above):
+**Entities** - shown here as the first panel's, one device (`screeny_<id>`), one retained
+config at `homeassistant/device/screeny_<id>/config`, with every entity in its
+`components` map (a later panel's are the same minus the picture and patch, under the
+layout above; a channel's device has only those two):
 
 | entity (default id) | platform | topics under `screeny/<id>/` | payload |
 |---|---|---|---|
 | `light.screeny` | light, JSON schema, brightness only | `brightness/state`, `brightness/set` | `{"state":"ON","brightness":96}`, 0-255, snapped to the panel's nearest real step (card 187). `OFF` is a dark panel (the studio carries on playing); a bare `ON` goes back to the last lit level (128 if there was none). |
 | `number.screeny_brightness` | number, "Brightness" | `level/state`, `level/set` | `0`-`100` in steps of 4 (one output-enable slot of the panel's 25, card 187 - every step is a real change). HA shows this inline on the device's own page, which it does not do for a light's brightness. |
-| `select.screeny_picture` | select, "Picture" | `picture/state`, `picture/set` | every playable patch, on Default and on each of its named settings: `Vesta`, `Vesta · Wall Clock`, ... The list follows the named settings (discovery is republished when one is saved, renamed or deleted). The state is the current patch and setting's label, or `None` (unknown) when the working copy has been modified since the setting was loaded. Picking one is a hand change with the usual 2 s fade. |
-| `sensor.screeny_patch` | sensor | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
+| `select.screeny_picture` | select, "Picture" (**Channel 1's**; a channel's own device has one too, under `ch<n>/`) | `picture/state`, `picture/set` | every playable patch, on Default and on each of its named settings: `Vesta`, `Vesta · Wall Clock`, ... The list follows the named settings (discovery is republished when one is saved, renamed or deleted). The state is the channel's current patch and setting's label, or `None` (unknown) when the working copy has been modified since the setting was loaded. Picking one is a hand change with the usual 2 s fade, on every panel of the channel. |
+| `sensor.screeny_patch` | sensor (**Channel 1's**; a channel's device has one too) | `patch/state` | `{"id":"overland","name":"Overland","setting":"Dusk","modified":false}`; the state is `name`, the rest are attributes |
+| `select.screeny_channel` | select, "Channel" (every panel) | `channel/state`, `channel/set` | the channels' names, `Channel 1`, ...; the state is the panel's channel, or `None` for the stand-in that stands for no panel. Picking one moves the panel (2 s fade, then the channel's shared bytes). |
 | `binary_sensor.screeny_panel_link` | binary sensor, `connectivity`, diagnostic | `panel/state` | `ON` while the studio is driving the panel and the link is up |
 
 Availability for all of them, on every panel, is `screeny/<id>/status`: `online` / `offline`, retained,
@@ -455,8 +489,8 @@ too (`Topics::retired_state_topics`).
 
 **Lifecycle.** On every connect, first or after a broker restart, the studio
 resubscribes to the command topics (`screeny/<id>/+/set` and `screeny/<id>/+/+/set`, so a
-panel adopted later needs no new subscription; a command for a panel that is gone is
-dropped) and to `homeassistant/status`, then publishes the
+panel or channel added later needs no new subscription; a command for one that is gone
+is dropped) and to `homeassistant/status`, then publishes the
 config, `online`, and every state. When HA says `online` there (HA restarted), it
 publishes the config and every state again. A lost broker is retried with a backoff up
 to 30 s, for as long as the studio runs, and logged once rather than once per retry.
@@ -491,24 +525,30 @@ curl -s -X POST -H 'content-type: application/json' \
 #     screeny/studio/brightness/state {"state":null}      (until something sets one)
 #     screeny/studio/picture/state None
 #     ...
+#     screeny/studio/channel/state Channel 1
 #  with a second panel (device id screeny-4a00a5) adopted, as well:
 #     homeassistant/device/screeny_studio_screeny-4a00a5/config {...}
-#     screeny/studio/screeny-4a00a5/picture/state None
+#     screeny/studio/screeny-4a00a5/channel/state Channel 1
 #     ...
+#  and a second channel made ("Drawing room", id 2):
+#     homeassistant/device/screeny_studio_ch2/config {...}
+#     screeny/studio/ch2/picture/state Vesta
 mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/level/set -m '40'
 #  -> screeny/studio/brightness/state {"state":"ON","brightness":97,"color_mode":"brightness"}
 #     screeny/studio/level/state 40
 mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/picture/set -m 'Vesta'
 #  -> screeny/studio/picture/state Vesta               (the panel cross-fades to it over 2 s)
-mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/screeny-4a00a5/picture/set -m 'Vesta'
-#  -> screeny/studio/screeny-4a00a5/picture/state Vesta  (the second panel; it joins the
-#     first panel's channel, one picture in sync on both)
+#  (Channel 1's picture: every panel on Channel 1 changes, frame for frame the same)
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/screeny-4a00a5/channel/set -m 'Drawing room'
+#  -> screeny/studio/screeny-4a00a5/channel/state Drawing room  (the second panel moves)
+mosquitto_pub -h 127.0.0.1 -p 18830 -t screeny/studio/ch2/picture/set -m 'Flock'
+#  -> screeny/studio/ch2/picture/state Flock     (the Drawing room's picture, alone)
 # Ctrl-C the studio:
 #  -> screeny/studio/status offline
 docker stop screeny-mqtt
 ```
 
-Two HA-side examples - an automation is Home Assistant's own YAML, not anything this
+Three HA-side examples - an automation is Home Assistant's own YAML, not anything this
 studio reads:
 
 ```yaml
@@ -531,6 +571,32 @@ automation:
         target: { entity_id: select.screeny_picture }
         data: { option: "Flock" }
 
+# Two panels, one picture most of the time: at night the hall panel leaves
+# Channel 1 (which the living room keeps) for the "Night" channel, and comes back.
+# HA builds an entity id from the device's name and the entity's: select.hall_channel
+# is the channel select of the panel named Hall, select.night_picture the picture of
+# the channel named Night. The first panel's is select.screeny_channel.
+automation:
+  - alias: Hall panel to the night channel
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      - service: select.select_option
+        target: { entity_id: select.hall_channel }
+        data: { option: "Night" }
+      - service: select.select_option
+        target: { entity_id: select.night_picture }
+        data: { option: "Vesta" }
+  - alias: Hall panel back to Channel 1
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      - service: select.select_option
+        target: { entity_id: select.hall_channel }
+        data: { option: "Channel 1" }
+
 # Brightness following a lux sensor.
 automation:
   - alias: Screeny brightness follows the room
@@ -547,12 +613,14 @@ The same broker runs the end-to-end test, which is ignored by default because it
 `SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored`.
 It uses the discovery prefix `screeny_test`, so it cannot put entities in front of a real
 HA even when pointed at the house broker. It covers the picture select, the brightness
-slider, the settings routes, reconnecting, and forgetting - and, against two
-`screeny-sim` panels, `every_panel_is_an_ha_device` (card 352): two discovery configs,
-the first panel's ids unchanged, a pick on panel 2 leaving panel 1 alone, the same picture
-on both being one channel, a rename and a forget. The module is `src/ha/`:
+slider, the settings routes, reconnecting, and forgetting - and, against two tapped
+`screeny-sim` panels and two channels, `channels_are_ha_devices_and_a_panels_channel_is_a_select`
+(card 355): `select.screeny_picture` changing both mirrored panels (the sims are sent the
+same bytes), a channel created, renamed and deleted as a device, a channel select moving a
+panel away (two sets of bytes) and back (identical again), card 352's second-panel picture
+and patch cleared from the broker, a panel rename and a forget. The module is `src/ha/`:
 `discovery.rs` (the config, as types), `payload.rs` (states out, commands in), `client.rs`
-(the connection and its lifecycle), `fleet.rs` (card 352: what several panels look like on the broker, pure), and
+(the connection and its lifecycle), `fleet.rs` (cards 352, 355: what several panels and channels look like on the broker, pure), and
 `bridge.rs`, the one file that knows the studio.
 The payload snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a
 change that is meant.
