@@ -890,6 +890,12 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
             let name = if setting.trim().is_empty() { channel.setting() } else { setting.to_string() };
             pick(&st, &panel, def, Some(&name), exclusive)?;
         }
+        // An edit to an idle panel's picture: it has none yet, so it is given
+        // the default patch on Default - a channel of its own, since the edit
+        // is about to land on it - and the edit goes on top.
+        (None, None) if (exclusive || change.restart) && panel.channel().is_none() => {
+            pick(&st, &panel, patch_def(&st, crate::state::default_patch())?, Some(""), true)?;
+        }
         (None, None) => {}
     }
     if exclusive || change.restart {
