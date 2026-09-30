@@ -116,7 +116,7 @@ async fn home_assistant_sees_and_drives_the_studio() {
 
     // Connect: the config, online, and every state.
     seen.until(&status, "online", |p| p == "online").await;
-    let config = seen.until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 9)).await;
+    let config = seen.until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 10)).await;
     assert_eq!(config["device"]["identifiers"][0], format!("screeny_{id}"));
     assert_eq!(config["origin"]["name"], "screeny-studio");
     for (retired, platform) in [("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")] {
@@ -215,7 +215,7 @@ async fn home_assistant_sees_and_drives_the_studio() {
     studio.stop().await;
 }
 
-// ------------------------------------------------------------ card 352 ---
+// ------------------------------------------------------ cards 352, 355 ---
 
 /// A simulator on consecutive loopback ports (a typed `IP:PORT` takes the
 /// control port to be frame + 1), in a band of its own.
@@ -232,24 +232,78 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16) {
     panic!("no free consecutive port pair in 51200..51300");
 }
 
-/// The channel each panel is on, from the overview.
-async fn channels(at: std::net::SocketAddr) -> (Value, Value) {
-    let v = common::get(at, "/api/v1/panels").await.json();
-    let of = |d: &str| v["panels"].as_array().unwrap().iter().find(|p| p["device"] == d).unwrap_or_else(|| panic!("no {d} in {v}"))["channel"].clone();
-    (of("aa0001"), of("bb0002"))
+/// What a tapped simulator was sent: every frame datagram's payload.
+type Wire = Arc<Mutex<Vec<Vec<u8>>>>;
+
+/// A simulator as [`start_sim`], recording every frame payload it is sent.
+fn start_tapped_sim(id: &str, avoid: u16) -> (SimDevice, u16, Wire) {
+    let wire = Wire::default();
+    for port in (51_200u16..51_300).step_by(2) {
+        if port == avoid {
+            continue;
+        }
+        let cfg = SimConfig { frame_port: port, control_port: port + 1, id: id.to_string(), instance: format!("sim-{id}"), ..SimConfig::for_test() };
+        let w = Arc::clone(&wire);
+        let tap = Box::new(move |datagram: &[u8]| {
+            if let Ok(f) = screeny_proto::FramePacket::parse(datagram) {
+                if f.flags & screeny_proto::F_FINAL == 0 {
+                    let mut v = w.lock().unwrap();
+                    if v.len() < 20_000 {
+                        v.push(f.payload.to_vec());
+                    }
+                }
+            }
+        });
+        let sink = Box::new(|_: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {});
+        if let Ok(dev) = SimDevice::start_tapped(cfg, Some(sink), Some(tap)) {
+            return (dev, port, wire);
+        }
+    }
+    panic!("no free consecutive port pair in 51200..51300");
 }
 
-/// **Card 352: one HA device per panel**, against a real broker and two sims.
+/// Of the payloads `b` was sent from `mark` on, the share `a` was sent too.
+/// Two panels on one channel are sent the same bytes (card 353): about 1.
+fn shared(a: &Wire, b: &Wire, a_mark: usize, b_mark: usize) -> f64 {
+    let a: std::collections::HashSet<Vec<u8>> = a.lock().unwrap()[a_mark..].iter().cloned().collect();
+    let b = b.lock().unwrap()[b_mark..].to_vec();
+    if b.is_empty() {
+        return 0.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        b.iter().filter(|p| a.contains(*p)).count() as f64 / b.len() as f64
+    }
+}
+
+fn len(w: &Wire) -> usize {
+    w.lock().unwrap().len()
+}
+
+/// The channel each panel is on, from the overview.
+async fn channel_of(at: std::net::SocketAddr, device: &str) -> Value {
+    let v = common::get(at, "/api/v1/panels").await.json();
+    v["panels"].as_array().unwrap().iter().find(|p| p["device"] == device).unwrap_or_else(|| panic!("no {device} in {v}"))["channel"].clone()
+}
+
+/// A fade, and a little more.
+async fn settle() {
+    tokio::time::sleep(Duration::from_secs_f32(screeny_studio::channel::FADE_MANUAL + 1.0)).await;
+}
+
+/// **Card 355: channels own the picture, in Home Assistant**, against a real
+/// broker and two sims.
 ///
-/// The first panel is the device every earlier build announced; the second is
-/// its own device named after the panel; a pick on one (on a channel of its
-/// own) does not touch the other; renaming a panel renames
-/// its device; forgetting it removes the device.
+/// The first device is the one every earlier build announced, and its picture
+/// and patch are Channel 1's: a pick there changes both mirrored panels. A
+/// channel select moves a panel. Another channel is a device of its own. What
+/// card 352 gave the second panel - a picture and a patch - is cleared from the
+/// broker, and a channel's rename and delete are followed.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a broker: SCREENY_TEST_MQTT=HOST:PORT (see the top of this file)"]
-async fn every_panel_is_an_ha_device() {
+async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     let (host, port) = broker();
-    let id = format!("multi_{}", std::process::id());
+    let id = format!("chan_{}", std::process::id());
     let mqtt = MqttConfig {
         host: host.clone(),
         port,
@@ -261,12 +315,20 @@ async fn every_panel_is_an_ha_device() {
     };
     let one = |entity: &str, kind: &str| format!("screeny/{id}/{entity}/{kind}");
     let two = |entity: &str, kind: &str| format!("screeny/{id}/bb0002/{entity}/{kind}");
+    let ch2 = |entity: &str, kind: &str| format!("screeny/{id}/ch2/{entity}/{kind}");
     let first_config = format!("{PREFIX}/device/screeny_{id}/config");
     let second_config = format!("{PREFIX}/device/screeny_{id}_bb0002/config");
+    let ch2_config = format!("{PREFIX}/device/screeny_{id}_ch2/config");
 
     let (ha, seen) = home_assistant(&host, port, &id).await;
-    let (_a_dev, a_port) = start_sim("aa0001", 0);
-    let (_b_dev, b_port) = start_sim("bb0002", a_port);
+    // What card 352 left retained on the broker for the second panel: a
+    // picture and a patch of its own. The live Home Assistant has them.
+    ha.publish(two("picture", "state"), QoS::AtLeastOnce, true, "Vesta").await.unwrap();
+    ha.publish(two("patch", "state"), QoS::AtLeastOnce, true, r#"{"id":"vesta","name":"Vesta","setting":"Default","modified":false}"#).await.unwrap();
+    seen.until(&two("picture", "state"), "the old picture state", |p| p == "Vesta").await;
+
+    let (_a_dev, a_port, a_wire) = start_tapped_sim("aa0001", 0);
+    let (_b_dev, b_port, b_wire) = start_tapped_sim("bb0002", a_port);
     let studio = Studio::bind(screeny_studio::Config { mqtt: Some(mqtt), ..test_config() }).await.unwrap().spawn();
     let at = studio.addr;
     for p in [a_port, b_port] {
@@ -277,74 +339,133 @@ async fn every_panel_is_an_ha_device() {
     })
     .await;
 
-    // Two devices. The first is exactly the one a single-panel studio made.
-    let first = seen.until_json(&first_config, "the first panel's config", |v| v["components"].as_object().is_some_and(|c| c.len() == 9)).await;
+    // The first device: the original five, plus the channel select.
+    let first = seen.until_json(&first_config, "the first device's config", |v| v["components"].as_object().is_some_and(|c| c.len() == 10)).await;
     assert_eq!(first["device"]["identifiers"], serde_json::json!([format!("screeny_{id}")]));
-    assert_eq!(first["device"]["name"], "Screeny test");
     for k in ["brightness", "level", "picture", "patch", "panel"] {
         assert_eq!(first["components"][k]["unique_id"], format!("screeny_{id}_{k}"));
     }
-    assert_eq!(first["components"]["picture"]["command_topic"], one("picture", "set"));
+    assert_eq!(first["components"]["picture"]["command_topic"], one("picture", "set"), "select.screeny_picture is Channel 1's");
+    assert_eq!(first["components"]["channel"]["options"], serde_json::json!(["Channel 1"]));
+    // The second panel: its own device, a channel select, and no picture.
     let second = seen.until_json(&second_config, "the second panel's config", |v| v["components"].as_object().is_some()).await;
-    assert_eq!(second["device"]["identifiers"], serde_json::json!([format!("screeny_{id}_bb0002")]));
-    assert_eq!(second["device"]["name"], "screeny sim", "named after the panel: the name the device says (a sim's is this)");
-    assert_eq!(second["components"].as_object().unwrap().len(), 5);
-    for k in ["brightness", "level", "picture", "patch", "panel"] {
-        assert_eq!(second["components"][k]["unique_id"], format!("screeny_{id}_bb0002_{k}"));
-    }
-    assert_eq!(second["components"]["picture"]["command_topic"], two("picture", "set"));
-    assert_eq!(second["components"]["picture"]["availability_topic"], format!("screeny/{id}/status"));
-    for entity in ["patch", "brightness", "level", "picture", "panel"] {
-        seen.until(&one(entity, "state"), "the first panel's state", |_| true).await;
-        seen.until(&two(entity, "state"), "the second panel's state", |_| true).await;
-    }
+    assert_eq!(second["components"]["channel"]["command_topic"], two("channel", "set"));
+    assert_eq!(second["components"]["picture"], serde_json::json!({ "platform": "select" }), "card 352's picture is removed");
+    assert_eq!(second["components"]["patch"], serde_json::json!({ "platform": "sensor" }), "and its patch");
+    assert_eq!(second["components"]["brightness"]["command_topic"], two("brightness", "set"), "the light is still its own");
+    // What card 352 left on the broker is cleared.
+    seen.until(&two("picture", "state"), "the old picture state cleared", str::is_empty).await;
+    seen.until(&two("patch", "state"), "the old patch state cleared", str::is_empty).await;
+    // One channel so far, and no device for it: Channel 1 is the first's.
+    assert!(seen.get(&ch2_config).is_none());
+    seen.until(&one("channel", "state"), "the first on Channel 1", |p| p == "Channel 1").await;
+    seen.until(&two("channel", "state"), "the second on Channel 1", |p| p == "Channel 1").await;
+    settle().await;
 
-    // Card 353: both joined Channel 1, and a panel's picture select changes
-    // its channel - every panel on it. With panel 2 on a channel of its own, a
-    // pick on it leaves panel 1 alone: different pictures, two channels.
-    assert_eq!(post(at, "/api/v1/channels/new", r#"{"name":"Two"}"#).await.status, 200);
-    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await.status, 200);
+    // A picture on Channel 1 - select.screeny_picture - changes both mirrored
+    // panels, and they are still sent the same bytes.
+    let (ma, mb) = (len(&a_wire), len(&b_wire));
     ha.publish(one("picture", "set"), QoS::AtLeastOnce, false, "Flock").await.unwrap();
-    seen.until_json(&one("patch", "state"), "flock on the first", |v| v["id"] == "flock").await;
-    ha.publish(two("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
-    seen.until_json(&two("patch", "state"), "vesta on the second", |v| v["id"] == "vesta").await;
-    seen.until(&two("picture", "state"), "Vesta", |p| p == "Vesta").await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(seen.get(&one("patch", "state")).unwrap().contains(r#""id":"flock""#), "panel 1 is untouched");
-    let (a, b) = channels(at).await;
-    assert!(a.is_number() && b.is_number() && a != b, "two channels: {a} {b}");
+    seen.until_json(&one("patch", "state"), "flock on Channel 1", |v| v["id"] == "flock").await;
+    seen.until(&one("picture", "state"), "Flock", |p| p == "Flock").await;
+    let channels = common::get(at, "/api/v1/channels").await.json();
+    assert_eq!(channels["channels"][0]["picture"]["patch"], "flock", "{channels}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let (na, nb) = (len(&a_wire) - ma, len(&b_wire) - mb);
+    assert!(na >= 20 && nb >= 20, "both panels were sent frames after the pick: {na}, {nb}");
+    let (ma, mb) = (len(&a_wire) - 20, len(&b_wire) - 20);
+    let same = shared(&a_wire, &b_wire, ma, mb);
+    assert!(same > 0.9, "both mirrored panels are sent the same bytes: {same:.2}");
 
-    // The same picture on both is still two channels: nothing joins by itself
-    // any more (card 353); moving panel 2 back is what puts them together.
-    ha.publish(one("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
-    seen.until_json(&one("patch", "state"), "vesta on the first", |v| v["id"] == "vesta").await;
-    let (a, b) = channels(at).await;
-    assert_ne!(a, b, "two channels showing one picture");
-    assert_eq!(post(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":1}"#).await.status, 200);
-    let (a, b) = channels(at).await;
-    assert_eq!(a, b, "one channel");
+    // A new channel is a device of its own, named after the channel; every
+    // channel select learns its name.
+    assert_eq!(post(at, "/api/v1/channels/new", r#"{"name":"Drawing room"}"#).await.status, 200);
+    let device = seen.until_json(&ch2_config, "the channel's device", |v| v["components"].as_object().is_some()).await;
+    assert_eq!(device["device"]["identifiers"], serde_json::json!([format!("screeny_{id}_ch2")]));
+    assert_eq!(device["device"]["name"], "Drawing room");
+    assert_eq!(device["components"]["picture"]["command_topic"], ch2("picture", "set"));
+    assert_eq!(device["components"].as_object().unwrap().len(), 2, "a picture and a patch");
+    seen.until(&ch2("patch", "state"), "the channel's patch", |p| p.contains("flock")).await;
+    seen.until_json(&first_config, "the first's options", |v| {
+        v["components"]["channel"]["options"] == serde_json::json!(["Channel 1", "Drawing room"])
+    })
+    .await;
+    seen.until_json(&second_config, "the second's options", |v| {
+        v["components"]["channel"]["options"] == serde_json::json!(["Channel 1", "Drawing room"])
+    })
+    .await;
 
-    // Brightness is per panel.
+    // The channel select moves the second panel: the same path as
+    // `POST /panel/channel`. A pick on the channel's own device changes it
+    // alone.
+    ha.publish(two("channel", "set"), QoS::AtLeastOnce, false, "Drawing room").await.unwrap();
+    seen.until(&two("channel", "state"), "the second on the Drawing room", |p| p == "Drawing room").await;
+    assert_eq!(channel_of(at, "bb0002").await, 2);
+    assert_eq!(channel_of(at, "aa0001").await, 1);
+    assert_eq!(seen.get(&one("channel", "state")).as_deref(), Some("Channel 1"));
+    ha.publish(ch2("picture", "set"), QoS::AtLeastOnce, false, "Vesta").await.unwrap();
+    seen.until_json(&ch2("patch", "state"), "vesta on the channel", |v| v["id"] == "vesta").await;
+    seen.until(&ch2("picture", "state"), "Vesta", |p| p == "Vesta").await;
+    assert!(seen.get(&one("patch", "state")).unwrap().contains("flock"), "Channel 1 is untouched");
+    settle().await;
+    let (ma, mb) = (len(&a_wire), len(&b_wire));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(shared(&a_wire, &b_wire, ma, mb) < 0.05, "two channels, two sets of bytes");
+    // Brightness is still the panel's own.
     ha.publish(two("level", "set"), QoS::AtLeastOnce, false, "8").await.unwrap();
     seen.until(&two("level", "state"), "8 % on the second", |p| p == "8").await;
-    assert_ne!(seen.get(&one("level", "state")).as_deref(), Some("8"), "the first is not dimmed");
+    assert_ne!(seen.get(&one("level", "state")).as_deref(), Some("8"));
 
-    // Renaming a panel renames its device (the first is named on the Settings
-    // screen, and does not follow).
+    // Back: identical again after the fade.
+    ha.publish(two("channel", "set"), QoS::AtLeastOnce, false, "Channel 1").await.unwrap();
+    seen.until(&two("channel", "state"), "back on Channel 1", |p| p == "Channel 1").await;
+    settle().await;
+    let (ma, mb) = (len(&a_wire), len(&b_wire));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let same = shared(&a_wire, &b_wire, ma, mb);
+    assert!(same > 0.9, "identical again: {same:.2}");
+    // A channel that is not there changes nothing.
+    ha.publish(two("channel", "set"), QoS::AtLeastOnce, false, "Nowhere").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(channel_of(at, "bb0002").await, 1);
+
+    // A rename follows: the channel's device name and every select's options.
+    assert_eq!(post(at, "/api/v1/channels/rename", r#"{"channel":2,"name":"Den"}"#).await.status, 200);
+    seen.until_json(&ch2_config, "the device renamed", |v| v["device"]["name"] == "Den").await;
+    seen.until_json(&first_config, "the option renamed", |v| v["components"]["channel"]["options"] == serde_json::json!(["Channel 1", "Den"])).await;
+
+    // A delete follows too: a panel on the channel goes to Channel 1, the
+    // device is removed, the options drop it.
+    ha.publish(two("channel", "set"), QoS::AtLeastOnce, false, "Den").await.unwrap();
+    seen.until(&two("channel", "state"), "on the Den", |p| p == "Den").await;
+    assert_eq!(post(at, "/api/v1/channels/delete", r#"{"channel":2}"#).await.status, 200);
+    seen.until(&ch2_config, "the channel's config removed", str::is_empty).await;
+    seen.until(&ch2("picture", "state"), "its states cleared", str::is_empty).await;
+    seen.until(&ch2("patch", "state"), "its patch cleared", str::is_empty).await;
+    seen.until(&two("channel", "state"), "the panel on Channel 1 again", |p| p == "Channel 1").await;
+    seen.until_json(&first_config, "the option gone", |v| v["components"]["channel"]["options"] == serde_json::json!(["Channel 1"])).await;
+    assert_eq!(channel_of(at, "bb0002").await, 1);
+    // A pick on a channel that has gone is dropped, not a crash.
+    ha.publish(ch2("picture", "set"), QoS::AtLeastOnce, false, "Flock").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Renaming a panel still renames its device (the first is named on the
+    // Settings screen, and does not follow).
     assert_eq!(post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{b_port}","name":"Kitchen"}}"#)).await.status, 200);
-    let renamed = seen.until_json(&second_config, "the new name", |v| v["device"]["name"] == "Kitchen").await;
-    assert_eq!(renamed["device"]["identifiers"], second["device"]["identifiers"], "same device, new name");
+    seen.until_json(&second_config, "the new name", |v| v["device"]["name"] == "Kitchen").await;
 
     // Forgetting a panel removes its device and clears its states; the first
     // is not touched.
     assert_eq!(post(at, "/api/v1/devices/forget", r#"{"device":"bb0002"}"#).await.status, 200);
     seen.until(&second_config, "the second config removed", str::is_empty).await;
-    seen.until(&two("patch", "state"), "its states cleared", str::is_empty).await;
+    seen.until(&two("channel", "state"), "its states cleared", str::is_empty).await;
     assert!(!seen.get(&first_config).unwrap().is_empty());
-    assert!(!seen.get(&one("patch", "state")).unwrap().is_empty());
 
-    // "Remove from Home Assistant" clears the first as well.
+    // A channel left over, and "Remove from Home Assistant" clears all of it.
+    assert_eq!(post(at, "/api/v1/channels/new", r#"{"name":"Last"}"#).await.status, 200);
+    seen.until_json(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the last channel's device", |v| v["device"]["name"] == "Last").await;
     assert_eq!(post(at, "/api/v1/home_assistant/forget", "{}").await.status, 200);
     seen.until(&first_config, "the first config removed", str::is_empty).await;
+    seen.until(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the channel's config removed", str::is_empty).await;
     studio.stop().await;
 }

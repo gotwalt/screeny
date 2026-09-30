@@ -364,9 +364,7 @@ struct PanelChannel {
 async fn panel_channel(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<PanelChannel>) -> ApiResult<Json<StudioState>> {
     let panel = st.panels.get(req.panel.trim()).ok_or_else(|| ApiError::not_found(format!("no panel `{}`", req.panel.trim())))?;
     let channel = st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
-    st.panels.move_panel(&panel, &channel, None);
-    channel.ensure_running();
-    crate::fleet::aim_at_device(&st, &panel);
+    crate::fleet::move_to_channel(&st, &panel, &channel);
     Ok(Json(publish(&st, &headers, &Aim { channel, from: Some(panel) })))
 }
 
@@ -686,7 +684,7 @@ async fn ha_forget(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiR
     // The running client must be gone first: `forget` connects as the same
     // client, and the broker would throw one off for the other.
     st.ha.until_off(crate::ha::client::GOODBYE + std::time::Duration::from_secs(1)).await;
-    crate::ha::client::forget(&cfg, &crate::ha::bridge::panel_keys(&st), std::time::Duration::from_secs(10)).await.map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
+    crate::ha::client::forget(&cfg, &crate::ha::bridge::panel_keys(&st), &crate::ha::bridge::channel_ids(&st), std::time::Duration::from_secs(10)).await.map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
     Ok(Json(st.ha.view()))
 }
 

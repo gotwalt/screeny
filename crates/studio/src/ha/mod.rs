@@ -10,11 +10,16 @@
 //!      └──────bridge<── mpsc<Command> <── parse `.../set`  <──────────────── broker <── HA
 //! ```
 //!
-//! **One HA device per panel (card 352).** A [`Fleet`] - a [`Snapshot`] per
-//! panel - goes in and an [`Order`] (a [`Command`] and the panel it is for)
-//! comes out. The first panel keeps the topics, discovery id and `unique_id`s
-//! every earlier build had; later ones are keyed by their device id
-//! ([`topics::Topics::for_panel`]).
+//! **One HA device per panel (card 352), one per channel (card 355).** A
+//! [`Fleet`] - a [`PanelView`] per panel and a [`ChannelView`] per channel -
+//! goes in and an [`Order`] (a [`Command`] and what it is for) comes out. The
+//! first panel keeps the topics, discovery id and `unique_id`s every earlier
+//! build had, and its picture and patch are now **Channel 1's**; later panels
+//! are keyed by their device id ([`topics::Topics::for_panel`]) and have a
+//! channel select in place of a picture; every other channel is a device of
+//! its own, `screeny_<instance>_ch<id>`, with the picture and the patch
+//! ([`topics::Topics::for_channel`]). The channel owns the picture, so HA
+//! picks it there, and a panel's channel select moves the panel.
 //!
 //! **The studio does not know about topics** and this module does not know
 //! about the studio: [`Snapshot`] goes in, [`Command`] comes out, and
@@ -322,6 +327,34 @@ pub struct Snapshot {
     pub picture: Option<String>,
     /// The studio is driving the panel and the link is up.
     pub panel_connected: bool,
+    /// Card 355: every channel, as a select's options, Channel 1 first.
+    pub channels: Vec<ChannelOption>,
+    /// The id of the channel this panel is on; `None` for the stand-in that
+    /// stands for no panel.
+    pub channel: Option<u32>,
+}
+
+/// One entry in HA's channel select.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelOption {
+    pub id: u32,
+    /// What HA shows: the channel's name, and `Name (<id>)` when two
+    /// channels have been given the same name, so the choice stays a choice.
+    pub label: String,
+}
+
+impl ChannelOption {
+    /// The options for channels `(id, name)`, labels made unique.
+    #[must_use]
+    pub fn all(channels: &[(u32, String)]) -> Vec<ChannelOption> {
+        channels
+            .iter()
+            .map(|(id, name)| {
+                let twice = channels.iter().filter(|(_, n)| n == name).count() > 1;
+                ChannelOption { id: *id, label: if twice { format!("{name} ({id})") } else { name.clone() } }
+            })
+            .collect()
+    }
 }
 
 /// What is on the panel. Published as it is, as JSON.
@@ -365,7 +398,7 @@ impl Picture {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PanelView {
     /// The studio's device id: what an [`Order`] is addressed to. Empty for
-    /// the unbound stand-in.
+    /// the stand-in that stands for no panel.
     pub device: String,
     /// `None` for the first panel, whose topics and ids are the ones every
     /// earlier build had; otherwise the sanitised, unique key that goes in
@@ -373,16 +406,44 @@ pub struct PanelView {
     pub key: Option<String>,
     /// The HA device's name.
     pub name: String,
+    /// The panel's own brightness and link, its channel and the channel
+    /// options; for the first panel, **Channel 1's** picture too.
     pub snapshot: Snapshot,
 }
 
-/// Every panel's HA device, first panel first (card 352).
-pub type Fleet = Vec<PanelView>;
+/// One channel: what HA needs to give it a device of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChannelView {
+    pub id: u32,
+    /// The HA device's name: the channel's.
+    pub name: String,
+    /// Its picture: the patch, the pictures HA may pick and the one playing.
+    pub snapshot: Snapshot,
+}
 
-/// A command, and the panel it is for.
+/// Everything HA is shown (cards 352, 355): every panel's device, first panel
+/// first, and every channel. Channel 1 has no device of its own; it is the
+/// first panel's.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Fleet {
+    pub panels: Vec<PanelView>,
+    /// Every channel, Channel 1 first.
+    pub channels: Vec<ChannelView>,
+}
+
+/// What a command is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// A panel, by device id; empty is the first panel.
+    Panel(String),
+    /// A channel, by id.
+    Channel(u32),
+}
+
+/// A command, and what it is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Order {
-    pub device: String,
+    pub target: Target,
     pub command: Command,
 }
 
@@ -395,6 +456,10 @@ pub enum Command {
     /// checked against [`Snapshot::pictures`]; the studio checks again, since
     /// a setting may have gone.
     ShowPicture { patch: String, setting: String },
+    /// Card 355: move the panel to this channel. Checked against
+    /// [`Snapshot::channels`]; the studio checks again, since a channel may
+    /// have gone.
+    MoveToChannel(u32),
 }
 
 #[cfg(test)]

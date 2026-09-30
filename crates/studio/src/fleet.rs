@@ -42,6 +42,15 @@ pub fn drive(st: &AppState, device: &str) -> Arc<Panel> {
     panel
 }
 
+/// **Move a panel to a channel**: it fades there, alone, and is then on that
+/// channel's shared frames. `POST /panel/channel` and Home Assistant's channel
+/// select both come here.
+pub fn move_to_channel(st: &AppState, panel: &Arc<Panel>, channel: &Arc<crate::channel::Channel>) {
+    st.panels.move_panel(panel, channel, None);
+    channel.ensure_running();
+    aim_at_device(st, panel);
+}
+
 /// Point a panel's link at wherever its device is now, or at nothing.
 pub fn aim_at_device(st: &AppState, panel: &Arc<Panel>) {
     let reach = st.devices.get(&panel.device()).map_or(Reach::Unknown, |r| r.reach());

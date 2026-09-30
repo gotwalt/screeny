@@ -23,7 +23,7 @@
 use super::discovery;
 use super::payload;
 use super::topics::Topics;
-use super::{fleet, Fleet, Ha, MqttConfig, Order, Status};
+use super::{fleet, Command, Fleet, Ha, MqttConfig, Order, Status, Target};
 use rumqttc::{AsyncClient, ConnectionError, Event, EventLoop, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -281,8 +281,9 @@ struct Session {
     /// The last payload that went out on each retained topic, so a state is
     /// sent when it changes and not on every snapshot.
     said: HashMap<String, String>,
-    /// Card 352: the panels whose devices are announced now, by device id
-    /// (`screeny_<instance>[_<key>]`), so one that has gone can be cleared.
+    /// Card 352: the devices announced now - panels, and since card 355
+    /// channels - by device id (`screeny_<instance>[_<key>]`), so one that has
+    /// gone can be cleared.
     published: Vec<Topics>,
     /// What a bare "on" restores, per panel (by the same id).
     last_lit: HashMap<String, Option<u8>>,
@@ -315,9 +316,13 @@ impl Session {
             }
         }
         // Card 310: an empty retained payload deletes a retained message, so
-        // the timetable's old states do not outlive it on the broker.
-        for topic in self.topics.retired_state_topics() {
-            let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+        // the timetable's old states do not outlive it on the broker. Card
+        // 355 the same for a later panel's picture and patch, which are its
+        // channel's now.
+        for device in fleet::devices(&self.cfg, fleet) {
+            for topic in device.retired_state_topics() {
+                let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+            }
         }
         self.announce(fleet);
     }
@@ -342,11 +347,11 @@ impl Session {
     /// Everything that differs from what was last said - or everything, with
     /// `all`. Only while the link is up: a reconnect says it all anyway.
     ///
-    /// A panel that has gone since the last time - forgotten, or renamed to a
-    /// new id - has its device removed: an empty retained config, and every
-    /// state cleared.
+    /// A panel or channel that has gone since the last time - forgotten,
+    /// deleted, or renamed to a new id - has its device removed: an empty
+    /// retained config, and every state cleared.
     fn show(&mut self, fleet: &Fleet, all: bool) {
-        for view in fleet {
+        for view in &fleet.panels {
             let id = fleet::topics_of(&self.cfg, view).device_id;
             let lit = self.last_lit.get(&id).copied().flatten();
             self.last_lit.insert(id, payload::lit(lit, &view.snapshot));
@@ -354,8 +359,16 @@ impl Session {
         if !self.up {
             return;
         }
-        let now: Vec<Topics> = fleet.iter().map(|v| fleet::topics_of(&self.cfg, v)).collect();
-        for gone in std::mem::take(&mut self.published) {
+        let now = fleet::devices(&self.cfg, fleet);
+        let before = std::mem::take(&mut self.published);
+        // A device that is new to this session: what card 352 (a later
+        // panel's picture and patch) or card 310 left retained for it goes.
+        for new in now.iter().filter(|t| !before.iter().any(|b| b.device_id == t.device_id)) {
+            for topic in new.retired_state_topics() {
+                let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+            }
+        }
+        for gone in before {
             if now.iter().any(|t| t.device_id == gone.device_id) {
                 continue;
             }
@@ -384,17 +397,32 @@ impl Session {
             }
             return;
         }
-        // Whose topic is it? Only a panel this studio has owns one; a
-        // command for one that has gone is stale and dropped.
-        let owner = fleet.iter().find(|v| fleet::topics_of(&self.cfg, v).command_topics().contains(&topic));
-        let Some(view) = owner else {
+        // Whose topic is it? Only a panel or channel this studio has owns
+        // one; a command for one that has gone is stale and dropped.
+        let panel = fleet.panels.iter().find(|v| fleet::topics_of(&self.cfg, v).command_topics().contains(&topic));
+        let channel = || fleet::channel_devices(fleet).find(|c| Topics::for_channel(&self.cfg, c.id).command_topics().contains(&topic));
+        let mut channel_id = None;
+        let (topics, snapshot, last_lit) = if let Some(view) = panel {
+            let topics = fleet::topics_of(&self.cfg, view);
+            let last_lit = self.last_lit.get(&topics.device_id).copied().flatten();
+            (topics, &view.snapshot, last_lit)
+        } else if let Some(ch) = channel() {
+            channel_id = Some(ch.id);
+            (Topics::for_channel(&self.cfg, ch.id), &ch.snapshot, None)
+        } else {
             return;
         };
-        let topics = fleet::topics_of(&self.cfg, view);
-        let last_lit = self.last_lit.get(&topics.device_id).copied().flatten();
-        match payload::parse_command(&topics, topic, payload, &view.snapshot, last_lit) {
+        match payload::parse_command(&topics, topic, payload, snapshot, last_lit) {
             Ok(command) => {
-                if commands.try_send(Order { device: view.device.clone(), command }).is_err() {
+                // What it is for. A picture is a channel's: the first panel's
+                // select is Channel 1's (card 355), a channel device's its own.
+                let target = match (&command, panel) {
+                    (Command::ShowPicture { .. }, Some(_)) => Target::Channel(crate::state::HOME_CHANNEL),
+                    (Command::ShowPicture { .. }, None) => Target::Channel(channel_id.unwrap_or(crate::state::HOME_CHANNEL)),
+                    (_, Some(view)) => Target::Panel(view.device.clone()),
+                    (_, None) => return,
+                };
+                if commands.try_send(Order { target, command }).is_err() {
                     self.full.say(|n| format!("studio: home assistant: {n} command(s) dropped, the studio is behind"));
                 }
             }
@@ -416,13 +444,14 @@ impl Session {
 /// the same client, and two of those would take turns throwing each other off.
 ///
 /// `panels` are the keys of every panel's HA device now (`None` is the
-/// first): each one's config and states are cleared. A panel forgotten
+/// first): each one's config and states are cleared; `channels` are the ids of
+/// every channel that has a device (card 355). A panel or channel gone
 /// earlier cleared its own when it went.
 ///
 /// # Errors
 ///
 /// The broker could not be reached, or refused us, within `within`.
-pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], within: Duration) -> Result<(), String> {
+pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], channels: &[u32], within: Duration) -> Result<(), String> {
     let topics = Topics::new(cfg);
     let (client, mut eventloop) = AsyncClient::new(options(cfg, &topics, false), REQUESTS);
     let work = async {
@@ -435,12 +464,14 @@ pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], within: Duratio
         }
         let empty = discovery::remove_device(&topics).1;
         let mut clear = vec![topics.status.clone()];
-        clear.extend(topics.retired_state_topics());
         // The first panel always, whatever `panels` says.
         let mut keys: Vec<Option<String>> = vec![None];
         keys.extend(panels.iter().filter(|k| k.is_some()).cloned());
         for key in keys {
             clear.extend(fleet::retained_topics(&Topics::for_panel(cfg, key.as_deref())));
+        }
+        for id in channels {
+            clear.extend(fleet::retained_topics(&Topics::for_channel(cfg, *id)));
         }
         for topic in clear {
             client.publish(topic, QoS::AtLeastOnce, true, empty.clone()).await.map_err(|e| e.to_string())?;

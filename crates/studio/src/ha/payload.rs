@@ -3,7 +3,7 @@
 //! Pure: a [`Snapshot`] in, messages out; a topic and bytes in, a validated
 //! [`Command`] or a sentence saying why not.
 
-use super::topics::Topics;
+use super::topics::{Role, Topics};
 use super::{Command, Snapshot};
 use serde::{Deserialize, Serialize};
 
@@ -73,13 +73,20 @@ pub fn state_messages(topics: &Topics, snap: &Snapshot) -> Vec<Message> {
         Some(0) => LightState { state: Some("OFF"), brightness: None, color_mode: None },
         Some(b) => LightState { state: Some("ON"), brightness: Some(b), color_mode: Some("brightness") },
     };
-    vec![
-        Message { topic: topics.patch.state.clone(), payload: json(&snap.patch) },
-        Message { topic: topics.brightness.state.clone(), payload: json(&light) },
-        Message { topic: topics.level.state.clone(), payload: snap.brightness.map_or_else(|| NO_OPTION.to_string(), |b| percent_of(b).to_string()) },
-        Message { topic: topics.picture.state.clone(), payload: snap.picture.clone().unwrap_or_else(|| NO_OPTION.to_string()) },
-        Message { topic: topics.panel.state.clone(), payload: on_off(snap.panel_connected) },
-    ]
+    let patch = Message { topic: topics.patch.state.clone(), payload: json(&snap.patch) };
+    let picture = Message { topic: topics.picture.state.clone(), payload: snap.picture.clone().unwrap_or_else(|| NO_OPTION.to_string()) };
+    let brightness = Message { topic: topics.brightness.state.clone(), payload: json(&light) };
+    let level = Message { topic: topics.level.state.clone(), payload: snap.brightness.map_or_else(|| NO_OPTION.to_string(), |b| percent_of(b).to_string()) };
+    let panel = Message { topic: topics.panel.state.clone(), payload: on_off(snap.panel_connected) };
+    // The channel this panel is on, by the label its select shows.
+    let on = snap.channel.and_then(|id| snap.channels.iter().find(|c| c.id == id)).map_or_else(|| NO_OPTION.to_string(), |c| c.label.clone());
+    let channel = Message { topic: topics.channel.state.clone(), payload: on };
+    match topics.role {
+        // The five it always had, in their order, and the channel select after.
+        Role::First => vec![patch, brightness, level, picture, panel, channel],
+        Role::Panel => vec![brightness, level, panel, channel],
+        Role::Channel => vec![patch, picture],
+    }
 }
 
 /// The brightness "on" should go back to: the one showing now if the panel
@@ -140,6 +147,12 @@ pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapsh
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         return Ok(Command::SetBrightness(level_for(p.round() as u8)));
     }
+    if topic == topics.channel.set {
+        return match snap.channels.iter().find(|c| c.label == text) {
+            Some(c) => Ok(Command::MoveToChannel(c.id)),
+            None => Err(format!("{topic}: there is no channel called `{text}`")),
+        };
+    }
     if topic == topics.picture.set {
         return match snap.pictures.iter().find(|p| p.label == text) {
             Some(p) => Ok(Command::ShowPicture { patch: p.patch.clone(), setting: p.setting.clone() }),
@@ -199,6 +212,8 @@ pub(crate) mod tests {
             pictures: pictures(),
             picture: Some("Overland · Dusk".into()),
             panel_connected: true,
+            channels: crate::ha::ChannelOption::all(&[(1, "Channel 1".into()), (2, "Drawing room".into())]),
+            channel: Some(2),
         }
     }
 
@@ -209,7 +224,12 @@ pub(crate) mod tests {
     #[test]
     fn state_when_lit_and_scheduled() {
         let topics = Topics::new(&config());
-        snapshot_json("state-lit.txt", &render(&state_messages(&topics, &snap())));
+        let all = state_messages(&topics, &snap());
+        // Card 355 added the channel select's state, last. The five before
+        // it are card 308-311's, byte for byte, and pinned as they were.
+        let (channel, old) = all.split_last().unwrap();
+        assert_eq!((channel.topic.as_str(), channel.payload.as_str()), ("screeny/studio/channel/state", "Drawing room"));
+        snapshot_json("state-lit.txt", &render(old));
     }
 
     #[test]
@@ -221,7 +241,8 @@ pub(crate) mod tests {
             panel_connected: false,
             ..snap()
         };
-        snapshot_json("state-dark.txt", &render(&state_messages(&topics, &s)));
+        let all = state_messages(&topics, &s);
+        snapshot_json("state-dark.txt", &render(&all[..all.len() - 1]));
     }
 
     #[test]
@@ -274,6 +295,32 @@ pub(crate) mod tests {
         assert!(parse("picture", "Flock").is_err(), "not in the list");
         assert!(parse("picture", "None").is_err());
         assert!(parse("screeny/studio/scene/set", "Day").is_err(), "scenes are retired");
+    }
+
+    #[test]
+    fn channel_commands() {
+        assert_eq!(parse("screeny/studio/channel/set", "Drawing room"), Ok(Command::MoveToChannel(2)));
+        assert_eq!(parse("screeny/studio/channel/set", " Channel 1\n"), Ok(Command::MoveToChannel(1)));
+        assert!(parse("screeny/studio/channel/set", "Channel 3").is_err(), "not in the list");
+        assert!(parse("screeny/studio/channel/set", "None").is_err());
+        // Two channels with one name are told apart by their ids.
+        let dup = crate::ha::ChannelOption::all(&[(1, "Hall".into()), (2, "Hall".into()), (3, "Den".into())]);
+        let labels: Vec<&str> = dup.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Hall (1)", "Hall (2)", "Den"]);
+    }
+
+    #[test]
+    fn a_channels_device_says_its_patch_and_picture_and_a_later_panels_no_picture() {
+        let cfg = config();
+        let ch = state_messages(&Topics::for_channel(&cfg, 2), &snap());
+        let topics: Vec<&str> = ch.iter().map(|m| m.topic.as_str()).collect();
+        assert_eq!(topics, ["screeny/studio/ch2/patch/state", "screeny/studio/ch2/picture/state"]);
+        let panel = state_messages(&Topics::for_panel(&cfg, Some("b")), &snap());
+        let topics: Vec<&str> = panel.iter().map(|m| m.topic.as_str()).collect();
+        assert_eq!(topics, ["screeny/studio/b/brightness/state", "screeny/studio/b/level/state", "screeny/studio/b/panel/state", "screeny/studio/b/channel/state"]);
+        assert_eq!(panel[3].payload, "Drawing room");
+        let none = state_messages(&Topics::for_panel(&cfg, Some("b")), &Snapshot { channel: None, ..snap() });
+        assert_eq!(none[3].payload, NO_OPTION);
     }
 
     #[test]

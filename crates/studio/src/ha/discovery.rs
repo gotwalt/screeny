@@ -10,7 +10,7 @@
 //! Every entity says its own `availability_topic` rather than relying on the
 //! device-level shared options, so a reader of one component sees all of it.
 
-use super::topics::Topics;
+use super::topics::{Role, Topics};
 use super::{MqttConfig, Snapshot};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -134,6 +134,8 @@ pub mod key {
     pub const LEVEL: &str = "level";
     pub const PICTURE: &str = "picture";
     pub const PANEL: &str = "panel";
+    /// Card 355: the panel's channel, a select.
+    pub const CHANNEL: &str = "channel";
 }
 
 /// Components a previous build announced and this one does not, with their
@@ -144,6 +146,12 @@ pub mod key {
 /// else; they are listed on every announcement, which costs a few bytes and
 /// means a studio that was down when this build first ran still cleans up.
 pub const RETIRED: &[(&str, &str)] = &[("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")];
+
+/// Card 355: what a later panel's device had from card 352 and does not any
+/// more - its picture and patch are its channel's now. Removed by listing them
+/// with their platforms and nothing else, on every announcement, so a studio
+/// that was down when this build first ran still cleans up.
+pub const PICTURE_MOVED_TO_CHANNEL: &[(&str, &str)] = &[("picture", "select"), ("patch", "sensor")];
 
 /// The whole config for this studio as it is now. Only the picture list
 /// moves, so this is republished when a named setting is saved, renamed or
@@ -206,6 +214,15 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
         }),
     );
     components.insert(
+        key::CHANNEL.to_string(),
+        Component::Select(Select {
+            entity: entity(key::CHANNEL, Some("Channel"), Some("mdi:television-classic"), None),
+            state_topic: topics.channel.state.clone(),
+            command_topic: topics.channel.set.clone(),
+            options: snap.channels.iter().map(|c| c.label.clone()).collect(),
+        }),
+    );
+    components.insert(
         key::PANEL.to_string(),
         Component::BinarySensor(BinarySensor {
             entity: entity(key::PANEL, Some("Panel link"), None, Some("diagnostic")),
@@ -213,6 +230,17 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
             device_class: Some("connectivity".into()),
         }),
     );
+    // What each kind of device carries: the first panel everything (its picture
+    // and patch are Channel 1's); a later panel no picture; a channel only
+    // the picture.
+    let absent: &[&str] = match topics.role {
+        Role::First => &[],
+        Role::Panel => &[key::PICTURE, key::PATCH],
+        Role::Channel => &[key::BRIGHTNESS, key::LEVEL, key::PANEL, key::CHANNEL],
+    };
+    for k in absent {
+        components.remove(*k);
+    }
     DeviceDiscovery {
         device: Device {
             identifiers: vec![topics.device_id.clone()],
@@ -231,12 +259,15 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
 #[must_use]
 pub fn payload(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> serde_json::Value {
     let mut value = serde_json::to_value(build(cfg, topics, snap)).unwrap_or_default();
-    // Only the first panel was ever announced by a build that had them.
-    if !topics.is_first() {
-        return value;
-    }
+    // Only the first panel was ever announced by a build that had the retired
+    // ones; only a later panel by one that had its own picture.
+    let removals: &[(&str, &str)] = match topics.role {
+        Role::First => RETIRED,
+        Role::Panel => PICTURE_MOVED_TO_CHANNEL,
+        Role::Channel => &[],
+    };
     if let Some(map) = value.get_mut("components").and_then(|c| c.as_object_mut()) {
-        for (key, platform) in RETIRED {
+        for (key, platform) in removals {
             map.insert((*key).to_string(), serde_json::json!({ "platform": platform }));
         }
     }
@@ -274,14 +305,27 @@ mod tests {
     use crate::ha::payload::tests::{config, snapshot_json};
 
     fn snap() -> Snapshot {
-        Snapshot { pictures: crate::ha::payload::tests::pictures(), ..Snapshot::default() }
+        Snapshot {
+            pictures: crate::ha::payload::tests::pictures(),
+            channels: crate::ha::ChannelOption::all(&[(1, "Channel 1".into()), (2, "Drawing room".into())]),
+            ..Snapshot::default()
+        }
     }
 
     #[test]
     fn the_device_config() {
         let cfg = config();
         let topics = Topics::new(&cfg);
-        let value = payload(&cfg, &topics, &snap());
+        let mut value = payload(&cfg, &topics, &snap());
+        // Card 355 added one component, the channel select, to this device.
+        // Everything else is card 308-311's, byte for byte: the snapshot is
+        // compared with the select taken out, and the select has its own pin.
+        let channel = value["components"].as_object_mut().unwrap().remove("channel").expect("the first device has a channel select");
+        assert_eq!(channel["platform"], "select");
+        assert_eq!(channel["unique_id"], "screeny_studio_channel");
+        assert_eq!(channel["command_topic"], "screeny/studio/channel/set");
+        assert_eq!(channel["state_topic"], "screeny/studio/channel/state");
+        assert_eq!(channel["options"], serde_json::json!(["Channel 1", "Drawing room"]));
         // The version moves with every release; the snapshot says `VERSION`.
         let text = serde_json::to_string_pretty(&value).unwrap().replace(env!("CARGO_PKG_VERSION"), "VERSION");
         snapshot_json("discovery.json", &text);
@@ -293,7 +337,7 @@ mod tests {
         let topics = Topics::new(&cfg);
         let value = serde_json::to_value(build(&cfg, &topics, &snap())).unwrap();
         let ids: Vec<&str> = value["components"].as_object().unwrap().values().filter_map(|c| c["unique_id"].as_str()).collect();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 6, "the five it always had, and the channel select");
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         sorted.dedup();
