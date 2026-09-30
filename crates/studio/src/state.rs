@@ -1442,7 +1442,13 @@ fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
         }
         let setting = state.patches.get(&p.patch).map(|e| e.setting.clone()).unwrap_or_default();
         showing.insert(p.patch.clone());
-        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params: p.params });
+        // Only what differs from the patch's defaults, as everywhere else; a
+        // v1 file's player carried a full dump of every parameter.
+        let params = match screeny_art::patch::find(&p.patch) {
+            Some(def) => sparse(def, &p.params),
+            None => p.params,
+        };
+        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params });
         state.panels.push(StoredPanel { device: p.device, on: p.on, channel: Some(next), output: p.output, brightness: p.brightness });
         next += 1;
     }
@@ -2026,8 +2032,9 @@ mod tests {
 
         let mut want = Persisted::default();
         want.devices.push(StoredDevice { id: "abc123".into(), name: "desk".into(), ..StoredDevice::default() });
-        want.players.push(StoredPlayer { device: "abc123".into(), patch: "metaballs".into(), seed: 7, ..StoredPlayer::default() });
-        want.focus = "abc123".into();
+        want.channels.push(StoredChannel { id: 4, patch: "metaballs".into(), seed: 7, ..StoredChannel::default() });
+        want.panels.push(StoredPanel { device: "abc123".into(), channel: Some(4), ..StoredPanel::default() });
+        want.panels.push(StoredPanel { device: "idle01".into(), ..StoredPanel::default() });
         store.save(want.clone());
         store.flush();
         assert_eq!(store.health().writes, 1);
@@ -2088,13 +2095,13 @@ mod tests {
         std::fs::write(dir.0.join(FILE), r#"{"players":[{"device":"abc","piece":"metaballs","seed":3}]}"#).expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.version, SCHEMA_VERSION);
-        assert_eq!(loaded.players.len(), 1);
-        assert_eq!(loaded.players[0].seed, 3);
+        assert_eq!(loaded.panels.len(), 1);
+        assert_eq!(player(&loaded, 0).seed, 3);
         // Fields the old file did not have take their defaults, not zeroes.
-        assert!(loaded.players[0].on);
-        assert_eq!(loaded.players[0].speed, 1.0, "v3's new fields take their defaults");
-        assert!(!loaded.players[0].paused);
-        assert_eq!(loaded.focus, "abc", "and the page looks at the one player there is");
+        assert!(player(&loaded, 0).on);
+        assert_eq!(player(&loaded, 0).speed, 1.0, "v3's new fields take their defaults");
+        assert!(!player(&loaded, 0).paused);
+        assert_eq!(loaded.panels[0].device, "abc", "and the page looks at the one player there is");
         assert!(store.health().recovered.is_some());
     }
 
@@ -2123,6 +2130,34 @@ mod tests {
 
     fn spec(def: &PatchDef, id: &str) -> ParamSpec {
         *def.params.iter().find(|s| s.id == id).expect("a parameter of this patch")
+    }
+
+    /// Card 350: panel `i` of a loaded file and the channel it follows, seen
+    /// as the v7 player it was - which is what most of the migration tests
+    /// below were written against, and what every migration must preserve.
+    fn player(state: &Persisted, i: usize) -> StoredPlayer {
+        let p = &state.panels[i];
+        let c = p.channel.and_then(|id| state.channels.iter().find(|c| c.id == id));
+        StoredPlayer {
+            device: p.device.clone(),
+            on: p.on,
+            patch: c.map(|c| c.patch.clone()).unwrap_or_default(),
+            seed: c.map_or(0, |c| c.seed),
+            params: c.map(|c| c.params.clone()).unwrap_or_default(),
+            output: p.output,
+            brightness: p.brightness,
+            paused: false,
+            speed: 1.0,
+        }
+    }
+
+    /// The last schema whose files have `players` (card 350 made v8).
+    const LAST_WITH_PLAYERS: u32 = 7;
+
+    /// The named setting panel `i`'s channel is on; empty is Default.
+    fn setting_of(state: &Persisted, i: usize) -> String {
+        let id = state.panels[i].channel.expect("not idle");
+        state.channels.iter().find(|c| c.id == id).expect("its channel").setting.clone()
     }
 
     /// The decision the card is built on: only what a human actually moved is
@@ -2227,13 +2262,15 @@ mod tests {
         assert_eq!(again, first);
     }
 
-    /// The whole point: switch away, switch back, and it is as you left it.
+    /// The named settings round-trip through the file, and so does what each
+    /// channel is showing - since card 350 the working copy is the channel's,
+    /// so that is where a tuned picture is kept.
     ///
-    /// The tuned entry here is **`plasma`, which this build has not got** -
+    /// The settings entry here is **`plasma`, which this build has not got** -
     /// card 178 removed it - and that is deliberate: someone may have spent
     /// an evening on it, a patch can come back, and the promise is that a
-    /// memory entry for a patch nobody can play any more round-trips through
-    /// the file untouched, settings and all. `back == want` is that promise.
+    /// patch nobody can play any more keeps its named settings through the
+    /// file untouched. `back == want` is that promise.
     #[test]
     fn a_memory_round_trips_through_the_file() {
         let dir = Temp::new("memory-roundtrip");
@@ -2242,29 +2279,28 @@ mod tests {
         want.patches.insert(
             "plasma".into(),
             PatchMemory {
-                seed: Some(3),
-                params: BTreeMap::from([("scale".into(), 2.5)]),
-                // Card 302: speed is retired, so the only speed that
-                // round-trips is 1.00x (anything else is put back on load).
-                speed: Some(1.0),
-                setting: "Lava".into(),
                 settings: BTreeMap::from([(
                     "Lava".to_string(),
                     Setting { seed: 3, params: BTreeMap::from([("scale".into(), 2.5)]), speed: 1.0 },
                 )]),
+                ..PatchMemory::default()
             },
         );
-        want.patches.insert(
-            "metaballs".into(),
-            PatchMemory { seed: Some(9), params: BTreeMap::from([("count".into(), 8.0)]), ..PatchMemory::default() },
-        );
-        want.players.push(StoredPlayer { device: "abc".into(), ..StoredPlayer::default() });
+        want.channels.push(StoredChannel {
+            id: 1,
+            patch: "metaballs".into(),
+            seed: 9,
+            params: BTreeMap::from([("count".into(), 8.0)]),
+            ..StoredChannel::default()
+        });
+        want.panels.push(StoredPanel { device: "abc".into(), channel: Some(1), ..StoredPanel::default() });
         store.save(want.clone());
         store.flush();
         store.stop();
 
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
-        assert!(text.contains("\"patches\""), "the memory is in the state file, not somewhere else:\n{text}");
+        assert!(text.contains("\"patches\""), "the settings are in the state file, not somewhere else:\n{text}");
+        assert!(!text.contains("\"players\"") && !text.contains("\"focus\""), "v8 writes neither:\n{text}");
         let (_s2, back) = Store::open(Some(&dir.0));
         assert_eq!(back, want);
         assert_eq!(back.version, SCHEMA_VERSION);
@@ -2319,32 +2355,33 @@ mod tests {
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(loaded.devices.len(), 1);
         assert_eq!(loaded.devices[0].id, "4a00a4");
-        assert_eq!(loaded.players[0].patch, "metaballs");
-        assert_eq!(loaded.players[0].seed, 4242);
-        assert_eq!(loaded.players[0].brightness, Some(96));
-        assert_eq!(loaded.players.len(), 1, "the panel's player is the truth; the preview block is not a second one");
-        assert_eq!(loaded.focus, "4a00a4", "and it is what the page looks at");
+        assert_eq!(player(&loaded, 0).patch, "metaballs");
+        assert_eq!(player(&loaded, 0).seed, 4242);
+        assert_eq!(player(&loaded, 0).brightness, Some(96));
+        assert_eq!(loaded.panels.len(), 1, "the panel's player is the truth; the preview block is not a second one");
+        assert_eq!(loaded.panels[0].device, "4a00a4", "and it is what the page looks at");
 
-        // And what each context was playing is merged into the one memory -
-        // only the values that were actually moved, not the whole v1 dump.
-        let m = &loaded.patches;
-        assert_eq!(m["metaballs"].seed, Some(4242), "what the panel was playing");
-        assert_eq!(m["metaballs"].params, BTreeMap::from([("size".to_string(), 2.5)]), "only `size` was off its default");
-        assert_eq!(m["clocks-numerals"].seed, Some(7), "and what the design view was showing");
-        assert_eq!(m["clocks-numerals"].params, BTreeMap::from([("rest".to_string(), 3.0)]));
+        // What the panel was playing is its channel's now (card 350) - only
+        // the values that were actually moved, not the whole v1 dump.
+        assert_eq!(player(&loaded, 0).params, BTreeMap::from([("size".to_string(), 2.5)]), "only `size` was off its default");
+        // The design view's tuning was merged into the memory by v2 and is
+        // showing nowhere, so v8 has nowhere to keep it: it is named, once.
+        assert!(!loaded.patches.contains_key("clocks-numerals"));
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v1")), "the migration says so once");
         assert_eq!(loaded.version, SCHEMA_VERSION);
         // The one thing a good v1 file now needs said about it: every one of
         // them names `settings.levels`, and card 102 retired it.
-        // ... and, since card 161, its `fps`.
+        // ... and, since card 161, its `fps`; and since card 350, the working
+        // copy nothing is showing.
         let said = store.health().repaired;
-        assert_eq!(said.len(), 2, "a good v1 file needs no other repair: {said:?}");
+        assert_eq!(said.len(), 3, "a good v1 file needs no other repair: {said:?}");
         assert!(said[0].contains("`settings.levels` (64)"), "{}", said[0]);
         assert!(said[0].contains("`output.panel`"), "and says what replaced it: {}", said[0]);
         assert!(said[1].starts_with("`fps`"), "and the retired rate: {}", said[1]);
+        assert!(said[2].contains("`clocks-numerals`") && said[2].contains("card 350"), "{}", said[2]);
         assert_eq!(
-            loaded.players[0].output.panel,
+            player(&loaded, 0).output.panel,
             screeny_art::panel::Panel::Dithered,
             "and the panel comes up at what the device really shows"
         );
@@ -2367,8 +2404,8 @@ mod tests {
         )
         .expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.patches["metaballs"].params["size"], 2.5, "the panel's value");
-        assert_eq!(loaded.patches["metaballs"].seed, Some(2), "and the panel's seed");
+        assert_eq!(player(&loaded, 0).params["size"], 2.5, "the panel's value");
+        assert_eq!(player(&loaded, 0).seed, 2, "and the panel's seed");
     }
 
     // ------------------------- v2 -> v3 (card 170) -------------------------
@@ -2430,32 +2467,31 @@ mod tests {
         assert_eq!(loaded.devices[0].id, "4a00a4");
 
         // The player, untouched, plus v3's two new fields at their defaults.
-        assert_eq!(loaded.players.len(), 1, "the preview block must not become a second player");
-        let p = &loaded.players[0];
+        assert_eq!(loaded.panels.len(), 1, "the preview block must not become a second player");
+        let p = &player(&loaded, 0);
         assert_eq!(p.device, "4a00a4");
         assert_eq!(p.patch, "overland");
         assert_eq!(p.seed, 4242);
         assert!(p.on);
         assert!(!p.paused);
         assert_eq!(p.speed, 1.0);
-        assert_eq!(loaded.focus, "4a00a4", "the page is a window onto the panel");
+        assert_eq!(loaded.panels[0].device, "4a00a4", "the page is a window onto the panel");
 
-        // The memory is v2's, exactly: the preview's patch was already in it,
-        // so its values must not have been written over the top.
-        assert_eq!(loaded.patches.len(), 4);
-        // `plasma` went with card 178, so this entry is now for a patch this
-        // build has not got - and it is still here, which is the promise.
-        assert_eq!(loaded.patches["plasma"].params["scale"], 2.97);
-        assert_eq!(loaded.patches["metaballs"].params["count"], 8.0);
-        assert_eq!(loaded.patches["overland"].seed, Some(4242));
-        assert_eq!(loaded.patches["clocks-numerals"].seed, Some(0), "the v2 entry wins over the preview block's");
-        assert!(loaded.patches["clocks-numerals"].params.is_empty(), "including its parameters");
+        // v2's memory held working copies and no named settings. Since card
+        // 350 a working copy is a channel's: the panel's (overland) is on its
+        // channel, and the three that were showing nowhere are named, once.
+        assert!(loaded.patches.is_empty(), "{:?}", loaded.patches);
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v2")), "it says so once");
         let said = store.health().repaired;
-        assert_eq!(said.len(), 2, "the retired `levels` (card 102) and `fps` (card 161): {said:?}");
+        assert_eq!(said.len(), 3, "the retired `levels` (card 102) and `fps` (card 161), and card 350: {said:?}");
         assert!(said[0].contains("`settings.levels`"), "{}", said[0]);
         assert!(said[1].starts_with("`fps`"), "{}", said[1]);
+        assert!(
+            said[2].contains("`clocks-numerals`, `metaballs`, `plasma`") && !said[2].contains("overland"),
+            "only what is showing nowhere: {}",
+            said[2]
+        );
         assert!(!dir.0.join(BAD_FILE).exists(), "a v2 file is migrated, not condemned");
     }
 
@@ -2470,19 +2506,20 @@ mod tests {
             let dir = Temp::new(&format!("levels-{level}"));
             std::fs::write(
                 dir.0.join(FILE),
+                // v7: the last schema with `players` (card 350).
                 format!(
-                    r#"{{"version":{SCHEMA_VERSION},"players":[{{"device":"","piece":"metaballs","seed":9,
+                    r#"{{"version":7,"players":[{{"device":"","piece":"metaballs","seed":9,
                        "settings":{{"levels":{level},"dither":"bayer8","panel_model":false}}}}]}}"#
                 ),
             )
             .expect("write the file");
             let (store, loaded) = Store::open(Some(&dir.0));
 
-            assert_eq!(loaded.players[0].seed, 9, "levels {level}: the rest of the file survives");
-            assert_eq!(loaded.players[0].output.dither, screeny_art::dither::Dither::Bayer8);
-            assert!(!loaded.players[0].output.panel_model, "levels {level}: and the rest of the output block");
+            assert_eq!(player(&loaded, 0).seed, 9, "levels {level}: the rest of the file survives");
+            assert_eq!(player(&loaded, 0).output.dither, screeny_art::dither::Dither::Bayer8);
+            assert!(!player(&loaded, 0).output.panel_model, "levels {level}: and the rest of the output block");
             assert_eq!(
-                loaded.players[0].output.panel,
+                player(&loaded, 0).output.panel,
                 screeny_art::panel::Panel::Dithered,
                 "levels {level}: the panel model is the device's"
             );
@@ -2490,7 +2527,10 @@ mod tests {
             let said = store.health().repaired;
             assert_eq!(said.len(), 1, "levels {level}: said once, not per player: {said:?}");
             assert!(said[0].contains(&format!("`settings.levels` ({level})")), "{}", said[0]);
-            assert!(store.health().recovered.is_none(), "levels {level}: not a recovery, the file was used");
+            assert!(
+                store.health().recovered.is_some_and(|w| w.contains("v7")),
+                "levels {level}: migrated to v8 (card 350), which is not what is being said here"
+            );
             assert!(!dir.0.join(BAD_FILE).exists(), "levels {level}: and certainly not condemned");
         }
     }
@@ -2506,8 +2546,9 @@ mod tests {
             let dir = Temp::new(&format!("fps-{rate}"));
             std::fs::write(
                 dir.0.join(FILE),
+                // v7: the last schema with `players` (card 350).
                 format!(
-                    r#"{{"version":{SCHEMA_VERSION},"focus":"","players":[{{"device":"","patch":"metaballs","seed":9,
+                    r#"{{"version":7,"focus":"","players":[{{"device":"","patch":"metaballs","seed":9,
                        "fps":{rate},"paused":true,"speed":0.5,
                        "output":{{"dither":"bayer8","panel_model":false}}}}]}}"#
                 ),
@@ -2515,12 +2556,12 @@ mod tests {
             .expect("write the file");
             let (store, loaded) = Store::open(Some(&dir.0));
 
-            assert_eq!(loaded.players.len(), 1, "fps {rate}: the file was used");
-            assert_eq!(loaded.players[0].seed, 9, "fps {rate}: the rest of the file survives");
+            assert_eq!(loaded.panels.len(), 1, "fps {rate}: the file was used");
+            assert_eq!(player(&loaded, 0).seed, 9, "fps {rate}: the rest of the file survives");
             // Card 302 retired the rest of the playback state as well.
-            assert!(!loaded.players[0].paused, "fps {rate}: pause is retired");
-            assert_eq!(loaded.players[0].speed, 1.0, "fps {rate}: and so is speed");
-            assert_eq!(loaded.players[0].output.dither, screeny_art::dither::Dither::Bayer8);
+            assert!(!player(&loaded, 0).paused, "fps {rate}: pause is retired");
+            assert_eq!(player(&loaded, 0).speed, 1.0, "fps {rate}: and so is speed");
+            assert_eq!(player(&loaded, 0).output.dither, screeny_art::dither::Dither::Bayer8);
 
             let said = store.health().repaired;
             assert_eq!(said.len(), 2, "fps {rate}: `fps` said once, not per player, and the retired playback once: {said:?}");
@@ -2531,12 +2572,7 @@ mod tests {
                 "and says what there is instead: {}",
                 said[0]
             );
-            assert!(store.health().recovered.is_none(), "fps {rate}: not a recovery - the file is v{SCHEMA_VERSION}");
             assert!(!dir.0.join(BAD_FILE).exists(), "fps {rate}: and certainly not condemned");
-            assert!(
-                !dir.0.join(format!("state.v{SCHEMA_VERSION}.json")).exists(),
-                "fps {rate}: no schema bump means no migration and no backup copy"
-            );
         }
     }
 
@@ -2548,23 +2584,24 @@ mod tests {
         std::fs::write(
             dir.0.join(FILE),
             format!(
-                r#"{{"version":{SCHEMA_VERSION},"focus":"a","players":[
+                r#"{{"version":{LAST_WITH_PLAYERS},"focus":"a","players":[
                    {{"device":"a","patch":"metaballs","fps":60.0}},
                    {{"device":"b","patch":"clocks-dials","fps":60.0}}]}}"#
             ),
         )
         .expect("write the file");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players.len(), 2);
+        assert_eq!(loaded.panels.len(), 2);
         let said = store.health().repaired;
         assert_eq!(said.len(), 1, "one sentence about the key, not one per player: {said:?}");
     }
 
     /// The design view's patch is only merged into the memory where the memory
     /// knows nothing about it - a v2 file whose preview was on a patch no
-    /// player had ever touched.
+    /// player had ever touched. Since card 350 that tuning, showing nowhere,
+    /// has nowhere to live, and is named once rather than dropped silently.
     #[test]
-    fn a_v2_preview_on_an_unknown_patch_is_kept() {
+    fn a_v2_preview_on_an_unknown_patch_is_named() {
         let dir = Temp::new("v2-gap");
         std::fs::write(
             dir.0.join(FILE),
@@ -2576,10 +2613,10 @@ mod tests {
             }"#,
         )
         .expect("write");
-        let (_store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.patches["metaballs"].seed, Some(9), "nothing knew about it, so it is kept");
-        assert_eq!(loaded.patches["metaballs"].params["count"], 8.0);
-        assert_eq!(loaded.players.len(), 1, "and it is still not a player");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        let said = store.health().repaired.join(" | ");
+        assert!(said.contains("`metaballs`") && !said.contains("clocks-dials"), "{said}");
+        assert_eq!(loaded.panels.len(), 1, "and it is still not a panel");
     }
 
     /// The one case where dropping `panel_on` would lose something: a v2 file
@@ -2601,8 +2638,8 @@ mod tests {
         )
         .expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players.len(), 1);
-        let p = &loaded.players[0];
+        assert_eq!(loaded.panels.len(), 1);
+        let p = &player(&loaded, 0);
         assert_eq!(p.device, "4a00a4", "`panel_to` named it by instance name; the id is what a player uses");
         assert!(p.on, "it was streaming, so it keeps streaming");
         assert_eq!(p.patch, "metaballs");
@@ -2610,7 +2647,7 @@ mod tests {
         assert_eq!(p.params["size"], 2.5);
         assert!(!p.paused, "pause is retired (card 302)");
         assert_eq!(p.speed, 1.0, "and so is speed");
-        assert_eq!(loaded.focus, "4a00a4");
+        assert_eq!(loaded.panels[0].device, "4a00a4");
     }
 
     /// The same, with nothing to point at: the player is unbound rather than
@@ -2624,11 +2661,11 @@ mod tests {
         )
         .expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players.len(), 1);
-        assert_eq!(loaded.players[0].device, UNBOUND);
-        assert_eq!(loaded.players[0].patch, "metaballs");
-        assert!(!loaded.players[0].on, "nothing to send to");
-        assert_eq!(loaded.focus, UNBOUND);
+        assert_eq!(loaded.panels.len(), 1);
+        assert_eq!(player(&loaded, 0).device, UNBOUND);
+        assert_eq!(player(&loaded, 0).patch, "metaballs");
+        assert!(!player(&loaded, 0).on, "nothing to send to");
+        assert_eq!(loaded.panels[0].device, UNBOUND);
     }
 
     /// A hand-edited file full of rubbish in the memory. Every one of these is
@@ -2644,7 +2681,7 @@ mod tests {
   "pieces": {{
     "metaballs": {{ "seed": 11, "params": {{ "hue": 2.5, "speed": null, "spread": "fast", "count": {{}}, "samples": [] }} }},
     "clocks-numerals": {{ "seed": "not a seed", "params": {{ "rest": 3.0 }} }},
-    "no-such-patch": {{ "seed": 4, "params": {{ "whatever": 1.0 }} }},
+    "no-such-patch": {{ "seed": 4, "params": {{ "whatever": 1.0 }}, "settings": {{ "Mine": {{ "seed": 4 }} }} }},
     "vesta": "not an object at all",
     "clocks-dials": {{ "params": "not an object either" }}
   }}
@@ -2654,15 +2691,21 @@ mod tests {
         let (store, loaded) = Store::open(Some(&dir.0));
 
         assert!(!dir.0.join(BAD_FILE).exists(), "a bad value must never condemn the file");
+        let said = store.health().repaired.join(" | ");
+        for bad in [
+            "`spread` was not a number",
+            "`count` was not a number",
+            "the seed remembered for `clocks-numerals` was not a seed",
+            "what was remembered for `vesta` was not an object",
+            "`clocks-dials`'s remembered parameters were not an object",
+        ] {
+            assert!(said.contains(bad), "each bad value is said, once: `{bad}` in {said}");
+        }
+        // Card 350: a working copy is a channel's now, so what is left of the
+        // memory is the named settings - one bad value never cost them.
         let m = &loaded.patches;
-        assert_eq!(m["metaballs"].seed, Some(11));
-        assert_eq!(m["metaballs"].params, BTreeMap::from([("hue".to_string(), 2.5)]), "one good value, four bad ones dropped");
-        assert_eq!(m["clocks-numerals"].seed, None, "a seed that is not a seed is forgotten");
-        assert_eq!(m["clocks-numerals"].params["rest"], 3.0, "and the rest of that patch's memory survives it");
-        assert!(m.contains_key("no-such-patch"), "an unknown patch keeps its entry, so a patch that comes back gets it");
-        assert!(!m.contains_key("vesta"), "an entry that is not an object is forgotten");
-        assert!(!m.contains_key("clocks-dials"), "so is one with nothing usable left in it");
-        assert!(!store.health().repaired.is_empty(), "and the server says what it had to correct");
+        assert_eq!(m.keys().collect::<Vec<_>>(), ["no-such-patch"], "{m:?}");
+        assert_eq!(m["no-such-patch"].settings["Mine"].seed, 4, "an unknown patch keeps its settings, so a patch that comes back gets them");
         assert!(store.health().last_error.is_none());
     }
 
@@ -2681,7 +2724,7 @@ mod tests {
         std::fs::write(
             dir.0.join(FILE),
             format!(
-                r#"{{"version":{SCHEMA_VERSION},"focus":"abc",
+                r#"{{"version":{LAST_WITH_PLAYERS},"focus":"abc",
                      "players":[{{"device":"abc","patch":"plasma","seed":4242,"params":{{"scale":2.5}},"speed":0.5}}],
                      "patches":{{"plasma":{{"seed":4242,"params":{{"scale":2.5}}}},
                                  "{}":{{"seed":77,"params":{{"rest":3.0}},"speed":0.25}}}}}}"#,
@@ -2691,28 +2734,26 @@ mod tests {
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
 
-        assert_eq!(loaded.players.len(), 1, "the file was used, not thrown away");
-        assert_eq!(loaded.players[0].patch, default_patch(), "a player must always have something to play");
-        assert_eq!(loaded.players[0].device, "abc", "and it is still that panel's player");
+        assert_eq!(loaded.panels.len(), 1, "the file was used, not thrown away");
+        assert_eq!(player(&loaded, 0).patch, default_patch(), "a panel must always have something to play");
+        assert_eq!(player(&loaded, 0).device, "abc", "and it is still that panel");
         // Not plasma's 4242 and not plasma's 0.5x: the default patch arrives
         // as the studio last left *it*, which is what switching to it by hand
-        // would do.
-        assert_eq!(loaded.players[0].seed, 77, "the default patch's own remembered seed");
-        assert_eq!(loaded.players[0].speed, 1.0, "speed is retired (card 302): 1.00x whatever was remembered");
-        assert_eq!(loaded.players[0].params["rest"], 3.0, "and its own parameters");
-        assert!(!loaded.players[0].params.contains_key("scale"), "never the missing patch's: {:?}", loaded.players[0].params);
-
-        // The memory is untouched. Somebody may have spent an evening on it,
-        // and a patch can come back.
-        assert_eq!(loaded.patches["plasma"].seed, Some(4242), "the tuning is kept, inert");
-        assert_eq!(loaded.patches["plasma"].params["scale"], 2.5);
+        // would have done in v7 - and v8 carries that onto the channel.
+        assert_eq!(player(&loaded, 0).seed, 77, "the default patch's own remembered seed");
+        assert_eq!(player(&loaded, 0).speed, 1.0, "speed is retired (card 302): 1.00x whatever was remembered");
+        assert_eq!(player(&loaded, 0).params["rest"], 3.0, "and its own parameters");
+        assert!(!player(&loaded, 0).params.contains_key("scale"), "never the missing patch's: {:?}", player(&loaded, 0).params);
 
         let h = store.health();
-        assert!(h.recovered.is_none(), "the file was read and used; this is not a recovery: {:?}", h.recovered);
+        assert!(h.recovered.as_ref().is_some_and(|w| w.contains("v7")), "migrated to v8 (card 350): {:?}", h.recovered);
         assert!(!dir.0.join(BAD_FILE).exists(), "and certainly not condemned");
-        let said: Vec<&String> = h.repaired.iter().filter(|s| s.contains("plasma")).collect();
+        let said: Vec<&String> = h.repaired.iter().filter(|s| s.contains("is not a patch this build has")).collect();
         assert_eq!(said.len(), 1, "said once: {:?}", h.repaired);
         assert!(said[0].contains(default_patch()), "and says what is playing instead: {}", said[0]);
+        // Card 350: plasma's tuning was a working copy showing nowhere, which
+        // v8 has nowhere to keep - so it is named rather than lost silently.
+        assert!(h.repaired.iter().any(|s| s.contains("`plasma`") && s.contains("card 350")), "{:?}", h.repaired);
     }
 
     /// Once **per player**, because it is a fact about each panel rather than
@@ -2724,7 +2765,7 @@ mod tests {
         std::fs::write(
             dir.0.join(FILE),
             format!(
-                r#"{{"version":{SCHEMA_VERSION},"focus":"a","players":[
+                r#"{{"version":{LAST_WITH_PLAYERS},"focus":"a","players":[
                      {{"device":"a","patch":"plasma"}},
                      {{"device":"b","patch":"testcard"}},
                      {{"device":"c","patch":"metaballs"}}]}}"#
@@ -2732,10 +2773,10 @@ mod tests {
         )
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players.len(), 3);
-        assert_eq!(loaded.players[0].patch, default_patch());
-        assert_eq!(loaded.players[1].patch, default_patch());
-        assert_eq!(loaded.players[2].patch, "metaballs", "a panel on a patch that is still here is not disturbed");
+        assert_eq!(loaded.panels.len(), 3);
+        assert_eq!(player(&loaded, 0).patch, default_patch());
+        assert_eq!(player(&loaded, 1).patch, default_patch());
+        assert_eq!(player(&loaded, 2).patch, "metaballs", "a panel on a patch that is still here is not disturbed");
         let said = store.health().repaired;
         assert_eq!(said.len(), 2, "one per panel that had to be moved: {said:?}");
         assert!(said[0].contains("plasma") && said[0].contains("panel a"), "{}", said[0]);
@@ -2754,9 +2795,9 @@ mod tests {
         )
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players.len(), 1, "a studio always has a picture to show");
-        assert_eq!(loaded.players[0].patch, default_patch());
-        assert_eq!(loaded.players[0].device, UNBOUND);
+        assert_eq!(loaded.panels.len(), 1, "a studio always has a picture to show");
+        assert_eq!(player(&loaded, 0).patch, default_patch());
+        assert_eq!(player(&loaded, 0).device, UNBOUND);
         assert!(store.health().repaired.iter().any(|s| s.contains("plasma")), "{:?}", store.health().repaired);
         // The v1 merge wrote nothing for it - `migrate_to_v3` skips a patch it
         // does not know - so there is nothing to keep and nothing is invented.
@@ -2770,9 +2811,9 @@ mod tests {
     fn unknown_patches_are_capped() {
         let dir = Temp::new("cap");
         let entries: Vec<String> =
-            (0..MAX_UNKNOWN_PATCHES + 20).map(|i| format!(r#""ghost-{i:03}": {{"seed": {i}}}"#)).collect();
+            (0..MAX_UNKNOWN_PATCHES + 20).map(|i| format!(r#""ghost-{i:03}": {{"settings": {{"A": {{"seed": {i}}}}}}}"#)).collect();
         let file = format!(
-            r#"{{"version":{SCHEMA_VERSION},"preview":{{"piece":"metaballs"}},"pieces":{{{},"metaballs":{{"seed":1}}}}}}"#,
+            r#"{{"version":{SCHEMA_VERSION},"patches":{{{},"metaballs":{{"settings":{{"A":{{"seed":1}}}}}}}}}}"#,
             entries.join(",")
         );
         std::fs::write(dir.0.join(FILE), &file).expect("write");
@@ -2790,7 +2831,8 @@ mod tests {
         let (store, _) = Store::open(Some(&dir.0));
         for i in 0..20 {
             let mut p = Persisted::default();
-            p.players.push(StoredPlayer { device: "abc".into(), seed: i, ..StoredPlayer::default() });
+            p.channels.push(StoredChannel { id: 1, seed: i, ..StoredChannel::default() });
+            p.panels.push(StoredPanel { device: "abc".into(), channel: Some(1), ..StoredPanel::default() });
             store.save(p);
         }
         store.flush();
@@ -2800,7 +2842,7 @@ mod tests {
         assert_eq!(left, vec![FILE.to_string()], "the state directory should hold exactly the state file");
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
         let back: Persisted = serde_json::from_str(&text).expect("the file parses");
-        assert_eq!(back.players[0].seed, 19, "the newest save wins");
+        assert_eq!(player(&back, 0).seed, 19, "the newest save wins");
     }
 
     // ------------------------- v3 -> v4 (card 150) -------------------------
@@ -2856,8 +2898,8 @@ mod tests {
         assert_eq!(loaded.devices[0].name, "the shelf");
         assert_eq!(loaded.devices[0].instance, "screeny-aa11bb");
 
-        assert_eq!(loaded.players.len(), 1);
-        let p = &loaded.players[0];
+        assert_eq!(loaded.panels.len(), 1);
+        let p = &player(&loaded, 0);
         assert_eq!(p.device, "aa11bb");
         assert!(p.on, "the panel switch");
         assert_eq!(p.patch, "clocks-dials", "`piece` is read as `patch`");
@@ -2873,26 +2915,23 @@ mod tests {
         assert_eq!(p.output.limiter.apl_cap, 0.32);
         assert_eq!(p.output.limiter.max_rise_per_s, 1.5);
         assert!(p.output.panel_model && p.output.codec_preview);
-        assert_eq!(loaded.focus, "aa11bb");
+        assert_eq!(loaded.panels[0].device, "aa11bb");
 
-        // `pieces` is read as `patches`, entry for entry - including the one
-        // for a patch this build has never heard of.
-        assert_eq!(loaded.patches.len(), 4);
-        assert_eq!(loaded.patches["clocks-dials"].seed, Some(4242));
-        assert_eq!(loaded.patches["clocks-dials"].params["mood"], 3.0);
-        assert_eq!(loaded.patches["metaballs"].params["count"], 8.0);
-        // Two entries for patches this build has not got: `long-gone`, which
-        // never existed, and `plasma`, which did until card 178. Both stay.
-        assert_eq!(loaded.patches["plasma"].params["scale"], 2.97);
-        assert_eq!(loaded.patches["long-gone"].seed, Some(5));
+        // `pieces` is read as `patches`, entry for entry - and since card 350
+        // what they held were working copies, which are the channels' now:
+        // the one showing is on its channel (above), and the three showing
+        // nowhere - two of them for patches this build has not got - are
+        // named, once.
+        assert!(loaded.patches.is_empty(), "{:?}", loaded.patches);
 
         // What needed saying: a v3 file names `fps`, which card 161 retired,
         // and plays at 0.75x, which card 302 retired (the player's speed and
         // the copy v4 -> v5 made of it). It names no retired `levels`.
         let said = store.health().repaired;
-        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said.len(), 3, "{said:?}");
         assert!(said[0].starts_with("`fps`"), "{}", said[0]);
         assert!(said[1].contains("card 302") && said[1].contains("2 saved speeds"), "{}", said[1]);
+        assert!(said[2].contains("`long-gone`, `metaballs`, `plasma`"), "{}", said[2]);
         assert!(!dir.0.join(BAD_FILE).exists(), "a v3 file is migrated, not condemned");
     }
 
@@ -2924,22 +2963,23 @@ mod tests {
         store.stop();
 
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
-        // Card 151: the same claim, one schema on - a v3 file passes through
-        // v4's renaming and v5's settings in one start and is written as v5.
-        for want in ["\"patches\"", "\"patch\"", "\"output\"", &format!("\"version\": {SCHEMA_VERSION}")] {
+        // Card 151: the same claim, schemas on - a v3 file passes through
+        // v4's renaming, v5's settings and v8's panels and channels (card 350)
+        // in one start and is written as the current schema.
+        for want in ["\"panels\"", "\"channels\"", "\"patch\"", "\"output\"", &format!("\"version\": {SCHEMA_VERSION}")] {
             assert!(text.contains(want), "the new file should say {want}:\n{text}");
         }
         // `settings` is card 151's word now - a patch's named settings - but
         // this file has none, so its absence still means what card 150 meant
-        // by it: no player writes its output block under the old name.
-        for gone in ["\"piece\"", "\"pieces\"", "\"settings\""] {
+        // by it: no panel writes its output block under the old name.
+        for gone in ["\"piece\"", "\"pieces\"", "\"settings\"", "\"players\"", "\"focus\""] {
             assert!(!text.contains(gone), "the new file should not say {gone}:\n{text}");
         }
 
         // And it reloads as itself, with no second migration.
         let (store2, back) = Store::open(Some(&dir.0));
         assert_eq!(back, loaded);
-        assert!(store2.health().recovered.is_none(), "a v4 file is not migrated again");
+        assert!(store2.health().recovered.is_none(), "a current file is not migrated again");
     }
 
     /// A file that is already v4 but still spells a player's fields the old
@@ -2951,7 +2991,7 @@ mod tests {
         std::fs::write(
             dir.0.join(FILE),
             format!(
-                r#"{{"version":{SCHEMA_VERSION},"focus":"abc",
+                r#"{{"version":{LAST_WITH_PLAYERS},"focus":"abc",
                      "players":[{{"device":"abc","piece":"metaballs","seed":8,
                                   "settings":{{"dither":"bayer8"}}}}],
                      "pieces":{{"metaballs":{{"seed":8,"params":{{"hue":2.5}}}}}}}}"#
@@ -2959,12 +2999,13 @@ mod tests {
         )
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.players[0].patch, "metaballs");
-        assert_eq!(loaded.players[0].seed, 8);
-        assert_eq!(loaded.players[0].output.dither, screeny_art::dither::Dither::Bayer8);
-        assert_eq!(loaded.patches["metaballs"].params["hue"], 2.5);
-        assert!(store.health().recovered.is_none(), "same version, so nothing was migrated");
-        assert!(!dir.0.join(backup_name(4)).exists(), "and nothing was copied aside");
+        assert_eq!(player(&loaded, 0).patch, "metaballs");
+        assert_eq!(player(&loaded, 0).seed, 8);
+        assert_eq!(player(&loaded, 0).output.dither, screeny_art::dither::Dither::Bayer8);
+        // Since card 350 the file is v7, the last with `players`, and so it is
+        // migrated on - but by nothing that cares how its keys were spelled.
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v7")));
+        assert!(!dir.0.join(backup_name(4)).exists(), "and nothing older was copied aside");
     }
 
     /// A v3 file has no `preview` block, so the v1/v2 migration must not run
@@ -2980,7 +3021,7 @@ mod tests {
         .expect("write");
         let (_store, loaded) = Store::open(Some(&dir.0));
         assert!(loaded.patches.is_empty(), "nothing was remembered, so nothing is: {:?}", loaded.patches);
-        assert_eq!(loaded.players.len(), 1, "and no second player was invented either");
+        assert_eq!(loaded.panels.len(), 1, "and no second player was invented either");
     }
 
     // ------------------------- named settings (card 151) -------------------------
@@ -3222,58 +3263,58 @@ mod tests {
 
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(loaded.devices.len(), 1);
-        assert_eq!(loaded.players.len(), 1);
-        assert_eq!(loaded.players[0].patch, "clocks-dials");
-        assert_eq!(loaded.players[0].speed, 1.0, "speed is retired (card 302)");
-        assert_eq!(loaded.focus, "aa11bb");
+        assert_eq!(loaded.panels.len(), 1);
+        assert_eq!(player(&loaded, 0).patch, "clocks-dials");
+        assert_eq!(player(&loaded, 0).speed, 1.0, "speed is retired (card 302)");
+        assert_eq!(loaded.panels[0].device, "aa11bb");
 
-        // The memory is v4's, entry for entry, and nothing was invented.
-        assert_eq!(loaded.patches.len(), 3);
-        assert_eq!(loaded.patches["metaballs"].params["count"], 8.0);
-        assert_eq!(loaded.patches["metaballs"].seed, Some(222));
-        assert!(loaded.patches.values().all(|e| e.settings.is_empty()), "a v4 file has no settings to carry");
-        assert!(loaded.patches.values().all(|e| e.setting.is_empty()), "so every patch is on Default");
-        // v4 -> v5 moved the player's 0.4x onto the patch it was on, and card
-        // 302's retirement then put it back to 1.00x - still only for the
-        // patch that was playing, so nothing was invented.
-        assert_eq!(loaded.patches["clocks-dials"].speed, Some(1.0), "moved, then retired");
-        assert_eq!(loaded.patches["metaballs"].speed, None, "a patch nothing was playing is left alone");
+        assert_eq!(player(&loaded, 0).params, BTreeMap::from([("mood".to_string(), 3.0)]), "the tuning, on its channel");
+        assert_eq!(setting_of(&loaded, 0), "", "a v4 file has no settings, so it is on Default");
+        // A v4 file has no named settings to carry, and its working copies
+        // are the channels' since card 350: nothing is left in the memory.
+        assert!(loaded.patches.is_empty(), "{:?}", loaded.patches);
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v4")), "it says so once");
         let said = store.health().repaired;
-        assert_eq!(said.len(), 2, "a good v4 file needs only the retired `fps` and speed said: {said:?}");
+        assert_eq!(said.len(), 3, "a good v4 file needs only the retired `fps` and speed, and card 350, said: {said:?}");
         assert!(said[0].starts_with("`fps`"), "{}", said[0]);
         assert!(said[1].contains("card 302"), "{}", said[1]);
+        assert!(said[2].contains("`clocks-numerals`, `metaballs`") && !said[2].contains("dials"), "{}", said[2]);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(4))).expect("the backup"), v4, "kept byte for byte");
         assert!(!dir.0.join(BAD_FILE).exists(), "a v4 file is migrated, not condemned");
     }
 
     /// And the migration is **run once**: the guard means a file that has
-    /// already been through a step does not run it again. A v5 file whose
-    /// player is at 1.0x but whose patch remembers 0.4x keeps the 0.4x, which
-    /// is exactly what a second run of v4 -> v5 would overwrite.
+    /// already been through a step does not run it again. A v7 file runs only
+    /// v7 -> v8 (card 350) - its channel takes the setting the patch was on -
+    /// and the file it writes is not migrated a second time.
     #[test]
     fn a_current_file_does_not_run_the_migration_again() {
-        let dir = Temp::new("v6-once");
-        let v5 = format!(
-            r#"{{"version":{SCHEMA_VERSION},"focus":"abc",
-                 "players":[{{"device":"abc","patch":"metaballs","seed":8,"speed":1.0}}],
-                 "patches":{{"metaballs":{{"seed":8,"speed":0.4,"setting":"Lava",
+        let dir = Temp::new("v8-once");
+        let v7 = format!(
+            r#"{{"version":{LAST_WITH_PLAYERS},"focus":"abc",
+                 "players":[{{"device":"abc","patch":"metaballs","seed":8,"params":{{"hue":2.5}},"speed":1.0}}],
+                 "patches":{{"metaballs":{{"seed":8,"params":{{"hue":2.5}},"speed":0.4,"setting":"Lava",
                               "settings":{{"Lava":{{"seed":8,"params":{{"hue":2.5}},"speed":0.4}}}}}}}}}}"#
         );
-        std::fs::write(dir.0.join(FILE), &v5).expect("write");
+        std::fs::write(dir.0.join(FILE), &v7).expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert!(store.health().recovered.is_none(), "same version, so nothing was migrated");
-        assert!(!dir.0.join(backup_name(u64::from(SCHEMA_VERSION))).exists(), "and nothing was copied aside");
-        assert!(!dir.0.join(backup_name(5)).exists());
-        // v4 -> v5 would have overwritten the working copy's speed with the
-        // player's; it did not run. Card 302's retirement runs on every load,
-        // so the 0.4x the file says is 1.00x either way - and said.
-        assert_eq!(loaded.patches["metaballs"].speed, Some(1.0));
-        assert_eq!(loaded.patches["metaballs"].setting, "Lava");
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v7")), "v7 -> v8, once");
+        assert!(!dir.0.join(backup_name(5)).exists(), "and no earlier step ran");
+        assert_eq!(setting_of(&loaded, 0), "Lava", "the channel is on the setting the patch was on");
+        assert_eq!(player(&loaded, 0).params["hue"], 2.5);
         assert_eq!(loaded.patches["metaballs"].settings["Lava"].params["hue"], 2.5);
-        assert_eq!(loaded.patches["metaballs"].settings["Lava"].speed, 1.0);
+        assert_eq!(loaded.patches["metaballs"].settings["Lava"].speed, 1.0, "retired (card 302), and said");
         assert!(store.health().repaired.iter().any(|r| r.contains("card 302")));
+        assert!(!store.health().repaired.iter().any(|r| r.contains("card 350")), "a working copy that is showing is not lost");
+
+        store.save(loaded.clone());
+        store.flush();
+        store.stop();
+        let (again, back) = Store::open(Some(&dir.0));
+        assert!(again.health().recovered.is_none(), "a v8 file is not migrated again");
+        assert!(again.health().repaired.is_empty(), "and has nothing to say: {:?}", again.health().repaired);
+        assert_eq!(back, loaded);
     }
 
     /// A v1 file goes all the way in one start: v1 -> v3 -> v5.
@@ -3291,12 +3332,11 @@ mod tests {
         .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.version, SCHEMA_VERSION);
-        assert_eq!(loaded.patches["clocks-dials"].params["mood"], 3.0, "v1's merge still happened");
-        // Each context's speed came with it (v4 -> v5) and was then retired
-        // (card 302): an entry each, at 1.00x.
-        assert_eq!(loaded.patches["clocks-dials"].speed, Some(1.0));
-        assert_eq!(loaded.patches["metaballs"].speed, Some(1.0));
-        assert!(loaded.patches.values().all(|e| e.settings.is_empty()));
+        assert_eq!(player(&loaded, 0).params["mood"], 3.0, "the panel's tuning, on its channel");
+        // The design view's metaballs was merged into the memory at v2 and is
+        // showing nowhere at v8, so it is named (card 350).
+        assert!(loaded.patches.is_empty(), "{:?}", loaded.patches);
+        assert!(store.health().repaired.iter().any(|r| r.contains("`metaballs`")), "{:?}", store.health().repaired);
         let why = store.health().recovered.expect("it says so");
         assert!(why.contains("v1") && why.contains(&format!("v{SCHEMA_VERSION}")), "{why}");
     }
@@ -3324,9 +3364,9 @@ mod tests {
         let entry = &loaded.patches["metaballs"];
 
         assert!(!dir.0.join(BAD_FILE).exists(), "one bad value never condemns the file");
-        assert_eq!(entry.seed, Some(1), "and never costs the rest of the entry");
-        assert_eq!(entry.speed, None, "a speed that is not a speed is forgotten");
-        assert!(entry.setting.is_empty(), "a name nothing answers to is not a name it is on");
+        // The working copy (`seed`, `speed`, `setting`) is a channel's since
+        // card 350 and is not kept here; its bad `speed` and its `Ghost` are
+        // still said (below), once, on the way in.
 
         assert_eq!(entry.settings["Good"].params["hue"], 2.5);
         assert_eq!(entry.settings["Good"].speed, 1.0, "retired (card 302)");
@@ -3406,14 +3446,12 @@ mod tests {
         assert!(!dir.0.join(BAD_FILE).exists());
 
         // The tuning, intact.
-        let p = &loaded.players[0];
+        let p = &player(&loaded, 0);
         assert_eq!((p.patch.as_str(), p.seed, p.brightness), ("clocks-dials", 4242, Some(96)));
         assert_eq!(p.params, BTreeMap::from([("dwell".to_string(), 90.0), ("mood".to_string(), 3.0)]));
         assert_eq!(p.output.dither, screeny_art::dither::Dither::Bayer4);
         let dials = &loaded.patches["clocks-dials"];
-        assert_eq!(dials.seed, Some(4242));
-        assert_eq!(dials.params, p.params);
-        assert_eq!(dials.setting, "Evening");
+        assert_eq!(setting_of(&loaded, 0), "Evening", "the channel is on the setting the patch was on (card 350)");
         assert_eq!(dials.settings.keys().collect::<Vec<_>>(), ["Busy", "Evening"]);
         assert_eq!(dials.settings["Evening"].params, p.params);
         assert_eq!(dials.settings["Busy"].seed, 11);
@@ -3423,17 +3461,120 @@ mod tests {
         // What card 302 retired, and nothing else.
         assert_eq!(p.speed, 1.0, "1.7x loads as 1.00x");
         assert!(!p.paused, "and nothing is paused");
-        assert_eq!(dials.speed, Some(1.0));
         assert!(dials.settings.values().chain(balls.settings.values()).all(|s| s.speed == 1.0));
         let said = store.health().repaired;
-        assert_eq!(said.len(), 1, "{said:?}");
+        assert_eq!(said.len(), 2, "{said:?}");
         assert!(said[0].contains("4 saved speeds") && said[0].contains("1 paused player"), "{}", said[0]);
-
+        // Card 350: metaballs' working copy was Lava with nothing moved - but
+        // its `setting` was never set, so it read as Default, moved; and it is
+        // showing nowhere.
+        assert!(said[1].contains("`metaballs`") && said[1].contains("card 350"), "{}", said[1]);
 
         // And the named setting still loads as itself - not modified.
         let def = screeny_art::patch::find("clocks-dials").expect("clocks-dials");
         let work = Working { params: sparse(def, &p.params), seed: p.seed, speed: p.speed };
         assert!(!modified(&loaded.patches, def, "Evening", &work), "Evening is still Evening, unmodified, after the retirement");
+    }
+
+    /// **Card 350: a realistic v7 file** - two panels (the owner's second
+    /// Tidbyt), the page focused on the second, a patch with named settings,
+    /// a tuned patch showing nowhere, Home Assistant set up. Dummy names only.
+    const LIVE_V7: &str = r#"{
+  "version": 7,
+  "devices": [
+    { "id": "aa11bb", "name": "the shelf", "instance": "screeny-aa11bb", "address": "", "manual": false },
+    { "id": "cc22dd", "name": "", "instance": "screeny-cc22dd", "address": "", "manual": false }
+  ],
+  "players": [
+    { "device": "aa11bb", "on": true, "patch": "clocks-dials", "seed": 4242, "params": { "mood": 3.0 },
+      "output": { "dither": "bayer4" }, "brightness": 96, "paused": false, "speed": 1.0 },
+    { "device": "cc22dd", "on": false, "patch": "metaballs", "seed": 1, "params": {},
+      "output": {}, "brightness": null, "paused": false, "speed": 1.0 }
+  ],
+  "focus": "cc22dd",
+  "patches": {
+    "clocks-dials": { "seed": 4242, "params": { "mood": 3.0 }, "speed": 1.0, "setting": "Evening",
+      "settings": { "Evening": { "seed": 4242, "params": { "mood": 3.0 }, "speed": 1.0 } } },
+    "flock": { "seed": 77, "params": { "count": 40.0 } }
+  },
+  "home_assistant": { "enabled": false, "host": "broker.example", "port": 1883 }
+}"#;
+
+    /// v7 -> v8: every player becomes its own panel on its own channel, the
+    /// picture on each unchanged, the focused one first; the v7 file is kept.
+    #[test]
+    fn a_real_v7_file_becomes_panels_and_channels() {
+        let dir = Temp::new("v7-to-v8");
+        std::fs::write(dir.0.join(FILE), LIVE_V7).expect("write the v7 file");
+        let (store, loaded) = Store::open(Some(&dir.0));
+
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(7))).expect("the backup"), LIVE_V7, "kept byte for byte");
+        assert!(store.health().recovered.is_some_and(|w| w.contains("v7") && w.contains("state.v7.json")));
+
+        // The focused player first: a route without `panel` means the panel
+        // it meant before.
+        let devices: Vec<&str> = loaded.panels.iter().map(|p| p.device.as_str()).collect();
+        assert_eq!(devices, ["cc22dd", "aa11bb"]);
+        assert_eq!(loaded.channels.len(), 2, "a channel each");
+        assert_ne!(loaded.panels[0].channel, loaded.panels[1].channel);
+
+        let second = player(&loaded, 0);
+        assert_eq!((second.patch.as_str(), second.seed, second.on), ("metaballs", 1, false));
+        let first = player(&loaded, 1);
+        assert_eq!((first.patch.as_str(), first.seed, first.brightness, first.on), ("clocks-dials", 4242, Some(96), true));
+        assert_eq!(first.params, BTreeMap::from([("mood".to_string(), 3.0)]));
+        assert_eq!(first.output.dither, screeny_art::dither::Dither::Bayer4, "the output stage is the panel's");
+        assert_eq!(setting_of(&loaded, 1), "Evening", "and its channel is on the setting it was on");
+        assert_eq!(setting_of(&loaded, 0), "", "Default");
+
+        // The named settings stay; the working copies went to the channels,
+        // and the one showing nowhere (flock) is named once.
+        assert_eq!(loaded.patches.keys().collect::<Vec<_>>(), ["clocks-dials"]);
+        assert!(loaded.patches["clocks-dials"].settings.contains_key("Evening"));
+        let said = store.health().repaired;
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("`flock`") && said[0].contains("card 350"), "{}", said[0]);
+        assert_eq!(loaded.home_assistant.as_ref().map(|h| h.host.as_str()), Some("broker.example"), "untouched");
+
+        // What is written is v8, and reloads as itself.
+        store.save(loaded.clone());
+        store.flush();
+        store.stop();
+        let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
+        let back: serde_json::Value = serde_json::from_str(&text).expect("json");
+        for gone in ["players", "focus"] {
+            assert!(back.get(gone).is_none(), "{gone} in {text}");
+        }
+        assert!(back["patches"]["clocks-dials"].get("seed").is_none(), "no working copy in `patches`: {text}");
+        let (again, reread) = Store::open(Some(&dir.0));
+        assert!(again.health().recovered.is_none());
+        assert_eq!(reread, loaded);
+    }
+
+    /// Every way a v8 file's panels and channels can disagree costs exactly
+    /// that, and is said.
+    #[test]
+    fn panels_and_channels_that_disagree_are_put_right() {
+        let dir = Temp::new("v8-repair");
+        std::fs::write(
+            dir.0.join(FILE),
+            format!(
+                r#"{{"version":{SCHEMA_VERSION},
+                     "panels":[{{"device":"a","channel":1}},{{"device":"a","channel":2}},{{"device":"b","channel":9}},{{"device":"c","channel":2}}],
+                     "channels":[{{"id":1,"patch":"metaballs","seed":3}},{{"id":2,"patch":"plasma","seed":4}},{{"id":3,"patch":"flock"}}]}}"#
+            ),
+        )
+        .expect("write");
+        let (store, loaded) = Store::open(Some(&dir.0));
+        assert_eq!(loaded.panels.len(), 3, "a panel named twice is kept once");
+        assert_eq!(player(&loaded, 0).seed, 3);
+        assert_eq!(loaded.panels[1].channel, None, "b followed a channel that is not there: idle");
+        assert_eq!(player(&loaded, 2).patch, default_patch(), "a channel on a patch that is gone plays the default");
+        assert_eq!(loaded.channels.len(), 2, "a channel nobody follows is not kept");
+        let said = store.health().repaired.join(" | ");
+        assert!(said.contains("panel b followed channel 9"), "{said}");
+        assert!(said.contains("`plasma` is not a patch this build has"), "{said}");
     }
 
     /// Card 310: a v6 file written by card 302's build - modes with card 309's
@@ -3457,7 +3598,7 @@ mod tests {
         }"#;
         std::fs::write(dir.0.join(FILE), old).expect("write the card 302 file");
         let (store, loaded) = Store::open(Some(&dir.0));
-        assert_eq!(loaded.version, 7);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
         let said = store.health().repaired;
         assert_eq!(said.len(), 2, "{said:?}");
         assert!(said[0].contains("Day = flock / as left, Night = vesta / Default, Late = vesta / as left"), "{}", said[0]);
