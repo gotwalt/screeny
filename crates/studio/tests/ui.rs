@@ -210,12 +210,19 @@ fn the_screens_hold_what_the_split_says_they_do() {
     }
     // Card 301: brightness moved to the Panel screen entirely - it is a panel
     // setting, not a way of judging a patch - so it is gone from the Picture
-    // screen along with the panel model and the limiter. `bindBrightness`
-    // stays a shared function in `common.js` even with one caller now, so a
-    // second one cannot drift from it if the day comes back that there is one.
-    for gone in ["bright", "bright-slider", "bright-note", "panel-kind", "dither", "panel-model", "codec-preview", "limiter-on", "apl-slider", "rise-slider"] {
+    // screen. `bindBrightness` stays a shared function in `common.js` even
+    // with one caller now, so a second one cannot drift from it if the day
+    // comes back that there is one.
+    for gone in ["bright", "bright-slider", "bright-note"] {
         assert!(!INDEX_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} belongs on the Panel screen now");
         assert!(PANEL_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} has to still exist somewhere");
+    }
+    // Card 354: the panel model, the dither and the limiter went the other
+    // way, back to the Picture screen - since card 353 they are the
+    // channel's, and shape the frames every panel on it is sent.
+    for moved in ["sec-output", "panel-kind", "dither", "panel-model", "codec-preview", "limiter-on", "apl-slider", "rise-slider"] {
+        assert!(INDEX_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is the channel's, on the Picture screen");
+        assert!(!PANEL_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is not the panel's any more");
     }
     assert!(COMMON_JS.contains("export function bindBrightness"), "the shared function stays, even with one caller");
     assert!(
@@ -1012,22 +1019,27 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
     // changes the picture. Card 301 took brightness, the panel model, the
     // limiter, Speed and pause/restart off this screen entirely.
     order("the Picture screen", INDEX_HTML, &[
-        // Card 351: the panel row heads it, then the chosen panel's picture.
-        ("the panel row", "id=\"panels\""),
+        // Card 354: the channel row heads it, then the chosen channel's
+        // picture, and after its parameters the channel itself and its
+        // Output.
+        ("the channel row", "id=\"channels\""),
         ("the picture", "id=\"stage\""),
         ("view", "id=\"sec-view\""),
         ("now playing", "id=\"sec-now\""),
         ("parameters", "id=\"sec-params\""),
+        ("the channel's panels", "id=\"sec-channel\""),
+        ("the channel's output", "id=\"sec-output\""),
         // And the meters, which are a detail, come after all of them.
         ("the meters", "class=\"meters\""),
     ]);
-    // The Panel screen: the things the owner touches - the switch, brightness,
-    // output settings - then what it says about itself, then the studio.
+    // The Panel screen: the things the owner touches - its channel, the
+    // switch, brightness - then what it says about itself, then the studio.
     order("the Panel screen", PANEL_HTML, &[
         ("the panel row", "id=\"panels\""),
         ("the panel's name", "id=\"panel-name\""),
         ("the panel's controls", "id=\"sec-panel\""),
-        ("output settings", "id=\"sec-output\""),
+        ("its channel", "id=\"panel-channel\""),
+        ("its output switch", "id=\"panel-out\""),
         ("the link", "id=\"sec-link\""),
         ("the device's own facts", "id=\"device-block\""),
         ("the studio", "id=\"sec-studio\""),
@@ -1062,59 +1074,100 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
     }
 }
 
-/// Card 351: several panels on the page. The Picture and Panel screens open on
-/// a row of them, filled by one shared function; which panel a screen is about
-/// is `?panel=` and nothing stored; everything the screen changes names it;
-/// thumbnails are the README's cheap recipe and the Panel screen still asks
-/// for no pictures.
+/// Card 354: the channel owns the picture, on the page as on the server
+/// (card 353). The Picture screen is about a channel - `?channel=`, a row of
+/// channel cards with their panels as chips, "New channel", the channel's
+/// Output and its panels with somewhere to move each - and the Panel screen is
+/// about a panel, with a compact row of panels and a Channel select. Card
+/// 351's Same as / Detach are gone, and nothing calls the retired routes.
 #[test]
-fn the_page_has_a_row_of_panels_and_acts_on_the_one_chosen() {
-    for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML)] {
-        assert!(html.contains(r#"<div class="panels__row" id="panels">"#), "{what} carries the panel row");
-    }
-    assert!(!SETTINGS_HTML.contains(r#"id="panels""#), "Settings is about the studio, not a panel");
-    assert!(COMMON_JS.contains("export function panelRow("), "one row, shared");
-    assert!(PICTURE_JS.contains("panelRow($('#panels'), { path: '/', current: here, thumbs: true })"), "the Picture screen's has thumbnails");
-    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: '/panel', current: attachedId })"), "the Panel screen's does not");
+fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
+    // The rows: channels (with thumbnails) on the Picture screen, panels
+    // (without) on the Panel screen, each filled by one shared function.
+    assert!(INDEX_HTML.contains(r#"<div class="channels__row" id="channels">"#), "the Picture screen carries the channel row");
+    assert!(!INDEX_HTML.contains(r#"id="panels""#), "and not the panel row any more");
+    assert!(PANEL_HTML.contains(r#"<div class="panels__row" id="panels">"#), "the Panel screen carries the panel row");
+    assert!(!SETTINGS_HTML.contains(r#"id="panels""#) && !SETTINGS_HTML.contains(r#"id="channels""#), "Settings is about the studio");
+    assert!(COMMON_JS.contains("export function channelRow("), "one channel row, shared");
+    assert!(COMMON_JS.contains("export function panelRow("), "one panel row, shared");
+    assert!(PICTURE_JS.contains("channelRow($('#channels'), { current: here, onNew: newChannel })"), "the Picture screen's row is of channels");
+    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: '/panel', current: attachedId })"), "the Panel screen's of panels");
 
-    // Thumbnails: a socket per other panel, four frames a second at most, no
-    // repeats, no overview, and the screen's own pace - 0 in a hidden tab.
-    let row = &COMMON_JS[COMMON_JS.find("export function panelRow(").unwrap()..];
+    // A channel card: thumbnail, name, picture, member chips, and New channel
+    // at the end. Thumbnails are the README's cheap recipe - a socket per
+    // other channel, four frames a second at most, no repeats, no overview,
+    // and the screen's own pace (0 in a hidden tab).
+    let row = &COMMON_JS[COMMON_JS.find("export function channelRow(").unwrap()..];
+    let row = &row[..row.find("export function panelRow(").unwrap()];
+    for needle in ["'ccard__thumb'", "span('ccard__name')", "span('ccard__pic')", "span('ccard__panels')", "span('chip', n)", "'New channel'"] {
+        assert!(row.contains(needle), "a channel card has {needle}");
+    }
     assert!(row.contains("const THUMB_FPS = 4;"), "thumbnails at a low rate");
     assert!(row.contains("Math.min(THUMB_FPS, pace())"), "and none while the tab is hidden");
-    assert!(row.contains("overview: false, quiet: true"), "a thumbnail's socket carries no overview");
-    assert!(row.contains("!mine && Boolean(p.picture)"), "no socket for the panel on screen, nor for an idle one");
-    assert!(COMMON_JS.contains("url.searchParams.set('panel', panel)"), "a socket names its panel");
+    assert!(row.contains("{ channel: c.id, overview: false, quiet: true }"), "a thumbnail's socket is its channel's, with no overview");
+    assert!(row.contains("const wants = !mine;"), "no second socket for the channel on screen");
+    let prow = &COMMON_JS[COMMON_JS.find("export function panelRow(").unwrap()..];
+    assert!(!prow[..prow.find("\n}\n").unwrap()].contains("canvas"), "the panel row draws no pictures");
+    assert!(COMMON_JS.contains("url.searchParams.set('channel', String(channel))"), "a socket names its channel");
+    assert!(COMMON_JS.contains("url.searchParams.set('panel', panel)"), "or its panel");
     assert!(COMMON_JS.contains("url.searchParams.set('overview', 'false')"), "and can decline the overview");
     assert!(COMMON_JS.contains("url.searchParams.set('repeat', 'false')"), "and never asks for a repeat");
 
-    // The panel is in the URL, both screens open their socket on it, and a
-    // forgotten one lands on the first rather than on an error.
-    assert!(COMMON_JS.contains("new URLSearchParams(location.search).get('panel')"), "the choice is the URL's");
+    // What each screen is about is in the URL; a deleted or forgotten one
+    // lands on the default rather than on an error.
+    assert!(COMMON_JS.contains("new URLSearchParams(location.search).get('channel')"), "the channel is the URL's");
+    assert!(COMMON_JS.contains("new URLSearchParams(location.search).get('panel')"), "so is the panel");
+    assert!(PICTURE_JS.contains("bootstrapFor({ channel: chosen })"), "the Picture screen bootstraps its channel");
+    assert!(PICTURE_JS.contains("}, undefined, { channel: chosen });"), "and opens its socket on it");
+    assert!(PANEL_JS.contains("bootstrapFor({ panel: chosen })"), "the Panel screen bootstraps its panel");
     for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
-        assert!(js.contains("bootstrapFor(chosen)"), "{what} bootstraps the chosen panel");
-        assert!(js.contains("{ panel: chosen });"), "{what} opens its socket on it");
-        assert!(js.contains("error: () => forgetChoice()"), "{what} leaves a forgotten panel");
-        assert!(js.contains("carryPanel("), "{what} carries the panel across the nav");
-        assert!(!js.contains("d.attached"), "{what} must not mean 'the first panel' by `attached` any more");
+        assert!(js.contains("error: () => forgetChoice()"), "{what} leaves a deleted channel or forgotten panel");
+        assert!(js.contains("carryNav({"), "{what} carries its channel and panel across the nav");
+        assert!(js.contains("channels: (message) =>"), "{what} reads the channel overview");
     }
-    assert!(!SETTINGS_JS.contains("d.attached"), "nor Settings");
-    assert!(SETTINGS_JS.contains("showStudioChip("), "Settings' chip is about every panel");
+    assert!(SETTINGS_JS.contains("carryNav({ channel: chosenChannel(), panel: chosenPanel() })"), "Settings hands both back");
+    assert!(SETTINGS_JS.contains("showPanelsChip("), "Settings' chip is about every panel");
+    assert!(PICTURE_JS.contains("showPanelsChip("), "the Picture screen's about every panel on its channel");
 
-    // Every change on the Picture screen names its panel; the editor says who
-    // shares the picture, offers Detach and "Same as".
-    assert!(PICTURE_JS.contains("invoke(cmd, forHere(args))"), "calls carry `panel`");
-    for id in ["shared", "shared-who", "detach", "same-as", "same-list", "idle-note"] {
+    // Every change on the Picture screen names its channel.
+    assert!(PICTURE_JS.contains("const forHere = (args) => ({ ...(args || {}), channel: here() });"), "calls carry `channel`");
+    assert!(PICTURE_JS.contains("invoke(cmd, forHere(args))"), "every one of them");
+
+    // The Picture screen: "On: ..." under the title, an empty channel says
+    // so, its panels each with a Move to, a way to bring one here, rename and
+    // delete (inline, no dialogs), and the channel's Output.
+    for id in [
+        "channel-kicker", "channel-on", "empty-note", "sec-channel", "members", "members-empty", "bring", "channel-rename",
+        "channel-delete", "channel-name", "channel-name-input", "channel-confirm", "channel-confirm-yes", "sec-output", "output-who",
+    ] {
         assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "#{id} on the Picture screen");
     }
-    assert!(PICTURE_JS.contains("call('same_as', { as: p.device })"), "Same as joins that panel's channel");
-    assert!(PICTURE_JS.contains("call('detach', {})"), "Detach splits this one off");
-    // The Panel screen's controls act on its panel, never on all of them.
-    assert!(PANEL_JS.contains("call('set_output', { output: state.output, panel: attachedId() })"), "output settings are this panel's");
-    assert!(PANEL_HTML.contains("<summary>Add a panel</summary>"), "'Change which panel' is gone with the stored focus");
-    assert!(!PANEL_HTML.contains("Change which panel"), "and nothing still says it");
-}
+    assert!(PICTURE_JS.contains("`On: ${names.join(', ')}`"), "the panels this picture is on, under the title");
+    assert!(PICTURE_JS.contains("invoke('channels/new', { from: here() })"), "New channel starts as a copy of this one");
+    assert!(PICTURE_JS.contains("invoke('panel/channel', { panel, channel })"), "a panel is moved by `/panel/channel`");
+    assert!(PICTURE_JS.contains("invoke('channels/rename', { channel: here(), name: channelInput.value })"), "renamed");
+    assert!(PICTURE_JS.contains("invoke('channels/delete', { channel: here() })"), "deleted");
+    assert!(PICTURE_JS.contains("$('#channel-delete').disabled = home;"), "Channel 1 cannot be deleted, and says so by shape");
+    assert!(PICTURE_JS.contains("call('set_output', { output: state.output })"), "Output is the channel's");
+    assert!(!PICTURE_JS.contains("window.confirm") && !PICTURE_JS.contains("window.prompt"), "no native dialogs on the Picture screen");
 
+    // The Panel screen: the channel it is on, as a select.
+    for id in ["panel-channel", "panel-channel-note", "ro-channel"] {
+        assert!(PANEL_HTML.contains(&format!("id=\"{id}\"")), "#{id} on the Panel screen");
+    }
+    assert!(PANEL_JS.contains("call('panel/channel', { panel, channel })"), "the select moves the panel");
+    assert!(PANEL_JS.contains("call('channels/new', { from: state.channel })"), "or makes a new channel for it");
+    assert!(!PANEL_JS.contains("set_output"), "Output is not the panel's any more");
+
+    // Card 351's implicit channels are gone from every screen.
+    for (what, text) in [("index.html", INDEX_HTML), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("common.js", COMMON_JS)] {
+        for gone in ["same_as", "'detach'", "id=\"same-as\"", "id=\"detach\"", "id=\"shared\"", "Same as", "Detach"] {
+            assert!(!text.contains(gone), "{what} should not still carry {gone}");
+        }
+    }
+    assert!(PANEL_HTML.contains("<summary>Add a panel</summary>"), "adding a panel stays on the Panel screen");
+    assert!(!PANEL_HTML.contains("Change which panel"), "and nothing still says 'Change which panel'");
+}
 /// Card 351: the owner asked for every screen to work on a phone. What a text
 /// file can hold of that: thumb-sized targets on a touch screen or a narrow
 /// one, crisp pixels on every canvas, and a panel row that scrolls sideways
@@ -1126,10 +1179,11 @@ fn every_screen_is_sized_for_a_thumb() {
     for needle in ["min-height: 44px", "height: 44px", "::-webkit-slider-thumb", ".seg span", ".patches span", ".switch input"] {
         assert!(block.contains(needle), "the touch block should size {needle}");
     }
-    assert!(STYLE_CSS.contains(".pcard__thumb"), "thumbnails are styled");
+    assert!(STYLE_CSS.contains(".ccard__thumb"), "thumbnails are styled");
     assert!(STYLE_CSS.matches("image-rendering: pixelated").count() >= 2, "the main canvas and the thumbnails keep crisp pixels");
-    let row = STYLE_CSS.find(".panels__row {").expect("the row");
-    assert!(STYLE_CSS[row..row + 200].contains("overflow-x: auto"), "the row scrolls sideways rather than widening the page");
+    let row = STYLE_CSS.find(".channels__row, .panels__row {").expect("the rows");
+    assert!(STYLE_CSS[row..row + 200].contains("overflow-x: auto"), "both rows scroll sideways rather than widening the page");
+    assert!(block.contains(".pcard, .ccard { min-height: 48px; }"), "a card is thumb-sized");
     for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
         assert!(html.contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#), "{what} is laid out for the device's width");
     }

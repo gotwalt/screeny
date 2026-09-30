@@ -162,9 +162,9 @@ export function makeAttempt(after) {
 export const CLIENT = crypto.randomUUID?.() ?? `c${Math.random().toString(36).slice(2)}`;
 
 // Reads; everything else is a POST carrying its arguments as JSON. A read's
-// arguments go in the query string instead - `?panel=` (card 351) is the one
-// any of them takes.
-const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices', 'home_assistant', 'panels']);
+// arguments go in the query string instead - `?channel=` (card 353) and
+// `?panel=` (card 351) are the ones they take.
+const GETS = new Set(['bootstrap', 'frame', 'patch_playing', 'panel_status', 'status', 'devices', 'home_assistant', 'panels', 'channels']);
 
 export async function invoke(cmd, args) {
   const read = GETS.has(cmd);
@@ -222,14 +222,17 @@ export const noFrames = () => 0;
 // clock holding the time is the same 6196 bytes for fifteen seconds - which the
 // server honours without letting the meters freeze.
 //
-// Card 351: a socket is about one panel. `panel` is the device id it names
-// (`''` follows the first panel, as a socket always did); `overview: false`
-// asks it to leave out the `{"type":"panels"}` messages, which only a screen's
-// own socket needs; `quiet` keeps a thumbnail's socket off the notice line,
-// which the screen's own socket already speaks on. The answer is a handle
-// whose `close()` stops it for good - a thumbnail whose panel is forgotten, or
-// has gone idle, is closed rather than left reconnecting.
-export function connect(handlers, pace = previewFps, { panel = '', overview = true, quiet = false } = {}) {
+// Card 353/354: a socket is about one **channel**. `channel` names it (the
+// Picture screen's own, and every channel card's thumbnail); `panel` names a
+// panel instead, which means that panel's channel and follows the panel when
+// it is moved (the Panel screen's); with neither it is Channel 1. `overview:
+// false` asks it to leave out the `{"type":"panels"}` and
+// `{"type":"channels"}` messages, which only a screen's own socket needs;
+// `quiet` keeps a thumbnail's socket off the notice line, which the screen's
+// own socket already speaks on. The answer is a handle whose `close()` stops
+// it for good - a thumbnail whose channel is deleted is closed rather than
+// left reconnecting.
+export function connect(handlers, pace = previewFps, { channel = '', panel = '', overview = true, quiet = false } = {}) {
   // Root-absolute rather than relative to the document: `/panel` and `/panel/`
   // are the same page, and a relative URL would aim the socket at
   // `/panel/api/v1/ws` from the second of them.
@@ -237,6 +240,7 @@ export function connect(handlers, pace = previewFps, { panel = '', overview = tr
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('client', CLIENT);
   url.searchParams.set('repeat', 'false');
+  if (channel) url.searchParams.set('channel', String(channel));
   if (panel) url.searchParams.set('panel', panel);
   if (!overview) url.searchParams.set('overview', 'false');
   let wait = 250;
@@ -285,45 +289,71 @@ export function connect(handlers, pace = previewFps, { panel = '', overview = tr
   };
 }
 
-// ---------- which panel (card 351) ----------
+// ---------- which channel, which panel (cards 351, 354) ----------
 //
-// A studio drives several panels (card 350), and which one a screen is about
-// is **the page's** business: `?panel=<device id>` in the URL, so a reload or
-// a bookmark keeps it and the back button is the browser's job. No `?panel=`
-// means the first panel, which is what every route and socket means without
-// one - so a studio with one panel reads exactly as it did.
+// A **channel** is the picture (card 353): patch, setting, tweaks, output
+// settings and the encoded frames, the same bytes for every panel on it. A
+// **panel** is a member of exactly one channel. So the Picture screen is about
+// a channel - `/?channel=<id>` - and the Panel screen about a panel -
+// `/panel?panel=<device id>`. Both are in the URL, so a reload or a bookmark
+// keeps them and the back button is the browser's job. No `?channel=` means
+// Channel 1 and no `?panel=` the first panel, which is what every route and
+// socket means without one - so a studio with one channel reads exactly as it
+// did.
+
+/** The channel this page was opened on: the id in `?channel=`, or `''`. */
+export const chosenChannel = () => new URLSearchParams(location.search).get('channel') || '';
 
 /** The panel this page was opened on: the device id in `?panel=`, or `''`. */
 export const chosenPanel = () => new URLSearchParams(location.search).get('panel') || '';
+
+/** Channel 1 is the one every route means without a `channel`. */
+export const HOME_CHANNEL = 1;
+
+/** `path` about channel `id` - no query at all for Channel 1 (or `''`). */
+export function channelHref(path, id) {
+  return id && Number(id) !== HOME_CHANNEL ? `${path}?channel=${encodeURIComponent(id)}` : path;
+}
 
 /** `path` about panel `id` - no query at all for `''`, the first panel. */
 export function panelHref(path, id) {
   return id ? `${path}?panel=${encodeURIComponent(id)}` : path;
 }
 
-/** Carry the panel across the nav and the status chip, so the Panel screen
- *  opens on the panel the Picture screen was showing, and back again. Only
- *  once a panel was chosen: without one every screen means the first. */
-export function carryPanel(id) {
-  if (!chosenPanel() || !id) return;
-  document.querySelectorAll('.nav a, a.pill--link').forEach((a) => {
-    a.href = panelHref(new URL(a.href, location.href).pathname, id);
+/** Carry what a screen is about across the nav, so the Panel screen opens on
+ *  a panel of the channel the Picture screen was showing, the Picture screen
+ *  on the channel of the panel the Panel screen was showing, and Settings
+ *  hands both back. `channel` or `panel` may be `''`: that link then means
+ *  the default, Channel 1 or the first panel. */
+export function carryNav({ channel = '', panel = '' } = {}) {
+  document.querySelectorAll('.nav a').forEach((a) => {
+    const path = new URL(a.href, location.href).pathname;
+    if (path === '/') a.href = channelHref('/', channel);
+    else if (path === '/panel') a.href = panelHref('/panel', panel);
+    else {
+      const q = new URLSearchParams();
+      if (channel && Number(channel) !== HOME_CHANNEL) q.set('channel', channel);
+      if (panel) q.set('panel', panel);
+      a.href = q.toString() ? `${path}?${q}` : path;
+    }
   });
 }
 
-/** A `?panel=` naming a panel the studio has not got - forgotten since the
- *  bookmark was made - lands on the first panel rather than on an error. */
+/** A `?channel=` or `?panel=` naming something the studio has not got -
+ *  deleted or forgotten since the bookmark was made - lands on the default
+ *  rather than on an error. */
 export function forgetChoice() {
-  if (chosenPanel()) location.replace(location.pathname);
+  if (location.search) location.replace(location.pathname);
 }
 
-/** Bootstrap for the chosen panel. A chosen panel the studio has not got is
- *  the server's 404, and the page goes to the first panel instead. */
-export async function bootstrapFor(panel) {
+/** Bootstrap for the chosen channel (`{ channel }`) or panel (`{ panel }`).
+ *  One the studio has not got is the server's 404, and the page goes to the
+ *  default instead. */
+export async function bootstrapFor(args) {
   try {
-    return await invoke('bootstrap', { panel });
+    return await invoke('bootstrap', args);
   } catch (e) {
-    if (panel) forgetChoice();
+    if (args && (args.channel || args.panel)) forgetChoice();
     throw e;
   }
 }
@@ -334,124 +364,186 @@ export const HEADER = 52;
 export const W = 64;
 export const H = 32;
 
-/** Card 351: the overview's link word (`PanelSummary.link`) as a person reads
- *  it, and the tone of the dot beside it. */
+/** The overview's link word (`PanelSummary.link`) as a person reads it, and
+ *  the tone of the dot beside it. */
 const LINK_WORDS = {
   up: ['Live', 'on'],
   connecting: ['Connecting', 'away'],
   waiting: ['Waiting', 'away'],
   closed: ['Away', 'away'],
   off: ['Output off', 'off'],
-  idle: ['Idle', 'idle'],
   none: ['No panel', 'off'],
 };
 export const linkWords = (link) => LINK_WORDS[link] || [words(link || ''), 'away'];
 
-/** One line for what a panel is showing: "Metaballs · Lava", and
- *  "modified" when its channel has been moved since. */
+/** One line for a picture: "Metaballs · Lava", and "modified" when it has
+ *  been moved since. Takes a `ChannelSummary` or a `PanelSummary`: both carry
+ *  `picture`. */
 export function pictureLine(p) {
-  if (!p.picture) return 'Idle: no picture yet';
+  if (!p.picture) return '–';
   const pic = p.picture;
   return [pic.patch_name || pic.patch, pic.setting, pic.modified ? 'modified' : ''].filter(Boolean).join(' · ');
 }
 
-/** **The panel row** (card 351): one card per panel - a live thumbnail of
- *  what it is showing, its name, its picture and a dot for its link - each a
- *  link to `path?panel=<id>`. The Picture screen gives it thumbnails; the
- *  Panel screen, which draws no pictures (card 120, 198), does not.
+/** A panel's name from the overview, else its id. */
+export function panelNamer(panels) {
+  const byId = new Map((panels || []).map((p) => [p.device, p]));
+  return (id) => { const p = byId.get(id); return (p && p.name) || id || 'Panel'; };
+}
+
+const span = (className, textContent = '') => Object.assign(document.createElement('span'), { className, textContent });
+const setText = (el, t) => { if (el.textContent !== t) el.textContent = t; };
+
+/** Draw one frame packet into a card's 64x32 canvas. */
+function paintThumb(card, buf) {
+  if (!card.ctx || buf.byteLength < HEADER + W * H * 3) return;
+  const rgb = new Uint8Array(buf, HEADER, W * H * 3);
+  const px = card.image.data;
+  for (let i = 0, j = 0; i < W * H * 3; i += 3, j += 4) {
+    px[j] = rgb[i]; px[j + 1] = rgb[i + 1]; px[j + 2] = rgb[i + 2]; px[j + 3] = 255;
+  }
+  card.ctx.putImageData(card.image, 0, 0);
+}
+
+/** **The channel row** (card 354), at the head of the Picture screen: one
+ *  card per channel - a live thumbnail of its picture, its name, "patch ·
+ *  setting", and the panels on it as chips, each with its link dot - each a
+ *  link to `/?channel=<id>`. "New channel" sits at the end of the row. This is
+ *  what makes the model visible: the channel is the picture, and the panels
+ *  are just on it.
  *
- *  Thumbnails are cheap on purpose: every panel but the one the screen is
- *  about gets its own socket at four frames a second (`?fps=4&repeat=false
- *  &overview=false`, the README's recipe), and none while the tab is hidden -
- *  `pace` is the screen's own, so a hidden tab asks 0 here too. The one the
- *  screen is about is drawn from frames the screen already has (`frame()`),
- *  so it is the only panel at full rate and costs no second socket. An idle
- *  panel has no picture, and so no socket either.
+ *  Thumbnails are cheap on purpose: every channel but the one the screen is
+ *  about gets its own socket at four frames a second (`?channel=N&fps=4
+ *  &repeat=false&overview=false`, the README's recipe), and none while the tab
+ *  is hidden - `pace` is the screen's own, so a hidden tab asks 0 here too.
+ *  The one the screen is about is drawn from frames the screen already has
+ *  (`frame()`), so it costs no second socket. A thumbnail's socket is a
+ *  watcher, which is what lets a channel with no panel render for it.
  *
- *  `root` is the element to fill; `current()` the device id the screen is
- *  about. `update(panels)` takes the overview (`{"type":"panels"}`). */
-export function panelRow(root, { path, current, thumbs = false, pace = previewFps }) {
-  /** device id -> the card's elements and its socket */
+ *  `root` is the element to fill; `current()` the channel id the screen is
+ *  about; `onNew()` what "New channel" does. `update(channels, panels)` takes
+ *  the two overview messages. */
+export function channelRow(root, { current, onNew, pace = previewFps }) {
+  /** channel id -> the card's elements and its socket */
   const cards = new Map();
   const THUMB_FPS = 4;
   const thumbPace = () => Math.min(THUMB_FPS, pace());
 
-  const paint = (card, buf) => {
-    if (!card.ctx || buf.byteLength < HEADER + W * H * 3) return;
-    const rgb = new Uint8Array(buf, HEADER, W * H * 3);
-    const px = card.image.data;
-    for (let i = 0, j = 0; i < W * H * 3; i += 3, j += 4) {
-      px[j] = rgb[i]; px[j + 1] = rgb[i + 1]; px[j + 2] = rgb[i + 2]; px[j + 3] = 255;
-    }
-    card.ctx.putImageData(card.image, 0, 0);
+  const add = Object.assign(document.createElement('button'), { type: 'button', className: 'ccard ccard--new' });
+  add.append(span('ccard__plus', '+'), span('ccard__name', 'New channel'), span('ccard__pic', 'Starts as a copy of this one'));
+  add.addEventListener('click', () => onNew());
+
+  const make = (id) => {
+    const el = document.createElement('a');
+    el.className = 'ccard';
+    el.href = channelHref('/', id);
+    const card = { el, socket: null, key: '' };
+    const face = span('ccard__face');
+    const canvas = Object.assign(document.createElement('canvas'), { className: 'ccard__thumb', width: W, height: H });
+    face.append(canvas);
+    card.ctx = canvas.getContext('2d');
+    card.image = card.ctx.createImageData(W, H);
+    card.name = span('ccard__name');
+    card.pic = span('ccard__pic');
+    card.chips = span('ccard__panels');
+    el.append(face, card.name, card.pic, card.chips);
+    return card;
   };
 
-  const span = (className) => Object.assign(document.createElement('span'), { className });
+  function update(channels, panels) {
+    const here = Number(current());
+    const byPanel = new Map((panels || []).map((p) => [p.device, p]));
+    const name = panelNamer(panels);
+    const ids = new Set(channels.map((c) => c.id));
+    for (const [id, card] of cards) {
+      if (!ids.has(id)) { card.socket?.close(); card.el.remove(); cards.delete(id); }
+    }
+    channels.forEach((c, i) => {
+      let card = cards.get(c.id);
+      if (!card) { card = make(c.id); cards.set(c.id, card); }
+      if (root.children[i] !== card.el) root.insertBefore(card.el, root.children[i] || null);
+      const mine = c.id === here;
+      if (mine) { card.el.setAttribute('aria-current', 'page'); } else { card.el.removeAttribute('aria-current'); }
+      card.el.dataset.empty = c.panels.length ? 'no' : 'yes';
+      setText(card.name, c.name);
+      setText(card.pic, pictureLine(c));
+      card.el.title = `${c.name}: ${pictureLine(c)}`;
+      // The members as chips, rebuilt only when what they say changes.
+      const chips = c.panels.map((id) => {
+        const p = byPanel.get(id);
+        return [name(id), linkWords(p ? p.link : 'none')[1]];
+      });
+      const key = JSON.stringify(chips);
+      if (key !== card.key) {
+        card.key = key;
+        card.chips.replaceChildren(...(chips.length
+          ? chips.map(([n, tone]) => { const chip = span('chip', n); chip.dataset.state = tone; return chip; })
+          : [span('chip chip--none', 'No panel')]));
+      }
+      const wants = !mine;
+      if (wants && !card.socket) {
+        card.socket = connect({ frame: (buf) => paintThumb(card, buf) }, thumbPace, { channel: c.id, overview: false, quiet: true });
+      } else if (!wants && card.socket) {
+        card.socket.close();
+        card.socket = null;
+      }
+    });
+    if (root.lastElementChild !== add) root.append(add);
+    root.dataset.count = String(channels.length);
+  }
 
+  return {
+    update,
+    /** A frame of the channel this screen is about, from the screen's own socket. */
+    frame(buf) {
+      const card = cards.get(Number(current()));
+      if (card) paintThumb(card, buf);
+    },
+  };
+}
+
+/** **The panel row** (card 351, compact since 354), at the head of the Panel
+ *  screen: one card per panel - its name, the channel it is on, what that
+ *  channel is showing, and a dot for its link - each a link to
+ *  `/panel?panel=<id>`. No thumbnails: that screen draws no pictures (card
+ *  120, 198), and the picture belongs to the channel anyway.
+ *
+ *  `update(panels)` takes the overview (`{"type":"panels"}`). */
+export function panelRow(root, { path, current }) {
+  const cards = new Map();
   const make = (id) => {
     const el = document.createElement('a');
     el.className = 'pcard';
     el.href = panelHref(path, id);
-    const card = { el, socket: null };
-    if (thumbs) {
-      const face = span('pcard__face');
-      const canvas = Object.assign(document.createElement('canvas'), { className: 'pcard__thumb', width: W, height: H });
-      face.append(canvas);
-      el.append(face);
-      card.ctx = canvas.getContext('2d');
-      card.image = card.ctx.createImageData(W, H);
-    }
-    card.name = span('pcard__name');
-    card.pic = span('pcard__pic');
-    card.state = span('pcard__state');
-    el.append(card.name, card.pic, card.state);
+    const card = { el, name: span('pcard__name'), channel: span('pcard__channel'), pic: span('pcard__pic'), state: span('pcard__state') };
+    el.append(card.name, card.channel, card.pic, card.state);
     return card;
   };
 
-  const text = (el, t) => { if (el.textContent !== t) el.textContent = t; };
-
   function update(panels) {
     const here = current();
-    const byId = new Map(panels.map((p) => [p.device, p]));
-    const name = (id) => { const p = byId.get(id); return (p && p.name) || id || 'Panel'; };
+    const ids = new Set(panels.map((p) => p.device));
     for (const [id, card] of cards) {
-      if (!byId.has(id)) { card.socket?.close(); card.el.remove(); cards.delete(id); }
+      if (!ids.has(id)) { card.el.remove(); cards.delete(id); }
     }
     panels.forEach((p, i) => {
       let card = cards.get(p.device);
       if (!card) { card = make(p.device); cards.set(p.device, card); }
       if (root.children[i] !== card.el) root.insertBefore(card.el, root.children[i] || null);
-      const mine = p.device === here;
-      if (mine) { card.el.setAttribute('aria-current', 'page'); } else { card.el.removeAttribute('aria-current'); }
-      card.el.dataset.idle = p.picture ? 'no' : 'yes';
-      text(card.name, name(p.device));
-      text(card.pic, pictureLine(p));
+      if (p.device === here) { card.el.setAttribute('aria-current', 'page'); } else { card.el.removeAttribute('aria-current'); }
+      const nm = p.name || p.device;
+      setText(card.name, nm);
+      setText(card.channel, `On ${p.channel_name}`);
+      setText(card.pic, pictureLine(p));
       const [said, tone] = linkWords(p.link);
-      const shared = (p.shared_with || []).map(name);
-      text(card.state, shared.length ? `${said} · with ${shared.join(', ')}` : said);
+      setText(card.state, p.fading ? `${said} · moving` : said);
       card.state.dataset.state = tone;
-      card.el.title = `${name(p.device)}: ${pictureLine(p)}`;
-      // Its own socket for every other panel that has a picture to show.
-      const wants = thumbs && !mine && Boolean(p.picture);
-      if (wants && !card.socket) {
-        card.socket = connect({ frame: (buf) => paint(card, buf) }, thumbPace, { panel: p.device, overview: false, quiet: true });
-      } else if (!wants && card.socket) {
-        card.socket.close();
-        card.socket = null;
-      }
-      if (thumbs && !p.picture) card.ctx.clearRect(0, 0, W, H);
+      card.el.title = `${nm}: on ${p.channel_name}, ${pictureLine(p)}`;
     });
     root.dataset.count = String(panels.length);
   }
 
-  return {
-    update,
-    /** A frame of the panel this screen is about, from the screen's own socket. */
-    frame(buf) {
-      const card = cards.get(current());
-      if (card) paint(card, buf);
-    },
-  };
+  return { update };
 }
 
 /** The panel's own facts, polled: `GET /api/v1/status` every couple of seconds
@@ -493,13 +585,10 @@ export function pollStatus(got) {
  *  It is given the half-second heartbeat's link rather than the two-second
  *  poll, so a panel going away shows up in half a second and the answer does
  *  not depend on a read that may not have happened yet. */
-export function panelState({ attached, device, on, link, idle = false }) {
+export function panelState({ attached, device, on, link }) {
   const player = (device || {}).player;
   if (!attached) return { key: 'none', label: 'No panel', tone: 'away' };
   if (player && player.health.gave_up) return { key: 'stopped', label: 'Stopped', tone: 'bad' };
-  // Card 350/351: a panel with no picture - no channel, no stream - is idle,
-  // on its own status screen, and that is not "away".
-  if (idle) return { key: 'idle', label: 'Idle', tone: 'away' };
   if (!on) return { key: 'off', label: 'Output off', tone: 'away' };
   if (link && link.connected) return { key: 'live', label: 'On the panel', tone: 'on' };
   return { key: 'away', label: 'Panel away', tone: 'away' };
@@ -553,15 +642,14 @@ export function attention(device) {
  *  `rate` is the fps to show while live, or `null`/`undefined` where there is
  *  none worth showing - a screen with no canvas has no rate (card 198,
  *  301); the Picture screen passes the heartbeat's `link.fps`. */
-export function showChip(chip, { attachedId, device, on, link, rate, idle = false }) {
-  const here = panelState({ attached: Boolean(attachedId), device, on, link, idle });
-  const name = device ? device.label : attachedId;
+export function showChip(chip, { attachedId, device, on, link, rate, name: known = '' }) {
+  const here = panelState({ attached: Boolean(attachedId), device, on, link });
+  const name = device ? device.label : known || attachedId;
   const doing = here.key === 'live'
     ? (rate === null || rate === undefined ? 'live' : `live · ${rate.toFixed(0)} fps`)
     : here.key === 'off' ? 'output off'
       : here.key === 'away' ? 'away'
-        : here.key === 'stopped' ? 'stopped'
-          : here.key === 'idle' ? 'idle' : '';
+        : here.key === 'stopped' ? 'stopped' : '';
   const needs = attention(device);
   const label = here.key === 'none' ? 'No panel' : [name || 'Panel', doing, needs].filter(Boolean).join(' · ');
   if (chip.textContent !== label) chip.textContent = label;
@@ -569,30 +657,40 @@ export function showChip(chip, { attachedId, device, on, link, rate, idle = fals
   return here;
 }
 
-/** Card 351: the chip on a screen that is about the whole studio rather than
- *  one panel (Settings). With one panel it is that panel's chip, as it always
- *  was; with several it says how many and how many are live, and takes the
- *  fault tone - and points at - the first panel that needs attention, so
- *  trouble on any panel is still never hidden behind this tab. `panels` is
- *  the overview, `devices` the status poll's list. */
-export function showStudioChip(chip, { panels, devices }) {
-  const real = (panels || []).filter((p) => !p.unbound);
+/** Card 351/354: the chip for more than one panel at once - the Picture
+ *  screen's (every panel on its channel) and the Settings screen's (every
+ *  panel there is). With one panel it is that panel's chip, as it always was,
+ *  with `link` and `rate` from the heartbeat where there are some; with none
+ *  it says `none` ("No panel"); with several it says how many and how many
+ *  are live, and takes the fault tone - and points at - the first panel that
+ *  needs attention, so trouble on any panel is still never hidden behind a
+ *  tab. `panels` is a list of `PanelSummary`, `devices` the status poll's
+ *  list. The chip links to the Panel screen, on the panel that needs looking
+ *  at, else the first. */
+export function showPanelsChip(chip, { panels, devices, link = null, rate = null, none = 'No panel' }) {
+  const list = panels || [];
   const deviceOf = (id) => (devices || []).find((d) => d.id === id) || null;
-  if (real.length <= 1) {
-    const p = real[0];
-    const device = p ? deviceOf(p.device) : null;
-    const link = p && p.connected ? { connected: true } : null;
-    showChip(chip, { attachedId: p ? p.device : '', device, on: p ? p.on : false, link, rate: null, idle: Boolean(p && !p.picture) });
-    chip.href = panelHref('/panel', chosenPanel());
-    return;
+  const trouble = list.find((p) => attention(deviceOf(p.device)));
+  const pointAt = trouble || list[0];
+  chip.href = panelHref('/panel', pointAt ? pointAt.device : '');
+  if (list.length === 0) {
+    if (chip.textContent !== none) chip.textContent = none;
+    chip.dataset.state = 'away';
+    return { key: 'none', tone: 'away' };
   }
-  const trouble = real.find((p) => attention(deviceOf(p.device)));
-  const live = real.filter((p) => p.connected).length;
-  const label = [`${real.length} panels`, live ? `${live} live` : 'none live', trouble ? `${trouble.name}: ${attention(deviceOf(trouble.device))}` : '']
+  if (list.length === 1) {
+    const p = list[0];
+    const device = deviceOf(p.device);
+    const heard = link || (p.connected ? { connected: true } : null);
+    return showChip(chip, { attachedId: p.device, device, on: p.on, link: heard, rate: link ? rate : null, name: p.name });
+  }
+  const live = list.filter((p) => p.connected).length;
+  const label = [`${list.length} panels`, live ? `${live} live` : 'none live', trouble ? `${trouble.name}: ${attention(deviceOf(trouble.device))}` : '']
     .filter(Boolean).join(' · ');
   if (chip.textContent !== label) chip.textContent = label;
-  chip.dataset.state = trouble ? 'bad' : live ? 'on' : 'away';
-  chip.href = panelHref('/panel', trouble ? trouble.device : chosenPanel());
+  const tone = trouble ? 'bad' : live ? 'on' : 'away';
+  chip.dataset.state = tone;
+  return { key: live ? 'live' : 'away', tone: live ? 'on' : 'away' };
 }
 
 // ---------- small control helpers ----------

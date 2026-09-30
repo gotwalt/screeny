@@ -1,15 +1,18 @@
 // The Studio's Panel screen: `/panel`.
 //
 // Everything about the panel itself and about this studio - which panel,
-// whether it is being looked for, the output switch, brightness, the panel
-// model and the limiter, the link, what the device says about its own heap
-// and WiFi and firmware, identify, rename, reboot, and the studio's own
+// which channel it is on (card 354), whether it is being looked for, the
+// output switch, brightness, the link, what the device says about its own
+// heap and WiFi and firmware, identify, rename, reboot, and the studio's own
 // health. Card 198 moved the device's own affairs off the Picture screen so
 // that the screen the art is judged on is about the art; card 301 moved the
 // rest of the global controls here too - brightness, the panel model and the
 // limiter change how *any* patch looks on this panel, not how one patch is
 // judged, so they belong beside the output switch rather than beside the
-// parameters.
+// parameters. Card 354 took the panel model and the limiter back to the
+// Picture screen: since card 353 they are the **channel's**, and shape the
+// frames every panel on it is sent. What is left here is the panel's own:
+// its channel, on/off, brightness and the device.
 //
 // It is the same state and the same stream as the other screens: a change
 // made here shows there, and in another browser, at once. What it does **not**
@@ -21,14 +24,14 @@
 'use strict';
 
 import {
-  $, ago, bindBrightness, bindRadios, bindSlider, bindSwitch, bootstrapFor, busy, carryPanel, chosenPanel,
-  connect, duration, facts, forgetChoice, IDLE, invoke, kb, kbs, makeAttempt, netSize, nf, noFrames, notice,
-  panelHref, panelRow, panelState, pct, pollStatus, size, wifiLine, words,
+  $, ago, bindBrightness, bootstrapFor, busy, carryNav, channelHref, chosenPanel, connect, duration, facts,
+  forgetChoice, IDLE, invoke, kb, kbs, makeAttempt, netSize, nf, noFrames, notice, panelHref, panelNamer, panelRow,
+  panelState, pollStatus, size, wifiLine, words,
 } from './common.js';
 
 async function start() {
   const chosen = chosenPanel();
-  const boot = await bootstrapFor(chosen);
+  const boot = await bootstrapFor({ panel: chosen });
   let state = boot.state;
   /** The last GET /api/v1/status. */
   let picture = null;
@@ -37,32 +40,83 @@ async function start() {
   /** Card 351: the overview's word on this panel's link - what the state
    *  pill goes by until the first heartbeat, so it does not open on "away". */
   let overviewSaysUp = false;
+  /** The overview (card 353): every panel and every channel. */
+  let panels = [];
+  let channels = [];
 
   const patchById = Object.fromEntries(boot.patches.map((p) => [p.id, p]));
 
   // Card 351: the panel this screen is about is the one in the URL, or the
   // first without one - the socket's own, whose state says which device it
-  // is. `''` is the unbound stand-in of a studio with no panel yet.
+  // is. `''` is a studio with no panel yet.
   const attachedId = () => state.device || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === attachedId()) : null) || null;
-  /** An idle panel: no picture, no channel, its own screen (card 350). */
-  const idle = () => state.channel === null || state.channel === undefined;
-  carryPanel(attachedId());
   const row = panelRow($('#panels'), { path: '/panel', current: attachedId });
 
   const attempt = makeAttempt(() => readStatus());
 
-  // Controls bound below that show a value out of `state.output`: another
-  // browser changing one is the same thing as this one doing it, and both
-  // paths end here, in `showPanel()`. The same pattern `picture.js` uses.
-  const refreshers = [];
-  const bind = (control) => { refreshers.push(control); return control; };
-
   const call = (cmd, args) => invoke(cmd, args).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  const pushOutput = () => call('set_output', { output: state.output, panel: attachedId() });
-  const s = () => state.output;
 
-  // ---- output, brightness, the device's own controls ----
+  // ---- which channel it is on (card 354) ----
+  //
+  // The channel is the picture; this panel is only on it. Moving it fades
+  // this panel from the old picture to the new one over 2 s, and then it is
+  // sent the new channel's frames, the same bytes as every panel on it.
+  // "New channel" makes one first, as a copy of the one it is on, so the move
+  // is seamless and the two can then be changed apart.
+
+  const channelSelect = $('#panel-channel');
+  const channelName = () => state.channel_name || `Channel ${state.channel}`;
+  let channelKey = '';
+  function showChannel() {
+    const list = channels.length ? channels : [{ id: state.channel, name: channelName() }];
+    const key = JSON.stringify(list.map((c) => [c.id, c.name]));
+    if (key !== channelKey && !busy(channelSelect)) {
+      channelKey = key;
+      channelSelect.replaceChildren(
+        ...list.map((c) => Object.assign(document.createElement('option'), { value: String(c.id), textContent: c.name })),
+        Object.assign(document.createElement('option'), { value: 'new', textContent: 'New channel' }),
+      );
+    }
+    if (!busy(channelSelect)) channelSelect.value = String(state.channel);
+    channelSelect.disabled = !attachedId();
+
+    const name = panelNamer(panels);
+    const others = (state.panels || []).filter((id) => id !== attachedId()).map(name);
+    const me = panels.find((p) => p.device === attachedId());
+    const note = !attachedId()
+      ? 'A panel the studio finds joins Channel 1.'
+      : me && me.fading
+        ? `Moving: it fades to ${channelName()}’s picture over two seconds.`
+        : others.length
+          ? `It shows ${channelName()}’s picture, frame for frame the same as ${others.join(', ')}. The picture is changed on the Picture screen.`
+          : `It shows ${channelName()}’s picture, the only panel on it. The picture is changed on the Picture screen.`;
+    if ($('#panel-channel-note').textContent !== note) $('#panel-channel-note').textContent = note;
+
+    const link = $('#ro-channel');
+    if (link.textContent !== channelName()) link.textContent = channelName();
+    link.href = channelHref('/', state.channel);
+    carryNav({ channel: state.channel, panel: chosen ? attachedId() : '' });
+  }
+
+  channelSelect.addEventListener('change', async () => {
+    const panel = attachedId();
+    let channel = Number(channelSelect.value);
+    if (channelSelect.value === 'new') {
+      const made = await call('channels/new', { from: state.channel });
+      if (!made) { channelSelect.blur(); showPanel(); return; }
+      channel = made.channel;
+    }
+    const done = await call('panel/channel', { panel, channel });
+    if (done) {
+      state = done;
+      notice(`${$('#panel-name').textContent} is on ${done.channel_name} now.`, 'say');
+    }
+    channelSelect.blur();
+    showPanel();
+  });
+
+  // ---- on/off, brightness, the device's own controls ----
 
   const outSwitch = $('#panel-out');
   outSwitch.addEventListener('change', async () => {
@@ -84,28 +138,6 @@ async function start() {
     attempt,
     stops: boot.brightness_stops,
   });
-
-  // ---- output: panel model, dither, the limiter (card 301, moved from the
-  // Picture screen - the same `pushOutput()` path, moved not rewritten) ----
-
-  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
-  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
-  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
-  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
-  bind(bindSwitch($('#limiter-on'), {
-    get: () => s().limiter.enabled,
-    set: (v) => { s().limiter.enabled = v; pushOutput(); },
-  }));
-  bind(bindSlider($('#apl-slider'), {
-    get: () => s().limiter.apl_cap,
-    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
-    format: pct,
-  }));
-  bind(bindSlider($('#rise-slider'), {
-    get: () => s().limiter.max_rise_per_s,
-    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
-    format: (v) => `${Math.round(1000 / v)} ms to full`,
-  }));
 
   const needPanel = () => {
     const id = attachedId();
@@ -137,7 +169,7 @@ async function start() {
     const device = needPanel();
     if (!device) return;
     const name = $('#panel-name').textContent;
-    if (!window.confirm(`Forget ${name}? It goes back to its own screen, and comes back idle if the studio finds it again.`)) return;
+    if (!window.confirm(`Forget ${name}? It goes back to its own screen, and comes back on Channel 1 if the studio finds it again.`)) return;
     attempt(`Forgot ${name}`, async () => {
       await invoke('devices/forget', { device });
       location.assign('/panel');
@@ -145,7 +177,7 @@ async function start() {
     });
   });
 
-  // Card 351: a new panel is added idle (card 350) and this screen moves to
+  // Card 351: a new panel is added (onto Channel 1 since card 353) and this screen moves to
   // it, so the next thing done is to it.
   $('#add').addEventListener('click', async () => {
     const to = $('#add-to').value.trim();
@@ -164,10 +196,8 @@ async function start() {
     $('#panel-name').textContent = name || 'No panel yet';
     $('#panel-help').textContent = !attachedId()
       ? 'Nothing is being sent. The studio is still playing the patch; the Picture screen shows it.'
-      : idle()
-        ? 'Idle: it is on its own screen. Switch it on below, or pick a picture for it on the Picture screen.'
       : !state.on
-        ? 'The panel is on its own idle screen. The patch is still playing here.'
+        ? 'Output is off: the panel is on its own idle screen. Its channel is still playing.'
         : here.key === 'live'
           ? `Sending to ${device ? (device.frame_addr || device.address || device.instance || device.id) : name}.`
           : `${name} is away. It will pick this up again by itself when it comes back.`;
@@ -177,20 +207,19 @@ async function start() {
     pill.dataset.state = here.tone;
 
     const patch = patchById[state.patch];
-    $('#ro-playing').textContent = idle() ? 'Nothing' : patch ? patch.name : state.patch;
+    $('#ro-playing').textContent = patch ? patch.name : state.patch;
     // Card 151: which of the patch's settings this panel is on, and whether it
     // has been moved since. The Picture screen is where they are changed.
-    $('#ro-setting').textContent = idle() ? '–' : state.modified ? `${state.setting}, modified` : state.setting;
+    $('#ro-setting').textContent = state.modified ? `${state.setting}, modified` : state.setting;
   }
 
   function showPanel() {
     const device = attachedDevice();
-    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link: link || (overviewSaysUp ? { connected: true } : null), idle: idle() });
+    const here = panelState({ attached: Boolean(attachedId()), device, on: state.on, link: link || (overviewSaysUp ? { connected: true } : null) });
     showHead(here, device);
+    showChannel();
 
-    // Card 351: an idle panel shows nothing whatever its output says, so the
-    // switch reads off; switching it on gives it a picture (`set_panel`).
-    if (!busy(outSwitch)) outSwitch.checked = Boolean(state.on) && !idle();
+    if (!busy(outSwitch)) outSwitch.checked = Boolean(state.on);
     // Card 181: the switch is still live with no panel attached, and it still
     // means something - `state.on` is what makes the first panel found start
     // playing without anybody pressing anything. What it cannot say while
@@ -204,10 +233,6 @@ async function start() {
     $('#discovery-note').hidden = !looking;
 
     brightness.show(device);
-    // The output controls (panel model, dither, the limiter): another
-    // browser's change lands in `state` above and is picked up here, the same
-    // way the Picture screen's own controls refresh.
-    for (const control of refreshers) control.refresh();
     showLink(device);
     showDevice(device);
     showStudio();
@@ -521,11 +546,12 @@ async function start() {
     state: (message) => { state = message.state; showPanel(); },
     status: (message) => { link = message.panel; showPanel(); },
     panels: (message) => {
-      const list = message.panels || [];
-      row.update(list);
-      overviewSaysUp = Boolean((list.find((p) => p.device === attachedId()) || {}).connected);
+      panels = message.panels || [];
+      row.update(panels);
+      overviewSaysUp = Boolean((panels.find((p) => p.device === attachedId()) || {}).connected);
       showPanel();
     },
+    channels: (message) => { channels = message.channels || []; showPanel(); },
     // The panel in the URL has been forgotten: go to the first one.
     error: () => forgetChoice(),
   }, noFrames, { panel: chosen });

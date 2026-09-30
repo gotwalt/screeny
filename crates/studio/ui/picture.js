@@ -1,8 +1,9 @@
 // The Studio's Picture screen: `/`.
 //
-// One panel, one picture. The server renders on the panel's own player and this
-// page is a window onto it: the frames drawn here are the same decoded
-// datagrams the panel is being sent, and every control changes the panel.
+// One channel, one picture. The server renders and encodes it once, and this
+// page is a window onto it: the frames drawn here are the channel's encoded
+// frames decoded - what every panel on it is sent - and every control changes
+// the channel, which means every panel on it.
 //
 // Card 198 took the panel's own affairs - which panel, discovery, the link, the
 // device's facts, identify/rename/reboot - to a screen of their own at
@@ -26,19 +27,24 @@
 // none at all while the tab is hidden. It never asks for a *different* picture:
 // what arrives is the panel's own frames, paced.
 //
-// Card 351: a studio drives several panels, and this screen opens on a row of
-// them (`panelRow`, common.js) - a thumbnail, a name, a picture and a link
-// dot each. The one in the URL (`/?panel=<device id>`, the first without it)
-// is the one this screen is about: its frames on the canvas, its channel in
-// the editor, and every change sent with its `panel`. Editing is per channel,
-// so the editor says which other panels share it ("Also on Kitchen") and
-// offers Detach; the picker offers "Same as <panel>" for the others.
+// Card 354 (on card 353's server): the screen is about a **channel** - the
+// picture: patch, setting, tweaks, output settings and the encoded frames,
+// the same bytes for every panel on it. It opens on a row of channels
+// (`channelRow`, common.js) - a thumbnail, a name, the picture and the panels
+// on it as chips - and the one in the URL (`/?channel=<id>`, Channel 1
+// without it) is in the editor below: its frames on the canvas, "On: Kitchen,
+// Hallway" under the title, its Output settings (moved here from the Panel
+// screen, because they shape every member's frames), and "Panels on this
+// channel", where a panel is moved to another channel. Every change is sent
+// with its `channel`. Card 351's join-another-panel and split-this-one-off
+// buttons went with card 353's implicit channels.
 
 'use strict';
 
 import {
-  $, ago, bindRadios, bindSlider, bindSwitch, bootstrapFor, busy, carryPanel, chosenPanel, connect,
-  forgetChoice, H, HEADER, invoke, notice, panelRow, pct, pictureLine, pollStatus, showChip as paintChip, trim, W,
+  $, ago, bindRadios, bindSlider, bindSwitch, bootstrapFor, busy, carryNav, channelHref, channelRow, chosenChannel,
+  connect, forgetChoice, H, HEADER, HOME_CHANNEL, invoke, linkWords, notice, panelHref, panelNamer, pct, pollStatus,
+  showPanelsChip, trim, W,
 } from './common.js';
 const PITCH_MM = 3; // LED pitch: the lit area is 192 x 96 mm
 
@@ -191,19 +197,18 @@ function sizeCanvas(canvas) {
 async function start() {
   const canvas = $('#panel');
   const renderer = createRenderer(canvas);
-  const chosen = chosenPanel();
-  const boot = await bootstrapFor(chosen);
+  const chosen = chosenChannel();
+  const boot = await bootstrapFor({ channel: chosen });
   let state = boot.state;
   /** The last GET /api/v1/status. */
   let picture = null;
-  /** The last overview, `{"type":"panels"}`: every panel, first first. */
-  let overview = [];
-  /** The panel this screen is about: the socket's own, which is the one in the
-   *  URL or - without one - the first. `''` is the unbound stand-in. */
-  const here = () => state.device || '';
-  carryPanel(here());
-  /** A picture with no channel: an idle panel, on its own screen. */
-  const idle = () => state.channel === null || state.channel === undefined;
+  /** The overview, `{"type":"panels"}` and `{"type":"channels"}`: every
+   *  panel, first first, and every channel, Channel 1 first. */
+  let panels = [];
+  let channels = [];
+  /** The channel this screen is about: the socket's own, which is the one in
+   *  the URL or - without one - Channel 1. */
+  const here = () => state.channel;
 
   // Controls that show a value from `state`. Another browser changing
   // something is the same thing as this one doing it, so both paths end here.
@@ -211,13 +216,12 @@ async function start() {
   let paramControls = [];             // rebuilt whenever the patch changes
   const bind = (control) => { refreshers.push(control); return control; };
 
-  // Every change names the panel it is for (card 350's `panel`); `''` is the
-  // first, which is what the server takes an absent one to mean anyway.
-  const forHere = (args) => ({ ...(args || {}), panel: here() });
+  // Every change names the channel it is for (card 353's `channel`).
+  const forHere = (args) => ({ ...(args || {}), channel: here() });
   const call = (cmd, args) => invoke(cmd, forHere(args)).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  // `state.output` is read-only here: the limiter's numbers feed the meters
-  // below, but the controls that set it (panel model, dither, the limiter
-  // itself) moved to the Panel screen with card 301, along with brightness.
+  // `state.output` is the channel's (card 353): the limiter's numbers feed
+  // the meters below, and the Output section sets it (card 354 brought it
+  // back from the Panel screen, where card 301 had put it).
   const s = () => state.output;
 
   // ---- patch, parameters ----
@@ -359,13 +363,8 @@ async function start() {
     if (!next) return;
     state = next;
     const patch = patchById[state.patch];
-    // Card 351: an idle panel has no patch. It says so, and every patch below
-    // is a way to start it; there are no parameters or settings to show.
-    $('#patch-name').textContent = idle() ? 'Idle' : patch ? patch.name : state.patch;
-    $('#patch-blurb').textContent = idle()
-      ? `${panelName(here())} is on its own screen. Pick a picture below to start it.`
-      : patch ? patch.blurb : '';
-    $('#sec-params').hidden = idle();
+    $('#patch-name').textContent = patch ? patch.name : state.patch;
+    $('#patch-blurb').textContent = patch ? patch.blurb : '';
     document.querySelectorAll('#patches input').forEach((i) => { i.checked = i.value === state.patch; });
 
     paramControls = [];
@@ -385,56 +384,202 @@ async function start() {
     for (const control of [...refreshers, ...paramControls]) control.refresh();
   }
 
-  // ---- which panel, and who else is on its picture (card 351) ----
+  // ---- the channel: its row, its panels, its name (card 354) ----
+  //
+  // The channel is the picture; panels are only on it. The row at the top
+  // says that at a glance - every channel, its thumbnail, and the panels on it
+  // as chips - and this section is where a panel is moved, the channel is
+  // renamed or deleted. Channel routes name their channel themselves, so they
+  // go through `invoke` rather than `call` (which adds this one's).
 
-  /** A panel's name, from the overview; its id until the overview arrives. */
-  function panelName(id) {
-    const p = overview.find((q) => q.device === id);
-    return (p && p.name) || id || 'This panel';
+  const nameOf = (id) => panelNamer(panels)(id);
+  const channelName = () => state.channel_name || `Channel ${here()}`;
+  /** This channel's summary from the overview, once it has arrived. */
+  const mine = () => channels.find((c) => c.id === here()) || null;
+  /** The panels on this channel, by device id, in the order they joined. */
+  const members = () => (mine() ? mine().panels : state.panels) || [];
+  /** Them as the overview has them; one it has not caught up with yet is
+   *  said by its id rather than left out. */
+  const memberSummaries = () => members().map((id) => panels.find((p) => p.device === id)
+    || { device: id, name: id, on: state.on, connected: false, link: 'connecting' });
+
+  const failed = (what) => (e) => { notice(`${what}: ${e.message || e}`, 'say'); return null; };
+
+  async function newChannel() {
+    const made = await invoke('channels/new', { from: here() }).catch(failed('New channel'));
+    if (made) location.assign(channelHref('/', made.channel));
+  }
+  const row = channelRow($('#channels'), { current: here, onNew: newChannel });
+
+  /** Move a panel to a channel - `'new'` makes one first, as a copy of this
+   *  one, so moving to it is seamless - and follow it there if it is new. */
+  async function moveTo(panel, target) {
+    let channel = Number(target);
+    if (target === 'new') {
+      const made = await invoke('channels/new', { from: here() }).catch(failed('New channel'));
+      if (!made) return;
+      channel = made.channel;
+    }
+    const done = await invoke('panel/channel', { panel, channel }).catch(failed(`Moving ${nameOf(panel)}`));
+    if (!done) return;
+    notice(`${nameOf(panel)} is on ${done.channel_name} now.`, 'say');
+    if (target === 'new') { location.assign(channelHref('/', channel)); return; }
+    if (done.channel === here()) sync(done);
   }
 
-  const row = panelRow($('#panels'), { path: '/', current: here, thumbs: true });
+  /** A `<select>` of every channel, this one chosen, and "New channel". */
+  function channelOptions(select, chosen, { placeholder = '' } = {}) {
+    const opts = [];
+    if (placeholder) opts.push(Object.assign(document.createElement('option'), { value: '', textContent: placeholder }));
+    for (const c of channels) {
+      opts.push(Object.assign(document.createElement('option'), { value: String(c.id), textContent: c.name }));
+    }
+    opts.push(Object.assign(document.createElement('option'), { value: 'new', textContent: 'New channel' }));
+    select.replaceChildren(...opts);
+    select.value = String(chosen);
+  }
 
-  /** "Also on Kitchen" with Detach, the idle line, and "Same as <panel>" for
-   *  every other panel with a picture this one is not already on. */
-  function showSharing() {
-    const others = state.shared_with || [];
-    $('#shared').hidden = idle() || others.length === 0;
-    $('#shared-who').textContent = others.length
-      ? `Also on ${others.map(panelName).join(', ')}. A change here changes ${others.length === 1 ? 'it' : 'them'} too.`
-      : '';
+  let membersKey = '';
+  function showChannel() {
+    const count = channels.length;
+    const ids = members();
+    const names = ids.map(nameOf);
 
-    // Said again here because the panel's name comes with the overview,
-    // which can arrive after the state that made it idle.
-    if (idle()) $('#patch-blurb').textContent = `${panelName(here())} is on its own screen. Pick a picture below to start it.`;
-    $('#idle-note').hidden = !idle();
-    $('#idle-note').textContent = idle() ? 'Nothing is being sent to this panel. Pick a picture to start it.' : '';
+    $('#channel-kicker').hidden = count <= 1;
+    $('#channel-kicker').textContent = channelName();
+    $('#channel-title').textContent = channelName();
+    $('#channel-on').textContent = names.length ? `On: ${names.join(', ')}` : 'On no panel';
+    $('#channel-on').dataset.empty = names.length ? 'no' : 'yes';
+    $('#empty-note').hidden = names.length > 0;
+    $('#empty-note').textContent = names.length ? '' : `No panel is on ${channelName()}. It still plays here, and everything you change is kept; move a panel onto it below.`;
+    $('#output-who').textContent = names.length > 1
+      ? `How ${channelName()}’s frames are finished: every panel on it (${names.join(', ')}) is sent the same ones.`
+      : `How ${channelName()}’s frames are finished, for every panel on it.`;
+    carryNav({ channel: here(), panel: ids[0] || '' });
 
-    // Card 353 retired "Same as" and Detach on the server (channels are
-    // explicit now); card 354 redesigns this screen around channels. Until
-    // then neither is offered.
-    const candidates = [];
-    $('#same-as').hidden = candidates.length === 0;
-    const key = candidates.map((p) => `${p.device}\u0000${p.name}\u0000${pictureLine(p)}`).join('\u0001');
-    if ($('#same-list').dataset.key === key) return;
-    $('#same-list').dataset.key = key;
-    $('#same-list').replaceChildren(...candidates.map((p) => {
-      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'same__one' });
-      b.append(
-        Object.assign(document.createElement('span'), { className: 'same__name', textContent: p.name || p.device }),
-        Object.assign(document.createElement('span'), { className: 'same__pic', textContent: pictureLine(p) }),
+    // The members, rebuilt only when what they say changes and never under
+    // somebody's hand.
+    const list = $('#members');
+    const key = JSON.stringify([memberSummaries().map((p) => [p.device, p.name, p.link, p.fading]), channels.map((c) => [c.id, c.name]), panels.map((p) => [p.device, p.name, p.channel])]);
+    if (key !== membersKey && !list.contains(document.activeElement) && !busy($('#bring'))) {
+      membersKey = key;
+      list.replaceChildren(...memberSummaries().map((p) => {
+        const li = Object.assign(document.createElement('li'), { className: 'member' });
+        const name = Object.assign(document.createElement('a'), { className: 'member__name', href: panelHref('/panel', p.device), textContent: p.name || p.device });
+        const [said, tone] = linkWords(p.link);
+        const state = Object.assign(document.createElement('span'), { className: 'member__state', textContent: p.fading ? `${said} · moving` : said });
+        state.dataset.state = tone;
+        const move = Object.assign(document.createElement('label'), { className: 'member__move' });
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', `Move ${p.name || p.device} to`);
+        channelOptions(select, here());
+        select.addEventListener('change', () => moveTo(p.device, select.value));
+        move.append(Object.assign(document.createElement('span'), { textContent: 'Move to' }), select);
+        li.append(name, state, move);
+        return li;
+      }));
+
+      // Every panel that is somewhere else, to bring here.
+      const others = panels.filter((p) => p.channel !== here());
+      $('#bring-row').hidden = others.length === 0;
+      $('#bring').replaceChildren(
+        Object.assign(document.createElement('option'), { value: '', textContent: 'Choose a panel…' }),
+        ...others.map((p) => Object.assign(document.createElement('option'), { value: p.device, textContent: `${p.name || p.device} (on ${p.channel_name})` })),
       );
-      b.addEventListener('click', async () => sync(await call('same_as', { as: p.device })));
-      return b;
-    }));
-  }
-  bind({ refresh: showSharing });
+    }
+    $('#members-empty').hidden = ids.length > 0;
+    $('#members-empty').textContent = panels.length
+      ? 'None yet.'
+      : 'None yet. A panel the studio finds joins Channel 1; the Panel screen can add one by address.';
 
-  $('#detach').hidden = true; // card 353: retired, see above
-  $('#detach').addEventListener('click', async () => {
-    const next = await call('detach', {});
-    if (next) { notice(`${panelName(here())} has a picture of its own now.`, 'say'); sync(next); }
+    const home = Boolean(mine() ? mine().home : here() === HOME_CHANNEL);
+    $('#channel-delete').disabled = home;
+    $('#channel-note').textContent = home
+      ? `${channelName()} cannot be deleted: it is where new panels join.`
+      : 'Deleting it moves its panels to Channel 1.';
+  }
+  bind({ refresh: showChannel });
+
+  $('#bring').addEventListener('change', () => {
+    const panel = $('#bring').value;
+    if (panel) moveTo(panel, String(here()));
   });
+
+  // Rename and delete, inline - no native dialogs - like the
+  // settings control.
+  const channelForm = $('#channel-name');
+  const channelInput = $('#channel-name-input');
+  const channelConfirm = $('#channel-confirm');
+  const sayChannel = (message) => {
+    $('#channel-error').hidden = !message;
+    $('#channel-error').textContent = message || '';
+  };
+  const closeChannelForms = () => { channelForm.hidden = true; channelConfirm.hidden = true; };
+  $('#channel-rename').addEventListener('click', () => {
+    closeChannelForms();
+    sayChannel('');
+    channelInput.value = channelName();
+    channelForm.hidden = false;
+    channelInput.focus();
+    channelInput.select();
+  });
+  channelForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    sayChannel('');
+    try {
+      sync(await invoke('channels/rename', { channel: here(), name: channelInput.value }));
+      closeChannelForms();
+    } catch (err) {
+      sayChannel(err.message || String(err));
+    }
+  });
+  $('#channel-name-cancel').addEventListener('click', () => { closeChannelForms(); sayChannel(''); });
+  channelInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeChannelForms(); sayChannel(''); } });
+  $('#channel-delete').addEventListener('click', () => {
+    closeChannelForms();
+    sayChannel('');
+    const n = members().length;
+    $('#channel-confirm-what').textContent = n
+      ? `Delete ${channelName()}? ${n === 1 ? 'Its panel moves' : `Its ${n} panels move`} to Channel 1.`
+      : `Delete ${channelName()}?`;
+    channelConfirm.hidden = false;
+    $('#channel-confirm-yes').focus();
+  });
+  $('#channel-confirm-no').addEventListener('click', closeChannelForms);
+  $('#channel-confirm-yes').addEventListener('click', async () => {
+    try {
+      await invoke('channels/delete', { channel: here() });
+      location.assign('/');
+    } catch (err) {
+      sayChannel(err.message || String(err));
+    }
+  });
+
+  // ---- output (card 354: the channel's, moved here from the Panel screen) ----
+  //
+  // Card 301's `pushOutput()` path, moved not rewritten: the panel model, the
+  // dither and the limiter shape the frames every panel on this channel is
+  // sent (card 353), so they are set where the channel is.
+
+  const pushOutput = () => call('set_output', { output: state.output });
+  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
+  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
+  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
+  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
+  bind(bindSwitch($('#limiter-on'), {
+    get: () => s().limiter.enabled,
+    set: (v) => { s().limiter.enabled = v; pushOutput(); },
+  }));
+  bind(bindSlider($('#apl-slider'), {
+    get: () => s().limiter.apl_cap,
+    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
+    format: pct,
+  }));
+  bind(bindSlider($('#rise-slider'), {
+    get: () => s().limiter.max_rise_per_s,
+    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
+    format: (v) => `${Math.round(1000 / v)} ms to full`,
+  }));
 
   // ---- settings (card 151) ----
   //
@@ -578,22 +723,13 @@ async function start() {
 
   // ---- the panel, as far as this screen is concerned ----
   //
-  // Card 301 also took Speed, pause/restart, the panel model and the
-  // limiter's own controls off this screen (they are on `/panel` now, or
-  // gone), so what is left here about the panel is only the chip below - the
-  // one thing on this screen that is about the panel rather than the picture.
+  // Card 301 took Speed and pause/restart off this screen, and brightness to
+  // `/panel`; what is left here about the panels themselves is the chip below
+  // and the channel's member list above.
 
-  const attachedId = here;
-  const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === here()) : null) || null;
-  /** The panel link, from the half-second heartbeat. Null when output is off. */
+  /** The link of the channel's first panel, from the half-second heartbeat.
+   *  Null when output is off or there is no panel. */
   let link = null;
-  /** Card 351: until the first heartbeat, the overview's word on this panel's
-   *  link, so the chip does not open on "away" for a panel that is live. */
-  const linkOrOverview = () => {
-    if (link) return link;
-    const mine = overview.find((p) => p.device === here());
-    return mine && mine.connected ? { connected: true } : null;
-  };
 
   /** The status chip in the title block: the one thing on this screen that is
    *  about the panel rather than the picture, and the way to the Panel screen.
@@ -612,20 +748,25 @@ async function start() {
    *  Card 307: the chip's own wording (name, "live · N fps", the fault
    *  phrase) is one function now, `showChip` in `common.js`, shared with the
    *  other screens so they cannot say different things about the same
-   *  panel again. This screen is the one that has a rate to pass it. */
+   *  panel again. This screen is the one that has a rate to pass it.
+   *
+   *  Card 354: it is about every panel on this channel - one panel's own chip
+   *  when there is one, "2 panels · 2 live" when there are more, and the fault
+   *  tone for whichever of them needs attention. */
   function showChip() {
-    const device = attachedDevice();
     const chip = $('#ro-panel');
-    const here = paintChip(chip, {
-      attachedId: attachedId(), device, on: state.on, link: linkOrOverview(), rate: link ? link.fps : null, idle: idle(),
-    });
+    const devices = picture ? picture.devices : [];
+    const on = memberSummaries();
+    const said = showPanelsChip(chip, { panels: on, devices, link, rate: link ? link.fps : null, none: 'No panel on it' });
+    const device = on.length === 1 ? devices.find((d) => d.id === on[0].device) : null;
     chip.title = device && device.last_seen_ago !== null && device.last_seen_ago !== undefined
       ? `Heard ${ago(device.last_seen_ago)}. The panel screen has the rest.`
       : 'The panel screen has the rest.';
 
     // The frame goes quiet when the panel is away; the picture stays lit,
     // because it is still the truth about what is playing (card 170).
-    $('#stage').dataset.panel = here.tone === 'on' ? 'on' : 'away';
+    // A channel with no panel has no panel to be away: it stays lit.
+    $('#stage').dataset.panel = on.length === 0 || said.tone === 'on' ? 'on' : 'away';
 
     // Card 145, on the half-second heartbeat: the notice line is shared, so a
     // black GPU patch says so again as soon as the line is free.
@@ -830,10 +971,11 @@ async function start() {
     frame: (buf) => { newest = buf; row.frame(buf); },
     state: (message) => sync(message.state),
     status: (message) => { link = message.panel; showPlaying(message.playing); showChip(); },
-    panels: (message) => { overview = message.panels || []; row.update(overview); showSharing(); showChip(); },
-    // The panel in the URL has been forgotten: go to the first one.
+    panels: (message) => { panels = message.panels || []; row.update(channels, panels); showChannel(); showChip(); },
+    channels: (message) => { channels = message.channels || []; row.update(channels, panels); showChannel(); showChip(); },
+    // The channel in the URL has been deleted: go to Channel 1.
     error: () => forgetChoice(),
-  }, undefined, { panel: chosen });
+  }, undefined, { channel: chosen });
 }
 
 start().catch((e) => notice(String(e.message || e)));

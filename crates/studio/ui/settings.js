@@ -10,7 +10,7 @@
 
 'use strict';
 
-import { $, bindSwitch, busy, carryPanel, chosenPanel, connect, facts, invoke, noFrames, notice, pollStatus, showStudioChip } from './common.js';
+import { $, bindSwitch, busy, carryNav, chosenChannel, chosenPanel, connect, facts, invoke, noFrames, notice, pollStatus, showPanelsChip } from './common.js';
 
 /** How often to ask how the connection is doing. It changes on its own - a
  *  broker going away, a reconnect - so this screen asks rather than waits. */
@@ -24,15 +24,16 @@ async function start() {
   /** The last GET /api/v1/home_assistant: `crate::ha::HaView`. */
   let ha = await invoke('home_assistant');
 
-  // Card 351: this screen is about the studio, not one panel; a `?panel=`
-  // it was opened with is only carried on to the other two screens.
-  carryPanel(chosenPanel());
+  // Card 351/354: this screen is about the studio, not one channel or panel;
+  // a `?channel=` or `?panel=` it was opened with is only carried on to the
+  // other two screens.
+  carryNav({ channel: chosenChannel(), panel: chosenPanel() });
 
   /** The same chip every screen carries, so trouble is never hidden behind
    *  this tab either - here about every panel at once (card 351), since
    *  nothing on this screen is about one of them. No canvas, so no rate. */
   function showChip() {
-    showStudioChip($('#ro-panel'), { panels, devices: picture ? picture.devices : [] });
+    showPanelsChip($('#ro-panel'), { panels, devices: picture ? picture.devices : [] });
   }
 
   // ------------------------------------------------------ home assistant ----

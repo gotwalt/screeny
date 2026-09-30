@@ -15,10 +15,10 @@
     <a href="/settings">Settings</a>
   </nav>
 
-  <!-- Card 351: the same panel row as the Picture screen, without the
-       thumbnails - this screen draws no pictures (card 120, 198). Every
-       control below acts on the panel picked here, which is in the URL
-       (`/panel?panel=<device id>`). -->
+  <!-- Card 351/354: a compact row of panels - name, the channel it is on,
+       that channel's picture, a link dot - without thumbnails: this screen
+       draws no pictures (card 120, 198). Every control below acts on the
+       panel picked here, which is in the URL (`/panel?panel=<device id>`). -->
   <section class="panels panels--compact" aria-label="Panels">
     <div class="panels__row" id="panels"></div>
   </section>
@@ -29,6 +29,9 @@
       <p class="hint" id="panel-help"></p>
     </div>
     <dl class="readouts" aria-label="The panel">
+      <!-- Card 354: the channel it is on - the picture belongs to the
+           channel, and this is the way to it. -->
+      <div><dt>Channel</dt><dd><a class="readouts__link" id="ro-channel" href="/">–</a></dd></div>
       <!-- Card 198: no canvas here, and so no frames asked for. What is
            playing is said in words, because "which patch is this panel on" is
            part of knowing which panel it is. -->
@@ -51,7 +54,8 @@
          side was shorter (first under Output, then, once floats replaced the
          grid, under Link - floats share a top constraint across the whole
          source order too, not only within a column, so the same gap just
-         moved). Two ordinary boxes, one holding Panel+Output and the other
+         moved). Two ordinary boxes, one holding Panel (and Output, until card 354
+         moved it to the Picture screen as the channel's) and the other
          Link+Studio, each in normal document flow, size to their own content
          and nothing else's - stacked in this same DOM order below the
          breakpoint (style.css), side by side above it. -->
@@ -62,6 +66,15 @@
       <!-- Card 173: is the studio even looking? Never a fault tone - a browse
            that finds nothing is normal - but never silent either. -->
       <p class="hint" id="discovery-note" hidden></p>
+
+      <!-- Card 354: which channel this panel is on. The channel is the
+           picture; a panel is only on it. Moving it fades this panel from the
+           old picture to the new one over 2 s. -->
+      <div class="row row--fill row--channel">
+        <label for="panel-channel">Channel</label>
+        <select id="panel-channel"></select>
+      </div>
+      <p class="hint" id="panel-channel-note"></p>
 
       <!-- Card 181: the label is written by the script. With a panel attached
            it is "Show it on the panel"; with none it says what the switch
@@ -105,59 +118,11 @@
             <button type="button" id="add">Add this panel</button>
             <button type="button" id="look" class="quiet">Look again</button>
           </div>
-          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not. A new panel starts idle, on its own screen, until it is given a picture.</p>
+          <p class="hint">An address, a host name, or the panel's own name. A name is looked up again every time it reconnects, so it follows the panel if its address changes; a bare address does not. A new panel joins Channel 1 and shows its picture straight away.</p>
         </div>
       </details>
     </section>
 
-    <!-- Card 301: the global controls that used to sit on the Picture screen -
-         they change how *any* patch looks on this panel, not how one patch is
-         judged, so they moved here beside the switch and the brightness they
-         already shared a `pushOutput()` path with. Moved, not rewritten. -->
-    <section id="sec-output">
-      <h2>Output</h2>
-      <!-- Card 102. This was "Levels per channel: 64 / 32 / 16". 32 and 16
-           modelled the panel being dimmed by scaling pixel values, which this
-           device has not done since card 020 - it shortens the output-enable
-           window instead, so every duty step survives at every brightness. 64
-           was the panel before card 030 taught the firmware to spend the
-           sub-level remainder across sixteen refreshes. What is left is the
-           one comparison the brief actually asks for. -->
-      <fieldset class="seg" id="panel-kind">
-        <legend>Panel</legend>
-        <label title="What the device shows: 1008 duty steps per channel, only sRGB 0-4 black">
-          <input type="radio" name="panel" value="dithered"><span>Dithered</span></label>
-        <label title="The same panel without its temporal dither: 64 levels, nothing below sRGB 21">
-          <input type="radio" name="panel" value="bit_planes"><span>Bit planes</span></label>
-        <label title="Dithered above level 16; below it every held shade sits exactly on a level, so the dark end holds still">
-          <input type="radio" name="panel" value="aligned_dark"><span>Aligned dark</span></label>
-      </fieldset>
-      <p class="hint">The firmware spreads each colour's sub-level remainder over sixteen panel
-        refreshes, walked so the dither does not blink up close (card 248), so a held colour
-        resolves 1008 duty steps and only sRGB 0-4 are black.
-        <em>Bit planes</em> is the same panel without that - 64 levels, nothing under sRGB 21 -
-        which is how the darks behave for anything that does not hold still for about 100 ms.
-        <em>Aligned dark</em> keeps the dithered panel above level 16 and puts every darker
-        shade exactly on a level, so held dark shades do not blink up close (card 188).</p>
-      <fieldset class="seg" id="dither">
-        <legend>Dither</legend>
-        <label><input type="radio" name="dither" value="none"><span>None</span></label>
-        <label><input type="radio" name="dither" value="bayer4"><span>Bayer 4</span></label>
-        <label><input type="radio" name="dither" value="bayer8"><span>Bayer 8</span></label>
-        <label><input type="radio" name="dither" value="blue_noise"><span>Blue noise</span></label>
-      </fieldset>
-      <label class="switch"><input type="checkbox" id="panel-model"><span>Quantise to panel levels</span></label>
-      <label class="switch"><input type="checkbox" id="codec-preview"><span>Show the frame after the real codec</span></label>
-      <label class="switch"><input type="checkbox" id="limiter-on"><span>Limit brightness and flashing</span></label>
-      <div class="slider" id="apl-slider">
-        <label for="apl-cap">Average level cap</label><output></output>
-        <input id="apl-cap" type="range" min="0.1" max="1" step="0.01">
-      </div>
-      <div class="slider" id="rise-slider">
-        <label for="rise">Fastest rise</label><output></output>
-        <input id="rise" type="range" min="0.5" max="10" step="0.1">
-      </div>
-    </section>
       </div>
 
       <div class="panel-columns__right">

@@ -169,18 +169,23 @@ a.pill { text-decoration: none; }
 a.pill::after { content: " ›"; }
 a.pill:hover { border-color: var(--paper); color: var(--paper); }
 
-/* ---------- the panel row (card 351) ----------
+/* ---------- the channel row and the panel row (cards 351, 354) ----------
 
-   One card per panel, on the Picture and Panel screens: a thumbnail (Picture
-   only), the panel's name, what it is showing, and a dot for its link. The row
-   scrolls sideways rather than wrapping, at every width - a phone shows two
-   cards and the edge of a third, which says "there are more" without a word -
-   and snaps to a card, so a flick lands on one rather than between two. The
-   card the screen is about wears the amber edge, like the nav's current
-   screen. With one panel it is one card. */
+   The Picture screen opens on a row of **channels** - one card each: a live
+   thumbnail of its picture, its name, patch · setting, and the panels on it
+   as chips - with "New channel" as the last card. The channel is the
+   picture; the chips say which panels are on it. The Panel screen opens on a
+   compact row of **panels** - name, the channel it is on, that picture, a
+   link dot - with no thumbnails, since that screen draws no pictures.
 
-.panels { padding: 12px 0 4px; }
-.panels__row {
+   Both rows scroll sideways rather than wrapping, at every width - a phone
+   shows two cards and the edge of a third, which says "there are more"
+   without a word - and snap to a card, so a flick lands on one rather than
+   between two. The card the screen is about wears the amber edge, like the
+   nav's current screen. */
+
+.channels, .panels { padding: 12px 0 4px; }
+.channels__row, .panels__row {
   display: flex;
   gap: 10px;
   padding: 0 var(--gutter) 8px;
@@ -189,12 +194,11 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   scroll-padding: 0 var(--gutter);
   overscroll-behavior-x: contain;
 }
-.pcard {
+.ccard, .pcard {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  width: 162px;
   min-height: 44px;
   padding: 8px 9px 9px;
   border: 1px solid var(--rule);
@@ -204,9 +208,11 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   text-decoration: none;
   scroll-snap-align: start;
 }
-.pcard:hover { border-color: var(--dim); }
-.pcard[aria-current] { border-color: var(--amber); }
-.pcard__face {
+.ccard { width: 164px; }
+.pcard { width: auto; min-width: 150px; max-width: 240px; }
+.ccard:hover, .pcard:hover { border-color: var(--dim); }
+.ccard[aria-current], .pcard[aria-current] { border-color: var(--amber); }
+.ccard__face {
   display: block;
   align-self: center;
   margin-bottom: 5px;
@@ -215,15 +221,14 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   background: #000;
 }
 /* 2x, so every LED is two by two screen pixels and stays square and sharp. */
-.pcard__thumb {
+.ccard__thumb {
   display: block;
   width: 128px;
   height: 64px;
   image-rendering: crisp-edges;
   image-rendering: pixelated;
 }
-.pcard[data-idle="yes"] .pcard__face { opacity: 0.45; }
-.pcard__name {
+.ccard__name, .pcard__name {
   font: 400 14px/1.15 var(--label);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -231,17 +236,52 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pcard__pic, .pcard__state {
+.ccard__pic, .pcard__pic, .pcard__channel, .pcard__state {
   overflow: hidden;
   color: var(--dim);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pcard__pic { color: var(--paper); }
-.pcard[data-idle="yes"] .pcard__pic { color: var(--dim); }
-/* The link dot: amber while it is on the panel, hollow while it is idle. */
-.pcard__state::before {
+.ccard__pic, .pcard__pic { color: var(--paper); }
+.pcard__channel { color: var(--amber); }
+
+/* The panels on a channel, as chips: each with its link dot. */
+.ccard__panels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.chip {
+  max-width: 100%;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--paper);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip--none { color: var(--dim); border-style: dashed; }
+.chip--none::before { display: none; }
+
+/* "New channel": the last card, quieter than a channel. */
+.ccard--new {
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  border-style: dashed;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+.ccard--new:hover { color: var(--paper); }
+.ccard--new .ccard__name { white-space: normal; }
+.ccard--new .ccard__pic { color: var(--dim); white-space: normal; }
+.ccard__plus { font: 300 30px/1 var(--body); }
+
+/* The link dot: amber while it is on the panel, dark while output is off. */
+.pcard__state::before, .member__state::before, .chip::before {
   content: "";
   display: inline-block;
   width: 7px;
@@ -251,12 +291,8 @@ a.pill:hover { border-color: var(--paper); color: var(--paper); }
   background: var(--dim);
   vertical-align: 1px;
 }
-.pcard__state[data-state="on"]::before { background: var(--amber); }
-.pcard__state[data-state="off"]::before { background: var(--rule); }
-.pcard__state[data-state="idle"]::before { background: none; box-shadow: inset 0 0 0 1px var(--dim); }
-/* The Panel screen's row has no thumbnails, so its cards are a line or three. */
-.panels--compact .pcard { width: auto; min-width: 150px; max-width: 240px; }
-
+.pcard__state[data-state="on"]::before, .member__state[data-state="on"]::before, .chip[data-state="on"]::before { background: var(--amber); }
+.pcard__state[data-state="off"]::before, .member__state[data-state="off"]::before, .chip[data-state="off"]::before { background: var(--rule); }
 /* ---------- the stage ---------- */
 
 .stage {
@@ -403,38 +439,61 @@ body.settings-page .titleblock { max-width: 640px; }
 
 .hint[data-tone="bad"] { color: var(--over); }
 
-/* Card 351: the other panels on this picture, and the way off it. */
-.shared {
+/* Card 354: which channel, over the title, once there is more than one; and
+   the panels it is on, under it - "On: Kitchen, Hallway". */
+.titleblock .titleblock__channel {
+  margin: 0 0 6px;
+  color: var(--amber);
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.titleblock .titleblock__on { color: var(--paper); }
+.titleblock .titleblock__on[data-empty="yes"] { color: var(--dim); }
+#empty-note { margin-bottom: 12px; }
+
+/* The Panel screen's Channel readout is the way to that channel's picture. */
+.readouts__link { color: var(--paper); text-decoration: none; border-bottom: 1px solid var(--rule); }
+.readouts__link::after { content: " ›"; color: var(--dim); }
+.readouts__link:hover { border-color: var(--paper); }
+
+/* Card 354: the channel section - its panels, each with where to move it;
+   the way to bring one here; rename and delete. */
+#sec-channel > h3 { margin-bottom: 8px; }
+.members { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.member {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
+  gap: 6px 10px;
+  padding: 8px 10px;
   border-left: 2px solid var(--amber);
   background: var(--bench);
 }
-.shared__who { flex: 1 1 180px; font-size: 12.5px; }
-.shared button { flex: none; }
-#idle-note { margin-bottom: 12px; }
-
-/* "Same as <panel>": one button per other panel, its name over its picture. */
-.same { margin-bottom: 14px; }
-.same h3 { margin-bottom: 8px; }
-.same__list { display: grid; gap: 6px; }
-.same__one {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  height: auto;
-  min-height: 40px;
-  padding: 6px 10px;
-  text-align: left;
+.member__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--paper);
+  font: 400 14px/1.2 var(--label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  overflow-wrap: anywhere;
 }
-.same__name { font: 400 13px/1.15 var(--label); letter-spacing: 0.06em; text-transform: uppercase; }
-.same__pic { color: var(--dim); font-size: 12px; font-weight: 400; }
-
+.member__name:hover { color: var(--amber); }
+.member__state { flex: none; color: var(--dim); font-size: 12px; }
+.member__move { display: flex; flex: 1 1 100%; align-items: center; gap: 10px; }
+.member__move span { flex: none; color: var(--dim); font-size: 12px; }
+#members-empty { margin-top: 0; }
+.row--bring { margin-top: 12px; }
+.row--bring label, .row--channel label { flex: none; }
+.channel__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.channel__actions button { flex: 1 1 auto; }
+#sec-channel .setting__name, #sec-channel .setting__confirm { margin-top: 10px; }
+#channel-note, #channel-error { margin-top: 8px; }
+#output-who { margin: -6px 0 14px; }
+.row--channel + .hint { margin-top: 6px; }
+.row--channel + .hint + .switch { margin-top: 10px; }
 /* Now playing: what a composing patch is performing. */
 .playing__title { font: 400 19px/1.15 var(--label); letter-spacing: 0.05em; text-transform: uppercase; }
 .playing__detail { margin-top: 5px; color: var(--dim); font-size: 12px; }
@@ -683,7 +742,7 @@ select:hover { border-color: var(--dim); }
     grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
     grid-template-areas:
       "nav     nav"
-      "panels  panels"
+      "channels channels"
       "head    side"
       "stage   side"
       "view    side"
@@ -691,7 +750,7 @@ select:hover { border-color: var(--dim); }
   }
 
   .picture-page .nav { grid-area: nav; }
-  .picture-page .panels { grid-area: panels; border-bottom: 1px solid var(--rule); }
+  .picture-page .channels { grid-area: channels; border-bottom: 1px solid var(--rule); }
   .titleblock { grid-area: head; flex-wrap: nowrap; padding-top: 22px; }
   .stage { grid-area: stage; height: auto; }
   .view { grid-area: view; }
@@ -770,8 +829,8 @@ select:hover { border-color: var(--dim); }
   input[type="range"]::-moz-range-thumb { width: 22px; height: 28px; border: 0; border-radius: 3px; background: var(--paper); }
 
   .setup summary, .view summary { padding: 15px 0; margin: -15px 0; } /* 44 px to hit, the triangle kept */
-  .pcard { min-height: 48px; }
-  .same__one { min-height: 48px; }
+  .pcard, .ccard { min-height: 48px; }
+  .readouts__link { display: inline-flex; align-items: center; min-height: 44px; }
   .playing__actions button { min-height: 44px; }
 }
 
