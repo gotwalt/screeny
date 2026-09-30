@@ -219,9 +219,8 @@ async function start() {
   // Every change names the channel it is for (card 353's `channel`).
   const forHere = (args) => ({ ...(args || {}), channel: here() });
   const call = (cmd, args) => invoke(cmd, forHere(args)).catch((e) => { notice(`${cmd} failed: ${e.message || e}`, 'say'); return null; });
-  // `state.output` is the channel's (card 353): the limiter's numbers feed
-  // the meters below, and the Output section sets it (card 354 brought it
-  // back from the Panel screen, where card 301 had put it).
+  // `state.output` is the studio's (card 356): the limiter's numbers feed
+  // the meters below. It is set on the Settings screen.
   const s = () => state.output;
 
   // ---- patch, parameters ----
@@ -447,14 +446,10 @@ async function start() {
 
     $('#channel-kicker').hidden = count <= 1;
     $('#channel-kicker').textContent = channelName();
-    $('#channel-title').textContent = channelName();
     $('#channel-on').textContent = names.length ? `On: ${names.join(', ')}` : 'On no panel';
     $('#channel-on').dataset.empty = names.length ? 'no' : 'yes';
     $('#empty-note').hidden = names.length > 0;
     $('#empty-note').textContent = names.length ? '' : `No panel is on ${channelName()}. It still plays here, and everything you change is kept; move a panel onto it below.`;
-    $('#output-who').textContent = names.length > 1
-      ? `How ${channelName()}’s frames are finished: every panel on it (${names.join(', ')}) is sent the same ones.`
-      : `How ${channelName()}’s frames are finished, for every panel on it.`;
     carryNav({ channel: here(), panel: ids[0] || '' });
 
     // The members, rebuilt only when what they say changes and never under
@@ -555,32 +550,6 @@ async function start() {
       sayChannel(err.message || String(err));
     }
   });
-
-  // ---- output (card 354: the channel's, moved here from the Panel screen) ----
-  //
-  // Card 301's `pushOutput()` path, moved not rewritten: the panel model, the
-  // dither and the limiter shape the frames every panel on this channel is
-  // sent (card 353), so they are set where the channel is.
-
-  const pushOutput = () => call('set_output', { output: state.output });
-  bind(bindRadios($('#panel-kind'), { get: () => s().panel, set: (v) => { s().panel = v; pushOutput(); } }));
-  bind(bindRadios($('#dither'), { get: () => s().dither, set: (v) => { s().dither = v; pushOutput(); } }));
-  bind(bindSwitch($('#panel-model'), { get: () => s().panel_model, set: (v) => { s().panel_model = v; pushOutput(); } }));
-  bind(bindSwitch($('#codec-preview'), { get: () => s().codec_preview, set: (v) => { s().codec_preview = v; pushOutput(); } }));
-  bind(bindSwitch($('#limiter-on'), {
-    get: () => s().limiter.enabled,
-    set: (v) => { s().limiter.enabled = v; pushOutput(); },
-  }));
-  bind(bindSlider($('#apl-slider'), {
-    get: () => s().limiter.apl_cap,
-    set: (v) => { s().limiter.apl_cap = v; pushOutput(); },
-    format: pct,
-  }));
-  bind(bindSlider($('#rise-slider'), {
-    get: () => s().limiter.max_rise_per_s,
-    set: (v) => { s().limiter.max_rise_per_s = v; pushOutput(); },
-    format: (v) => `${Math.round(1000 / v)} ms to full`,
-  }));
 
   // ---- settings (card 151) ----
   //

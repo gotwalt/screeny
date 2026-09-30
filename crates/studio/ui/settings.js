@@ -10,7 +10,7 @@
 
 'use strict';
 
-import { $, bindSwitch, busy, carryNav, chosenChannel, chosenPanel, connect, facts, invoke, noFrames, notice, pollStatus, showPanelsChip } from './common.js';
+import { $, pct, bindRadios, bindSlider, bindSwitch, busy, carryNav, chosenChannel, chosenPanel, connect, facts, invoke, noFrames, notice, pollStatus, showPanelsChip } from './common.js';
 
 /** How often to ask how the connection is doing. It changes on its own - a
  *  broker going away, a reconnect - so this screen asks rather than waits. */
@@ -24,6 +24,10 @@ async function start() {
   /** The last GET /api/v1/home_assistant: `crate::ha::HaView`. */
   let ha = await invoke('home_assistant');
 
+  /** The studio's output settings (card 356): one, for every channel. The
+   *  server reports it on every channel; the first is as good as any. */
+  let output = (await invoke('channels')).channels[0].output;
+
   // Card 351/354: this screen is about the studio, not one channel or panel;
   // a `?channel=` or `?panel=` it was opened with is only carried on to the
   // other two screens.
@@ -35,6 +39,27 @@ async function start() {
   function showChip() {
     showPanelsChip($('#ro-panel'), { panels, devices: picture ? picture.devices : [] });
   }
+
+  // -------------------------------------------------------------- output ----
+  //
+  // Card 356: card 301's `pushOutput()` path, moved for the third time. The
+  // panel model, the dither and the limiter shape every frame of every
+  // channel, so there is one of them.
+
+  const pushOutput = () => invoke('set_output', { output }).catch((e) => notice(`set_output failed: ${e.message || e}`, 'say'));
+  const outputs = [
+    bindRadios($('#panel-kind'), { get: () => output.panel, set: (v) => { output.panel = v; pushOutput(); } }),
+    bindRadios($('#dither'), { get: () => output.dither, set: (v) => { output.dither = v; pushOutput(); } }),
+    bindSwitch($('#panel-model'), { get: () => output.panel_model, set: (v) => { output.panel_model = v; pushOutput(); } }),
+    bindSwitch($('#codec-preview'), { get: () => output.codec_preview, set: (v) => { output.codec_preview = v; pushOutput(); } }),
+    bindSwitch($('#limiter-on'), { get: () => output.limiter.enabled, set: (v) => { output.limiter.enabled = v; pushOutput(); } }),
+    bindSlider($('#apl-slider'), { get: () => output.limiter.apl_cap, set: (v) => { output.limiter.apl_cap = v; pushOutput(); }, format: pct }),
+    bindSlider($('#rise-slider'), {
+      get: () => output.limiter.max_rise_per_s,
+      set: (v) => { output.limiter.max_rise_per_s = v; pushOutput(); },
+      format: (v) => `${Math.round(1000 / v)} ms to full`,
+    }),
+  ];
 
   // ------------------------------------------------------ home assistant ----
 
@@ -154,6 +179,11 @@ async function start() {
 
   connect({
     panels: (message) => { panels = message.panels || []; showChip(); },
+    // Another browser changed the output: adopt it, but not under a hand.
+    channels: (message) => {
+      const next = (message.channels || [])[0];
+      if (next && JSON.stringify(next.output) !== JSON.stringify(output)) { output = next.output; outputs.forEach((o) => o.refresh()); }
+    },
   }, noFrames);
 
   showChip();

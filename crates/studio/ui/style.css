@@ -459,7 +459,7 @@ body.settings-page .titleblock { max-width: 640px; }
 
 /* Card 354: the channel section - its panels, each with where to move it;
    the way to bring one here; rename and delete. */
-#sec-channel > h3 { margin-bottom: 8px; }
+#sec-channel h3 { margin-bottom: 8px; }
 .members { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .member {
   display: flex;
@@ -491,7 +491,6 @@ body.settings-page .titleblock { max-width: 640px; }
 .channel__actions button { flex: 1 1 auto; }
 #sec-channel .setting__name, #sec-channel .setting__confirm { margin-top: 10px; }
 #channel-note, #channel-error { margin-top: 8px; }
-#output-who { margin: -6px 0 14px; }
 .row--channel + .hint { margin-top: 6px; }
 .row--channel + .hint + .switch { margin-top: 10px; }
 /* Now playing: what a composing patch is performing. */
@@ -704,6 +703,18 @@ select:hover { border-color: var(--dim); }
 .setup summary:hover { color: var(--paper); }
 .setup__body { margin-top: 14px; }
 
+/* Card 356: Manage channel, folded shut under the parameters - the same quiet
+   summary as `.setup`, inside the channel's own section. */
+.manage summary {
+  cursor: pointer;
+  font: 400 13px/1 var(--label);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.manage summary:hover, .manage[open] summary { color: var(--paper); }
+.manage__body { margin-top: 14px; }
+
 /* Card 301: View is how *this browser* draws the panel, not a panel setting -
    its effect is only visible beside the canvas, and nothing here reaches the
    panel. Folded shut by default, under the canvas rather than beside the
@@ -828,7 +839,7 @@ select:hover { border-color: var(--dim); }
   input[type="range"]::-webkit-slider-thumb { width: 22px; height: 28px; margin-top: -12px; border-radius: 3px; }
   input[type="range"]::-moz-range-thumb { width: 22px; height: 28px; border: 0; border-radius: 3px; background: var(--paper); }
 
-  .setup summary, .view summary { padding: 15px 0; margin: -15px 0; } /* 44 px to hit, the triangle kept */
+  .setup summary, .view summary, .manage summary { padding: 15px 0; margin: -15px 0; } /* 44 px to hit, the triangle kept */
   .pcard, .ccard { min-height: 48px; }
   .readouts__link { display: inline-flex; align-items: center; min-height: 44px; }
   .member__name { display: inline-flex; align-items: center; min-height: 44px; }

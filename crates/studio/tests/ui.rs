@@ -217,11 +217,13 @@ fn the_screens_hold_what_the_split_says_they_do() {
         assert!(!INDEX_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} belongs on the Panel screen now");
         assert!(PANEL_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} has to still exist somewhere");
     }
-    // Card 354: the panel model, the dither and the limiter went the other
-    // way, back to the Picture screen - since card 353 they are the
-    // channel's, and shape the frames every panel on it is sent.
+    // Card 356: the panel model, the dither and the limiter are the studio's
+    // (card 353 made them the channel's, card 354 put them on the Picture
+    // screen, and the owner has only ever wanted the defaults): one Output
+    // section, on Settings, and on neither of the other two screens.
     for moved in ["sec-output", "panel-kind", "dither", "panel-model", "codec-preview", "limiter-on", "apl-slider", "rise-slider"] {
-        assert!(INDEX_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is the channel's, on the Picture screen");
+        assert!(SETTINGS_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is the studio's, on the Settings screen");
+        assert!(!INDEX_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is not the channel's any more");
         assert!(!PANEL_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is not the panel's any more");
     }
     assert!(COMMON_JS.contains("export function bindBrightness"), "the shared function stays, even with one caller");
@@ -1027,8 +1029,7 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
         ("view", "id=\"sec-view\""),
         ("now playing", "id=\"sec-now\""),
         ("parameters", "id=\"sec-params\""),
-        ("the channel's panels", "id=\"sec-channel\""),
-        ("the channel's output", "id=\"sec-output\""),
+        ("manage channel", "id=\"sec-channel\""),
         // And the meters, which are a detail, come after all of them.
         ("the meters", "class=\"meters\""),
     ]);
@@ -1045,7 +1046,7 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
         ("the studio", "id=\"sec-studio\""),
     ]);
     // The Settings screen (card 311): Home Assistant, and nothing else yet.
-    order("the Settings screen", SETTINGS_HTML, &[("Home Assistant", "id=\"sec-ha\"")]);
+    order("the Settings screen", SETTINGS_HTML, &[("Home Assistant", "id=\"sec-ha\""), ("Output", "id=\"sec-output\"")]);
 }
 
 /// Card 301: one nav, the same markup, on every screen - and the current
@@ -1138,7 +1139,7 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     // delete (inline, no dialogs), and the channel's Output.
     for id in [
         "channel-kicker", "channel-on", "empty-note", "sec-channel", "members", "members-empty", "bring", "channel-rename",
-        "channel-delete", "channel-name", "channel-name-input", "channel-confirm", "channel-confirm-yes", "sec-output", "output-who",
+        "channel-delete", "channel-name", "channel-name-input", "channel-confirm", "channel-confirm-yes", "manage",
     ] {
         assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "#{id} on the Picture screen");
     }
@@ -1148,7 +1149,19 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     assert!(PICTURE_JS.contains("invoke('channels/rename', { channel: here(), name: channelInput.value })"), "renamed");
     assert!(PICTURE_JS.contains("invoke('channels/delete', { channel: here() })"), "deleted");
     assert!(PICTURE_JS.contains("$('#channel-delete').disabled = home;"), "Channel 1 cannot be deleted, and says so by shape");
-    assert!(PICTURE_JS.contains("call('set_output', { output: state.output })"), "Output is the channel's");
+    assert!(!PICTURE_JS.contains("set_output"), "Output is not the channel's any more");
+    assert!(SETTINGS_JS.contains("invoke('set_output', { output })"), "it is the studio's, set on Settings");
+    // Card 356: Manage channel is folded shut by default, after the
+    // parameters, with everything that was in the channel section inside it;
+    // "On: ..." under the title stays where it was.
+    let manage = &INDEX_HTML[INDEX_HTML.find("<details class=\"manage\" id=\"manage\">").expect("a Manage channel fold")..];
+    let manage = &manage[..manage.find("</details>").unwrap()];
+    assert!(!manage.contains(" open"), "collapsed by default");
+    assert!(manage.contains("<summary>Manage channel</summary>"), "and named for what it does");
+    for id in ["members", "bring", "channel-rename", "channel-delete", "channel-name", "channel-confirm"] {
+        assert!(manage.contains(&format!("id=\"{id}\"")), "#{id} is inside Manage channel");
+    }
+    assert!(INDEX_HTML.find("id=\"channel-on\"").unwrap() < INDEX_HTML.find("id=\"manage\"").unwrap(), "On: ... stays under the title");
     assert!(!PICTURE_JS.contains("window.confirm") && !PICTURE_JS.contains("window.prompt"), "no native dialogs on the Picture screen");
 
     // The Panel screen: the channel it is on, as a select.

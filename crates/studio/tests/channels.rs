@@ -317,12 +317,19 @@ async fn channels_are_made_renamed_and_deleted() {
     assert_eq!(get(at, "/api/v1/bootstrap?channel=1").await.json()["state"]["patch"], "clocks-numerals", "Channel 1 as it was");
     assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"channel":9}"#).await.status, 404);
     assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"panel":"nope"}"#).await.status, 404);
-    // Output settings are the channel's.
+    // Card 356: output is the studio's - one setting, for every channel. A
+    // `channel` (an older client's) is accepted and does not scope it.
     let mut output = dials["output"].clone();
+    assert_eq!(output["dither"], "blue_noise", "the live default");
     output["dither"] = "bayer4".into();
     let out = ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "channel": 3 }).to_string()).await;
     assert_eq!(out["output"]["dither"], "bayer4");
-    assert_ne!(get(at, "/api/v1/bootstrap").await.json()["state"]["output"]["dither"], "bayer4", "not Channel 1's");
+    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["output"]["dither"], "bayer4", "Channel 1 has it too");
+    for c in get(at, "/api/v1/channels").await.json()["channels"].as_array().expect("list") {
+        assert_eq!(c["output"]["dither"], "bayer4", "every channel reports the studio's: {c}");
+    }
+    let stale = ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "channel": 99 }).to_string()).await;
+    assert_eq!(stale["output"]["dither"], "bayer4", "a channel that is gone is not an error");
 
     // Card 350's implicit ways of sharing are retired, and say what to use.
     for route in ["/api/v1/same_as", "/api/v1/detach"] {
