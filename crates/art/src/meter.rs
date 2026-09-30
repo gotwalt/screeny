@@ -61,6 +61,10 @@ pub struct Meter {
     decoded: Box<Rgb888Frame>,
     idx: Box<[u8; NPIX]>,
     last: Measured,
+    /// The last frame, encoded: what [`Meter::encoded`] hands out.
+    encoded: Encoded,
+    /// Whether it was encoded from an index plane (the exact path).
+    indexed: bool,
 }
 
 impl Default for Meter {
@@ -80,6 +84,8 @@ impl Meter {
             decoded: Box::new([0; NPIX * 3]),
             idx: Box::new([0; NPIX]),
             last: Measured::default(),
+            encoded: Encoded { codec: 0, payload: Vec::new() },
+            indexed: false,
         }
     }
 
@@ -110,6 +116,7 @@ impl Meter {
     /// The indexed arm mirrors `screeny::Sender::send_indexed` and the linear
     /// arm `Sender::send`, because that is the decision being reported.
     pub fn measure(&mut self, wire: &WireFrame) -> Measured {
+        self.indexed = matches!(&wire.indexed, Some((palette, indices)) if usable_indexed(palette, indices));
         let out = match &wire.indexed {
             Some((palette, indices)) if usable_indexed(palette, indices) => {
                 self.idx.copy_from_slice(indices);
@@ -133,7 +140,25 @@ impl Meter {
             colours: distinct_colours(&wire.rgb) as u32,
         };
         self.decode(&out);
+        self.encoded = out;
         self.last
+    }
+
+    /// **The last measured frame, encoded**: the codec and the payload bytes
+    /// themselves, which [`Meter::decoded`] is the decode of. The studio's
+    /// channels (card 353) send exactly these bytes to every panel on the
+    /// channel, so the meter's encode is *the* encode and not a prediction
+    /// of one - which is what makes several panels frame-for-frame identical.
+    #[must_use]
+    pub fn encoded(&self) -> &Encoded {
+        &self.encoded
+    }
+
+    /// Whether the last frame went down the indexed (exact) path, for the
+    /// sender's exactness counters.
+    #[must_use]
+    pub fn was_indexed(&self) -> bool {
+        self.indexed
     }
 
     /// The last measurement, without re-encoding.

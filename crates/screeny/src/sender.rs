@@ -604,6 +604,58 @@ impl Sender {
         self.deliver(out, st.elapsed, st.exact, false)
     }
 
+    /// Whether a payload somebody else encoded can go to this device as it
+    /// is: its codec is one this session may send (spec 4.7) and it fits this
+    /// session's budget. What [`Sender::send_encoded`] checks first.
+    #[must_use]
+    pub fn accepts(&self, codec: u8, len: usize) -> bool {
+        self.my_codecs.contains(&codec) && len <= self.budget
+    }
+
+    /// Send a frame **somebody else encoded** - byte for byte, only the
+    /// datagram header (sequence number, flags) being this session's own.
+    ///
+    /// This is how one encoded frame reaches several panels identically
+    /// (studio card 353: a channel encodes once and every panel on it is sent
+    /// the same payload). The caller says whether the payload is an exact
+    /// rendering of what it was handed, and whether that was an indexed
+    /// frame, so the exactness counters mean what they always meant. Nothing
+    /// is encoded here, so [`SendStats::frames_encoded`] does not move.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Metadata`] if the payload is not one this session may send -
+    /// a codec it has not negotiated, or more than its budget (check with
+    /// [`Sender::accepts`]) - and [`Error::Io`] if the datagram could not be
+    /// sent.
+    pub fn send_encoded(&mut self, frame: &crate::encode::Encoded, exact: bool, indexed: bool) -> Result<Sent> {
+        if !self.accepts(frame.codec, frame.payload.len()) {
+            return Err(Error::Metadata(format!(
+                "a {}-byte payload in codec {} is not one this session can send (budget {}, codecs {:?})",
+                frame.payload.len(),
+                frame.codec,
+                self.budget,
+                self.my_codecs
+            )));
+        }
+        if indexed {
+            if exact {
+                self.stats.indexed_exact += 1;
+            } else {
+                self.stats.indexed_fallback += 1;
+            }
+        }
+        let seq = self.seq;
+        self.transmit(frame.codec, &frame.payload, false)?;
+        self.last_payload = Some((frame.codec, frame.payload.clone()));
+        Ok(Sent::Frame {
+            codec: frame.codec,
+            bytes: frame.payload.len(),
+            exact,
+            seq,
+        })
+    }
+
     /// Put an [`Encoded`] on the wire and account for it.
     fn deliver(
         &mut self,

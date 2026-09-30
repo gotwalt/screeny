@@ -116,6 +116,25 @@ impl Pipeline {
         *self = Pipeline::new(self.output);
     }
 
+    /// A new pipeline that carries on from this one's **brightness history** -
+    /// the limiter's state and the luma window - with a meter of its own.
+    ///
+    /// For a stream that branches off another for a while (studio card 353: a
+    /// panel fading from one channel to another runs its own output stage for
+    /// those two seconds): the limiter must see the picture continuously, or a
+    /// fresh one would treat the first frame as a rise from black.
+    #[must_use]
+    pub fn fork(&self) -> Self {
+        Pipeline {
+            output: self.output,
+            limiter: self.limiter.clone(),
+            meter: Meter::new(),
+            prev_luma: self.prev_luma,
+            dluma_window: self.dluma_window.clone(),
+            clock: self.clock,
+        }
+    }
+
     /// The meter, for pointing at a connected device's real budget and codec
     /// set (`link.limits()`), or for reading the last frame's decode.
     pub fn meter(&mut self) -> &mut Meter {

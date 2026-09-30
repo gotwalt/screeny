@@ -461,6 +461,47 @@ impl Link {
         // an error the caller can fix must not depend on whether this frame
         // happened to be the one that was kept.
         px.validate()?;
+        self.offer(|sender| sender.send(px))
+    }
+
+    /// Whether a payload encoded elsewhere can go to this device as it is
+    /// ([`Sender::accepts`]). True while the link is down - the frame would
+    /// be [`Sent::Dropped`] either way - so a caller only falls back to
+    /// [`Link::send`] when a live session would refuse it.
+    #[must_use]
+    pub fn accepts(&self, frame: &crate::encode::Encoded) -> bool {
+        self.sender.as_ref().is_none_or(|s| s.accepts(frame.codec, frame.payload.len()))
+    }
+
+    /// Offer a frame **already encoded** - by a studio channel that encodes
+    /// once for every panel on it (card 353) - to go out byte for byte, with
+    /// only this link's datagram header. Paced, counted and reconnected
+    /// exactly as [`Link::send`] is.
+    ///
+    /// `exact` and `indexed` are what the encoder said of the frame, for the
+    /// exactness counters.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Metadata`] when a live session cannot take this payload (a
+    /// codec it did not negotiate, or over its budget): check
+    /// [`Link::accepts`] first and use [`Link::send`] instead. Nothing is
+    /// counted as offered then.
+    pub fn send_encoded(&mut self, frame: &crate::encode::Encoded, exact: bool, indexed: bool) -> Result<Sent> {
+        if !self.accepts(frame) {
+            return Err(Error::Metadata(format!(
+                "a {}-byte codec {} payload is not one this session can send",
+                frame.payload.len(),
+                frame.codec
+            )));
+        }
+        self.offer(|sender| sender.send_encoded(frame, exact, indexed))
+    }
+
+    /// The part of [`Link::send`] and [`Link::send_encoded`] that is the
+    /// same: count, poll, the cadence ceiling, hand the frame to the session,
+    /// and account for what became of it.
+    fn offer(&mut self, put: impl FnOnce(&mut Sender) -> Result<Sent>) -> Result<Sent> {
         self.stats.frames_offered += 1;
         self.poll();
 
@@ -488,7 +529,7 @@ impl Link {
 
         let before_exact = sender.stats().indexed_exact;
         let before_fallback = sender.stats().indexed_fallback;
-        let out = sender.send(px);
+        let out = put(sender);
         // Account for the encode even if the datagram did not make it: the
         // exactness decision was taken either way.
         self.stats.indexed_exact += sender.stats().indexed_exact - before_exact;

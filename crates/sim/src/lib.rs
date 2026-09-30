@@ -81,7 +81,7 @@ pub mod http;
 
 pub use config::{Config, Faults, Health, PanelModel, Timing, DEFAULT_HTTP_PORT};
 pub use core::{Core, FrameMeta, Outbox};
-pub use device::{FrameSink, SimDevice, SimHandle, Snapshot};
+pub use device::{DatagramTap, FrameSink, SimDevice, SimHandle, Snapshot};
 pub use event::{DropCause, Event, ReleaseReason, State, WifiAction, WifiPhase};
 pub use ota::{OtaTiming, Phase as OtaPhase};
 pub use stats::Stats;

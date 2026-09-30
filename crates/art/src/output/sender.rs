@@ -235,6 +235,33 @@ impl SenderOutput {
         }
     }
 
+    /// **Send a frame that has already been encoded** - by a studio channel,
+    /// once for every panel on it (card 353) - so this panel is sent exactly
+    /// the payload bytes every other panel on the channel is sent, and only
+    /// the datagram header is this link's own.
+    ///
+    /// `wire` is the same frame before it was encoded. It is used only when
+    /// this link's live session cannot take the payload as it is - a codec it
+    /// did not negotiate or a budget smaller than the one it was encoded for,
+    /// which lasts until the encoder is next pointed at this device's limits -
+    /// and then the frame is encoded here instead, as [`Output::send`] would.
+    /// The answer says which happened: `true` for the shared bytes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Output::send`]: only a malformed frame, never the network.
+    pub fn send_shared(&mut self, wire: &WireFrame, encoded: &crate::Encoded, exact: bool, indexed: bool) -> io::Result<bool> {
+        if !self.link.accepts(encoded) {
+            self.send(wire)?;
+            return Ok(false);
+        }
+        let sent = self.link.send_encoded(encoded, exact, indexed)?;
+        if sent.is_sent() {
+            self.last = Some(sent);
+        }
+        Ok(true)
+    }
+
     /// Send `FINAL` and let the panel go at once, rather than waiting out its
     /// stream timeout. Dropping the output does the same thing.
     pub fn close(&mut self) {

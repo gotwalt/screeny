@@ -36,6 +36,12 @@ use crate::screens::{self, Scene};
 /// than approximately.
 pub type FrameSink = Box<dyn FnMut(&Rgb888Frame, &FrameMeta) + Send>;
 
+/// Called on the frame thread with **every datagram** that arrives on the
+/// frame port, exactly as it arrived - before loss is simulated, before it is
+/// parsed. For a test that has to compare what two panels were sent byte for
+/// byte (studio card 353), which a decoded frame cannot show.
+pub type DatagramTap = Box<dyn FnMut(&[u8]) + Send>;
+
 /// How long a socket read waits before the loop checks whether it should stop.
 const POLL: Duration = Duration::from_millis(1);
 /// Cap on one drain, so a flood cannot starve the stop flag.
@@ -601,7 +607,17 @@ impl SimDevice {
     /// # Errors
     ///
     /// See [`SimDevice::start`].
-    pub fn start_with(cfg: Config, mut sink: Option<FrameSink>) -> io::Result<Self> {
+    pub fn start_with(cfg: Config, sink: Option<FrameSink>) -> io::Result<Self> {
+        Self::start_tapped(cfg, sink, None)
+    }
+
+    /// As [`SimDevice::start_with`], and with a [`DatagramTap`] that sees
+    /// every datagram on the frame port as it arrived.
+    ///
+    /// # Errors
+    ///
+    /// See [`SimDevice::start`].
+    pub fn start_tapped(cfg: Config, mut sink: Option<FrameSink>, mut tap: Option<DatagramTap>) -> io::Result<Self> {
         if cfg.mdns && crate::instance_is_reserved(&cfg.instance) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -709,7 +725,7 @@ impl SimDevice {
             threads.push(
                 thread::Builder::new()
                     .name("sim-frames".into())
-                    .spawn(move || frame_loop(&shared, &fs, &cs, &mut sink, seed))?,
+                    .spawn(move || frame_loop(&shared, &fs, &cs, &mut sink, &mut tap, seed))?,
             );
         }
         {
@@ -804,6 +820,7 @@ fn frame_loop(
     frame_sock: &UdpSocket,
     control_sock: &UdpSocket,
     sink: &mut Option<FrameSink>,
+    tap: &mut Option<DatagramTap>,
     seed: u64,
 ) {
     // One byte more than the protocol's ceiling, so an over-budget datagram
@@ -823,6 +840,9 @@ fn frame_loop(
         for _ in 0..MAX_DRAIN {
             match frame_sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
+                    if let Some(t) = tap.as_mut() {
+                        t(&buf[..n]);
+                    }
                     // Loss on the air: the datagram never happened, so
                     // nothing is parsed and nothing is counted.
                     if faults.drop_pct > 0.0 && rng.chance(faults.drop_pct) {
