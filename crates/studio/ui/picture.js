@@ -410,7 +410,10 @@ async function start() {
     $('#idle-note').hidden = !idle();
     $('#idle-note').textContent = idle() ? 'Nothing is being sent to this panel. Pick a picture to start it.' : '';
 
-    const candidates = overview.filter((p) => p.device !== here() && p.picture && !others.includes(p.device));
+    // Card 353 retired "Same as" and Detach on the server (channels are
+    // explicit now); card 354 redesigns this screen around channels. Until
+    // then neither is offered.
+    const candidates = [];
     $('#same-as').hidden = candidates.length === 0;
     const key = candidates.map((p) => `${p.device}\u0000${p.name}\u0000${pictureLine(p)}`).join('\u0001');
     if ($('#same-list').dataset.key === key) return;
@@ -427,6 +430,7 @@ async function start() {
   }
   bind({ refresh: showSharing });
 
+  $('#detach').hidden = true; // card 353: retired, see above
   $('#detach').addEventListener('click', async () => {
     const next = await call('detach', {});
     if (next) { notice(`${panelName(here())} has a picture of its own now.`, 'say'); sync(next); }
