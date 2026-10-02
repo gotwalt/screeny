@@ -56,36 +56,71 @@ pub static ALL: &[PatchDef] = &[
     knot::DEF,
 ];
 
-/// The patches that need a graphics adapter (card 145).
-///
-/// They are exactly the ones behind the `gpu` feature, so this list is built
-/// from the same `cfg`s as `ALL` and cannot drift from it. Without an adapter
-/// they render black and say so only on stderr, so the studio marks them on
-/// the page rather than letting a black picture pass silently. In a build
-/// without the feature they are not here at all and this is empty, which is
-/// the truth for that build.
-pub static NEEDS_GPU: &[&str] = &[
+/// What a patch needs from the machine to draw (card 145, card 357).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Need {
+    /// Draws on the CPU; plays anywhere.
+    Nothing,
+    /// A wgpu adapter, any kind: a software rasteriser (llvmpipe) is fast
+    /// enough.
+    Adapter,
+    /// A hardware adapter. Under a software rasteriser these cost a core or
+    /// more and still drop frames (card 357: overland 320 of 600 frames at
+    /// 322% CPU, ghosts 8, on a Raspberry Pi 4).
+    Hardware,
+}
+
+/// The patches that are behind the `gpu` feature, with what each needs. Built
+/// from the same `cfg`s as `ALL`, so it cannot drift from it; in a build
+/// without the feature it is empty, which is the truth for that build.
+static GPU_PATCHES: &[(&str, Need)] = &[
     #[cfg(feature = "gpu")]
-    ghosts::DEF.id,
+    (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
-    leaves::DEF.id,
+    (leaves::DEF.id, Need::Adapter),
     #[cfg(feature = "gpu")]
-    overland::DEF.id,
+    (overland::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
-    lattice::DEF.id,
+    (lattice::DEF.id, Need::Adapter),
     #[cfg(feature = "gpu")]
-    knot::DEF.id,
+    (knot::DEF.id, Need::Adapter),
 ];
 
-/// True when this patch cannot draw without a graphics adapter.
+/// What this patch needs. Anything not listed draws on the CPU.
 #[must_use]
-pub fn needs_gpu(id: &str) -> bool {
-    NEEDS_GPU.contains(&id)
+pub fn need(id: &str) -> Need {
+    GPU_PATCHES.iter().find(|(i, _)| *i == id).map_or(Need::Nothing, |(_, n)| *n)
+}
+
+/// The one rule for "can this machine play this patch": every caller (startup
+/// line, page bootstrap, Home Assistant's patch list) asks here. `Err` carries
+/// the reason, in words a person can read.
+///
+/// # Errors
+/// When the patch needs more than `gpu` has: any adapter, or a hardware one.
+pub fn playable(id: &str, gpu: &crate::GpuStatus) -> Result<(), String> {
+    match need(id) {
+        Need::Nothing => Ok(()),
+        Need::Adapter if gpu.available => Ok(()),
+        Need::Adapter => Err(gpu.line()),
+        Need::Hardware if gpu.available && !gpu.software => Ok(()),
+        Need::Hardware if gpu.available => Err(format!(
+            "they need a graphics card; this machine draws in software ({})",
+            gpu.adapter.split(" (").next().unwrap_or(&gpu.adapter)
+        )),
+        Need::Hardware => Err(gpu.line()),
+    }
+}
+
+/// The ids this machine cannot play, in list order.
+#[must_use]
+pub fn blocked(gpu: &crate::GpuStatus) -> Vec<&'static str> {
+    GPU_PATCHES.iter().filter(|(id, _)| playable(id, gpu).is_err()).map(|(id, _)| *id).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_gpu, ALL};
+    use super::{need, Need, ALL};
     use crate::frame::Frame;
     use crate::patch::{Ctx, Params};
 
@@ -116,7 +151,7 @@ mod tests {
     /// eye and by the shader source) and a test machine may have no adapter.
     #[test]
     fn a_patch_that_says_it_is_seeded_looks_different_on_another_seed() {
-        for def in ALL.iter().filter(|d| !needs_gpu(d.id)) {
+        for def in ALL.iter().filter(|d| need(d.id) == Need::Nothing) {
             let differs = frame_of(def, 1) != frame_of(def, 999_983);
             if def.seeded {
                 assert!(differs, "`{}` says `seeded` but two seeds draw the same picture", def.id);
@@ -138,5 +173,40 @@ mod tests {
         let def = crate::patch::find("vesta").expect("vesta is in every build");
         assert!(!def.seeded);
         assert_eq!(frame_of(def, 1), frame_of(def, 999_983));
+    }
+
+    /// Card 357: the one rule, over the three adapter states and every patch.
+    #[test]
+    fn playable_follows_what_each_patch_needs_over_every_adapter_state() {
+        use super::{blocked, playable};
+        use crate::GpuStatus;
+        let none = GpuStatus { error: Some("no GPU adapter: nothing".into()), ..GpuStatus::default() };
+        let software = GpuStatus {
+            available: true,
+            adapter: "llvmpipe (LLVM 19.1.7, 128 bits)".into(),
+            backend: "Vulkan".into(),
+            software: true,
+            error: None,
+        };
+        let hardware = GpuStatus { software: false, adapter: "Apple M3".into(), backend: "Metal".into(), ..software.clone() };
+        for def in ALL {
+            let n = need(def.id);
+            assert!(playable(def.id, &hardware).is_ok(), "{} on hardware", def.id);
+            assert_eq!(playable(def.id, &none).is_ok(), n == Need::Nothing, "{} with no adapter", def.id);
+            assert_eq!(playable(def.id, &software).is_ok(), n != Need::Hardware, "{} on software", def.id);
+        }
+        assert!(blocked(&hardware).is_empty());
+        if cfg!(feature = "gpu") {
+            assert_eq!(blocked(&software), vec!["ghosts", "overland"]);
+            assert_eq!(blocked(&none).len(), 5);
+            let why = playable("overland", &software).unwrap_err();
+            assert!(why.contains("software (llvmpipe)"), "{why}");
+            for id in ["leaves", "lattice", "knot"] {
+                assert_eq!(need(id), Need::Adapter);
+            }
+        } else {
+            assert!(blocked(&none).is_empty());
+        }
+        assert_eq!(software.line(), "gpu llvmpipe (LLVM 19.1.7, 128 bits) (Vulkan, software)");
     }
 }

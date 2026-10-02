@@ -20,7 +20,7 @@
 
 use screeny_art::frame::{Frame, N};
 use screeny_art::patch::{Ctx, Params, PatchDef};
-use screeny_art::patches::{needs_gpu, ALL};
+use screeny_art::patches::{need, Need, ALL};
 
 /// A moment on `local_now`'s scale, chosen so that **the minute rolls over at
 /// engine time `T * 0.75`** - between the half-time run's end and the full
@@ -97,7 +97,7 @@ fn every_patch_advances_by_time_and_not_by_frame_count() {
     let mut checked = 0;
     let mut skipped = 0;
     for def in ALL {
-        if needs_gpu(def.id) && !gpu {
+        if need(def.id) != Need::Nothing && !gpu {
             eprintln!("rate: skipping `{}`: no graphics adapter here", def.id);
             skipped += 1;
             continue;

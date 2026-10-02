@@ -66,6 +66,9 @@ pub struct GpuStatus {
     /// The backend it came up on: "Metal", "Vulkan", "Gl". Empty when there is
     /// no adapter.
     pub backend: String,
+    /// True when the adapter is a software rasteriser (llvmpipe, SwiftShader,
+    /// WARP: wgpu's `DeviceType::Cpu`). It draws, slowly (card 357).
+    pub software: bool,
     /// Why there is no adapter, in the words wgpu used. `None` when there is
     /// one.
     pub error: Option<String>,
@@ -78,6 +81,7 @@ impl GpuStatus {
     #[must_use]
     pub fn line(&self) -> String {
         match (&self.error, self.available) {
+            (_, true) if self.software => format!("gpu {} ({}, software)", self.adapter, self.backend),
             (_, true) => format!("gpu {} ({})", self.adapter, self.backend),
             (Some(e), _) => e.clone(),
             (None, _) => "no graphics adapter".to_string(),

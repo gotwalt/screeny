@@ -16,7 +16,7 @@
 //! CPU keeps the "seeded, indexed, exact frame" promise the autumn set's
 //! rules ask for without writing a new WGSL pipeline and a palette-readback
 //! path for it. Nothing here touches `crates/art/src/gpu/` or `patches/mod.rs`'s
-//! `NEEDS_GPU` list.
+//! `GPU_PATCHES` list.
 //!
 //! **This is a sibling of `flock`, not a fork of it** (card 313's own doc
 //! comment, carried forward): a seeded, indexed CPU patch with a camera, an
