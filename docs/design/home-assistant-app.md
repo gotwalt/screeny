@@ -56,3 +56,21 @@ The Supervisor gives every app `TZ` and `SUPERVISOR_TOKEN`; Mosquitto is the usu
 360 multi-arch images on ghcr from GitHub Actions - 361 colour order as a runtime setting
 (one image) - 362 Improv Serial - 363 the web flasher - 364 firmware updates from the Studio
 and HA - 365 the user guide and the end-to-end run on a real HA.
+
+## The web flasher (card 363)
+
+`site/` (page) + `tools/pages-build.sh` + `.github/workflows/pages.yml`, published at
+`https://gotwalt.github.io/screeny/`. The build downloads the newest `fw-v*` release's
+`screeny-fw-<v>-full.bin`, checks it against `SHA256SUMS`, writes `manifest.json` and vendors
+ESP Web Tools 10.4.0 (checked against npm's sha512). Nothing binary is committed.
+
+- **Baud: 115200, fixed.** ESP Web Tools constructs `ESPLoader({baudrate: 115200})`
+  (`src/flash.ts`); esptool-js's ROM baud is also 115200, so it never changes baud, and
+  the manifest has no key to change it. This is below the bench's 230400 limit.
+- **Erase: default.** No `new_install_prompt_erase`. ESP Web Tools erases the whole chip when
+  the device is not already running the manifest's firmware (stock Tidbyt, or no Improv) and
+  does not erase when it is (`name` = `screeny-fw`, which the device reports over Improv), so
+  updates keep WiFi. The stock layout has `app1` over our settings partition (0x410000);
+  a first install clears that rather than relying on the store tolerating leftovers.
+- **Needs one image**: the page installs `screeny-fw-<v>-full.bin`; colour order is a runtime
+  setting (card 361), so the `-hdk-colours` variants are not published.
