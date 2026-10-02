@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screeny flasher</title>
+<meta name="description" content="Install screeny firmware on a Gen 1 Tidbyt from your browser.">
+<link rel="stylesheet" href="flasher.css">
+<script type="module" src="vendor/esp-web-tools/install-button.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">Screeny</p>
+    <h1>Install the firmware</h1>
+    <p class="lede">Turn a Gen 1 Tidbyt into a network display. Plug it in, click Install, pick your WiFi.
+    Nothing to download and nothing to type into a terminal.</p>
+  </header>
+
+  <section class="card" id="install">
+    <h2>Install</h2>
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate" class="go" type="button">Install screeny <span id="ver"></span></button>
+      <span slot="unsupported" class="warn">This browser cannot flash a device. Open this page in desktop Chrome, Edge or Opera.</span>
+      <span slot="not-allowed" class="warn">Flashing needs a secure page. Open this page from its https address.</span>
+    </esp-web-install-button>
+    <p class="note">Allow about three minutes. Do not unplug the Tidbyt while the bar moves.</p>
+  </section>
+
+  <section>
+    <h2>You need</h2>
+    <ul>
+      <li>Desktop <strong>Chrome, Edge or Opera</strong>. Firefox, Safari and phones cannot talk to USB serial devices.</li>
+      <li>A <strong>USB-C data cable</strong>. Some charging cables carry power only; if the Tidbyt does not appear in the port list, try another.</li>
+      <li>A <strong>Tidbyt Gen 1</strong> (the wooden one). Gen 2 is untested.</li>
+      <li>Your <strong>WiFi name and password</strong> (2.4 GHz).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What happens</h2>
+    <ol>
+      <li>Plug the Tidbyt into your computer and click <em>Install</em>. Pick the port that appears (CP2102 or USB Serial).</li>
+      <li>The dialog installs the firmware. A first install on a Tidbyt running its original firmware erases the chip first, so nothing old gets in the way. Updating a Tidbyt that already runs screeny keeps its WiFi.</li>
+      <li>When it finishes, the dialog offers to connect the Tidbyt to WiFi. Type the network name and password. They go straight to the Tidbyt over the cable.</li>
+      <li>The panel joins your network and appears in the <strong>Screeny app in Home Assistant</strong>, or on any machine with <code>screeny discover</code>.</li>
+    </ol>
+    <p>If the dialog says it failed to initialize, unplug and replug the cable and try again.</p>
+  </section>
+
+  <section>
+    <h2>Going back</h2>
+    <p>Tidbyt's own support pages have the official firmware and instructions:
+    <a href="https://help.tidbyt.com" rel="noopener">help.tidbyt.com</a>.</p>
+  </section>
+
+  <footer>
+    <p>Firmware <span id="ver2">-</span> &middot; <a href="https://github.com/gotwalt/screeny">source and releases</a>
+    &middot; flashing by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></p>
+  </footer>
+</main>
+<script>
+  // The manifest is generated at deploy time and names the firmware version.
+  fetch("manifest.json").then(function (r) { return r.json(); }).then(function (m) {
+    document.getElementById("ver").textContent = m.version;
+    document.getElementById("ver2").textContent = m.version;
+  }).catch(function () {});
+</script>
+</body>
+</html>
