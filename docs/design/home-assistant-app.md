@@ -1,0 +1,58 @@
+# Screeny as a Home Assistant app
+
+The goal: someone with Home Assistant and a Gen 1 Tidbyt installs the **Screeny** app,
+flashes the Tidbyt from their browser, types their WiFi password once, and from then on the
+panel is a device in Home Assistant - its picture, patch, channel and brightness are HA
+entities, and firmware updates arrive as an HA update. Nobody opens a terminal.
+
+This file is the plan and the decisions. [`deployment.md`](deployment.md) stays the guide
+for running the Studio as a plain Docker service; this is the other way to run it.
+
+## The path a new user takes
+
+| step | what happens | what makes it work |
+|---|---|---|
+| 1 | Add the screeny repository to HA's app store, install **Screeny** | `repository.yaml` at the repo root and the app in `ha-app/` (card 359); multi-arch images on ghcr (card 360) |
+| 2 | Open **Screeny** in the HA sidebar | HA ingress in front of the Studio (card 359) |
+| 3 | Plug the Tidbyt into the computer, open the flasher, click Install | a Web Serial flasher on HTTPS (card 363), one firmware image for every unit (card 361) |
+| 4 | Pick the WiFi network and type the password in the same dialog | Improv Serial in the firmware (card 362) |
+| 5 | The panel appears in the Studio and in HA | already true: mDNS discovery, a new panel joins Channel 1, the MQTT bridge publishes it as a device (cards 141, 353, 355) |
+| 6 | Later, HA shows "update available" for the panel; Install | the Studio pushes OTA, published as an MQTT `update` entity, firmware bundled in the app image (card 364) |
+
+## Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **The app runs the existing Studio image** (Debian trixie + Mesa), not HA's Alpine base. | Mesa's lavapipe under musl segfaulted in the 2026-10-02 spike; the Debian build ran. Apps may use any base. |
+| 2 | **Host networking.** | mDNS discovery and the UDP frame stream behave exactly as in `docker-compose.yml`. |
+| 3 | **The Studio is reached through ingress only, by default.** It does not listen on the LAN unless an app option says so. | Ingress puts HA's login in front of a Studio that has none of its own (card 041). |
+| 4 | **MQTT is configured by the Supervisor** when the user has not configured it on the Settings screen. | The Supervisor hands an app the broker's address and credentials (`services: mqtt:want`). A user's explicit settings win. |
+| 5 | **No GPU is required.** On a machine whose only adapter is a software rasteriser, overland and ghosts are unavailable (card 357); everything else plays. | Measured on a Raspberry Pi 4 on HA OS, which exposes no GPU to apps. |
+| 6 | **Flashing happens in the browser over Web Serial, on an HTTPS page** (GitHub Pages), using ESP Web Tools. Not inside the app. | Web Serial needs a secure context; HA on plain `http://homeassistant.local:8123` is not one. The Tidbyt's USB bridge is a CP2102N, which is serial, not WebUSB. |
+| 7 | **No stock-firmware backup step** in the flasher. | The owner, 2026-10-02: the official Tidbyt firmware is easy to download and flash back. |
+| 8 | **The flasher is for the first install; updates are OTA.** | The device has `POST /api/v1/firmware` since fw 0.6.0. |
+| 9 | **The firmware that an app version offers is inside the app image.** | An app update is what offers a firmware update; the Studio never fetches from the internet. |
+| 10 | **WiFi credentials over Improv Serial** follow the portal's rule: the password is written to the settings partition and never appears in a reply, a log line or on the panel. | Same posture as spec 8.4 and `crates/provision`. |
+
+## Measured on the owner's HA (Raspberry Pi 4, 4 GB, HA OS 18.2), 2026-10-02
+
+`/sys/class/drm` is empty: HA OS starts the Pi 4 without the v3d driver, so no app can have
+a GPU there and wgpu comes up on lavapipe. Each patch paced at 30 fps for 20 s, with HA
+running alongside; CPU is a percentage of one core (the Pi has four):
+
+| patch | frames of 600 | CPU |
+|---|---|---|
+| clocks-numerals, clocks-dials, vesta, metaballs, flock, bats | 600 | 26-57% |
+| knot, lattice | 584, 575 | 122%, 142% |
+| leaves | 523 | 88% |
+| overland | 320 | 322% |
+| ghosts | 8 | 100% |
+
+The Supervisor gives every app `TZ` and `SUPERVISOR_TOKEN`; Mosquitto is the usual broker.
+
+## Cards
+
+359 the app: `ha-app/`, ingress-safe URLs, options, Supervisor MQTT, ingress-only listen -
+360 multi-arch images on ghcr from GitHub Actions - 361 colour order as a runtime setting
+(one image) - 362 Improv Serial - 363 the web flasher - 364 firmware updates from the Studio
+and HA - 365 the user guide and the end-to-end run on a real HA.

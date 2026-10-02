@@ -16,6 +16,7 @@ docs/
 | [`design/generative-art-brief.md`](design/generative-art-brief.md) | What the art system is for and the rules a patch has to live by (the panel's colour model, the wire budget, brightness safety). |
 | [`design/studio-vision.md`](design/studio-vision.md) | Screeny Studio as a server-first web app that runs unattended. |
 | [`design/deployment.md`](design/deployment.md) | Running the Studio as a Docker service on a Linux box. |
+| [`design/home-assistant-app.md`](design/home-assistant-app.md) | Shipping the Studio as a Home Assistant app: browser flashing, Improv WiFi setup, OTA from HA. |
 | [`design/device-web.md`](design/device-web.md) | The device's own web page, the captive-portal WiFi setup, safe over-the-air updates, and the button. |
 
 ## Research
