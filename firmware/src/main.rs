@@ -1203,7 +1203,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     // Card 362: Improv Serial on UART0's receive side, for ESP Web Tools.
     spawner.spawn(
-        improv::improv_task(improv::rx(peripherals.UART0, peripherals.GPIO3), host).unwrap(),
+        improv::improv_task(improv::rx(peripherals.UART0), host).unwrap(),
     );
     spawner.spawn(telemetry_task().unwrap());
     // Card 230: the button. **After the radio and the store**, because a five
