@@ -167,8 +167,16 @@ ssh <host> -- stat -c '%G %g' /dev/dri/renderD128
 tools/deploy.sh --render-gid <gid>
 ```
 
-lavapipe still renders - it is Mesa's software rasteriser and 64x32 is small - so the
-GPU patches will work, slowly, rather than fail. **If there is no adapter at all**, the
+lavapipe still renders - it is Mesa's software rasteriser and 64x32 is small - so
+leaves, lattice and knot play, at 575-584 of 600 frames in 20 s and one to one and a
+half cores on a Raspberry Pi 4. **overland and ghosts do not**: overland managed 320 of
+600 frames at 322% CPU there and ghosts 8, so since card 357 the studio treats a
+software adapter (wgpu `DeviceType::Cpu`: llvmpipe, SwiftShader, WARP) as "no graphics
+card" for those two. The page strikes them through ("software"), the note under the
+list says why ("a graphics card is needed; this machine draws in software
+(llvmpipe)"), Home Assistant's patch list leaves them out, the startup line names them,
+and `/api/v1/status` `gpu.software` is true. Nothing else changes, and there is no
+override. **If there is no adapter at all**, the
 GPU patches render black and say so once on stderr per patch
 (`screeny-art: <patch>: no GPU adapter: ...; rendering black`) - and, since card 145,
 the page says it too: `overland`, `lattice` and `knot` are struck through with "no GPU"
@@ -267,7 +275,8 @@ What is different there:
   it can be given to `set_panel` as it stands, and a name that means nothing says so
   instead of reporting a missing panel.
 - **No GPU.** The GPU patches fall back to lavapipe, Mesa's software rasteriser, which
-  the image carries. Build with `SCREENY_FEATURES=none` for a studio with the CPU
+  the image carries. Under it leaves, lattice and knot play; overland and ghosts are
+  marked unavailable (card 357). Build with `SCREENY_FEATURES=none` for a studio with the CPU
   patches only and no graphics driver compiled in at all.
 
 ## Knobs
