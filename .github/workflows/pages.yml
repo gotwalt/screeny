@@ -1,0 +1,45 @@
+name: Web flasher (GitHub Pages)
+
+# Publishes site/ with the newest firmware release's image. Needs, once, in the
+# repository settings: Pages > Source = "GitHub Actions".
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - tools/pages-build.sh
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # A release event for anything but a firmware tag (an app release, say) is not ours.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'fw-v')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: tools/pages-build.sh --out _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

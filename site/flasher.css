@@ -1,0 +1,33 @@
+/* The Studio's look: warm dark bench, paper text, amber for the one action.
+   Colours and type stacks match crates/studio/ui/style.css. */
+:root {
+  --bench: #1b1a18; --bench-raised: #24221f; --rule: #36332d;
+  --paper: #ddd7c9; --dim: #8e887b; --amber: #e9a23b; --over: #e5553d;
+  --label: "DIN Condensed", "DIN Alternate", "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  --body: "Avenir Next", "Avenir", "Segoe UI", system-ui, sans-serif;
+  --data: "SF Mono", ui-monospace, "Menlo", "Consolas", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bench); color: var(--paper); font: 16px/1.55 var(--body); -webkit-font-smoothing: antialiased; }
+main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+h1, h2, .kicker { font-family: var(--label); font-weight: 400; text-transform: uppercase; margin: 0; }
+.kicker { letter-spacing: 0.09em; color: var(--amber); font-size: 14px; }
+h1 { font-size: clamp(34px, 9vw, 52px); line-height: 1; letter-spacing: 0.04em; margin-top: 6px; }
+h2 { font-size: 14px; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 10px; }
+.lede { color: var(--dim); max-width: 52ch; margin: 14px 0 0; }
+section { margin-top: 36px; }
+p { margin: 0 0 10px; }
+ul, ol { margin: 0; padding-left: 1.2em; }
+li { margin-bottom: 8px; }
+li::marker { color: var(--dim); }
+a { color: var(--amber); }
+code { font-family: var(--data); font-size: 0.9em; background: var(--bench-raised); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.card { background: var(--bench-raised); border: 1px solid var(--rule); border-radius: 4px; padding: 20px 16px; margin-top: 28px; }
+.go { font: 400 18px/1 var(--label); letter-spacing: 0.09em; text-transform: uppercase; background: var(--amber); color: #1b1a18; border: 0; border-radius: 3px; padding: 16px 24px; min-height: 48px; cursor: pointer; }
+.go:hover { background: #f1b25a; }
+.go:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+.warn { color: var(--over); }
+.note { color: var(--dim); font-size: 14px; margin: 14px 0 0; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
+esp-web-install-button { display: block; }
