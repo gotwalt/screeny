@@ -57,6 +57,7 @@ mod fb;
 mod flash_stress;
 mod gamma;
 mod http;
+mod improv;
 mod mdns;
 mod net;
 /// Card 240: staging a firmware image into the inactive app slot.
@@ -1200,6 +1201,10 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
+    // Card 362: Improv Serial on UART0's receive side, for ESP Web Tools.
+    spawner.spawn(
+        improv::improv_task(improv::rx(peripherals.UART0, peripherals.GPIO3), host).unwrap(),
+    );
     spawner.spawn(telemetry_task().unwrap());
     // Card 230: the button. **After the radio and the store**, because a five
     // second hold hands `Event::ButtonWipe` to the provisioning task and asks
