@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Panel · Screeny Studio</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body class="panel-page">
   <!-- Card 301: one nav, the same markup on every screen, with the current
        one marked. -->
   <nav class="nav" aria-label="Screeny Studio">
-    <a href="/">Picture</a>
-    <a href="/panel" aria-current="page">Panel</a>
-    <a href="/settings">Settings</a>
+    <a href="./">Picture</a>
+    <a href="panel" aria-current="page">Panel</a>
+    <a href="settings">Settings</a>
   </nav>
 
   <!-- Card 351/354: a compact row of panels - name, the channel it is on,
@@ -31,7 +31,7 @@
     <dl class="readouts" aria-label="The panel">
       <!-- Card 354: the channel it is on - the picture belongs to the
            channel, and this is the way to it. -->
-      <div><dt>Channel</dt><dd><a class="readouts__link" id="ro-channel" href="/">–</a></dd></div>
+      <div><dt>Channel</dt><dd><a class="readouts__link" id="ro-channel" href="./">–</a></dd></div>
       <!-- Card 198: no canvas here, and so no frames asked for. What is
            playing is said in words, because "which patch is this panel on" is
            part of knowing which panel it is. -->
@@ -160,6 +160,6 @@
     </div>
   </main>
 
-  <script type="module" src="/panel.js"></script>
+  <script type="module" src="panel.js"></script>
 </body>
 </html>

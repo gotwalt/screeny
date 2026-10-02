@@ -173,7 +173,7 @@ export async function invoke(cmd, args) {
     headers: { 'content-type': 'application/json', 'x-studio-client': CLIENT },
     body: JSON.stringify(args ?? {}),
   };
-  const url = new URL(`/api/v1/${cmd}`, location.href);
+  const url = new URL(`api/v1/${cmd}`, location.href);
   if (read && args) {
     for (const [k, v] of Object.entries(args)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
@@ -233,10 +233,10 @@ export const noFrames = () => 0;
 // it for good - a thumbnail whose channel is deleted is closed rather than
 // left reconnecting.
 export function connect(handlers, pace = previewFps, { channel = '', panel = '', overview = true, quiet = false } = {}) {
-  // Root-absolute rather than relative to the document: `/panel` and `/panel/`
-  // are the same page, and a relative URL would aim the socket at
-  // `/panel/api/v1/ws` from the second of them.
-  const url = new URL('/api/v1/ws', location.href);
+  // Relative to the document, never root-absolute: behind Home Assistant's
+  // ingress the studio lives under `/api/hassio_ingress/<token>/`. The server
+  // redirects `/panel/` to `/panel`, so a page's directory is always the root.
+  const url = new URL('api/v1/ws', location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('client', CLIENT);
   url.searchParams.set('repeat', 'false');
@@ -328,13 +328,14 @@ export function panelHref(path, id) {
 export function carryNav({ channel = '', panel = '' } = {}) {
   document.querySelectorAll('.nav a').forEach((a) => {
     const path = new URL(a.href, location.href).pathname;
-    if (path === '/') a.href = channelHref('/', channel);
-    else if (path === '/panel') a.href = panelHref('/panel', panel);
+    const page = path.split('/').pop();
+    if (page === '') a.href = channelHref('./', channel);
+    else if (page === 'panel') a.href = panelHref('panel', panel);
     else {
       const q = new URLSearchParams();
       if (channel && Number(channel) !== HOME_CHANNEL) q.set('channel', channel);
       if (panel) q.set('panel', panel);
-      a.href = q.toString() ? `${path}?${q}` : path;
+      a.href = q.toString() ? `${page}?${q}` : page;
     }
   });
 }
@@ -436,7 +437,7 @@ export function channelRow(root, { current, onNew, pace = previewFps }) {
   const make = (id) => {
     const el = document.createElement('a');
     el.className = 'ccard';
-    el.href = channelHref('/', id);
+    el.href = channelHref('./', id);
     const card = { el, socket: null, key: '' };
     const face = span('ccard__face');
     const canvas = Object.assign(document.createElement('canvas'), { className: 'ccard__thumb', width: W, height: H });
@@ -672,7 +673,7 @@ export function showPanelsChip(chip, { panels, devices, link = null, rate = null
   const deviceOf = (id) => (devices || []).find((d) => d.id === id) || null;
   const trouble = list.find((p) => attention(deviceOf(p.device)));
   const pointAt = trouble || list[0];
-  chip.href = panelHref('/panel', pointAt ? pointAt.device : '');
+  chip.href = panelHref('panel', pointAt ? pointAt.device : '');
   if (list.length === 0) {
     if (chip.textContent !== none) chip.textContent = none;
     chip.dataset.state = 'away';

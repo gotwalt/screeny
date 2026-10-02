@@ -51,7 +51,7 @@ async function start() {
   // is. `''` is a studio with no panel yet.
   const attachedId = () => state.device || '';
   const attachedDevice = () => (picture ? picture.devices.find((d) => d.id === attachedId()) : null) || null;
-  const row = panelRow($('#panels'), { path: '/panel', current: attachedId });
+  const row = panelRow($('#panels'), { path: 'panel', current: attachedId });
 
   const attempt = makeAttempt(() => readStatus());
 
@@ -95,7 +95,7 @@ async function start() {
 
     const link = $('#ro-channel');
     if (link.textContent !== channelName()) link.textContent = channelName();
-    link.href = channelHref('/', state.channel);
+    link.href = channelHref('./', state.channel);
     carryNav({ channel: state.channel, panel: chosen ? attachedId() : '' });
   }
 
@@ -172,7 +172,7 @@ async function start() {
     if (!window.confirm(`Forget ${name}? It goes back to its own screen, and comes back on Channel 1 if the studio finds it again.`)) return;
     attempt(`Forgot ${name}`, async () => {
       await invoke('devices/forget', { device });
-      location.assign('/panel');
+      location.assign('panel');
       return `Forgot ${name}`;
     });
   });
@@ -183,7 +183,7 @@ async function start() {
     const to = $('#add-to').value.trim();
     if (!to) { notice('Type an address, a host name, or the panel’s name first.'); return; }
     const done = await attempt(`Added ${to}`, () => invoke('devices/add', { to }));
-    if (done && done.id) { $('#add-to').value = ''; location.assign(panelHref('/panel', done.id)); }
+    if (done && done.id) { $('#add-to').value = ''; location.assign(panelHref('panel', done.id)); }
   });
   $('#look').addEventListener('click', () => attempt('Asked every panel who it is', () => invoke('devices/refresh', {})));
 

@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Screeny Studio</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body class="picture-page">
   <!-- Card 301: one nav, the same markup on every screen, with the current
        one marked. Real navigation - URLs that survive a reload, so the back
        button is the browser's job and not ours. -->
   <nav class="nav" aria-label="Screeny Studio">
-    <a href="/" aria-current="page">Picture</a>
-    <a href="/panel">Panel</a>
-    <a href="/settings">Settings</a>
+    <a href="./" aria-current="page">Picture</a>
+    <a href="panel">Panel</a>
+    <a href="settings">Settings</a>
   </nav>
 
   <!-- Card 354: the channel row. A channel is the picture - patch, setting,
@@ -52,7 +52,7 @@
            rather than the picture. It says what the panel is doing, wears a
            fault tone when the panel needs attention - so that trouble is never
            hidden behind a tab - and is the way to the Panel screen. -->
-      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="/panel">–</a></dd></div>
+      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="panel">–</a></dd></div>
     </dl>
   </header>
 
@@ -228,6 +228,6 @@
     </div>
   </section>
 
-  <script type="module" src="/picture.js"></script>
+  <script type="module" src="picture.js"></script>
 </body>
 </html>

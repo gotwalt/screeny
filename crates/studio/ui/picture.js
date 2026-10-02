@@ -410,7 +410,7 @@ async function start() {
 
   async function newChannel() {
     const made = await invoke('channels/new', { from: here() }).catch(failed('New channel'));
-    if (made) location.assign(channelHref('/', made.channel));
+    if (made) location.assign(channelHref('./', made.channel));
   }
   const row = channelRow($('#channels'), { current: here, onNew: newChannel });
 
@@ -426,7 +426,7 @@ async function start() {
     const done = await invoke('panel/channel', { panel, channel }).catch(failed(`Moving ${nameOf(panel)}`));
     if (!done) return;
     notice(`${nameOf(panel)} is on ${done.channel_name} now.`, 'say');
-    if (target === 'new') { location.assign(channelHref('/', channel)); return; }
+    if (target === 'new') { location.assign(channelHref('./', channel)); return; }
     if (done.channel === here()) sync(done);
   }
 
@@ -464,7 +464,7 @@ async function start() {
       membersKey = key;
       list.replaceChildren(...memberSummaries().map((p) => {
         const li = Object.assign(document.createElement('li'), { className: 'member' });
-        const name = Object.assign(document.createElement('a'), { className: 'member__name', href: panelHref('/panel', p.device), textContent: p.name || p.device });
+        const name = Object.assign(document.createElement('a'), { className: 'member__name', href: panelHref('panel', p.device), textContent: p.name || p.device });
         const [said, tone] = linkWords(p.link);
         const state = Object.assign(document.createElement('span'), { className: 'member__state', textContent: p.fading ? `${said} · moving` : said });
         state.dataset.state = tone;
@@ -549,7 +549,7 @@ async function start() {
   $('#channel-confirm-yes').addEventListener('click', async () => {
     try {
       await invoke('channels/delete', { channel: here() });
-      location.assign('/');
+      location.assign('./');
     } catch (err) {
       sayChannel(err.message || String(err));
     }
