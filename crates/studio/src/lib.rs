@@ -32,6 +32,7 @@
 //! renders while somebody watches it.
 
 pub mod api;
+pub mod app;
 pub mod channel;
 pub mod devhttp;
 pub mod devices;
@@ -141,6 +142,14 @@ pub struct Config {
     /// integration up on the Settings screen (card 311), and that is kept in
     /// `state.json`. `None` - the default - talks to no broker.
     pub mqtt: Option<ha::MqttConfig>,
+    /// Card 359, app mode only (`app::plan`): when set, `listen` serves only
+    /// these peers - everyone else gets 403. `None` is every plain deployment.
+    pub peers: Option<Vec<std::net::IpAddr>>,
+    /// Card 359: a second, unchecked listener (the app's `direct_access`).
+    pub direct: Option<SocketAddr>,
+    /// Card 359: the Home Assistant Supervisor, whose MQTT broker is used
+    /// when the owner has set none.
+    pub supervisor: Option<ha::supervisor::Supervisor>,
 }
 
 impl Default for Config {
@@ -160,6 +169,9 @@ impl Default for Config {
             stale_after: Duration::from_secs(120),
             fault_patches: false,
             mqtt: None,
+            peers: None,
+            direct: None,
+            supervisor: None,
         }
     }
 }
@@ -375,11 +387,14 @@ pub struct Studio {
     /// What it actually bound to. With port 0 in the config, this is the port
     /// the OS chose - which is how the tests get an ephemeral server.
     pub addr: SocketAddr,
+    /// Card 359: where the unchecked `direct` listener bound, if there is one.
+    pub direct_addr: Option<SocketAddr>,
     listener: TcpListener,
     state: AppState,
     stop: watch::Sender<bool>,
     /// Card 308, when there is a broker to talk to.
     ha: ha::client::Handle,
+    direct: Option<TcpListener>,
 }
 
 /// Stops the studio when dropped: every channel ends, every panel link sends
@@ -453,6 +468,11 @@ impl Studio {
         );
         let listener = TcpListener::bind(cfg.listen).await?;
         let addr = listener.local_addr()?;
+        let direct = match cfg.direct {
+            Some(a) => Some(TcpListener::bind(a).await?),
+            None => None,
+        };
+        let direct_addr = direct.as_ref().and_then(|l| l.local_addr().ok());
 
         // Start rendering at once rather than on the supervisor's first tick,
         // so a browser that opens immediately is not shown a black panel.
@@ -465,8 +485,11 @@ impl Studio {
         fleet::spawn_telemetry(state.clone());
         fleet::spawn_device_http(state.clone());
         let ha = ha::bridge::start(&state);
+        if let Some(sup) = cfg.supervisor.clone() {
+            ha::supervisor::spawn(&state, sup, ha::supervisor::RECHECK, ha::supervisor::RETRY);
+        }
 
-        Ok(Studio { addr, listener, state, stop, ha })
+        Ok(Studio { addr, direct_addr, listener, state, stop, ha, direct })
     }
 
     /// Everything a handler can reach, for a test that would rather poke the
@@ -505,12 +528,31 @@ impl Studio {
         let mut stopped = self.stop.subscribe();
         let st = self.state.clone();
         let ha = self.ha;
-        let app = router(self.state);
-        axum::serve(self.listener, app)
+        // Card 359: in app mode the main listener serves only the peers the
+        // plan names; a plain deployment installs no check at all.
+        let mut app = router(self.state.clone());
+        if let Some(peers) = self.state.cfg.peers.clone() {
+            app = app.layer(axum::middleware::from_fn_with_state(Arc::new(peers), app::only_peers));
+        }
+        let direct = self.direct.map(|l| {
+            let mut stop = self.stop.subscribe();
+            let app = router(self.state.clone());
+            tokio::spawn(async move {
+                let _ = axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>())
+                    .with_graceful_shutdown(async move {
+                        let _ = stop.wait_for(|s| *s).await;
+                    })
+                    .await;
+            })
+        });
+        axum::serve(self.listener, app.into_make_service_with_connect_info::<SocketAddr>())
             .with_graceful_shutdown(async move {
                 let _ = stopped.wait_for(|s| *s).await;
             })
             .await?;
+        if let Some(d) = direct {
+            let _ = d.await;
+        }
         // Let every panel go at once rather than after its stream timeout, and
         // make sure the last thing that changed is on disk before we go.
         st.panels.shutdown();

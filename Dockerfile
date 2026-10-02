@@ -69,8 +69,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # keeps `.symtab`, so a backtrace still names the functions - no line numbers,
 # but never a column of hex.
 
-# ---------------------------------------------------------------- runtime ---
-FROM ${RUNTIME_IMAGE} AS runtime
+# ------------------------------------------------------------------ base ---
+# Everything the two images below share. Never built on its own.
+FROM ${RUNTIME_IMAGE} AS base
 
 # libvulkan1 + mesa-vulkan-drivers give wgpu the Intel ANV driver on a host
 # with an Intel iGPU (and lavapipe, Mesa's software rasteriser, on a host with
@@ -104,7 +105,6 @@ RUN set -eux; \
 COPY --from=builder /out/screeny-studio /usr/local/bin/screeny-studio
 COPY --from=builder /out/screeny /usr/local/bin/screeny
 
-USER studio
 WORKDIR /data
 
 ENV TZ=America/Los_Angeles \
@@ -117,3 +117,19 @@ EXPOSE 8787
 # No CMD: the binary reads SCREENY_LISTEN and SCREENY_STATE_DIR (card 106), and a
 # flag here would silently beat the environment a compose file sets.
 ENTRYPOINT ["/usr/local/bin/screeny-studio"]
+
+# ---------------------------------------------------------------------- app ---
+# The Home Assistant app image (card 359; `ha-app/`): `docker build --target
+# app`. The Supervisor runs an app's container as the image's user and mounts
+# `/data` root-owned, so this one stage runs as root. Nothing else differs; in
+# particular it listens as `SUPERVISOR_TOKEN` and `/data/options.json` say
+# (`crates/studio/src/app.rs`), not as `SCREENY_LISTEN` says.
+FROM base AS app
+USER root
+
+# ---------------------------------------------------------------- runtime ---
+# The default target - the last stage - and what both compose files build:
+# unprivileged, exactly as before.
+FROM base AS runtime
+USER studio
+

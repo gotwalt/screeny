@@ -66,7 +66,12 @@ fn main() -> ExitCode {
             }
         };
         println!("studio: http://{}/", shown(studio.addr));
-        if !studio.addr.ip().is_loopback() {
+        if cfg.peers.is_some() {
+            println!("studio: running as a Home Assistant app: served through Home Assistant only (ingress)");
+            if let Some(d) = cfg.direct {
+                println!("studio: direct access is ON: also on {d}, reachable from the whole network with no password");
+            }
+        } else if !studio.addr.ip().is_loopback() {
             println!("studio: reachable from the whole network, and there is no password yet.");
         }
         if let Some(dir) = &cfg.ui_dir {
@@ -176,6 +181,19 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
+    // Card 359: running as a Home Assistant app. `SUPERVISOR_TOKEN` is what
+    // says so; the app's own listening rules replace `--listen` and
+    // `SCREENY_LISTEN`. A plain deployment has no token and is untouched.
+    if env("SUPERVISOR_TOKEN").is_some() {
+        let path = env("SCREENY_APP_OPTIONS").unwrap_or_else(|| screeny_studio::app::OPTIONS_PATH.to_string());
+        let text = std::fs::read_to_string(&path).ok();
+        if let Some(plan) = screeny_studio::app::plan(env, text.as_deref())? {
+            cfg.listen = plan.listen;
+            cfg.peers = Some(plan.peers);
+            cfg.direct = plan.direct;
+            cfg.supervisor = Some(plan.supervisor);
+        }
+    }
     Ok(Some(cfg))
 }
 
@@ -261,6 +279,26 @@ mod tests {
         assert_eq!(parse_env(&[], &[("SCREENY_DEVICE_HTTP_PORT", "8080")]).unwrap().unwrap().device_http_port, 8080);
         assert!(parse_args(&["--device-http-port", "no"]).is_err());
         assert!(parse_env(&[], &[("SCREENY_DEVICE_HTTP_PORT", "no")]).is_err());
+    }
+
+    /// Card 359: the token is what makes it an app; without it nothing about
+    /// listening changes, and with it `SCREENY_LISTEN` no longer applies.
+    #[test]
+    fn only_the_supervisors_token_makes_it_an_app() {
+        let plain = parse_env(&[], &[("SCREENY_LISTEN", "0.0.0.0:8787")]).unwrap().unwrap();
+        assert_eq!(plain.listen.to_string(), "0.0.0.0:8787");
+        assert!(plain.peers.is_none() && plain.direct.is_none() && plain.supervisor.is_none(), "no check in a plain deployment");
+
+        let app = parse_env(
+            &[],
+            &[("SCREENY_LISTEN", "0.0.0.0:8787"), ("SUPERVISOR_TOKEN", "s3cr3t-value"), ("SCREENY_APP_OPTIONS", "/no/such/options.json")],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(app.listen.to_string(), "172.30.32.1:8099", "the bridge only, not the LAN");
+        assert_eq!(app.peers.as_deref().map(<[_]>::len), Some(1));
+        assert!(app.direct.is_none());
+        assert!(!format!("{:?}", app.supervisor).contains("s3cr3t-value"), "the token stays out of Debug");
     }
 
     #[test]

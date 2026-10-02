@@ -634,6 +634,36 @@ and patch cleared from the broker, a panel rename and a forget. The module is `s
 The payload snapshots are in `src/ha/snapshots/`; `SCREENY_BLESS=1` rewrites them for a
 change that is meant.
 
+## As a Home Assistant app (card 359)
+
+The same binary runs as the **Screeny** app in `ha-app/` (`repository.yaml` at the root makes
+the repository installable; the user's side is `ha-app/DOCS.md`, the plan
+`docs/design/home-assistant-app.md`). **App mode is on when `SUPERVISOR_TOKEN` is in the
+environment** - no wrapper script - and it changes three things (`src/app.rs`):
+
+- **Listening.** `--listen`/`SCREENY_LISTEN` no longer apply. The studio binds
+  `172.30.32.1:8099` - for a `host_network` app that is the address the Supervisor's ingress
+  proxy connects to - which exists only on the Home Assistant host's hassio bridge, so the
+  LAN cannot reach it; and every connection is checked against `172.30.32.2` (the
+  Supervisor, the one peer the HA docs allow), 403 for anyone else. With the `direct_access`
+  option on, a second listener with no check opens on `0.0.0.0:direct_port`. A plain Docker
+  deployment has no token, so none of this exists there. `SCREENY_APP_INGRESS_LISTEN`,
+  `SCREENY_APP_INGRESS_PEERS`, `SCREENY_APP_OPTIONS` and `SCREENY_SUPERVISOR_URL` exist for
+  simulating it off-HA (`tools/ingress-sim.py`) and for tests.
+- **Every URL the pages use is relative**, so the pages work under
+  `/api/hassio_ingress/<token>/` as well as at `/` (`tests/ui.rs`
+  `no_url_the_pages_use_is_root_absolute`). `/panel/` redirects to `/panel` so a page always
+  sits at the root of its own directory.
+- **MQTT from the Supervisor** (`src/ha/supervisor.rs`): `GET http://supervisor/services/mqtt`
+  with the bearer token, every five minutes (every twenty seconds until there is a broker).
+  Used only while the Settings screen has nothing set - **the owner's settings win**, an
+  explicit "off" included. `GET /api/v1/home_assistant` says `from_supervisor` and the
+  Settings screen says so; the password is never in the view, the log or `Debug`.
+
+The app image is the root `Dockerfile`'s `app` stage (root user, since the Supervisor mounts
+`/data` root-owned); `docker compose` still builds the unprivileged last stage. Tests:
+`tests/app.rs` (a fake Supervisor, the peer rule, `direct_access`), unit tests in `src/app.rs`.
+
 ## Health: what 503 means
 
 `GET /healthz` is **200 `ok`**, or **503** and the reasons in words.

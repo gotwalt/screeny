@@ -39,6 +39,7 @@ pub mod client;
 pub mod discovery;
 pub mod fleet;
 pub mod payload;
+pub mod supervisor;
 pub mod topics;
 
 use serde::{Deserialize, Serialize};
@@ -232,6 +233,10 @@ pub struct HaView {
     pub discovery_topic: String,
     /// `screeny/<id>`.
     pub topic_base: String,
+    /// Card 359: the broker is the one Home Assistant's Supervisor handed this
+    /// app, not one typed on this screen. The fields above then show it
+    /// (without its password); typing a broker of one's own replaces it.
+    pub from_supervisor: bool,
 }
 
 /// The integration's settings and its state, shared by the page's routes and
@@ -242,6 +247,10 @@ pub struct Ha {
     /// The connection to keep: `None` for none. The supervisor restarts the
     /// client whenever this changes.
     pub(crate) want: watch::Sender<Option<MqttConfig>>,
+    /// Card 359: the broker the Supervisor offered, when this runs as a Home
+    /// Assistant app. Used only while the owner's own settings are untouched:
+    /// **explicit settings win**, including an explicit "off".
+    supervised: Mutex<Option<MqttConfig>>,
     pub(crate) status: watch::Sender<Status>,
 }
 
@@ -249,7 +258,7 @@ impl Ha {
     #[must_use]
     pub fn new(settings: HaSettings) -> Ha {
         let want = watch::Sender::new(settings.connection());
-        Ha { settings: Mutex::new(settings), want, status: watch::Sender::new(Status::Off) }
+        Ha { settings: Mutex::new(settings), want, supervised: Mutex::new(None), status: watch::Sender::new(Status::Off) }
     }
 
     #[must_use]
@@ -260,8 +269,37 @@ impl Ha {
     /// Take new settings - already [`HaSettings::check`]ed - and reconnect if
     /// the connection they describe is a different one.
     pub fn set(&self, settings: HaSettings) {
-        let conn = settings.connection();
         *self.settings.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
+        self.retarget();
+    }
+
+    /// Card 359: the broker the Supervisor offers (`None`: it offers none, or
+    /// not any more). Takes effect only while the owner has set nothing.
+    pub fn set_supervised(&self, offered: Option<MqttConfig>) {
+        *self.supervised.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = offered;
+        self.retarget();
+    }
+
+    /// The connection to keep: the owner's settings if they have touched
+    /// them at all, else the Supervisor's broker.
+    #[must_use]
+    pub fn effective(&self) -> Option<MqttConfig> {
+        let s = self.settings();
+        if s == HaSettings::default() {
+            self.supervised.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        } else {
+            s.connection()
+        }
+    }
+
+    /// Whether [`Ha::effective`] is the Supervisor's.
+    #[must_use]
+    pub fn is_supervised(&self) -> bool {
+        self.settings() == HaSettings::default() && self.supervised.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
+    }
+
+    fn retarget(&self) {
+        let conn = self.effective();
         self.want.send_if_modified(|was| {
             if *was == conn {
                 return false;
@@ -284,7 +322,22 @@ impl Ha {
 
     #[must_use]
     pub fn view(&self) -> HaView {
-        let s = self.settings();
+        let from_supervisor = self.is_supervised();
+        // From the Supervisor, the page is shown that broker: where it is and
+        // who it is, never the password.
+        let s = match self.effective().filter(|_| from_supervisor) {
+            Some(c) => HaSettings {
+                enabled: true,
+                host: c.host,
+                port: c.port,
+                username: c.username.unwrap_or_default(),
+                password: c.password.unwrap_or_default(),
+                discovery_prefix: c.discovery_prefix,
+                instance: c.instance,
+                name: c.name,
+            },
+            None => self.settings(),
+        };
         let t = topics::Topics::new(&MqttConfig {
             host: String::new(),
             port: s.port,
@@ -306,6 +359,7 @@ impl Ha {
             status: self.status(),
             discovery_topic: t.discovery,
             topic_base: t.base,
+            from_supervisor,
         }
     }
 }

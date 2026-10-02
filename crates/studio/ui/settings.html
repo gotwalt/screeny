@@ -38,6 +38,10 @@
         and what is playing. Schedules are Home Assistant automations.</p>
       <label class="switch"><input type="checkbox" id="ha-on"><span>Connect to Home Assistant</span></label>
       <p class="hint" id="ha-status">–</p>
+      <!-- Card 359: inside Home Assistant the broker comes from the Supervisor
+           until one is typed here. -->
+      <p class="hint" id="ha-source" hidden>The broker below was provided by Home Assistant, so
+        there is nothing to set up. Type a broker of your own to use that instead.</p>
 
       <form id="ha-form">
         <div class="row row--fill">

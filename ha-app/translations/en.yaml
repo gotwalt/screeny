@@ -1,0 +1,12 @@
+configuration:
+  direct_access:
+    name: Direct access
+    description: >-
+      Also serve the Studio on your network, on the port below, without Home
+      Assistant's login in front of it. Off by default: the Studio then opens
+      only from the Screeny entry in the sidebar.
+  direct_port:
+    name: Direct access port
+    description: >-
+      The port used when Direct access is on. It cannot be 8099, which Home
+      Assistant's own entry uses.

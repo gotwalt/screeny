@@ -250,6 +250,14 @@ Docker daemon's configuration, and nothing prunes. If other compose projects liv
 the same host, the explicit `-p screeny` project name on every invocation is what
 keeps this one apart from them.
 
+## As a Home Assistant app
+
+On Home Assistant OS the Studio is installed as the **Screeny** app instead (`ha-app/`,
+`repository.yaml`): host networking as above, but reached through Home Assistant's ingress
+and not on the LAN unless an option says so, and its MQTT broker taken from Home Assistant.
+The Dockerfile's `app` stage is that image. See `home-assistant-app.md` and
+`ha-app/DOCS.md`.
+
 ## Running it somewhere else
 
 `docker-compose.portable.yml` is for a Mac, or any host with no `/dev/dri` and no
