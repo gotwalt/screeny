@@ -577,6 +577,9 @@ fn post_settings(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
         let mut core = shared.core().lock().unwrap();
         let mut apply = |r: Request<'_>| control(&mut core, head.peer, now, r, &mut events);
         let mut err = None;
+        if let Some(order) = req.colour_order {
+            *shared.colour_order().lock().unwrap() = order;
+        }
         if let Some(b) = req.brightness {
             err = err.or(apply(Request::SetBrightness(b)).err());
         }
@@ -592,6 +595,7 @@ fn post_settings(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
                     name: screeny_device_api::text::text(core.name()).unwrap_or_default(),
                     brightness: core.brightness(),
                     idle_mode: core.idle_mode().into(),
+                    colour_order: Some(*shared.colour_order().lock().unwrap()),
                 })
             },
             Err,

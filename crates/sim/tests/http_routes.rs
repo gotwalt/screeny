@@ -226,14 +226,14 @@ fn a_body_over_the_routes_bound_is_payload_too_large() {
     let dev = portal_device();
     let addr = api(&dev);
 
-    // `MAX_REQUEST_LEN` is the WiFi form's 384 bytes, and it is the number
-    // card 222 sizes picoserve's buffer from, so one byte over must be
+    // the WiFi form's own bound is 384 bytes (`MAX_FORM_LEN`; the global
+    // `MAX_REQUEST_LEN` has been the settings body's 400 since card 361), so one byte over must be
     // refused rather than accepted because a host could hold it.
     let mut body = String::from("ssid=Example-Wifi1&psk=");
-    while body.len() <= route::MAX_REQUEST_LEN {
+    while body.len() <= screeny_device_api::form::MAX_FORM_LEN {
         body.push('x');
     }
-    assert!(body.len() > route::MAX_REQUEST_LEN);
+    assert!(body.len() > screeny_device_api::form::MAX_FORM_LEN);
     let res = http::post_form(addr, route::WIFI, &body);
     assert_eq!(res.status, 413);
     assert_eq!(res.error_code(), "payload_too_large");
@@ -242,10 +242,10 @@ fn a_body_over_the_routes_bound_is_payload_too_large() {
     // refused for the PSK being longer than 64 bytes, which is the form
     // parser's own rule and a different code.)
     let mut at = String::from("ssid=Example-Wifi1&psk=");
-    while at.len() < route::MAX_REQUEST_LEN {
+    while at.len() < screeny_device_api::form::MAX_FORM_LEN {
         at.push('x');
     }
-    assert_eq!(at.len(), route::MAX_REQUEST_LEN);
+    assert_eq!(at.len(), screeny_device_api::form::MAX_FORM_LEN);
     let res = http::post_form(addr, route::WIFI, &at);
     assert_ne!(res.status, 413, "at the bound, not over it: {}", res.text());
 
@@ -374,6 +374,48 @@ fn settings_are_clamped_by_the_same_code_udp_clamps_with() {
     let res = http::post_json(addr, route::SETTINGS, "{}");
     assert_eq!(res.status, 200);
 
+    dev.shutdown();
+}
+
+#[test]
+fn the_colour_order_is_a_setting_the_simulator_stores_and_reports() {
+    use screeny_device_api::ColourOrder;
+
+    // The default is the rotated wiring, so a unit that never heard of the
+    // setting behaves as it always did.
+    let dev = SimDevice::start(Config::for_test()).expect("bind loopback");
+    let addr = api(&dev);
+    let sim = dev.handle();
+    assert_eq!(sim.colour_order(), ColourOrder::Rotated);
+
+    // An empty request reads the stored value without changing anything.
+    let res: SettingsReply = http::post_json(addr, route::SETTINGS, "{}").parse();
+    assert_eq!(res.colour_order, Some(ColourOrder::Rotated));
+
+    let res: SettingsReply =
+        http::post_json(addr, route::SETTINGS, r#"{"colour_order":"published"}"#).parse();
+    assert_eq!(res.colour_order, Some(ColourOrder::Published));
+    assert_eq!(sim.colour_order(), ColourOrder::Published);
+
+    // A request that does not mention it leaves it alone.
+    let res: SettingsReply =
+        http::post_json(addr, route::SETTINGS, r#"{"brightness":10}"#).parse();
+    assert_eq!(res.colour_order, Some(ColourOrder::Published));
+
+    // A word the API does not have is refused, not guessed at.
+    let res = http::post_json(addr, route::SETTINGS, r#"{"colour_order":"bgr"}"#);
+    assert_eq!(res.status, 400);
+    assert_eq!(sim.colour_order(), ColourOrder::Published);
+    dev.shutdown();
+
+    // And it can start out the other way round.
+    let dev = SimDevice::start(Config {
+        colour_order: ColourOrder::Published,
+        ..Config::for_test()
+    })
+    .expect("bind loopback");
+    let res: SettingsReply = http::post_json(api(&dev), route::SETTINGS, "{}").parse();
+    assert_eq!(res.colour_order, Some(ColourOrder::Published));
     dev.shutdown();
 }
 
