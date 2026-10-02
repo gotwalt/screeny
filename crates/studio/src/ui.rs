@@ -107,11 +107,22 @@ fn content_type(name: &str) -> &'static str {
 /// than the index: a mistyped asset should say so, not arrive as HTML.
 pub async fn serve(axum::extract::State(st): axum::extract::State<crate::AppState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/').trim_end_matches('/');
+    // Card 359: every URL a page uses is relative (it may be served under
+    // Home Assistant's ingress prefix), so a page must sit at the root of its
+    // own directory. `/panel/` would resolve `style.css` to `/panel/style.css`;
+    // send it to `/panel`, query kept, by a relative redirect.
+    if !path.is_empty() && uri.path().ends_with('/') && PAGES.iter().any(|(url, _)| *url == path) {
+        let to = match uri.query() {
+            Some(q) => format!("../{path}?{q}"),
+            None => format!("../{path}"),
+        };
+        return Redirect::temporary(&to).into_response();
+    }
     // The dashboard is the same page now. A permanent redirect would be
     // cached for ever by a browser that had the old bookmark, which is a
     // nuisance the day somebody wants `/dashboard` back for something else.
     if FOLDED_IN.contains(&path) {
-        return Redirect::temporary("/").into_response();
+        return Redirect::temporary("./").into_response();
     }
     let name = PAGES.iter().find(|(url, _)| *url == path).map_or(path, |(_, file)| *file);
     // A served name is one file in one directory: no traversal, no

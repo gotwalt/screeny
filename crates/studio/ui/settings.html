@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Settings · Screeny Studio</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body class="settings-page">
   <!-- Card 301: one nav, the same markup on every screen, with the current
        one marked. Card 311 gave the third place to Settings. -->
   <nav class="nav" aria-label="Screeny Studio">
-    <a href="/">Picture</a>
-    <a href="/panel">Panel</a>
-    <a href="/settings" aria-current="page">Settings</a>
+    <a href="./">Picture</a>
+    <a href="panel">Panel</a>
+    <a href="settings" aria-current="page">Settings</a>
   </nav>
 
   <header class="titleblock">
@@ -22,7 +22,7 @@
     <!-- The same trouble indicator every screen carries, so a fault is never
          hidden behind a tab - see common.js's `panelState` and `attention`. -->
     <dl class="readouts" aria-label="Panel">
-      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="/panel">–</a></dd></div>
+      <div class="readouts__panel"><dt>Panel</dt><dd><a class="pill pill--link" id="ro-panel" href="panel">–</a></dd></div>
     </dl>
   </header>
 
@@ -38,6 +38,10 @@
         and what is playing. Schedules are Home Assistant automations.</p>
       <label class="switch"><input type="checkbox" id="ha-on"><span>Connect to Home Assistant</span></label>
       <p class="hint" id="ha-status">–</p>
+      <!-- Card 359: inside Home Assistant the broker comes from the Supervisor
+           until one is typed here. -->
+      <p class="hint" id="ha-source" hidden>The broker below was provided by Home Assistant, so
+        there is nothing to set up. Type a broker of your own to use that instead.</p>
 
       <form id="ha-form">
         <div class="row row--fill">
@@ -139,6 +143,6 @@
     </section>
   </main>
 
-  <script type="module" src="/settings.js"></script>
+  <script type="module" src="settings.js"></script>
 </body>
 </html>

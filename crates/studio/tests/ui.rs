@@ -90,7 +90,7 @@ async fn all_three_screens_are_served_and_so_are_their_files() {
     // (The content types are `ui::content_type`'s and are checked over real
     // HTTP in the card's Log; the test client keeps only the body.)
     for path in [
-        "/", "/index.html", "/panel", "/panel/", "/panel.html", "/settings", "/settings/", "/settings.html",
+        "/", "/index.html", "/panel", "/panel.html", "/settings", "/settings.html",
         "/common.js", "/picture.js", "/panel.js", "/settings.js", "/style.css",
     ] {
         let r = get(at, path).await;
@@ -111,9 +111,9 @@ async fn all_three_screens_are_served_and_so_are_their_files() {
 
     // Each screen loads its own module, and all three load the shared one
     // through it rather than with a second <script> tag.
-    assert!(screen.contains(r#"src="/panel.js""#), "the panel screen loads its own script");
+    assert!(screen.contains(r#"src="panel.js""#), "the panel screen loads its own script");
     assert!(PANEL_JS.contains("from './common.js'"), "...which imports the shared one");
-    assert!(settings_screen.contains(r#"src="/settings.js""#), "the settings screen loads its own script");
+    assert!(settings_screen.contains(r#"src="settings.js""#), "the settings screen loads its own script");
     assert!(SETTINGS_JS.contains("from './common.js'"), "...which imports the shared one too");
 
     // Still no directory traversal, and still a 404 rather than the index for
@@ -228,7 +228,7 @@ fn the_screens_hold_what_the_split_says_they_do() {
     }
     assert!(COMMON_JS.contains("export function bindBrightness"), "the shared function stays, even with one caller");
     assert!(
-        INDEX_HTML.contains(r#"<a class="pill pill--link" id="ro-panel" href="/panel">"#),
+        INDEX_HTML.contains(r#"<a class="pill pill--link" id="ro-panel" href="panel">"#),
         "the status chip is the way to the Panel screen"
     );
     // The way back is the shared nav now, not a one-off backlink - checked in
@@ -1077,7 +1077,7 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
         let nav_start = html.find(r#"<nav class="nav""#).unwrap_or_else(|| panic!("{what} should carry the nav"));
         let nav = &html[nav_start..nav_start + html[nav_start..].find("</nav>").expect("a closed nav")];
         assert_eq!(nav.matches("<a ").count(), 3, "{what}: the nav should have exactly three links: {nav}");
-        for (dest, label) in [("/", "Picture"), ("/panel", "Panel"), ("/settings", "Settings")] {
+        for (dest, label) in [("./", "Picture"), ("panel", "Panel"), ("settings", "Settings")] {
             assert!(nav.contains(&format!(r#"href="{dest}""#)), "{what}: the nav should link to {dest}");
             assert!(nav.contains(&format!(">{label}<")), "{what}: the nav should say {label}");
         }
@@ -1106,7 +1106,7 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     assert!(COMMON_JS.contains("export function channelRow("), "one channel row, shared");
     assert!(COMMON_JS.contains("export function panelRow("), "one panel row, shared");
     assert!(PICTURE_JS.contains("channelRow($('#channels'), { current: here, onNew: newChannel })"), "the Picture screen's row is of channels");
-    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: '/panel', current: attachedId })"), "the Panel screen's of panels");
+    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: 'panel', current: attachedId })"), "the Panel screen's of panels");
 
     // A channel card: thumbnail, name, picture, member chips, and New channel
     // at the end. Thumbnails are the README's cheap recipe - a socket per
@@ -1231,4 +1231,45 @@ async fn a_panel_that_is_not_there_is_a_404_the_page_can_leave() {
     let channels = get(at, "/api/v1/channels").await.json();
     assert_eq!(channels["channels"][0]["name"], "Channel 1", "{channels}");
     assert_eq!(get(at, "/api/v1/bootstrap?channel=9").await.status, 404);
+}
+
+/// Card 359. Behind Home Assistant's ingress the studio is served under
+/// `/api/hassio_ingress/<token>/`, so a root-absolute URL (`/api/v1/...`,
+/// `/style.css`, `href="/panel"`) would leave the prefix and 404. Every URL a
+/// page uses is relative; this fails when a root-absolute one comes back.
+#[test]
+fn no_url_the_pages_use_is_root_absolute() {
+    for (what, text) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
+        for attr in ["href=\"/", "src=\"/", "action=\"/", "href='/", "src='/"] {
+            assert!(!text.contains(attr), "{what} has a root-absolute URL ({attr}); use a relative one");
+        }
+    }
+    for (what, js) in [("common.js", COMMON_JS), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("settings.js", SETTINGS_JS)] {
+        for (n, line) in js.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with('*') || t.starts_with("/*") || t.starts_with("//") {
+                continue;
+            }
+            let code = line.split(" // ").next().unwrap_or(line).replace("'/'", "");
+            // A string or template literal that starts at the root: a fetch,
+            // a socket, an href, a location.assign.
+            for quote in ["'/", "\"/", "`/"] {
+                assert!(!code.contains(quote), "{what}:{}: a root-absolute path `{quote}...`: {line}", n + 1);
+            }
+        }
+    }
+    assert!(COMMON_JS.contains("new URL(`api/v1/${cmd}`, location.href)"), "the API is relative to the page");
+    assert!(COMMON_JS.contains("new URL('api/v1/ws', location.href)"), "so is the socket");
+}
+
+/// Card 359: a page must sit at the root of its own directory for relative
+/// URLs to work, so `/panel/` goes to `/panel`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_with_a_trailing_slash_redirects_so_relative_urls_resolve() {
+    let studio = studio().await;
+    let at = studio.addr;
+    assert_eq!(get(at, "/panel/").await.status, 307);
+    assert_eq!(get(at, "/settings/").await.status, 307);
+    assert_eq!(get(at, "/panel").await.status, 200);
+    assert_eq!(get(at, "/").await.status, 200);
 }

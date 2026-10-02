@@ -98,7 +98,9 @@ async function start() {
       ['Discovery', ha.discovery_topic],
       ['Topics', `${ha.topic_base}/…`],
     ]);
-    $('#ha-forget').disabled = !ha.host;
+    // Card 359: a broker Home Assistant provided is not this screen's to remove.
+    $('#ha-source').hidden = !ha.from_supervisor;
+    $('#ha-forget').disabled = !ha.host || ha.from_supervisor;
   }
 
   /** Every route here answers the whole view, so there is nothing to re-read

@@ -1,0 +1,6 @@
+# Home Assistant app repository: add https://github.com/gotwalt/screeny to
+# Settings > Apps > App store > Repositories. The one app is in `ha-app/`.
+# https://developers.home-assistant.io/docs/apps/repository#repository-configuration
+name: Screeny
+url: https://github.com/gotwalt/screeny
+maintainer: Aaron Gotwalt
