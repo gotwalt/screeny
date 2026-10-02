@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use serde::{de::DeserializeOwned, Serialize};
 
 use screeny_device_api::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
@@ -267,6 +267,7 @@ pub fn worst_settings_reply() -> SettingsReply {
         name: worst_text(),
         brightness: u8::MAX,
         idle_mode: IdleMode::HoldForever,
+        colour_order: Some(ColourOrder::Published),
     }
 }
 
@@ -296,6 +297,7 @@ pub fn worst_settings_request() -> SettingsRequest {
         name: Some(worst_text()),
         brightness: Some(u8::MAX),
         idle_mode: Some(IdleMode::HoldForever),
+        colour_order: Some(ColourOrder::Published),
         pin: Some(worst_text()),
         counter: Some(u32::MAX),
     }

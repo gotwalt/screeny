@@ -135,7 +135,8 @@ fn the_numbers_card_222_needs_are_printed_here() {
             r.method, r.path, r.max_request_len, r.max_reply_len, r.body
         );
     }
-    assert_eq!(MAX_REQUEST_LEN, MAX_FORM_LEN);
+    // Card 361: the worst-case settings body (400) now outgrows the WiFi form.
+    assert!(MAX_REQUEST_LEN >= MAX_FORM_LEN);
 }
 
 /// Card 243b's lesson, as a test: **a reply type is paid many times over in

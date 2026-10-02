@@ -22,7 +22,7 @@ Sizes are bytes of JSON, and the size columns come from the constants in the cod
 | GET | `/api/v1/networks` | - | `NetworksReply` (≤ 16, strongest first) | - | 3710 |
 | GET | `/api/v1/wifi` | - | `WifiReply` | - | 345 |
 | POST | `/api/v1/wifi` | urlencoded `WifiForm` | `AcceptedReply` (`"trying"`) | 384 | 24 |
-| POST | `/api/v1/settings` | `SettingsRequest` | `SettingsReply` | 373 | 247 |
+| POST | `/api/v1/settings` | `SettingsRequest` | `SettingsReply` | 400 | 274 |
 | POST | `/api/v1/firmware[?activate=0]` | raw `application/octet-stream`, streamed | `FirmwareReply` | streamed | 76 |
 | POST | `/api/v1/reboot` | `RebootRequest` (`{"confirm":"RBOO"}`) | `AcceptedReply` (`"rebooting"`) | 188 | 24 |
 | POST | `/api/v1/identify` | `IdentifyRequest` | `AcceptedReply` (`"identifying"`) | 152 | 24 |
@@ -89,8 +89,8 @@ by serialising the longest value that type can hold and asserting **equality**. 
 not the same kind of number on each side:
 
 * **Requests.** picoserve's `Json` and `Form` extractors call `read_all()`, which needs
-  the whole body contiguous in the HTTP buffer. `route::MAX_REQUEST_LEN` (384, the WiFi
-  form) is therefore a real dimension of card 222's server.
+  the whole body contiguous in the HTTP buffer. `route::MAX_REQUEST_LEN` (400, the
+  worst-case settings body; the WiFi form is 384) is therefore a real dimension of card 222's server.
 * **Replies.** Not a buffer size. picoserve measures a JSON reply by serialising it into
   a counting writer (`Content::content_length`) and then streams it, so no reply needs a
   buffer at all. The reply bound is for `serde-json-core`'s `to_slice` into a fixed

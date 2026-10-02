@@ -282,7 +282,7 @@ What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
   streams), so reply bounds are documentation; the RAM-relevant bound is the request
-  side, `route::MAX_REQUEST_LEN` = 384 bytes (the WiFi form).
+  side, `route::MAX_REQUEST_LEN` = 400 bytes (the worst-case settings body; the WiFi form is 384).
 - **`serde_json_core::from_slice` silently does not unescape strings**: use
   `from_slice_escaped` / picoserve's `JsonWithUnescapeBufferSize<T, { MIN_UNESCAPE_BUFFER }>`
   (32 bytes = the longest name; raising `MAX_NAME_LEN` raises it).

@@ -136,7 +136,7 @@ pub const HTTP_TASKS: usize = 2;
 /// picoserve's own buffer: the request line, all the headers, and the whole
 /// body of any route that parses one.
 ///
-/// The body side is settled: `route::MAX_REQUEST_LEN` is 384 (the WiFi form),
+/// The body side is settled: `route::MAX_REQUEST_LEN` is 400 (the settings body),
 /// and picoserve's body extractors need it contiguous in here. The header side
 /// is what sets the number - a desktop Chrome `GET /` carries ~700 bytes of
 /// `User-Agent`, `Accept`, `sec-ch-ua*` and `sec-fetch-*`. 1536 covers that
@@ -1737,7 +1737,7 @@ async fn route_request<R: picoserve::io::Read>(
         return match method {
             "GET" => get_setup(),
             "POST" => {
-                if body.content_length() > route::MAX_REQUEST_LEN {
+                if body.content_length() > screeny_device_api::form::MAX_FORM_LEN {
                     return Reply::detail(
                         ErrorCode::PayloadTooLarge,
                         "the body is longer than this route accepts",

@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorCode;
-use crate::enums::IdleMode;
+use crate::enums::{ColourOrder, IdleMode};
 use crate::text::{NameText, PinText, MAX_NAME_LEN, MAX_PIN_LEN};
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN};
 
@@ -80,7 +80,7 @@ pub trait Mutating {
     }
 }
 
-/// `POST /api/v1/settings`: change any subset of the three live settings.
+/// `POST /api/v1/settings`: change any subset of the settings.
 ///
 /// Every field is optional and an absent field means "leave it alone", so a
 /// brightness slider does not have to know the device's name to move. An
@@ -96,6 +96,10 @@ pub struct SettingsRequest {
     /// The new idle mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_mode: Option<IdleMode>,
+    /// The panel's colour-line wiring (card 361). Stored at once, applied at
+    /// the next boot: the pins are chosen once, before the panel starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour_order: Option<ColourOrder>,
     /// Decision 3; parsed and ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<PinText>,
@@ -110,6 +114,7 @@ impl SettingsRequest {
         + field("name", 2 + MAX_NAME_LEN * ESCAPE_MAX)
         + field("brightness", MAX_U8_LEN)
         + field("idle_mode", IdleMode::MAX_JSON_LEN)
+        + field("colour_order", ColourOrder::MAX_JSON_LEN)
         + field("pin", 2 + MAX_PIN_LEN * ESCAPE_MAX)
         + field("counter", MAX_U32_LEN);
 
@@ -117,7 +122,10 @@ impl SettingsRequest {
     /// error, but the caller may want to skip the flash write.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.brightness.is_none() && self.idle_mode.is_none()
+        self.name.is_none()
+            && self.brightness.is_none()
+            && self.idle_mode.is_none()
+            && self.colour_order.is_none()
     }
 }
 

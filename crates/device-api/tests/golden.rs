@@ -9,7 +9,7 @@ mod common;
 
 use common::check;
 use screeny_device_api::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
@@ -242,6 +242,7 @@ fn settings() {
             name: text("Studio panel"),
             brightness: Some(96),
             idle_mode: Some(IdleMode::Dim),
+            colour_order: Some(ColourOrder::Published),
             pin: None,
             counter: None,
         },
@@ -262,6 +263,7 @@ fn settings() {
             name: text("Studio panel").unwrap(),
             brightness: 128,
             idle_mode: IdleMode::Dim,
+            colour_order: Some(ColourOrder::Published),
         },
     );
 }
