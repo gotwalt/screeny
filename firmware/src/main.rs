@@ -906,31 +906,35 @@ async fn main(spawner: Spawner) {
     }
 
     // Some Gen 1 units have their colour lines wired in the order Tidbyt's own
-    // `hdk` publishes; others have them rotated. This unit's colour lines are
+    // `hdk` publishes; others have them rotated. The first bench unit is
     // rotated relative to the hdk's names: the lines it calls R/G/B drive
-    // blue/red/green. Confirmed on the panel at bring-up (card 001) and again
-    // by card 007's test card. Card 021 owns the board-revision story. If the
-    // test card's colours come up wrong on a different unit, build with
-    // `--features panel-hdk-colours` instead, which uses the published order
-    // (`tidbyt::pins`) rather than this rotated one.
-    #[cfg(feature = "panel-hdk-colours")]
-    let (red1, grn1, blu1, red2, grn2, blu2) = (
-        peripherals.GPIO21.degrade(),
-        peripherals.GPIO2.degrade(),
-        peripherals.GPIO22.degrade(),
-        peripherals.GPIO23.degrade(),
-        peripherals.GPIO4.degrade(),
-        peripherals.GPIO27.degrade(),
-    );
-    #[cfg(not(feature = "panel-hdk-colours"))]
-    let (red1, grn1, blu1, red2, grn2, blu2) = (
-        peripherals.GPIO2.degrade(),
-        peripherals.GPIO22.degrade(),
-        peripherals.GPIO21.degrade(),
-        peripherals.GPIO4.degrade(),
-        peripherals.GPIO27.degrade(),
-        peripherals.GPIO23.degrade(),
-    );
+    // blue/red/green (confirmed on the panel at bring-up, card 001, and again
+    // by card 007's test card). Card 361 made the choice a stored setting, so
+    // one image fits both: `ColourOrder::Rotated` (the default, and what every
+    // unit that predates the setting boots as) or `ColourOrder::Published`
+    // (`tidbyt::pins`). It is read here, once, because the pins are handed to
+    // the panel driver below and never revisited - a change takes effect on the
+    // next boot. The pins are all `.degrade()`d to `AnyPin`, so the two arms
+    // have one type and the choice costs no code in the driver.
+    info!("panel: colour order {}", settings.colour_order.as_u8());
+    let (red1, grn1, blu1, red2, grn2, blu2) = match settings.colour_order {
+        screeny_settings::ColourOrder::Published => (
+            peripherals.GPIO21.degrade(),
+            peripherals.GPIO2.degrade(),
+            peripherals.GPIO22.degrade(),
+            peripherals.GPIO23.degrade(),
+            peripherals.GPIO4.degrade(),
+            peripherals.GPIO27.degrade(),
+        ),
+        screeny_settings::ColourOrder::Rotated => (
+            peripherals.GPIO2.degrade(),
+            peripherals.GPIO22.degrade(),
+            peripherals.GPIO21.degrade(),
+            peripherals.GPIO4.degrade(),
+            peripherals.GPIO27.degrade(),
+            peripherals.GPIO23.degrade(),
+        ),
+    };
 
     let pins = Hub75Pins16 {
         red1,

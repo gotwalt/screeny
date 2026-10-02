@@ -49,6 +49,11 @@ button.warn{border-color:#c33;color:#c33}
 <option value="dim">dim the last frame</option>
 <option value="black">black</option>
 </select></label>
+<label><span>Colour order. If red shows as blue (or any colour is wrong), switch this. It is read at boot, so a change needs a reboot.</span>
+<select id="colour">
+<option value="rotated">rotated (the default)</option>
+<option value="published">published (Tidbyt's pin map)</option>
+</select></label>
 <div class="row"><button type="submit">Apply</button>
 <button type="button" id="ident">Identify</button>
 <button type="button" id="boot" class="warn">Reboot</button></div>
@@ -74,7 +79,7 @@ not work it comes back here, and <code>GET /api/v1/wifi</code> says why.</p>
 <script>
 const $=s=>document.querySelector(s),msg=t=>{$("#msg").textContent=t};
 let touched=false;
-["#name","#bright","#idle"].forEach(s=>$(s).addEventListener("input",()=>{touched=true}));
+["#name","#bright","#idle","#colour"].forEach(s=>$(s).addEventListener("input",()=>{touched=true}));
 $("#bright").addEventListener("input",()=>{$("#bv").textContent=$("#bright").value});
 function paint(s){
  for(const k in s){const c=document.querySelector('[data-k="'+k+'"]');if(c&&typeof s[k]!="object")c.textContent=s[k]}
@@ -88,7 +93,9 @@ function paint(s){
  // while the device is running - a panic reboots it - so there is nothing to
  // repaint, and `GET /api/v1/panic` is where a program reads it.
  $("#title").textContent=s.name||("screeny-"+s.id);document.title=$("#title").textContent;
- if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode}
+ if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode;
+  // Card 361: the stored order is a cell the firmware renders, not a field of the status JSON.
+  const c=document.querySelector('[data-k="colour_order"]');if(c)$("#colour").value=c.textContent}
 }
 async function poll(){
  try{const r=await fetch("/api/v1/status",{cache:"no-store"});if(r.ok)paint(await r.json())}catch(e){msg("device unreachable")}
@@ -103,8 +110,12 @@ async function send(path,body){
 }
 $("#set").addEventListener("submit",async e=>{
  e.preventDefault();
- const j=await send("/api/v1/settings",{name:$("#name").value,brightness:+$("#bright").value,idle_mode:$("#idle").value});
- if(j){touched=false;msg("applied: brightness "+j.brightness);poll()}
+ const was=document.querySelector('[data-k="colour_order"]').textContent;
+ const j=await send("/api/v1/settings",{name:$("#name").value,brightness:+$("#bright").value,idle_mode:$("#idle").value,colour_order:$("#colour").value});
+ if(j){touched=false;msg("applied: brightness "+j.brightness);
+  const c=document.querySelector('[data-k="colour_order"]');if(c)c.textContent=j.colour_order;
+  if(j.colour_order&&j.colour_order!==was&&confirm("Colour order saved. It takes effect after a reboot - reboot now?"))send("/api/v1/reboot",{confirm:"RBOO"});
+  poll()}
 });
 $("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10000}));
 $("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"})});

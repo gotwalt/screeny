@@ -98,8 +98,8 @@ it on the chip, including the settings partition, is left alone, so reflashing k
 a panel's WiFi. Stay at 230400 baud: faster rates corrupted long transfers on the
 author's bench. Now skip to [step 5](#5-give-it-wifi).
 
-If, once it is streaming, the test pattern's colours are wrong, flash the
-`-hdk-colours-full.bin` file from the same release instead (step 6 explains).
+If, once it is streaming, the test pattern's colours are wrong, that is a setting and
+not a different image: step 6 explains.
 
 ### 2b. Install the firmware toolchain
 
@@ -222,9 +222,10 @@ cargo run --release -p screeny -- --name screeny-xxxxxx stats           # fps re
 ```
 
 Look at the test pattern first. If red, green and blue come out as the wrong colours,
-your unit's colour lines are in the other of the two orders seen on Gen 1 boards:
-rebuild the firmware with `cargo build --release --features panel-hdk-colours` and
-flash again (step 4).
+your unit's colour lines are in the other of the two orders seen on Gen 1 boards.
+Open the panel's settings page (`http://screeny-xxxxxx.local/`), switch "Colour order"
+to the other value, apply, and reboot when it offers to. The setting is stored on the
+panel and survives reflashing.
 
 `screeny stats` is the device's own account of what it is receiving. Thirty frames a
 second with zero decode drops is normal on a decent WiFi link.

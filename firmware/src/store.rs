@@ -69,7 +69,7 @@ use esp_bootloader_esp_idf::partitions::{
 };
 use log::{info, warn};
 use screeny_settings::{
-    Debounce, Field, IdleMode, LoadReport, Name, SchemaState, Scratch, Settings, Store, StoreError,
+    ColourOrder, Debounce, Field, IdleMode, LoadReport, Name, SchemaState, Scratch, Settings, Store, StoreError,
     Wifi, Write,
 };
 
@@ -433,6 +433,20 @@ impl Flash {
         timed!(with_store!(self, s, buf, s.save_idle_mode(buf, mode).await))
     }
 
+    /// Store the colour order. Read once at boot, so it takes effect on the
+    /// next boot.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn save_colour_order(&mut self, order: ColourOrder) -> Result<Timing, StoreError> {
+        timed!(with_store!(
+            self,
+            s,
+            buf,
+            s.save_colour_order(buf, order).await
+        ))
+    }
+
     /// Store a credential pair. Written immediately, never debounced: the
     /// device is about to drop its association.
     ///
@@ -666,18 +680,20 @@ pub async fn init(flash: esp_hal::peripherals::FLASH<'static>) -> (Settings, Loa
         report = r;
     }
     *STORE.lock().await = Some(f);
+    COLOUR_ORDER_STORED.store(settings.colour_order.as_u8(), Ordering::Relaxed);
 
     // Deliberately not a `Debug` of `Settings`: `Ssid`'s `Debug` prints the
     // SSID, and the Wi-Fi task's "connected" line is the only place in this
     // firmware that says one out loud.
     info!(
-        "store: loaded schema {:?} fallback {:#06b} error {:?} | name {:?} brightness {} idle {} | wifi {}",
+        "store: loaded schema {:?} fallback {:#06b} error {:?} | name {:?} brightness {} idle {} colour {} | wifi {}",
         report.schema,
         report.fallback.bits(),
         report.error,
         settings.name.as_str(),
         settings.brightness,
         settings.idle_mode.as_u8(),
+        settings.colour_order.as_u8(),
         if settings.wifi.is_some() {
             "stored"
         } else {
@@ -802,6 +818,46 @@ pub enum Immediate {
         /// Whether to write it to flash first.
         persist: bool,
     },
+}
+
+/// The colour order in flash, which is what the next boot will use (card 361).
+///
+/// Seeded by [`init`] from the load and kept current by
+/// [`commit_colour_order`]. The running panel never reads it: the pins were
+/// chosen once, at boot, from the loaded value. It exists so the settings page
+/// and `POST /api/v1/settings` can say what is stored without a flash read.
+static COLOUR_ORDER_STORED: AtomicU8 = AtomicU8::new(0);
+
+/// What [`COLOUR_ORDER_STORED`] holds, as the setting.
+pub fn colour_order_stored() -> ColourOrder {
+    ColourOrder::from_u8(COLOUR_ORDER_STORED.load(Ordering::Relaxed)).unwrap_or_default()
+}
+
+/// Write the colour order now, and remember it for [`colour_order_stored`].
+///
+/// Immediate, like `SET_NAME`: a settings POST can answer `ERR_STORAGE`
+/// honestly only for a write that already happened. A write that finds flash
+/// already holding the value is free ([`Write::Skipped`]), so the settings
+/// page may send the field on every Apply.
+///
+/// # Errors
+/// [`StoreError`]. The remembered value is unchanged when this fails.
+pub async fn commit_colour_order(order: ColourOrder) -> Result<(), StoreError> {
+    let mut guard = STORE.lock().await;
+    let Some(f) = guard.as_mut() else {
+        return Err(StoreError::Flash);
+    };
+    let t = f.save_colour_order(order).await?;
+    COLOUR_ORDER_STORED.store(order.as_u8(), Ordering::Relaxed);
+    if t.write == Write::Committed {
+        info!(
+            "store: colour order {} written in {} us ({} erases); takes effect on reboot",
+            order.as_u8(),
+            t.us,
+            t.erases
+        );
+    }
+    Ok(())
 }
 
 /// Carry out an [`Immediate`]. Returns `Ok(())` when there was nothing to write
