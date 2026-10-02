@@ -153,10 +153,37 @@ impl StreamArgs {
     }
 }
 
+/// What `screeny improv` asks the device.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum ImprovAsk {
+    /// Request device information (firmware, version, chip, name).
+    Info,
+    /// Request the provisioning state, and the device URL once joined.
+    State,
+    /// Request scanned networks (this firmware answers with an empty list).
+    Scan,
+}
+
 #[derive(Subcommand, Debug)]
 enum Cmd {
     /// List screeny devices on the network.
     Discover,
+
+    /// Talk Improv Wi-Fi over serial to a device, as ESP Web Tools does.
+    /// Read-only: it cannot send credentials (use ESP Web Tools for that).
+    Improv {
+        /// Serial device (e.g. /dev/cu.usbserial-XXXX) or `tcp:HOST:PORT`
+        /// for the simulator.
+        #[arg(long, value_name = "PATH|tcp:HOST:PORT")]
+        port: String,
+        /// Seconds to wait for an answer. Opening a USB serial port can reset
+        /// the board, which then needs a few seconds to boot.
+        #[arg(long, default_value_t = 12.0, value_name = "SECS")]
+        wait: f64,
+        /// What to ask.
+        #[arg(value_enum, default_value = "info")]
+        ask: ImprovAsk,
+    },
 
     /// Print a device's GET_INFO metadata.
     Info,
@@ -276,6 +303,7 @@ fn main() {
 fn run(cli: &Cli) -> Result<()> {
     match &cli.cmd {
         Cmd::Discover => cmd_discover(cli),
+        Cmd::Improv { port, wait, ask } => cmd_improv(port, *wait, *ask),
         Cmd::Info => cmd_info(cli),
         Cmd::Stats {
             interval,
@@ -391,6 +419,21 @@ fn control(cli: &Cli) -> Result<(Device, ControlClient)> {
     let d = cli.target.resolve()?;
     let c = ControlClient::connect(d.control).hinted()?;
     Ok((d, c))
+}
+
+fn cmd_improv(port: &str, wait: f64, ask: ImprovAsk) -> Result<()> {
+    use screeny::improv::{open, query, render, Ask};
+    let ask = match ask {
+        ImprovAsk::Info => Ask::Info,
+        ImprovAsk::State => Ask::State,
+        ImprovAsk::Scan => Ask::Scan,
+    };
+    let mut p = open(port)?;
+    let frames = query(&mut *p, ask, Duration::from_secs_f64(wait.max(0.5)))?;
+    for line in render(ask, &frames) {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn cmd_info(cli: &Cli) -> Result<()> {

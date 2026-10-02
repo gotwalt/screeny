@@ -426,3 +426,46 @@ fn the_session_and_replies_carry_no_password() {
     let all = format!("{s:?} {out:?} {:?} {:?}", Observed::from_machine(&m), m);
     assert!(!all.contains("password9"), "{all}");
 }
+
+#[test]
+fn scan_frame_finds_every_type_in_a_noisy_stream() {
+    let mut stream = b"boot: x I (1) y ".to_vec();
+    let mut f = [0u8; REPLY_MAX];
+    let n = encode_state(&mut f, State::Provisioned).unwrap();
+    stream.extend_from_slice(&f[..n]);
+    stream.extend_from_slice(b"\nIMPRO");
+    let n = encode_error(&mut f, ErrorCode::UnableToConnect).unwrap();
+    stream.extend_from_slice(&f[..n]);
+    // A corrupt frame, then a good one that starts inside its bytes.
+    stream.extend_from_slice(b"IMPROV\x01\x01\x01");
+    let n = encode_state(&mut f, State::Authorized).unwrap();
+    stream.extend_from_slice(&f[..n]);
+
+    let mut got = Vec::new();
+    let mut buf = &stream[..];
+    loop {
+        match scan_frame(buf) {
+            Scan::Frame { ty, data, used } => {
+                got.push((ty, data.to_vec()));
+                buf = &buf[used..];
+            }
+            Scan::Need { skip: 0 } => break,
+            Scan::Need { skip } => buf = &buf[skip..],
+        }
+    }
+    assert_eq!(got, [(1, vec![4]), (2, vec![3]), (1, vec![2])]);
+}
+
+#[test]
+fn scan_frame_waits_for_a_split_frame_and_keeps_a_partial_header() {
+    let mut f = [0u8; 16];
+    let n = encode_state(&mut f, State::Authorized).unwrap();
+    for cut in 1..n {
+        let mut b = b"xx".to_vec();
+        b.extend_from_slice(&f[..cut]);
+        let Scan::Need { skip } = scan_frame(&b) else { panic!("cut {cut}") };
+        assert!(skip <= 2, "cut {cut} skip {skip}");
+        b.extend_from_slice(&f[cut..n]);
+        assert!(matches!(scan_frame(&b[skip..]), Scan::Frame { ty: 1, .. }));
+    }
+}

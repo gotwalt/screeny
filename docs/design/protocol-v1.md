@@ -1519,6 +1519,27 @@ And **an update that goes wrong needs no cable**: every revert above is
 automatic, and the device is back on the network within about half a minute of
 whichever deadline caught it.
 
+### 8.11 Improv Wi-Fi over serial (the fourth front door)
+
+Card 362. The UART the log leaves on (UART0, 115200) also listens for
+[Improv Wi-Fi serial](https://www.improv-wifi.com/serial/) version 1, so a
+browser flasher (ESP Web Tools) can offer a network and a password right after
+an install. It enters §8.3's **trial** exactly as `POST /api/v1/wifi` does
+(`persist` implied set): nothing is stored before the join succeeds, a failure
+falls back per §8.3, and §8.4's invariant holds - the password lives in the
+parser's frame buffer until the credentials are handed to the join path, is
+zeroed then, and is never echoed, logged (only its length) or drawn.
+
+| Improv | This device |
+|---|---|
+| Frames | `IMPROV`, version 1, type, length, data, checksum (byte sum mod 256). A reply is followed by `\n`, as ESPHome does. The parser hunts for the header in the log text and resyncs on anything else. |
+| State | `Authorized` while not joined, `Provisioning` during a trial or a stored-credentials join, `Provisioned` once online. Never `AwaitingAuthorization`: holding the cable is the authorization. |
+| Error | `0x00` is sent on every well-formed command; `InvalidRpc` for a bad checksum or inconsistent lengths, `UnknownRpc` for commands 5-7, `UnableToConnect` when the trial fails (then `Authorized` again), `Unknown` for a second submit while one is running or one the machine never took. |
+| Command 1 (settings) | SSID 1-32 bytes, password 0-64, else `InvalidRpc`. The result's one string is `http://a.b.c.d/`. |
+| Command 2 (state) | The state frame, plus the same URL result when provisioned. |
+| Command 3 (device info) | `screeny-fw`, the firmware version, `ESP32`, `screeny-<id>`. |
+| Command 4 (scan) | **An empty terminator only**: the radio belongs to the provisioning task and a scan while associated stalls the link (card 229 was dropped for the same reason). The client falls back to a typed SSID. |
+
 ---
 
 ## 9. Sender implementation notes (macOS, and Linux)

@@ -364,6 +364,18 @@ impl SimHandle {
         self.shared.core.lock().unwrap().wifi().phase()
     }
 
+    /// What the Improv session needs to know about the join (card 362).
+    #[must_use]
+    pub fn wifi_observed(&self) -> screeny_provision::improv::Observed {
+        let core = self.shared.core.lock().unwrap();
+        let w = core.wifi();
+        screeny_provision::improv::Observed {
+            state: w.phase(),
+            trial: w.trial().map(|t| t.outcome),
+            ip: w.ip(),
+        }
+    }
+
     /// The SSID the store holds, if any. There is no method for the PSK,
     /// because the simulator never keeps one (spec section 8.4).
     #[must_use]
@@ -587,6 +599,7 @@ pub struct SimDevice {
     threads: Vec<JoinHandle<()>>,
     mdns: Option<Advertisement>,
     http: Option<crate::http::Server>,
+    improv: Option<crate::improv::ImprovServer>,
 }
 
 impl SimDevice {
@@ -747,11 +760,22 @@ impl SimDevice {
             );
         }
 
+        let handle = SimHandle { shared };
+        let improv = match cfg.improv_port {
+            Some(p) => Some(crate::improv::ImprovServer::start(
+                SocketAddr::new(cfg.bind, p),
+                handle.clone(),
+                cfg.instance.clone(),
+            )?),
+            None => None,
+        };
+
         Ok(SimDevice {
-            handle: SimHandle { shared },
+            handle,
             threads,
             mdns,
             http,
+            improv,
         })
     }
 
@@ -783,6 +807,9 @@ impl SimDevice {
         if let Some(h) = self.http.take() {
             h.shutdown();
         }
+        if let Some(i) = self.improv.take() {
+            i.shutdown();
+        }
         if let Some(m) = self.mdns.take() {
             m.shutdown();
         }
@@ -795,6 +822,13 @@ impl SimDevice {
     #[must_use]
     pub fn http_addr(&self) -> Option<SocketAddr> {
         self.handle.http_addr()
+    }
+
+    /// The address Improv Wi-Fi over serial is offered on, if
+    /// [`Config::improv_port`](crate::Config::improv_port) asked for it.
+    #[must_use]
+    pub fn improv_addr(&self) -> Option<SocketAddr> {
+        self.improv.as_ref().map(crate::improv::ImprovServer::addr)
     }
 }
 

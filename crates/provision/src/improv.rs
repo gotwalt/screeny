@@ -345,6 +345,62 @@ impl Parser {
 }
 
 // ---------------------------------------------------------------------------
+// Client-side scanning
+// ---------------------------------------------------------------------------
+
+/// What [`scan_frame`] found at the front of a buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scan<'a> {
+    /// A complete, checksummed frame. Drop `used` bytes from the buffer.
+    Frame {
+        /// Frame type ([`ty`]).
+        ty: u8,
+        /// The frame's data, without header or checksum.
+        data: &'a [u8],
+        /// Bytes to drop from the front of the buffer.
+        used: usize,
+    },
+    /// Nothing usable yet: drop `skip` bytes (garbage, log text, a corrupt
+    /// frame) and wait for more. `skip` never covers a possible frame start.
+    Need {
+        /// Bytes safe to drop.
+        skip: usize,
+    },
+}
+
+/// Find the first Improv frame in `buf`, for a *client* reading a device's
+/// stream (which carries frames of every type, unlike the device-side
+/// [`Parser`] that only keeps commands). A frame that fails its checksum is
+/// skipped one byte at a time, so a real frame that began inside it is still
+/// found.
+#[must_use]
+pub fn scan_frame(buf: &[u8]) -> Scan<'_> {
+    let Some(i) = buf.windows(6).position(|w| w == HEADER) else {
+        // Keep a tail that could be the start of a header.
+        let keep = buf
+            .iter()
+            .rposition(|&b| b == HEADER[0])
+            .map_or(0, |p| buf.len() - p);
+        return Scan::Need { skip: buf.len() - keep };
+    };
+    let f = &buf[i..];
+    if f.len() < 9 {
+        return Scan::Need { skip: i };
+    }
+    if f[6] != VERSION {
+        return Scan::Need { skip: i + 1 };
+    }
+    let total = 9 + f[8] as usize + 1;
+    if f.len() < total {
+        return Scan::Need { skip: i };
+    }
+    if checksum(&f[..total - 1]) != f[total - 1] {
+        return Scan::Need { skip: i + 1 };
+    }
+    Scan::Frame { ty: f[7], data: &f[9..total - 1], used: i + total }
+}
+
+// ---------------------------------------------------------------------------
 // Encoders
 // ---------------------------------------------------------------------------
 

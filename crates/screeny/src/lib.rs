@@ -71,6 +71,7 @@ pub mod error;
 /// and the CLI have always used.
 pub use screeny_encode as encode;
 pub mod frame;
+pub mod improv;
 pub mod net;
 pub mod panel;
 pub mod patterns;
