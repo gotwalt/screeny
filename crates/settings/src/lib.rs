@@ -58,7 +58,7 @@ pub use store::{
     key, Fields, LoadReport, MapConfigError, SchemaState, Scratch, Store, StoreError, Write,
     MAX_ITEM_LEN, SCHEMA_VERSION, SCRATCH_LEN, SCRATCH_MIN,
 };
-pub use value::{Name, Psk, SettingError, Settings, Ssid, Wifi, DEFAULT_BRIGHTNESS};
+pub use value::{ColourOrder, Name, Psk, SettingError, Settings, Ssid, Wifi, DEFAULT_BRIGHTNESS};
 
 // The limits are `screeny-proto`'s, not ours: the store cannot hold something
 // the wire could not have carried.

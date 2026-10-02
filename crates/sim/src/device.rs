@@ -116,6 +116,9 @@ pub(crate) struct Shared {
     fade_ms: u32,
     panel_model: crate::config::PanelModel,
     rssi_dbm: i8,
+    /// Card 361: the stored colour order. Held here rather than in `Core`
+    /// because it is not a protocol setting and no opcode reaches it.
+    colour_order: Mutex<screeny_device_api::ColourOrder>,
     /// Card 246's paper firmware update. Off - and costing one unlocked
     /// `Option` per request - unless a test turns it on.
     ota: crate::ota::OtaModel,
@@ -140,6 +143,11 @@ impl Shared {
     /// `Host` rule accepts as this device's own.
     pub(crate) fn instance(&self) -> &str {
         &self.instance
+    }
+
+    /// The stored colour order (card 361).
+    pub(crate) fn colour_order(&self) -> &Mutex<screeny_device_api::ColourOrder> {
+        &self.colour_order
     }
 
     /// Card 246's firmware-update model, which the API routes read and
@@ -513,6 +521,13 @@ impl SimHandle {
         self.shared.core.lock().unwrap().set_health(health);
     }
 
+    /// The colour order the simulated unit has stored (card 361). Changed by
+    /// `POST /api/v1/settings`; there is no reboot here for it to wait for.
+    #[must_use]
+    pub fn colour_order(&self) -> screeny_device_api::ColourOrder {
+        *self.shared.colour_order().lock().unwrap()
+    }
+
     /// What the device is currently claiming about its health.
     #[must_use]
     pub fn health(&self) -> crate::Health {
@@ -674,6 +689,7 @@ impl SimDevice {
             fade_ms: cfg.timing.fade_ms,
             panel_model: cfg.panel,
             rssi_dbm: cfg.rssi_dbm,
+            colour_order: Mutex::new(cfg.colour_order),
             ota: crate::ota::OtaModel::new(),
         });
         shared.bus.publish(&boot_events);

@@ -136,7 +136,7 @@ pub const HTTP_TASKS: usize = 2;
 /// picoserve's own buffer: the request line, all the headers, and the whole
 /// body of any route that parses one.
 ///
-/// The body side is settled: `route::MAX_REQUEST_LEN` is 384 (the WiFi form),
+/// The body side is settled: `route::MAX_REQUEST_LEN` is 400 (the settings body),
 /// and picoserve's body extractors need it contiguous in here. The header side
 /// is what sets the number - a desktop Chrome `GET /` carries ~700 bytes of
 /// `User-Agent`, `Accept`, `sec-ch-ua*` and `sec-fetch-*`. 1536 covers that
@@ -874,6 +874,15 @@ async fn post_settings(req: SettingsRequest) -> Reply {
     if let Err(e) = apply_control(&reqs).await {
         return Reply::error(e);
     }
+    // Card 361: not a control opcode - the colour order never crosses the wire
+    // protocol and only the next boot reads it - so it is stored here and
+    // nothing else happens. `Skipped` (already stored) costs no flash write.
+    if let Some(order) = req.colour_order
+        && let Err(e) = store::commit_colour_order(order_to_setting(order)).await
+    {
+        warn!("http: storing the colour order failed: {:?}", e);
+        return Reply::detail(ErrorCode::Storage, "the write to flash failed");
+    }
 
     // The reply is the whole settings state, not an echo: a caller that set
     // only the brightness still learns the name, and one whose brightness was
@@ -890,7 +899,26 @@ async fn post_settings(req: SettingsRequest) -> Reply {
         name,
         brightness: crate::BRIGHTNESS.load(Ordering::Relaxed),
         idle_mode,
+        colour_order: Some(order_from_setting(store::colour_order_stored())),
     }))
+}
+
+/// The API's colour order as the store's. Two enums, one per crate, for the
+/// reason `IdleMode` has two: `screeny-device-api` does not depend on
+/// `screeny-settings`, and the firmware is the one place both are in scope.
+const fn order_to_setting(o: screeny_device_api::ColourOrder) -> screeny_settings::ColourOrder {
+    match o {
+        screeny_device_api::ColourOrder::Rotated => screeny_settings::ColourOrder::Rotated,
+        screeny_device_api::ColourOrder::Published => screeny_settings::ColourOrder::Published,
+    }
+}
+
+/// The store's colour order as the API's.
+const fn order_from_setting(o: screeny_settings::ColourOrder) -> screeny_device_api::ColourOrder {
+    match o {
+        screeny_settings::ColourOrder::Rotated => screeny_device_api::ColourOrder::Rotated,
+        screeny_settings::ColourOrder::Published => screeny_device_api::ColourOrder::Published,
+    }
 }
 
 async fn post_identify(req: IdentifyRequest) -> Reply {
@@ -1270,6 +1298,15 @@ impl core::fmt::Display for Page {
         row(f, "rssi", format_args!("{} dBm", s.rssi_dbm))?;
         row(f, "brightness", format_args!("{}", s.brightness))?;
         row(f, "idle_mode", format_args!("{}", idle_word(s.idle_mode)))?;
+        // Card 361: the *stored* colour order, which is what the next boot
+        // will use. Rendered here and not carried in `StatusReply` for card
+        // 243's reason (that type is moved through the response chain many
+        // times in one frame); the script reads this cell to set the select.
+        row(
+            f,
+            "colour_order",
+            format_args!("{}", order_from_setting(store::colour_order_stored()).word()),
+        )?;
         row(f, "uptime", format_args!("{} s", s.uptime_ms / 1000))?;
         row(f, "heap", format_args!("{} / {}", s.heap_used, s.heap_size))?;
         row(f, "stack_free", format_args!("{}", s.stack_free))?;
@@ -1737,7 +1774,7 @@ async fn route_request<R: picoserve::io::Read>(
         return match method {
             "GET" => get_setup(),
             "POST" => {
-                if body.content_length() > route::MAX_REQUEST_LEN {
+                if body.content_length() > screeny_device_api::form::MAX_FORM_LEN {
                     return Reply::detail(
                         ErrorCode::PayloadTooLarge,
                         "the body is longer than this route accepts",

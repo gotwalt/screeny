@@ -88,6 +88,7 @@ DISPLAY
     --brightness-cap N     the cap SET_BRIGHTNESS clamps to [255]
     --idle MODE            status | hold | dim | black [status]
     --rssi DBM             signal strength to report [-55]
+    --colour-order ORDER   rotated | published: the wiring the unit claims [rotated]
 
 DEVICE HEALTH (what GET /api/v1/status reports about itself; there is no
 flash here and no stack to measure, so these are chosen. Nothing else in
@@ -209,6 +210,13 @@ impl Opts {
                         "dim" => IdleMode::Dim,
                         "black" => IdleMode::Black,
                         other => return Err(format!("--idle: unknown mode {other:?}")),
+                    }
+                }
+                "--colour-order" => {
+                    o.cfg.colour_order = match value()?.as_str() {
+                        "rotated" => screeny_device_api::ColourOrder::Rotated,
+                        "published" => screeny_device_api::ColourOrder::Published,
+                        other => return Err(format!("--colour-order: unknown order {other:?}")),
                     }
                 }
                 // Card 192. Every name goes through the `screeny-device-api`

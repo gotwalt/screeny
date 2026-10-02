@@ -153,7 +153,8 @@ pin maps side by side. If you make it work, please send it back.
 
 Some Gen 1 units have the colour lines in the order Tidbyt's firmware publishes; the
 author's unit has them rotated. If `screeny pattern` shows the wrong colours, rebuild
-with the other pin order (`--features panel-hdk-colours`).
+the colour order. It is a setting, not a build: open the panel's own settings page,
+switch "Colour order" (`rotated` or `published`) and reboot.
 
 The panel runs from USB power. The firmware caps brightness and the art system limits
 average lit area, so a laptop port is enough; do not lift those limits without a

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build both firmware colour variants, package them as GitHub Release assets,
-# and cut the release. Assets go under target/fw-release/<version>/.
+# Build the firmware (one image for every Gen 1 unit since card 361: the colour
+# order is a stored setting), package it as GitHub Release assets, and cut the
+# release. Assets go under target/fw-release/<version>/.
 #
 # Usage: tools/fw-release.sh [--dry-run] [--draft] [--no-build]
 #   --dry-run  print every command; refuse nothing about the tag, branch or
@@ -55,15 +56,11 @@ BOOTLOADER=firmware/bootloader/esp32-rollback-bootloader.bin
 PARTS=firmware/partitions.csv
 ESP_ENV="$HOME/export-esp.sh"
 
-# 3. Build + image each colour variant. Both build to the same ELF path, so a
-# variant's images must be written before the next variant's build overwrites
-# it - these two steps cannot be split across a loop. Paths are computed here,
-# not returned from the function, so the function's own stdout (cargo's and
-# espflash's) never has to be parsed.
+# 3. Build + image the firmware. Paths are computed here, not returned from the
+# function, so the function's own stdout (cargo's and espflash's) never has to
+# be parsed.
 APP_DEFAULT="$OUT/screeny-fw-$VERSION.bin"
 FULL_DEFAULT="$OUT/screeny-fw-$VERSION-full.bin"
-APP_HDK="$OUT/screeny-fw-$VERSION-hdk-colours.bin"
-FULL_HDK="$OUT/screeny-fw-$VERSION-hdk-colours-full.bin"
 
 build_variant() {
   local features=$1 app=$2 full=$3
@@ -95,13 +92,12 @@ build_variant() {
 }
 
 build_variant "" "$APP_DEFAULT" "$FULL_DEFAULT"
-build_variant "panel-hdk-colours" "$APP_HDK" "$FULL_HDK"
 
 (cd "$OUT" && shasum -a 256 screeny-fw-"$VERSION"*.bin > SHA256SUMS)
 
-# 4. Scan each app image the way the device would; refuse the release if it
+# 4. Scan the app image the way the device would; refuse the release if it
 # would refuse the image.
-for img in "$APP_DEFAULT" "$APP_HDK"; do
+for img in "$APP_DEFAULT"; do
   echo "fw-scan $img"
   timeout 120 cargo run --release -p screeny-probe -- fw-scan "$img"
 done

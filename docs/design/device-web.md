@@ -218,7 +218,7 @@ and reply, verified through `serde_json` and `serde-json-core` on every `cargo t
 | GET | `/api/v1/networks` | - | at most 16, strongest first; one scan per 10 s |
 | GET | `/api/v1/wifi` | - | `{state, ssid, ip, reason}` - what the portal page's reload reads |
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}`, sent before the radio work |
-| POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | the applied values |
+| POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?, colour_order?}` | the applied values; `colour_order` (`rotated`\|`published`, card 361) is the stored value and takes effect on reboot. `{}` reads without changing. Not in `status`: that type is on the hot path (card 243), so the page renders it as a table row |
 | POST | `/api/v1/firmware` | raw octet-stream, streamed | `{ok, written, error?}` |
 | POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` |
 | POST | `/api/v1/identify` | `{duration_ms}` | `{"result":"identifying"}` |
@@ -282,7 +282,7 @@ What card 222 must not rediscover:
 
 - **picoserve does not buffer replies** (it measures into a counting writer, then
   streams), so reply bounds are documentation; the RAM-relevant bound is the request
-  side, `route::MAX_REQUEST_LEN` = 384 bytes (the WiFi form).
+  side, `route::MAX_REQUEST_LEN` = 400 bytes (the worst-case settings body; the WiFi form is 384).
 - **`serde_json_core::from_slice` silently does not unescape strings**: use
   `from_slice_escaped` / picoserve's `JsonWithUnescapeBufferSize<T, { MIN_UNESCAPE_BUFFER }>`
   (32 bytes = the longest name; raising `MAX_NAME_LEN` raises it).

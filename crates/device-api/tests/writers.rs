@@ -28,6 +28,7 @@ fn named(name: &str) -> SettingsReply {
         name: text(name).unwrap(),
         brightness: 96,
         idle_mode: IdleMode::Status,
+        colour_order: None,
     }
 }
 

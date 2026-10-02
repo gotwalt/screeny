@@ -62,6 +62,35 @@ impl From<IdleMode> for ProtoIdleMode {
     }
 }
 
+/// The panel's colour-line wiring (card 361).
+///
+/// Two Gen 1 wirings exist. `rotated` is the first bench unit's and the
+/// default; `published` is Tidbyt's `hdk` pin map. If red shows as blue, switch
+/// it. It is read once at boot, so a change takes effect on the next reboot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColourOrder {
+    /// The first bench unit's wiring. The default.
+    #[default]
+    Rotated,
+    /// Tidbyt's published pin map.
+    Published,
+}
+
+impl ColourOrder {
+    /// The longest serialised form, quotes included.
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("rotated", "published");
+
+    /// The word on the wire, without the quotes.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            ColourOrder::Rotated => "rotated",
+            ColourOrder::Published => "published",
+        }
+    }
+}
+
 /// The station's join state: the `GET_WIFI` byte of spec section 6.3.
 ///
 /// (Section 8.3 is the *join sequence* - what the device tries and in what

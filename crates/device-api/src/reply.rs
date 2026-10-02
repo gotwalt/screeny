@@ -14,7 +14,7 @@ use screeny_provision::machine::{Trial, TrialOutcome};
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{
-    Accepted, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use crate::text::{
@@ -567,6 +567,11 @@ pub struct SettingsReply {
     pub brightness: u8,
     /// The idle mode now in effect.
     pub idle_mode: IdleMode,
+    /// The colour order **stored**, which is what the next boot will use (card
+    /// 361). Absent from a firmware that predates the setting, so a reader
+    /// treats absence as `rotated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour_order: Option<ColourOrder>,
 }
 
 impl SettingsReply {
@@ -574,7 +579,8 @@ impl SettingsReply {
     pub const MAX_JSON_LEN: usize = 1
         + field("name", 2 + MAX_NAME_LEN * ESCAPE_MAX)
         + field("brightness", MAX_U8_LEN)
-        + field("idle_mode", IdleMode::MAX_JSON_LEN);
+        + field("idle_mode", IdleMode::MAX_JSON_LEN)
+        + field("colour_order", ColourOrder::MAX_JSON_LEN);
 }
 
 // ---------------------------------------------------------------------------

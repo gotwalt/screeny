@@ -13,7 +13,7 @@ use sequential_storage::Error as SsError;
 
 pub use sequential_storage::map::MapConfigError;
 
-use crate::value::{Name, Psk, SettingError, Settings, Ssid, Wifi};
+use crate::value::{ColourOrder, Name, Psk, SettingError, Settings, Ssid, Wifi};
 
 /// The schema version this build writes and understands.
 ///
@@ -25,7 +25,7 @@ pub const SCHEMA_VERSION: u8 = 1;
 /// The key byte of every item in the map. `sequential-storage` implements its
 /// `Key` trait for `u8`, so these are the keys verbatim.
 ///
-/// Numbers are permanent. A retired key is never reused; the next key is 6.
+/// Numbers are permanent. A retired key is never reused; the next key is 7.
 pub mod key {
     /// [`super::SCHEMA_VERSION`], a `u8`. Written first, read first.
     pub const SCHEMA_VERSION: u8 = 0;
@@ -40,6 +40,9 @@ pub mod key {
     pub const BRIGHTNESS: u8 = 4;
     /// Idle mode, a `u8`; interpret with `IdleMode::from_u8`.
     pub const IDLE_MODE: u8 = 5;
+    /// Colour-line wiring, a `u8`; interpret with `ColourOrder::from_u8`.
+    /// Added by card 361 without a schema bump: an absent key is `Rotated`.
+    pub const COLOUR_ORDER: u8 = 6;
 }
 
 /// The longest item this schema can produce: one key byte plus the longest
@@ -198,8 +201,10 @@ impl Fields {
     pub const BRIGHTNESS: Self = Self(1 << 2);
     /// The idle mode.
     pub const IDLE_MODE: Self = Self(1 << 3);
-    /// All four.
-    pub const ALL: Self = Self(0b1111);
+    /// The colour order.
+    pub const COLOUR_ORDER: Self = Self(1 << 4);
+    /// All five.
+    pub const ALL: Self = Self(0b1_1111);
 
     /// True when `other`'s bits are all set here.
     #[must_use]
@@ -394,6 +399,16 @@ impl<F: NorFlash> Store<F> {
             },
         }
 
+        match self.fetch_u8(scratch, key::COLOUR_ORDER).await {
+            Err(e) => report.note(Fields::COLOUR_ORDER, Some(e)),
+            Ok(None) => report.note(Fields::COLOUR_ORDER, None),
+            Ok(Some(raw)) => match ColourOrder::from_u8(raw) {
+                // A value a later firmware wrote and this one does not know.
+                None => report.note(Fields::COLOUR_ORDER, None),
+                Some(order) => out.colour_order = order,
+            },
+        }
+
         (out, report)
     }
 
@@ -527,6 +542,20 @@ impl<F: NorFlash> Store<F> {
         mode: IdleMode,
     ) -> Result<Write, StoreError> {
         self.save_u8(scratch, key::IDLE_MODE, mode.as_u8()).await
+    }
+
+    /// Store the colour order. Read at boot, so it takes effect on the next
+    /// reboot; written immediately by its callers, never debounced.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn save_colour_order(
+        &mut self,
+        scratch: &mut [u8],
+        order: ColourOrder,
+    ) -> Result<Write, StoreError> {
+        self.save_u8(scratch, key::COLOUR_ORDER, order.as_u8())
+            .await
     }
 
     /// Factory reset: erase the whole region.

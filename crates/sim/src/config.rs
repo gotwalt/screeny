@@ -326,6 +326,11 @@ pub struct Config {
     pub brightness: u8,
     /// Idle behaviour at startup.
     pub idle_mode: IdleMode,
+    /// The colour-line wiring the simulated unit claims (card 361). The real
+    /// device reads it once at boot to choose its HUB75 pins; the simulator
+    /// draws the picture the sender meant either way, so this is stored and
+    /// reported through `POST /api/v1/settings` and nothing more.
+    pub colour_order: screeny_device_api::ColourOrder,
     /// The RSSI to report in telemetry and draw on the status screen.
     pub rssi_dbm: i8,
     /// Spec timing constants, or a test's compressed versions of them.
@@ -408,6 +413,7 @@ impl Default for Config {
             brightness_cap: 255,
             brightness: 255,
             idle_mode: IdleMode::Status,
+            colour_order: screeny_device_api::ColourOrder::Rotated,
             rssi_dbm: -55,
             timing: Timing::SPEC,
             faults: Faults::default(),

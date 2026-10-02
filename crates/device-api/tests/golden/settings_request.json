@@ -1,5 +1,6 @@
 {
   "name": "Studio panel",
   "brightness": 96,
-  "idle_mode": "dim"
+  "idle_mode": "dim",
+  "colour_order": "published"
 }

@@ -9,7 +9,7 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use screeny_settings::{
-    key, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch,
+    key, ColourOrder, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch,
     SettingError, Settings, Ssid, Store, StoreError, Wifi, DEFAULT_BRIGHTNESS, SCHEMA_VERSION,
     SCRATCH_MIN,
 };
@@ -131,9 +131,11 @@ fn every_key_round_trips() {
     block_on(st.save_name(buf, &Name::new("kitchen").unwrap())).unwrap();
     block_on(st.save_brightness(buf, 137)).unwrap();
     block_on(st.save_idle_mode(buf, IdleMode::Dim)).unwrap();
+    block_on(st.save_colour_order(buf, ColourOrder::Published)).unwrap();
 
     let (settings, report) = load(&mut st);
     assert!(report.is_clean(), "{report:?}");
+    assert_eq!(settings.colour_order, ColourOrder::Published);
     assert_eq!(report.schema, SchemaState::Current);
     assert_eq!(settings.wifi, Some(wifi()));
     assert_eq!(settings.wifi.as_ref().unwrap().psk.as_bytes(), PSK);
@@ -293,7 +295,7 @@ fn an_unknown_key_is_ignored_not_an_error() {
 
     // Key 6 is the next one expected to be added (a boot counter);
     // key 200 is something further out still.
-    let flash = poke_bytes(st.flash().clone(), 6, &[1, 2, 3, 4]);
+    let flash = poke_bytes(st.flash().clone(), 7, &[1, 2, 3, 4]);
     let flash = poke_bytes(flash, 200, b"a much longer future value");
     let mut st = store(flash);
 
@@ -747,4 +749,56 @@ fn a_sixty_second_brightness_sweep_costs_a_handful_of_writes() {
         "sweep: {changes} changes -> {commits} commits -> {} flash writes, {} erases",
         d.writes, d.erases
     );
+}
+
+// -- colour order (card 361) -------------------------------------------------
+
+#[test]
+fn colour_order_defaults_to_rotated_and_round_trips() {
+    let mut scratch = Scratch::new();
+    let mut st = store(blank_flash());
+    assert_eq!(load(&mut st).0.colour_order, ColourOrder::Rotated);
+
+    for order in [ColourOrder::Published, ColourOrder::Rotated] {
+        block_on(st.save_colour_order(scratch.as_mut_slice(), order)).unwrap();
+        let (settings, report) = load(&mut st);
+        assert_eq!(settings.colour_order, order);
+        assert!(!report.fallback.contains(Fields::COLOUR_ORDER));
+    }
+    assert_eq!(
+        block_on(st.save_colour_order(scratch.as_mut_slice(), ColourOrder::Rotated)).unwrap(),
+        screeny_settings::Write::Skipped
+    );
+}
+
+#[test]
+fn a_store_written_before_the_key_existed_loads_clean_as_rotated() {
+    // The migration: no schema bump, so a unit with credentials stored by an
+    // older build keeps them and boots in the order it always did. The new
+    // field is reported as a fallback (it is absent) and that is not an error.
+    let mut scratch = Scratch::new();
+    let mut st = store(blank_flash());
+    block_on(st.save_wifi(scratch.as_mut_slice(), &Wifi::new(SSID, PSK).unwrap())).unwrap();
+    block_on(st.save_brightness(scratch.as_mut_slice(), 77)).unwrap();
+
+    let (settings, report) = load(&mut st);
+    assert_eq!(report.schema, SchemaState::Current);
+    assert_eq!(report.error, None);
+    assert!(report.fallback.contains(Fields::COLOUR_ORDER));
+    assert_eq!(settings.colour_order, ColourOrder::Rotated);
+    assert!(settings.wifi.is_some(), "the credentials survive");
+    assert_eq!(settings.brightness, 77);
+}
+
+#[test]
+fn a_colour_order_this_build_does_not_know_falls_back_without_an_error() {
+    let mut scratch = Scratch::new();
+    let mut st = store(blank_flash());
+    block_on(st.save_brightness(scratch.as_mut_slice(), 77)).unwrap();
+    let flash = poke_u8(st.flash().clone(), key::COLOUR_ORDER, 9);
+    let (settings, report) = load(&mut store(flash));
+    assert_eq!(settings.colour_order, ColourOrder::Rotated);
+    assert_eq!(settings.brightness, 77);
+    assert!(report.fallback.contains(Fields::COLOUR_ORDER));
+    assert_eq!(report.error, None);
 }

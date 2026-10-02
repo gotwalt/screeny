@@ -46,7 +46,7 @@ const ACCEPT_POLL: Duration = Duration::from_millis(20);
 pub const MAX_HEAD_LEN: usize = 8 * 1024;
 /// The largest non-streamed request body that will be buffered.
 ///
-/// Far above `screeny_device_api::route::MAX_REQUEST_LEN` (384 bytes) on
+/// Far above `screeny_device_api::route::MAX_REQUEST_LEN` (400 bytes) on
 /// purpose: a body between the route's bound and this one has to be *read* to
 /// be refused with `payload_too_large` rather than by hanging up, which is
 /// what a client needs to see the error at all.

@@ -1437,9 +1437,9 @@ fn oversize_for(r: &route::Route) -> (String, &'static str) {
 }
 
 fn oversize_body(cx: &mut Ctx) -> Result<Outcome, String> {
-    // `MAX_REQUEST_LEN` is the WiFi form's 384 bytes and it is the number card
-    // 222 sizes picoserve's buffer from, so this is the one length bound every
-    // build has to enforce however it routes.
+    // The WiFi form's own bound (384 bytes, `max_request_len` of its row) is the
+    // one length bound every build has to enforce however it routes. (Card 361
+    // made the global `MAX_REQUEST_LEN` the settings body's 400.)
     let r = route::find(route::WIFI, route::Method::Post)
         .ok_or("POST /api/v1/wifi is not in ROUTES")?;
     let (body, ct) = oversize_for(r);
@@ -1450,7 +1450,7 @@ fn oversize_body(cx: &mut Ctx) -> Result<Outcome, String> {
             format!(
                 "{} bytes (bound {}) answered HTTP {}: {}",
                 body.len(),
-                route::MAX_REQUEST_LEN,
+                r.max_request_len,
                 res.status,
                 res.snippet(60)
             ),
@@ -1461,7 +1461,7 @@ fn oversize_body(cx: &mut Ctx) -> Result<Outcome, String> {
         Outcome::Pass(d) => Outcome::Pass(format!(
             "{} bytes over the {}-byte bound: {d}",
             body.len(),
-            route::MAX_REQUEST_LEN
+            r.max_request_len
         )),
         other => other,
     })

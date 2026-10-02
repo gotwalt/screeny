@@ -16,6 +16,7 @@ clock (card 212), and `cargo test` covers everything below on the host against
 | 3 `NAME` | `&[u8]`, UTF-8 | 32 | empty: use `screeny-<id>` |
 | 4 `BRIGHTNESS` | `u8` | - | `DEFAULT_BRIGHTNESS` (96) |
 | 5 `IDLE_MODE` | `u8` | - | `IdleMode::Status` |
+| 6 `COLOUR_ORDER` | `u8`: 0 `rotated`, 1 `published` | - | `ColourOrder::Rotated` (every unit that predates the key) |
 
 Limits are `screeny-proto`'s constants, not numbers typed twice. An SSID is
 **bytes** (real access points are not all UTF-8); a `Name` is **text**, because
@@ -23,7 +24,7 @@ it becomes a `heapless::String` in `screeny-receiver` and an mDNS instance name.
 
 ## Adding a key
 
-1. Take the next number (6) in `store::key`. **Never reuse a retired one.**
+1. Take the next number (7) in `store::key`. **Never reuse a retired one.**
 2. Fetch it in `Store::load` and give it a `Fields` bit; a missing or unusable
    value must fall back to a default and be reported, never fail the load.
 3. Add a saver that compares before it writes, so the debounce still works.

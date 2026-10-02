@@ -228,6 +228,45 @@ impl Name {
     }
 }
 
+/// Which of the two Gen 1 HUB75 colour-line wirings this unit has.
+///
+/// Some units are wired in the order Tidbyt's `hdk` publishes; the first bench
+/// unit is rotated relative to it (the lines the hdk calls R/G/B drive
+/// blue/red/green). One firmware image serves both, and the firmware picks
+/// which GPIO is which colour at boot from this setting (card 361). The wire
+/// protocol never carries it.
+///
+/// The flash byte is [`ColourOrder::as_u8`]; an unknown byte falls back to the
+/// default at load, like an unknown idle mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum ColourOrder {
+    /// The first bench unit's wiring, and the default so every unit already in
+    /// the field boots exactly as it did before this setting existed.
+    #[default]
+    Rotated = 0,
+    /// Tidbyt's published (`hdk`) pin map.
+    Published = 1,
+}
+
+impl ColourOrder {
+    /// The flash byte.
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Interpret a flash byte. `None` for a value this build does not know.
+    #[must_use]
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(ColourOrder::Rotated),
+            1 => Some(ColourOrder::Published),
+            _ => None,
+        }
+    }
+}
+
 /// Everything the device persists.
 ///
 /// `Clone + PartialEq` so the firmware can keep one of these as the live
@@ -244,6 +283,9 @@ pub struct Settings {
     pub brightness: u8,
     /// What to do when no source is streaming.
     pub idle_mode: IdleMode,
+    /// The panel's colour-line wiring. Read once at boot to pick the pins, so
+    /// a change takes effect on the next reboot.
+    pub colour_order: ColourOrder,
 }
 
 impl Default for Settings {
@@ -253,6 +295,7 @@ impl Default for Settings {
             name: Name::empty(),
             brightness: DEFAULT_BRIGHTNESS,
             idle_mode: IdleMode::Status,
+            colour_order: ColourOrder::Rotated,
         }
     }
 }

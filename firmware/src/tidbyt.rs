@@ -7,7 +7,7 @@
 //!
 //! Confirmed on the author's unit: the panel geometry, this pin map (though
 //! its colour-line order is rotated on that particular board - see the
-//! `panel-hdk-colours` feature in `Cargo.toml`), the button pin
+//! `colour_order` setting, card 361), the button pin
 //! ([`BUTTON_GPIO`]) and the pixel clock. The firmware has run for days on
 //! that hardware; what is still inferred rather than cross-checked is called
 //! out inline below.
