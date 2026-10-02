@@ -74,3 +74,16 @@ ESP Web Tools 10.4.0 (checked against npm's sha512). Nothing binary is committed
   a first install clears that rather than relying on the store tolerating leftovers.
 - **Needs one image**: the page installs `screeny-fw-<v>-full.bin`; colour order is a runtime
   setting (card 361), so the `-hdk-colours` variants are not published.
+
+## Status, 2026-10-02 (paused)
+
+| card | state |
+|---|---|
+| 357 software adapter hides overland/ghosts | merged |
+| 359 the app (`ha-app/`, ingress-only, Supervisor MQTT) | merged; **not yet run on a real HA** - needs 360's images. Open: `ingress_port` 8099 + watchdog on a real Supervisor, websocket through HA's proxy, peer `172.30.32.2` |
+| 360 multi-arch images on ghcr | not started; build `--target app`; image `ghcr.io/gotwalt/screeny-studio`, tag = `ha-app/config.yaml` `version`; the ghcr package must be made public |
+| 361 colour order as a runtime setting | in progress on a local branch (see its card) |
+| 362 Improv Serial | merged; **not yet tried on a Tidbyt**. Bench: `screeny improv --port <tty> info|state|scan`, then ESP Web Tools; check GPIO3 receives without `with_rx`, logs stay clean, wrong password falls back |
+| 363 web flasher (`site/`, `tools/pages-build.sh`) | merged; needs GitHub Pages enabled (Source: GitHub Actions) and a firmware release containing 361 + 362 (0.11.0) for the WiFi step to appear. ESP Web Tools flashes at 115200 (fine for the CP2102N) and erases on a first install |
+| 364 firmware updates from HA | not started; OTA has never been used for a real update - the first real one on the bench is part of it |
+| 365 guide + end-to-end on a real HA | not started; decide first how the app takes the panels over from an existing Studio (both would stream to the same panels and publish to the same broker) |
