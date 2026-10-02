@@ -65,6 +65,8 @@ pub mod device;
 pub mod dump;
 pub mod event;
 pub mod font;
+// Card 362: Improv Wi-Fi over serial, on a TCP socket.
+pub mod improv;
 pub mod mdns;
 pub mod net;
 // Card 246: a paper firmware update, off unless a test asks for it.

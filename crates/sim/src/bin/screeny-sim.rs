@@ -68,7 +68,9 @@ NETWORK
     --no-http              do not serve the HTTP API
 
 WIFI (there is no radio; all of this is scripted)
-    --wifi-result WHICH    what a join attempt does: ok | fail | slow [ok]
+    --improv-port N        offer Improv Wi-Fi over serial on this TCP port
+                           (screeny improv --port tcp:127.0.0.1:N) [off]
+    --wifi-result WHICH   what a join attempt does: ok | fail | slow [ok]
                            ok   = joins; fail = wrong password;
                            slow = the radio never answers, so it times out
     --wifi-join-ms MS      how long a scripted join takes [200]
@@ -171,6 +173,7 @@ impl Opts {
                     // fallback: this one is going to be connected to.
                     o.cfg.http_port_explicit = true;
                 }
+                "--improv-port" => o.cfg.improv_port = Some(num(&value()?, "--improv-port")?),
                 "--wifi-ssid" => o.cfg.wifi_ssid = value()?,
                 "--ap-ssid" => o.cfg.ap_ssid = value()?,
                 "--wifi-join-ms" => o.cfg.wifi_join_ms = num(&value()?, "--wifi-join-ms")?,
@@ -305,6 +308,9 @@ fn run(opts: Opts) -> Result<(), String> {
         // the first one and has since card 006.
         if let Some(addr) = dev.http_addr() {
             println!("screeny-sim: HTTP API on http://{addr}/");
+        }
+        if let Some(addr) = dev.improv_addr() {
+            println!("screeny-sim: Improv Wi-Fi on tcp:{addr}");
         }
         if mdns {
             println!("screeny-sim: advertising _screeny._udp as {instance:?}");

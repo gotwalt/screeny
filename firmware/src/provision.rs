@@ -198,6 +198,18 @@ fn with<R>(f: impl FnOnce(&Provisioner) -> R) -> Option<R> {
     MACHINE.lock(|c| c.borrow().as_ref().map(f))
 }
 
+/// What the Improv Serial session needs from the machine (card 362).
+#[must_use]
+pub fn improv_observed() -> screeny_provision::improv::Observed {
+    with(screeny_provision::improv::Observed::from_machine).unwrap_or(
+        screeny_provision::improv::Observed {
+            state: State::Boot,
+            trial: None,
+            ip: None,
+        },
+    )
+}
+
 /// The trailing byte of a `GET_WIFI` reply (spec section 6.3), straight from
 /// the machine - including its sticky `FAILED` after a posted pair did not work.
 #[must_use]

@@ -358,6 +358,10 @@ pub struct Config {
     /// `true` means somebody named the port (`--http-port N`) and is going to
     /// connect to it, so a busy one is an error rather than a surprise.
     pub http_port_explicit: bool,
+    /// Serve Improv Wi-Fi over serial on this TCP port (card 362); 0 binds an
+    /// ephemeral one and `None` (the default) serves nothing. See
+    /// [`crate::improv`].
+    pub improv_port: Option<u16>,
     /// The SSID the simulator claims its store holds, and so what `GET_WIFI`
     /// and `/api/v1/status` report. Never a PSK; the simulator keeps none.
     pub wifi_ssid: String,
@@ -412,6 +416,7 @@ impl Default for Config {
             http: true,
             http_port: DEFAULT_HTTP_PORT,
             http_port_explicit: false,
+            improv_port: None,
             wifi_ssid: crate::core::SIM_SSID.into(),
             ap_ssid: "screeny-515151".into(),
             wifi_outcome: WifiOutcome::Ok,
