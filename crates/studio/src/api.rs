@@ -252,11 +252,12 @@ fn pick(st: &AppState, channel: &Arc<Channel>, def: &'static PatchDef, setting: 
 
 async fn bootstrap(State(st): State<AppState>, Query(q): Query<Which>) -> ApiResult<Json<Bootstrap>> {
     let aim = target(&st, &Target::default(), &q)?;
+    let gpu = screeny_art::gpu_status();
     Ok(Json(Bootstrap {
-        patches: page::patches(st.cfg.fault_patches),
+        patches: page::patches(st.cfg.fault_patches, &gpu),
         payload_bytes: screeny_art::meter::PAYLOAD_BYTES,
         state: st.state_of(&aim.channel, aim.from.as_ref()),
-        gpu: screeny_art::gpu_status(),
+        gpu,
         brightness_stops: page::brightness_stops(),
     }))
 }

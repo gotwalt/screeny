@@ -657,7 +657,13 @@ does fix:
 
 A **missing graphics adapter is not one of them** (card 145). A studio with no GPU plays
 every CPU patch perfectly well and no restart conjures one, so it is reported as `gpu` on
-`/api/v1/status` and said on the page, never as a 503.
+`/api/v1/status` and said on the page, never as a 503. The same goes for a **software
+adapter** (llvmpipe, SwiftShader, WARP: `gpu.software` is true, and the startup line
+ends `(Vulkan, software)`): overland and ghosts need a hardware adapter and are marked
+unplayable (card 357); leaves, lattice and knot still play. The one rule is
+`screeny_art::patches::playable`, and the bootstrap carries its answer per patch
+(`playable`, `unplayable_reason`) so the page, the startup line and the Home Assistant
+patch list cannot disagree.
 
 Card 106 had a fourth, "the preview engine is wedged", and card 170 deleted the thing
 it was about. A patch that stops returning is now caught by the same five-second
@@ -817,7 +823,7 @@ channel's `StudioState`:
 
 | route | body | answer |
 |---|---|---|
-| `GET /bootstrap?channel=` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`), which are worth asking "another one like this" of (`seeded`, card 151), the payload budget, the channel's state, and the adapter outcome (`gpu`) |
+| `GET /bootstrap?channel=` | | every patch and its parameters (a parameter that is a list of named stops carries `choices`; a 0/1 one carries `switch`), which patches need a GPU (`needs_gpu`) and whether this machine can play each (`playable`, `unplayable_reason`; card 357), which are worth asking "another one like this" of (`seeded`, card 151), the payload budget, the channel's state, and the adapter outcome (`gpu`) |
 | `GET /frame?channel=` | | one frame packet: 52-byte header + 64x32 sRGB = 6196 bytes - the channel's last encoded frame, decoded: what every panel on it was sent |
 | `GET /patch_playing?channel=` | | what a composing patch is performing, or `null` |
 | `GET /panel_status?panel=` | | a panel's link (the first panel's without `panel`), or `null` |

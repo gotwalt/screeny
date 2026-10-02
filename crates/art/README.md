@@ -191,8 +191,10 @@ determinism claim is checked on the code that is shipped.
    through `Patch::playing` - "Compose another" is the better word, and it acts
    at once instead of rebuilding the patch.
 4. List it in `ALL` in `crates/art/src/patches/mod.rs`. If it needs a GPU, list
-   its id in `NEEDS_GPU` beside it, so the studio can say why it is black on a
-   machine with no adapter (card 145).
+   its id in `GPU_PATCHES` beside it with what it needs (`Need::Adapter`, or
+   `Need::Hardware` when a software rasteriser such as llvmpipe is too slow),
+   so the studio can say why it is unavailable on a machine without (cards 145,
+   357). Callers ask `patches::playable(id, &gpu_status())`, never the list.
 
 Work in linear light (`Rgb`), choose colours with `color::oklch`, use
 `Frame::supersample` for anything with edges or slow motion, and drive

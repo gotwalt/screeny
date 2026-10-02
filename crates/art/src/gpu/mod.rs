@@ -35,6 +35,8 @@ pub struct Gpu {
     pub adapter: String,
     /// Which backend it came up on: "Metal", "Vulkan", "Gl".
     pub backend: String,
+    /// A software rasteriser (`DeviceType::Cpu`), for [`status`] (card 357).
+    pub software: bool,
 }
 
 impl Gpu {
@@ -62,7 +64,7 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("GPU device: {e}"))?;
-        Ok(Gpu { device, queue, adapter: info.name.clone(), backend: format!("{:?}", info.backend) })
+        Ok(Gpu { device, queue, adapter: info.name.clone(), backend: format!("{:?}", info.backend), software: info.device_type == wgpu::DeviceType::Cpu })
     }
 }
 
@@ -83,6 +85,7 @@ pub fn status() -> crate::GpuStatus {
             available: true,
             adapter: gpu.adapter.clone(),
             backend: gpu.backend.clone(),
+            software: gpu.software,
             error: None,
         },
         Err(e) => crate::GpuStatus { available: false, error: Some(e.clone()), ..Default::default() },
