@@ -22,7 +22,7 @@ only from that sidebar entry (Home Assistant's "ingress").
 
 The Studio finds Tidbyts running the Screeny firmware on your network by itself, and
 a new panel joins Channel 1. Putting the firmware on a Tidbyt for the first time is
-done from your browser: the flasher is at *(link to come: card 363)*.
+done from your browser: the flasher is at <https://gotwalt.github.io/screeny/> (desktop Chrome, Edge or Opera and a USB data cable).
 
 ## MQTT: nothing to set up
 

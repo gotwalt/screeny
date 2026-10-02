@@ -301,6 +301,9 @@ fn the_screens_keep_their_promises() {
             ("settings.js", SETTINGS_JS),
             ("style.css", STYLE_CSS),
         ] {
+            // A link the person follows is not something the page loads: the
+            // flasher (card 363) lives on HTTPS because Web Serial needs it.
+            let text = text.replace("href=\"https://gotwalt.github.io/screeny/\"", "");
             assert!(!text.contains(bad), "{what} must not reach outside the box: {bad}");
         }
     }
