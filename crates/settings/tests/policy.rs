@@ -48,6 +48,7 @@ fn debug_of_the_whole_settings_does_not_contain_the_psk() {
         name: Name::new("kitchen").unwrap(),
         brightness: 96,
         idle_mode: IdleMode::Dim,
+        colour_order: screeny_settings::ColourOrder::Published,
     };
     let text = format!("{s:?}");
     assert!(!text.contains("password9"), "{text}");
@@ -68,6 +69,7 @@ fn the_defaults_are_the_firmwares() {
     assert_eq!(d.brightness, DEFAULT_BRIGHTNESS);
     assert_eq!(DEFAULT_BRIGHTNESS, 96, "firmware/src/display.rs:116");
     assert_eq!(d.idle_mode, IdleMode::Status);
+    assert_eq!(d.colour_order, screeny_settings::ColourOrder::Rotated);
     assert_eq!(d.wifi, None);
     assert!(d.name.is_empty(), "empty means screeny-<id>");
 }
