@@ -92,8 +92,8 @@ fn main() -> ExitCode {
         // anyway, and doing it now keeps the first `/api/v1/status` prompt.
         // It is never fatal: the CPU patches do not care.
         let gpu = screeny_art::gpu_status();
-        let blocked = screeny_art::patches::NEEDS_GPU;
-        if gpu.available || blocked.is_empty() {
+        let blocked = screeny_art::patches::blocked(&gpu);
+        if blocked.is_empty() {
             println!("studio: {}", gpu.line());
         } else {
             println!("studio: {} - {} cannot be played here", gpu.line(), blocked.join(", "));

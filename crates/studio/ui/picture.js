@@ -232,8 +232,11 @@ async function start() {
   // which nobody is reading. The outcome is decided once by the server and
   // comes down in `bootstrap`.
   const gpu = boot.gpu || { available: true };
-  const unplayable = (p) => Boolean(p && p.needs_gpu && !gpu.available);
+  // Card 357: whether this machine can play a patch is the server's answer
+  // (`playable`, `unplayable_reason`), not a rule written out here again.
+  const unplayable = (p) => Boolean(p && p.playable === false);
   const blocked = boot.patches.filter(unplayable);
+  const whyNot = (p) => (p && p.unplayable_reason) || gpu.error || 'no graphics adapter';
 
   $('#patches').replaceChildren(...boot.patches.map((p) => {
     const label = document.createElement('label');
@@ -243,8 +246,8 @@ async function start() {
       // Not offered, rather than offered and then black.
       input.disabled = true;
       label.dataset.unavailable = 'yes';
-      label.title = 'Needs a graphics adapter, and there is none here.';
-      span.append(Object.assign(document.createElement('em'), { textContent: 'no GPU' }));
+      label.title = `Not available here: ${whyNot(p)}.`;
+      span.append(Object.assign(document.createElement('em'), { textContent: gpu.available ? 'software' : 'no GPU' }));
     }
     input.addEventListener('change', async () => adopt(await call('set_patch', { id: p.id })));
     label.append(input, span);
@@ -254,7 +257,8 @@ async function start() {
   $('#gpu-note').hidden = blocked.length === 0;
   if (blocked.length) {
     const names = blocked.map((p) => p.name).join(', ');
-    $('#gpu-note').textContent = `${names} cannot be drawn here — ${gpu.error || 'no graphics adapter'}.`;
+    const reasons = [...new Set(blocked.map(whyNot))].join('; ');
+    $('#gpu-note').textContent = `${names} cannot be drawn here — ${reasons}.`;
   }
 
   /** A black picture never passes silently: if the patch that is *already*
@@ -278,7 +282,7 @@ async function start() {
       return;
     }
     $('#gpu-note').dataset.tone = 'bad';
-    blackNotice = `${patch.name} needs a graphics adapter, so the panel is black — ${gpu.error || 'no graphics adapter'}. Pick another patch.`;
+    blackNotice = `${patch.name} cannot be drawn here, so the panel ${gpu.available ? 'would stutter' : 'is black'} — ${whyNot(patch)}. Pick another patch.`;
     if (el.hidden || el.textContent === blackNotice) notice(blackNotice);
   }
 

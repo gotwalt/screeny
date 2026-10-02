@@ -485,7 +485,20 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
         .filter(|p| p["needs_gpu"] == true)
         .filter_map(|p| p["id"].as_str())
         .collect();
-    assert_eq!(marked, screeny_art::patches::NEEDS_GPU.to_vec(), "the marked patches are exactly the GPU ones");
+    let expected: Vec<&str> = screeny_art::patches::ALL
+        .iter()
+        .map(|d| d.id)
+        .filter(|id| screeny_art::patches::need(id) != screeny_art::patches::Need::Nothing)
+        .collect();
+    assert_eq!(marked, expected, "the marked patches are exactly the GPU ones");
+    // Card 357: the per-patch answer is the art crate's predicate, on this machine's status.
+    let status_now = screeny_art::gpu_status();
+    for p in patches {
+        let id = p["id"].as_str().unwrap();
+        let verdict = screeny_art::patches::playable(id, &status_now);
+        assert_eq!(p["playable"], verdict.is_ok(), "{id}");
+        assert_eq!(p["unplayable_reason"].as_str().map(str::to_string), verdict.err(), "{id}");
+    }
 
     let status = get(at, "/api/v1/status").await.json();
     assert_eq!(status["gpu"], *gpu, "the two routes must not be able to disagree");
@@ -507,7 +520,8 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
 fn the_page_says_why_a_gpu_patch_is_not_available() {
     assert!(INDEX_HTML.contains("id=\"gpu-note\""), "the patch list needs a line for the adapter");
     assert!(PICTURE_JS.contains("input.disabled = true"), "a patch that cannot draw must not be offered");
-    assert!(PICTURE_JS.contains("needs_gpu"), "the page reads the per-patch flag from bootstrap");
+    assert!(PICTURE_JS.contains("unplayable_reason"), "the page reads the per-patch answer from bootstrap");
+    assert!(!PICTURE_JS.contains("needs_gpu"), "no second copy of the rule in the page (card 357)");
     assert!(STYLE_CSS.contains("data-unavailable"), "an unavailable patch has to look unavailable");
 }
 

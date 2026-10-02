@@ -105,7 +105,7 @@ pub fn playable(id: &str, gpu: &crate::GpuStatus) -> Result<(), String> {
         Need::Adapter => Err(gpu.line()),
         Need::Hardware if gpu.available && !gpu.software => Ok(()),
         Need::Hardware if gpu.available => Err(format!(
-            "they need a graphics card; this machine draws in software ({})",
+            "a graphics card is needed; this machine draws in software ({})",
             gpu.adapter.split(" (").next().unwrap_or(&gpu.adapter)
         )),
         Need::Hardware => Err(gpu.line()),

@@ -134,16 +134,19 @@ fn panel_of(st: &AppState, panel: &Arc<Panel>) -> Snapshot {
     }
 }
 
+/// The patches this machine can play, by the same predicate the page reads
+/// (card 357): HA's list leaves the others out.
+#[must_use]
+pub fn playable_patches(faults: bool, gpu: &screeny_art::GpuStatus) -> Vec<crate::page::PatchInfo> {
+    crate::page::patches(faults, gpu).into_iter().filter(|p| p.playable).collect()
+}
+
 /// Every patch this studio can play here, on Default and then on each of its
 /// named settings (alphabetically, as the Picture screen lists them).
 #[must_use]
 pub fn pictures(st: &AppState) -> Vec<Picture> {
-    let gpu = screeny_art::gpu_status().available;
     let mut out = Vec::new();
-    for p in crate::page::patches(st.cfg.fault_patches) {
-        if p.needs_gpu && !gpu {
-            continue;
-        }
+    for p in playable_patches(st.cfg.fault_patches, &screeny_art::gpu_status()) {
         let settings = std::iter::once(DEFAULT_SETTING.to_string()).chain(st.memory.setting_names(p.id));
         out.extend(settings.map(|setting| Picture { label: Picture::label(p.name, &setting), patch: p.id.to_string(), setting }));
     }
@@ -253,7 +256,37 @@ pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::snap;
+    use super::{playable_patches, snap};
+
+    fn status(available: bool, software: bool) -> screeny_art::GpuStatus {
+        screeny_art::GpuStatus {
+            available,
+            adapter: if available { "llvmpipe (LLVM 19.1.7, 128 bits)".into() } else { String::new() },
+            backend: if available { "Vulkan".into() } else { String::new() },
+            software,
+            error: (!available).then(|| "no GPU adapter: none".into()),
+        }
+    }
+
+    /// Card 357: on a software rasteriser HA is not offered overland or ghosts
+    /// but still gets leaves, lattice and knot; with a hardware adapter, all.
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn ha_leaves_out_the_hardware_only_patches_on_a_software_adapter() {
+        let ids = |g: &screeny_art::GpuStatus| playable_patches(false, g).iter().map(|p| p.id).collect::<Vec<_>>();
+        let hard = ids(&status(true, false));
+        let soft = ids(&status(true, true));
+        let none = ids(&status(false, false));
+        assert!(hard.contains(&"overland") && hard.contains(&"ghosts"));
+        assert!(!soft.contains(&"overland") && !soft.contains(&"ghosts"));
+        for id in ["leaves", "lattice", "knot", "vesta"] {
+            assert!(soft.contains(&id), "{id} stays on software");
+        }
+        for id in ["leaves", "lattice", "knot", "overland", "ghosts"] {
+            assert!(!none.contains(&id), "{id} needs an adapter");
+        }
+        assert!(none.contains(&"vesta"));
+    }
 
     #[test]
     fn snap_lands_on_a_real_stop_and_never_turns_a_level_off() {

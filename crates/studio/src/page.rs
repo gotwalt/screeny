@@ -273,6 +273,13 @@ pub struct PatchInfo {
     /// [`Bootstrap::gpu`] saying there is none, the page marks it unavailable
     /// rather than letting it be picked and render black.
     pub needs_gpu: bool,
+    /// Card 357: whether *this* machine can play it, from the one predicate
+    /// (`screeny_art::patches::playable`). False for a hardware-only patch on a
+    /// software rasteriser as well as for a GPU patch with no adapter; the page
+    /// carries no copy of the rule.
+    pub playable: bool,
+    /// Why not, in words, when `playable` is false.
+    pub unplayable_reason: Option<String>,
     /// Card 151: whether "another one like this" means anything to this patch
     /// (`PatchDef::seeded`). The page shows its one quiet **Another** button
     /// only for a patch that says yes; the seed itself is not shown at all any
@@ -383,7 +390,7 @@ pub fn brightness_stops() -> Vec<u8> {
 
 /// Every patch this build offers, with its parameters.
 #[must_use]
-pub fn patches(faults: bool) -> Vec<PatchInfo> {
+pub fn patches(faults: bool, gpu: &screeny_art::GpuStatus) -> Vec<PatchInfo> {
     let extra = if faults { crate::channel::FAULT_PATCHES } else { &[] };
     patches::ALL
         .iter()
@@ -392,7 +399,9 @@ pub fn patches(faults: bool) -> Vec<PatchInfo> {
             id: d.id,
             name: d.name,
             blurb: d.blurb,
-            needs_gpu: patches::needs_gpu(d.id),
+            needs_gpu: patches::need(d.id) != patches::Need::Nothing,
+            playable: patches::playable(d.id, gpu).is_ok(),
+            unplayable_reason: patches::playable(d.id, gpu).err(),
             seeded: d.seeded,
             params: d
                 .params
@@ -414,7 +423,35 @@ pub fn patches(faults: bool) -> Vec<PatchInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::brightness_stops;
+    use super::{brightness_stops, patches};
+
+    /// Card 357: the bootstrap carries the per-patch answer and reason, built
+    /// from a hand-made adapter status so no test depends on this machine's.
+    #[test]
+    fn the_bootstrap_marks_overland_and_ghosts_unplayable_on_software() {
+        let soft = screeny_art::GpuStatus {
+            available: true,
+            adapter: "llvmpipe (LLVM 19.1.7, 128 bits)".into(),
+            backend: "Vulkan".into(),
+            software: true,
+            error: None,
+        };
+        let list = patches(false, &soft);
+        let get = |id: &str| list.iter().find(|p| p.id == id).unwrap_or_else(|| panic!("{id}"));
+        if cfg!(feature = "gpu") {
+            for id in ["overland", "ghosts"] {
+                assert!(!get(id).playable, "{id}");
+                let why = get(id).unplayable_reason.clone().unwrap();
+                assert!(why.contains("software (llvmpipe)"), "{why}");
+            }
+            for id in ["leaves", "lattice", "knot"] {
+                assert!(get(id).playable && get(id).unplayable_reason.is_none(), "{id}");
+            }
+        }
+        assert!(list.iter().filter(|p| !p.needs_gpu).all(|p| p.playable));
+        let hard = screeny_art::GpuStatus { software: false, ..soft };
+        assert!(patches(false, &hard).iter().all(|p| p.playable));
+    }
 
     /// One stop for off, one for each of `MAX_OE_SLOTS` (25) lit slots - the
     /// full real resolution of the control, never 256.
