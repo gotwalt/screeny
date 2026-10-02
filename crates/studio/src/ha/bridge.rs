@@ -256,8 +256,9 @@ pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{playable_patches, snap};
+    use super::snap;
 
+    #[cfg(feature = "gpu")]
     fn status(available: bool, software: bool) -> screeny_art::GpuStatus {
         screeny_art::GpuStatus {
             available,
@@ -273,6 +274,7 @@ mod tests {
     #[test]
     #[cfg(feature = "gpu")]
     fn ha_leaves_out_the_hardware_only_patches_on_a_software_adapter() {
+        use super::playable_patches;
         let ids = |g: &screeny_art::GpuStatus| playable_patches(false, g).iter().map(|p| p.id).collect::<Vec<_>>();
         let hard = ids(&status(true, false));
         let soft = ids(&status(true, true));

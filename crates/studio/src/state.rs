@@ -2568,6 +2568,7 @@ mod tests {
     /// A **real v2 file**: the shape the live service has today, from card
     /// 165's Log - one device, one player, a `preview` block and the output
     /// memory. Card 170 drops `preview`; nothing else may move.
+    #[cfg(feature = "gpu")]
     const LIVE_V2: &str = r#"{
   "version": 2,
   "devices": [
@@ -2611,7 +2612,11 @@ mod tests {
 
     /// The panel's player is the truth, the memory is not disturbed, and the
     /// `preview` block leaves without taking anything with it.
+    ///
+    /// The live file was playing `overland`, which a build without the `gpu`
+    /// feature does not have (card 358).
     #[test]
+    #[cfg(feature = "gpu")]
     fn a_real_v2_file_migrates_to_v3() {
         let dir = Temp::new("v2");
         std::fs::write(dir.0.join(FILE), LIVE_V2).expect("write the v2 file");
