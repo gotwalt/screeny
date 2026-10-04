@@ -139,6 +139,16 @@ file, and a script that deploys over SSH. Multi-arch images (amd64, arm64) are b
 GitHub Actions and published to `ghcr.io/gotwalt/screeny-studio` (the standalone Studio) and
 `ghcr.io/gotwalt/screeny-ha-app` (the Home Assistant app); see the same file.
 
+## Home Assistant
+
+The Studio also runs as a Home Assistant app: add `https://github.com/gotwalt/screeny`
+as an app repository, install **Screeny**, and it opens from the sidebar. The Tidbyt is
+flashed and given its WiFi from the browser at <https://gotwalt.github.io/screeny/>,
+then shows up in the Studio and, through MQTT, in Home Assistant as a device with a
+picture, patch, channel and brightness. Needs Home Assistant OS or Supervised on
+aarch64 or amd64. The step-by-step guide is [`ha-app/DOCS.md`](ha-app/DOCS.md); the
+design is [`docs/design/home-assistant-app.md`](docs/design/home-assistant-app.md).
+
 ## Hardware
 
 **Tested only on the Tidbyt Gen 1** (ESP32-D0WD, 8 MB flash, the version with a blue
