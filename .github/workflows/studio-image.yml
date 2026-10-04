@@ -1,19 +1,29 @@
 name: Studio image (ghcr)
 
-# Builds the Studio image (root Dockerfile, `--target app`) natively on an amd64
-# and an arm64 runner (no QEMU: Rust + wgpu under emulation takes far too long),
-# then stitches the two into one multi-arch manifest on ghcr.io. That one
-# reference is what ha-app/config.yaml's `image:` names, so the Supervisor needs
-# no {arch} substitution.
+# Builds the Studio image (root Dockerfile) natively on an amd64 and an arm64
+# runner (no QEMU: Rust + wgpu under emulation takes far too long), then stitches
+# the per-arch images into multi-arch manifests on ghcr.io. Two images, one build:
+# the Dockerfile's two final stages differ only in the USER line, so the second
+# build per arch is a cache hit.
+#
+#   ghcr.io/gotwalt/screeny-studio   `runtime` target: the standalone service
+#                                    (unprivileged), what docker-compose.yml runs.
+#   ghcr.io/gotwalt/screeny-ha-app   `app` target: the Home Assistant app image
+#                                    (runs as root), what ha-app/config.yaml names,
+#                                    so the Supervisor needs no {arch} substitution.
 #
 # Tags published:
-#   <version>   from ha-app/config.yaml: exactly what the Supervisor asks for
-#   edge, sha-<short>   moving tag and immutable tag for a main push
-#   latest      on app-v* release tags only
+#   screeny-ha-app    <version> from ha-app/config.yaml (exactly what the Supervisor
+#                     asks for), edge, sha-<short> on main pushes, and latest on
+#                     app-v* release tags only.
+#   screeny-studio    edge, sha-<short> and latest on main pushes. There is no
+#                     standalone release process, so `latest` follows main (same as
+#                     `edge`) rather than pointing at nothing: a bare `docker pull`
+#                     must work. Nothing is published for app-v* tags.
 #
-# Once, after the first run: the package is private by default. Make it public
-# (github.com/gotwalt?tab=packages > screeny-studio > Package settings > Change
-# visibility), or Home Assistant cannot pull it anonymously.
+# Once, after the first run: ghcr packages are private by default. Make BOTH public
+# (github.com/gotwalt?tab=packages > each package > Package settings > Change
+# visibility), or nobody can pull them anonymously.
 #
 # Why plain docker/build-push-action and not home-assistant/builder: the Dockerfile
 # is the Studio's own, shared with docker-compose, and builds one image with a
@@ -42,9 +52,6 @@ concurrency:
   group: studio-image-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  IMAGE: ghcr.io/gotwalt/screeny-studio
-
 jobs:
   build:
     strategy:
@@ -65,7 +72,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: build
+      - id: studio
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+          outputs: type=image,name=ghcr.io/gotwalt/screeny-studio,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=studio-${{ matrix.arch }}
+          cache-to: type=gha,scope=studio-${{ matrix.arch }},mode=max
+      - id: app
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -76,24 +97,44 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/gotwalt/screeny-ha-app,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=studio-${{ matrix.arch }}
           cache-to: type=gha,scope=studio-${{ matrix.arch }},mode=max
-      - name: Export digest
+      - name: Export digests
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          STUDIO: ${{ steps.studio.outputs.digest }}
+          APP: ${{ steps.app.outputs.digest }}
         run: |
-          mkdir -p "${RUNNER_TEMP}/digests"
-          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+          mkdir -p "${RUNNER_TEMP}/digests/studio" "${RUNNER_TEMP}/digests/app"
+          touch "${RUNNER_TEMP}/digests/studio/${STUDIO#sha256:}"
+          touch "${RUNNER_TEMP}/digests/app/${APP#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
-          name: digest-${{ matrix.arch }}
-          path: ${{ runner.temp }}/digests/*
+          name: digest-studio-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/studio/*
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-app-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/app/*
           if-no-files-found: error
           retention-days: 1
 
   manifest:
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: studio
+            image: ghcr.io/gotwalt/screeny-studio
+          - target: app
+            image: ghcr.io/gotwalt/screeny-ha-app
+    env:
+      IMAGE: ${{ matrix.image }}
+      # The standalone image has no release tags: nothing to publish for app-v*.
+      PUBLISH: ${{ matrix.target == 'app' || github.ref_type == 'branch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -114,7 +155,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digest-*
+          pattern: digest-${{ matrix.target }}-*
           merge-multiple: true
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -125,14 +166,15 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ matrix.image }}
           flavor: latest=false
           tags: |
-            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ matrix.target == 'app' }}
             type=edge,branch=main
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/app-v') }}
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref_type == 'branch' }}
+            type=raw,value=latest,enable=${{ (matrix.target == 'app' && startsWith(github.ref, 'refs/tags/app-v')) || (matrix.target == 'studio' && github.ref == 'refs/heads/main') }}
       - name: Create the manifest list
+        if: env.PUBLISH == 'true'
         working-directory: ${{ runner.temp }}/digests
         run: |
           tags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
@@ -142,4 +184,5 @@ jobs:
           # shellcheck disable=SC2086
           docker buildx imagetools create $tags $refs
       - name: Inspect the result
-        run: docker buildx imagetools inspect "${IMAGE}:${{ steps.version.outputs.version }}"
+        if: env.PUBLISH == 'true'
+        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
