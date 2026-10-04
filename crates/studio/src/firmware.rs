@@ -15,8 +15,8 @@
 //!    touched: the firmware's upload keeps the stream alive (card 240) and puts
 //!    its "updating" screen up itself;
 //! 2. waits for the panel to **go away and come back with a different `boot_id`**
-//!    - the old image keeps answering for about two seconds after the reply, and
-//!    a poll in that window must not be mistaken for success (card 246);
+//!    (the old image keeps answering for about two seconds after the reply, and
+//!    a poll in that window must not be mistaken for success, card 246);
 //! 3. waits for the new image to confirm itself: it is on trial
 //!    (`fw_state` `pending_verify`) until it has proved itself healthy, and the
 //!    bootloader rolls it back if it does not. The panel coming back on the
