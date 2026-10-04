@@ -17,7 +17,7 @@ marked where they go.
   `amd64` machine. Container and Core installs have no apps.
 - Ideally the **Mosquitto broker** app, so the panel shows up as a Home Assistant
   device. Without it the app still works.
-- Your WiFi name and password (2.4 GHz). <!-- verify: 2.4 GHz only; the flasher page says so -->
+- Your WiFi name and password (2.4 GHz). The ESP32 has no 5 GHz radio.
 
 ## 1. Put the firmware on the Tidbyt
 
@@ -52,7 +52,7 @@ To go back to Tidbyt's own firmware, see [help.tidbyt.com](https://help.tidbyt.c
 
    <!-- screenshot: app-page -->
 
-4. Start it. Leave **Start on boot** on. <!-- verify: Watchdog was removed from the app (the image has a HEALTHCHECK); the old text said to leave it on -->
+4. Start it. Leave **Start on boot** on.
 5. **Screeny** appears in Home Assistant's sidebar. Open it.
 
    <!-- screenshot: studio-in-sidebar -->
