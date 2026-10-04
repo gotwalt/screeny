@@ -23,9 +23,11 @@
 //! | then | `+ trial_for` | a **new** `boot_id`, the uploaded version, `panic.update.outcome = trial` |
 //! | then | for ever | the same, `outcome = confirmed`, `fw_state valid` |
 //!
-//! A revert is not modelled: what the probe has to get right is the waiting,
-//! and the two ends of a trial are one field apart. When something needs a
-//! reverted device, this is where to add it.
+//! **A revert is modelled when asked for** ([`OtaModel::set_reverting`], card
+//! 364): the trial then ends not in `confirmed` but in a reboot into the old
+//! image - a new `boot_id` again, the old version, `fw_state valid`, and
+//! `panic.update.outcome = reverted` - which is what a device whose new image
+//! never became healthy shows. The Studio's update has to call that a failure.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -72,6 +74,9 @@ pub enum Phase {
     Trial,
     /// It confirmed itself.
     Confirmed,
+    /// The trial failed and the old image is running again (only when the
+    /// model was told to revert).
+    Reverted,
 }
 
 /// The model, as the simulator holds it: one lock, and nothing in it until a
@@ -97,6 +102,11 @@ struct State {
     /// default, so an update lands in the other one, exactly as a device's
     /// does.
     slot: FwSlot,
+    /// The version that was running before the update, which a revert goes
+    /// back to.
+    old_version: String,
+    /// End the trial in a rollback instead of a confirm.
+    revert: bool,
 }
 
 impl Default for State {
@@ -110,6 +120,8 @@ impl Default for State {
             // inventing one for it would be a wire-facing enum growing a
             // meaning for the sake of this file.
             slot: FwSlot::Ota1,
+            old_version: String::new(),
+            revert: false,
         }
     }
 }
@@ -129,6 +141,11 @@ impl OtaModel {
         s.started = None;
     }
 
+    /// Make the trial end in a rollback to the old image rather than a confirm.
+    pub fn set_reverting(&self, revert: bool) {
+        self.lock().revert = revert;
+    }
+
     /// Is an activating upload going to be played out?
     #[must_use]
     pub fn is_on(&self) -> bool {
@@ -140,7 +157,7 @@ impl OtaModel {
     ///
     /// `running` is the slot the simulator says it is running, so that the
     /// update lands in the other one.
-    pub fn activate(&self, version: &str, running: FwSlot) -> bool {
+    pub fn activate(&self, version: &str, running: FwSlot, old_version: &str) -> bool {
         let mut s = self.lock();
         if s.timing.is_none() {
             return false;
@@ -151,6 +168,7 @@ impl OtaModel {
         // one before, and one more than it does that and reads as a restart.
         s.new_boot_id = s.new_boot_id.wrapping_add(1);
         s.version = version.to_string();
+        s.old_version = old_version.to_string();
         s.slot = match running {
             FwSlot::Ota0 => FwSlot::Ota1,
             _ => FwSlot::Ota0,
@@ -177,6 +195,8 @@ impl OtaModel {
             Phase::Away
         } else if since < t.old_image_for + t.away_for + t.trial_for {
             Phase::Trial
+        } else if s.revert {
+            Phase::Reverted
         } else {
             Phase::Confirmed
         }
@@ -198,6 +218,21 @@ impl OtaModel {
             // Before the reboot the old image is still answering, and it
             // answers with its own numbers - which is the whole trap.
             Phase::Idle | Phase::OldImage | Phase::Away => None,
+            Phase::Reverted => {
+                let s = self.lock();
+                Some(RunningImage {
+                    // A second reboot: a boot_id that is neither the old one nor
+                    // the trial's.
+                    boot_id: s.new_boot_id.wrapping_add(1),
+                    version: s.old_version.clone(),
+                    // Back in the slot it was running from.
+                    slot: match s.slot {
+                        FwSlot::Ota0 => FwSlot::Ota1,
+                        _ => FwSlot::Ota0,
+                    },
+                    state: FwState::Valid,
+                })
+            }
             Phase::Trial | Phase::Confirmed => {
                 let s = self.lock();
                 Some(RunningImage {
@@ -220,15 +255,17 @@ impl OtaModel {
     /// `GET /api/v1/panic`'s `update`.
     #[must_use]
     pub fn update_record(&self) -> Option<UpdateRecord> {
-        let outcome = match self.phase() {
+        let phase = self.phase();
+        let outcome = match phase {
             Phase::Idle | Phase::OldImage | Phase::Away => return None,
             Phase::Trial => UpdateOutcome::Trial,
             Phase::Confirmed => UpdateOutcome::Confirmed,
+            Phase::Reverted => UpdateOutcome::Reverted,
         };
         let s = self.lock();
         Some(UpdateRecord {
             outcome,
-            reason: None,
+            reason: (phase == Phase::Reverted).then_some(screeny_device_api::RevertReason::Deadline),
             slot: s.slot,
             version: screeny_device_api::text::text(&s.version),
         })
@@ -274,7 +311,7 @@ mod tests {
     fn a_model_that_is_off_takes_no_activation_and_says_nothing() {
         let m = OtaModel::new();
         assert!(!m.is_on());
-        assert!(!m.activate("9.9.9", FwSlot::Ota0));
+        assert!(!m.activate("9.9.9", FwSlot::Ota0, "0.7.0"));
         assert_eq!(m.phase(), Phase::Idle);
         assert!(m.update_record().is_none());
         assert!(m.running_image().is_none());
@@ -283,7 +320,7 @@ mod tests {
     #[test]
     fn the_old_image_answers_first_and_has_no_update_record() {
         let m = model(FAST);
-        assert!(m.activate("0.7.2", FwSlot::Ota0));
+        assert!(m.activate("0.7.2", FwSlot::Ota0, "0.7.0"));
         // The instant after the reply: this is where the probe used to decide.
         assert_eq!(m.phase(), Phase::OldImage);
         assert!(
@@ -297,7 +334,7 @@ mod tests {
     fn the_phases_run_in_order_and_end_confirmed() {
         let m = model(FAST);
         let t0 = Instant::now();
-        m.activate("0.7.2", FwSlot::Ota0);
+        m.activate("0.7.2", FwSlot::Ota0, "0.7.0");
         assert_eq!(m.phase_at(t0), Phase::OldImage);
         assert_eq!(m.phase_at(t0 + Duration::from_millis(150)), Phase::Away);
         assert_eq!(m.phase_at(t0 + Duration::from_millis(250)), Phase::Trial);
@@ -312,7 +349,7 @@ mod tests {
             away_for: Duration::ZERO,
             trial_for: Duration::from_secs(60),
         });
-        m.activate("0.7.2", FwSlot::Ota0);
+        m.activate("0.7.2", FwSlot::Ota0, "0.7.0");
         let r = m.running_image().expect("on trial");
         assert_eq!(r.version, "0.7.2");
         assert_eq!(r.slot, FwSlot::Ota1, "an update lands in the other slot");
@@ -324,6 +361,29 @@ mod tests {
     }
 
     #[test]
+    fn a_reverting_model_ends_back_on_the_old_image_with_a_new_boot_id() {
+        let m = model(OtaTiming {
+            old_image_for: Duration::ZERO,
+            away_for: Duration::ZERO,
+            trial_for: Duration::from_millis(100),
+        });
+        m.set_reverting(true);
+        let t0 = Instant::now();
+        m.activate("0.7.2", FwSlot::Ota0, "0.7.0");
+        let trial = m.running_image().expect("on trial first");
+        assert_eq!((trial.version.as_str(), trial.state), ("0.7.2", FwState::PendingVerify));
+        assert_eq!(m.phase_at(t0 + Duration::from_millis(500)), Phase::Reverted);
+        std::thread::sleep(Duration::from_millis(150));
+        let back = m.running_image().expect("the old image is running again");
+        assert_eq!((back.version.as_str(), back.state, back.slot), ("0.7.0", FwState::Valid, FwSlot::Ota0));
+        assert_ne!(back.boot_id, trial.boot_id, "a second reboot");
+        let u = m.update_record().expect("a record");
+        assert_eq!(u.outcome, UpdateOutcome::Reverted);
+        assert!(u.reason.is_some());
+        assert_eq!(u.version.as_deref(), Some("0.7.2"), "the version that was rejected");
+    }
+
+    #[test]
     fn the_boot_id_changes_with_every_update() {
         let m = model(FAST);
         m.set(Some(OtaTiming {
@@ -331,9 +391,9 @@ mod tests {
             away_for: Duration::ZERO,
             trial_for: Duration::from_secs(60),
         }));
-        m.activate("a", FwSlot::Ota0);
+        m.activate("a", FwSlot::Ota0, "0.7.0");
         let first = m.running_image().expect("on trial").boot_id;
-        m.activate("b", FwSlot::Ota1);
+        m.activate("b", FwSlot::Ota1, "0.7.0");
         let second = m.running_image().expect("on trial").boot_id;
         assert_ne!(first, second);
     }
