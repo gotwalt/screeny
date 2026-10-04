@@ -2254,6 +2254,7 @@ dependencies = [
  "screeny",
  "screeny-art",
  "screeny-device-api",
+ "screeny-fwimage",
  "screeny-panel",
  "screeny-proto",
  "screeny-receiver",

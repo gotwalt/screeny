@@ -74,6 +74,8 @@ pub struct Topics {
     pub panel: Pair,
     /// Card 355: which channel the panel is on, as a select of channel names.
     pub channel: Pair,
+    /// Card 364: the panel's firmware, an `update` entity. A panel's only.
+    pub firmware: Pair,
 }
 
 /// The key a channel's device and topics carry: `ch<id>`.
@@ -126,6 +128,7 @@ impl Topics {
             picture: pair("picture"),
             panel: pair("panel"),
             channel: pair("channel"),
+            firmware: pair("firmware"),
             device_id,
             base,
         }
@@ -137,8 +140,8 @@ impl Topics {
     #[must_use]
     pub fn command_topics(&self) -> Vec<&str> {
         match self.role {
-            Role::First => vec![&self.brightness.set, &self.level.set, &self.picture.set, &self.channel.set],
-            Role::Panel => vec![&self.brightness.set, &self.level.set, &self.channel.set],
+            Role::First => vec![&self.brightness.set, &self.level.set, &self.picture.set, &self.channel.set, &self.firmware.set],
+            Role::Panel => vec![&self.brightness.set, &self.level.set, &self.channel.set, &self.firmware.set],
             Role::Channel => vec![&self.picture.set],
         }
     }
@@ -236,7 +239,8 @@ mod tests {
         assert_eq!(t.command_wildcards(), ["screeny/studio/+/set", "screeny/studio/+/+/set"]);
         assert!(!t.is_first() && Topics::new(&cfg).is_first());
         assert_eq!(t.channel.set, "screeny/studio/screeny-4a00a5/channel/set");
-        assert_eq!(t.command_topics().len(), 3, "brightness, level and a channel: no picture");
+        assert_eq!(t.command_topics().len(), 4, "brightness, level, a channel and firmware: no picture");
+        assert_eq!(t.firmware.set, "screeny/studio/screeny-4a00a5/firmware/set");
     }
 
     #[test]
@@ -261,6 +265,7 @@ mod tests {
         let first = Topics::new(&cfg);
         assert_eq!(first.picture.set, "screeny/studio/picture/set");
         assert_eq!(first.channel.set, "screeny/studio/channel/set");
-        assert_eq!(first.command_topics().len(), 4);
+        assert_eq!(first.command_topics().len(), 5);
+        assert_eq!(first.firmware.state, "screeny/studio/firmware/state");
     }
 }

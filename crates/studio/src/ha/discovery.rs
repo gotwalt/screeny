@@ -48,6 +48,22 @@ pub enum Component {
     Select(Select),
     Number(Number),
     BinarySensor(BinarySensor),
+    /// Card 364: a panel's firmware.
+    Update(Update),
+}
+
+/// HA's MQTT `update` platform: the state topic carries JSON with
+/// `installed_version`, `latest_version`, `in_progress` and
+/// `update_percentage`; Install publishes `payload_install` on the command
+/// topic. `device_class: firmware` is what makes HA draw it as one.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Update {
+    #[serde(flatten)]
+    pub entity: Entity,
+    pub state_topic: String,
+    pub command_topic: String,
+    pub payload_install: String,
+    pub device_class: String,
 }
 
 /// What every entity has.
@@ -136,6 +152,8 @@ pub mod key {
     pub const PANEL: &str = "panel";
     /// Card 355: the panel's channel, a select.
     pub const CHANNEL: &str = "channel";
+    /// Card 364: the panel's firmware, an `update` entity.
+    pub const FIRMWARE: &str = "firmware";
 }
 
 /// Components a previous build announced and this one does not, with their
@@ -230,13 +248,23 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
             device_class: Some("connectivity".into()),
         }),
     );
+    components.insert(
+        key::FIRMWARE.to_string(),
+        Component::Update(Update {
+            entity: entity(key::FIRMWARE, Some("Firmware"), None, None),
+            state_topic: topics.firmware.state.clone(),
+            command_topic: topics.firmware.set.clone(),
+            payload_install: super::payload::INSTALL.into(),
+            device_class: "firmware".into(),
+        }),
+    );
     // What each kind of device carries: the first panel everything (its picture
     // and patch are Channel 1's); a later panel no picture; a channel only
     // the picture.
     let absent: &[&str] = match topics.role {
         Role::First => &[],
         Role::Panel => &[key::PICTURE, key::PATCH],
-        Role::Channel => &[key::BRIGHTNESS, key::LEVEL, key::PANEL, key::CHANNEL],
+        Role::Channel => &[key::BRIGHTNESS, key::LEVEL, key::PANEL, key::CHANNEL, key::FIRMWARE],
     };
     for k in absent {
         components.remove(*k);
@@ -320,6 +348,18 @@ mod tests {
         // Card 355 added one component, the channel select, to this device.
         // Everything else is card 308-311's, byte for byte: the snapshot is
         // compared with the select taken out, and the select has its own pin.
+        // Card 364 added the firmware's `update` entity, and has its own pin
+        // (`update.json`).
+        let update = value["components"].as_object_mut().unwrap().remove("firmware").expect("the first device has a firmware update entity");
+        let text = serde_json::to_string_pretty(&update).unwrap();
+        snapshot_json("update.json", &text);
+        assert_eq!(update["platform"], "update");
+        assert_eq!(update["device_class"], "firmware");
+        assert_eq!(update["payload_install"], "INSTALL");
+        assert_eq!(update["unique_id"], "screeny_studio_firmware");
+        assert_eq!(update["command_topic"], "screeny/studio/firmware/set");
+        assert_eq!(update["state_topic"], "screeny/studio/firmware/state");
+        assert_eq!(update["availability_topic"], "screeny/studio/status");
         let channel = value["components"].as_object_mut().unwrap().remove("channel").expect("the first device has a channel select");
         assert_eq!(channel["platform"], "select");
         assert_eq!(channel["unique_id"], "screeny_studio_channel");
@@ -337,7 +377,7 @@ mod tests {
         let topics = Topics::new(&cfg);
         let value = serde_json::to_value(build(&cfg, &topics, &snap())).unwrap();
         let ids: Vec<&str> = value["components"].as_object().unwrap().values().filter_map(|c| c["unique_id"].as_str()).collect();
-        assert_eq!(ids.len(), 6, "the five it always had, and the channel select");
+        assert_eq!(ids.len(), 7, "the five it always had, the channel select and the firmware update");
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         sorted.dedup();

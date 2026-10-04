@@ -1,0 +1,10 @@
+{
+  "availability_topic": "screeny/studio/status",
+  "command_topic": "screeny/studio/firmware/set",
+  "device_class": "firmware",
+  "name": "Firmware",
+  "payload_install": "INSTALL",
+  "platform": "update",
+  "state_topic": "screeny/studio/firmware/state",
+  "unique_id": "screeny_studio_firmware"
+}

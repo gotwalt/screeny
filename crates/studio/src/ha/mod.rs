@@ -386,6 +386,49 @@ pub struct Snapshot {
     /// The id of the channel this panel is on; `None` for the stand-in that
     /// stands for no panel.
     pub channel: Option<u32>,
+    /// Card 364: what a panel's `update` entity shows. Only a panel's.
+    pub firmware: FirmwareState,
+}
+
+/// What HA's `update` entity for a panel is told (card 364): the installed
+/// and the latest firmware version, and whether an update is going.
+///
+/// `latest` is the offered version when it is newer than what is installed and
+/// **otherwise the installed one**, so that HA shows "up to date" rather than
+/// "unknown" for a panel with nothing to install - and never offers a
+/// downgrade.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FirmwareState {
+    pub installed: Option<String>,
+    pub latest: Option<String>,
+    /// An update is going on: uploading, restarting or on trial.
+    pub in_progress: bool,
+    /// 0-100 while the image is going out; `None` when there is no honest
+    /// figure (HA then shows the spinner without a bar).
+    pub percent: Option<u8>,
+    /// What went wrong with the last attempt, if it did.
+    pub failed: Option<String>,
+}
+
+impl FirmwareState {
+    /// From one panel's [`crate::firmware::View`].
+    #[must_use]
+    pub fn of(view: &crate::firmware::View) -> FirmwareState {
+        let newer = match (&view.installed, &view.offered) {
+            (Some(i), Some(o)) if crate::firmware::is_update(i, o) => Some(o.clone()),
+            _ => None,
+        };
+        FirmwareState {
+            latest: newer.or_else(|| view.installed.clone()),
+            installed: view.installed.clone(),
+            in_progress: view.run.as_ref().is_some_and(crate::firmware::Run::is_active),
+            percent: view.run.as_ref().and_then(crate::firmware::Run::percent),
+            failed: match &view.run {
+                Some(crate::firmware::Run::Failed { why }) => Some(why.clone()),
+                _ => None,
+            },
+        }
+    }
 }
 
 /// One entry in HA's channel select.
@@ -514,6 +557,10 @@ pub enum Command {
     /// [`Snapshot::channels`]; the studio checks again, since a channel may
     /// have gone.
     MoveToChannel(u32),
+    /// Card 364: HA's Install on the panel's `update` entity. An explicit
+    /// action, never automatic; the studio checks that there is something to
+    /// install.
+    InstallFirmware,
 }
 
 #[cfg(test)]

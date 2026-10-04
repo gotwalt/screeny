@@ -540,6 +540,11 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
         // Nowhere to ask yet. Not a failure and not worth backing off for:
         // the telemetry poll is what finds out where this device is.
         let Some(addr) = record.http_addr(st.cfg.device_http_port) else { continue };
+        // Card 364: a panel being updated has one connection worker, and the
+        // update is using it. The update's own task reads the status.
+        if st.firmware.active(&id) {
+            continue;
+        }
 
         let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status_counted(addr, crate::devhttp::TIMEOUT)).await;
         // Card 164: the HTTP path's bytes, recorded before the reply is

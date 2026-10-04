@@ -36,6 +36,7 @@ pub mod app;
 pub mod channel;
 pub mod devhttp;
 pub mod devices;
+pub mod firmware;
 pub mod fleet;
 pub mod ha;
 pub mod health;
@@ -150,6 +151,12 @@ pub struct Config {
     /// Card 359: the Home Assistant Supervisor, whose MQTT broker is used
     /// when the owner has set none.
     pub supervisor: Option<ha::supervisor::Supervisor>,
+    /// Card 364: the firmware image this Studio offers to panels (the app
+    /// image, `screeny-fw-<v>.bin`). `None`, or a path with nothing at it,
+    /// offers nothing; everything else works.
+    pub firmware: Option<PathBuf>,
+    /// Card 364: how patient an update is. Tests make it quick.
+    pub firmware_timing: firmware::Timing,
 }
 
 impl Default for Config {
@@ -172,6 +179,8 @@ impl Default for Config {
             peers: None,
             direct: None,
             supervisor: None,
+            firmware: None,
+            firmware_timing: firmware::Timing::default(),
         }
     }
 }
@@ -230,6 +239,8 @@ pub struct AppState {
     /// Card 311: Home Assistant - its settings, and how the connection is
     /// doing.
     pub ha: Arc<ha::Ha>,
+    /// Card 364: the firmware this Studio offers, and every panel's update.
+    pub firmware: Arc<firmware::Firmware>,
     rev: Arc<AtomicU64>,
 }
 
@@ -244,6 +255,7 @@ impl AppState {
         ha: Arc<ha::Ha>,
     ) -> Self {
         let memory = panels.memory();
+        let firmware = Arc::new(firmware::Firmware::load(cfg.firmware.as_deref(), cfg.firmware_timing));
         AppState {
             states: broadcast::Sender::new(STATE_BACKLOG),
             status: watch::Sender::new(Arc::new(StatusBoard::default())),
@@ -257,6 +269,7 @@ impl AppState {
             cfg,
             started: Instant::now(),
             ha,
+            firmware,
             rev: Arc::new(AtomicU64::new(0)),
         }
     }

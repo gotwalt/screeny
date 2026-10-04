@@ -12,6 +12,8 @@ pub const MAX_COMMAND_BYTES: usize = 1024;
 /// What "on" means when HA says only "on" and the panel has never been lit
 /// in this process: the middle of the scale, never full.
 pub const DEFAULT_LIT: u8 = 128;
+/// What the `update` entity sends on its command topic for Install.
+pub const INSTALL: &str = "INSTALL";
 /// A select's state for "none of the options" - HA shows it as unknown.
 pub const NO_OPTION: &str = "None";
 /// The brightness slider's step: one output-enable slot of the panel's 25
@@ -54,6 +56,37 @@ struct LightState {
     color_mode: Option<&'static str>,
 }
 
+/// What HA's `update` entity reads off its state topic: the keys of
+/// <https://www.home-assistant.io/integrations/update.mqtt/>. Every key is
+/// always there - `null` when there is nothing to say - so a retained message
+/// never leaves HA holding a value from an earlier one.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct UpdateState<'a> {
+    installed_version: Option<&'a str>,
+    latest_version: Option<&'a str>,
+    title: &'static str,
+    release_summary: Option<String>,
+    in_progress: bool,
+    update_percentage: Option<u8>,
+}
+
+/// HA truncates a release summary at 255 characters; so does this, on a
+/// character boundary.
+const SUMMARY_MAX: usize = 255;
+
+impl<'a> UpdateState<'a> {
+    fn of(f: &'a super::FirmwareState) -> Self {
+        UpdateState {
+            installed_version: f.installed.as_deref(),
+            latest_version: f.latest.as_deref(),
+            title: "Screeny firmware",
+            release_summary: f.failed.as_ref().map(|why| format!("The last update failed: {why}").chars().take(SUMMARY_MAX).collect()),
+            in_progress: f.in_progress,
+            update_percentage: f.percent,
+        }
+    }
+}
+
 /// These types have no maps with non-string keys and nothing that can fail
 /// to serialise.
 fn json<T: Serialize>(v: &T) -> String {
@@ -81,10 +114,12 @@ pub fn state_messages(topics: &Topics, snap: &Snapshot) -> Vec<Message> {
     // The channel this panel is on, by the label its select shows.
     let on = snap.channel.and_then(|id| snap.channels.iter().find(|c| c.id == id)).map_or_else(|| NO_OPTION.to_string(), |c| c.label.clone());
     let channel = Message { topic: topics.channel.state.clone(), payload: on };
+    let firmware = Message { topic: topics.firmware.state.clone(), payload: json(&UpdateState::of(&snap.firmware)) };
     match topics.role {
-        // The five it always had, in their order, and the channel select after.
-        Role::First => vec![patch, brightness, level, picture, panel, channel],
-        Role::Panel => vec![brightness, level, panel, channel],
+        // The five it always had, in their order, and the channel select after,
+        // and card 364's firmware last.
+        Role::First => vec![patch, brightness, level, picture, panel, channel, firmware],
+        Role::Panel => vec![brightness, level, panel, channel, firmware],
         Role::Channel => vec![patch, picture],
     }
 }
@@ -146,6 +181,10 @@ pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapsh
         // In range, so the cast is exact after rounding.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         return Ok(Command::SetBrightness(level_for(p.round() as u8)));
+    }
+    if topic == topics.firmware.set {
+        // HA's default `payload_install`; anything else is not Install.
+        return if text == INSTALL { Ok(Command::InstallFirmware) } else { Err(format!("{topic}: `{text}` is not {INSTALL}")) };
     }
     if topic == topics.channel.set {
         return match snap.channels.iter().find(|c| c.label == text) {
@@ -214,6 +253,7 @@ pub(crate) mod tests {
             panel_connected: true,
             channels: crate::ha::ChannelOption::all(&[(1, "Channel 1".into()), (2, "Drawing room".into())]),
             channel: Some(2),
+            firmware: crate::ha::FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..Default::default() },
         }
     }
 
@@ -225,11 +265,56 @@ pub(crate) mod tests {
     fn state_when_lit_and_scheduled() {
         let topics = Topics::new(&config());
         let all = state_messages(&topics, &snap());
-        // Card 355 added the channel select's state, last. The five before
-        // it are card 308-311's, byte for byte, and pinned as they were.
-        let (channel, old) = all.split_last().unwrap();
+        // Card 355 added the channel select's state after them, and card 364
+        // the firmware's last. The five before are card 308-311's, byte for
+        // byte, and pinned as they were.
+        let (firmware, rest) = all.split_last().unwrap();
+        let (channel, old) = rest.split_last().unwrap();
         assert_eq!((channel.topic.as_str(), channel.payload.as_str()), ("screeny/studio/channel/state", "Drawing room"));
         snapshot_json("state-lit.txt", &render(old));
+        assert_eq!(firmware.topic, "screeny/studio/firmware/state");
+        snapshot_json("firmware-state.txt", &render(std::slice::from_ref(firmware)));
+    }
+
+    /// Card 364: what HA's `update` entity is told in each situation. Every key
+    /// is always there, so a retained message never leaves HA holding a value
+    /// from an earlier one.
+    #[test]
+    fn the_firmware_state_in_each_situation() {
+        use crate::ha::FirmwareState;
+        let topics = Topics::new(&config());
+        let state = |f: FirmwareState| {
+            let all = state_messages(&topics, &Snapshot { firmware: f, ..snap() });
+            let m = all.into_iter().find(|m| m.topic == topics.firmware.state).unwrap();
+            serde_json::from_str::<serde_json::Value>(&m.payload).unwrap()
+        };
+        let available = FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..FirmwareState::default() };
+        let v = state(available.clone());
+        assert_eq!((v["installed_version"].as_str(), v["latest_version"].as_str()), (Some("0.10.0"), Some("0.11.0")));
+        assert_eq!(v["in_progress"], false);
+        let going = state(FirmwareState { in_progress: true, percent: Some(42), ..available.clone() });
+        assert_eq!((going["in_progress"].clone(), going["update_percentage"].clone()), (true.into(), 42.into()));
+        let waiting = state(FirmwareState { in_progress: true, ..available.clone() });
+        assert!(waiting["in_progress"] == true && waiting["update_percentage"].is_null(), "restarting has no percentage: {waiting}");
+        let failed = state(FirmwareState { failed: Some("the panel refused the image".into()), ..available });
+        assert_eq!(failed["release_summary"], "The last update failed: the panel refused the image");
+        let up_to_date = state(FirmwareState { installed: Some("0.11.0".into()), latest: Some("0.11.0".into()), ..FirmwareState::default() });
+        assert_eq!(up_to_date["installed_version"], up_to_date["latest_version"], "HA shows it up to date");
+        let unknown = state(FirmwareState::default());
+        assert!(unknown["installed_version"].is_null() && unknown["latest_version"].is_null());
+        let long = state(FirmwareState { failed: Some("x".repeat(1000)), ..FirmwareState::default() });
+        assert_eq!(long["release_summary"].as_str().unwrap().chars().count(), SUMMARY_MAX);
+    }
+
+    #[test]
+    fn install_is_the_only_firmware_command() {
+        let topics = Topics::new(&config());
+        let parse = |p: &str| parse_command(&topics, &topics.firmware.set, p.as_bytes(), &snap(), None);
+        assert_eq!(parse("INSTALL"), Ok(Command::InstallFirmware));
+        assert_eq!(parse(" INSTALL\n"), Ok(Command::InstallFirmware));
+        assert!(parse("install").is_err() && parse("").is_err() && parse("ON").is_err());
+        let channel = Topics::for_channel(&config(), 2);
+        assert!(!channel.command_topics().contains(&topics.firmware.set.as_str()), "a channel has no firmware");
     }
 
     #[test]
@@ -242,7 +327,8 @@ pub(crate) mod tests {
             ..snap()
         };
         let all = state_messages(&topics, &s);
-        snapshot_json("state-dark.txt", &render(&all[..all.len() - 1]));
+        // Without the channel select's state and the firmware's, which are later additions.
+        snapshot_json("state-dark.txt", &render(&all[..all.len() - 2]));
     }
 
     #[test]
@@ -317,7 +403,7 @@ pub(crate) mod tests {
         assert_eq!(topics, ["screeny/studio/ch2/patch/state", "screeny/studio/ch2/picture/state"]);
         let panel = state_messages(&Topics::for_panel(&cfg, Some("b")), &snap());
         let topics: Vec<&str> = panel.iter().map(|m| m.topic.as_str()).collect();
-        assert_eq!(topics, ["screeny/studio/b/brightness/state", "screeny/studio/b/level/state", "screeny/studio/b/panel/state", "screeny/studio/b/channel/state"]);
+        assert_eq!(topics, ["screeny/studio/b/brightness/state", "screeny/studio/b/level/state", "screeny/studio/b/panel/state", "screeny/studio/b/channel/state", "screeny/studio/b/firmware/state"]);
         assert_eq!(panel[3].payload, "Drawing room");
         let none = state_messages(&Topics::for_panel(&cfg, Some("b")), &Snapshot { channel: None, ..snap() });
         assert_eq!(none[3].payload, NO_OPTION);
