@@ -67,3 +67,6 @@ socket2 = "0.6"
 # `page::brightness_stops`'s lowest nonzero stop against the device's own
 # `BRIGHTNESS_FLOOR` rather than a second literal (card 187).
 screeny-receiver = { path = "../receiver" }
+# Card 364: the tests make firmware images (`Builder`), which is the feature
+# the normal dependency leaves off.
+screeny-fwimage = { path = "../fwimage", features = ["build"] }
