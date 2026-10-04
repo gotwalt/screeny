@@ -229,7 +229,12 @@ esp_bootloader_esp_idf::esp_app_desc!(
 ///
 /// **0.10.0: the compiled-in credential path is gone; the join order is
 /// stored -> portal.**
-pub const FW_VERSION: &str = "0.10.0";
+///
+/// **0.11.0: one image for every Gen 1 unit** - the HUB75 colour order is a
+/// stored setting (`colour_order`, card 361) instead of a cargo feature - and
+/// **Improv Serial** on UART0 (card 362), so the web flasher can set WiFi
+/// right after a first install.
+pub const FW_VERSION: &str = "0.11.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

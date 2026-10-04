@@ -4,26 +4,21 @@ Custom firmware that turns a **Tidbyt Gen 1** (ESP32 + 64x32 HUB75 panel) into a
 network frame buffer. This is firmware for that specific board; a **Tidbyt Gen 2**
 is different hardware and has not been tried.
 
-## Back up the stock firmware first
+## The easy way: the web flasher
 
-This is the step that lets you change your mind. The Tidbyt's stock firmware is not
-published anywhere, and it holds the device's identity for Tidbyt's service. Read it
-out of the chip before writing anything else to it - it is the only way back.
+Plug the Tidbyt into a computer with a USB-C data cable and open
+<https://gotwalt.github.io/screeny/> in Chrome or Edge. It installs this release and
+then sets up WiFi over the same cable.
 
-Find the serial port (`ls /dev/cu.usbserial-*` on macOS, `/dev/ttyUSB*` on Linux),
-then, at 230400 baud (faster rates have been seen to corrupt this link):
+To go back to the stock firmware later, Tidbyt's support pages have the official
+firmware and instructions: <https://help.tidbyt.com>.
 
-```bash
-esptool --port <port> --baud 230400 read-flash 0 0x800000 tidbyt-stock-backup.bin
-```
-
-That should produce an 8,388,608-byte file. Keep it somewhere safe. To restore it
-later: `esptool --port <port> --baud 230400 write-flash 0 tidbyt-stock-backup.bin`.
-
-## Flash the full image
+## Flash the full image by hand
 
 `screeny-fw-<version>-full.bin` is the bootloader, partition table and app merged
-into one file, meant to be written starting at address 0:
+into one file, meant to be written starting at address 0. Find the serial port
+(`ls /dev/cu.usbserial-*` on macOS, `/dev/ttyUSB*` on Linux) and stay at 230400 baud
+or below (faster rates have been seen to corrupt this link):
 
 ```bash
 esptool --port <port> --baud 230400 write-flash 0 screeny-fw-<version>-full.bin
