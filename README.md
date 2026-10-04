@@ -135,7 +135,8 @@ To change the firmware itself, install the Xtensa toolchain (`espup`) and build 
 
 To run the Studio as a service on a Linux box, see
 [`docs/design/deployment.md`](docs/design/deployment.md): a Dockerfile, a compose
-file, and a script that deploys over SSH.
+file, and a script that deploys over SSH. Multi-arch images (amd64, arm64) are built by
+GitHub Actions and published to `ghcr.io/gotwalt/screeny-studio`; see the same file.
 
 ## Hardware
 

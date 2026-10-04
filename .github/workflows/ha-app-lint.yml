@@ -1,0 +1,29 @@
+name: HA app lint
+
+# Lints ha-app/ (config.yaml, translations, docs files) with the Home Assistant
+# community's add-on linter. It also checks that the image named in config.yaml
+# is well formed; it does not pull it.
+on:
+  push:
+    paths:
+      - ha-app/**
+      - repository.yaml
+      - .github/workflows/ha-app-lint.yml
+  pull_request:
+    paths:
+      - ha-app/**
+      - repository.yaml
+      - .github/workflows/ha-app-lint.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: frenck/action-addon-linter@v2
+        with:
+          path: ./ha-app

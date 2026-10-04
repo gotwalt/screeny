@@ -258,6 +258,16 @@ and not on the LAN unless an option says so, and its MQTT broker taken from Home
 The Dockerfile's `app` stage is that image. See `home-assistant-app.md` and
 `ha-app/DOCS.md`.
 
+Where the image comes from: `.github/workflows/studio-image.yml` builds `--target app`
+natively on an amd64 and an arm64 runner (no QEMU) on every push to `main` that touches
+the crates, the Dockerfile or `ha-app/`, and on `app-v<version>` tags, and publishes one
+multi-arch manifest as `ghcr.io/gotwalt/screeny-studio` with tags `<version>` (read from
+`ha-app/config.yaml`, which is what the Supervisor pulls), `edge`, `sha-<short>`, and
+`latest` on release tags. `.github/workflows/ha-app-lint.yml` lints `ha-app/`. One manual
+step, once: a ghcr package made by Actions is private, so after the first run set the
+package `screeny-studio` to Public (profile > Packages > Package settings > Change
+visibility); Home Assistant pulls anonymously.
+
 ## Running it somewhere else
 
 `docker-compose.portable.yml` is for a Mac, or any host with no `/dev/dri` and no

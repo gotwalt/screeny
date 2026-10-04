@@ -81,7 +81,7 @@ ESP Web Tools 10.4.0 (checked against npm's sha512). Nothing binary is committed
 |---|---|
 | 357 software adapter hides overland/ghosts | merged |
 | 359 the app (`ha-app/`, ingress-only, Supervisor MQTT) | merged; **not yet run on a real HA** - needs 360's images. Open: `ingress_port` 8099 + watchdog on a real Supervisor, websocket through HA's proxy, peer `172.30.32.2` |
-| 360 multi-arch images on ghcr | not started; build `--target app`; image `ghcr.io/gotwalt/screeny-studio`, tag = `ha-app/config.yaml` `version`; the ghcr package must be made public |
+| 360 multi-arch images on ghcr | workflow written, not yet run on GitHub (the ghcr package must be made public once); build `--target app`; image `ghcr.io/gotwalt/screeny-studio`, tag = `ha-app/config.yaml` `version`; the ghcr package must be made public |
 | 361 colour order as a runtime setting | merged at the pause **without a full workspace test run** - run `cargo test --no-fail-fast` first. Setting `colour_order` = `rotated` (default) / `published`, device settings page, reboot to apply; `panel-hdk-colours` feature gone, one image. Not flashed: check both bench units with `screeny pattern` and `stack_free` |
 | 362 Improv Serial | merged; **not yet tried on a Tidbyt**. Bench: `screeny improv --port <tty> info|state|scan`, then ESP Web Tools; check GPIO3 receives without `with_rx`, logs stay clean, wrong password falls back |
 | 363 web flasher (`site/`, `tools/pages-build.sh`) | merged; needs GitHub Pages enabled (Source: GitHub Actions) and a firmware release containing 361 + 362 (0.11.0) for the WiFi step to appear. ESP Web Tools flashes at 115200 (fine for the CP2102N) and erases on a first install |
