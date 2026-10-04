@@ -126,6 +126,11 @@ ENTRYPOINT ["/usr/local/bin/screeny-studio"]
 # (`crates/studio/src/app.rs`), not as `SCREENY_LISTEN` says.
 FROM base AS app
 USER root
+# Replaces the obsolete `watchdog` in ha-app/config.yaml. App mode listens only
+# on the hassio gateway (`app::INGRESS_ADDR`, ingress port 8099), and
+# `GET /healthz` is the one path its peer check lets this container reach.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS -o /dev/null http://172.30.32.1:8099/healthz || exit 1
 
 # ---------------------------------------------------------------- runtime ---
 # The default target - the last stage - and what both compose files build:

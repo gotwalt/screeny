@@ -116,12 +116,14 @@ async fn no_mosquitto_yet_is_not_a_failure() {
 
 /// The peer rule: in app mode only the listed peers are served, 403 for the
 /// rest, over HTTP and the websocket's upgrade alike; a plain studio (no list)
-/// serves everybody.
+/// serves everybody. `GET /healthz` is open to any peer: the image's
+/// HEALTHCHECK is not the Supervisor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_the_named_peer_is_served_in_app_mode() {
     let stranger: IpAddr = "10.9.9.9".parse().unwrap();
     let studio = Studio::bind(Config { peers: Some(vec![stranger]), ..test_config() }).await.unwrap().spawn();
-    for path in ["/", "/healthz", "/api/v1/status", "/api/v1/ws"] {
+    assert_eq!(get(studio.addr, "/healthz").await.status, 200, "the container's own healthcheck");
+    for path in ["/", "/api/v1/status", "/api/v1/ws"] {
         assert_eq!(get(studio.addr, path).await.status, 403, "{path} from a peer that is not the Supervisor");
     }
     assert_eq!(post(studio.addr, "/api/v1/home_assistant/set", "{}").await.status, 403);

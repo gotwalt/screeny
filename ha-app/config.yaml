@@ -20,10 +20,10 @@ host_network: true
 # The Studio is reached through Home Assistant's ingress. For a host-network
 # app the Supervisor connects to the hassio bridge's gateway (172.30.32.1) on
 # ingress_port, and the Studio binds only that address in app mode.
+# `ingress_port` (8099) and `panel_admin` (true: the panel is admin-only) are
+# left at their defaults; the app linter refuses them spelled out.
 ingress: true
-ingress_port: 8099
 panel_icon: mdi:led-strip-variant
-panel_admin: true
 
 # The MQTT broker (Mosquitto) is offered by the Supervisor when there is one.
 services:
@@ -33,7 +33,7 @@ services:
 # once), so no init wrapper in between; and gives it the compose file's grace.
 init: false
 timeout: 25
-watchdog: http://[HOST]:[PORT:8099]/healthz
+# No `watchdog` (obsolete): the image's HEALTHCHECK polls /healthz instead.
 
 options:
   direct_access: false

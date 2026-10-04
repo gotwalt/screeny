@@ -128,10 +128,17 @@ pub fn plan(env: &dyn Fn(&str) -> Option<String>, options: Option<&str>) -> Resu
 
 /// Refuse every peer that is not in the list: 403, with no body that says
 /// more. Wrapped round the ingress listener's router only.
+///
+/// `GET /healthz` is open to every peer (owner, 2026-10-04): the image's
+/// `HEALTHCHECK`, which the app linter wants instead of `watchdog`, runs inside
+/// the container on the host network, so it arrives from the gateway address
+/// itself, not from the Supervisor. It says only whether the studio is well,
+/// and the address it is served on exists only inside the Home Assistant host.
 pub async fn only_peers(State(peers): State<Arc<Vec<IpAddr>>>, ConnectInfo(from): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Response {
     // A v4 peer on a dual-stack socket arrives as `::ffff:a.b.c.d`.
     let ip = from.ip().to_canonical();
-    if peers.contains(&ip) {
+    let health = req.method() == axum::http::Method::GET && req.uri().path() == "/healthz";
+    if health || peers.contains(&ip) {
         next.run(req).await
     } else {
         (StatusCode::FORBIDDEN, "this studio is reached through Home Assistant").into_response()
