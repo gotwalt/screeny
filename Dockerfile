@@ -18,6 +18,11 @@
 #                 `--build-arg FEATURES=none` for a CPU-only studio with no
 #                 graphics driver compiled in at all.
 #   RUST_IMAGE    override the builder base, e.g. to pin a Rust version.
+#   FIRMWARE_VERSION
+#                 the panel firmware this image offers over the air (card 364):
+#                 the release `fw-v<version>`'s `screeny-fw-<version>.bin`,
+#                 downloaded at build time and checked against SHA256SUMS.
+#                 Bump it to offer a newer one.
 
 ARG RUST_IMAGE=rust:1-trixie
 ARG RUNTIME_IMAGE=debian:trixie-slim
@@ -69,6 +74,33 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # keeps `.symtab`, so a backtrace still names the functions - no line numbers,
 # but never a column of hex.
 
+# --------------------------------------------------------------- firmware ---
+# Card 364: the firmware this Studio offers to panels, fetched at build time
+# from the GitHub release `fw-v<FIRMWARE_VERSION>` and checked against that
+# release's SHA256SUMS. It is the **app image** (`screeny-fw-<v>.bin`, the one
+# `POST /api/v1/firmware` takes), not the `-full.bin` a first install flashes.
+# There is no internet at runtime: an image update is what offers a firmware
+# update (docs/design/home-assistant-app.md, decision 9). Runs on the build
+# machine's own architecture - it only downloads a file - so a multi-arch build
+# does not emulate it.
+FROM --platform=$BUILDPLATFORM ${RUNTIME_IMAGE} AS firmware
+ARG FIRMWARE_VERSION=0.10.0
+ARG FIRMWARE_REPO=gotwalt/screeny
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl; \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /fw
+RUN set -eux; \
+    img="screeny-fw-${FIRMWARE_VERSION}.bin"; \
+    base="https://github.com/${FIRMWARE_REPO}/releases/download/fw-v${FIRMWARE_VERSION}"; \
+    curl -fsSL --retry 3 -o SHA256SUMS "${base}/SHA256SUMS"; \
+    curl -fsSL --retry 3 -o "${img}" "${base}/${img}"; \
+    test "$(grep -cF "  ${img}" SHA256SUMS)" = 1; \
+    grep -F "  ${img}" SHA256SUMS | sha256sum -c -; \
+    mv "${img}" screeny-fw.bin; \
+    ls -l screeny-fw.bin
+
 # ------------------------------------------------------------------ base ---
 # Everything the two images below share. Never built on its own.
 FROM ${RUNTIME_IMAGE} AS base
@@ -104,6 +136,8 @@ RUN set -eux; \
 
 COPY --from=builder /out/screeny-studio /usr/local/bin/screeny-studio
 COPY --from=builder /out/screeny /usr/local/bin/screeny
+# Card 364: where `screeny_studio::firmware::DEFAULT_PATH` looks.
+COPY --from=firmware /fw/screeny-fw.bin /usr/local/share/screeny/screeny-fw.bin
 
 WORKDIR /data
 

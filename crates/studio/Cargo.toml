@@ -41,6 +41,10 @@ screeny-device-api = { path = "../device-api", features = ["std"] }
 # (`oe_slots`, `MAX_OE_SLOTS`), so the page's list and the device's real
 # resolution cannot drift apart. No new formula here.
 screeny-panel = { path = "../panel" }
+# Card 364: the firmware image this Studio offers is read with the device's own
+# validator (`Scan`), so "is this a screeny-fw image, and which version" has the
+# one definition the panel and the simulator use. No alloc, no I/O.
+screeny-fwimage = { path = "../fwimage", default-features = false }
 # The server. No `tracing`, no `form`, no `tower-log`: this is a handful of
 # routes and one socket, and every feature is a crate in the tree.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
@@ -63,3 +67,6 @@ socket2 = "0.6"
 # `page::brightness_stops`'s lowest nonzero stop against the device's own
 # `BRIGHTNESS_FLOOR` rather than a second literal (card 187).
 screeny-receiver = { path = "../receiver" }
+# Card 364: the tests make firmware images (`Builder`), which is the feature
+# the normal dependency leaves off.
+screeny-fwimage = { path = "../fwimage", features = ["build"] }

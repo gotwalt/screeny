@@ -780,7 +780,8 @@ fn post_firmware(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
             // the running binary.
             let running = shared.core().lock().unwrap().ident().fw_slot;
             let version = image.version.as_str().unwrap_or("");
-            if activate && shared.ota().activate(version, running) {
+            let old_version = shared.core().lock().unwrap().ident().fw.clone();
+            if activate && shared.ota().activate(version, running, &old_version) {
                 ok_json(&FirmwareReply::activating(written32))
             } else {
                 ok_json(&FirmwareReply::ok(written32))

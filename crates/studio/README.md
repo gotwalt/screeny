@@ -410,6 +410,11 @@ one device per panel (card 352) and one per channel other than Channel 1:
   channels' names (two channels with one name are told apart as `Name (<id>)`); creating,
   renaming or deleting a channel republishes every select within a second, and a deleted
   channel's device is removed, its panels having gone to Channel 1.
+- Every panel's device (the first included) has a **Firmware `update` entity** (card 364,
+  `screeny_<id>[_<key>]_firmware`, `device_class: firmware`): installed and latest version,
+  Install, and `in_progress` / `update_percentage` while it runs - see *Firmware updates*
+  below. The first device's snapshot files are compared with that entity taken out, like the
+  channel select.
 
 The first device's ids are guaranteed three ways: `Topics::new` and `discovery::build` are
 unchanged for its five entities; `ha::fleet::tests` compares its discovery config and
@@ -744,6 +749,41 @@ points it somewhere other than 80, which is how a simulator is talked to.
 redacts it, and nothing about a device is written to the state file, because these are
 live facts and not state. `tests/ssid.rs` checks both.
 
+### Firmware updates (card 364)
+
+The image carries one firmware: the Dockerfile fetches the release app image
+`screeny-fw-<FIRMWARE_VERSION>.bin` (not the `-full.bin` a first install flashes), checks it
+against the release's `SHA256SUMS` and puts it at `/usr/local/share/screeny/screeny-fw.bin`
+(`SCREENY_FIRMWARE_FILE` says otherwise). At start the studio reads it with the device's own
+validator (`screeny-fwimage`'s `Scan`) and takes the version from `esp_app_desc`. **No file,
+or a bad one, offers nothing** and everything else works - a local `cargo run` has none.
+There is no internet at runtime: a new studio image is what offers a new firmware.
+
+Each panel's `devices[].update` in `GET /api/v1/status` says what it runs, what is on offer,
+whether Install can start now (`available`, else `why_not`) and the attempt in progress or
+the last that failed (`run`). A panel on the **same or a newer** version is offered nothing,
+and an unreadable version is not offered either: never a downgrade.
+
+**Nothing updates a panel by itself.** `POST /device/firmware` `{device, confirm: true}` (the
+Panel screen's *Update firmware*, after a confirm) and Home Assistant's **Install** on the
+panel's `update` entity (`INSTALL` on `screeny/<id>/<key>/firmware/set`) both call
+`firmware::start`. It returns at once; the work is a task that
+
+1. uploads the image (`POST /api/v1/firmware`, which activates; `devhttp::post_firmware`,
+   one connection, a stall limit on every write). The frame stream is not touched - the
+   firmware keeps it alive through an upload and shows its own updating screen;
+2. waits for the panel to go away and come back with **a different `boot_id`** (the old image
+   answers for ~2 s after the reply: the trap card 246 found);
+3. waits for the new image to leave trial: `fw_state` `valid` is success; the panel back on
+   the **old version** is the bootloader's rollback and is reported as a failure.
+
+While it runs the status poller leaves that panel alone (one connection worker, and the
+update is using it), and the reboot is registered as asked-for, so it is not counted among
+the unexplained ones. Progress and the reason for any failure are on the page and, for HA,
+in the `update` entity's `in_progress`, `update_percentage` and `release_summary`.
+`tests/firmware.rs` plays all of it against the simulator, including a refused image, a
+panel that vanishes mid-upload, one that never returns and a rollback.
+
 ### What a panel costs the network (card 164)
 
 The author's question: *"how much network traffic are we sending, and receiving?"*
@@ -958,6 +998,7 @@ attaching answers at once whether or not the panel is there. Card 170's `to` als
 | `POST /device/identify` | `{device, ms?}` | |
 | `POST /device/name` | `{device, name}` | renames it here, and on the device when it can be reached |
 | `POST /device/reboot` | `{device, confirm}` | `confirm: true` is required |
+| `POST /device/firmware` | `{device, confirm}` | card 364: install the firmware this studio carries; `confirm: true` is required; 409 when there is nothing newer to install or one is already going; progress is `devices[].update` in `GET /status` |
 | `POST /device/stats` | `{device}` | telemetry, read now rather than from the poll |
 
 ### The frame socket, `GET /ws`

@@ -40,7 +40,8 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 
-use screeny_device_api::reply::{PanicReply, StatusReply};
+use screeny_device_api::error::ErrorReply;
+use screeny_device_api::reply::{FirmwareReply, PanicReply, StatusReply};
 use screeny_device_api::route;
 
 /// The port the device serves its HTTP API on (`docs/design/device-web.md`).
@@ -157,6 +158,105 @@ pub fn get_panic_counted(addr: SocketAddr, patience: Duration) -> (Cost, Result<
     (cost, out)
 }
 
+/// How long a whole firmware upload may take, connect to reply.
+///
+/// The image is ~0.9 MB and the device erases and writes a 4 KB sector at a
+/// time (about 50 ms each, research 006), so a healthy upload is some tens of
+/// seconds; this is several times that, and every single write is bounded by
+/// [`UPLOAD_STALL`] besides.
+pub const UPLOAD_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How long the device may take to accept any one piece of the body before the
+/// upload is called dead: a panel that was unplugged mid-upload must not hold
+/// the update for the whole of [`UPLOAD_TIMEOUT`].
+pub const UPLOAD_STALL: Duration = Duration::from_secs(15);
+
+/// The size of one write of the body: a sector, which is what the device
+/// stages in.
+const UPLOAD_CHUNK: usize = screeny_fwimage::SECTOR;
+
+/// `POST /api/v1/firmware?activate=...` to the device at `addr`: the raw image
+/// as an `application/octet-stream` body, and the device's own answer back.
+///
+/// Blocking, one connection, `Connection: close`, on the same terms as
+/// [`get_status`]. `progress` is told how many bytes of the body have gone out,
+/// after each write.
+///
+/// A device that refuses the image on its first sector answers at once and may
+/// close; a write that fails is therefore followed by a read, and a reply that
+/// is there wins over the write error - it says *why*.
+///
+/// # Errors
+///
+/// [`Fault`]: the device could not be reached, stopped taking the body
+/// ([`UPLOAD_STALL`]), ran out of `patience`, or answered with an error body
+/// (`busy`, `unavailable`...) rather than a [`FirmwareReply`].
+pub fn post_firmware(
+    addr: SocketAddr,
+    image: &[u8],
+    activate: bool,
+    patience: Duration,
+    progress: &mut dyn FnMut(usize),
+) -> Result<FirmwareReply, Fault> {
+    let started = Instant::now();
+    let left = || patience.checked_sub(started.elapsed()).filter(|d| !d.is_zero());
+    let mut stream = TcpStream::connect_timeout(&addr, UPLOAD_STALL.min(patience))
+        .map_err(|e| Fault::reached(format!("connecting to its HTTP port: {e}")))?;
+    let _ = stream.set_nodelay(true);
+    let head = format!(
+        "POST {path}?{key}={flag} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/octet-stream\r\n\
+         Content-Length: {len}\r\nAccept: application/json\r\nUser-Agent: screeny-studio/{version}\r\n\
+         Connection: close\r\n\r\n",
+        path = route::FIRMWARE,
+        key = route::ACTIVATE_KEY,
+        flag = u8::from(activate),
+        len = image.len(),
+        version = env!("CARGO_PKG_VERSION"),
+    );
+    let mut cost = Cost::default();
+    let mut write_error: Option<String> = None;
+    let mut sent = 0usize;
+    let pieces = std::iter::once((head.as_bytes(), false)).chain(image.chunks(UPLOAD_CHUNK).map(|c| (c, true)));
+    for (piece, is_body) in pieces {
+        let Some(deadline) = left() else {
+            return Err(Fault::reached("the upload ran out of time"));
+        };
+        let _ = stream.set_write_timeout(Some(deadline.min(UPLOAD_STALL)));
+        if let Err(e) = stream.write_all(piece) {
+            write_error = Some(match e.kind() {
+                ErrorKind::WouldBlock | ErrorKind::TimedOut => "the panel stopped accepting the upload".to_string(),
+                _ => format!("sending the firmware: {e}"),
+            });
+            break;
+        }
+        if is_body {
+            sent += piece.len();
+            progress(sent);
+        }
+    }
+    // The reply, whether or not the body went all the way out. After the body
+    // the device is writing flash and may be a while.
+    let raw = match read_reply_with(&mut stream, &left, &mut cost, 16 * 1024) {
+        Ok(raw) => raw,
+        Err(f) => return Err(write_error.map_or(f, Fault::reached)),
+    };
+    let (status, body) = match split_reply(&raw) {
+        Ok(x) => x,
+        Err(f) => return Err(write_error.map_or(f, Fault::reached)),
+    };
+    if status == 200 {
+        return serde_json::from_slice(body)
+            .map_err(|e| Fault::reached(format!("its answer to the upload was not understood: {e}")));
+    }
+    let said = serde_json::from_slice::<ErrorReply>(body).ok();
+    Err(Fault::reached(match said {
+        Some(e) => {
+            format!("the panel refused the upload: {}{}", e.error, e.detail.map_or_else(String::new, |d| format!(" ({d})")))
+        }
+        None => write_error.unwrap_or_else(|| format!("the upload was answered {status}")),
+    }))
+}
+
 /// `GET path` from `addr`, decoded as `T`. What [`get_status`] and
 /// [`get_panic`] both are, parameterised on the route and the reply shape -
 /// the connection handling, the deadline and the 404-is-absent rule are one
@@ -210,6 +310,11 @@ fn read_json<T: DeserializeOwned>(path: &str, addr: SocketAddr, patience: Durati
 /// Read until the server closes, or until `Content-Length` is satisfied, or
 /// until [`MAX_REPLY`] - whichever comes first.
 fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost: &mut Cost) -> Result<Vec<u8>, Fault> {
+    read_reply_with(stream, left, cost, MAX_REPLY)
+}
+
+/// [`read_reply`] with its own ceiling.
+fn read_reply_with(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost: &mut Cost, max: usize) -> Result<Vec<u8>, Fault> {
     let mut raw: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
@@ -228,7 +333,7 @@ fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost:
         // Every byte read, including the ones of a reply that is about to be
         // refused for being too long: they crossed the network either way.
         cost.inbound += n as u64;
-        if raw.len() > MAX_REPLY {
+        if raw.len() > max {
             return Err(Fault::absent("its HTTP port sent more than a status reply can be"));
         }
         // A server that did not honour `Connection: close` would otherwise

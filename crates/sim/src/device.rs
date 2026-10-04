@@ -360,6 +360,14 @@ impl SimHandle {
         self.shared.ota().set(timing);
     }
 
+    /// Make a modelled update (see [`SimHandle::model_ota`]) end its trial in a
+    /// **rollback** to the old image instead of a confirm (card 364): the
+    /// device reboots again, with a third `boot_id`, on the version it had
+    /// before, and `panic.update.outcome` says `reverted`.
+    pub fn model_ota_reverts(&self, revert: bool) {
+        self.shared.ota().set_reverting(revert);
+    }
+
     /// Where the modelled update has got to.
     #[must_use]
     pub fn ota_phase(&self) -> crate::OtaPhase {

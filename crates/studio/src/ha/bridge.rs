@@ -127,7 +127,13 @@ fn picture_of(st: &AppState, channel: &Arc<Channel>, pictures: &[Picture]) -> Sn
 /// A panel's own part of its device: brightness, and the link.
 fn panel_of(st: &AppState, panel: &Arc<Panel>) -> Snapshot {
     let status = st.panels.status_of(panel);
+    // Card 364: the panel's firmware, as the status poll last read it.
+    let device = panel.device();
+    let record = st.devices.get(&device);
+    let facts = record.as_ref().and_then(|r| r.facts.as_ref());
+    let view = st.firmware.view(&device, facts.map(|f| f.reply.fw.to_string()).as_deref(), facts.map(|f| f.reply.fw_state));
     Snapshot {
+        firmware: super::FirmwareState::of(&view),
         brightness: status.brightness,
         panel_connected: status.on && status.panel.as_ref().is_some_and(|p| p.connected),
         ..Snapshot::default()
@@ -246,6 +252,8 @@ pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
                     crate::fleet::move_to_channel(st, &panel, &channel);
                 }
                 Command::ShowPicture { .. } => return Err("a picture is a channel's, not a panel's".into()),
+                // Returns at once; the update is a task (card 364).
+                Command::InstallFirmware => crate::firmware::start(st, &panel.device())?,
             }
         }
     }

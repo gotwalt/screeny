@@ -162,6 +162,7 @@ pub fn routes() -> Router<AppState> {
         .route("/device/identify", post(device_identify))
         .route("/device/name", post(device_name))
         .route("/device/reboot", post(device_reboot))
+        .route("/device/firmware", post(device_firmware))
         .route("/device/stats", post(device_stats))
 }
 
@@ -1111,6 +1112,21 @@ async fn device_reboot(State(st): State<AppState>, Json(req): Json<Reboot>) -> A
     st.devices.asked_to_reboot(&req.device);
     on_device(&st, &req.device, "rebooting", |c| c.reboot().map_err(|e| e.to_string())).await?;
     Ok(Json(serde_json::json!({ "rebooting": req.device })))
+}
+
+/// **Card 364: install the firmware this Studio carries on a panel.** Returns
+/// as soon as the update has started; its progress is `devices[].update` in
+/// `GET /api/v1/status`. An explicit action only: nothing updates a panel by
+/// itself, and `confirm` is the second lock, as for a reboot.
+async fn device_firmware(State(st): State<AppState>, Json(req): Json<Reboot>) -> ApiResult<Json<serde_json::Value>> {
+    if !req.confirm {
+        return Err(ApiError::bad_request("updating a panel's firmware needs `confirm: true`".into()));
+    }
+    if st.devices.get(&req.device).is_none() {
+        return Err(ApiError::not_found(format!("no device `{}`", req.device)));
+    }
+    crate::firmware::start(&st, &req.device).map_err(ApiError::unreachable)?;
+    Ok(Json(serde_json::json!({ "updating": req.device, "to": st.firmware.offered() })))
 }
 
 /// Telemetry, read now rather than from the five-second poll.

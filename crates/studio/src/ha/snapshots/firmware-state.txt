@@ -1,0 +1,1 @@
+screeny/studio/firmware/state {"installed_version":"0.10.0","latest_version":"0.11.0","title":"Screeny firmware","release_summary":null,"in_progress":false,"update_percentage":null}

@@ -152,6 +152,7 @@ mod tests {
             panel_connected: true,
             channels: options(),
             channel: Some(channel),
+            firmware: crate::ha::FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..Default::default() },
         }
     }
 
@@ -190,6 +191,9 @@ mod tests {
         let (config_msg, rest) = (&out[0], &out[1..]);
         assert_eq!(config_msg.topic, "homeassistant/device/screeny_studio/config");
         let mut v = json(config_msg);
+        // Card 364's update entity has its own pins (discovery.rs, payload.rs).
+        let update = v["components"].as_object_mut().unwrap().remove("firmware").unwrap();
+        assert_eq!(update["command_topic"], "screeny/studio/firmware/set");
         let channel_select = v["components"].as_object_mut().unwrap().remove("channel").unwrap();
         assert_eq!(channel_select["unique_id"], "screeny_studio_channel");
         assert_eq!(channel_select["command_topic"], "screeny/studio/channel/set");
@@ -202,7 +206,8 @@ mod tests {
         assert_eq!((rest[0].topic.as_str(), rest[0].payload.as_str()), ("screeny/studio/status", "online"));
         let states: String = rest[1..6].iter().map(|m| format!("{} {}", m.topic, m.payload)).collect::<Vec<_>>().join("\n");
         snapshot_json("state-lit.txt", &states);
-        assert_eq!((rest[6].topic.as_str(), rest[6].payload.as_str()), ("screeny/studio/channel/state", "Channel 1"), "the one addition, last");
+        assert_eq!((rest[6].topic.as_str(), rest[6].payload.as_str()), ("screeny/studio/channel/state", "Channel 1"), "card 355's addition");
+        assert_eq!(rest[7].topic, "screeny/studio/firmware/state", "card 364's, last");
 
         // Every id and topic, spelt out.
         let v = json(config_msg);
@@ -215,7 +220,7 @@ mod tests {
         assert_eq!(v["components"]["picture"]["command_topic"], "screeny/studio/picture/set");
         assert_eq!(v["components"]["picture"]["state_topic"], "screeny/studio/picture/state");
         assert_eq!(v["components"]["patch"]["state_topic"], "screeny/studio/patch/state");
-        let topics: Vec<&str> = rest[1..7].iter().map(|m| m.topic.as_str()).collect();
+        let topics: Vec<&str> = rest[1..8].iter().map(|m| m.topic.as_str()).collect();
         assert_eq!(
             topics,
             [
@@ -224,7 +229,8 @@ mod tests {
                 "screeny/studio/level/state",
                 "screeny/studio/picture/state",
                 "screeny/studio/panel/state",
-                "screeny/studio/channel/state"
+                "screeny/studio/channel/state",
+                "screeny/studio/firmware/state"
             ]
         );
         for retired in ["scene", "schedule", "resume", "scheduled"] {
@@ -265,10 +271,10 @@ mod tests {
         let topics: Vec<&str> = out.iter().map(|m| m.topic.as_str()).collect();
         assert_eq!(topics[0], "homeassistant/device/screeny_studio/config");
         assert_eq!(topics[1], "screeny/studio/status");
-        assert_eq!(topics[8], "homeassistant/device/screeny_studio_screeny-4a00a5/config");
-        assert_eq!(topics[9], "screeny/studio/screeny-4a00a5/brightness/state");
+        assert_eq!(topics[9], "homeassistant/device/screeny_studio_screeny-4a00a5/config");
+        assert_eq!(topics[10], "screeny/studio/screeny-4a00a5/brightness/state");
         assert_eq!(topics.iter().filter(|t| t.ends_with("/status")).count(), 1, "one availability for the studio");
-        let second = json(&out[8]);
+        let second = json(&out[9]);
         assert_eq!(second["device"]["identifiers"], serde_json::json!(["screeny_studio_screeny-4a00a5"]));
         assert_eq!(second["device"]["name"], "Kitchen");
         assert_eq!(second["components"]["channel"]["unique_id"], "screeny_studio_screeny-4a00a5_channel");
@@ -279,7 +285,10 @@ mod tests {
         // platform and nothing else.
         assert_eq!(second["components"]["picture"], serde_json::json!({ "platform": "select" }));
         assert_eq!(second["components"]["patch"], serde_json::json!({ "platform": "sensor" }));
-        assert_eq!(second["components"].as_object().unwrap().len(), 6, "brightness, level, panel, channel, and two removals");
+        assert_eq!(second["components"].as_object().unwrap().len(), 7, "brightness, level, panel, channel, firmware, and two removals");
+        assert_eq!(second["components"]["firmware"]["platform"], "update");
+        assert_eq!(second["components"]["firmware"]["unique_id"], "screeny_studio_screeny-4a00a5_firmware");
+        assert_eq!(second["components"]["firmware"]["command_topic"], "screeny/studio/screeny-4a00a5/firmware/set");
         assert!(!out.iter().any(|m| m.topic == "screeny/studio/screeny-4a00a5/picture/state"), "no state for what it does not have");
         let first = json(&out[0]);
         assert_eq!(first["device"]["name"], "Screeny", "the first is named by the Settings screen, as before");
@@ -344,7 +353,8 @@ mod tests {
         let topics = retained_topics(&t);
         assert_eq!(topics[0], "homeassistant/device/screeny_studio_b/config");
         assert!(topics[1..].iter().all(|t| t.starts_with("screeny/studio/b/")), "{topics:?}");
-        assert_eq!(topics.len(), 7, "the config; brightness, level, panel, channel and card 352's picture and patch");
+        assert_eq!(topics.len(), 8, "the config; brightness, level, panel, channel, firmware and card 352's picture and patch");
+        assert!(topics.contains(&"screeny/studio/b/firmware/state".to_string()));
         assert!(topics.contains(&"screeny/studio/b/picture/state".to_string()) && topics.contains(&"screeny/studio/b/patch/state".to_string()));
         let c = retained_topics(&Topics::for_channel(&cfg, 2));
         assert_eq!(c, ["homeassistant/device/screeny_studio_ch2/config", "screeny/studio/ch2/patch/state", "screeny/studio/ch2/picture/state"]);

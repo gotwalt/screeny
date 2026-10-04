@@ -155,6 +155,10 @@ pub struct DeviceStatus {
     /// older than `facts` by design and not only by poll timing.
     pub panic: Option<PanicFacts>,
     pub panic_ago: Option<f64>,
+    /// Card 364: what firmware this Studio could install on it, whether that
+    /// can be started now, and how an update is going or why the last one
+    /// failed.
+    pub update: crate::firmware::View,
     /// How reading it is going. Never a reason for a 503.
     pub http: HttpHealth,
     /// **Card 164: what this panel has cost the network since the studio
@@ -309,6 +313,11 @@ pub fn collect(st: &AppState) -> Status {
                 facts: d.facts.clone(),
                 panic_ago: d.panic.as_ref().map(|p| now.saturating_sub(p.heard_unix) as f64),
                 panic: d.panic.clone(),
+                update: st.firmware.view(
+                    &d.stored.id,
+                    d.facts.as_ref().map(|f| f.reply.fw.to_string()).as_deref(),
+                    d.facts.as_ref().map(|f| f.reply.fw_state),
+                ),
                 http: d.http.clone(),
                 traffic: d.traffic.reported(),
                 last_error: d.last_error.clone(),
