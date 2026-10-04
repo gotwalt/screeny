@@ -231,7 +231,7 @@ if [ "$ACTION" = down ]; then
   fi
   say ""
   say "The image and (unless --volumes) the state volume are still on $HOST:"
-  say "  ssh $HOST -- docker image rm screeny-studio:local"
+  say "  ssh $HOST -- docker image rm ghcr.io/gotwalt/screeny-studio:edge"
   say "  ssh $HOST -- docker volume rm ${PROJECT}_state"
   exit 0
 fi

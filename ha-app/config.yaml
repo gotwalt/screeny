@@ -11,7 +11,7 @@ arch:
 
 # The image is the Studio's own (the root Dockerfile, `--target app`), published
 # multi-arch by card 360. The tag is the version above.
-image: ghcr.io/gotwalt/screeny-studio
+image: ghcr.io/gotwalt/screeny-ha-app
 
 # Host networking: mDNS discovery and the UDP frame stream behave exactly as
 # in docker-compose.yml.

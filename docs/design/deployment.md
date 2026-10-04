@@ -15,7 +15,7 @@ files are, how to deploy, what to check, and how to take it all away again.
 
 | file | what it is |
 |---|---|
-| `Dockerfile` | two stages. Builder: the official Rust image, cargo registry and `target/` in BuildKit cache mounts. Runtime: `debian:trixie-slim` + Mesa's Vulkan driver, `screeny-studio` and the `screeny` CLI, running as uid 10001. |
+| `Dockerfile` | builder, then runtime (default) and `app` final stages. Builder: the official Rust image, cargo registry and `target/` in BuildKit cache mounts. Runtime: `debian:trixie-slim` + Mesa's Vulkan driver, `screeny-studio` and the `screeny` CLI, running as uid 10001. |
 | `docker-compose.yml` | the service on a Linux host with a GPU: host networking, `/dev/dri`, a named state volume, healthcheck, capped logs, `restart: unless-stopped`. |
 | `docker-compose.portable.yml` | the same service on a Mac or on any host with no `/dev/dri` and no host networking: a published port, no GPU, discovery not expected to work. A whole file, not an override - see below. |
 | `tools/deploy.sh` | does the deployment over SSH, and `--status`, `--logs`, `--down` afterwards. |
@@ -241,7 +241,7 @@ ssh <host> -- "cd ~/src/screeny && SCREENY_PORT=8787 SCREENY_RENDER_GID=993 TZ=A
 
 # remove everything this ever created on the host
 ssh <host> -- docker compose -p screeny -f ~/src/screeny/docker-compose.yml down --volumes
-ssh <host> -- docker image rm screeny-studio:local
+ssh <host> -- docker image rm ghcr.io/gotwalt/screeny-studio:edge
 ssh <host> -- rm -rf ~/src/screeny
 ```
 
@@ -258,15 +258,41 @@ and not on the LAN unless an option says so, and its MQTT broker taken from Home
 The Dockerfile's `app` stage is that image. See `home-assistant-app.md` and
 `ha-app/DOCS.md`.
 
-Where the image comes from: `.github/workflows/studio-image.yml` builds `--target app`
-natively on an amd64 and an arm64 runner (no QEMU) on every push to `main` that touches
-the crates, the Dockerfile or `ha-app/`, and on `app-v<version>` tags, and publishes one
-multi-arch manifest as `ghcr.io/gotwalt/screeny-studio` with tags `<version>` (read from
-`ha-app/config.yaml`, which is what the Supervisor pulls), `edge`, `sha-<short>`, and
-`latest` on release tags. `.github/workflows/ha-app-lint.yml` lints `ha-app/`. One manual
-step, once: a ghcr package made by Actions is private, so after the first run set the
-package `screeny-studio` to Public (profile > Packages > Package settings > Change
-visibility); Home Assistant pulls anonymously.
+## Published images
+
+Nobody has to build from source. `.github/workflows/studio-image.yml` builds the
+Dockerfile natively on an amd64 and an arm64 runner (no QEMU) on every push to `main`
+that touches the crates, the Dockerfile or `ha-app/`, and publishes two multi-arch
+manifests (`linux/amd64`, `linux/arm64`) on ghcr.io. They are the same build; only the
+last Dockerfile stage differs.
+
+| image | Dockerfile target | for | tags |
+|---|---|---|---|
+| `ghcr.io/gotwalt/screeny-studio` | `runtime` (the default; uid 10001) | the standalone service: `docker-compose.yml` | `edge`, `sha-<short>`, `latest` on every main push |
+| `ghcr.io/gotwalt/screeny-ha-app` | `app` (root, as the Supervisor expects) | the Home Assistant app (`ha-app/config.yaml` `image:`) | `<version>` from `ha-app/config.yaml` (what the Supervisor pulls), `edge`, `sha-<short>`, `latest` on `app-v<version>` tags |
+
+`latest` on the standalone image follows `main`, the same as `edge`: there is no
+standalone release process or version number, and a bare `docker pull` should work
+rather than fail. Pin `sha-<short>` for something stable.
+
+`docker-compose.yml` names `ghcr.io/gotwalt/screeny-studio:edge` and also keeps its
+`build:`: `docker compose pull` fetches the published image, `docker compose build`
+builds the working tree and tags the result with the same name (so `up` then uses it).
+`tools/deploy.sh` still builds from source on the host. It could switch to a pull later
+(`compose pull` instead of `build`) once the images are public and a `sha-` pin is wanted
+instead of "whatever is checked out"; it does not today.
+
+The GPU boundary: the GPU path needs a Vulkan device inside the container, e.g. an
+Intel or AMD GPU passed as `/dev/dri` (what `docker-compose.yml` does). Without one the
+Studio falls back to software rendering (lavapipe, on the CPU), and some patches are too
+heavy for that on a small CPU (a Raspberry Pi 4 class host); the per-patch measurements
+are in `home-assistant-app.md` (card 357). The images contain the Mesa Vulkan drivers
+either way; the host provides the device. NVIDIA is not covered.
+
+`.github/workflows/ha-app-lint.yml` lints `ha-app/`. One manual step, once, after the
+first run: a ghcr package made by Actions is private, so set **both** packages,
+`screeny-studio` and `screeny-ha-app`, to Public (profile > Packages > the package >
+Package settings > Change visibility); both are pulled anonymously.
 
 ## Running it somewhere else
 
