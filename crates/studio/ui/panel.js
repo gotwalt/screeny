@@ -165,6 +165,16 @@ async function start() {
     attempt(`Rebooting ${name}`, () => invoke('device/reboot', { device, confirm: true }));
   });
 
+  // Card 364: install the firmware this Studio carries. The same action as
+  // Home Assistant's Install on the panel's update entity.
+  $('#fw-update').addEventListener('click', () => {
+    const device = needPanel();
+    if (!device) return;
+    const name = $('#panel-name').textContent;
+    if (!window.confirm(`Update ${name}'s firmware? It shows an updating screen, restarts, and is back in about a minute.`)) return;
+    attempt(`Updating ${name}`, () => invoke('device/firmware', { device, confirm: true }));
+  });
+
   $('#forget').addEventListener('click', () => {
     const device = needPanel();
     if (!device) return;
@@ -349,9 +359,11 @@ async function start() {
   function showDevice(d) {
     const f = d && d.facts;
     $('#device-block').hidden = !f;
+    showFirmware(f && d.update);
     if (!f) { $('#device-note').hidden = true; return; }
 
     const rows = [
+      firmwareRow(f, d.update),
       ['Slot', `${words(f.fw_slot)} · ${words(f.fw_state)}`, f.bad_fw_state ? 'warn' : null],
       // uptime_ms wraps at 49.7 days, like telemetry's. So does the panel's.
       ['Up', duration(f.uptime_ms / 1000)],
@@ -387,6 +399,48 @@ async function start() {
     if (d.facts_ago > 120) notes.push(`This is what it last said about itself, ${ago(d.facts_ago)}.`);
     $('#device-note').textContent = notes.join(' ');
     $('#device-note').hidden = notes.length === 0;
+  }
+
+  /** Card 364: what an update is doing, in words. `u` is the server's view
+   *  (`firmware.rs`'s `View`): `run` is the attempt in progress or the last one
+   *  that failed. */
+  function updateProgress(run) {
+    if (!run) return '';
+    if (run.phase === 'uploading') {
+      const pct = run.total ? Math.min(100, Math.floor((run.sent * 100) / run.total)) : 0;
+      return `sending the update, ${pct}%`;
+    }
+    if (run.phase === 'restarting') return 'the panel is restarting into it';
+    if (run.phase === 'trial') return 'the new firmware is proving itself';
+    return '';
+  }
+
+  /** The Firmware row: what the panel runs, and what is on offer. */
+  function firmwareRow(f, u) {
+    const running = f.fw;
+    if (u && u.run && u.run.phase !== 'failed') return ['Firmware', `${running} · updating to ${u.offered}: ${updateProgress(u.run)}`, 'warn'];
+    if (u && u.run && u.run.phase === 'failed') return ['Firmware', `${running} · the last update failed: ${u.run.why}`, 'warn'];
+    if (u && u.available) return ['Firmware', `${running} · ${u.offered} is available`];
+    return ['Firmware', running];
+  }
+
+  /** The Update firmware button: only when there is something newer to
+   *  install, or an update is going (then it says so and does nothing). Never
+   *  started by anything but this click, and asked about first. */
+  function showFirmware(u) {
+    const going = Boolean(u && u.run && u.run.phase !== 'failed');
+    const show = Boolean(u && (u.available || going));
+    $('#fw-row').hidden = !show;
+    const btn = $('#fw-update');
+    btn.disabled = going;
+    const label = going ? 'Updating…' : `Update firmware to ${u ? u.offered : ''}`;
+    if (btn.textContent !== label) btn.textContent = label;
+    const note = $('#fw-note');
+    const text = going
+      ? 'The panel shows an updating screen, restarts, and then proves the new firmware for a minute or two before it keeps it. If it cannot, it goes back to the old one by itself.'
+      : '';
+    note.textContent = text;
+    note.hidden = !text;
   }
 
   /** Card 199: the Panic row - what `GET /api/v1/panic` says that
