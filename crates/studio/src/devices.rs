@@ -799,6 +799,33 @@ impl Registry {
         }
     }
 
+    /// **Card 367: adopt the identities an export carried.** The device keeps
+    /// the name it had there. Where it is, is this Studio's to find out: a
+    /// device already here keeps its own address, instance and resolution
+    /// (only its name is replaced), and a new one starts with none - the case
+    /// "a discovered device we have lost sight of" - so the next browse or
+    /// probe fills it in, exactly as for a panel that moved. Nothing an
+    /// export said about an address is used.
+    ///
+    /// Returns the ids that were not known before.
+    pub fn import(&self, identities: &[StoredDevice]) -> Vec<String> {
+        let mut devices = self.lock();
+        let mut added = Vec::new();
+        for s in identities {
+            if s.id.is_empty() || s.id.starts_with(PENDING) {
+                continue;
+            }
+            if let Some(d) = devices.get_mut(&s.id) {
+                d.stored.name = s.name.trim().to_string();
+            } else {
+                let stored = StoredDevice { id: s.id.clone(), name: s.name.trim().to_string(), ..StoredDevice::default() };
+                devices.insert(s.id.clone(), DeviceRecord { stored, ..DeviceRecord::default() });
+                added.push(s.id.clone());
+            }
+        }
+        added
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, DeviceRecord>> {
         self.devices.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
