@@ -66,10 +66,21 @@ permission does not stick; if discovery keeps failing after you said yes, see
 
 ## 2. Put the firmware on the Tidbyt
 
-There are two ways. **Flash a release** needs no Rust toolchain: one Python tool and
-one file. **Build it yourself** (steps 2b to 4) is for changing the firmware.
+There are three ways. **The web flasher** needs nothing but Chrome or Edge and a USB-C
+data cable, and sets up WiFi in the same step. **Flash a release by hand** needs one
+Python tool. **Build it yourself** (steps 2c to 4) is for changing the firmware.
 
-### 2a. Flash a release
+To go back to Tidbyt's own firmware at any point, see
+[help.tidbyt.com](https://help.tidbyt.com).
+
+### 2a. The web flasher
+
+Open <https://gotwalt.github.io/screeny/>, plug the Tidbyt in, click **Install** and
+pick the port that appears (CP2102 or USB Serial). When the install finishes it asks
+for your WiFi (2.4 GHz only) and hands it to the panel over the cable. Then skip to
+[step 6](#6-stream-to-it).
+
+### 2b. Flash a release by hand
 
 ```bash
 pip install esptool                                   # or: brew install esptool
@@ -77,15 +88,14 @@ ls /dev/cu.usbserial-*                                # macOS; Linux: ls /dev/tt
 export SCREENY_PORT=/dev/cu.usbserial-XXXX
 ```
 
-**Back up the stock firmware first.** It is not published anywhere, it holds the
-device's identity for Tidbyt's service, and this is the only way back:
+If you want your own copy of what is on the chip now (optional; Tidbyt publishes its
+firmware), read it out first:
 
 ```bash
 esptool --port "$SCREENY_PORT" --baud 230400 read-flash 0 0x800000 tidbyt-stock-mine.bin
 ```
 
-Expect an 8,388,608-byte file after a few minutes; copy it somewhere safe. Then
-download `screeny-fw-<version>-full.bin` from the
+Download `screeny-fw-<version>-full.bin` from the
 [latest release](https://github.com/gotwalt/screeny/releases), check it against
 the release's `SHA256SUMS`, and write it at address 0:
 
@@ -96,12 +106,9 @@ esptool --port "$SCREENY_PORT" --baud 230400 write-flash 0 screeny-fw-<version>-
 The file is the bootloader, the partition table and the app in one; everything past
 it on the chip, including the settings partition, is left alone, so reflashing keeps
 a panel's WiFi. Stay at 230400 baud: faster rates corrupted long transfers on the
-author's bench. Now skip to [step 5](#5-give-it-wifi).
+author's bench. Now go to [step 5](#5-give-it-wifi).
 
-If, once it is streaming, the test pattern's colours are wrong, that is a setting and
-not a different image: step 6 explains.
-
-### 2b. Install the firmware toolchain
+### 2c. Install the firmware toolchain
 
 The firmware is `no_std` Rust for the ESP32's Xtensa core, which needs Espressif's
 fork of the compiler. `espup` installs it.
@@ -123,11 +130,8 @@ Check it: `cd firmware && cargo build --release` should finish with an ELF at
 
 ## 3. Back up the stock firmware
 
-(Skip if you did it in step 2a.)
-
-This is the step that lets you change your mind. The Tidbyt's stock firmware is not
-published anywhere, and it holds the device's identity for Tidbyt's service. Read it
-out of the chip before writing anything.
+(Only for building and flashing yourself with `tools/fw-run.sh`, which refuses to run
+without a backup in `backup/`.)
 
 Plug the Tidbyt in and find its serial port:
 
@@ -221,11 +225,10 @@ cargo run --release -p screeny -- --name screeny-xxxxxx brightness 120
 cargo run --release -p screeny -- --name screeny-xxxxxx stats           # fps received, drops, signal, heap
 ```
 
-Look at the test pattern first. If red, green and blue come out as the wrong colours,
-your unit's colour lines are in the other of the two orders seen on Gen 1 boards.
-Open the panel's settings page (`http://screeny-xxxxxx.local/`), switch "Colour order"
-to the other value, apply, and reboot when it offers to. The setting is stored on the
-panel and survives reflashing.
+Look at the test pattern first. Every Gen 1 tested so far shows red, green and blue
+correctly with the default. If yours does not, open the panel's page
+(`http://screeny-xxxxxx.local/`), switch "Colour order" under Advanced, apply, and
+reboot when it offers to. The setting is stored on the panel.
 
 `screeny stats` is the device's own account of what it is receiving. Thirty frames a
 second with zero decode drops is normal on a decent WiFi link.
