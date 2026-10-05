@@ -227,6 +227,18 @@ Failures are one shape: `{"error":"<code>", "detail"?:"..."}`, the HTTP status b
 property of the code. Every mutating request carries an optional `pin`/`counter`, parsed
 and ignored today (decision 3); `check_auth` is the single hook for that possible later addition (041).
 
+**The page (`firmware/src/http_page.html`)** is written for an owner first: the status
+table carries human labels (Name, Firmware, Network, IP address, Signal, Up for, ...) with
+the technical rows (device ID, stored colour order, memory, stack, settings write errors,
+boot ID, firmware slot, last reset, last crash) under a collapsed "Details". The `data-k`
+key of each cell is the machine name and does not change with the label. The colour order
+select sits under a collapsed "Advanced" ("rotated" is right for Gen 1). The firmware
+section tells the owner to update from the Studio's Panel screen or Home Assistant, and
+has a file form that POSTs the raw `screeny-fw-<version>.bin` (not the `-full` image) to
+`/api/v1/firmware?activate=1` with XHR progress, confirms first, and shows the verdict
+(`activating: true` means the panel restarts and confirms itself, rolling back if it
+fails). The page uses no API path or card number in visible text.
+
 Requested (2026-09-20), to land with card 222: `StatusReply`
 gains **`boot_id`**, a random `u32` drawn once at boot, so the Studio can tell "the device
 rebooted" from "the link flapped" without inferring it from uptime going backwards. A

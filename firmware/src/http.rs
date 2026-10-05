@@ -164,6 +164,15 @@ pub const HTTP_PORT: u16 = 80;
 // ---------------------------------------------------------------------------
 
 /// The whole status page: one file, inline CSS and JS, no external assets.
+///
+/// Design notes that used to be HTML comments (they shipped to the device and
+/// showed in view-source): the status table is rendered by the firmware, so the
+/// page reads with JavaScript off, and the script only repaints the same cells
+/// every few seconds. The Wi-Fi form is a plain form post to `/setup`, the same
+/// path and bytes the captive portal uses, so there is one credentials path and
+/// it works without JavaScript; posting takes the panel off this network while
+/// it tries the new one, and it comes back by itself if that fails. The upload
+/// form is the only part that needs the script (XHR, for progress).
 const PAGE: &str = include_str!("http_page.html");
 
 /// Where the server-rendered status table goes. The page is split here at
@@ -172,7 +181,7 @@ const PAGE: &str = include_str!("http_page.html");
 /// seconds when it is enabled.
 const PAGE_SPLIT: &str = "<!--STATUS-->";
 
-const _: () = assert!(PAGE.len() < 8192, "the status page has got out of hand");
+const _: () = assert!(PAGE.len() < 16384, "the status page has got out of hand");
 
 // ---------------------------------------------------------------------------
 // What the server needs from `main`, and what it learns at boot
@@ -1274,30 +1283,108 @@ impl Page {
     }
 }
 
-/// One `<tr>` per field, with a `data-k` the script can find again.
-fn row(f: &mut impl core::fmt::Write, key: &str, value: core::fmt::Arguments<'_>) -> core::fmt::Result {
-    write!(f, "<tr><th>{key}</th><td data-k=\"{key}\">{value}</td></tr>")
+/// One `<tr>` per field: a human label for the eye, and a `data-k` (the
+/// field's machine name, which the script and the tests find it by) that must
+/// not change when the label does.
+fn row(
+    f: &mut impl core::fmt::Write,
+    key: &str,
+    label: &str,
+    value: core::fmt::Arguments<'_>,
+) -> core::fmt::Result {
+    write!(f, "<tr><th>{label}</th><td data-k=\"{key}\">{value}</td></tr>")
+}
+
+/// Uptime as a person reads it. `up()` in `http_page.html` is the same
+/// function; the two must agree or the page changes wording on first refresh.
+struct Uptime(u32);
+
+impl core::fmt::Display for Uptime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let secs = self.0;
+        let (m, h) = (secs / 60, secs / 3600);
+        match secs {
+            0..=59 => write!(f, "{secs} s"),
+            60..=3599 => write!(f, "{m} min"),
+            3600..=86399 => write!(f, "{h} h {} min", m % 60),
+            _ => write!(f, "{} d {} h", h / 24, h % 24),
+        }
+    }
+}
+
+/// Signal strength in words, mirrored by `sig()` in the page script.
+struct SignalWords(i8);
+
+impl core::fmt::Display for SignalWords {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let d = self.0;
+        let word = match d {
+            0.. => return f.write_str("-"),
+            -55..=-1 => "excellent",
+            -67..=-56 => "good",
+            -80..=-68 => "fair",
+            _ => "weak",
+        };
+        write!(f, "{word} ({d} dBm)")
+    }
+}
+
+/// The words the page uses for a stream state, mirrored by `W` in the script.
+const fn state_human(s: StreamState) -> &'static str {
+    match s {
+        StreamState::Idle => "idle",
+        StreamState::Live => "showing a stream",
+        StreamState::Hold => "holding the last frame",
+        StreamState::Identify => "identifying",
+        StreamState::Provisioning => "setup mode",
+    }
+}
+
+const fn wifi_human(s: WifiState) -> &'static str {
+    match s {
+        WifiState::Disconnected => "not connected",
+        WifiState::Connecting => "connecting",
+        WifiState::Connected => "connected",
+        WifiState::Failed => "failed",
+    }
+}
+
+const fn idle_human(m: IdleMode) -> &'static str {
+    match m {
+        IdleMode::Status => "status screen",
+        IdleMode::HoldForever => "hold the last frame",
+        IdleMode::Dim => "dim the last frame",
+        IdleMode::Black => "black",
+    }
 }
 
 impl core::fmt::Display for Page {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s = &self.st;
         f.write_str(self.head)?;
-        row(f, "name", format_args!("{}", s.name))?;
-        row(f, "id", format_args!("{}", s.id))?;
-        row(f, "host", format_args!("{}.local", ctx().host))?;
-        row(f, "fw", format_args!("{}", s.fw))?;
-        row(f, "state", format_args!("{}", as_word(s.state)))?;
-        row(f, "wifi", format_args!("{}", wifi_word(s.wifi_state)))?;
+        // The page has one marker and this writes the structure around it: the
+        // everyday rows first, then the table that opens the collapsed
+        // "Details" block. The template supplies the closing
+        // `</tbody></table></details>`. The `data-k` keys are unchanged from
+        // when every row was in one table.
+        row(f, "name", "Name", format_args!("{}", s.name))?;
+        row(f, "fw", "Firmware", format_args!("{}", s.fw))?;
+        row(f, "state", "Showing", format_args!("{}", state_human(s.state)))?;
+        row(f, "wifi", "Network", format_args!("{}", wifi_human(s.wifi_state)))?;
         row(
             f,
             "ssid",
+            "Network name",
             format_args!("{}", s.ssid.as_deref().unwrap_or("-")),
         )?;
-        row(f, "ip", format_args!("{}", s.ip.as_deref().unwrap_or("-")))?;
-        row(f, "rssi", format_args!("{} dBm", s.rssi_dbm))?;
-        row(f, "brightness", format_args!("{}", s.brightness))?;
-        row(f, "idle_mode", format_args!("{}", idle_word(s.idle_mode)))?;
+        row(f, "ip", "IP address", format_args!("{}", s.ip.as_deref().unwrap_or("-")))?;
+        row(f, "host", "Host name", format_args!("{}.local", ctx().host))?;
+        row(f, "rssi", "Signal", format_args!("{}", SignalWords(s.rssi_dbm)))?;
+        row(f, "brightness", "Brightness", format_args!("{}", s.brightness))?;
+        row(f, "idle_mode", "When idle", format_args!("{}", idle_human(s.idle_mode)))?;
+        row(f, "uptime", "Up for", format_args!("{}", Uptime(s.uptime_ms / 1000)))?;
+        f.write_str("</tbody></table><details><summary>Details</summary><table><tbody>")?;
+        row(f, "id", "Device ID", format_args!("{}", s.id))?;
         // Card 361: the *stored* colour order, which is what the next boot
         // will use. Rendered here and not carried in `StatusReply` for card
         // 243's reason (that type is moved through the response chain many
@@ -1305,19 +1392,20 @@ impl core::fmt::Display for Page {
         row(
             f,
             "colour_order",
+            "Colour order",
             format_args!("{}", order_from_setting(store::colour_order_stored()).word()),
         )?;
-        row(f, "uptime", format_args!("{} s", s.uptime_ms / 1000))?;
-        row(f, "heap", format_args!("{} / {}", s.heap_used, s.heap_size))?;
-        row(f, "stack_free", format_args!("{}", s.stack_free))?;
-        row(f, "store_errors", format_args!("{}", s.store_errors))?;
-        row(f, "boot_id", format_args!("{:08x}", s.boot_id))?;
+        row(f, "heap", "Memory used", format_args!("{} / {}", s.heap_used, s.heap_size))?;
+        row(f, "stack_free", "Stack free", format_args!("{}", s.stack_free))?;
+        row(f, "store_errors", "Settings write errors", format_args!("{}", s.store_errors))?;
+        row(f, "boot_id", "Boot ID", format_args!("{:08x}", s.boot_id))?;
         row(
             f,
             "firmware",
+            "Firmware slot",
             format_args!("{} / {}", slot_word(s.fw_slot), state_word(s.fw_state)),
         )?;
-        row(f, "reset", format_args!("{}", reset_word(s.reset_reason)))?;
+        row(f, "reset", "Last reset", format_args!("{}", reset_word(s.reset_reason)))?;
         // Card 243, one line: the whole breadcrumb, read **here** rather than
         // carried in the reply. Two things make that safe where it would not
         // be for `uptime` or `heap`: picoserve formats a body twice (once to
@@ -1330,11 +1418,13 @@ impl core::fmt::Display for Page {
             None => row(
                 f,
                 "panic",
+                "Last crash",
                 format_args!("none in {} boot(s) since power-on", crumb.boots),
             )?,
             Some(p) => row(
                 f,
                 "panic",
+                "Last crash",
                 format_args!(
                     "{}:{} at {} s, boot {} of {} ({} in a row, {} total)",
                     p.file(),
@@ -1371,36 +1461,7 @@ impl picoserve::response::Content for Page {
 }
 
 // The enums serialise through serde, which is not reachable from a `Display`
-// impl without a writer; these are the same strings, and the page is the only
-// caller.
-const fn as_word(s: StreamState) -> &'static str {
-    match s {
-        StreamState::Idle => "idle",
-        StreamState::Live => "live",
-        StreamState::Hold => "hold",
-        StreamState::Identify => "identify",
-        StreamState::Provisioning => "provisioning",
-    }
-}
-
-const fn wifi_word(s: WifiState) -> &'static str {
-    match s {
-        WifiState::Disconnected => "disconnected",
-        WifiState::Connecting => "connecting",
-        WifiState::Connected => "connected",
-        WifiState::Failed => "failed",
-    }
-}
-
-const fn idle_word(m: IdleMode) -> &'static str {
-    match m {
-        IdleMode::Status => "status",
-        IdleMode::HoldForever => "hold_forever",
-        IdleMode::Dim => "dim",
-        IdleMode::Black => "black",
-    }
-}
-
+// impl without a writer; these are the same strings, and the page is the only caller.
 const fn slot_word(s: FwSlot) -> &'static str {
     match s {
         FwSlot::Ota0 => "ota_0",
