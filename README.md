@@ -9,10 +9,7 @@ a computer you already have (or inside Home Assistant): clocks that dance,
 birds in slow flight, a split-flap night clock, and more. No cloud, no account, no
 subscription.
 
-![Eight patches, rendered as the panel would show them](docs/media/gallery.png)
-
-<!-- REAL PANEL FOOTAGE: drop a phone clip here as docs/media/panel-*.gif and
-     replace this comment. GIFs in the README play inline; MP4 does not. -->
+https://github.com/user-attachments/assets/0f64a06b-48bb-4760-a3d9-1baab2ff8e12
 
 ## Get it running
 
@@ -79,6 +76,8 @@ Open it from the Studio's **Panel** screen, or find panels from a terminal with
 
 These are the exact frames a panel receives, drawn as LEDs. A real panel is brighter,
 smaller and better.
+
+![Eight patches, rendered as the panel would show them](docs/media/gallery.png)
 
 | | |
 |---|---|
