@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Carries firmware 0.11.2: the panel's own web page is written for owners
+  and can install a firmware file.
+
 ## 0.1.2
 
 - Carries firmware 0.11.1 (the web flasher's WiFi step works) and offers it
