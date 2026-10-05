@@ -36,7 +36,7 @@ or Opera, plug the Tidbyt into the computer, and click **Install**.
 <!-- screenshot: flasher-wifi -->
 
 The panel then joins your network. If the dialog says it failed to initialize, unplug
-and replug the cable and try again. <!-- verify: WiFi step needs a firmware release with Improv (0.11.0); check the flasher offers it on the published release -->
+and replug the cable and try again.
 
 To go back to Tidbyt's own firmware, see [help.tidbyt.com](https://help.tidbyt.com).
 
