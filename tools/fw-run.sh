@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Flash an ELF to the Tidbyt, log serial output for a while, and (optionally)
-# grab a camera still.
+# Flash an ELF to the Tidbyt and log serial output for a while.
 # Talks to the device over serial; one process at a time.
 # Usage: tools/fw-run.sh <elf> <name> [seconds=20]
-#   -> captures/<name>.log (ANSI stripped) and, with SCREENY_CAMERA=1, captures/<name>.jpg
+#   -> captures/<name>.log (ANSI stripped)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ELF=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -39,7 +38,6 @@ espflash monitor --chip esp32 --port "$PORT" --non-interactive --elf "$ELF" \
   > "captures/$NAME.raw.log" 2>&1 &
 MON=$!
 sleep "$SECS"
-[[ "${SCREENY_CAMERA:-0}" == 1 ]] && tools/cam-request.sh "$NAME" || true
 kill $MON 2>/dev/null || true
 wait $MON 2>/dev/null || true
 sed $'s/\x1b\\[[0-9;]*m//g' "captures/$NAME.raw.log" > "captures/$NAME.log"

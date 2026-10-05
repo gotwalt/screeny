@@ -304,6 +304,8 @@ fn the_screens_keep_their_promises() {
             // A link the person follows is not something the page loads: the
             // flasher (card 363) lives on HTTPS because Web Serial needs it.
             let text = text.replace("href=\"https://gotwalt.github.io/screeny/\"", "");
+            // Nor is the link to a panel's own page, on the panel itself.
+            let text = text.replace("page.href = `http://${", "");
             assert!(!text.contains(bad), "{what} must not reach outside the box: {bad}");
         }
     }

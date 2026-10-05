@@ -1,6 +1,7 @@
 target/
 __pycache__/
-backup/*.bin
+# Your own stock-firmware dump, if you made one (tools/fw-run.sh wants it here).
+backup/
 captures/
 .DS_Store
 lab/out/

@@ -71,8 +71,9 @@ Each patch has settings to play with, and you can save the ones you like. The
 **Panel** screen has brightness and firmware updates. Several panels can share a
 picture or each show their own (channels).
 
-The panel also has its own page at `http://screeny-<id>.local/` (the name is on its
-status screen): its name, brightness, WiFi, and a firmware upload.
+Each panel also has a small page of its own (name, brightness, WiFi, firmware upload).
+Open it from the Studio's **Panel** screen, or find panels from a terminal with
+`screeny discover`.
 
 ## What it looks like
 

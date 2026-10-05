@@ -7,7 +7,7 @@ The author's bench, for the record.
 Tidbyt Gen 1: ESP32-D0WD-V3 rev 3.0, dual core 240 MHz, 8 MB flash, 40 MHz crystal,
 MAC b4:8a:0a:4a:00:a4, CP2102N on `/dev/cu.usbserial-XXXX`. Stock firmware strings
 mention `tidbyt/atca` (an ATECC secure element on I2C), `tidbyt/ble`, a button, and
-ESP-IDF. Partition table and restore instructions: `backup/README.md`.
+ESP-IDF. Back to stock: Tidbyt's firmware and instructions are at help.tidbyt.com.
 
 Serial link corrupts long transfers at 460800 baud and above. Use 230400.
 Auto-reset into the bootloader over DTR/RTS works; no button press needed.

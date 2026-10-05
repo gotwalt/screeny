@@ -75,7 +75,7 @@ espflash's built-in default table (`espflash-4.6.0/src/image_format/idf.rs` line
 | phy_init | data | phy | 0xf000 | 0x1000 |
 | factory | app | factory | 0x10000 | 0x3f0000 |
 
-The stock Tidbyt table (`backup/README.md`) was nvs 0x9000+0x5000, otadata 0xe000+0x2000,
+The stock Tidbyt table was nvs 0x9000+0x5000, otadata 0xe000+0x2000,
 app0 0x10000+0x3f0000, app1 0x400000+0x3f0000. Our new table keeps `nvs` and `otadata` at
 the stock offsets, so the low 64 KB of flash has the same shape it has always had here.
 
@@ -515,7 +515,7 @@ Card numbers are assigned later; these are titles and scope.
 
 **A. Partition table and the flashing path.** Add `firmware/partitions.csv` exactly as
 §3. Change `tools/fw-run.sh` to pass `--partition-table` and `--erase-data-parts ota`, and
-document in `backup/README.md` how the new layout relates to the stock one. `hardware:
+document how the new layout relates to the stock one. `hardware:
 yes` — the acceptance is one flash and one boot on the real device, with the serial log
 showing the bootloader selecting `ota_0`, plus a `GET_INFO` that still works. This is the
 foundation every other card here sits on and should land alone.

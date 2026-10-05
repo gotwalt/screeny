@@ -212,6 +212,13 @@ async function start() {
           ? `Sending to ${device ? (device.frame_addr || device.address || device.instance || device.id) : name}.`
           : `${name} is away. It will pick this up again by itself when it comes back.`;
 
+    // The panel's own page (name, WiFi, firmware upload) is on port 80 of
+    // whatever address the studio reaches it at.
+    const host = device && (device.frame_addr || device.address || '').replace(/:\d+$/, '');
+    const page = $('#panel-page');
+    page.hidden = !host;
+    if (host) page.href = `http://${host.includes(':') ? `[${host}]` : host}/`;
+
     const pill = $('#panel-pill');
     if (pill.textContent !== here.label) pill.textContent = here.label;
     pill.dataset.state = here.tone;
