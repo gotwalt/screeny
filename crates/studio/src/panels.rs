@@ -375,7 +375,15 @@ impl Panels {
     ///
     /// The caller has already put the output and the settings library in
     /// place, so a picture's named setting resolves.
+    ///
+    /// **Card 368: the file's order is carried.** The first panel is the one a
+    /// route without `panel` means, and the one whose Home Assistant device
+    /// keeps the Studio's original ids; the file's panels now come first, in
+    /// the file's order, and a panel here that the file did not name follows
+    /// them in the order it had. (A Studio that adopted a panel before the
+    /// import would otherwise keep that one first.)
     pub fn replace(&self, panels: Vec<StoredPanel>, channels: Vec<StoredChannel>) {
+        let order: Vec<String> = panels.iter().filter(|p| !p.device.is_empty()).map(|p| p.device.clone()).collect();
         let home = self.ensure_home();
         let mut inner = self.lock();
         let wanted: std::collections::BTreeSet<ChannelId> = channels.iter().map(|c| c.id).filter(|id| *id != 0).collect();
@@ -434,6 +442,8 @@ impl Panels {
                 }
             }
         }
+        // A stable sort: the file's panels by their place in it, the rest after.
+        inner.panels.sort_by_key(|p| order.iter().position(|d| *d == p.device()).unwrap_or(usize::MAX));
     }
 
     /// Start every channel's render thread that is not running.
@@ -844,6 +854,23 @@ mod tests {
         assert!(p.cfg().on, "and lit");
         assert!(p.fading(), "fading in from black");
         assert_eq!(panels.home().follower_ids(), vec!["4a00a4".to_string()]);
+    }
+
+    /// Card 368: an import carries the file's first panel, whatever this
+    /// Studio had adopted before it, and keeps unnamed panels after.
+    #[test]
+    fn an_import_carries_the_files_first_panel() {
+        let panels = Panels::quiet(SharedMemory::default());
+        panels.adopt("office");
+        panels.adopt("extra");
+        let stored = |d: &str| StoredPanel { device: d.into(), on: true, ..StoredPanel::default() };
+        panels.replace(vec![stored("living"), stored("office")], Vec::new());
+        let order: Vec<String> = panels.all().iter().map(|p| p.device()).collect();
+        assert_eq!(order, ["living", "office", "extra"]);
+        assert_eq!(panels.first().expect("a first").device(), "living");
+        // The same panels in the same order stay put.
+        panels.replace(vec![stored("living"), stored("office")], Vec::new());
+        assert_eq!(panels.first().expect("a first").device(), "living");
     }
 
     /// **New, rename, delete.** A new channel is a copy of the one it came
