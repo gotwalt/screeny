@@ -109,6 +109,15 @@ panel over WiFi. The panel keeps its WiFi settings, and rolls back by itself if 
 firmware does not start properly. The firmware an app version offers is inside the app
 image, so updating the app is what makes a firmware update appear.
 
+## Moving from a docker Studio
+
+If you already run Studio in Docker, bring its settings over instead of setting everything up again.
+
+1. In the **old** Studio, open **Settings**, then **Move to another Studio**, and press **Export settings**. A file called `screeny-studio-<date>.json` downloads.
+2. In **this** app's Studio, open **Settings**, press **Import settings…**, choose the file and confirm. It applies at once; there is nothing to restart.
+
+What comes over: your panels (their names, which channel each is on, brightness, on or off), the channels and what they show, every patch's saved settings, and the output settings. What does not: the Home Assistant broker and password (this app uses Home Assistant's own broker) and network addresses. The Studio finds your panels again by itself, so they appear under the names you gave them as soon as they are seen. A file from an older Studio works too. A file that cannot be read changes nothing and says why. Importing leaves any panel the file does not mention exactly as it is.
+
 ## Options
 
 | option | default | what it does |

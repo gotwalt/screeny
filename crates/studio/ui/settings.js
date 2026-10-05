@@ -162,6 +162,33 @@ async function start() {
     showHa();
   });
 
+  // Card 367: export is a download (the server says `attachment`), import
+  // sends the file's text as it is. Relative, so ingress's prefix is kept.
+  $('#export-settings').addEventListener('click', () => {
+    window.location.href = new URL('api/v1/state/export', window.location.href).href;
+  });
+  $('#import-settings').addEventListener('click', () => $('#import-file').click());
+  $('#import-file').addEventListener('change', async (e) => {
+    const input = e.target;
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    if (!window.confirm('This replaces panels, channels and patch settings on this Studio.')) return;
+    try {
+      const response = await fetch(new URL('api/v1/state/import', window.location.href), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: await file.text(),
+      });
+      const answer = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(answer.error || `${response.status} ${response.statusText}`);
+      const fixed = (answer.repaired || []).length ? ` ${answer.repaired.length} thing(s) could not be used as written and were corrected.` : '';
+      notice(`Imported ${answer.panels} panel(s) and ${answer.channels} channel(s), live. Nothing else changed.${fixed}`, 'say');
+    } catch (err) {
+      notice(`Nothing was imported: ${err.message || err}`);
+    }
+  });
+
   async function readHa() {
     if (document.hidden) return;
     try {

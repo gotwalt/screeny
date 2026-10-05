@@ -146,6 +146,9 @@ pub fn routes() -> Router<AppState> {
         .route("/home_assistant", get(ha_get))
         .route("/home_assistant/set", post(ha_set))
         .route("/home_assistant/forget", post(ha_forget))
+        // ---- card 367: move a Studio's settings to another ----
+        .route("/state/export", get(state_export))
+        .route("/state/import", post(state_import))
         // ---- card 150: the names a piece went by, still answering ----
         .route("/piece_playing", get(patch_playing))
         .route("/set_piece", post(set_patch))
@@ -689,6 +692,62 @@ async fn ha_forget(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiR
     st.ha.until_off(crate::ha::client::GOODBYE + std::time::Duration::from_secs(1)).await;
     crate::ha::client::forget(&cfg, &crate::ha::bridge::panel_keys(&st), &crate::ha::bridge::channel_ids(&st), std::time::Duration::from_secs(10)).await.map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
     Ok(Json(st.ha.view()))
+}
+
+// ------------------------ card 367: export and import ------------------------
+
+/// `1970-01-01` for a unix time, civil calendar, UTC. (Howard Hinnant's
+/// `civil_from_days`; no calendar crate for one filename.)
+fn ymd(unix: u64) -> String {
+    let z = i64::try_from(unix / 86_400).unwrap_or(0) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// **Download this Studio's settings** as a file: panels, channels, patch
+/// settings and output. Never the Home Assistant broker or its password, and
+/// no device addresses ([`crate::state::export`]).
+async fn state_export(State(st): State<AppState>) -> Response {
+    let doc = crate::state::export(&st.snapshot());
+    let body = serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".into());
+    let name = format!("screeny-studio-{}.json", ymd(crate::state::unix_now()));
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+            (axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"")),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// **Replace panels, channels, patch settings and output with an export's**,
+/// live. A file that does not pass changes nothing (400, with the reason).
+/// What is left alone: the Home Assistant settings, and any panel this Studio
+/// has that the file does not name.
+async fn state_import(State(st): State<AppState>, body: axum::body::Bytes) -> ApiResult<Json<serde_json::Value>> {
+    let imported = crate::state::import(&body).map_err(ApiError::bad_request)?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "applied": "live",
+        "from_version": imported.was,
+        "panels": imported.state.panels.len(),
+        "channels": imported.state.channels.len(),
+        "devices": imported.state.devices.len(),
+        "patches_with_settings": imported.state.patches.values().filter(|p| !p.settings.is_empty()).count(),
+        "repaired": imported.repaired,
+        "note": "Applied now and saved. Addresses are not carried: panels are found again on this network.",
+    });
+    st.apply_import(imported.state);
+    Ok(Json(summary))
 }
 
 // ------------------------------ panel output ------------------------------

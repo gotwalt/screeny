@@ -39,7 +39,7 @@ use crate::channel::{fade_len, find_patch, shared_output, Channel, ChannelId, Sh
 use crate::devices::Registry;
 use crate::page::{SocketMeter, StudioState};
 use crate::panel::{Panel, SendCounts};
-use crate::state::{self, SharedMemory, StoredChannel, StoredPanel, DEFAULT_SETTING, HOME_CHANNEL};
+use crate::state::{self, SharedMemory, StoredChannel, StoredPanel, Working, DEFAULT_SETTING, HOME_CHANNEL};
 
 /// What `/api/v1/status` says about one panel and the picture it shows.
 ///
@@ -355,6 +355,84 @@ impl Panels {
             // picture always has.
             panel.switch_channel(&channel, f64::from(FADE_MANUAL));
             inner.panels.push(panel);
+        }
+    }
+
+    /// **Card 367: an import, live.** What the file has replaces what is here,
+    /// without a restart and without a panel losing its link:
+    ///
+    /// - a channel with the same id **keeps running**: it is renamed and, if
+    ///   its picture differs, shown the new one with the usual cross-fade; a
+    ///   channel the file does not have is deleted as `delete_channel` does
+    ///   (its panels go to Channel 1 and fade);
+    /// - a new channel is made and started;
+    /// - a panel the file names keeps its link and takes the file's on/off,
+    ///   brightness and channel (fading if it changes channel); one this Studio
+    ///   did not have is adopted;
+    /// - a panel here that the file does **not** mention is left alone (a
+    ///   device discovered on this network is not undone by a file from
+    ///   another).
+    ///
+    /// The caller has already put the output and the settings library in
+    /// place, so a picture's named setting resolves.
+    pub fn replace(&self, panels: Vec<StoredPanel>, channels: Vec<StoredChannel>) {
+        let home = self.ensure_home();
+        let mut inner = self.lock();
+        let wanted: std::collections::BTreeSet<ChannelId> = channels.iter().map(|c| c.id).filter(|id| *id != 0).collect();
+        for c in channels {
+            if c.id == 0 {
+                continue;
+            }
+            inner.next = inner.next.max(c.id.saturating_add(1));
+            match inner.channels.get(&c.id).cloned() {
+                Some(have) => {
+                    have.set_name(&c.name);
+                    let same = {
+                        let now = have.stored();
+                        now.patch == c.patch
+                            && state::same_setting(&now.setting, &c.setting)
+                            && now.seed == c.seed
+                            && now.params == c.params
+                    };
+                    if !same {
+                        let def = crate::channel::find_patch(&c.patch, self.faults).unwrap_or_else(|| crate::channel::fallback_patch(""));
+                        have.show(def, &c.setting, Working { params: c.params, seed: c.seed, speed: 1.0 }, None);
+                        have.ensure_running();
+                    }
+                }
+                None => {
+                    self.insert_locked(&mut inner, c);
+                }
+            }
+        }
+        let gone: Vec<ChannelId> = inner.channels.keys().copied().filter(|id| *id != HOME_CHANNEL && !wanted.contains(id)).collect();
+        for id in gone {
+            if let Some(old) = inner.channels.remove(&id) {
+                for panel in old.followers() {
+                    panel.switch_channel(&home, f64::from(FADE_MANUAL));
+                }
+                inner.retired.push(old);
+            }
+        }
+        for sp in panels {
+            if sp.device.is_empty() {
+                continue;
+            }
+            let to = inner.channels.get(&sp.channel).cloned().unwrap_or_else(|| Arc::clone(&home));
+            match inner.panels.iter().find(|p| p.device() == sp.device).cloned() {
+                Some(p) => {
+                    p.set_on(sp.on);
+                    p.set_brightness(sp.brightness);
+                    if !p.channel().is_some_and(|c| Arc::ptr_eq(&c, &to)) {
+                        p.switch_channel(&to, f64::from(FADE_MANUAL));
+                    }
+                }
+                None => {
+                    let p = Panel::new(&sp);
+                    p.switch_channel(&to, f64::from(FADE_MANUAL));
+                    inner.panels.push(p);
+                }
+            }
         }
     }
 

@@ -636,6 +636,11 @@ impl SharedMemory {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Replace the whole library (card 367: an import).
+    pub fn replace(&self, memory: Memory) {
+        *self.lock() = memory;
+    }
+
     /// What to write to the state file.
     #[must_use]
     pub fn snapshot(&self) -> Memory {
@@ -1297,7 +1302,7 @@ fn load(path: &Path) -> Loaded {
     // would reject - and the per-patch memory has to be lifted out and cleaned
     // before serde sees it, because a single bad value in there must cost that
     // value and not the whole file.
-    let mut raw: serde_json::Value = match serde_json::from_slice(&bytes) {
+    let raw: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(e) => return keep_the_file(format!("the state file could not be parsed ({e})")),
     };
@@ -1313,6 +1318,37 @@ fn load(path: &Path) -> Loaded {
         }
     }
 
+    let mut it = match interpret(raw) {
+        Ok(it) => it,
+        Err(e) => return keep_the_file(format!("the state file could not be parsed ({e})")),
+    };
+    let was = it.was;
+    let kept = if was < SCHEMA_VERSION { back_up(path, was) } else { None };
+    it.repaired.truncate(MAX_REPAIRS);
+    let recovered = (was != SCHEMA_VERSION).then(|| {
+        let where_ = kept.map_or(String::new(), |k| format!("; the v{was} file is kept as {k}"));
+        format!("the state file was schema v{was}; migrated to v{SCHEMA_VERSION}{where_}")
+    });
+    Loaded { state: it.state, recovered, repaired: it.repaired }
+}
+
+/// A state file's JSON, read and brought up to [`SCHEMA_VERSION`].
+struct Interpreted {
+    state: Persisted,
+    /// The version it was written as.
+    was: u32,
+    repaired: Vec<String>,
+}
+
+/// **Card 367: the one reader of state JSON**, shared by [`load`] and by
+/// [`import`]: the per-patch memory is cleaned value by value, an older schema
+/// is migrated, and what cannot be used is repaired and said. Refusing a
+/// version from the future is the caller's.
+///
+/// # Errors
+///
+/// The JSON is not the shape of a state file.
+fn interpret(mut raw: serde_json::Value) -> Result<Interpreted, String> {
     let mut repaired = Vec::new();
     // `patches` from v4, `pieces` before it (card 150).
     let patches = clean_memory(raw.get("patches").or_else(|| raw.get("pieces")), &mut repaired);
@@ -1350,21 +1386,14 @@ fn load(path: &Path) -> Loaded {
         o.remove("schedule_run");
     }
 
-    let mut state: Persisted = match serde_json::from_value(raw) {
-        Ok(p) => p,
-        Err(e) => return keep_the_file(format!("the state file could not be parsed ({e})")),
-    };
+    let mut state: Persisted = serde_json::from_value(raw).map_err(|e| e.to_string())?;
     let was = state.version;
     state.version = SCHEMA_VERSION;
     state.patches = patches;
     state.home_assistant = home_assistant;
-    let kept = if was < SCHEMA_VERSION {
-        let kept = back_up(path, was);
+    if was < SCHEMA_VERSION {
         migrate(&mut state, &legacy, was);
-        kept
-    } else {
-        None
-    };
+    }
     // After the migrations, so a v1/v2 file's player - which `migrate_to_v3`
     // builds out of the old `preview` block - is looked at too.
     repair_unknown_players(&mut state, &mut repaired);
@@ -1391,12 +1420,139 @@ fn load(path: &Path) -> Loaded {
     }
     repair_panels(&mut state, &mut repaired);
     strip_working_copies(&mut state);
+    Ok(Interpreted { state, was, repaired })
+}
+
+// ------------------------------------------------- export and import (367) ---
+
+/// The top-level `export` key of an exported file: what says "this came from
+/// the Export button" and not from a `state.json` copied by hand.
+pub const EXPORT_MARKER: &str = "screeny-studio";
+
+/// The most panels, channels or devices an import will take. Far above any
+/// real studio; it is a bound on what a hostile or mistaken file can ask for.
+pub const MAX_IMPORT_ITEMS: usize = 256;
+
+/// A device id that is a guess made from what a human typed
+/// ([`crate::devices::PENDING`]`:<address>`): an address by another name, and
+/// not an identity.
+fn is_provisional(id: &str) -> bool {
+    id.starts_with(crate::devices::PENDING)
+}
+
+/// **The state as a file somebody can carry to another Studio** (card 367).
+///
+/// What travels is what the owner built: panels (channel, on/off, brightness),
+/// channels (name, picture), the named settings in `patches`, and the studio's
+/// `output`. Devices travel as **identities only** - `id` and `name` - so the
+/// same physical panel keeps its name and channel; where a device was (its
+/// address, the instance name it was found by, whether a human typed it) is a
+/// fact about the old network and is left out, as are provisional ids, which
+/// *are* an address. **`home_assistant` is never in it**: the broker and its
+/// password belong to the Studio that talks to it.
+///
+/// The file carries `export` (the marker) and `version` (the schema), so an
+/// import runs the same migrations a restart does.
+#[must_use]
+pub fn export(state: &Persisted) -> serde_json::Value {
+    let devices: Vec<serde_json::Value> = state
+        .devices
+        .iter()
+        .filter(|d| !d.id.is_empty() && !is_provisional(&d.id))
+        .map(|d| serde_json::json!({ "id": d.id, "name": d.name }))
+        .collect();
+    let panels: Vec<StoredPanel> = state.panels.iter().filter(|p| !is_provisional(&p.device)).cloned().collect();
+    let carried = Persisted {
+        version: SCHEMA_VERSION,
+        devices: Vec::new(),
+        panels,
+        channels: state.channels.clone(),
+        output: state.output,
+        players: Vec::new(),
+        focus: String::new(),
+        patches: state.patches.clone(),
+        home_assistant: None,
+    };
+    let mut out = serde_json::to_value(&carried).unwrap_or(serde_json::Value::Null);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("export".into(), EXPORT_MARKER.into());
+        o.insert("exported_unix".into(), unix_now().into());
+        o.insert("devices".into(), devices.into());
+    }
+    out
+}
+
+/// What an import found, ready to apply.
+#[derive(Debug)]
+pub struct Imported {
+    /// Everything importable, at [`SCHEMA_VERSION`], with `home_assistant`
+    /// `None` and devices holding identities only.
+    pub state: Persisted,
+    /// The version the file was written as.
+    pub was: u32,
+    /// Values that could not be used as written and were corrected, as a
+    /// restart says them (capped).
+    pub repaired: Vec<String>,
+}
+
+/// **Read an export, or say why not** (card 367). Nothing is applied here: a
+/// file that does not pass changes nothing.
+///
+/// Goes through the same [`interpret`] a restart does, so an export from an
+/// older schema is migrated, a patch this build has not got is repaired and a
+/// channel-less panel lands on Channel 1. Then the three things an import
+/// never trusts are taken out: `home_assistant`, every address a device
+/// carried, and provisional ids.
+///
+/// # Errors
+///
+/// A sentence for the page: not JSON, not an export, from a newer Studio, too
+/// big, or not the shape of a state file.
+pub fn import(bytes: &[u8]) -> Result<Imported, String> {
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("This is not a JSON file ({e})."))?;
+    let Some(o) = raw.as_object_mut() else {
+        return Err("This is not a Studio export: it should be a JSON object.".into());
+    };
+    if o.get("export").and_then(serde_json::Value::as_str) != Some(EXPORT_MARKER) {
+        return Err("This is not a Studio export (it has no `\"export\": \"screeny-studio\"`). Use Export settings on the Studio you are moving from.".into());
+    }
+    let Some(version) = o.get("version").and_then(serde_json::Value::as_u64) else {
+        return Err("This export does not say which schema version it is.".into());
+    };
+    if version > u64::from(SCHEMA_VERSION) {
+        return Err(format!(
+            "This export is schema v{version}, from a newer Studio than this one (v{SCHEMA_VERSION}). Update this Studio first."
+        ));
+    }
+    for key in ["devices", "panels", "channels"] {
+        let n = o.get(key).and_then(serde_json::Value::as_array).map_or(0, Vec::len);
+        if n > MAX_IMPORT_ITEMS {
+            return Err(format!("This export has {n} {key}; a Studio takes at most {MAX_IMPORT_ITEMS}."));
+        }
+    }
+    // The broker and its password are this Studio's own.
+    o.remove("home_assistant");
+    let it = interpret(raw).map_err(|e| format!("This export could not be read ({e})."))?;
+    let mut state = it.state;
+    state.home_assistant = None;
+    state.panels.retain(|p| !is_provisional(&p.device));
+    let mut seen = std::collections::BTreeSet::new();
+    state.devices.retain(|d| !d.id.is_empty() && !is_provisional(&d.id) && seen.insert(d.id.clone()));
+    for d in &mut state.devices {
+        d.instance.clear();
+        d.address.clear();
+        d.manual = false;
+    }
+    // A panel always has its device in the registry.
+    for p in &state.panels {
+        if seen.insert(p.device.clone()) {
+            state.devices.push(StoredDevice { id: p.device.clone(), ..StoredDevice::default() });
+        }
+    }
+    let mut repaired = it.repaired;
     repaired.truncate(MAX_REPAIRS);
-    let recovered = (was != SCHEMA_VERSION).then(|| {
-        let where_ = kept.map_or(String::new(), |k| format!("; the v{was} file is kept as {k}"));
-        format!("the state file was schema v{was}; migrated to v{SCHEMA_VERSION}{where_}")
-    });
-    Loaded { state, recovered, repaired }
+    Ok(Imported { state, was: it.was, repaired })
 }
 
 /// **A player on a patch this build has not got comes up on the default

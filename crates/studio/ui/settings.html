@@ -141,6 +141,22 @@
         <input id="rise" type="range" min="0.5" max="10" step="0.1">
       </div>
     </section>
+    <!-- Card 367: take the studio's settings to another Studio (a docker
+         Studio becoming the Home Assistant app). Relative URLs, like every
+         other call this page makes, so it works under Home Assistant's
+         ingress prefix. -->
+    <section id="sec-move">
+      <h2>Move to another Studio</h2>
+      <p class="hint">Export saves the panels (names, channels, brightness, on or off), the channels and
+        their pictures, every patch’s saved settings and the output settings as one file. Import puts
+        such a file into this Studio. Home Assistant’s broker and password are never in the file, and
+        neither are network addresses: this Studio finds the panels itself.</p>
+      <div class="row row--actions">
+        <button type="button" id="export-settings">Export settings</button>
+        <button type="button" id="import-settings">Import settings…</button>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+      </div>
+    </section>
   </main>
 
   <script type="module" src="settings.js"></script>

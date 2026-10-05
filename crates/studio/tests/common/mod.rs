@@ -140,6 +140,8 @@ where
 pub struct Response {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The status line and headers, as sent.
+    pub head: String,
 }
 
 impl Response {
@@ -173,7 +175,7 @@ async fn request(addr: SocketAddr, head: String, body: &[u8]) -> Response {
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse().ok())
         .expect("a status line");
-    Response { status, body: raw[split + 4..].to_vec() }
+    Response { status, body: raw[split + 4..].to_vec(), head }
 }
 
 pub async fn get(addr: SocketAddr, path: &str) -> Response {

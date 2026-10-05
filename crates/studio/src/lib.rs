@@ -369,8 +369,16 @@ impl AppState {
     /// has a one-slot mailbox and the newest state wins, so a slider being
     /// dragged costs one write rather than sixty.
     pub fn persist(&self) {
+        self.store.save(self.snapshot());
+    }
+
+    /// Everything worth keeping, as of now: what [`AppState::persist`] writes
+    /// and what an export is made from (card 367).
+    #[must_use]
+    pub fn snapshot(&self) -> state::Persisted {
         let (panels, channels) = self.panels.stored();
-        self.store.save(state::Persisted {
+        {
+            state::Persisted {
             version: state::SCHEMA_VERSION,
             devices: self.devices.stored(),
             panels,
@@ -383,7 +391,28 @@ impl AppState {
             // keeps across a rebuild.
             patches: self.memory.snapshot(),
             home_assistant: Some(self.ha.settings()).filter(|s| *s != ha::HaSettings::default()),
-        });
+        }
+        }
+    }
+
+    /// **Card 367: put an import in place, live.** Order matters: the output
+    /// and the settings library first, so a channel's picture resolves its
+    /// named setting; then the device identities; then the channels and
+    /// panels, which keep running and keep their links
+    /// ([`panels::Panels::replace`]); then every device this Studio already
+    /// knew but the file did not name is a panel on Channel 1 as ever.
+    /// `home_assistant` is never touched.
+    pub fn apply_import(&self, imported: state::Persisted) {
+        self.panels.set_output(imported.output);
+        self.memory.replace(imported.patches);
+        self.devices.import(&imported.devices);
+        self.panels.replace(imported.panels, imported.channels);
+        for id in self.devices.ids() {
+            self.panels.adopt(&id);
+        }
+        self.panels.start();
+        self.changed(None);
+        self.persist();
     }
 
     /// Stamp a change, with who made it.
