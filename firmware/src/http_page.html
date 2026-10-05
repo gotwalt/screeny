@@ -1,8 +1,4 @@
 <!doctype html>
-<!-- The device's one page (card 222). Self-contained: no external asset, no
-     font, no framework. The status table between the marker below is rendered
-     by the firmware, so the page is readable with JavaScript disabled; the
-     script only replaces the same cells every few seconds. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -18,7 +14,7 @@ h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--di
 p.sub{margin:0 0 4px;color:var(--dim);font-size:.85rem}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 th,td{text-align:left;padding:3px 0;border-bottom:1px solid var(--line);font-weight:400}
-th{color:var(--dim);width:9rem}
+th{color:var(--dim);width:9rem;vertical-align:top}td{word-break:break-word}
 label{display:block;margin:8px 0}
 label span{display:block;color:var(--dim);font-size:.85rem}
 input,select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
@@ -27,21 +23,23 @@ button{cursor:pointer;border-color:var(--acc);color:var(--acc)}
 button.warn{border-color:#c33;color:#c33}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 #msg{min-height:1.2em;font-size:.85rem;color:var(--dim)}
-.todo{border:1px dashed var(--line);border-radius:6px;padding:8px 10px;color:var(--dim);font-size:.85rem}
+details{margin:10px 0}summary{cursor:pointer;color:var(--acc);font-size:.9rem}
+progress{width:100%}
+[hidden]{display:none}
 </style>
 </head>
 <body>
 <h1 id="title">screeny</h1>
-<p class="sub">Tidbyt Gen 1 as a network frame buffer.</p>
+<p class="sub">Your Tidbyt, running Screeny firmware.</p>
 
 <h2>Status</h2>
-<table id="st"><tbody><!--STATUS--></tbody></table>
+<table><tbody><!--STATUS--></tbody></table></details>
 <p id="msg"></p>
 
 <h2>Settings</h2>
 <form id="set">
-<label><span>Name (empty means screeny-&lt;id&gt;)</span><input id="name" maxlength="32" placeholder="screeny"></label>
-<label><span>Brightness <output id="bv"></output> (the firmware caps it)</span><input id="bright" type="range" min="0" max="255"></label>
+<label><span>Name (leave empty to use the default, screeny-&lt;id&gt;)</span><input id="name" maxlength="32" placeholder="screeny"></label>
+<label><span>Brightness <output id="bv"></output> (the panel limits the top end to stay safe)</span><input id="bright" type="range" min="0" max="255"></label>
 <label><span>When nothing is streaming</span>
 <select id="idle">
 <option value="status">status screen</option>
@@ -49,52 +47,66 @@ button.warn{border-color:#c33;color:#c33}
 <option value="dim">dim the last frame</option>
 <option value="black">black</option>
 </select></label>
-<label><span>Colour order. If red shows as blue (or any colour is wrong), switch this. It is read at boot, so a change needs a reboot.</span>
+<details><summary>Advanced</summary>
+<label><span>Colour order. Gen 1 panels use "rotated"; switch only if the colours look wrong. It takes effect after a reboot.</span>
 <select id="colour">
-<option value="rotated">rotated (the default)</option>
-<option value="published">published (Tidbyt's pin map)</option>
+<option value="rotated">rotated (Gen 1)</option>
+<option value="published">published pin map</option>
 </select></label>
+</details>
 <div class="row"><button type="submit">Apply</button>
 <button type="button" id="ident">Identify</button>
 <button type="button" id="boot" class="warn">Reboot</button></div>
 </form>
 
 <h2>Wi-Fi</h2>
-<!-- Card 223. A plain form post to /setup, the same path and the same bytes the
-     captive portal uses, so there is one credentials path and it works with
-     JavaScript off. Posting here takes the panel off this network while it
-     tries the new one: if it fails it comes back to this one by itself, and
-     the panel is where the result shows up. -->
 <form method="post" action="/setup">
 <label><span>Network name</span><input name="ssid" maxlength="32" required autocapitalize="none" autocorrect="off" spellcheck="false"></label>
 <label><span>Password (empty for an open network)</span><input name="psk" type="password" maxlength="64" autocapitalize="none" autocorrect="off"></label>
 <div class="row"><button type="submit">Join this network</button></div>
 </form>
-<p class="sub">The panel leaves this network while it tries. If the new one does
-not work it comes back here, and <code>GET /api/v1/wifi</code> says why.</p>
+<p class="sub">The panel leaves this network while it tries the new one. If that fails, it comes back to this one.</p>
 
 <h2>Firmware</h2>
-<div class="todo">Firmware upload lives here once the OTA path lands (card 240).</div>
+<p class="sub" id="fwline">The installed version is shown above, under Firmware.</p>
+<p class="sub">To update, use the Panel screen in Screeny Studio, or the update entity in Home Assistant. Or upload a firmware file here: download <code>screeny-fw-&lt;version&gt;.bin</code> from
+<a href="https://github.com/gotwalt/screeny/releases" rel="noopener">github.com/gotwalt/screeny/releases</a> (not the one ending in <code>-full.bin</code>).</p>
+<form id="up" hidden>
+<label><input id="fwfile" type="file" accept=".bin" required></label>
+<div class="row"><button type="submit" id="upgo">Upload and install</button></div>
+<progress id="upp" value="0" max="100" hidden></progress>
+<p id="upm" class="sub"></p>
+</form>
+<noscript><p class="sub">Uploading a file needs JavaScript.</p></noscript>
 
 <script>
 const $=s=>document.querySelector(s),msg=t=>{$("#msg").textContent=t};
 let touched=false;
 ["#name","#bright","#idle","#colour"].forEach(s=>$(s).addEventListener("input",()=>{touched=true}));
 $("#bright").addEventListener("input",()=>{$("#bv").textContent=$("#bright").value});
+// These words and the uptime/signal wording mirror the table the firmware
+// renders (http.rs), so the page reads the same before and after a refresh.
+const W={idle:"idle",live:"showing a stream",hold:"holding the last frame",identify:"identifying",provisioning:"setup mode",
+ disconnected:"not connected",connecting:"connecting",connected:"connected",failed:"failed",
+ status:"status screen",hold_forever:"hold the last frame",dim:"dim the last frame",black:"black"};
+const w=k=>W[k]||k;
+function up(t){const m=Math.floor(t/60),h=Math.floor(m/60);
+ return t<60?t+" s":h<1?m+" min":h<24?h+" h "+m%60+" min":Math.floor(h/24)+" d "+h%24+" h"}
+function sig(d){return d>=0?"-":(d>=-55?"excellent":d>=-67?"good":d>=-80?"fair":"weak")+" ("+d+" dBm)"}
+const put=(k,v)=>{const c=document.querySelector('[data-k="'+k+'"]');if(c)c.textContent=v};
 function paint(s){
- for(const k in s){const c=document.querySelector('[data-k="'+k+'"]');if(c&&typeof s[k]!="object")c.textContent=s[k]}
- const put=(k,v)=>{const c=document.querySelector('[data-k="'+k+'"]');if(c)c.textContent=v};
- put("ssid",s.ssid??"-");put("ip",s.ip??"-");put("rssi",s.rssi_dbm+" dBm");
- put("uptime",Math.floor(s.uptime_ms/1000)+" s");put("heap",s.heap_used+" / "+s.heap_size);
- put("wifi",s.wifi_state);put("boot_id",s.boot_id.toString(16).padStart(8,"0"));
+ put("name",s.name);put("id",s.id);put("fw",s.fw);put("state",w(s.state));put("wifi",w(s.wifi_state));
+ put("ssid",s.ssid??"-");put("ip",s.ip??"-");put("rssi",sig(s.rssi_dbm));
+ put("brightness",s.brightness);put("idle_mode",w(s.idle_mode));
+ put("uptime",up(Math.floor(s.uptime_ms/1000)));put("heap",s.heap_used+" / "+s.heap_size);
+ put("stack_free",s.stack_free);put("store_errors",s.store_errors);
+ put("boot_id",s.boot_id.toString(16).padStart(8,"0"));
  put("firmware",s.fw_slot+" / "+s.fw_state);put("reset",s.reset_reason);
- // Card 243: the `panic` row is rendered by the firmware and deliberately
- // left alone here. It comes from the RTC breadcrumb, which cannot change
- // while the device is running - a panic reboots it - so there is nothing to
- // repaint, and `GET /api/v1/panic` is where a program reads it.
+ // The `panic` and `colour_order` rows are rendered by the firmware and not
+ // repainted: neither can change while the device runs.
+ $("#fwline").textContent="Installed version: "+s.fw+".";
  $("#title").textContent=s.name||("screeny-"+s.id);document.title=$("#title").textContent;
  if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode;
-  // Card 361: the stored order is a cell the firmware renders, not a field of the status JSON.
   const c=document.querySelector('[data-k="colour_order"]');if(c)$("#colour").value=c.textContent}
 }
 async function poll(){
@@ -119,6 +131,29 @@ $("#set").addEventListener("submit",async e=>{
 });
 $("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10000}));
 $("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"})});
+const UE={bad_magic:"that is not a firmware file",wrong_chip:"it was built for a different chip",wrong_project:"that is not Screeny firmware",
+ bad_checksum:"the file is damaged - download it again",bad_sha256:"the file is damaged or incomplete - download it again",
+ too_large:"the file is too big for this panel",busy:"another update is already running",flash:"the panel could not write it to its memory"};
+const upm=t=>{$("#upm").textContent=t};
+$("#up").hidden=false;
+$("#up").addEventListener("submit",e=>{
+ e.preventDefault();
+ const f=$("#fwfile").files[0];if(!f)return;
+ if(/full/i.test(f.name)){upm("Use the file named screeny-fw-<version>.bin, not the -full one.");return}
+ if(!confirm("Install "+f.name+"? The panel will restart. If the new firmware does not start properly, it goes back to the old one by itself."))return;
+ const x=new XMLHttpRequest(),p=$("#upp");
+ x.open("POST","/api/v1/firmware?activate=1");
+ x.setRequestHeader("content-type","application/octet-stream");
+ $("#upgo").disabled=true;p.hidden=false;p.value=0;upm("Uploading...");
+ x.upload.onprogress=v=>{if(v.lengthComputable){p.value=100*v.loaded/v.total;upm("Uploading... "+Math.round(100*v.loaded/v.total)+"%")}};
+ x.onerror=()=>{$("#upgo").disabled=false;p.hidden=true;upm("The upload did not finish. If the panel is restarting, wait a minute and reload this page; otherwise try again.")};
+ x.onload=()=>{
+  $("#upgo").disabled=false;let j={};try{j=JSON.parse(x.responseText)}catch(e){}
+  if(j.ok){p.value=100;upm(j.activating?"Accepted. The panel is restarting into the new firmware and will confirm it by itself; if it fails, the panel goes back to the old version. Reload this page in about 30 seconds.":"Accepted and stored.")}
+  else{p.hidden=true;upm("Not installed: "+(UE[j.error]||j.detail||j.error||"the panel refused the file")+".")}
+ };
+ x.send(f);
+});
 poll();setInterval(poll,4000);
 </script>
 </body>
