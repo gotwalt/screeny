@@ -37,6 +37,15 @@ from the sidebar, finds the panel by itself, and the panel shows up in Home Assi
 as a device you can automate. Step by step, with screenshots:
 [`ha-app/DOCS.md`](ha-app/DOCS.md).
 
+What it costs on a Raspberry Pi 4 (4 GB, Home Assistant OS 18.3), measured on a live
+install driving two panels from one channel showing the numeral clock: about half of
+one core, so roughly 12% of the whole Pi, and about 85 MB of memory. Home Assistant OS
+gives apps no GPU on a Pi, so the Studio draws in software. The cost follows the
+patch, not the number of panels: a channel draws once for all its panels. Light patches
+(flock, bats) use about a quarter of a core; the 3D ones (knot, lattice) use more than a
+whole core. The two heaviest (ghosts, overland) are hidden on a Pi. Measurements per patch:
+[`docs/design/home-assistant-app.md`](docs/design/home-assistant-app.md).
+
 **Docker** on any Linux machine (amd64 or arm64, e.g. a Raspberry Pi or a home server):
 
 ```bash

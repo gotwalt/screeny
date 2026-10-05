@@ -48,6 +48,11 @@ running alongside; CPU is a percentage of one core (the Pi has four):
 | overland | 320 | 322% |
 | ghosts | 8 | 100% |
 
+Live app, 2026-10-05 (app 0.1.3, HA OS 18.3, same Pi): two panels on one channel playing
+clocks-numerals since the night before. The Supervisor's container counters gave 50% of
+one core over 60 s and 48% over the hour since the app last restarted (12% of the Pi),
+85 MB resident. Host load average about 1.0, SoC 52 °C.
+
 The Supervisor gives every app `TZ` and `SUPERVISOR_TOKEN`; Mosquitto is the usual broker.
 
 ## Cards
