@@ -83,8 +83,7 @@
     ],
     "manufacturer": "screeny",
     "model": "Studio",
-    "name": "Screeny",
-    "sw_version": "VERSION"
+    "name": "Screeny"
   },
   "origin": {
     "name": "screeny-studio",

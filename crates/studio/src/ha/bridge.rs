@@ -67,11 +67,10 @@ pub fn fleet_of(st: &AppState) -> Fleet {
                 }
                 PanelView {
                     device: panel.device(),
-                    name: match &key {
-                        // The first panel's device is named on the Settings screen.
-                        None => String::new(),
-                        Some(_) => st.devices.get(&panel.device()).map_or_else(|| panel.device(), |d| d.label()),
-                    },
+                    // Card 368: every panel's device is named after the panel,
+                    // the first included; the Settings screen's Device name is
+                    // only what the stand-in with no panel is called.
+                    name: st.devices.get(&panel.device()).map_or_else(|| panel.device(), |d| d.label()),
                     key,
                     snapshot,
                 }

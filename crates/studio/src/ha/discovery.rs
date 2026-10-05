@@ -28,7 +28,11 @@ pub struct Device {
     pub name: String,
     pub manufacturer: String,
     pub model: String,
-    pub sw_version: String,
+    /// Card 368: the **panel's** firmware, as HA shows it on the device
+    /// page; left out until the panel has said, and for a channel. The
+    /// Studio's own version is the `origin`'s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sw_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -275,7 +279,10 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
             name: cfg.name.clone(),
             manufacturer: "screeny".into(),
             model: "Studio".into(),
-            sw_version: env!("CARGO_PKG_VERSION").into(),
+            sw_version: match topics.role {
+                Role::Channel => None,
+                _ => snap.firmware.installed.clone(),
+            },
         },
         origin: Origin { name: "screeny-studio".into(), sw_version: env!("CARGO_PKG_VERSION").into(), support_url: None },
         components,

@@ -36,7 +36,7 @@ pub const ONLINE: &str = "online";
 pub const OFFLINE: &str = "offline";
 /// Requests the client may have queued for the poller. A connect publishes
 /// about ten; the session never waits for room (`try_publish`).
-const REQUESTS: usize = 64;
+const REQUESTS: usize = 256;
 /// Incoming messages waiting for the session. HA sends a command per click,
 /// so this is only ever full if something is flooding the command topics, and
 /// then dropping is the right answer.
@@ -289,6 +289,9 @@ struct Session {
     last_lit: HashMap<String, Option<u8>>,
     refused: Quiet,
     full: Quiet,
+    /// Card 368: the stale device ids already cleared on this connection, so
+    /// the clear is said once per role change and not every second.
+    cleared: Vec<String>,
 }
 
 impl Session {
@@ -303,7 +306,27 @@ impl Session {
             last_lit: HashMap::new(),
             refused: Quiet::default(),
             full: Quiet::default(),
+            cleared: Vec::new(),
         }
+    }
+
+    /// Card 368: the retained topics of an identity a panel no longer has
+    /// ([`fleet::stale_topics`]) that have not been cleared since the
+    /// connection came up. Idempotent: the same panel in the same role asks
+    /// nothing twice; a role change (a panel added, forgotten, a different
+    /// first) asks again.
+    fn stale(&mut self, fleet: &Fleet) -> Vec<String> {
+        let topics = fleet::stale_topics(&self.cfg, fleet);
+        let id = topics.first().cloned().unwrap_or_default();
+        if topics.is_empty() {
+            self.cleared.clear();
+            return topics;
+        }
+        if self.cleared.contains(&id) {
+            return Vec::new();
+        }
+        self.cleared = vec![id];
+        topics
     }
 
     /// A ConnAck: subscribe again, then say everything.
@@ -324,6 +347,7 @@ impl Session {
                 let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
             }
         }
+        self.cleared.clear();
         self.announce(fleet);
     }
 
@@ -379,6 +403,10 @@ impl Session {
             self.last_lit.remove(&gone.device_id);
         }
         self.published = now;
+        for topic in self.stale(fleet) {
+            self.said.remove(&topic);
+            let _ = self.client.try_publish(topic, QoS::AtLeastOnce, true, Vec::new());
+        }
         // The config before anything that refers to it, and `online` before
         // the states, so HA never sees an entity's state without the entity.
         for m in fleet::announce(&self.cfg, fleet) {
@@ -485,4 +513,50 @@ pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], channels: &[u32
         }
     };
     tokio::time::timeout(within, work).await.map_err(|_| format!("mqtt://{}:{}: no answer within {}s", cfg.host, cfg.port, within.as_secs()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ha::payload::tests::config;
+    use crate::ha::{ChannelView, PanelView, Snapshot};
+
+    fn view(device: &str, key: Option<&str>) -> PanelView {
+        PanelView { device: device.into(), key: key.map(str::to_string), name: device.into(), snapshot: Snapshot::default() }
+    }
+
+    fn session() -> Session {
+        let cfg = config();
+        let topics = Topics::new(&cfg);
+        let (client, _eventloop) = AsyncClient::new(options(&cfg, &topics, false), REQUESTS);
+        Session::new(cfg, topics, client)
+    }
+
+    fn fleet(panels: Vec<PanelView>) -> Fleet {
+        Fleet { panels, channels: vec![ChannelView { id: 1, name: "Channel 1".into(), snapshot: Snapshot::default() }] }
+    }
+
+    /// Card 368: the first panel clears the identity it had as a later panel,
+    /// once; a different first clears its own; a reconnect says it again.
+    #[test]
+    fn the_first_panel_clears_the_device_it_was_as_a_later_panel_once() {
+        let mut s = session();
+        let office_first = fleet(vec![view("office-1", None), view("living-2", Some("living-2"))]);
+        let cleared = s.stale(&office_first);
+        assert_eq!(cleared[0], "homeassistant/device/screeny_studio_office-1/config");
+        assert!(cleared.contains(&"screeny/studio/office-1/firmware/state".to_string()));
+        assert!(!cleared.iter().any(|t| t.contains("living-2")), "a live device is never touched");
+        assert!(s.stale(&office_first).is_empty(), "idempotent: said once");
+        // Living Room becomes first: Office is a later panel with a live
+        // identity, and Living Room's old one is cleared.
+        let living_first = fleet(vec![view("living-2", None), view("office-1", Some("office-1"))]);
+        let cleared = s.stale(&living_first);
+        assert_eq!(cleared[0], "homeassistant/device/screeny_studio_living-2/config");
+        assert!(s.stale(&living_first).is_empty());
+        // A reconnect forgets what was said.
+        s.cleared.clear();
+        assert_eq!(s.stale(&living_first)[0], "homeassistant/device/screeny_studio_living-2/config");
+        // No panel: nothing to clear.
+        assert!(s.stale(&fleet(vec![view("", None)])).is_empty());
+    }
 }
