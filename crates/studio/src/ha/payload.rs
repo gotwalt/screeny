@@ -58,14 +58,22 @@ struct LightState {
 
 /// What HA's `update` entity reads off its state topic: the keys of
 /// <https://www.home-assistant.io/integrations/update.mqtt/>. Every key is
-/// always there - `null` when there is nothing to say - so a retained message
-/// never leaves HA holding a value from an earlier one.
+/// always there, so a retained message never leaves HA holding a value from
+/// an earlier one - **except a version nobody knows**.
+///
+/// **Card 368: HA validates this against a schema (`MQTT_JSON_UPDATE_SCHEMA`),
+/// and a `null` in a string key fails the whole message** ("Schema
+/// violation ... ignored"), so the entity stays *Unknown* for ever. A version
+/// HA has not been told is therefore left out, and `release_summary` is the
+/// empty string rather than `null`. Only `update_percentage` may be `null`.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 struct UpdateState<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
     installed_version: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     latest_version: Option<&'a str>,
     title: &'static str,
-    release_summary: Option<String>,
+    release_summary: String,
     in_progress: bool,
     update_percentage: Option<u8>,
 }
@@ -80,7 +88,7 @@ impl<'a> UpdateState<'a> {
             installed_version: f.installed.as_deref(),
             latest_version: f.latest.as_deref(),
             title: "Screeny firmware",
-            release_summary: f.failed.as_ref().map(|why| format!("The last update failed: {why}").chars().take(SUMMARY_MAX).collect()),
+            release_summary: f.failed.as_ref().map_or_else(String::new, |why| format!("The last update failed: {why}").chars().take(SUMMARY_MAX).collect()),
             in_progress: f.in_progress,
             update_percentage: f.percent,
         }
@@ -301,9 +309,23 @@ pub(crate) mod tests {
         let up_to_date = state(FirmwareState { installed: Some("0.11.0".into()), latest: Some("0.11.0".into()), ..FirmwareState::default() });
         assert_eq!(up_to_date["installed_version"], up_to_date["latest_version"], "HA shows it up to date");
         let unknown = state(FirmwareState::default());
-        assert!(unknown["installed_version"].is_null() && unknown["latest_version"].is_null());
+        assert!(unknown.get("installed_version").is_none() && unknown.get("latest_version").is_none(), "left out, never null: {unknown}");
+        // HA's MQTT_JSON_UPDATE_SCHEMA: these keys are `cv.string`, which
+        // refuses null, and one bad key drops the whole message (card 368).
+        for f in [up_to_date_state(), FirmwareState::default()] {
+            let v = state(f);
+            for key in ["installed_version", "latest_version", "title", "release_summary"] {
+                assert!(v.get(key).is_none_or(serde_json::Value::is_string), "{key} in {v}");
+            }
+            assert_eq!(v["release_summary"], "");
+            assert!(v["in_progress"].is_boolean());
+        }
         let long = state(FirmwareState { failed: Some("x".repeat(1000)), ..FirmwareState::default() });
         assert_eq!(long["release_summary"].as_str().unwrap().chars().count(), SUMMARY_MAX);
+    }
+
+    fn up_to_date_state() -> crate::ha::FirmwareState {
+        crate::ha::FirmwareState { installed: Some("0.11.0".into()), latest: Some("0.11.0".into()), ..Default::default() }
     }
 
     #[test]

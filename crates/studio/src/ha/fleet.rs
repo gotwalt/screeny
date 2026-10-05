@@ -2,8 +2,9 @@
 //! Pure: a [`Fleet`] in, the retained messages out, and no connection anywhere.
 //!
 //! **The first panel is the studio as it always was**: the same discovery id,
-//! topics and `unique_id`s, and the device is named by the Settings screen's
-//! Device name. Its picture and patch are now Channel 1's, and it has a
+//! topics and `unique_id`s, and - since card 368 - the device is
+//! named after the panel (the Settings screen's Device name is only the
+//! stand-in's, with no panel). Its picture and patch are now Channel 1's, and it has a
 //! channel select. Every later panel is a device of its own, `screeny_<instance>_
 //! <key>`, named after the panel, with a channel select and no picture. Every
 //! channel but Channel 1 is a device of its own, `screeny_<instance>_ch<id>`,
@@ -54,11 +55,12 @@ pub fn keys(devices: &[String]) -> Vec<Option<String>> {
         .collect()
 }
 
-/// One panel's HA device, as its own connection settings: the first keeps
-/// the name from the Settings screen, a later one is named after its panel.
+/// One panel's HA device, as its own connection settings: each is named
+/// after its panel (card 368: the first too); the Settings screen's name is
+/// only the stand-in's, with no panel.
 #[must_use]
 pub fn device_cfg(cfg: &MqttConfig, view: &PanelView) -> MqttConfig {
-    if view.key.is_some() && !view.name.trim().is_empty() {
+    if !view.name.trim().is_empty() {
         MqttConfig { name: view.name.clone(), ..cfg.clone() }
     } else {
         cfg.clone()
@@ -108,6 +110,24 @@ pub fn announce(cfg: &MqttConfig, fleet: &Fleet) -> Vec<Message> {
         out.extend(payload::state_messages(&topics, &view.snapshot));
     }
     out
+}
+
+/// **Card 368: the retained topics of the device id a panel had when it was a
+/// later panel, and is no longer.** The first panel is `screeny_<instance>`;
+/// the same panel announced as a later one - by a Studio it moved from, or
+/// before the panels were reordered - is `screeny_<instance>_<key>`, and that
+/// retained config is a dead device in HA that nobody clears. Only the first
+/// panel can have one, since the first device's id is shared by whoever is
+/// first; and nothing that is a live device's is touched. Empty when the
+/// first has no panel.
+#[must_use]
+pub fn stale_topics(cfg: &MqttConfig, fleet: &Fleet) -> Vec<String> {
+    let Some(first) = fleet.panels.first().filter(|v| v.key.is_none() && !v.device.is_empty()) else { return Vec::new() };
+    let was = Topics::for_panel(cfg, Some(&panel_key(&first.device)));
+    if devices(cfg, fleet).iter().any(|t| t.device_id == was.device_id) {
+        return Vec::new();
+    }
+    retained_topics(&was)
 }
 
 /// The topics of every device the fleet has now: panels, then channels.
@@ -187,7 +207,7 @@ mod tests {
     #[test]
     fn the_first_panel_is_exactly_what_a_single_device_studio_says() {
         let cfg = config();
-        let out = announce(&cfg, &one("A name from the panel, which the first panel ignores"));
+        let out = announce(&cfg, &one("Living Room"));
         let (config_msg, rest) = (&out[0], &out[1..]);
         assert_eq!(config_msg.topic, "homeassistant/device/screeny_studio/config");
         let mut v = json(config_msg);
@@ -198,6 +218,10 @@ mod tests {
         assert_eq!(channel_select["unique_id"], "screeny_studio_channel");
         assert_eq!(channel_select["command_topic"], "screeny/studio/channel/set");
         assert_eq!(channel_select["options"], serde_json::json!(["Channel 1", "Drawing room"]));
+        // Card 368 changed the device's name and firmware, which have their own
+        // asserts below; the pin is of everything else.
+        v["device"]["name"] = "Screeny".into();
+        v["device"].as_object_mut().unwrap().remove("sw_version");
         let text = serde_json::to_string_pretty(&v).unwrap().replace(env!("CARGO_PKG_VERSION"), "VERSION");
         // The discovery snapshot is of `snap()` in discovery.rs: the four
         // pictures and a default patch; this one has a patch playing, which
@@ -212,7 +236,7 @@ mod tests {
         // Every id and topic, spelt out.
         let v = json(config_msg);
         assert_eq!(v["device"]["identifiers"], serde_json::json!(["screeny_studio"]));
-        assert_eq!(v["device"]["name"], "Screeny");
+        assert_eq!(v["device"]["name"], "Living Room", "card 368: named after the panel; the id is what automations use");
         let mut ids: Vec<String> =
             ["brightness", "level", "picture", "patch", "panel"].iter().map(|k| v["components"][k]["unique_id"].as_str().unwrap().to_string()).collect();
         ids.sort();
@@ -291,7 +315,7 @@ mod tests {
         assert_eq!(second["components"]["firmware"]["command_topic"], "screeny/studio/screeny-4a00a5/firmware/set");
         assert!(!out.iter().any(|m| m.topic == "screeny/studio/screeny-4a00a5/picture/state"), "no state for what it does not have");
         let first = json(&out[0]);
-        assert_eq!(first["device"]["name"], "Screeny", "the first is named by the Settings screen, as before");
+        assert_eq!(first["device"]["name"], "Living room", "card 368: the first is named after its panel too");
     }
 
     #[test]
@@ -301,7 +325,8 @@ mod tests {
         let mut f = fleet(vec![view("a", None, "Uno"), view("b", Some("b"), "Pantry")]);
         f.channels[1].name = "Den".into();
         let after = announce(&cfg, &f);
-        assert_eq!(before[0], after[0], "the first panel's config does not follow its name");
+        assert_ne!(before[0], after[0], "card 368: the first panel's device follows its panel's name");
+        assert_eq!(json(&after[0])["device"]["identifiers"], json(&before[0])["device"]["identifiers"], "and keeps its id");
         let find = |o: &[Message], end: &str| o.iter().find(|m| m.topic.ends_with(end)).cloned().unwrap();
         assert!(find(&after, "_b/config").payload.contains(r#""name":"Pantry""#));
         assert_ne!(find(&before, "_b/config").payload, find(&after, "_b/config").payload);
@@ -332,6 +357,40 @@ mod tests {
         assert!(!announce(&cfg, &gone).iter().any(|m| m.topic.contains("_ch2/")));
         assert_eq!(devices(&cfg, &gone).len(), 2);
         assert_eq!(devices(&cfg, &fleet(panels())).len(), 3);
+    }
+
+    /// Card 368: the stand-in with no panel is still named by the Settings
+    /// screen; the first panel's old later-panel identity is stale, unless a
+    /// live device has it; only the first panel has one.
+    #[test]
+    fn the_stand_in_keeps_the_settings_name_and_the_first_panel_has_a_stale_identity() {
+        let cfg = config();
+        let standin = announce(&cfg, &fleet(vec![view("", None, "")]));
+        assert_eq!(json(&standin[0])["device"]["name"], "Screeny");
+        assert!(stale_topics(&cfg, &fleet(vec![view("", None, "")])).is_empty());
+        let two = fleet(vec![view("aa0001", None, "Office"), view("bb0002", Some("bb0002"), "Living Room")]);
+        let stale = stale_topics(&cfg, &two);
+        assert_eq!(stale[0], "homeassistant/device/screeny_studio_aa0001/config");
+        assert!(stale.iter().all(|t| t.contains("aa0001")), "{stale:?}");
+        // A live device that has that id is not stale.
+        let clash = fleet(vec![view("a b", None, "One"), view("a_b", Some("a_b"), "Two")]);
+        assert!(stale_topics(&cfg, &clash).is_empty());
+    }
+
+    /// Card 368: HA's device page shows `sw_version` as "Firmware": it is the
+    /// panel's, not the Studio's (which is the origin's).
+    #[test]
+    fn the_device_firmware_is_the_panels_and_the_origin_is_the_studios() {
+        let cfg = config();
+        let out = announce(&cfg, &one("x"));
+        let v = json(&out[0]);
+        assert_eq!(v["device"]["sw_version"], "0.10.0");
+        assert_eq!(v["origin"]["sw_version"], env!("CARGO_PKG_VERSION"));
+        let ch2 = json(out.iter().find(|m| m.topic.ends_with("_ch2/config")).unwrap());
+        assert!(ch2["device"].get("sw_version").is_none(), "a channel has no firmware");
+        let mut unknown = one("x");
+        unknown.panels[0].snapshot.firmware = crate::ha::FirmwareState::default();
+        assert!(json(&announce(&cfg, &unknown)[0])["device"].get("sw_version").is_none(), "left out until the panel has said");
     }
 
     #[test]

@@ -391,8 +391,9 @@ one device per panel (card 352) and one per channel other than Channel 1:
 
 - The **first panel** - the one a route without `panel` means, the first adopted - is the
   device every earlier build announced, with **the same discovery id, topics and
-  `unique_id`s, byte for byte**, and it is still named by the Device name on the Settings
-  screen. Its **`select.screeny_picture` and `sensor.screeny_patch` now mean Channel 1**:
+  `unique_id`s, byte for byte**, and since card 368 it is **named after its panel**, like the others (the Device name on the
+  Settings screen only names the stand-in with no panel; the id and entity ids are unchanged,
+  and an entity id HA has already made is never renamed). Its **`select.screeny_picture` and `sensor.screeny_patch` now mean Channel 1**:
   picking a picture there changes Channel 1 and so every panel on it (the API's own path,
   `Panels::pick`, with the channel's 2 s fade). Its light, brightness slider and panel
   link stay the first panel's. It gains one entity, **`select.screeny_channel`**, which
@@ -430,7 +431,7 @@ carries, so a later panel or channel cannot leak into the first.
 | entity topics | `screeny/<id>/<entity>/state\|set` | `screeny/<id>/<key>/<entity>/state\|set` | `screeny/<id>/ch<n>/<entity>/state\|set` |
 | entities | light, brightness, **Channel 1's** picture + patch, link, channel select | light, brightness, link, channel select | picture select, patch sensor |
 | availability | `screeny/<id>/status` | the same one: an MQTT connection has one Last Will | the same |
-| device name | Device name (Settings) | the panel's name | the channel's name |
+| device name | the panel's name (Device name, Settings, with no panel) | the panel's name | the channel's name |
 
 (A panel whose key would be `ch<digits>` gets `_panel` added, so a panel's topics never
 collide with a channel's.) With no panel at all the first device is still Channel 1's

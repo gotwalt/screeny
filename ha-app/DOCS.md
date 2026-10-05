@@ -73,8 +73,9 @@ so. <!-- verify: time to appear -->
 
 If Home Assistant has an MQTT broker, the Studio is given its address and login by
 Home Assistant and announces itself over MQTT discovery. You type nothing in the
-Studio's **Settings** screen. Home Assistant gets a device, **Screeny**, named by the
-Studio's Device name setting, with these entities:
+Studio's **Settings** screen. Home Assistant gets **one device per panel, named after the
+panel** (for example "Living Room"). The first panel's device also carries Channel 1's
+picture and patch; its entities are:
 
 | entity | what it is |
 |---|---|
@@ -87,7 +88,9 @@ Studio's Device name setting, with these entities:
 
 <!-- screenshot: ha-device -->
 
-A second panel is a device of its own with a Channel select, and every channel after
+The device page's "Firmware" line is the panel's own firmware version. (The Studio's
+Device name setting only names the stand-in device a Studio has before it knows any
+panel.) A second panel is a device of its own with a Channel select, and every channel after
 Channel 1 is a device with a Picture and Patch, because a channel owns the picture and
 panels are members of channels.
 
