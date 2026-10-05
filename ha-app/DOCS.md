@@ -24,7 +24,7 @@ marked where they go.
 Open the web flasher at <https://gotwalt.github.io/screeny/> in desktop Chrome, Edge
 or Opera, plug the Tidbyt into the computer, and click **Install**.
 
-<!-- screenshot: flasher-install -->
+![The web flasher](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/flasher-install.png)
 
 1. Pick the port that appears (CP2102 or USB Serial).
 2. The dialog installs the firmware. On a Tidbyt still running its original firmware
@@ -46,17 +46,17 @@ To go back to Tidbyt's own firmware, see [help.tidbyt.com](https://help.tidbyt.c
 2. Open the three-dot menu and choose **Repositories**, then **+ Add**, and enter
    `https://github.com/gotwalt/screeny`.
 
-   <!-- screenshot: add-repository -->
+   ![Adding the repository](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/add-repository.png)
 
 3. Reload the store, open **Screeny** and click **Install**.
 
-   <!-- screenshot: app-page -->
+   ![The Screeny app in Home Assistant](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/app-page.png)
 
 4. Start it. Leave **Start on boot** on, and turn **Watchdog** on: it restarts the
    Studio if its health check fails. The Studio takes about a minute to start.
 5. **Screeny** appears in Home Assistant's sidebar. Open it.
 
-   <!-- screenshot: studio-in-sidebar -->
+   ![The Studio, opened from the sidebar](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/studio-in-sidebar.png)
 
 That is the Studio: what is playing, the panels it knows, and the settings. It is
 shown through Home Assistant ("ingress"), so Home Assistant's login is what protects
@@ -68,7 +68,7 @@ The Studio finds Tidbyts running the Screeny firmware by itself (mDNS), and a ne
 panel joins Channel 1. It should appear on the Studio's panel list within a minute or
 so.
 
-<!-- screenshot: studio-panel-found -->
+![Both panels found by the Studio](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/studio-panel-found.png)
 
 ### In Home Assistant
 
@@ -87,7 +87,7 @@ picture and patch; its entities are:
 | **Channel** (select) | which channel the panel shows |
 | **Panel link** (diagnostic) | whether the Studio is streaming to the panel |
 
-<!-- screenshot: ha-device -->
+![A panel as a Home Assistant device](https://raw.githubusercontent.com/gotwalt/screeny/main/docs/media/ha/ha-device.png)
 
 The device page's "Firmware" line is the panel's own firmware version. (The Studio's
 Device name setting only names the stand-in device a Studio has before it knows any

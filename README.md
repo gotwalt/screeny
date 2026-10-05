@@ -149,6 +149,8 @@ picture, patch, channel and brightness. Needs Home Assistant OS or Supervised on
 aarch64 or amd64. The step-by-step guide is [`ha-app/DOCS.md`](ha-app/DOCS.md); the
 design is [`docs/design/home-assistant-app.md`](docs/design/home-assistant-app.md).
 
+![The Studio inside Home Assistant](docs/media/ha/studio-in-sidebar.png)
+
 ## Hardware
 
 **Tested only on the Tidbyt Gen 1** (ESP32-D0WD, 8 MB flash, the version with a blue
