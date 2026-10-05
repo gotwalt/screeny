@@ -23,9 +23,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A release runs on its tag, and the github-pages environment only lets main
+  # deploy. Rather than loosen that, a firmware release asks for a run on main
+  # (the site build picks the newest release either way). workflow_dispatch is
+  # one of the events GITHUB_TOKEN may trigger.
+  on-main:
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'fw-v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run pages.yml --ref main
+
   deploy:
-    # A release event for anything but a firmware tag (an app release, say) is not ours.
-    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'fw-v')
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
