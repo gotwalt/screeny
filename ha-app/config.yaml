@@ -1,7 +1,7 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-configuration
 # Design: docs/design/home-assistant-app.md (card 359).
 name: Screeny
-version: "0.1.1"
+version: "0.1.2"
 slug: screeny
 description: Generative art on a Tidbyt LED panel, and the panel as a Home Assistant device.
 url: https://github.com/gotwalt/screeny

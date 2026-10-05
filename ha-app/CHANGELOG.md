@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Carries firmware 0.11.1 (the web flasher's WiFi step works) and offers it
+  to panels on 0.11.0.
+
 ## 0.1.1
 
 - Each panel's Home Assistant device is named after the panel, and shows the

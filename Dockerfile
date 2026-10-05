@@ -84,7 +84,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # machine's own architecture - it only downloads a file - so a multi-arch build
 # does not emulate it.
 FROM --platform=$BUILDPLATFORM ${RUNTIME_IMAGE} AS firmware
-ARG FIRMWARE_VERSION=0.11.0
+ARG FIRMWARE_VERSION=0.11.1
 ARG FIRMWARE_REPO=gotwalt/screeny
 RUN set -eux; \
     apt-get update; \
