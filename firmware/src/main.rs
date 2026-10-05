@@ -238,7 +238,11 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// **0.11.1: Improv actually hears the host.** esp-hal ties UART0's RX input
 /// high when the driver is created; 0.11.0 never routed GPIO3 back, so ESP Web
 /// Tools got no answer and skipped the WiFi step (`src/improv.rs`).
-pub const FW_VERSION: &str = "0.11.1";
+///
+/// **0.11.2: the device page reads for an owner** - plain labels, the
+/// technical rows folded under Details, colour order under Advanced, and a
+/// firmware upload form.
+pub const FW_VERSION: &str = "0.11.2";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

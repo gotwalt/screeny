@@ -1369,7 +1369,7 @@ impl core::fmt::Display for Page {
         // when every row was in one table.
         row(f, "name", "Name", format_args!("{}", s.name))?;
         row(f, "fw", "Firmware", format_args!("{}", s.fw))?;
-        row(f, "state", "Showing", format_args!("{}", state_human(s.state)))?;
+        row(f, "state", "Panel", format_args!("{}", state_human(s.state)))?;
         row(f, "wifi", "Network", format_args!("{}", wifi_human(s.wifi_state)))?;
         row(
             f,
