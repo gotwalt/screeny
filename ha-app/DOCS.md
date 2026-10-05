@@ -42,8 +42,8 @@ To go back to Tidbyt's own firmware, see [help.tidbyt.com](https://help.tidbyt.c
 
 ## 2. Add the app to Home Assistant
 
-1. Open **Settings > Apps > App store**. <!-- verify: menu is called Apps or Add-ons depending on the HA version -->
-2. Open the three-dot menu, choose **Repositories**, and add
+1. Open **Settings > Apps > App store** (**Add-ons** on older Home Assistant).
+2. Open the three-dot menu and choose **Repositories**, then **+ Add**, and enter
    `https://github.com/gotwalt/screeny`.
 
    <!-- screenshot: add-repository -->
@@ -52,7 +52,8 @@ To go back to Tidbyt's own firmware, see [help.tidbyt.com](https://help.tidbyt.c
 
    <!-- screenshot: app-page -->
 
-4. Start it. Leave **Start on boot** on.
+4. Start it. Leave **Start on boot** on, and turn **Watchdog** on: it restarts the
+   Studio if its health check fails. The Studio takes about a minute to start.
 5. **Screeny** appears in Home Assistant's sidebar. Open it.
 
    <!-- screenshot: studio-in-sidebar -->
@@ -65,7 +66,7 @@ it. By default the Studio does **not** listen on your network at all.
 
 The Studio finds Tidbyts running the Screeny firmware by itself (mDNS), and a new
 panel joins Channel 1. It should appear on the Studio's panel list within a minute or
-so. <!-- verify: time to appear -->
+so.
 
 <!-- screenshot: studio-panel-found -->
 
@@ -147,7 +148,7 @@ router does not block multicast between WiFi and wired devices.
 broker. In the app's **Log**, "Home Assistant offers no MQTT broker yet" means none is
 installed: install and start the Mosquitto broker app and add the MQTT integration, or
 set a broker on the Studio's Settings screen. The Studio works fine without one, you
-just cannot control it from Home Assistant. <!-- verify: MQTT integration must be added for entities to appear -->
+just cannot control it from Home Assistant.
 
 **The sidebar entry opens a blank page.** Restart the app and read its **Log**; the
 Studio says on its first lines how it is listening.
