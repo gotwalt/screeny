@@ -53,14 +53,33 @@ const POLL_MS: u32 = 250;
 
 /// The UART0 receiver, at the rate the console and ESP Web Tools use.
 ///
-/// **Blocking driver, polled, and no `with_rx`.** The async driver and the pin
-/// binding pulled ~2.3 KB of pin-signal tables into `.data` (`.stack` had 1.4 KB
-/// to spare), and neither is needed: GPIO3 is U0RXD from reset, so the pin is
-/// already routed, and a 128-byte FIFO polled every 10 ms cannot overflow at
-/// 115200 baud (it takes 11 ms to fill).
-pub fn rx(uart: esp_hal::peripherals::UART0<'static>) -> UartRx<'static, Blocking> {
+/// **Blocking driver, polled, and GPIO3 routed by hand.** The routing is not
+/// optional: esp-hal's `UartBuilder::new` ties the UART's RX input to a
+/// constant high through the GPIO matrix (`uart/mod.rs`, esp-hal 1.2.2), so
+/// the receiver hears nothing even though GPIO3 is U0RXD from reset. That is
+/// what fw 0.11.0 shipped with: ESP Web Tools never got an answer and skipped
+/// the WiFi step (owner, 2026-10-04). `with_rx` would fix it but pulls ~2.3 KB
+/// of pin-signal tables into `.data`, which comes straight off `.stack` (it
+/// took the build below the 24 KB floor). One write to the matrix does the same
+/// job: input signal 14 (U0RXD) reads GPIO3. GPIO3's IO_MUX pad is left as the
+/// boot ROM leaves it (U0RXD function, input enabled, pulled up). A 128-byte
+/// FIFO polled every 10 ms cannot overflow at 115200 baud (11 ms to fill).
+pub fn rx(
+    uart: esp_hal::peripherals::UART0<'static>,
+    _pin: esp_hal::peripherals::GPIO3<'static>,
+) -> UartRx<'static, Blocking> {
+    /// `InputSignal::U0RXD` on the ESP32.
+    const U0RXD: usize = 14;
+    const GPIO3: u8 = 3;
     let cfg = UartConfig::default().with_baudrate(115_200);
-    UartRx::new(uart, cfg).expect("uart0 config")
+    let rx = UartRx::new(uart, cfg).expect("uart0 config");
+    // After `new`, which is what tied the signal high. `sel` set = through the
+    // matrix, from the pad `in_sel` names. `_pin` is taken so nothing else can
+    // claim GPIO3.
+    esp_hal::peripherals::GPIO::regs()
+        .func_in_sel_cfg(U0RXD)
+        .write(|w| unsafe { w.in_sel().bits(GPIO3) }.sel().set_bit());
+    rx
 }
 
 fn send(replies: &mut Replies, info: &DeviceInfo<'_>) {

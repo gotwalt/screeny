@@ -234,7 +234,11 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// stored setting (`colour_order`, card 361) instead of a cargo feature - and
 /// **Improv Serial** on UART0 (card 362), so the web flasher can set WiFi
 /// right after a first install.
-pub const FW_VERSION: &str = "0.11.0";
+///
+/// **0.11.1: Improv actually hears the host.** esp-hal ties UART0's RX input
+/// high when the driver is created; 0.11.0 never routed GPIO3 back, so ESP Web
+/// Tools got no answer and skipped the WiFi step (`src/improv.rs`).
+pub const FW_VERSION: &str = "0.11.1";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -1212,7 +1216,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     // Card 362: Improv Serial on UART0's receive side, for ESP Web Tools.
     spawner.spawn(
-        improv::improv_task(improv::rx(peripherals.UART0), host).unwrap(),
+        improv::improv_task(improv::rx(peripherals.UART0, peripherals.GPIO3), host).unwrap(),
     );
     spawner.spawn(telemetry_task().unwrap());
     // Card 230: the button. **After the radio and the store**, because a five
