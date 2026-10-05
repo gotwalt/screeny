@@ -18,12 +18,13 @@ computer. Fifteen minutes, nothing to install for step 1.
 
 ### 1. Flash the Tidbyt from your browser
 
-Open **<https://gotwalt.github.io/screeny/>**, plug the Tidbyt in, click
-**Install**, and type your WiFi name and password when it asks (2.4 GHz networks
-only). The panel joins your network and shows a status screen.
+Open **<https://gotwalt.github.io/screeny/>**, plug the Tidbyt in, click **Back up**
+to save a copy of its original firmware, then click **Install** and type your WiFi
+name and password when it asks (2.4 GHz networks only). The panel joins your network
+and shows a status screen.
 
-Changed your mind? Tidbyt's own firmware and instructions are at
-[help.tidbyt.com](https://help.tidbyt.com); flashing it puts the panel back as it was.
+Keep the backup file: Tidbyt does not publish its firmware, so it is the only way back.
+Changed your mind? **Restore** on the same page writes it back and the panel is as it was.
 
 ### 2. Run Screeny Studio
 

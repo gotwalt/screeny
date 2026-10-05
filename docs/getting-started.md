@@ -70,13 +70,15 @@ There are three ways. **The web flasher** needs nothing but Chrome or Edge and a
 data cable, and sets up WiFi in the same step. **Flash a release by hand** needs one
 Python tool. **Build it yourself** (steps 2c to 4) is for changing the firmware.
 
-To go back to Tidbyt's own firmware at any point, see
-[help.tidbyt.com](https://help.tidbyt.com).
+**Back up the stock firmware first.** Tidbyt does not publish its firmware, so a copy
+of your own unit's flash is the only way back. The web flasher does this as its first
+step (and restores it from the same page); by hand it is [step 3](#3-back-up-the-stock-firmware).
 
 ### 2a. The web flasher
 
-Open <https://gotwalt.github.io/screeny/>, plug the Tidbyt in, click **Install** and
-pick the port that appears (CP2102 or USB Serial). When the install finishes it asks
+Open <https://gotwalt.github.io/screeny/>, plug the Tidbyt in, click **Back up** and
+pick the port that appears (CP2102 or USB Serial); it reads all 8 MB (about eight
+minutes) and your browser saves the file. Then click **Install** and pick the same port. When the install finishes it asks
 for your WiFi (2.4 GHz only) and hands it to the panel over the cable. Then skip to
 [step 6](#6-stream-to-it).
 
@@ -130,8 +132,8 @@ Check it: `cd firmware && cargo build --release` should finish with an ELF at
 
 ## 3. Back up the stock firmware
 
-(Only for building and flashing yourself with `tools/fw-run.sh`, which refuses to run
-without a backup in `backup/`.)
+(Skip this if the web flasher already saved a backup; that file is the same thing.
+`tools/fw-run.sh` refuses to run without a backup in `backup/`, so copy it there.)
 
 Plug the Tidbyt in and find its serial port:
 
@@ -340,4 +342,4 @@ running, a pull request with the pin map behind a cargo feature would be very we
 - **A patch shows black in the Studio in Docker.** The GPU patches need a Vulkan
   device. On Linux pass `/dev/dri` (the default compose file does); on a Mac there is
   none, so build with `SCREENY_FEATURES=none` for the CPU patches only.
-- **You want the stock firmware back.** Step 3's last command.
+- **You want the stock firmware back.** Restore on the web flasher page, or step 3's last command.

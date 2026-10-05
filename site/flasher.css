@@ -26,8 +26,20 @@ code { font-family: var(--data); font-size: 0.9em; background: var(--bench-raise
 .card { background: var(--bench-raised); border: 1px solid var(--rule); border-radius: 4px; padding: 20px 16px; margin-top: 28px; }
 .go { font: 400 18px/1 var(--label); letter-spacing: 0.09em; text-transform: uppercase; background: var(--amber); color: #1b1a18; border: 0; border-radius: 3px; padding: 16px 24px; min-height: 48px; cursor: pointer; }
 .go:hover { background: #f1b25a; }
+.go:disabled { background: var(--rule); color: var(--dim); cursor: not-allowed; }
+.go.quiet:not(:disabled) { background: transparent; color: var(--amber); border: 1px solid var(--amber); }
 .go:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
 .warn { color: var(--over); }
 .note { color: var(--dim); font-size: 14px; margin: 14px 0 0; }
 footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--dim); font-size: 14px; }
 esp-web-install-button { display: block; }
+.card p:first-of-type { color: var(--dim); }
+.card.locked { opacity: 0.85; }
+progress[hidden] { display: none; }
+progress { display: block; width: 100%; height: 6px; margin-top: 16px; accent-color: var(--amber); }
+.status { margin: 12px 0 0; min-height: 1em; }
+.status:empty { display: none; }
+.status.ok { color: var(--paper); }
+.status.bad { color: var(--over); }
+.skip { display: flex; gap: 8px; align-items: baseline; margin-top: 16px; color: var(--dim); font-size: 14px; cursor: pointer; }
+input[type=file] { font: 14px var(--body); color: var(--dim); max-width: 100%; }

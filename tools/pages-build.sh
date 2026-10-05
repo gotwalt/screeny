@@ -19,6 +19,9 @@ cd "$ROOT"
 # ESP Web Tools: pinned. To bump: `npm view esp-web-tools@<v> dist.integrity`.
 EWT_VERSION=10.4.0
 EWT_INTEGRITY='sha512-3pwkeFFm5Fj7UQo8SJNYK5RXrtNCpq6X9QoI6bMT4GBZWgrJqjn0YvM9ihG74BtMoSFYXfmDtkehuxe50PTMPQ=='
+# esptool-js (backup and restore, site/stock.js): pinned the same way.
+EJS_VERSION=0.7.0
+EJS_INTEGRITY='sha512-9wHuW/s9t4Vs6HKcr3pra3gbRVWwaN0eabMWodWH4KEJHEYZxgmWwZ3s0F4xcWVCZOc/L98bGZ4uWoZvR8KBKA=='
 
 TAG="" OUT="target/pages"
 while [[ $# -gt 0 ]]; do
@@ -40,7 +43,7 @@ echo "flasher: firmware $VERSION (tag $TAG)"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/vendor"
-cp site/index.html site/flasher.css "$OUT/"
+cp site/index.html site/flasher.css site/stock.js "$OUT/"
 
 # 1. Firmware: the merged image (bootloader + partition table + app, unpadded so
 # the settings partition is never overwritten). One image for every unit.
@@ -79,6 +82,15 @@ tar -xzf "$WORK/ewt.tgz" -C "$WORK" package/dist/web package/LICENSE
 mkdir -p "$OUT/vendor/esp-web-tools"
 cp -R "$WORK/package/dist/web/." "$OUT/vendor/esp-web-tools/"
 cp "$WORK/package/LICENSE" "$OUT/vendor/esp-web-tools/LICENSE"
+rm -rf "$WORK/package"
+
+# 4. esptool-js, vendored the same way: its self-contained ES module bundle.
+curl -fsSL "https://registry.npmjs.org/esptool-js/-/esptool-js-$EJS_VERSION.tgz" -o "$WORK/ejs.tgz"
+GOT="sha512-$(openssl dgst -sha512 -binary "$WORK/ejs.tgz" | openssl base64 -A)"
+[[ "$GOT" == "$EJS_INTEGRITY" ]] || { echo "esptool-js integrity mismatch: $GOT" >&2; exit 1; }
+tar -xzf "$WORK/ejs.tgz" -C "$WORK" package/bundle.js package/LICENSE
+mkdir -p "$OUT/vendor/esptool-js"
+cp "$WORK/package/bundle.js" "$WORK/package/LICENSE" "$OUT/vendor/esptool-js/"
 touch "$OUT/.nojekyll"
 
 echo "flasher site written to $OUT"

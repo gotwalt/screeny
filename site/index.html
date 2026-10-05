@@ -7,23 +7,36 @@
 <meta name="description" content="Install screeny firmware on a Gen 1 Tidbyt from your browser.">
 <link rel="stylesheet" href="flasher.css">
 <script type="module" src="vendor/esp-web-tools/install-button.js"></script>
+<script type="module" src="stock.js"></script>
 </head>
 <body>
 <main>
   <header>
     <p class="kicker">Screeny</p>
     <h1>Install the firmware</h1>
-    <p class="lede">Turn a Gen 1 Tidbyt into a network display. Plug it in, click Install, pick your WiFi.
-    Nothing to download and nothing to type into a terminal.</p>
+    <p class="lede">Turn a Gen 1 Tidbyt into a network display. Plug it in, save a backup of
+    its original firmware, click Install, pick your WiFi. Nothing to download and nothing to type into a terminal.</p>
   </header>
 
-  <section class="card" id="install">
-    <h2>Install</h2>
+  <section class="card" id="backup">
+    <h2>1. Back up the original firmware</h2>
+    <p>Tidbyt does not publish its firmware, so this copy is the only way to put your Tidbyt
+    back the way it came. It reads the whole chip (8 MB) and saves it as a file. It changes nothing on the Tidbyt.</p>
+    <button id="backup-go" class="go" type="button">Back up</button>
+    <progress id="backup-bar" value="0" hidden></progress>
+    <p id="backup-status" class="status" role="status"></p>
+    <p class="note">Allow about eight minutes. Keep the file somewhere safe and private: it also holds
+    the WiFi password the Tidbyt was using.</p>
+  </section>
+
+  <section class="card locked" id="install">
+    <h2>2. Install</h2>
     <esp-web-install-button manifest="manifest.json">
-      <button slot="activate" class="go" type="button">Install screeny <span id="ver"></span></button>
+      <button id="install-go" slot="activate" class="go" type="button" disabled>Install screeny <span id="ver"></span></button>
       <span slot="unsupported" class="warn">This browser cannot flash a device. Open this page in desktop Chrome, Edge or Opera.</span>
       <span slot="not-allowed" class="warn">Flashing needs a secure page. Open this page from its https address.</span>
     </esp-web-install-button>
+    <label class="skip"><input id="skip" type="checkbox"> Skip the backup: I already have one, or this Tidbyt already runs screeny.</label>
     <p class="note">Allow about three minutes. Do not unplug the Tidbyt while the bar moves.</p>
   </section>
 
@@ -40,7 +53,8 @@
   <section>
     <h2>What happens</h2>
     <ol>
-      <li>Plug the Tidbyt into your computer and click <em>Install</em>. Pick the port that appears (CP2102 or USB Serial).</li>
+      <li>Plug the Tidbyt into your computer and click <em>Back up</em>. Pick the port that appears (CP2102 or USB Serial). Your browser saves the backup file when the read finishes.</li>
+      <li>Click <em>Install</em> and pick the same port.</li>
       <li>The dialog installs the firmware. A first install on a Tidbyt running its original firmware erases the chip first, so nothing old gets in the way. Updating a Tidbyt that already runs screeny keeps its WiFi.</li>
       <li>When it finishes, the dialog offers to connect the Tidbyt to WiFi. Type the network name and password. They go straight to the Tidbyt over the cable.</li>
       <li>The panel joins your network and appears in the <strong>Screeny app in Home Assistant</strong>, or on any machine with <code>screeny discover</code>.</li>
@@ -48,15 +62,21 @@
     <p>If the dialog says it failed to initialize, unplug and replug the cable and try again.</p>
   </section>
 
-  <section>
+  <section class="card" id="restore">
     <h2>Going back</h2>
-    <p>Tidbyt's own support pages have the official firmware and instructions:
-    <a href="https://help.tidbyt.com" rel="noopener">help.tidbyt.com</a>.</p>
+    <p>Choose the backup you saved in step 1 and write it back. The Tidbyt returns to exactly what it ran
+    when you saved it, WiFi included.</p>
+    <p><input id="restore-file" type="file" accept=".bin,application/octet-stream"></p>
+    <button id="restore-go" class="go quiet" type="button" disabled>Restore</button>
+    <progress id="restore-bar" value="0" hidden></progress>
+    <p id="restore-status" class="status" role="status"></p>
+    <p class="note">Allow about five minutes.</p>
   </section>
 
   <footer>
     <p>Firmware <span id="ver2">-</span> &middot; <a href="https://github.com/gotwalt/screeny">source and releases</a>
-    &middot; flashing by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a></p>
+    &middot; flashing by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>
+    and <a href="https://github.com/espressif/esptool-js">esptool-js</a></p>
   </footer>
 </main>
 <script>
