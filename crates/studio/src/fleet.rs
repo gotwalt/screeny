@@ -333,7 +333,10 @@ async fn probe_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) {
     }
     for m in &moves {
         let from = if m.from.is_empty() { "nowhere we knew of".to_string() } else { m.from.clone() };
-        eprintln!("studio: `{}` answered a probe at {} (it was at {from}); following it", m.id, m.to);
+        // Card 370: one reached by name keeps its name; say so, because the
+        // address on the page will not change and the link will.
+        let kept = m.name.as_ref().map_or_else(String::new, |n| format!(", still known as `{n}`"));
+        eprintln!("studio: `{}` answered a probe at {} (it was at {from}); following it{kept}", m.id, m.to);
     }
     // The panel is already keyed by the id, so nothing here touches it: the
     // supervisor re-aims its link at the new address on its next tick.
