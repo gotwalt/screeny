@@ -36,7 +36,9 @@
 //!    goes no further. A panel that reboots forever on USB power is worse than
 //!    one that says it is broken.
 //! 5. **Never a second opinion about the PSK.** Nothing here formats anything
-//!    but a source file name, a line number and a few counters.
+//!    but a source file name, a line number, a few counters and - since card
+//!    371 - the first 48 bytes of the panic message, which is what the serial
+//!    port is sent anyway and in which the PSK's own `Debug` is a byte count.
 //!
 //! ## Why this file owns `#[panic_handler]` instead of `esp-backtrace`
 //!
@@ -171,9 +173,50 @@ const W_PREV_RESET: usize = 11;
 const W_SECTOR: usize = 12;
 /// XOR of every word above, plus [`CHECK_SALT`].
 const W_CHECK: usize = 13;
-const WORDS: usize = 14;
 
-/// 52 bytes of RTC slow memory, and **not one byte of `.bss`**.
+// **Card 371's tail: what the panic said.** Words 14.. are a second record
+// with its own checksum, *after* [`W_CHECK`] rather than inside the first,
+// and that is the whole of the layout versioning. Words 0..=13 are exactly
+// fw 0.11.2's, so [`MAGIC`] did not have to change and the update that
+// installs this keeps the counters and the panic it is being installed to
+// diagnose. The tail is believed only when its own check holds **and**
+// [`W_WHAT_FOR`] equals [`W_PANICS`]: what 0.11.2 left past word 13 is
+// whatever RTC memory held (it zeroed only 56 bytes), and a tail written
+// before a downgrade-and-panic names the panic before the last one. Either way
+// the answer is "no message", never somebody else's.
+
+/// The [`W_PANICS`] count the tail was written for.
+const W_WHAT_FOR: usize = 14;
+/// The faulting `PC` of a CPU exception, when [`H_PC`] is set.
+const W_PC: usize = 15;
+/// `EXCVADDR` - the address a load or store was refused - when [`H_ADDR`] is set.
+const W_ADDR: usize = 16;
+/// `H_*`.
+const W_WHAT_HAS: usize = 17;
+/// [`WHAT_LEN`] bytes of the message's first line, NUL padded.
+const W_WHAT: usize = 18;
+const WHAT_WORDS: usize = 12;
+/// XOR of the tail's words, plus [`WHAT_SALT`].
+const W_WHAT_CHECK: usize = W_WHAT + WHAT_WORDS;
+const WORDS: usize = W_WHAT_CHECK + 1;
+
+/// The tail's own salt: a tail that is a copy of the head's pattern must not
+/// pass.
+const WHAT_SALT: u32 = 0x85eb_ca6b;
+const H_PC: u32 = 1 << 0;
+const H_ADDR: u32 = 1 << 1;
+
+/// Bytes of message kept. 48 holds every message esp-hal's exception handler
+/// starts with (`ProCpu 'InstructionFetchProhibited'` is 35, once the handler's
+/// `Exception occurred on ` is dropped) and the start of most others:
+/// ``called `Option::unwrap()` on a `None` value`` is 43.
+const WHAT_LEN: usize = WHAT_WORDS * 4;
+const _: () = assert!(
+    WHAT_LEN + " pc=0x".len() + 8 + " addr=0x".len() + 8
+        <= screeny_device_api::text::MAX_PANIC_WHAT_LEN
+);
+
+/// 124 bytes of RTC slow memory, and **not one byte of `.bss`**.
 ///
 /// `persistent` means the runtime zeroes it on a power-on reset and leaves it
 /// alone on every other kind (`esp-hal`'s `__init_persistent`). That is exactly
@@ -216,6 +259,19 @@ fn intact() -> bool {
     get(W_MAGIC) == MAGIC && get(W_CHECK) == checksum()
 }
 
+fn what_checksum() -> u32 {
+    let mut x = WHAT_SALT;
+    for i in W_WHAT_FOR..W_WHAT_CHECK {
+        x ^= get(i);
+    }
+    x
+}
+
+/// The tail describes the panic the head does. See [`W_WHAT_FOR`].
+fn what_intact() -> bool {
+    get(W_WHAT_CHECK) == what_checksum() && get(W_WHAT_FOR) == get(W_PANICS)
+}
+
 fn wipe() {
     for i in 0..WORDS {
         put(i, 0);
@@ -241,9 +297,56 @@ pub struct Panic {
     pub consecutive: u32,
     /// The source file's base name, NUL padded. Use [`Panic::file`].
     file: [u8; 12],
+    /// Card 371: the message's first line, NUL padded, and an exception's
+    /// `PC` and `EXCVADDR`. All empty when the tail did not hold. Use
+    /// [`Panic::what`].
+    what: [u8; WHAT_LEN],
+    pc: Option<u32>,
+    addr: Option<u32>,
+}
+
+/// What a panic said, as one line: see [`Panic::what`].
+pub struct What<'a>(&'a Panic);
+
+impl What<'_> {
+    /// Nothing on record: firmware before 0.11.3 wrote the panic, or its
+    /// message could not be recorded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.what[0] == 0 && self.0.pc.is_none() && self.0.addr.is_none()
+    }
+}
+
+impl core::fmt::Display for What<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let p = self.0;
+        let n = p.what.iter().position(|b| *b == 0).unwrap_or(WHAT_LEN);
+        // ASCII by construction ([`shown`]); the fallback is for a tail that
+        // passed its check by luck.
+        let text = core::str::from_utf8(&p.what[..n]).unwrap_or("?");
+        f.write_str(text)?;
+        let mut gap = if text.is_empty() { "" } else { " " };
+        if let Some(pc) = p.pc {
+            write!(f, "{gap}pc={pc:#010x}")?;
+            gap = " ";
+        }
+        if let Some(addr) = p.addr {
+            write!(f, "{gap}addr={addr:#010x}")?;
+        }
+        Ok(())
+    }
 }
 
 impl Panic {
+    /// What the panic said (card 371): e.g. `ProCpu 'LoadProhibited'
+    /// pc=0x400d6f2c addr=0x00000000` for a CPU exception, whose
+    /// [`file`](Panic::file) and [`line`](Panic::line) are always esp-hal's
+    /// `mod.rs:10`. Check [`What::is_empty`] before showing it.
+    #[must_use]
+    pub fn what(&self) -> What<'_> {
+        What(self)
+    }
+
     /// The source file's base name, e.g. `net.rs`. Never empty: an
     /// unattributed panic reads `?`.
     #[must_use]
@@ -287,12 +390,25 @@ pub fn report() -> Report {
         for (w, chunk) in file.chunks_mut(4).enumerate() {
             chunk.copy_from_slice(&get(W_FILE + w).to_le_bytes());
         }
+        let mut what = [0u8; WHAT_LEN];
+        let (mut pc, mut addr) = (None, None);
+        if what_intact() {
+            for (w, chunk) in what.chunks_mut(4).enumerate() {
+                chunk.copy_from_slice(&get(W_WHAT + w).to_le_bytes());
+            }
+            let has = get(W_WHAT_HAS);
+            pc = (has & H_PC != 0).then(|| get(W_PC));
+            addr = (has & H_ADDR != 0).then(|| get(W_ADDR));
+        }
         Panic {
             uptime_ms: get(W_UPTIME),
             boot: get(W_PANIC_BOOT),
             line: get(W_LINE),
             consecutive: get(W_RUN),
             file,
+            what,
+            pc,
+            addr,
         }
     });
     Report {
@@ -341,13 +457,15 @@ pub fn boot() -> bool {
     match r.last {
         None => info!("boot: no panic on record"),
         Some(p) => warn!(
-            "boot: last panic was boot #{} at uptime {} ms, {}:{}, {} in a row ({} panic(s) since power-on)",
+            "boot: last panic was boot #{} at uptime {} ms, {}:{}, {} in a row ({} panic(s) since power-on): {}{}",
             p.boot,
             p.uptime_ms,
             p.file(),
             p.line,
             p.consecutive,
             r.panics,
+            p.what(),
+            if p.what().is_empty() { "-" } else { "" },
         ),
     }
     // Card 241b: **the line that would have saved an evening.** If the bit is
@@ -500,6 +618,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     } else {
         After::Reset
     };
+    // Card 371: the message, *after* the location is sealed. Formatting runs
+    // other crates' `Display`/`Debug` code, and if that panics too the nested
+    // panic goes straight to the reset with the head of the record already
+    // safe; only the tail is lost.
+    if first {
+        record_what(info);
+    }
 
     if first {
         // What `esp-backtrace`'s own handler prints, in its order, so that
@@ -582,6 +707,160 @@ fn record(loc: Option<&core::panic::Location<'_>>) -> After {
     put(W_FLAGS, flags);
     seal();
     if latched { After::Halt } else { After::Reset }
+}
+
+/// Write the panic's message into the breadcrumb's tail (card 371).
+///
+/// **Why the message.** Every Xtensa CPU exception reaches this handler
+/// through esp-hal 1.2.2's `__user_exception`, which is one `panic!` at
+/// `exception_handler/mod.rs:10` - so the head's `file:line` is the same for a
+/// `LoadProhibited`, an `IllegalInstruction` and a `StoreProhibited`, and the
+/// Office unit's crash after 5.5 days (2026-10-17) said nothing more than
+/// "it was an exception". The message is `"\n\nException occurred on {cpu:?}
+/// '{cause:?}'\n{trapframe:?}"`, so its first line names the cause and the
+/// trap frame's derived `Debug` (`Context { PC: 1074..., ..., EXCVADDR: ...`,
+/// decimal) carries the two addresses worth having.
+///
+/// Rule 1 still holds: [`WhatSink`] is a fixed buffer on this stack, and it
+/// answers `fmt::Error` once it has what it wants, which stops the formatting
+/// there. Rule 5 is unchanged in substance: the message is exactly what the
+/// line `println!("{}", info)` below already sends to the serial port, and the
+/// one secret this firmware holds has a `Debug` that prints a length
+/// (`screeny_settings::Psk`).
+fn record_what(info: &core::panic::PanicInfo) {
+    use core::fmt::Write as _;
+    let mut sink = WhatSink::new();
+    // An `Err` here is the sink saying "enough"; what it has is kept.
+    let _ = write!(sink, "{}", info.message());
+    for w in 0..WHAT_WORDS {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&sink.text[w * 4..w * 4 + 4]);
+        put(W_WHAT + w, u32::from_le_bytes(bytes));
+    }
+    put(W_PC, sink.pc.unwrap_or(0));
+    put(W_ADDR, sink.addr.unwrap_or(0));
+    let has = if sink.pc.is_some() { H_PC } else { 0 } | if sink.addr.is_some() { H_ADDR } else { 0 };
+    put(W_WHAT_HAS, has);
+    put(W_WHAT_FOR, get(W_PANICS));
+    put(W_WHAT_CHECK, what_checksum());
+}
+
+/// esp-hal's exception message starts with this; it is dropped, because the
+/// 48 bytes are better spent on the cause.
+const EXCEPTION_PREFIX: &[u8] = b"Exception occurred on ";
+
+/// Formatting stops after this many bytes whatever has been found: a bound on
+/// the time spent in someone else's `Debug`. The trap frame's `EXCVADDR` is
+/// about 350 bytes into the message.
+const WHAT_SCAN: usize = 1024;
+
+/// A `core::fmt::Write` that keeps the first line of what is written to it and
+/// picks the trap frame's `PC: ` and `EXCVADDR: ` numbers out of the rest.
+struct WhatSink {
+    text: [u8; WHAT_LEN],
+    len: usize,
+    /// 0 before the first line has started, 1 inside it, 2 after it.
+    line: u8,
+    /// The last few bytes seen, to recognise a field name across `write_str`
+    /// calls (a derived `Debug` writes the name and the value separately).
+    window: [u8; 10],
+    /// The number being read: `Some(true)` for `PC`, `Some(false)` for
+    /// `EXCVADDR`.
+    reading: Option<bool>,
+    value: u32,
+    pc: Option<u32>,
+    addr: Option<u32>,
+    seen: usize,
+}
+
+impl WhatSink {
+    const fn new() -> Self {
+        Self {
+            text: [0; WHAT_LEN],
+            len: 0,
+            line: 0,
+            window: [0; 10],
+            reading: None,
+            value: 0,
+            pc: None,
+            addr: None,
+            seen: 0,
+        }
+    }
+
+    fn byte(&mut self, b: u8) {
+        self.seen += 1;
+
+        // The numbers: a derived `Debug` writes `u32` in decimal.
+        if let Some(is_pc) = self.reading {
+            if b.is_ascii_digit() {
+                self.value = self.value.wrapping_mul(10).wrapping_add(u32::from(b - b'0'));
+            } else {
+                if is_pc {
+                    self.pc = Some(self.value);
+                } else {
+                    self.addr = Some(self.value);
+                }
+                self.reading = None;
+            }
+        }
+        self.window.copy_within(1.., 0);
+        self.window[self.window.len() - 1] = b;
+        if self.addr.is_none() && self.window.ends_with(b"EXCVADDR: ") {
+            self.reading = Some(false);
+            self.value = 0;
+        } else if self.pc.is_none() && self.window.ends_with(b" PC: ") {
+            self.reading = Some(true);
+            self.value = 0;
+        }
+
+        // The first line.
+        match (self.line, b) {
+            (2, _) => {}
+            (0, b' ' | b'\t' | b'\r' | b'\n') => {}
+            (1, b'\n') => self.line = 2,
+            _ => {
+                self.line = 1;
+                if self.len < WHAT_LEN {
+                    self.text[self.len] = shown(b);
+                    self.len += 1;
+                }
+                if self.text[..self.len] == *EXCEPTION_PREFIX {
+                    self.text = [0; WHAT_LEN];
+                    self.len = 0;
+                }
+            }
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.seen >= WHAT_SCAN || (self.pc.is_some() && self.addr.is_some())
+    }
+}
+
+impl core::fmt::Write for WhatSink {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for b in s.bytes() {
+            self.byte(b);
+            if self.done() {
+                return Err(core::fmt::Error);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Printable ASCII, minus the three bytes a JSON writer might escape - `"`,
+/// `\`, and `/` (picoserve's `\/`, see [`base_name`]) - so `what` is the same
+/// bytes from all three writers and in the API's golden files, and minus the
+/// three the status page would have to escape, `<`, `>` and `&`.
+const fn shown(b: u8) -> u8 {
+    match b {
+        b'"' | b'\\' | b'/' | b'<' | b'>' | b'&' => b'?',
+        b'\t' | b'\r' => b' ',
+        0x20..=0x7e => b,
+        _ => b'?',
+    }
 }
 
 /// The last 12 bytes of a source path's base name.
@@ -716,5 +995,17 @@ pub async fn panic_test_task() {
         AFTER_S
     );
     Timer::after(Duration::from_secs(AFTER_S)).await;
+    // Card 371's variant: a real CPU exception instead of a `panic!`, so the
+    // breadcrumb's `what` can be seen to name it. Address 0x10 is mapped to
+    // nothing on the ESP32, so the load raises `LoadProhibited` with
+    // `EXCVADDR` 0x10 (not null: `read_volatile` checks for that in some
+    // builds, and the point is the CPU's answer, not Rust's).
+    #[cfg(feature = "panic-test-exception")]
+    {
+        // SAFETY: none, deliberately - this is the fault under test. It
+        // never returns: the exception handler panics and the chip resets.
+        let v = unsafe { core::ptr::read_volatile(0x10 as *const u32) };
+        info!("panic-test: the load returned {} (it should have faulted)", v);
+    }
     panic!("panic-test: deliberate panic on core 0 (card 243)");
 }

@@ -212,6 +212,7 @@ pub fn worst_panic() -> PanicRecord {
         file: worst_text(),
         line: u32::MAX,
         consecutive: u32::MAX,
+        what: Some(worst_text()),
     }
 }
 

@@ -6,7 +6,8 @@
     "boot": 2,
     "file": "main.rs",
     "line": 1034,
-    "consecutive": 1
+    "consecutive": 1,
+    "what": null
   },
   "update": {
     "outcome": "reverted",

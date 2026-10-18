@@ -242,7 +242,13 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// **0.11.2: the device page reads for an owner** - plain labels, the
 /// technical rows folded under Details, colour order under Advanced, and a
 /// firmware upload form.
-pub const FW_VERSION: &str = "0.11.2";
+///
+/// **0.11.3: mDNS follows the lease, and a crash says what it was.** The
+/// responder rebinds and re-announces (with a goodbye for the old `A` record)
+/// when DHCP moves the address without a reboot (card 251, `src/mdns.rs`), and
+/// the panic breadcrumb keeps the message's first line and an exception's
+/// `PC`/`EXCVADDR`, as `last_panic.what` (card 371, `src/panic.rs`).
+pub const FW_VERSION: &str = "0.11.3";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

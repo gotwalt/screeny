@@ -688,6 +688,14 @@ fn get_panic() -> Reply {
             file: text::text(p.file()).unwrap_or_default(),
             line: p.line,
             consecutive: p.consecutive,
+            // Card 371: the cause, which `file:line` cannot give for a CPU
+            // exception. Bounded by construction (`panic::WHAT_LEN` and
+            // its assert), so the `write!` cannot overflow; `None` if it did.
+            what: {
+                let w = p.what();
+                let mut s = text::PanicWhatText::new();
+                (!w.is_empty() && write!(s, "{w}").is_ok()).then_some(s)
+            },
         }),
         // Card 241, and on this route for the same two reasons the breadcrumb
         // is: `StatusReply` is polled every few seconds and is full, and this
@@ -1426,7 +1434,7 @@ impl core::fmt::Display for Page {
                 "panic",
                 "Last crash",
                 format_args!(
-                    "{}:{} at {} s, boot {} of {} ({} in a row, {} total)",
+                    "{}:{} at {} s, boot {} of {} ({} in a row, {} total){}{}",
                     p.file(),
                     p.line,
                     p.uptime_ms / 1000,
@@ -1434,6 +1442,10 @@ impl core::fmt::Display for Page {
                     crumb.boots,
                     p.consecutive,
                     crumb.panics,
+                    // Card 371. Printable ASCII without `<`, `>`, `&` or `"`
+                    // (`panic::shown`), so it needs no HTML escaping.
+                    if p.what().is_empty() { "" } else { ": " },
+                    p.what(),
                 ),
             )?,
         }

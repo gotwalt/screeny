@@ -61,6 +61,11 @@ fb-on-stack = []
 # flashed bench build cannot become the crash loop this card is about. Off by
 # default; never shipped.
 panic-test = []
+# **Card 371's variant of it**: the same one-shot, but a CPU exception (a load
+# from unmapped address 0x10, `LoadProhibited`) instead of a `panic!`, so that
+# `GET /api/v1/panic`'s `last_panic.what` can be seen to name the cause and
+# the faulting addresses. Off by default; never shipped.
+panic-test-exception = ["panic-test"]
 
 # **Card 241's two bench builds.** Both are *deliberately broken updates*:
 # uploading one to a working device shows the previous image

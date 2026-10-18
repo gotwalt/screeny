@@ -4,9 +4,10 @@
   "last_panic": {
     "uptime_ms": 94312,
     "boot": 1,
-    "file": "net.rs",
-    "line": 321,
-    "consecutive": 1
+    "file": "mod.rs",
+    "line": 10,
+    "consecutive": 1,
+    "what": "ProCpu 'LoadProhibited' pc=0x400d6f2c addr=0x00000000"
   },
   "update": null,
   "last_reset": "power_on"
