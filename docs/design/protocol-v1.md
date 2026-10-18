@@ -1212,6 +1212,14 @@ shape here bumps it and moves the prefix, a new optional field does not.
   answers `{"boot_count":1,"panic_count":0,"last_panic":null}`, and one running
   firmware older than 0.5.2 answers `404`.
 
+  Since firmware 0.11.3 `last_panic` also carries **`what`** (card 371): `null`,
+  or at most 80 bytes of printable ASCII naming what the panic said - the first
+  line of its message, and for a CPU exception the cause, the core and the
+  faulting addresses, e.g. `"ProCpu 'LoadProhibited' pc=0x400d6f2c
+  addr=0x00000000"`. It matters because every CPU exception is located at the
+  same `file:line`, the HAL's exception handler. Older firmware omits the key;
+  a reader treats that as `null`.
+
   Since firmware 0.7.0 it also carries **`update`**, which is `null` or
   `{outcome, reason, slot, version}` and is what became of the last firmware
   update this device activated (§8.10): `outcome` is `trial` / `confirmed` /

@@ -18,8 +18,9 @@ use crate::enums::{
     StreamState, UpdateOutcome, WifiState,
 };
 use crate::text::{
-    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, SsidText, MAX_FW_LEN,
-    MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN, MAX_SSID_LEN,
+    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, PanicWhatText,
+    SsidText, MAX_FW_LEN, MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN,
+    MAX_PANIC_WHAT_LEN, MAX_SSID_LEN,
 };
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN, MIN_I8_LEN};
 
@@ -67,6 +68,17 @@ pub struct PanicRecord {
     /// made. `1` is an isolated panic; a device that reaches the firmware's
     /// crash-loop limit stops rebooting and says so on the panel.
     pub consecutive: u32,
+    /// What the panic said (card 371), e.g.
+    /// `"ProCpu 'LoadProhibited' pc=0x400d6f2c addr=0x00000000"` for a CPU
+    /// exception - whose `file:line` is always esp-hal's `mod.rs:10` - or the
+    /// first line of an ordinary panic's message. See
+    /// [`MAX_PANIC_WHAT_LEN`](crate::text::MAX_PANIC_WHAT_LEN).
+    ///
+    /// `null` from firmware before 0.11.3, which did not keep it, and for a
+    /// panic whose message could not be recorded. `#[serde(default)]`, so a
+    /// Studio built from this commit still reads those.
+    #[serde(default)]
+    pub what: Option<PanicWhatText>,
 }
 
 impl PanicRecord {
@@ -75,7 +87,8 @@ impl PanicRecord {
         + field("boot", MAX_U32_LEN)
         + field("file", 2 + MAX_PANIC_FILE_LEN * ESCAPE_MAX)
         + field("line", MAX_U32_LEN)
-        + field("consecutive", MAX_U32_LEN);
+        + field("consecutive", MAX_U32_LEN)
+        + field("what", 2 + MAX_PANIC_WHAT_LEN * ESCAPE_MAX);
 }
 
 /// `GET /api/v1/status`: everything the status page and the Studio's device

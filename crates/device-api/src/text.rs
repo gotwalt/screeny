@@ -40,6 +40,19 @@ pub const MAX_PIN_LEN: usize = 16;
 /// where an exact answer lives; this is the part that survives the reboot.
 pub const MAX_PANIC_FILE_LEN: usize = 12;
 
+/// What a panic said, as the breadcrumb keeps it (card 371): the first line of
+/// the panic message, at most 48 bytes, plus the faulting `pc=0x........` and
+/// `addr=0x........` when the panic was a CPU exception.
+///
+/// Card 371 exists because a CPU exception's location is always esp-hal's
+/// `exception_handler/mod.rs:10` - the `panic!` every Xtensa exception goes
+/// through - so `file` and `line` alone cannot tell a `LoadProhibited` from an
+/// `IllegalInstruction`. The device writes only printable ASCII here and
+/// never `"`, `\` or `/`, so no JSON writer escapes any of it; the bound
+/// below assumes the worst anyway, as every other text type's does.
+/// 80 = 48 + `" pc=0x"` and 8 digits + `" addr=0x"` and 8 digits.
+pub const MAX_PANIC_WHAT_LEN: usize = 80;
+
 /// The stable short device id.
 pub type IdText = String<MAX_ID_LEN>;
 /// A firmware version string.
@@ -57,6 +70,9 @@ pub type DetailText = String<MAX_DETAIL_LEN>;
 pub type PinText = String<MAX_PIN_LEN>;
 /// The base name of the source file a panic came from.
 pub type PanicFileText = String<MAX_PANIC_FILE_LEN>;
+/// What a panic said: its message's first line, and the faulting addresses of
+/// a CPU exception.
+pub type PanicWhatText = String<MAX_PANIC_WHAT_LEN>;
 
 /// Copy `s` into a bounded string, or `None` if it does not fit.
 ///

@@ -54,11 +54,23 @@ fn status_online() {
 }
 
 #[test]
+fn a_breadcrumb_from_before_card_371_still_reads() {
+    // fw 0.11.2 sends no `what`. The Studio talks to panels on both sides of
+    // the update, so its absence must read as `null`, not as an error.
+    let old = r#"{"boot_count":2,"panic_count":1,"last_panic":{"uptime_ms":94312,"boot":1,
+        "file":"mod.rs","line":10,"consecutive":1},"update":null,"last_reset":"software"}"#;
+    let reply: PanicReply = serde_json::from_str(old).unwrap();
+    assert_eq!(reply.last_panic.unwrap().what, None);
+}
+
+#[test]
 fn the_panic_breadcrumb() {
     // Card 243: `GET /api/v1/panic` on a device that has panicked once and
     // rebooted by itself. `status.reset_reason` says only `software` - that is
     // all the ESP32's register knows - and this is what makes it a panic and
-    // says where.
+    // says where. Since card 371 it is a CPU exception, the case `file:line`
+    // alone cannot tell apart: every one of them is esp-hal's `mod.rs:10`,
+    // and `what` is the cause and the faulting addresses.
     check(
         "panic",
         &PanicReply {
@@ -67,9 +79,10 @@ fn the_panic_breadcrumb() {
             last_panic: Some(PanicRecord {
                 uptime_ms: 94_312,
                 boot: 1,
-                file: text("net.rs").unwrap(),
-                line: 321,
+                file: text("mod.rs").unwrap(),
+                line: 10,
                 consecutive: 1,
+                what: Some(text("ProCpu 'LoadProhibited' pc=0x400d6f2c addr=0x00000000").unwrap()),
             }),
             update: None,
             last_reset: Some(ResetReason::PowerOn),
@@ -131,6 +144,8 @@ fn an_update_that_was_rolled_back() {
                 file: text("main.rs").unwrap(),
                 line: 1034,
                 consecutive: 1,
+                // Firmware before 0.11.3 kept no message (card 371).
+                what: None,
             }),
             update: Some(UpdateRecord {
                 outcome: UpdateOutcome::Reverted,
