@@ -2009,9 +2009,6 @@ mod tests {
                 // A *different* device answering at an address we hold for
                 // `abc123`. Not a move: nothing was heard about `abc123`.
                 device("screeny-other", "oth777", "192.0.2.7:49374"),
-                // A device known by name. It re-resolves its name on every
-                // reconnect and must not be pinned to an address.
-                device("screeny-byname", "byname", "192.0.2.60:49374"),
                 // A device that is streaming happily and simply also
                 // answered. Taking its resolution away would drop its link.
                 device("screeny-live", "live01", "192.0.2.80:49374"),
@@ -2032,6 +2029,139 @@ mod tests {
         // either: it is alive and something else is wrong.
         let same = reg.probed(&[device("screeny-abc", "abc123", "192.0.2.7:49374")], &candidates, None);
         assert!(same.is_empty(), "{same:?}");
+    }
+
+    // --------------------- card 370: a panel reached by name, mDNS wrong ----
+
+    /// The panel's name, as the owner typed it, and the two addresses of the
+    /// night of 2026-10-17: the one its mDNS kept announcing, and the one the
+    /// router had given it.
+    const NAME: &str = "screeny-4a00a4.local";
+    const OLD: &str = "192.0.2.26:49374";
+    const NEW: &str = "192.0.2.215:49374";
+
+    /// Pretend the last UDP answer was ten minutes ago.
+    fn age(reg: &Registry, id: &str) {
+        let then = unix_now().saturating_sub(600);
+        let mut devices = reg.lock();
+        let d = devices.get_mut(id).expect("there");
+        d.udp_seen_unix = Some(then);
+    }
+
+    /// A by-name panel that has gone dark behind a stale mDNS answer, the way
+    /// the house panels did: resolved by a browse to `OLD`, telemetry there
+    /// failing, unheard for ten minutes.
+    fn dark_behind_stale_mdns() -> Registry {
+        let reg = Registry::new();
+        reg.load(vec![stored_at("4a00a4", NAME)]);
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
+        age(&reg, "4a00a4");
+        reg.control_failed("4a00a4", "no reply".into());
+        reg
+    }
+
+    /// **The card, exactly**: the browse keeps saying `OLD`, the probe hears
+    /// the panel's own id at `NEW`, and the link goes to `NEW` - with the
+    /// owner's name left as the stored address.
+    #[test]
+    fn a_probe_follows_a_panel_reached_by_name_whose_mdns_is_stale() {
+        let reg = dark_behind_stale_mdns();
+        // A stale answer every thirty seconds is not the panel being heard:
+        // without this the probe would never be for it.
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
+        let candidates = reg.unheard(Duration::from_secs(120));
+        assert_eq!(candidates, vec!["4a00a4".to_string()], "a stale browse must not keep it heard");
+
+        let moves = reg.probed(&[device("", "4a00a4", NEW)], &candidates, None);
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        assert_eq!(moves[0].to, NEW);
+        assert_eq!(moves[0].name.as_deref(), Some(NAME));
+        assert!(moves[0].from.contains(OLD), "{}", moves[0].from);
+
+        let d = reg.get("4a00a4").expect("still the same device");
+        assert_eq!(d.stored.address, NAME, "the owner's name is not turned into an IP");
+        assert_eq!(reg.stored()[0].address, NAME, "and nothing else is persisted");
+        assert_eq!(d.followed.map(|a| a.to_string()).as_deref(), Some(NEW));
+        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == NEW), "the link goes to NEW");
+        assert_eq!(d.http_addr(80).map(|a| a.to_string()).as_deref(), Some("192.0.2.215:80"));
+        assert_eq!(reg.discovery_health().moved, 1);
+        assert!(reg.unheard(Duration::from_secs(120)).is_empty(), "it just answered");
+
+        // The next browse says `OLD` again. The panel answering at `NEW`
+        // wins over its own stale responder.
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
+        let d = reg.get("4a00a4").expect("there");
+        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == NEW), "a stale browse does not undo it");
+        assert!(d.followed.is_some());
+
+        // And a second probe while it is answering where it is followed is
+        // not another move.
+        let again = reg.probed(&[device("", "4a00a4", NEW)], &["4a00a4".to_string()], None);
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(reg.discovery_health().moved, 1);
+    }
+
+    /// The override ends by itself once the name tells the truth again - the
+    /// panel rebooted, or runs firmware whose mDNS follows its lease.
+    #[test]
+    fn mdns_agreeing_with_the_probe_ends_the_override() {
+        let reg = dark_behind_stale_mdns();
+        let candidates = reg.unheard(Duration::from_secs(120));
+        reg.probed(&[device("", "4a00a4", NEW)], &candidates, None);
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", NEW)], None);
+        let d = reg.get("4a00a4").expect("there");
+        assert!(d.followed.is_none(), "nothing left to override");
+        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == NEW));
+        assert_eq!(d.stored.address, NAME);
+    }
+
+    /// mDNS disagreeing wins once the probe's address has stopped answering:
+    /// a panel that has moved again, or rebooted somewhere with a correct
+    /// responder, is not pinned to where a probe once heard it.
+    #[test]
+    fn mdns_wins_once_the_followed_address_stops_answering() {
+        let reg = dark_behind_stale_mdns();
+        let candidates = reg.unheard(Duration::from_secs(120));
+        reg.probed(&[device("", "4a00a4", NEW)], &candidates, None);
+        reg.control_failed("4a00a4", "no reply".into());
+        let elsewhere = "192.0.2.77:49374";
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", elsewhere)], None);
+        let d = reg.get("4a00a4").expect("there");
+        assert!(d.followed.is_none());
+        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == elsewhere));
+
+        // Throwing a stale resolution away drops the override with it.
+        let reg = dark_behind_stale_mdns();
+        reg.probed(&[device("", "4a00a4", NEW)], &["4a00a4".to_string()], None);
+        reg.stale("4a00a4");
+        let d = reg.get("4a00a4").expect("there");
+        assert!(d.followed.is_none() && d.resolved.is_none());
+        assert!(matches!(d.reach(), Reach::Name(n) if n == NAME));
+    }
+
+    /// **The normal case does not flap**: a by-name panel whose mDNS is right
+    /// and which answers is never a probe candidate, and a probe answer at the
+    /// address it is already resolved to is not a move.
+    #[test]
+    fn a_healthy_panel_reached_by_name_is_left_alone() {
+        let reg = Registry::new();
+        reg.load(vec![stored_at("4a00a4", NAME)]);
+        reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
+        assert!(reg.unheard(Duration::from_secs(120)).is_empty(), "a first sighting counts as heard");
+        for _ in 0..3 {
+            reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
+        }
+        let d = reg.get("4a00a4").expect("there");
+        assert!(d.followed.is_none());
+        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == OLD));
+
+        // Quiet (telemetry failing) but alive where the name says: no move.
+        age(&reg, "4a00a4");
+        let candidates = reg.unheard(Duration::from_secs(120));
+        let moves = reg.probed(&[device("", "4a00a4", OLD)], &candidates, None);
+        assert!(moves.is_empty(), "{moves:?}");
+        assert!(reg.get("4a00a4").expect("there").followed.is_none());
+        assert_eq!(reg.discovery_health().moved, 0);
     }
 
     #[test]
