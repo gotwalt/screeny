@@ -391,13 +391,6 @@ impl Clocks {
 
     fn perform(&mut self, ctx: &Ctx, composition: dance::Composition, to: [Hands; CLOCKS], minute: i64, motor: Motor) {
         let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
-        eprintln!(
-            "numerals: t={:.1} {:02}:{:02} by {}, {total:.1} s",
-            ctx.t,
-            minute.div_euclid(60).rem_euclid(24),
-            minute.rem_euclid(60),
-            composition.name
-        );
         for hands in &mut self.angles {
             *hands = hands.map(|a| a.rem_euclid(360.0));
         }
@@ -501,7 +494,6 @@ impl Clocks {
                 let mood = self.variety.freshest(&moods, || rng.f32()).and_then(|n| moods.iter().position(|m| m == n)).unwrap_or(0);
                 self.variety.note("", std::slice::from_ref(&moods[mood]));
                 let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
-                eprintln!("numerals: t={:.1} ambient {}", ctx.t, ambient.name());
                 self.ambient = Some(ambient);
             }
             None => {}
