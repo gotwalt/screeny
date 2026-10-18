@@ -48,7 +48,8 @@ pub const MAX_PANIC_FILE_LEN: usize = 12;
 /// `exception_handler/mod.rs:10` - the `panic!` every Xtensa exception goes
 /// through - so `file` and `line` alone cannot tell a `LoadProhibited` from an
 /// `IllegalInstruction`. The device writes only printable ASCII here and
-/// never `"`, `\` or `/`, so no JSON writer escapes any of it; the bound
+/// never `"`, `\`, `/`, `<`, `>` or `&`, so no JSON writer escapes any of it
+/// and the status page can show it as it is; the bound
 /// below assumes the worst anyway, as every other text type's does.
 /// 80 = 48 + `" pc=0x"` and 8 digits + `" addr=0x"` and 8 digits.
 pub const MAX_PANIC_WHAT_LEN: usize = 80;
