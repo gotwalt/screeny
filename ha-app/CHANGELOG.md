@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- Finds a panel again after the router gives it a new address, even when the
+  panel is still announcing its old one (it follows the panel's own answer to
+  the network-wide probe).
+- Carries firmware 0.11.3: the panel announces its new address as soon as its
+  lease moves, and a crash record names the CPU exception.
+- The clock patch no longer writes two log lines a minute.
+
 ## 0.1.3
 
 - Carries firmware 0.11.2: the panel's own web page is written for owners
