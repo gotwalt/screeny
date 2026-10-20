@@ -247,9 +247,16 @@ fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     let dt = 0.1; // ten frames a second is plenty to watch; the sim steps at its own rate
     let mut prints: Vec<u64> = Vec::new();
     let (mut ember_frames, mut ember_sum, mut ember_max_calm) = (0usize, 0usize, 0usize);
+    let (mut settles_so_far, mut last_settle) = (0u32, -100.0f64);
     for i in 1..=(20 * 60 * 10) {
         let f = h.render(&ctx_at(i as f64 * dt, dt, &params));
-        if !h.settling() {
+        // A burst's sparks outlive the settle that threw them by a few
+        // seconds: count from fifteen seconds after a settle began.
+        if h.settles_seen > settles_so_far {
+            settles_so_far = h.settles_seen;
+            last_settle = i as f64 * dt;
+        }
+        if i as f64 * dt - last_settle > 15.0 {
             ember_sum += h.ember_count();
             ember_frames += 1;
             ember_max_calm = ember_max_calm.max(h.ember_count());

@@ -591,11 +591,6 @@ impl Hearth {
     pub(crate) fn eased_size(&self) -> f32 {
         self.size
     }
-
-    #[cfg(test)]
-    pub(crate) fn settling(&self) -> bool {
-        self.settle.is_some()
-    }
 }
 
 /// Where lightness `l` falls along the fire ramp: 0 is black, 1 the first
