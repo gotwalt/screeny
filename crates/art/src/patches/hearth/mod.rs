@@ -423,7 +423,7 @@ impl Hearth {
         if gusts > 0.0 && self.gust.is_none() && self.t > self.calm_until {
             let mean = 240.0 * (30.0f64 / 240.0).powf(f64::from(gusts));
             if f64::from(self.dice.f32()) < dt / mean {
-                let peak = self.dice.range(8.0, 15.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
+                let peak = self.dice.range(11.0, 18.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
                 let length = f64::from(self.dice.range(4.5, 9.0));
                 self.gust = Some(Gust { start: self.t, length, peak });
                 self.calm_until = self.t + length + 15.0;
