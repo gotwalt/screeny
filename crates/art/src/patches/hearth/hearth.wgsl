@@ -347,8 +347,8 @@ fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
   // Small and light: the air has it within half a second, and it keeps a
   // lift of its own only while it is hot. A jitter of its own on top.
   let seed = P.dims.w * 64u + k * 4u;
-  let jitter = vec3<f32>(rand(seed) - 0.5, rand(seed + 1u) - 0.5, rand(seed + 2u) - 0.5) * vec3<f32>(80.0, 50.0, 40.0);
-  let lift = 28.0 * a.w * a.w - 14.0;
+  let jitter = vec3<f32>(rand(seed) - 0.5, rand(seed + 1u) - 0.5, rand(seed + 2u) - 0.5) * vec3<f32>(60.0, 30.0, 30.0);
+  let lift = 45.0 * a.w * a.w + 6.0;
   var v = b.xyz + dt * (2.2 * (fluid - b.xyz) + vec3<f32>(0.0, lift, 0.0) + jitter);
   let prev = a.xyz;
   let pos = a.xyz + dt * v;
