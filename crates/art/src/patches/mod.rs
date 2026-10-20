@@ -7,6 +7,9 @@ pub(crate) mod clocks;
 pub(crate) mod flock;
 #[cfg(feature = "gpu")]
 pub(crate) mod ghosts;
+// Card 372: a 2D fluid fire on the CPU, because the Studio that plays it is a
+// Raspberry Pi 4 with no GPU.
+pub(crate) mod hearth;
 // Card 321: leaves became a mesh-based GPU patch (real lighting, a real depth
 // buffer, heavy supersampling - the owner's direction was to spend the GPU on
 // the picture, not avoid it), so it needs the adapter exactly as knot,
@@ -44,6 +47,7 @@ pub static ALL: &[PatchDef] = &[
     metaballs::DEF,
     flock::DEF,
     bats::DEF,
+    hearth::DEF,
     #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
