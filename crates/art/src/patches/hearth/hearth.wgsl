@@ -66,7 +66,7 @@ const BED_ROWS: u32 = 5u;
 const SOR: f32 = 1.8;
 const EMBER_OUT: f32 = 0.30;
 const LIGHT_CELL: u32 = 4u;
-const LIGHT_RADIUS: i32 = 4;
+const LIGHT_RADIUS: i32 = 6;
 
 fn gw() -> u32 { return P.dims.x; }
 fn gh() -> u32 { return P.dims.y; }

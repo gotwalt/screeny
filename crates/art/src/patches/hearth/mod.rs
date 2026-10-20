@@ -122,7 +122,7 @@ const SMOKE_STEPS: usize = 4;
 const FIRE_L0: f32 = 0.2;
 /// Lit smoke, as the march returns it, to a step on the smoke ramp at
 /// `smoke` 1.
-const SMOKE_GAIN: f32 = 1.0;
+const SMOKE_GAIN: f32 = 20.0;
 
 struct Log {
     /// Centre and half-width across, in cells, and the same into the hearth.
@@ -229,6 +229,7 @@ pub(crate) struct Hearth {
     // Counters for tests and `playing`.
     pub(crate) gusts_seen: u32,
     pub(crate) settles_seen: u32,
+    pub(crate) sparks_thrown: u32,
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
@@ -282,6 +283,7 @@ impl Hearth {
             palette: None,
             gusts_seen: 0,
             settles_seen: 0,
+            sparks_thrown: 0,
         }
     }
 
@@ -302,7 +304,7 @@ impl Hearth {
             // glowing. cool4, cool1, expansion, smoke yield.
             c: [1.2 - 0.6 * s, 1.4 - 1.1 * s, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
-            d: [0.55, 0.08, 1.0, 0.15],
+            d: [0.55, 0.08, 1.0, 0.35],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
@@ -394,6 +396,7 @@ impl Hearth {
     /// Throw a spark up from `(x, z)` on the bed into a free slot, if there
     /// is one. `vigour` in `0..1` is how hard its fire is burning.
     fn spawn(&mut self, x: f32, z: f32, vigour: f32) {
+        self.sparks_thrown += 1;
         let free = (0..EMBERS).find(|k| self.sparks[3 * k][3] <= EMBER_OUT && !self.pending.contains(k));
         let Some(slot) = free else { return };
         let r = &mut self.spark_dice;

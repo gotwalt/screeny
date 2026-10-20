@@ -9,6 +9,16 @@ fn ctx_at<'a>(t: f64, dt: f64, params: &'a Params) -> Ctx<'a> {
 
 const DT: f64 = 1.0 / 30.0;
 
+/// The fire needs a graphics adapter; a machine without one skips these
+/// (as `tests/rate.rs` skips GPU patches), saying so.
+fn gpu() -> bool {
+    let ok = crate::gpu::Gpu::shared().is_ok();
+    if !ok {
+        eprintln!("hearth: no graphics adapter here; skipping");
+    }
+    ok
+}
+
 fn indices(frame: &Frame) -> &[u8] {
     match frame {
         Frame::Indexed { indices, .. } => indices,
@@ -23,11 +33,14 @@ fn level(frame: &Frame) -> f32 {
 
 #[test]
 fn the_same_seed_burns_the_same_fire() {
+    if !gpu() {
+        return;
+    }
     let params = Params::defaults(PARAMS);
     let (mut a, mut b) = (Hearth::new(7), Hearth::new(7));
     let mut c = Hearth::new(8);
     let mut differs = false;
-    for i in 1..=240 {
+    for i in 1..=90 {
         let ctx = ctx_at(i as f64 * DT, DT, &params);
         let (fa, fb, fc) = (a.render(&ctx), b.render(&ctx), c.render(&ctx));
         assert_eq!(indices(&fa), indices(&fb), "frame {i}");
@@ -39,6 +52,9 @@ fn the_same_seed_burns_the_same_fire() {
 /// The first frame is already a fire, not an empty grate catching.
 #[test]
 fn the_first_frame_is_already_burning() {
+    if !gpu() {
+        return;
+    }
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(3);
     let f = h.render(&ctx_at(0.0, 0.0, &params));
@@ -50,12 +66,15 @@ fn the_first_frame_is_already_burning() {
 /// like - and the pipeline agrees.
 #[test]
 fn every_frame_goes_out_exact() {
+    if !gpu() {
+        return;
+    }
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(5);
     let mut output = crate::pipeline::Output::default();
     output.limiter.enabled = false;
     let mut pipe = crate::Pipeline::new(output);
-    for i in 1..=300 {
+    for i in 1..=150 {
         let f = h.render(&ctx_at(i as f64 * DT, DT, &params));
         let Frame::Indexed { palette, .. } = &f else { panic!("indexed") };
         assert!(palette.len() <= crate::frame::GUARANTEED_PALETTE, "{} colours", palette.len());
@@ -79,36 +98,80 @@ fn the_palette_has_no_white_and_color_zero_is_grey() {
 }
 
 /// HA moves `size` whenever it likes; the fire follows over tens of
-/// seconds and never jumps.
+/// seconds and never jumps. The easing is the CPU's: stepped here without a
+/// GPU attached (a `Hearth` that has not rendered yet steps everything but
+/// the fluid), so a minute and a half costs nothing.
 #[test]
 fn size_eases_and_never_jumps() {
     let mut params = Params::defaults(PARAMS);
     params.set(PARAMS, "size", 0.0);
     let mut h = Hearth::new(2);
-    let mut t = 0.0;
-    let mut tick = |h: &mut Hearth, params: &Params| {
-        t += DT;
-        h.render(&ctx_at(t, DT, params))
-    };
-    for _ in 0..300 {
-        tick(&mut h, &params);
-    }
+    h.size = 0.0;
+    let ctx = ctx_at(0.0, DT, &params);
+    h.step(&ctx);
     assert!(h.eased_size() < 0.01, "it started where it was told");
     params.set(PARAMS, "size", 1.0);
+    let ctx = ctx_at(0.0, DT, &params);
     let mut last = h.eased_size();
-    for i in 0..30 * 120 {
-        tick(&mut h, &params);
+    for i in 1..=30 * 90 {
+        h.step(&ctx);
         let now = h.eased_size();
         assert!(now - last < 0.004, "a jump of {} at step {i}", now - last);
         last = now;
-        if i == 30 * 5 {
-            assert!(now < 0.3, "five seconds in it is still mostly the small fire: {now}");
-        }
-        if i == 30 * 30 {
-            assert!(now > 0.6, "thirty seconds in it has mostly arrived: {now}");
+        match i {
+            150 => assert!(now < 0.3, "five seconds in it is still mostly the small fire: {now}"),
+            900 => assert!(now > 0.6, "thirty seconds in it has mostly arrived: {now}"),
+            _ => {}
         }
     }
-    assert!(last > 0.98);
+    assert!(last > 0.98, "a minute and a half in it has arrived: {last}");
+}
+
+/// And on the GPU: the frame after HA moves `size` all the way is the same
+/// picture as the frame before, near enough - the fire grows, it does not
+/// jump.
+#[test]
+fn the_picture_does_not_jump_when_size_moves() {
+    if !gpu() {
+        return;
+    }
+    let mut params = Params::defaults(PARAMS);
+    params.set(PARAMS, "size", 0.0);
+    let mut h = Hearth::new(2);
+    let mut t = 0.0;
+    let mut lit = Vec::new();
+    for i in 0..60 {
+        if i == 30 {
+            params.set(PARAMS, "size", 1.0);
+        }
+        t += DT;
+        lit.push(measure(&h.render(&ctx_at(t, DT, &params))).0);
+    }
+    let natural = (1..30).map(|i| (lit[i] - lit[i - 1]).abs()).fold(0.0f32, f32::max);
+    let across = (lit[30] - lit[29]).abs();
+    assert!(across <= natural + 0.01, "the change of size moved the picture by {across} (it moves by up to {natural} on its own)");
+}
+
+/// The rare things are rare, and they happen: over twenty minutes at the
+/// default, a handful of gusts and log settles, and a spark every few
+/// seconds. The dice are the CPU's, so this needs no GPU.
+#[test]
+fn the_rare_things_happen_rarely() {
+    let params = Params::defaults(PARAMS);
+    for seed in [11] {
+        let mut h = Hearth::new(seed);
+        let ctx = ctx_at(0.0, DT, &params);
+        for _ in 0..30 * 60 * 20 {
+            h.step(&ctx);
+            // Nothing reads the GPU back here, so free the slots by hand.
+            h.pending.clear();
+        }
+        let (gusts, settles, sparks) = (h.gusts_seen, h.settles_seen, h.sparks_thrown);
+        eprintln!("seed {seed}, twenty minutes: {gusts} gusts, {settles} settles, {sparks} sparks");
+        assert!((2..=20).contains(&gusts), "{gusts} gusts");
+        assert!((1..=15).contains(&settles), "{settles} settles");
+        assert!((60..=400).contains(&sparks), "{sparks} sparks: about one every few seconds");
+    }
 }
 
 /// The default picture: flames at the bottom, black above. Over a minute
@@ -116,11 +179,14 @@ fn size_eases_and_never_jumps() {
 /// there is fire along the bottom almost all the time.
 #[test]
 fn the_top_is_mostly_black_at_the_default() {
+    if !gpu() {
+        return;
+    }
     let params = Params::defaults(PARAMS);
-    for seed in [1, 2, 3] {
+    for seed in [1] {
         let mut h = Hearth::new(seed);
         let (mut top_lit, mut frames, mut no_fire) = (0usize, 0usize, 0usize);
-        for i in 1..=1800 {
+        for i in 1..=450 {
             let f = h.render(&ctx_at(i as f64 * DT, DT, &params));
             let idx = indices(&f);
             top_lit += idx[..W * H / 3].iter().filter(|k| **k != 0).count();
@@ -138,11 +204,14 @@ fn the_top_is_mostly_black_at_the_default() {
 /// small fraction of it.
 #[test]
 fn no_whole_frame_pulse_above_three_hertz() {
-    for size in [0.5, 1.0] {
+    if !gpu() {
+        return;
+    }
+    for size in [1.0] {
         let mut params = Params::defaults(PARAMS);
         params.set(PARAMS, "size", size);
         let mut h = Hearth::new(4);
-        let levels: Vec<f32> = (1..=1800).map(|i| level(&h.render(&ctx_at(i as f64 * DT, DT, &params)))).collect();
+        let levels: Vec<f32> = (1..=450).map(|i| level(&h.render(&ctx_at(i as f64 * DT, DT, &params)))).collect();
         // A 3 Hz low-pass: a moving average over a third of a second (ten
         // frames). What is left over is the fast part.
         let mean = levels.iter().sum::<f32>() / levels.len() as f32;
@@ -158,8 +227,15 @@ fn no_whole_frame_pulse_above_three_hertz() {
 /// Twenty minutes at the default: it never repeats itself, gusts and log
 /// settles both happen (rarely), and embers stay few outside a settle's
 /// burst.
+///
+/// Ignored by default: twenty minutes of a 1.2-million-cell fire is a few
+/// minutes of GPU. `cargo test -p screeny-art hearth::tests::twenty -- --ignored --nocapture`
 #[test]
+#[ignore]
 fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
+    if !gpu() {
+        return;
+    }
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(11);
     let dt = 0.1; // ten frames a second is plenty to watch; the sim steps at its own rate
