@@ -302,7 +302,7 @@ impl Hearth {
             b: [1.4, 5.0, 2.0 - 0.6 * s, 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
-            c: [1.2 - 0.6 * s, 1.4 - 1.1 * s, 1.5, 0.5],
+            c: [0.6 + 1.8 * (1.0 - s) * (1.0 - s), 0.3 + 2.7 * (1.0 - s) * (1.0 - s), 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
             d: [0.55, 0.08, 1.0, 0.4],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
@@ -348,7 +348,7 @@ impl Hearth {
         let t = self.t as f32;
         let breath = self.breath();
         let strengths: Vec<f32> = (0..self.logs.len()).map(|k| self.log_strength(k)).collect();
-        let lo = 0.45 - 0.25 * self.size;
+        let lo = 0.55 - 0.45 * self.size;
         for z in 0..GD {
             let zf = z as f32;
             for x in 0..GW {
@@ -365,7 +365,7 @@ impl Hearth {
                 let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0, t * 0.7, self.salt)).max(0.0).powf(1.2);
                 let level = 1.5 * smoothstep(lo, lo + 0.6, bed * (0.35 + tongues) * breath);
                 let shimmer = 0.85 + 0.3 * noise::noise3(xf / 5.0, zf / 5.0, t * 0.3, self.salt ^ 0xc0a1);
-                self.bed[z * GW + x] = [level, 0.62 * (bed / 1.4).min(1.0) * shimmer];
+                self.bed[z * GW + x] = [level, 0.85 * (bed / 1.4).min(1.0) * shimmer];
             }
         }
 
