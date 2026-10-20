@@ -44,6 +44,35 @@ pub fn noise2(x: f32, y: f32, salt: u32) -> f32 {
     top + (bot - top) * uy
 }
 
+fn lattice3(ix: i32, iy: i32, iz: i32, salt: u32) -> f32 {
+    lattice(ix, iy.wrapping_add(iz.wrapping_mul(7919)), salt ^ (iz as u32).wrapping_mul(0xC2B2_AE35))
+}
+
+/// Value noise at `(x, y, z)`, in `0..1`.
+pub fn noise3(x: f32, y: f32, z: f32, salt: u32) -> f32 {
+    let (x0, y0, z0) = (x.floor(), y.floor(), z.floor());
+    let (ux, uy, uz) = (fade(x - x0), fade(y - y0), fade(z - z0));
+    let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
+    let plane = |iz: i32| {
+        let a = lattice3(ix, iy, iz, salt);
+        let b = lattice3(ix + 1, iy, iz, salt);
+        let c = lattice3(ix, iy + 1, iz, salt);
+        let d = lattice3(ix + 1, iy + 1, iz, salt);
+        let top = a + (b - a) * ux;
+        let bot = c + (d - c) * ux;
+        top + (bot - top) * uy
+    };
+    let (p, q) = (plane(iz), plane(iz + 1));
+    p + (q - p) * uz
+}
+
+/// Two octaves of [`noise3`], centred: roughly `-1..1`.
+pub fn fbm3(x: f32, y: f32, z: f32, salt: u32) -> f32 {
+    let a = noise3(x, y, z, salt) * 2.0 - 1.0;
+    let b = noise3(x * 2.03, y * 2.03, z * 2.03, salt.wrapping_add(977)) * 2.0 - 1.0;
+    (a + 0.5 * b) / 1.5
+}
+
 /// Value noise along one axis, in `0..1`.
 pub fn noise1(x: f32, salt: u32) -> f32 {
     noise2(x, 0.5, salt)

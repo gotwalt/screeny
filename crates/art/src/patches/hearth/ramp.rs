@@ -69,7 +69,7 @@ pub fn chromaticity(kelvin: f32) -> Rgb {
 pub fn kelvin(theta: f32) -> f32 {
     // Curved, so most of the visible range is red and orange and only the
     // hottest gas goes gold.
-    COOLEST_K + (HOTTEST_K - COOLEST_K) * theta.clamp(0.0, 1.0).powf(1.6)
+    COOLEST_K + (HOTTEST_K - COOLEST_K) * theta.clamp(0.0, 1.0).powf(1.3)
 }
 
 /// How bright gas at `theta` glows, in linear light. Nothing below a
@@ -102,6 +102,11 @@ impl Ramp {
             })
             .collect();
         Ramp { lut }
+    }
+
+    /// The table as the shader takes it: linear RGB, one vec4 an entry.
+    pub fn table(&self) -> [[f32; 4]; LUT] {
+        std::array::from_fn(|i| [self.lut[i].r, self.lut[i].g, self.lut[i].b, 0.0])
     }
 
     #[inline]
