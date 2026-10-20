@@ -210,8 +210,14 @@ fn no_whole_frame_pulse_above_three_hertz() {
     for size in [1.0] {
         let mut params = Params::defaults(PARAMS);
         params.set(PARAMS, "size", size);
-        let mut h = Hearth::new(4);
-        let levels: Vec<f32> = (1..=450).map(|i| level(&h.render(&ctx_at(i as f64 * DT, DT, &params)))).collect();
+        // Seed 2 at size 1 is the run where, before the velocity guard
+        // (`tame` in the shader), the fire froze into its logs and the
+        // frame went black from 28 s to 32 s.
+        let mut h = Hearth::new(2);
+        let frames: Vec<Frame> = (1..=1050).map(|i| h.render(&ctx_at(i as f64 * DT, DT, &params))).collect();
+        let dark = frames.iter().filter(|f| indices(f)[(H - 1) * W..].iter().all(|k| *k == 0)).count();
+        assert_eq!(dark, 0, "size {size}: {dark} frames with nothing burning");
+        let levels: Vec<f32> = frames.iter().map(level).collect();
         // A 3 Hz low-pass: a moving average over a third of a second (ten
         // frames). What is left over is the fast part.
         let mean = levels.iter().sum::<f32>() / levels.len() as f32;
@@ -370,7 +376,9 @@ fn raw() {
     e.set_depth(png::BitDepth::Eight);
     e.write_header().and_then(|mut wr| wr.write_image_data(&img)).expect("png");
     let tmax = scal.iter().fold(0.0f32, |a, c| a.max(c[0]));
-    eprintln!("{path}: temperature peak {tmax:.2}");
+    let nans = scal.iter().filter(|c| c.iter().any(|v| !v.is_finite())).count();
+    let lit = leds.iter().filter(|l| !l.iter().all(|v| v.is_finite())).count();
+    eprintln!("{path}: temperature peak {tmax:.2}, {nans} non-finite cells, {lit} non-finite LEDs");
 }
 
 /// Not a test: when the gusts and settles of a seed fall, in snapshot time

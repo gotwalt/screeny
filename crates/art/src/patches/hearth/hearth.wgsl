@@ -75,6 +75,16 @@ fn idx(x: u32, y: u32, z: u32) -> u32 { return (z * gh() + y) * gw() + x; }
 fn inside(g: vec3<u32>) -> bool { return g.x < gw() && g.y < gh() && g.z < gd(); }
 fn wind_at(y: u32) -> f32 { return P.wind[y / 4u][y % 4u]; }
 
+// No gas moves faster than this, cells per second: a guard against the
+// rare runaway (an unbounded confinement kick feeding itself), which once
+// left a whole fire frozen in its logs for seconds. Real flames here move
+// at a third of it.
+const VMAX: f32 = 150.0;
+
+fn tame(v: vec3<f32>) -> vec3<f32> {
+  return clamp(v, vec3<f32>(-VMAX), vec3<f32>(VMAX));
+}
+
 fn emit(theta: f32) -> vec3<f32> {
   return lut[u32(clamp(theta, 0.0, 1.0) * 511.0 + 0.5)].rgb;
 }
@@ -225,6 +235,7 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   v.x += (wind_at(g.y) - v.x) * (1.0 - exp(-P.b.x * dt));
   v *= exp(-P.a.w * dt);
   if (g.y == 0u) { v.y = max(v.y, 0.0); }
+  v = tame(v);
   vel[i] = vec4<f32>(v, 0.0);
 }
 
@@ -325,7 +336,7 @@ fn gradient(@builtin(global_invocation_id) g: vec3<u32>) {
     pres_at(p.x + 1, p.y, p.z, own) - pres_at(p.x - 1, p.y, p.z, own),
     pres_at(p.x, p.y + 1, p.z, own) - pres_at(p.x, p.y - 1, p.z, own),
     pres_at(p.x, p.y, p.z + 1, own) - pres_at(p.x, p.y, p.z - 1, own));
-  vel[i] = vec4<f32>(vel[i].xyz - grad, 0.0);
+  vel[i] = vec4<f32>(tame(vel[i].xyz - grad), 0.0);
 }
 
 // ---------------------------------------------------------------- embers
