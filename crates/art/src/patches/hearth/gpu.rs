@@ -37,6 +37,10 @@ pub const EMBERS: usize = 16;
 pub const SWEEPS: usize = 32;
 const LIGHT_CELL: u32 = 4;
 
+/// What [`Sim::picture`] reads back: (fire light rgb, lit smoke) per LED,
+/// and the ember slots.
+pub type Picture = (Vec<[f32; 4]>, Vec<[f32; 4]>);
+
 struct Pass {
     pipeline: wgpu::ComputePipeline,
     bind: wgpu::BindGroup,
@@ -224,7 +228,7 @@ impl Sim {
 
     /// The fire's light per LED (rgb) and lit smoke (a), and the ember
     /// slots, read back.
-    pub fn picture(&self, params: &Params) -> Option<(Vec<[f32; 4]>, Vec<[f32; 4]>)> {
+    pub fn picture(&self, params: &Params) -> Option<Picture> {
         let q = &self.gpu.queue;
         q.write_buffer(&self.params, 0, bytemuck::bytes_of(params));
         let cg = self.coarse.map(|d| d.div_ceil(4));

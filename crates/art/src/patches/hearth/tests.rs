@@ -373,6 +373,79 @@ fn raw() {
     eprintln!("{path}: temperature peak {tmax:.2}");
 }
 
+/// Not a test: when the gusts and settles of a seed fall, in snapshot time
+/// (`--at`), for photographing them. `HEARTH_SEED=n cargo test -p
+/// screeny-art hearth::tests::timeline -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn timeline() {
+    let seed = std::env::var("HEARTH_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let params = Params::defaults(PARAMS);
+    let mut h = Hearth::new(seed);
+    let ctx = ctx_at(0.0, DT, &params);
+    let (mut gusts, mut settles) = (0, 0);
+    for _ in 0..30 * 60 * 10 {
+        h.step(&ctx);
+        h.pending.clear();
+        let at = h.t - WARMUP;
+        if h.gusts_seen > gusts {
+            gusts = h.gusts_seen;
+            let g = h.gust.as_ref().expect("a gust");
+            eprintln!("gust at {at:.1} s for {:.1} s, peak {:.1}", g.length, g.peak);
+        }
+        if h.settles_seen > settles {
+            settles = h.settles_seen;
+            eprintln!("settle at {at:.1} s");
+        }
+    }
+}
+
+/// Not a test: one run, photographed at several moments, through the same
+/// pipeline and dot preview as `screeny-art snapshot --scale 12`. Writes
+/// `HEARTH_STRIP/<HEARTH_NAME>-t<seconds>.png` for each of `HEARTH_TIMES`
+/// (comma-separated), with `HEARTH_SET="size=1,smoke=0.5"` and
+/// `HEARTH_SEED`.
+#[test]
+#[ignore]
+fn strip() {
+    let Ok(dir) = std::env::var("HEARTH_STRIP") else { return };
+    let name = std::env::var("HEARTH_NAME").unwrap_or_else(|_| "strip".into());
+    let seed = std::env::var("HEARTH_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let mut times: Vec<f64> =
+        std::env::var("HEARTH_TIMES").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    times.sort_by(f64::total_cmp);
+    let mut params = Params::defaults(PARAMS);
+    for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+        if let Some((k, v)) = kv.split_once('=') {
+            params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+        }
+    }
+    let mut h = Hearth::new(seed);
+    let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
+    let last = times.last().copied().unwrap_or(0.0);
+    let mut next = 0;
+    let mut i = 0usize;
+    loop {
+        let t = i as f64 * DT;
+        if t > last + 1e-6 {
+            break;
+        }
+        let out = pipe.process(h.render(&ctx_at(t, if i == 0 { 0.0 } else { DT }, &params)), DT);
+        while next < times.len() && (times[next] - t).abs() < DT * 0.5 {
+            let (w, hgt, rgba) = crate::preview::render_dots(&out.preview, 12);
+            let path = format!("{dir}/{name}-t{:07.2}.png", times[next]);
+            let file = std::fs::File::create(&path).expect("create");
+            let mut e = png::Encoder::new(std::io::BufWriter::new(file), w as u32, hgt as u32);
+            e.set_color(png::ColorType::Rgba);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).expect("png");
+            eprintln!("{path}: {} colours, exact {}, embers {}", out.stats.distinct_colours, out.stats.exact, h.ember_count());
+            next += 1;
+        }
+        i += 1;
+    }
+}
+
 /// Not a test: how long a frame takes on this machine (two steps and a
 /// picture). `cargo test -p screeny-art hearth::tests::cost -- --ignored --nocapture`
 #[test]

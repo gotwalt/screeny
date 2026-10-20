@@ -91,7 +91,7 @@ const GH: usize = 128;
 const GD: usize = 48;
 /// The grid row the bottom edge of the frame sits on (at the middle depth):
 /// the logs are below it.
-const BELOW: usize = 14;
+const BELOW: usize = 9;
 /// The rows fuel comes in at: the logs themselves.
 const BED_ROWS: usize = 5;
 /// Supersamples per LED, each way.
@@ -304,7 +304,7 @@ impl Hearth {
             // glowing. cool4, cool1, expansion, smoke yield.
             c: [1.2 - 0.6 * s, 1.4 - 1.1 * s, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
-            d: [0.55, 0.08, 1.0, 0.35],
+            d: [0.55, 0.08, 1.0, 0.4],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
@@ -362,7 +362,7 @@ impl Hearth {
                     self.bed[z * GW + x] = [0.0, 0.0];
                     continue;
                 }
-                let tongues = (2.2 * noise::fbm3(xf / 7.0, zf / 7.0, t * 0.7, self.salt)).max(0.0).powf(1.3);
+                let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0, t * 0.7, self.salt)).max(0.0).powf(1.2);
                 let level = 1.5 * smoothstep(lo, lo + 0.6, bed * (0.35 + tongues) * breath);
                 let shimmer = 0.85 + 0.3 * noise::noise3(xf / 5.0, zf / 5.0, t * 0.3, self.salt ^ 0xc0a1);
                 self.bed[z * GW + x] = [level, 0.62 * (bed / 1.4).min(1.0) * shimmer];
@@ -378,7 +378,7 @@ impl Hearth {
             g.peak * env * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057))
         });
         for y in 0..GH {
-            self.wind[y / 4][y % 4] = (drift + gust) * (0.3 + 0.7 * smoothstep(0.0, GH as f32 * 0.55, y as f32));
+            self.wind[y / 4][y % 4] = (drift + gust) * (0.1 + 0.9 * smoothstep(BELOW as f32, GH as f32 * 0.6, y as f32));
         }
 
         let params = self.params();
@@ -423,7 +423,7 @@ impl Hearth {
         if gusts > 0.0 && self.gust.is_none() && self.t > self.calm_until {
             let mean = 240.0 * (30.0f64 / 240.0).powf(f64::from(gusts));
             if f64::from(self.dice.f32()) < dt / mean {
-                let peak = self.dice.range(14.0, 26.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
+                let peak = self.dice.range(8.0, 15.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
                 let length = f64::from(self.dice.range(4.5, 9.0));
                 self.gust = Some(Gust { start: self.t, length, peak });
                 self.calm_until = self.t + length + 15.0;
