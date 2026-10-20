@@ -316,14 +316,14 @@ impl Hearth {
     /// The fire breathing by itself: slow swells and lulls over minutes.
     fn breath(&self) -> f32 {
         let t = self.t as f32;
-        1.0 + 0.22 * noise::fbm1(t / 75.0, self.salt ^ 0xb4ea) + 0.1 * noise::fbm1(t / 23.0, self.salt ^ 0x77)
+        1.0 + 0.12 * noise::fbm1(t / 75.0, self.salt ^ 0xb4ea) + 0.06 * noise::fbm1(t / 23.0, self.salt ^ 0x77)
     }
 
     /// How strongly log `k` is burning now, before size and breath.
     fn log_strength(&self, k: usize) -> f32 {
         let log = &self.logs[k];
         let t = self.t as f32;
-        let mut s = 0.75 + 0.5 * noise::noise1(t / 17.0 + log.phase, log.salt);
+        let mut s = 0.85 + 0.3 * noise::noise1(t / 17.0 + log.phase, log.salt);
         if let Some(settle) = &self.settle {
             if settle.log == k {
                 let age = (self.t - settle.start) as f32;
