@@ -194,46 +194,6 @@ fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     assert!(ember_max_calm <= 5, "{ember_max_calm} embers at once outside a burst");
 }
 
-/// Not a test: `HEARTH_DUMP=dir cargo test -p screeny-art hearth::tests::dump -- --ignored`
-/// writes the whole grid (logs included) as greyscale temperature and
-/// smoke, for tuning by eye.
-#[test]
-#[ignore]
-fn dump() {
-    let Ok(dir) = std::env::var("HEARTH_DUMP") else { return };
-    let at: f64 = std::env::var("HEARTH_AT").ok().and_then(|s| s.parse().ok()).unwrap_or(10.0);
-    let size: f32 = std::env::var("HEARTH_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(0.5);
-    let mut params = Params::defaults(PARAMS);
-    params.set(PARAMS, "size", size);
-    let mut h = Hearth::new(1);
-    let dt = 1.0 / 30.0;
-    let n = (at / dt) as usize;
-    for i in 1..=n {
-        h.render(&ctx_at(i as f64 * dt, dt, &params));
-    }
-    let f = &h.fluid;
-    let mut rgb = Vec::with_capacity(GW * GH * 3);
-    for y in (0..GH).rev() {
-        for x in 0..GW {
-            let i = y * GW + x;
-            let line = if y == BELOW { 60 } else { 0 };
-            rgb.push(((f.temp[i] * 255.0) as u8).max(line));
-            rgb.push((f.smoke[i].min(1.0) * 255.0) as u8);
-            rgb.push((f.fuel[i].min(1.0) * 255.0) as u8);
-        }
-    }
-    let path = format!("{dir}/grid-{at}-{size}.png");
-    let file = std::fs::File::create(&path).expect("create");
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), GW as u32, GH as u32);
-    enc.set_color(png::ColorType::Rgb);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header().and_then(|mut w| w.write_image_data(&rgb)).expect("png");
-    let vmax = f.v.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-    let umax = f.u.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-    let tmax = f.temp.iter().fold(0.0f32, |a, b| a.max(*b));
-    eprintln!("{path}: vmax {vmax:.1} umax {umax:.1} tmax {tmax:.2} embers {}", h.embers.live.len());
-}
-
 /// Per-frame measures of a painted frame: lit fraction, the height (in LED
 /// rows from the bottom) of the tallest fire, how many columns have fire in
 /// the bottom row, and how many pixels are smoke.
@@ -258,26 +218,98 @@ fn measure(frame: &Frame) -> (f32, usize, usize, usize) {
     (lit as f32 / N as f32, tallest, base, smoke)
 }
 
-/// Not a test: how long a step and a paint take on this machine.
-/// `cargo test -p screeny-art --release hearth::tests::cost -- --ignored --nocapture`
+/// Not a test: `HEARTH_RAW=dir cargo test -p screeny-art hearth::tests::raw -- --ignored --nocapture`
+/// writes the march's continuous output before painting - the fire's light
+/// (times `HEARTH_GAIN`) on the left, the lit smoke on the right - and
+/// prints its peaks, for tuning by eye.
+#[test]
+#[ignore]
+fn raw() {
+    let Ok(dir) = std::env::var("HEARTH_RAW") else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+    let (at, size, gain) = (env("HEARTH_AT", 10.0), env("HEARTH_SIZE", 0.5) as f32, env("HEARTH_GAIN", 1.0) as f32);
+    let mut params = Params::defaults(PARAMS);
+    params.set(PARAMS, "size", size);
+    let mut h = Hearth::new(env("HEARTH_SEED", 1.0) as u64);
+    for i in 1..=(at / DT) as usize {
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+    }
+    let p = h.params();
+    let Some(Some(sim)) = &h.sim else { return };
+    let (leds, _) = sim.picture(&p).expect("a picture");
+    let (s, w) = (8usize, 2 * W + 2);
+    let mut rgb = vec![40u8; w * s * H * s * 3];
+    let enc = |v: f32| (crate::color::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0) as u8;
+    let (mut fmax, mut smax) = (0.0f32, 0.0f32);
+    for y in 0..H {
+        for x in 0..W {
+            let l = leds[y * W + x];
+            fmax = fmax.max(l[0]);
+            smax = smax.max(l[3]);
+            for (ox, c) in [(x, [l[0] * gain, l[1] * gain, l[2] * gain]), (x + W + 2, [l[3]; 3])] {
+                for dy in 0..s {
+                    for dx in 0..s {
+                        let o = ((y * s + dy) * w * s + ox * s + dx) * 3;
+                        rgb[o..o + 3].copy_from_slice(&c.map(enc));
+                    }
+                }
+            }
+        }
+    }
+    let path = format!("{dir}/raw-{at}-{size}.png");
+    let file = std::fs::File::create(&path).expect("create");
+    let mut e = png::Encoder::new(std::io::BufWriter::new(file), (w * s) as u32, (H * s) as u32);
+    e.set_color(png::ColorType::Rgb);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().and_then(|mut wr| wr.write_image_data(&rgb)).expect("png");
+    eprintln!("{path}: fire red peak {fmax:.3}, smoke peak {smax:.3}");
+
+    // The volume itself, from the front (max over depth) and from the side
+    // (max over x): temperature red, smoke green, fuel blue.
+    let scal = sim.scalars();
+    let (vw, vh) = (GW + 4 + GD, GH);
+    let mut img = vec![0u8; vw * vh * 3];
+    for z in 0..GD {
+        for y in 0..GH {
+            for x in 0..GW {
+                let c = scal[(z * GH + y) * GW + x];
+                let v = [c[0], c[2].min(1.0), c[1].min(1.0)].map(|v| (v * 255.0) as u8);
+                for (px, py) in [(x, GH - 1 - y), (GW + 4 + z, GH - 1 - y)] {
+                    let o = (py * vw + px) * 3;
+                    for k in 0..3 {
+                        img[o + k] = img[o + k].max(v[k]);
+                    }
+                }
+            }
+        }
+    }
+    for x in 0..vw {
+        let o = ((GH - 1 - BELOW) * vw + x) * 3;
+        img[o + 2] = img[o + 2].max(120);
+    }
+    let path = format!("{dir}/vol-{at}-{size}.png");
+    let file = std::fs::File::create(&path).expect("create");
+    let mut e = png::Encoder::new(std::io::BufWriter::new(file), vw as u32, vh as u32);
+    e.set_color(png::ColorType::Rgb);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().and_then(|mut wr| wr.write_image_data(&img)).expect("png");
+    let tmax = scal.iter().fold(0.0f32, |a, c| a.max(c[0]));
+    eprintln!("{path}: temperature peak {tmax:.2}");
+}
+
+/// Not a test: how long a frame takes on this machine (two steps and a
+/// picture). `cargo test -p screeny-art hearth::tests::cost -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn cost() {
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(1);
     h.render(&ctx_at(0.0, 0.0, &params));
-    let ctx = ctx_at(0.0, 0.0, &params);
     let start = std::time::Instant::now();
-    for _ in 0..600 {
-        h.step(&ctx);
+    for i in 1..=90 {
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
     }
-    let step = start.elapsed().as_secs_f64() / 600.0;
-    let start = std::time::Instant::now();
-    for _ in 0..300 {
-        std::hint::black_box(h.paint(&ctx));
-    }
-    let paint = start.elapsed().as_secs_f64() / 300.0;
-    eprintln!("step {:.3} ms, paint {:.3} ms", step * 1e3, paint * 1e3);
+    eprintln!("frame {:.2} ms", start.elapsed().as_secs_f64() / 90.0 * 1e3);
 }
 
 /// Not a test: prints how big the fire is over a minute at a few sizes.
@@ -295,7 +327,7 @@ fn survey() {
             let mut h = Hearth::new(seed);
             let dt = 1.0 / 30.0;
             let (mut lit, mut tall, mut base, mut empty, mut tallmax, mut smoke, mut n) = (0.0, 0, 0, 0, 0, 0, 0);
-            for i in 1..=1800 {
+            for i in 1..=900 {
                 let f = h.render(&ctx_at(i as f64 * dt, dt, &params));
                 if i % 10 == 0 {
                     let (l, t, b, s) = measure(&f);

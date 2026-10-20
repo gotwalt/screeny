@@ -34,7 +34,7 @@ pub struct Params {
 /// Ember slots; the shader reads the count from `coarse.w`.
 pub const EMBERS: usize = 16;
 /// Pressure sweeps a step (each a red and a black half).
-pub const SWEEPS: usize = 48;
+pub const SWEEPS: usize = 32;
 const LIGHT_CELL: u32 = 4;
 
 struct Pass {
@@ -189,14 +189,37 @@ impl Sim {
             for name in ["combust", "curl_of", "confine", "divergence"] {
                 self.run(&mut cp, name, g);
             }
+            let half = [g[0].div_ceil(2), g[1], g[2]];
             for _ in 0..SWEEPS {
-                self.run(&mut cp, "pres_red", g);
-                self.run(&mut cp, "pres_black", g);
+                self.run(&mut cp, "pres_red", half);
+                self.run(&mut cp, "pres_black", half);
             }
             self.run(&mut cp, "gradient", g);
             self.run(&mut cp, "embers", [1, 1, 1]);
         }
         q.submit([enc.finish()]);
+    }
+
+    /// For tuning: the whole scalar field (temperature, fuel, smoke, source)
+    /// read back.
+    #[cfg(test)]
+    pub fn scalars(&self) -> Vec<[f32; 4]> {
+        let size = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
+        let read = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scal read"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(&self.scal, 0, &read, 0, size);
+        self.gpu.queue.submit([enc.finish()]);
+        let slice = read.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let out = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
+        read.unmap();
+        out
     }
 
     /// The fire's light per LED (rgb) and lit smoke (a), and the ember

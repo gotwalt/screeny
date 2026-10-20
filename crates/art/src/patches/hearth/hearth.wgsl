@@ -287,14 +287,24 @@ fn pres_at(x: i32, y: i32, z: i32, own: f32) -> f32 {
   return pres[idx(u32(x), u32(y), u32(z))];
 }
 
-fn relax(g: vec3<u32>, colour: u32) {
-  if (!inside(g) || ((g.x + g.y + g.z) & 1u) != colour) { return; }
-  let p = vec3<i32>(g);
+// Dispatched over half the cells across: invocation gx is the cell of this
+// colour in the pair (2 gx, 2 gx + 1).
+fn relax(h: vec3<u32>, colour: u32) {
+  let x = 2u * h.x + ((h.y + h.z + colour) & 1u);
+  let g = vec3<u32>(x, h.y, h.z);
+  if (!inside(g)) { return; }
   let i = idx(g.x, g.y, g.z);
   let own = pres[i];
-  let sum = pres_at(p.x + 1, p.y, p.z, own) + pres_at(p.x - 1, p.y, p.z, own)
-          + pres_at(p.x, p.y + 1, p.z, own) + pres_at(p.x, p.y - 1, p.z, own)
-          + pres_at(p.x, p.y, p.z + 1, own) + pres_at(p.x, p.y, p.z - 1, own);
+  var sum: f32;
+  if (g.x > 0u && g.y > 0u && g.z > 0u && g.x + 1u < gw() && g.y + 1u < gh() && g.z + 1u < gd()) {
+    let sy = gw(); let sz = gw() * gh();
+    sum = pres[i - 1u] + pres[i + 1u] + pres[i - sy] + pres[i + sy] + pres[i - sz] + pres[i + sz];
+  } else {
+    let p = vec3<i32>(g);
+    sum = pres_at(p.x + 1, p.y, p.z, own) + pres_at(p.x - 1, p.y, p.z, own)
+        + pres_at(p.x, p.y + 1, p.z, own) + pres_at(p.x, p.y - 1, p.z, own)
+        + pres_at(p.x, p.y, p.z + 1, own) + pres_at(p.x, p.y, p.z - 1, own);
+  }
   let gs = (sum - div[i]) / 6.0;
   pres[i] = own + SOR * (gs - own);
 }

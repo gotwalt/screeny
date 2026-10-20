@@ -107,12 +107,12 @@ const EYE_DROP: f32 = 22.0;
 const EMBER_OUT: f32 = 0.30;
 
 /// The fixed step, seconds.
-pub(crate) const STEP: f64 = 1.0 / 60.0;
+pub(crate) const STEP: f64 = 1.0 / 30.0;
 /// Seconds of fire run before the first frame.
 const WARMUP: f64 = 5.0;
 /// After a stall, at most this many steps are caught up: a paused Studio
 /// resumes the fire, it does not fast-forward it.
-const CATCHUP: i64 = 30;
+const CATCHUP: i64 = 15;
 /// How long `size` takes to follow its parameter: the time constant, seconds.
 const SIZE_EASE: f32 = 18.0;
 
@@ -295,14 +295,14 @@ impl Hearth {
             dims: [GW as u32, GH as u32, GD as u32, self.step_no as u32],
             coarse: [(GW / 4) as u32, (GH / 4) as u32, (GD / 4) as u32, EMBERS as u32],
             // dt, buoyancy, smoke weight, drag
-            a: [STEP as f32, 95.0, 6.0, 0.9],
+            a: [STEP as f32, 95.0, 1.0, 0.9],
             // wind grip, confinement, burn, fuel heat
-            b: [1.4, 14.0, 2.0 - 0.6 * s, 1.5],
+            b: [1.4, 5.0, 2.0 - 0.6 * s, 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
-            c: [1.8 - 1.0 * s, 2.2 - 1.7 * s, 1.5, 0.9],
+            c: [1.2 - 0.6 * s, 1.4 - 1.1 * s, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
-            d: [0.55, 0.08, 1.0, 0.1],
+            d: [0.55, 0.08, 1.0, 0.15],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
