@@ -555,12 +555,12 @@ impl Hearth {
     /// motion so it never twinkles as it crosses an LED boundary. `spark` is
     /// its three slot vec4s.
     fn draw_ember(&self, px: &mut [Rgb], spark: &[[f32; 4]]) {
-        const SIGMA: f32 = 0.42;
+        const SIGMA: f32 = 0.3;
         const TAPS: usize = 3;
         const SUB: usize = 3;
         let (now, prev) = (spark[0], spark[2]);
         // The peak LED reads about as bright as gas at the ember's heat.
-        let colour = self.ramp.emit(now[3]).scale(2.6 / TAPS as f32);
+        let colour = self.ramp.emit(now[3]).scale(1.4 / TAPS as f32);
         for k in 0..TAPS {
             let f = (k as f32 + 0.5) / TAPS as f32;
             let at = [0, 1, 2].map(|c| prev[c] + (now[c] - prev[c]) * f);
@@ -633,7 +633,7 @@ impl Hearth {
                 if soot[i] > SOOT_BLACK && p < 0.5 * FIRE_STEPS as f32 {
                     return 0;
                 }
-                if p >= 0.55 {
+                if p >= 0.35 {
                     return (p + 0.5 + thr).floor().clamp(1.0, FIRE_STEPS as f32) as u8;
                 }
                 let q = amount * SMOKE_GAIN * leds[i][3] * SMOKE_STEPS as f32;
