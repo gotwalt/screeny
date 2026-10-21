@@ -112,7 +112,7 @@ const LIGHTS_WITHIN: f64 = 3.0;
 fn smoke_is_grey() {
     let mut h = Hearth::new(1);
     for color in [1.0, 0.5, 0.0] {
-        let pal = h.palette(color);
+        let pal = h.palette(color, 0).colours;
         for c in &pal[FIRE_STEPS + 1..] {
             let lab = crate::color::to_oklab(*c);
             let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
@@ -176,6 +176,60 @@ fn the_stove_is_deterministic() {
     }
 }
 
+/// Card 375: with any level ramp, at any `color`, every channel of every
+/// palette entry below level 16 is on the code the panel shows steadily, and
+/// the soot is neutral and no brighter than level 2.
+#[test]
+fn the_dark_ramps_sit_on_panel_levels() {
+    use screeny_panel::model::{duty_16ths, nearest_level};
+    let mut h = Hearth::new(1);
+    let ceiling = crate::panel::level_triple([2, 2, 2]).luma();
+    for dark in 1..DARK_CHOICES.len() {
+        for color in [1.0, 0.6, 0.0] {
+            let p = h.palette(color, dark);
+            for (i, c) in p.colours.iter().enumerate() {
+                for v in [c.r, c.g, c.b] {
+                    let code = crate::color::linear_to_srgb8(v);
+                    let (level, _) = nearest_level(duty_16ths(code));
+                    if level < crate::panel::DARK_ALIGN_LEVEL {
+                        assert_eq!(code, crate::panel::level_code(level), "{} entry {i}: {c:?}", DARK_CHOICES[dark]);
+                    }
+                }
+            }
+            for c in &p.colours[FIRE_STEPS + 1..] {
+                assert!(c.r == c.g && c.g == c.b, "soot is neutral: {c:?}");
+                assert!(c.luma() <= ceiling + 1e-6, "soot no brighter than (2,2,2): {c:?}");
+            }
+        }
+    }
+}
+
+/// Card 375: hearth chooses its own dark shades, so the output's
+/// `aligned_dark` backstop has nothing left to do: a frame goes out the same
+/// through it as through the plain dithered panel.
+#[test]
+fn aligned_dark_changes_no_hearth_pixel() {
+    let Some(_gpu) = gpu() else { return };
+    let mut params = Params::defaults(PARAMS);
+    params.set(PARAMS, "smoke", 1.0);
+    params.set(PARAMS, "size", 1.0);
+    let mut h = Hearth::new(4);
+    let pipe = |panel| {
+        let mut o = crate::pipeline::Output { panel, ..Default::default() };
+        o.limiter.enabled = false;
+        crate::Pipeline::new(o)
+    };
+    let (mut plain, mut aligned) = (pipe(crate::panel::Panel::Dithered), pipe(crate::panel::Panel::AlignedDark));
+    for i in 1..=120 {
+        let f = h.render(&ctx_at(i as f64 * DT, DT, &params));
+        if i % 10 == 0 {
+            let a = plain.process(f.clone(), DT).preview;
+            let b = aligned.process(f, DT).preview;
+            assert_eq!(a, b, "frame {i}");
+        }
+    }
+}
+
 /// Every frame is at most 32 colours - exact on the wire whatever it looks
 /// like - and the pipeline agrees.
 #[test]
@@ -203,14 +257,14 @@ fn every_frame_goes_out_exact() {
 #[test]
 fn the_palette_has_no_white_and_color_zero_is_grey() {
     let mut h = Hearth::new(1);
-    let pal = h.palette(1.0);
+    let pal = h.palette(1.0, 0).colours;
     for c in &pal[..=FIRE_STEPS] {
         assert!(c.b <= 0.6 * c.r + 1e-3 && c.luma() < 0.6, "{c:?}");
     }
     for c in &pal[FIRE_STEPS + 1..] {
         assert!(c.luma() < 0.06, "soot is dim: {c:?}");
     }
-    for c in h.palette(0.0) {
+    for c in h.palette(0.0, 0).colours {
         assert!((c.r - c.g).abs() < 0.02 && (c.g - c.b).abs() < 0.02, "grayscale: {c:?}");
     }
 }
@@ -742,6 +796,23 @@ fn survey() {
                 gold as f32 / n as f32
             );
         }
+    }
+}
+
+/// Not a test: the palette's entries as sRGB codes and panel levels.
+/// `cargo test -p screeny-art hearth::tests::palette_levels -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn palette_levels() {
+    let mut h = Hearth::new(1);
+    for (i, c) in h.palette(1.0, 0).colours.iter().enumerate() {
+        let code = c.to_srgb8();
+        let lv = code.map(|v| screeny_panel::model::nearest_level(screeny_panel::model::duty_16ths(v)));
+        eprintln!(
+            "{i:>2}  srgb {:>3} {:>3} {:>3}   levels {:>2}{:+} {:>2}{:+} {:>2}{:+}   L {:.3}",
+            code[0], code[1], code[2], lv[0].0, lv[0].1, lv[1].0, lv[1].1, lv[2].0, lv[2].1,
+            crate::color::to_oklab(*c)[0]
+        );
     }
 }
 

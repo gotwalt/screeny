@@ -71,7 +71,7 @@ use crate::color::{oklch, smoothstep, to_oklab, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
 use crate::gpu::Gpu;
-use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Sim, EMBERS};
 use ramp::Ramp;
@@ -100,6 +100,9 @@ const PARAMS: &[ParamSpec] = &[
     param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 1.0, 0.01, 0.7),
     param("flue", "How wide the flue is", 0.0, 1.0, 0.01, 0.4),
     param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
+    // Card 375: the cool end of the fire and the soot as hand-picked level
+    // triples, so the panel shows them steadily; several to flip between.
+    choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
 ];
 
 /// Where card 372's maximum sits on the rescaled `size`, `gusts` and
@@ -191,6 +194,51 @@ const SIZE_EASE: f32 = 18.0;
 
 const FIRE_STEPS: usize = 24;
 const SMOKE_STEPS: usize = 4;
+
+/// The `dark` choices (card 375). `"as before"` is card 374's computed
+/// palette; each other is a [`DARK_RAMPS`] entry, the same index less one.
+pub(crate) const DARK_CHOICES: &[&str] = &["as before", "steady red", "deeper red", "warmer"];
+pub(crate) const DEFAULT_DARK: usize = 1;
+
+/// The fire's ramp as panel level triples (brief 2.1.1), darkest first. Every
+/// channel sits on one of the panel's 64 levels, so nothing in the fire is
+/// made of a channel alternating between two levels near black - which is
+/// what made card 374's cool reds band and drift in hue: its computed dark
+/// entries had green at a fraction of level 1, and the `aligned_dark` output
+/// snapped each channel its own way.
+///
+/// The bright half is the computed blackbody ramp at its nearest levels and
+/// is the same in all three; the ramps differ in the dark half, where it
+/// shows.
+pub(crate) const DARK_RAMPS: [[[u32; 3]; FIRE_STEPS]; 3] = [
+    // "steady red": card 374's ramp at its nearest levels, green held at 0
+    // until it is past half a level - the same look, steadied.
+    [
+        [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [7, 1, 0], [8, 1, 0], [10, 1, 0],
+        [12, 2, 0], [14, 2, 0], [16, 2, 0], [18, 3, 0], [20, 4, 0], [23, 5, 0], [25, 6, 0], [28, 7, 0],
+        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+    ],
+    // "deeper red": one level darker at the bottom and pure red for longer,
+    // so the tips and the edges fade through deep red rather than orange.
+    [
+        [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [8, 0, 0], [10, 1, 0],
+        [12, 1, 0], [14, 1, 0], [16, 2, 0], [18, 2, 0], [20, 3, 0], [23, 4, 0], [25, 5, 0], [28, 6, 0],
+        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+    ],
+    // "warmer": green comes in early, so the cool end is a dim orange
+    // rather than a red.
+    [
+        [2, 0, 0], [3, 1, 0], [4, 1, 0], [5, 1, 0], [6, 2, 0], [7, 2, 0], [8, 2, 0], [10, 3, 0],
+        [12, 3, 0], [14, 4, 0], [16, 4, 0], [18, 5, 0], [20, 6, 0], [23, 7, 0], [25, 8, 0], [28, 9, 0],
+        [30, 10, 1], [32, 11, 1], [35, 12, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+    ],
+];
+
+/// The soot greys with a level ramp: level 1 and level 2 on every channel,
+/// nothing between them and black. Card 374's darkest computed soot sat
+/// below level 1 and the panel showed it *at* level 1 - brighter than meant.
+/// Soot dimmer than level 1 is now dithered against black instead.
+const SOOT_TRIPLES: [[u32; 3]; 2] = [[1, 1, 1], [2, 2, 2]];
 /// Darkest fire entry's lightness, OKLab; below half of it, black.
 const FIRE_L0: f32 = 0.2;
 /// Soot that has taken more than this share of the fire behind it paints
@@ -311,7 +359,7 @@ pub(crate) struct Hearth {
     /// from them for the last `color`.
     fire_l: [f32; FIRE_STEPS],
     fire_theta: [f32; FIRE_STEPS],
-    palette: Option<(f32, Vec<Rgb>)>,
+    palette: Option<Painting>,
     // Counters for tests and `playing`.
     pub(crate) gusts_seen: u32,
     pub(crate) settles_seen: u32,
@@ -649,25 +697,52 @@ impl Hearth {
         }
     }
 
-    fn palette(&mut self, color: f32) -> Vec<Rgb> {
-        if let Some((c, p)) = &self.palette {
-            if *c == color {
+    /// The palette for `color` and the `dark` choice, with the lightness of
+    /// each fire entry (what the painter matches the fire's light against)
+    /// and how many soot entries follow the fire's.
+    pub(crate) fn palette(&mut self, color: f32, dark: usize) -> Painting {
+        if let Some(p) = &self.palette {
+            if p.color == color && p.dark == dark {
                 return p.clone();
             }
         }
-        let mut pal = vec![Rgb::BLACK];
-        for theta in self.fire_theta {
-            let lab = to_oklab(self.ramp.emit(theta));
-            let (c, h) = ((lab[1] * lab[1] + lab[2] * lab[2]).sqrt(), lab[2].atan2(lab[1]).to_degrees());
-            pal.push(oklch(lab[0], c * color, h));
-        }
-        // Soot: neutral greys, its own entries, never the flame's hue
-        // (card 373: fire-tinted smoke read as a muddy dark red).
-        for l in SMOKE_L {
-            pal.push(oklch(l, 0.0, 0.0));
-        }
-        self.palette = Some((color, pal.clone()));
-        pal
+        let desaturate = |c: Rgb| {
+            let lab = to_oklab(c);
+            let (ch, h) = ((lab[1] * lab[1] + lab[2] * lab[2]).sqrt(), lab[2].atan2(lab[1]).to_degrees());
+            oklch(lab[0], ch * color, h)
+        };
+        let mut colours = vec![Rgb::BLACK];
+        let mut fire_l = self.fire_l;
+        let soot = match dark.checked_sub(1).and_then(|d| DARK_RAMPS.get(d)) {
+            None => {
+                for theta in self.fire_theta {
+                    colours.push(desaturate(self.ramp.emit(theta)));
+                }
+                // Soot: neutral greys, never the flame's hue (card 373).
+                for l in SMOKE_L {
+                    colours.push(oklch(l, 0.0, 0.0));
+                }
+                SMOKE_STEPS
+            }
+            Some(ramp) => {
+                // Snapped last: a desaturated entry goes back onto levels.
+                for (k, triple) in ramp.iter().enumerate() {
+                    let c = on_levels(desaturate(crate::panel::level_triple(*triple)));
+                    fire_l[k] = to_oklab(c)[0];
+                    if k > 0 {
+                        fire_l[k] = fire_l[k].max(fire_l[k - 1] + 1e-4);
+                    }
+                    colours.push(c);
+                }
+                for triple in SOOT_TRIPLES {
+                    colours.push(crate::panel::level_triple(triple));
+                }
+                SOOT_TRIPLES.len()
+            }
+        };
+        let p = Painting { color, dark, colours, fire_l, soot };
+        self.palette = Some(p.clone());
+        p
     }
 
     /// The frame, by palette index: fire where there is fire, smoke where
@@ -686,13 +761,14 @@ impl Hearth {
             }
         }
         let amount = ctx.get("smoke");
-        let palette = self.palette(ctx.get("color"));
+        let dark = (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1);
+        let Painting { colours: palette, fire_l, soot: soot_steps, .. } = self.palette(ctx.get("color"), dark);
         let dither = Dither::BlueNoise;
         let indices = (0..N)
             .map(|i| {
                 let thr = dither.threshold(i % W, i / W);
                 let l = to_oklab(light[i])[0];
-                let p = fire_position(&self.fire_l, l);
+                let p = fire_position(&fire_l, l);
                 // Flame seen through thick soot goes to black, not to the
                 // ramp's dark reds: smoke on this panel is a silhouette.
                 if soot[i] > SOOT_BLACK && p < 0.5 * FIRE_STEPS as f32 {
@@ -703,8 +779,11 @@ impl Hearth {
                 }
                 let q = amount * SMOKE_GAIN * leds[i][3] * SMOKE_STEPS as f32;
                 if q >= 0.6 && p < 0.25 {
-                    let k = (q + 0.5 + thr).floor().clamp(1.0, SMOKE_STEPS as f32) as usize;
-                    return (FIRE_STEPS + k) as u8;
+                    // Spread over the soot entries this ramp has; below its
+                    // first entry, dithered against black.
+                    let q = q * soot_steps as f32 / SMOKE_STEPS as f32;
+                    let k = (q + 0.5 + thr).floor().clamp(0.0, soot_steps as f32) as usize;
+                    return if k == 0 { 0 } else { (FIRE_STEPS + k) as u8 };
                 }
                 0
             })
@@ -722,6 +801,29 @@ impl Hearth {
     pub(crate) fn eased_size(&self) -> f32 {
         self.size
     }
+}
+
+/// A colour moved onto the panel's levels, channel by channel: the nearest
+/// level, and the lowest code that reaches it (brief 2.1.1).
+fn on_levels(c: Rgb) -> Rgb {
+    let snap = |v: f32| {
+        let code = crate::color::linear_to_srgb8(v);
+        let (level, _) = screeny_panel::model::nearest_level(screeny_panel::model::duty_16ths(code));
+        crate::color::srgb8_to_linear(crate::panel::level_code(level))
+    };
+    Rgb::new(snap(c.r), snap(c.g), snap(c.b))
+}
+
+/// A palette as the painter uses it (card 375).
+#[derive(Clone)]
+pub(crate) struct Painting {
+    color: f32,
+    dark: usize,
+    pub(crate) colours: Vec<Rgb>,
+    /// Each fire entry's lightness, darkest first.
+    fire_l: [f32; FIRE_STEPS],
+    /// How many soot entries follow the fire's.
+    pub(crate) soot: usize,
 }
 
 /// Where lightness `l` falls along the fire ramp: 0 is black, 1 the first
