@@ -160,11 +160,11 @@ impl Sim {
         let bed = buffer("bed", u64::from(dims[0] * dims[2]) * 8, storage);
         let light = buffer("light", coarse_cells * 4, storage);
         let light2 = buffer("light2", coarse_cells * 4, storage);
-        let parts = buffer("parts", (EMBERS * 48) as u64, storage);
+        let parts = buffer("parts", (EMBERS * 64) as u64, storage);
         let out = buffer("out", 2 * 2048 * 16, storage);
         let out_read = buffer("out read", 2 * 2048 * 16, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
         let parts_read =
-            buffer("parts read", (EMBERS * 48) as u64, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+            buffer("parts read", (EMBERS * 64) as u64, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hearth"),
@@ -258,9 +258,9 @@ impl Sim {
         self.dims.map(|d| d.div_ceil(4))
     }
 
-    /// Put sparks into empty slots: `(slot, [pos+heat, vel+cooling, prev])`.
-    pub fn spawn(&self, slot: usize, spark: [[f32; 4]; 3]) {
-        self.gpu.queue.write_buffer(&self.parts, (slot * 48) as u64, bytemuck::cast_slice(&spark));
+    /// Put sparks into empty slots: `(slot, [pos+heat, vel+cooling, prev+age, bounces])`.
+    pub fn spawn(&self, slot: usize, spark: [[f32; 4]; 4]) {
+        self.gpu.queue.write_buffer(&self.parts, (slot * 64) as u64, bytemuck::cast_slice(&spark));
     }
 
     /// One fixed step of the fluid and the embers.
@@ -343,7 +343,7 @@ impl Sim {
         });
         self.stage(&mut enc, "march", |cp| self.run(cp, "march", [8, 4, 1]));
         enc.copy_buffer_to_buffer(&self.out, 0, &self.out_read, 0, 2 * 2048 * 16);
-        enc.copy_buffer_to_buffer(&self.parts, 0, &self.parts_read, 0, (EMBERS * 48) as u64);
+        enc.copy_buffer_to_buffer(&self.parts, 0, &self.parts_read, 0, (EMBERS * 64) as u64);
         self.submit(enc);
 
         let (a, b) = (self.out_read.slice(..), self.parts_read.slice(..));

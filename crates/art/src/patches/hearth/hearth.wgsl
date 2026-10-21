@@ -65,6 +65,12 @@ struct Params {
 
 const SOR: f32 = 1.8;
 const EMBER_OUT: f32 = 0.30;
+// A spark's bounce (card 376): the share of its speed into a wall it keeps,
+// the share of its slide along it, and the impact speed (design cells per
+// second) that counts as a bounce rather than a touch.
+const EMBER_REST: f32 = 0.3;
+const EMBER_SLIDE: f32 = 0.6;
+const EMBER_IMPACT: f32 = 18.0;
 const LIGHT_CELL: u32 = 4u;
 const LIGHT_RADIUS: i32 = 6;
 // Upward acceleration in the flue at full draft, cells per second squared.
@@ -432,16 +438,18 @@ fn gradient(@builtin(global_invocation_id) g: vec3<u32>) {
 
 // ---------------------------------------------------------------- embers
 //
-// Three vec4s a spark: (position, heat), (velocity, cooling rate),
-// (position one step ago, age in seconds). Heat at or below EMBER_OUT is an empty slot;
+// Four vec4s a spark: (position, heat), (velocity, cooling rate),
+// (position one step ago, age in seconds), (bounces, off a wall, off the
+// ceiling, 1 once it has gone up the flue). Heat at or below EMBER_OUT is an empty slot;
 // Rust fills empty slots when the dice say a spark flies.
 
 @compute @workgroup_size(16)
 fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
   let k = g.x;
   if (k >= P.coarse.w) { return; }
-  var a = parts[3u * k];
-  var b = parts[3u * k + 1u];
+  var a = parts[4u * k];
+  var b = parts[4u * k + 1u];
+  var hits = parts[4u * k + 3u];
   if (a.w <= EMBER_OUT) { return; }
   let dt = P.a.x;
   let fluid = tri_vel(tap(a.xyz)).xyz;
@@ -451,20 +459,64 @@ fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
   let seed = P.dims.w * 64u + k * 4u;
   let jitter = vec3<f32>(rand(seed) - 0.5, rand(seed + 1u) - 0.5, rand(seed + 2u) - 0.5) * vec3<f32>(60.0, 30.0, 30.0) * P.stove.w;
   let lift = (45.0 * a.w * a.w + 6.0) * P.stove.w;
-  var v = b.xyz + dt * (2.2 * (fluid - b.xyz) + vec3<f32>(0.0, lift, 0.0) + jitter);
+  // A burst's sparks (cooling slot past 1, card 376) are heavier chunks:
+  // the air grips them less.
+  let burst = b.w >= 1.0;
+  let cooling = b.w - select(0.0, 1.0, burst);
+  let grip = select(2.2, 0.7, burst);
+  var v = b.xyz + dt * (grip * (fluid - b.xyz) + vec3<f32>(0.0, lift, 0.0) + jitter);
   let prev = a.xyz;
-  let pos = a.xyz + dt * v;
-  var heat = a.w - dt * b.w * a.w * (1.0 - 0.25 * around);
+  var pos = a.xyz + dt * v;
+  var heat = a.w - dt * cooling * a.w * (1.0 - 0.25 * around);
   // No spark lingers: one that has been alight eight seconds goes out.
-  let age = parts[3u * k + 2u].w + dt;
+  let age = parts[4u * k + 2u].w + dt;
   if (age > 8.0) { heat = 0.0; }
-  let w = f32(gw());
-  if (pos.y > f32(gh()) - 2.0 || pos.x < -6.0 || pos.x > w + 6.0 || pos.z < 0.0 || pos.z > f32(gd())) { heat = 0.0; }
-  // A spark that meets the ceiling or a wall goes out against it.
-  if (solid(i32(floor(pos.x)), i32(floor(pos.y)), i32(floor(pos.z)))) { heat = 0.0; }
-  parts[3u * k] = vec4<f32>(pos, heat);
-  parts[3u * k + 1u] = vec4<f32>(v, b.w);
-  parts[3u * k + 2u] = vec4<f32>(prev, age);
+
+  // The firebox (card 376): the frame's left and right edges are walls and
+  // its top is the ceiling. A spark that meets one bounces - most of its
+  // speed into the wall is lost, some of its slide along it kept - and
+  // keeps cooling. Only a real impact counts as a bounce; a spark the air
+  // holds against the ceiling slides along it.
+  let impact = EMBER_IMPACT * P.stove.w;
+  // Where the frame's edges are at this depth: the camera is level and
+  // looks along +z, so the half-width grows with distance.
+  let half = (pos.z - P.eye.z) * length(P.right.xyz);
+  let inset = 0.3 * f32(gw()) / 64.0;
+  let xl = P.eye.x - half + inset;
+  let xr = P.eye.x + half - inset;
+  if (pos.x < xl) {
+    if (-v.x > impact) { hits.x += 1.0; hits.y += 1.0; }
+    pos.x = xl + (xl - pos.x) * EMBER_REST;
+    v = vec3<f32>(abs(v.x) * EMBER_REST, v.y * EMBER_SLIDE, v.z * EMBER_SLIDE);
+  } else if (pos.x > xr) {
+    if (v.x > impact) { hits.x += 1.0; hits.y += 1.0; }
+    pos.x = xr - (pos.x - xr) * EMBER_REST;
+    v = vec3<f32>(-abs(v.x) * EMBER_REST, v.y * EMBER_SLIDE, v.z * EMBER_SLIDE);
+  }
+  if (stove_on() && !in_flue(pos.x, pos.z)) {
+    let top = P.stove.y - 0.5;
+    if (pos.y > top) {
+      if (v.y > impact) { hits.x += 1.0; hits.z += 1.0; }
+      pos.y = top - (pos.y - top) * EMBER_REST;
+      // A spark that hits hard skitters off sideways along the ceiling: a
+      // little scatter, seeded like the rest of its dice.
+      let skitter = (rand(seed + 3u) - 0.5) * 2.0 * max(v.y, 0.0);
+      v = vec3<f32>(v.x * EMBER_SLIDE + skitter, -abs(v.y) * EMBER_REST, v.z * EMBER_SLIDE);
+    }
+  }
+  // Up the flue, or out of an open fire's top: gone.
+  if (pos.y > f32(gh()) - 2.0) {
+    heat = 0.0;
+    if (stove_on()) { hits.w = 1.0; }
+  }
+  // Front glass and back wall, unseen: kept inside, quietly.
+  if (pos.z < 0.5) { pos.z = 0.5; v.z = abs(v.z) * EMBER_REST; }
+  if (pos.z > f32(gd()) - 1.5) { pos.z = f32(gd()) - 1.5; v.z = -abs(v.z) * EMBER_REST; }
+  if (pos.y < 0.5) { pos.y = 0.5; v.y = abs(v.y) * EMBER_REST; }
+  parts[4u * k] = vec4<f32>(pos, heat);
+  parts[4u * k + 1u] = vec4<f32>(v, b.w);
+  parts[4u * k + 2u] = vec4<f32>(prev, age);
+  parts[4u * k + 3u] = hits;
 }
 
 // ---------------------------------------------------------------- the fire's light

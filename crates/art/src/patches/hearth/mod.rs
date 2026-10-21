@@ -329,7 +329,11 @@ pub(crate) struct Hearth {
     /// filled since, and the sparks waiting to go in with the next step.
     sparks: Vec<[f32; 4]>,
     pending: Vec<usize>,
-    spawns: Vec<(usize, [[f32; 4]; 3])>,
+    spawns: Vec<(usize, [[f32; 4]; 4])>,
+    /// Each slot's bounce counters as last read back, and the running
+    /// totals (card 376).
+    bounces_read: [[f32; 4]; EMBERS],
+    pub(crate) bounces: Bounces,
     spark_dice: Rng,
     logs: Vec<Log>,
     salt: u32,
@@ -398,7 +402,9 @@ impl Hearth {
             grid,
             sim: None,
             camera: Camera::new(&grid),
-            sparks: vec![[0.0; 4]; EMBERS * 3],
+            sparks: vec![[0.0; 4]; EMBERS * 4],
+            bounces_read: [[0.0; 4]; EMBERS],
+            bounces: Bounces::default(),
             pending: Vec::new(),
             spawns: Vec::new(),
             spark_dice: Rng::new(rng.u64()),
@@ -566,21 +572,28 @@ impl Hearth {
 
     /// Throw a spark up from `(x, z)` on the bed into a free slot, if there
     /// is one. `vigour` in `0..1` is how hard its fire is burning.
-    fn spawn(&mut self, x: f32, z: f32, vigour: f32) {
+    /// A settle's `burst` throws its sparks harder and wider: those are
+    /// the ones that reach the firebox walls (card 376).
+    fn spawn(&mut self, x: f32, z: f32, vigour: f32, burst: bool) {
         self.sparks_thrown += 1;
-        let free = (0..EMBERS).find(|k| self.sparks[3 * k][3] <= EMBER_OUT && !self.pending.contains(k));
+        let free = (0..EMBERS).find(|k| self.sparks[4 * k][3] <= EMBER_OUT && !self.pending.contains(k));
         let Some(slot) = free else { return };
         let r = &mut self.spark_dice;
         let k = self.grid.k;
         let pos = [x + r.range(-3.0, 3.0), BED_ROWS + 3.0, z + r.range(-2.0, 2.0)].map(|v| v * k);
         let heat = r.range(0.88, 1.0);
-        let v = [r.range(-12.0, 12.0), r.range(30.0, 55.0) * (0.7 + 0.5 * vigour), r.range(-6.0, 6.0)].map(|v| v * k);
-        let cooling = r.range(0.16, 0.30);
+        let wide = if burst { 90.0 } else { 12.0 };
+        let v = [r.range(-wide, wide), r.range(30.0, 55.0) * (0.7 + 0.5 * vigour), r.range(-6.0, 6.0)].map(|v| v * k);
+        // A burst's sparks are flagged in the cooling slot (plus 1): the air
+        // grips them less, so they carry their throw to the walls.
+        let cooling = r.range(0.16, 0.30) + if burst { 1.0 } else { 0.0 };
         self.pending.push(slot);
         // Until the next read-back says otherwise, the slot is this spark.
-        self.sparks[3 * slot] = [pos[0], pos[1], pos[2], heat];
-        self.sparks[3 * slot + 2] = [pos[0], pos[1], pos[2], 0.0];
-        self.spawns.push((slot, [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0]]));
+        self.sparks[4 * slot] = [pos[0], pos[1], pos[2], heat];
+        self.sparks[4 * slot + 2] = [pos[0], pos[1], pos[2], 0.0];
+        self.sparks[4 * slot + 3] = [0.0; 4];
+        self.bounces_read[slot] = [0.0; 4];
+        self.spawns.push((slot, [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0], [0.0; 4]]));
     }
 
     /// The dice: gusts, log settles, and single sparks.
@@ -627,7 +640,7 @@ impl Hearth {
             }
         }
         if let Some((x, z)) = burst {
-            self.spawn(x, z, 1.0);
+            self.spawn(x, z, 1.0, true);
         }
 
         // Single sparks: on average one every six seconds or so at the
@@ -648,7 +661,7 @@ impl Hearth {
             }
             let log = &self.logs[which];
             let (x, z) = (log.x + self.dice.range(-0.6, 0.6) * log.half, log.z);
-            self.spawn(x, z, vigour.min(1.0));
+            self.spawn(x, z, vigour.min(1.0), false);
         }
     }
 
@@ -757,8 +770,8 @@ impl Hearth {
         let soot: Vec<f32> =
             light.iter().zip(bare).map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 }).collect();
         for k in 0..EMBERS {
-            if self.sparks[3 * k][3] > EMBER_OUT {
-                let spark = self.sparks[3 * k..3 * k + 3].to_vec();
+            if self.sparks[4 * k][3] > EMBER_OUT {
+                let spark = self.sparks[4 * k..4 * k + 3].to_vec();
                 self.draw_ember(&mut light, &spark);
             }
         }
@@ -796,7 +809,7 @@ impl Hearth {
     /// For tests: how many embers are alive.
     #[cfg(test)]
     pub(crate) fn ember_count(&self) -> usize {
-        (0..EMBERS).filter(|k| self.sparks[3 * k][3] > EMBER_OUT).count()
+        (0..EMBERS).filter(|k| self.sparks[4 * k][3] > EMBER_OUT).count()
     }
 
     #[cfg(test)]
@@ -814,6 +827,16 @@ fn on_levels(c: Rgb) -> Rgb {
         crate::color::srgb8_to_linear(crate::panel::level_code(level))
     };
     Rgb::new(snap(c.r), snap(c.g), snap(c.b))
+}
+
+/// Sparks against the firebox (card 376), counted as the read-backs show
+/// them.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Bounces {
+    pub walls: u32,
+    pub ceiling: u32,
+    /// Sparks that went up the flue.
+    pub flue: u32,
 }
 
 /// A palette as the painter uses it (card 375).
@@ -886,6 +909,15 @@ impl Patch for Hearth {
         let Some((leds, sparks)) = sim.picture(&params) else { return Frame::black() };
         self.sparks = sparks;
         self.pending.clear();
+        for k in 0..EMBERS {
+            let now = self.sparks[4 * k + 3];
+            let was = self.bounces_read[k];
+            let more = |i: usize| (now[i] - was[i]).max(0.0) as u32;
+            self.bounces.walls += more(1);
+            self.bounces.ceiling += more(2);
+            self.bounces.flue += more(3);
+            self.bounces_read[k] = now;
+        }
         self.paint(ctx, &leds)
     }
 

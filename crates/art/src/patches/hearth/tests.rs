@@ -885,6 +885,48 @@ fn swatches() {
     e.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).expect("png");
 }
 
+/// Not a test: when sparks bounce (card 376). `HEARTH_MINUTES` (default 3)
+/// at `HEARTH_SET` params, seed `HEARTH_SEED`; prints each bounce and the
+/// rates.
+#[test]
+#[ignore]
+fn bounce_log() {
+    let Some(_gpu) = gpu() else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+    let mut params = Params::defaults(PARAMS);
+    for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+        if let Some((k, v)) = kv.split_once('=') {
+            params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+        }
+    }
+    let minutes = env("HEARTH_MINUTES", 3.0);
+    let mut h = Hearth::new(env("HEARTH_SEED", 1.0) as u64);
+    let mut last = h.bounces;
+    for i in 1..=(minutes * 60.0 / DT) as usize {
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+        let b = h.bounces;
+        let t = i as f64 * DT;
+        if b.walls > last.walls {
+            eprintln!("{t:7.2} s  wall");
+        }
+        if b.ceiling > last.ceiling {
+            eprintln!("{t:7.2} s  ceiling");
+        }
+        if b.flue > last.flue {
+            eprintln!("{t:7.2} s  flue");
+        }
+        last = b;
+    }
+    let b = h.bounces;
+    eprintln!(
+        "{minutes} min: {} wall, {} ceiling bounces ({:.1} a minute), {} up the flue",
+        b.walls,
+        b.ceiling,
+        (b.walls + b.ceiling) as f64 / minutes,
+        b.flue
+    );
+}
+
 /// For the tools: `HEARTH_GRID="k,depth,sweeps,samples,march"`, any prefix
 /// of it, the rest as shipped.
 fn grid_from_env() -> Grid {
