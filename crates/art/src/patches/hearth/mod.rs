@@ -76,13 +76,26 @@ pub const DEF: PatchDef = PatchDef {
     seeded: true,
 };
 
+// Card 373: the owner liked card 372's fire best with these sliders all the
+// way up, so card 372's maximum is now about [`OLD_MAX`] of each range, the
+// default sits there, and the rest of the range is headroom above it.
 const PARAMS: &[ParamSpec] = &[
-    param("size", "How big the fire is (eases over tens of seconds)", 0.0, 1.0, 0.01, 0.5),
-    param("gusts", "How often a draught leans the flames", 0.0, 1.0, 0.01, 0.4),
-    param("embers", "How many sparks fly up", 0.0, 1.0, 0.01, 0.4),
+    param("size", "How big the fire is (eases over tens of seconds)", 0.0, 1.0, 0.01, 0.6),
+    param("gusts", "How often the draught surges", 0.0, 1.0, 0.01, 0.6),
+    param("embers", "How many sparks fly up", 0.0, 1.0, 0.01, 0.6),
     param("smoke", "How much smoke shows", 0.0, 1.0, 0.01, 0.3),
     param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
 ];
+
+/// Where card 372's maximum sits on the rescaled `size`, `gusts` and
+/// `embers` (card 373): a slider at this value behaves as card 372's did at
+/// 1, and the range runs on to 1 / `OLD_MAX` of it.
+const OLD_MAX: f32 = 0.6;
+
+/// A slider in card 372's units: 1 is its old maximum.
+fn intensity(ctx: &Ctx, id: &str) -> f32 {
+    ctx.get(id) / OLD_MAX
+}
 
 /// Grid cells per LED across the panel.
 const CELLS: usize = 3;
@@ -290,7 +303,14 @@ impl Hearth {
     /// The uniform block for a step at the current eased size: the physical
     /// constants (cells and seconds, tuned by eye), the camera, the wind.
     fn params(&self) -> Params {
-        let s = self.size;
+        let s = self.size / OLD_MAX;
+        // Card 372's cooling curve up to its old maximum, and on down past
+        // it for the headroom: a hotter, taller fire.
+        let (cool4, cool1) = if s <= 1.0 {
+            (0.9 + 1.5 * (1.0 - s) * (1.0 - s), 0.7 + 2.3 * (1.0 - s) * (1.0 - s))
+        } else {
+            (0.9 - 0.5 * (s - 1.0), 0.7 - 0.45 * (s - 1.0))
+        };
         let c = &self.camera;
         let scale = |v: [f32; 3], k: f32| [v[0] * k, v[1] * k, v[2] * k, 0.0];
         Params {
@@ -302,7 +322,7 @@ impl Hearth {
             b: [1.4, 5.0, 2.0 - 0.6 * s, 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
-            c: [0.9 + 1.5 * (1.0 - s) * (1.0 - s), 0.7 + 2.3 * (1.0 - s) * (1.0 - s), 1.5, 0.5],
+            c: [cool4, cool1, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
             d: [0.55, 0.08, 1.0, 0.4],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
@@ -348,7 +368,7 @@ impl Hearth {
         let t = self.t as f32;
         let breath = self.breath();
         let strengths: Vec<f32> = (0..self.logs.len()).map(|k| self.log_strength(k)).collect();
-        let lo = 0.55 - 0.45 * self.size;
+        let lo = 0.55 - 0.45 * self.size / OLD_MAX;
         for z in 0..GD {
             let zf = z as f32;
             for x in 0..GW {
@@ -414,16 +434,17 @@ impl Hearth {
     /// The dice: gusts, log settles, and single sparks.
     fn events(&mut self, ctx: &Ctx) {
         let dt = STEP;
-        let gusts = ctx.get("gusts");
+        let gusts = intensity(ctx, "gusts");
         if self.gust.as_ref().is_some_and(|g| self.t > g.start + g.length) {
             self.gust = None;
         }
-        // A mean wait of four minutes at 0, rising to one every half minute
-        // at 1, and none at all when it is turned right off.
+        // A mean wait of four minutes near 0, one every half minute at card
+        // 372's maximum (now the default), and more often above it; none at
+        // all when it is turned right off.
         if gusts > 0.0 && self.gust.is_none() && self.t > self.calm_until {
             let mean = 240.0 * (30.0f64 / 240.0).powf(f64::from(gusts));
             if f64::from(self.dice.f32()) < dt / mean {
-                let peak = self.dice.range(11.0, 18.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
+                let peak = self.dice.range(11.0, 18.0) * (0.6 + 0.8 * gusts.min(1.4)) * self.dice.sign();
                 let length = f64::from(self.dice.range(4.5, 9.0));
                 self.gust = Some(Gust { start: self.t, length, peak });
                 self.calm_until = self.t + length + 15.0;
@@ -435,9 +456,12 @@ impl Hearth {
         if self.settle.as_ref().is_some_and(|s| self.t > s.start + 8.0) {
             self.settle = None;
         }
-        if self.settle.is_none() && f64::from(self.dice.f32()) < dt / 200.0 && self.t > 4.0 {
+        // A mean wait of 150 s at the default, about 100 s at the top.
+        let embers = intensity(ctx, "embers");
+        let settle_mean = 150.0 / (0.3 + 0.7 * f64::from(embers));
+        if self.settle.is_none() && f64::from(self.dice.f32()) < dt / settle_mean && self.t > 4.0 {
             let log = (self.dice.u64() % self.logs.len() as u64) as usize;
-            let sparks = 3 + (ctx.get("embers") * 6.0).round() as u32;
+            let sparks = 3 + (embers * 4.0).round() as u32;
             self.settle = Some(Settle { start: self.t, log, sparks, next_spark: self.t + 0.25 });
             self.settles_seen += 1;
         }
@@ -456,8 +480,8 @@ impl Hearth {
 
         // Single sparks: on average one every six seconds or so at the
         // default, fewer from a small fire.
-        let vigour = (0.25 + self.size).min(1.0) * self.breath();
-        let rate = f64::from(ctx.get("embers") * 0.42 * vigour);
+        let vigour = (0.25 + self.size / OLD_MAX).min(1.6) * self.breath();
+        let rate = f64::from(embers * 0.42 * vigour);
         if f64::from(self.dice.f32()) < dt * rate {
             let weights: Vec<f32> = (0..self.logs.len()).map(|k| self.log_strength(k)).collect();
             let total: f32 = weights.iter().sum();

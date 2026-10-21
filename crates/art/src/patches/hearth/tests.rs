@@ -152,9 +152,10 @@ fn the_picture_does_not_jump_when_size_moves() {
     assert!(across <= natural + 0.01, "the change of size moved the picture by {across} (it moves by up to {natural} on its own)");
 }
 
-/// The rare things are rare, and they happen: over twenty minutes at the
-/// default, a handful of gusts and log settles, and a spark every few
-/// seconds. The dice are the CPU's, so this needs no GPU.
+/// The occasional things happen and stay occasional: over twenty minutes at
+/// the default (card 373 made the default card 372's maximum), a gust about
+/// once a minute, a log settling every few minutes, and a spark every couple
+/// of seconds. The dice are the CPU's, so this needs no GPU.
 #[test]
 fn the_rare_things_happen_rarely() {
     let params = Params::defaults(PARAMS);
@@ -168,9 +169,9 @@ fn the_rare_things_happen_rarely() {
         }
         let (gusts, settles, sparks) = (h.gusts_seen, h.settles_seen, h.sparks_thrown);
         eprintln!("seed {seed}, twenty minutes: {gusts} gusts, {settles} settles, {sparks} sparks");
-        assert!((2..=20).contains(&gusts), "{gusts} gusts");
-        assert!((1..=15).contains(&settles), "{settles} settles");
-        assert!((60..=400).contains(&sparks), "{sparks} sparks: about one every few seconds");
+        assert!((10..=40).contains(&gusts), "{gusts} gusts");
+        assert!((3..=20).contains(&settles), "{settles} settles");
+        assert!((300..=1000).contains(&sparks), "{sparks} sparks: about one every couple of seconds");
     }
 }
 
@@ -276,8 +277,8 @@ fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     let gusts = h.gusts_seen;
     let settles = h.settles_seen;
     eprintln!("twenty minutes: {gusts} gusts, {settles} settles, mean {:.2} embers (max {ember_max_calm} outside a burst)", ember_sum as f32 / ember_frames as f32);
-    assert!((2..=20).contains(&gusts), "{gusts} gusts in twenty minutes");
-    assert!((1..=15).contains(&settles), "{settles} settles in twenty minutes");
+    assert!((10..=40).contains(&gusts), "{gusts} gusts in twenty minutes");
+    assert!((3..=20).contains(&settles), "{settles} settles in twenty minutes");
     let mean = ember_sum as f32 / ember_frames as f32;
     assert!(mean < 1.5, "{mean:.2} embers on average");
     assert!(ember_max_calm <= 5, "{ember_max_calm} embers at once outside a burst");
