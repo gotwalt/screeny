@@ -62,6 +62,79 @@ fn the_first_frame_is_already_burning() {
     assert!(lit > 0.01 && base > 5, "lit {lit}, base {base}");
 }
 
+/// Card 373: soot is neutral. Its palette entries are greys (OKLCH chroma
+/// near 0) whatever `color` is, and none of them is a fire colour.
+#[test]
+fn smoke_is_grey() {
+    let mut h = Hearth::new(1);
+    for color in [1.0, 0.5, 0.0] {
+        let pal = h.palette(color);
+        for c in &pal[FIRE_STEPS + 1..] {
+            let lab = crate::color::to_oklab(*c);
+            let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
+            assert!(chroma < 0.01, "smoke entry {c:?} has chroma {chroma}");
+        }
+    }
+}
+
+/// Card 373: the firebox ceiling is solid. After a few seconds of stove at
+/// full size and draft, nothing moves in the ceiling and nothing has got
+/// into it - no heat, no smoke - while the flue above it carries gas up.
+#[test]
+fn the_ceiling_is_solid_and_the_flue_draws() {
+    if !gpu() {
+        return;
+    }
+    let mut params = Params::defaults(PARAMS);
+    params.set(PARAMS, "size", 1.0);
+    params.set(PARAMS, "draft", 1.0);
+    let mut h = Hearth::new(3);
+    for i in 1..=120 {
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+    }
+    let Some(Some(sim)) = &h.sim else { return };
+    let (vel, scal) = (sim.velocities(), sim.scalars());
+    let flue = h.flue;
+    let in_flue = |x: usize, z: usize| {
+        let (dx, dz) = (x as f32 - 0.5 * (GW - 1) as f32, z as f32 - 0.5 * (GD - 1) as f32);
+        dx * dx + dz * dz < flue * flue
+    };
+    let (mut up, mut n) = (0.0f32, 0);
+    for z in 0..GD {
+        for y in CEILING..GH {
+            for x in 0..GW {
+                let i = (z * GH + y) * GW + x;
+                if in_flue(x, z) {
+                    up += vel[i][1];
+                    n += 1;
+                } else {
+                    assert_eq!(vel[i], [0.0; 4], "gas moving inside the ceiling at ({x}, {y}, {z})");
+                    assert_eq!(scal[i], [0.0; 4], "heat or smoke inside the ceiling at ({x}, {y}, {z})");
+                }
+            }
+        }
+    }
+    let up = up / n as f32;
+    assert!(up > 10.0, "the flue draws up at {up:.1} cells/s on average");
+}
+
+/// The new parameters are as deterministic as the old.
+#[test]
+fn the_stove_is_deterministic() {
+    if !gpu() {
+        return;
+    }
+    let mut params = Params::defaults(PARAMS);
+    params.set(PARAMS, "draft", 0.9);
+    params.set(PARAMS, "flue", 0.8);
+    params.set(PARAMS, "smoke", 0.7);
+    let (mut a, mut b) = (Hearth::new(9), Hearth::new(9));
+    for i in 1..=60 {
+        let ctx = ctx_at(i as f64 * DT, DT, &params);
+        assert_eq!(indices(&a.render(&ctx)), indices(&b.render(&ctx)), "frame {i}");
+    }
+}
+
 /// Every frame is at most 32 colours - exact on the wire whatever it looks
 /// like - and the pipeline agrees.
 #[test]
@@ -85,12 +158,18 @@ fn every_frame_goes_out_exact() {
 }
 
 /// No white anywhere, at any setting: the hottest colour is a pale gold,
-/// blue well under red, and nothing near full brightness.
+/// blue well under red, and nothing near full brightness. (The fire's
+/// entries; card 373's soot greys are dim neutrals, checked in
+/// `smoke_is_grey`.)
 #[test]
 fn the_palette_has_no_white_and_color_zero_is_grey() {
     let mut h = Hearth::new(1);
-    for c in h.palette(1.0) {
+    let pal = h.palette(1.0);
+    for c in &pal[..=FIRE_STEPS] {
         assert!(c.b <= 0.6 * c.r + 1e-3 && c.luma() < 0.6, "{c:?}");
+    }
+    for c in &pal[FIRE_STEPS + 1..] {
+        assert!(c.luma() < 0.06, "soot is dim: {c:?}");
     }
     for c in h.palette(0.0) {
         assert!((c.r - c.g).abs() < 0.02 && (c.g - c.b).abs() < 0.02, "grayscale: {c:?}");

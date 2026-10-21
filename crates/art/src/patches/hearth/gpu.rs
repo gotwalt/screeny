@@ -208,10 +208,21 @@ impl Sim {
         q.submit([enc.finish()]);
     }
 
-    /// For tuning: the whole scalar field (temperature, fuel, smoke, source)
-    /// read back.
+    /// For tuning and tests: the whole scalar field (temperature, fuel,
+    /// smoke, source) read back.
     #[cfg(test)]
     pub fn scalars(&self) -> Vec<[f32; 4]> {
+        self.read_field(&self.scal)
+    }
+
+    /// For tests: the whole velocity field read back.
+    #[cfg(test)]
+    pub fn velocities(&self) -> Vec<[f32; 4]> {
+        self.read_field(&self.vel)
+    }
+
+    #[cfg(test)]
+    fn read_field(&self, field: &wgpu::Buffer) -> Vec<[f32; 4]> {
         let size = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
         let read = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scal read"),
@@ -220,7 +231,7 @@ impl Sim {
             mapped_at_creation: false,
         });
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        enc.copy_buffer_to_buffer(&self.scal, 0, &read, 0, size);
+        enc.copy_buffer_to_buffer(field, 0, &read, 0, size);
         self.gpu.queue.submit([enc.finish()]);
         let slice = read.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
