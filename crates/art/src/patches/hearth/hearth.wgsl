@@ -63,7 +63,6 @@ struct Params {
 @group(0) @binding(13) var<storage, read_write> out: array<vec4<f32>>;
 @group(0) @binding(14) var<uniform> lut: array<vec4<f32>, 512>;
 
-const BED_ROWS: u32 = 5u;
 const SOR: f32 = 1.8;
 const EMBER_OUT: f32 = 0.30;
 const LIGHT_CELL: u32 = 4u;
@@ -128,7 +127,8 @@ fn keep_in(p: vec3<f32>) -> vec3<f32> {
 const VMAX: f32 = 150.0;
 
 fn tame(v: vec3<f32>) -> vec3<f32> {
-  return clamp(v, vec3<f32>(-VMAX), vec3<f32>(VMAX));
+  let m = VMAX * P.stove.w;
+  return clamp(v, vec3<f32>(-m), vec3<f32>(m));
 }
 
 fn emit(theta: f32) -> vec3<f32> {
@@ -267,9 +267,14 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   var s = scal[i];
   var temp = s.x;
   var fuel = s.y;
-  if (g.y < BED_ROWS) {
-    // Most in the middle of the log's height, a little at its edges.
-    let k = 1.0 - abs(f32(g.y) - 2.0) / 3.0;
+  // The logs: the bottom five rows, in design units (card 374: `stove.w` is
+  // grid cells per design unit).
+  let yd = f32(g.y) / P.stove.w;
+  if (yd < 5.0) {
+    // Full through the middle two rows of the log's height, tapering to its
+    // edges. Flat-topped so that a coarser grid, whose rows fall between the
+    // design rows, still holds the log at full fuel (card 374).
+    let k = clamp(1.0 - (abs(yd - 2.0) - 1.0) / 2.0, 0.0, 1.0);
     let b = bed[g.z * gw() + g.x];
     fuel = max(fuel, b.x * k);
     temp = max(temp, b.y * k);
@@ -293,14 +298,14 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
     let y = f32(g.y);
     let z = f32(g.z);
     if (y >= P.stove.y - 3.0 && in_flue(x, z)) {
-      v.y += dt * DRAFT_PULL * P.stove.x;
+      v.y += dt * DRAFT_PULL * P.stove.w * P.stove.x;
     } else {
       // Toward the flue's axis, across and in depth.
       let to = vec2<f32>(0.5 * f32(gw() - 1u) - x, 0.5 * f32(gd() - 1u) - z);
       let dir = to / (length(to) + 1.0);
-      let k = 0.35 + 0.65 * smoothstep(P.stove.y - DRAFT_POOL, P.stove.y - 2.0, y);
-      v.x += dt * DRAFT_DRAW * P.stove.x * k * dir.x;
-      v.z += dt * DRAFT_DRAW * P.stove.x * k * dir.y;
+      let k = 0.35 + 0.65 * smoothstep(P.stove.y - DRAFT_POOL * P.stove.w, P.stove.y - 2.0, y);
+      v.x += dt * DRAFT_DRAW * P.stove.w * P.stove.x * k * dir.x;
+      v.z += dt * DRAFT_DRAW * P.stove.w * P.stove.x * k * dir.y;
     }
   }
   v = tame(v);
@@ -443,8 +448,8 @@ fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
   // Small and light: the air has it within half a second, and it keeps a
   // lift of its own only while it is hot. A jitter of its own on top.
   let seed = P.dims.w * 64u + k * 4u;
-  let jitter = vec3<f32>(rand(seed) - 0.5, rand(seed + 1u) - 0.5, rand(seed + 2u) - 0.5) * vec3<f32>(60.0, 30.0, 30.0);
-  let lift = 45.0 * a.w * a.w + 6.0;
+  let jitter = vec3<f32>(rand(seed) - 0.5, rand(seed + 1u) - 0.5, rand(seed + 2u) - 0.5) * vec3<f32>(60.0, 30.0, 30.0) * P.stove.w;
+  let lift = (45.0 * a.w * a.w + 6.0) * P.stove.w;
   var v = b.xyz + dt * (2.2 * (fluid - b.xyz) + vec3<f32>(0.0, lift, 0.0) + jitter);
   let prev = a.xyz;
   let pos = a.xyz + dt * v;

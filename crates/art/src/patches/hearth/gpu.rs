@@ -36,8 +36,6 @@ pub struct Params {
 
 /// Ember slots; the shader reads the count from `coarse.w`.
 pub const EMBERS: usize = 16;
-/// Pressure sweeps a step (each a red and a black half).
-pub const SWEEPS: usize = 32;
 const LIGHT_CELL: u32 = 4;
 
 /// What [`Sim::picture`] reads back: (fire light rgb, lit smoke) per LED,
@@ -107,6 +105,8 @@ pub struct Sim {
     passes: Vec<(&'static str, Pass)>,
     /// Card 374's cost tool, when it is measuring.
     pub profile: Option<std::cell::RefCell<Profile>>,
+    /// Pressure sweeps per step.
+    sweeps: usize,
 }
 
 /// Which bindings each entry point uses: a default pipeline layout holds only
@@ -133,7 +133,7 @@ const ENTRIES: &[(&str, &[u32])] = &[
 ];
 
 impl Sim {
-    pub fn new(gpu: &'static Gpu, dims: [u32; 3], lut: &[[f32; 4]; 512]) -> Sim {
+    pub fn new(gpu: &'static Gpu, dims: [u32; 3], sweeps: usize, lut: &[[f32; 4]; 512]) -> Sim {
         let device = &gpu.device;
         let cells = u64::from(dims[0] * dims[1] * dims[2]);
         let coarse = dims.map(|d| d / LIGHT_CELL);
@@ -195,7 +195,7 @@ impl Sim {
                 (*name, Pass { pipeline, bind })
             })
             .collect();
-        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, parts, out, out_read, parts_read, passes, profile: None }
+        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, parts, out, out_read, parts_read, passes, profile: None, sweeps }
     }
 
     fn pass(&self, name: &str) -> &Pass {
@@ -286,7 +286,7 @@ impl Sim {
         self.stage(&mut enc, "divergence", |cp| self.run(cp, "divergence", g));
         let half = [g[0].div_ceil(2), g[1], g[2]];
         self.stage(&mut enc, "pressure", |cp| {
-            for _ in 0..SWEEPS {
+            for _ in 0..self.sweeps {
                 self.run(cp, "pres_red", half);
                 self.run(cp, "pres_black", half);
             }

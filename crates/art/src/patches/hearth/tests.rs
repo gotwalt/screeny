@@ -75,7 +75,7 @@ fn first_frame_parts() {
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(1);
     let t = std::time::Instant::now();
-    h.sim = Some(Some(Sim::new(gpu, [GW as u32, GH as u32, GD as u32], &h.ramp.table())));
+    h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table())));
     let built = t.elapsed().as_secs_f64();
     let t = std::time::Instant::now();
     h.render(&ctx_at(0.0, 0.0, &params));
@@ -136,16 +136,17 @@ fn the_ceiling_is_solid_and_the_flue_draws() {
     }
     let Some(Some(sim)) = &h.sim else { return };
     let (vel, scal) = (sim.velocities(), sim.scalars());
-    let flue = h.flue;
+    let flue = h.flue * h.grid.k;
+    let (gw, gh, gd) = (h.grid.gw(), h.grid.gh(), h.grid.gd());
     let in_flue = |x: usize, z: usize| {
-        let (dx, dz) = (x as f32 - 0.5 * (GW - 1) as f32, z as f32 - 0.5 * (GD - 1) as f32);
+        let (dx, dz) = (x as f32 - 0.5 * (gw - 1) as f32, z as f32 - 0.5 * (gd - 1) as f32);
         dx * dx + dz * dz < flue * flue
     };
     let (mut up, mut n) = (0.0f32, 0);
-    for z in 0..GD {
-        for y in CEILING..GH {
-            for x in 0..GW {
-                let i = (z * GH + y) * GW + x;
+    for z in 0..gd {
+        for y in h.grid.ceiling()..gh {
+            for x in 0..gw {
+                let i = (z * gh + y) * gw + x;
                 if in_flue(x, z) {
                     up += vel[i][1];
                     n += 1;
@@ -440,7 +441,7 @@ fn raw() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = Hearth::new(env("HEARTH_SEED", 1.0) as u64);
+    let mut h = Hearth::with_grid(env("HEARTH_SEED", 1.0) as u64, grid_from_env());
     for i in 1..=(at / DT) as usize {
         h.render(&ctx_at(i as f64 * DT, DT, &params));
     }
@@ -477,14 +478,15 @@ fn raw() {
     // The volume itself, from the front (max over depth) and from the side
     // (max over x): temperature red, smoke green, fuel blue.
     let scal = sim.scalars();
-    let (vw, vh) = (GW + 4 + GD, GH);
+    let (gw, gh, gd) = (h.grid.gw(), h.grid.gh(), h.grid.gd());
+    let (vw, vh) = (gw + 4 + gd, gh);
     let mut img = vec![0u8; vw * vh * 3];
-    for z in 0..GD {
-        for y in 0..GH {
-            for x in 0..GW {
-                let c = scal[(z * GH + y) * GW + x];
+    for z in 0..gd {
+        for y in 0..gh {
+            for x in 0..gw {
+                let c = scal[(z * gh + y) * gw + x];
                 let v = [c[0], c[2].min(1.0), c[1].min(1.0)].map(|v| (v * 255.0) as u8);
-                for (px, py) in [(x, GH - 1 - y), (GW + 4 + z, GH - 1 - y)] {
+                for (px, py) in [(x, gh - 1 - y), (gw + 4 + z, gh - 1 - y)] {
                     let o = (py * vw + px) * 3;
                     for k in 0..3 {
                         img[o + k] = img[o + k].max(v[k]);
@@ -494,7 +496,7 @@ fn raw() {
         }
     }
     for x in 0..vw {
-        let o = ((GH - 1 - BELOW) * vw + x) * 3;
+        let o = ((gh - 1 - (BELOW * h.grid.k) as usize) * vw + x) * 3;
         img[o + 2] = img[o + 2].max(120);
     }
     let path = format!("{dir}/vol-{at}-{size}.png");
@@ -556,7 +558,7 @@ fn strip() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = Hearth::new(seed);
+    let mut h = Hearth::with_grid(seed, grid_from_env());
     let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
     let last = times.last().copied().unwrap_or(0.0);
     let mut next = 0;
@@ -624,8 +626,8 @@ fn stages() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = Hearth::new(1);
-    let mut sim = Sim::new(gpu, [GW as u32, GH as u32, GD as u32], &h.ramp.table());
+    let mut h = Hearth::with_grid(1, grid_from_env());
+    let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table());
     sim.profile = Some(std::cell::RefCell::new(gpu::Profile::new(&gpu.device)));
     h.sim = Some(Some(sim));
     let warm = (env("HEARTH_AT", 10.0) / DT) as usize;
@@ -676,14 +678,27 @@ fn stages() {
 #[test]
 #[ignore]
 fn cost() {
-    let params = Params::defaults(PARAMS);
-    let mut h = Hearth::new(1);
-    h.render(&ctx_at(0.0, 0.0, &params));
-    let start = std::time::Instant::now();
-    for i in 1..=90 {
-        h.render(&ctx_at(i as f64 * DT, DT, &params));
+    let mut params = Params::defaults(PARAMS);
+    for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+        if let Some((k, v)) = kv.split_once('=') {
+            params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+        }
     }
-    eprintln!("frame {:.2} ms", start.elapsed().as_secs_f64() / 90.0 * 1e3);
+    let mut h = Hearth::with_grid(1, grid_from_env());
+    // Ten seconds of fire first, then 300 frames timed one by one, as a
+    // player would run them: no per-stage waits.
+    for i in 0..300 {
+        h.render(&ctx_at(i as f64 * DT, if i == 0 { 0.0 } else { DT }, &params));
+    }
+    let mut times = Vec::new();
+    for i in 300..600 {
+        let t = std::time::Instant::now();
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+        times.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    times.sort_by(f64::total_cmp);
+    let pick = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+    eprintln!("frame ms: median {:.2}  p95 {:.2}  max {:.2}", pick(0.5), pick(0.95), pick(1.0));
 }
 
 /// Not a test: prints how big the fire is over a minute at a few sizes.
@@ -698,12 +713,13 @@ fn survey() {
         for seed in [1, 2, 3] {
             let mut params = Params::defaults(PARAMS);
             params.set(PARAMS, "size", size);
-            let mut h = Hearth::new(seed);
+            let mut h = Hearth::with_grid(seed, grid_from_env());
             let dt = 1.0 / 30.0;
             let (mut lit, mut tall, mut base, mut empty, mut tallmax, mut smoke, mut n) = (0.0, 0, 0, 0, 0, 0, 0);
+            let (mut light, mut gold) = (0.0f32, 0usize);
             for i in 1..=900 {
                 let f = h.render(&ctx_at(i as f64 * dt, dt, &params));
-                if i % 10 == 0 {
+                if i % 10 == 0 && i > 90 {
                     let (l, t, b, s) = measure(&f);
                     lit += l;
                     tall += t;
@@ -711,16 +727,43 @@ fn survey() {
                     base += b;
                     smoke += s;
                     empty += usize::from(t == 0);
+                    light += level(&f);
+                    gold += indices(&f).iter().filter(|k| (FIRE_STEPS - 5..=FIRE_STEPS).contains(&(**k as usize))).count();
                     n += 1;
                 }
             }
             eprintln!(
-                "size {size:.2} seed {seed}: lit {:.1}%  mean tallest {:.1} (max {tallmax})  base cols {:.1}  smoke px {:.1}  empty {empty}/{n}",
+                "size {size:.2} seed {seed}: lit {:.1}%  mean tallest {:.1} (max {tallmax})  base cols {:.1}  smoke px {:.1}  empty {empty}/{n}  level {:.4}  gold px {:.1}",
                 100.0 * lit / n as f32,
                 tall as f32 / n as f32,
                 base as f32 / n as f32,
-                smoke as f32 / n as f32
+                smoke as f32 / n as f32,
+                light / n as f32,
+                gold as f32 / n as f32
             );
         }
     }
+}
+
+/// For the tools: `HEARTH_GRID="k,depth,sweeps,samples,march"`, any prefix
+/// of it, the rest as shipped.
+fn grid_from_env() -> Grid {
+    let mut g = Grid::SHIPPED;
+    let v: Vec<f32> = std::env::var("HEARTH_GRID").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    if let Some(x) = v.first() {
+        g.k = *x;
+    }
+    if let Some(x) = v.get(1) {
+        g.depth = *x;
+    }
+    if let Some(x) = v.get(2) {
+        g.sweeps = *x as usize;
+    }
+    if let Some(x) = v.get(3) {
+        g.samples = *x as u32;
+    }
+    if let Some(x) = v.get(4) {
+        g.march = *x;
+    }
+    g
 }

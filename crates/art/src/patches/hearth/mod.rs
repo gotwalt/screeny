@@ -112,28 +112,72 @@ fn intensity(ctx: &Ctx, id: &str) -> f32 {
     ctx.get(id) / OLD_MAX
 }
 
-/// Grid cells per LED across the panel.
-const CELLS: usize = 3;
-const GW: usize = W * CELLS;
-const GH: usize = 128;
-const GD: usize = 48;
-/// The grid row the bottom edge of the frame sits on (at the middle depth):
-/// the logs are below it.
-const BELOW: usize = 9;
-/// The firebox ceiling (card 373): the grid row at the frame's top edge, at
-/// the middle depth. Only with a draft.
-const CEILING: usize = BELOW + 3 * H;
+// Space is described in *design units*: card 372's cells, three to an LED
+// across. The simulation grid ([`Grid`]) has `k` cells to a design unit, so
+// the same firebox can be simulated finer or coarser (card 374).
+
+/// The firebox in design units: across, up, into the hearth.
+const WIDE: f32 = 3.0 * W as f32;
+const TALL: f32 = 128.0;
+/// The row the bottom edge of the frame sits on (at the middle depth): the
+/// logs are below it.
+const BELOW: f32 = 9.0;
+/// The firebox ceiling (card 373): the row at the frame's top edge, at the
+/// middle depth. Only with a draft.
+const CEILING: f32 = BELOW + 3.0 * H as f32;
 /// The rows fuel comes in at: the logs themselves.
-const BED_ROWS: usize = 5;
-/// Supersamples per LED, each way.
-const SAMPLES: u32 = 5;
-/// Ray-march step, cells.
-const MARCH_STEP: f32 = 0.5;
-/// How far back the camera stands from the middle of the hearth, cells.
+const BED_ROWS: f32 = 5.0;
+/// How far back the camera stands from the middle of the hearth.
 const DISTANCE: f32 = 340.0;
 /// How far below the frame's middle the camera's eye is: a little low,
 /// looking a touch up.
 const EYE_DROP: f32 = 22.0;
+
+/// How the fire is simulated and seen: the knobs card 374 swept for the
+/// point where the picture stops improving.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Grid {
+    /// Grid cells per design unit.
+    pub k: f32,
+    /// The firebox's depth, design units.
+    pub depth: f32,
+    /// Pressure sweeps per step.
+    pub sweeps: usize,
+    /// Rays per LED, each way.
+    pub samples: u32,
+    /// Ray-march step, grid cells.
+    pub march: f32,
+}
+
+impl Grid {
+    /// What ships: card 374's knee. Two cells per LED across (128 x 88 x 32)
+    /// instead of three keeps the pointed tongues; at 1.5 they go to rounded
+    /// blobs. Pressure sweeps past 16 change nothing a survey of the
+    /// picture can find (16, 32 and 64 measure the same). Three rays per LED
+    /// each way look the same as five on the panel. About a third of card
+    /// 373's GPU time.
+    pub const SHIPPED: Grid = Grid { k: 2.0 / 3.0, depth: 48.0, sweeps: 16, samples: 3, march: 0.5 };
+
+    fn cells(design: f32, k: f32) -> usize {
+        ((design * k / 4.0).ceil() as usize).max(2) * 4
+    }
+    pub fn gw(&self) -> usize {
+        Grid::cells(WIDE, self.k)
+    }
+    pub fn gh(&self) -> usize {
+        Grid::cells(TALL, self.k)
+    }
+    pub fn gd(&self) -> usize {
+        Grid::cells(self.depth, self.k)
+    }
+    pub fn dims(&self) -> [u32; 3] {
+        [self.gw() as u32, self.gh() as u32, self.gd() as u32]
+    }
+    /// The ceiling's grid row.
+    pub fn ceiling(&self) -> usize {
+        (CEILING * self.k).round() as usize
+    }
+}
 /// An ember slot at or below this heat is empty.
 const EMBER_OUT: f32 = 0.30;
 
@@ -195,8 +239,9 @@ struct Camera {
 }
 
 impl Camera {
-    fn new() -> Camera {
-        let centre = [GW as f32 * 0.5, BELOW as f32 + 1.5 * H as f32, GD as f32 * 0.5];
+    /// Set up in design units, then scaled to the grid's.
+    fn new(grid: &Grid) -> Camera {
+        let centre = [WIDE * 0.5, BELOW + 1.5 * H as f32, grid.depth * 0.5];
         let eye = [centre[0], centre[1] - EYE_DROP, centre[2] - DISTANCE];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
@@ -210,7 +255,7 @@ impl Camera {
             fwd[2] * right[0] - fwd[0] * right[2],
             fwd[0] * right[1] - fwd[1] * right[0],
         ];
-        Camera { eye, right, up, fwd, tan_w: 0.5 * GW as f32 / len, tan_h: 1.5 * H as f32 / len }
+        Camera { eye: eye.map(|v| v * grid.k), right, up, fwd, tan_w: 0.5 * WIDE / len, tan_h: 1.5 * H as f32 / len }
     }
 
     /// A grid position on the panel, in LED coordinates.
@@ -228,6 +273,7 @@ impl Camera {
 }
 
 pub(crate) struct Hearth {
+    pub(crate) grid: Grid,
     /// `None` until first render; `Some(None)` if there is no GPU.
     sim: Option<Option<Sim>>,
     camera: Camera,
@@ -278,6 +324,10 @@ fn make(seed: u64) -> Box<dyn Patch> {
 
 impl Hearth {
     pub(crate) fn new(seed: u64) -> Hearth {
+        Hearth::with_grid(seed, Grid::SHIPPED)
+    }
+
+    pub(crate) fn with_grid(seed: u64, grid: Grid) -> Hearth {
         let mut rng = Rng::new(seed ^ 0x4ea7_7a11);
         let salt = rng.u64() as u32;
         // Three or four logs across the width, never evenly spaced.
@@ -286,9 +336,9 @@ impl Hearth {
         for k in 0..count {
             let slot = (k as f32 + 0.5) / count as f32;
             logs.push(Log {
-                x: GW as f32 * (0.12 + 0.76 * slot) + rng.range(-10.0, 10.0),
+                x: WIDE * (0.12 + 0.76 * slot) + rng.range(-10.0, 10.0),
                 half: rng.range(20.0, 32.0),
-                z: GD as f32 * 0.5 + rng.range(-7.0, 7.0),
+                z: grid.depth * 0.5 + rng.range(-7.0, 7.0),
                 zhalf: rng.range(4.0, 7.0),
                 salt: rng.u64() as u32,
                 phase: rng.range(0.0, 100.0),
@@ -297,8 +347,9 @@ impl Hearth {
         let ramp = Ramp::new();
         let (fire_theta, fire_l) = fire_steps(&ramp);
         Hearth {
+            grid,
             sim: None,
-            camera: Camera::new(),
+            camera: Camera::new(&grid),
             sparks: vec![[0.0; 4]; EMBERS * 3],
             pending: Vec::new(),
             spawns: Vec::new(),
@@ -318,7 +369,7 @@ impl Hearth {
             gust: None,
             calm_until: 20.0,
             settle: None,
-            bed: vec![[0.0; 2]; GW * GD],
+            bed: vec![[0.0; 2]; grid.gw() * grid.gd()],
             wind: [[0.0; 4]; 40],
             ramp,
             fire_l,
@@ -343,23 +394,30 @@ impl Hearth {
         };
         let c = &self.camera;
         let scale = |v: [f32; 3], k: f32| [v[0] * k, v[1] * k, v[2] * k, 0.0];
+        let g = &self.grid;
+        // Lengths and speeds go to grid cells (times k); what happens per
+        // grid cell along a ray (emission, soot, lit smoke) by 1/k.
+        let k = g.k;
+        let [gw, gh, gd] = g.dims();
         Params {
-            dims: [GW as u32, GH as u32, GD as u32, self.step_no as u32],
-            coarse: [(GW / 4) as u32, (GH / 4) as u32, (GD / 4) as u32, EMBERS as u32],
+            dims: [gw, gh, gd, self.step_no as u32],
+            coarse: [gw / 4, gh / 4, gd / 4, EMBERS as u32],
             // dt, buoyancy, smoke weight, drag
-            a: [STEP as f32, 95.0, 1.0, 0.9],
+            a: [STEP as f32, 95.0 * k, 1.0 * k, 0.9],
             // wind grip, confinement, burn, fuel heat
-            b: [1.4, 5.0, 2.0 - 0.6 * s, 1.5],
+            b: [1.4, 5.0 * k, 2.0 - 0.6 * s, 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
             c: [cool4, cool1, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
-            d: [0.55, self.soot, 1.0, 0.4],
-            eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
+            // (Lit smoke is not divided by k: a coarser grid already smears
+            // smoke wider, and the wider wisps would show as more grey.)
+            d: [0.55, self.soot / k, 1.0, 0.3 / k],
+            eye: [c.eye[0], c.eye[1], c.eye[2], g.samples as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
-            fwd: [c.fwd[0], c.fwd[1], c.fwd[2], MARCH_STEP],
-            stove: [self.draft, CEILING as f32, self.flue, 0.0],
+            fwd: [c.fwd[0], c.fwd[1], c.fwd[2], g.march],
+            stove: [self.draft, g.ceiling() as f32, self.flue * k, k],
             wind: self.wind,
         }
     }
@@ -402,23 +460,24 @@ impl Hearth {
         let breath = self.breath();
         let strengths: Vec<f32> = (0..self.logs.len()).map(|k| self.log_strength(k)).collect();
         let lo = 0.55 - 0.45 * self.size / OLD_MAX;
-        for z in 0..GD {
-            let zf = z as f32;
-            for x in 0..GW {
-                let xf = x as f32;
+        let (gw, gh, gd, k) = (self.grid.gw(), self.grid.gh(), self.grid.gd(), self.grid.k);
+        for z in 0..gd {
+            let zf = z as f32 / k;
+            for x in 0..gw {
+                let xf = x as f32 / k;
                 let mut bed = 0.0;
                 for (log, s) in self.logs.iter().zip(&strengths) {
                     let (dx, dz) = ((xf - log.x) / log.half, (zf - log.z) / log.zhalf);
                     bed += s * (-dx * dx - dz * dz).exp();
                 }
                 if bed < 0.02 {
-                    self.bed[z * GW + x] = [0.0, 0.0];
+                    self.bed[z * gw + x] = [0.0, 0.0];
                     continue;
                 }
                 let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0, t * 0.7, self.salt)).max(0.0).powf(1.2);
                 let level = 1.5 * smoothstep(lo, lo + 0.6, bed * (0.35 + tongues) * breath);
                 let shimmer = 0.85 + 0.3 * noise::noise3(xf / 5.0, zf / 5.0, t * 0.3, self.salt ^ 0xc0a1);
-                self.bed[z * GW + x] = [level, 0.75 * (bed / 1.4).min(1.0) * shimmer];
+                self.bed[z * gw + x] = [level, 0.75 * (bed / 1.4).min(1.0) * shimmer];
             }
         }
 
@@ -436,8 +495,9 @@ impl Hearth {
             (g.peak * env, env * g.peak.abs() / 18.0)
         });
         let gust = if stove { 0.0 } else { gust };
-        for y in 0..GH {
-            self.wind[y / 4][y % 4] = (drift + gust) * (0.1 + 0.9 * smoothstep(BELOW as f32, GH as f32 * 0.6, y as f32));
+        for y in 0..gh.min(160) {
+            let yd = y as f32 / k;
+            self.wind[y / 4][y % 4] = k * (drift + gust) * (0.1 + 0.9 * smoothstep(BELOW, TALL * 0.6, yd));
         }
         self.draft = if stove { draft * (1.0 + 0.9 * surge) } else { 0.0 };
         self.flue = 6.0 + 18.0 * ctx.get("flue");
@@ -461,9 +521,10 @@ impl Hearth {
         let free = (0..EMBERS).find(|k| self.sparks[3 * k][3] <= EMBER_OUT && !self.pending.contains(k));
         let Some(slot) = free else { return };
         let r = &mut self.spark_dice;
-        let pos = [x + r.range(-3.0, 3.0), BED_ROWS as f32 + 3.0, z + r.range(-2.0, 2.0)];
+        let k = self.grid.k;
+        let pos = [x + r.range(-3.0, 3.0), BED_ROWS + 3.0, z + r.range(-2.0, 2.0)].map(|v| v * k);
         let heat = r.range(0.88, 1.0);
-        let v = [r.range(-12.0, 12.0), r.range(30.0, 55.0) * (0.7 + 0.5 * vigour), r.range(-6.0, 6.0)];
+        let v = [r.range(-12.0, 12.0), r.range(30.0, 55.0) * (0.7 + 0.5 * vigour), r.range(-6.0, 6.0)].map(|v| v * k);
         let cooling = r.range(0.16, 0.30);
         self.pending.push(slot);
         // Until the next read-back says otherwise, the slot is this spark.
@@ -705,7 +766,7 @@ impl Patch for Hearth {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         if self.sim.is_none() {
             self.sim = Some(match Gpu::shared() {
-                Ok(gpu) => Some(Sim::new(gpu, [GW as u32, GH as u32, GD as u32], &self.ramp.table())),
+                Ok(gpu) => Some(Sim::new(gpu, self.grid.dims(), self.grid.sweeps, &self.ramp.table())),
                 Err(e) => {
                     eprintln!("screeny-art: hearth: {e}; rendering black");
                     None
