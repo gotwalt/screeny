@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5
+
+- New patch, **hearth**: a fire in a wood-stove firebox, simulated in 3D on the
+  GPU. Flames, grey smoke and sparks rise from a bed just below the frame, with
+  thermal gusts, logs that settle, and a chimney draft at the top. Sparks
+  occasionally bounce off the sides and the ceiling. Size, gusts, embers, smoke
+  and draft are settings, eased so Home Assistant can drive them. Needs a real
+  GPU, so it is not offered on a machine without one (such as a Raspberry Pi).
+
 ## 0.1.4
 
 - Finds a panel again after the router gives it a new address, even when the
