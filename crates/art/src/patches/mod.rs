@@ -7,6 +7,9 @@ pub(crate) mod clocks;
 pub(crate) mod flock;
 #[cfg(feature = "gpu")]
 pub(crate) mod ghosts;
+// Card 372: a 3D fluid fire in compute shaders.
+#[cfg(feature = "gpu")]
+pub(crate) mod hearth;
 // Card 321: leaves became a mesh-based GPU patch (real lighting, a real depth
 // buffer, heavy supersampling - the owner's direction was to spend the GPU on
 // the picture, not avoid it), so it needs the adapter exactly as knot,
@@ -45,6 +48,8 @@ pub static ALL: &[PatchDef] = &[
     flock::DEF,
     bats::DEF,
     #[cfg(feature = "gpu")]
+    hearth::DEF,
+    #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
     leaves::DEF,
@@ -74,6 +79,8 @@ pub enum Need {
 /// from the same `cfg`s as `ALL`, so it cannot drift from it; in a build
 /// without the feature it is empty, which is the truth for that build.
 static GPU_PATCHES: &[(&str, Need)] = &[
+    #[cfg(feature = "gpu")]
+    (hearth::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
@@ -197,8 +204,8 @@ mod tests {
         }
         assert!(blocked(&hardware).is_empty());
         if cfg!(feature = "gpu") {
-            assert_eq!(blocked(&software), vec!["ghosts", "overland"]);
-            assert_eq!(blocked(&none).len(), 5);
+            assert_eq!(blocked(&software), vec!["hearth", "ghosts", "overland"]);
+            assert_eq!(blocked(&none).len(), 6);
             let why = playable("overland", &software).unwrap_err();
             assert!(why.contains("software (llvmpipe)"), "{why}");
             for id in ["leaves", "lattice", "knot"] {
