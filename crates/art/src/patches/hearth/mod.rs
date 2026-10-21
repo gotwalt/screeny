@@ -35,12 +35,21 @@
 //! 24-step blackbody ramp chosen at even perceptual lightness, and four smoke
 //! tints. 29 colours, so every frame is exact whatever it looks like.
 //!
-//! Named settings to offer (the card asks for two or three):
+//! **The stove** (card 373): with a `draft`, the panel is the inside of a
+//! wood stove's firebox. Its top edge is a solid ceiling with a chimney flue
+//! in the middle; flames that reach it spread under it and the gas is drawn
+//! in toward the flue and up it, sparks with it. `draft` 0 is card 372's
+//! open fire.
 //!
-//! - **Roaring**: `size` 1, `gusts` 0.5, `embers` 0.7, `smoke` 0.4.
-//! - **Evening** (the defaults): `size` 0.5, `gusts` 0.4, `embers` 0.4,
-//!   `smoke` 0.3.
-//! - **Embers**: `size` 0, `gusts` 0.2, `embers` 0.25, `smoke` 0.15.
+//! Named settings to offer (card 373's scale: card 372's maximum is 0.6):
+//!
+//! - **Roaring**: `size` 0.85, `gusts` 0.8, `embers` 0.8, `smoke` 0.3,
+//!   `draft` 0.85.
+//! - **Stove** (the defaults): `size` 0.6, `gusts` 0.6, `embers` 0.6,
+//!   `smoke` 0.3, `draft` 0.7, `flue` 0.4.
+//! - **Open hearth**: the defaults with `draft` 0.
+//! - **Embers**: `size` 0.1, `gusts` 0.3, `embers` 0.3, `smoke` 0.15,
+//!   `draft` 0.5.
 //!
 //! Credit: the method is Stam, "Stable Fluids" (SIGGRAPH 1999); Fedkiw, Stam
 //! and Jensen, "Visual Simulation of Smoke" (SIGGRAPH 2001); Nguyen, Fedkiw
