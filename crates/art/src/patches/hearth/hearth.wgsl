@@ -439,7 +439,9 @@ fn light_at(p: vec3<f32>) -> f32 {
 
 // ---------------------------------------------------------------- the picture
 
-// Out: (fire light rgb, lit smoke) per LED, averaged over ss x ss rays.
+// Out: (fire light rgb, lit smoke) per LED, averaged over ss x ss rays, and
+// at out[2048 + led] the same fire's light as if there were no smoke (its
+// luminance, in x): the difference is how much soot is standing in front of it.
 @compute @workgroup_size(8, 8, 1)
 fn march(@builtin(global_invocation_id) g: vec3<u32>) {
   if (g.x >= 64u || g.y >= 32u) { return; }
@@ -448,6 +450,7 @@ fn march(@builtin(global_invocation_id) g: vec3<u32>) {
   let hi = vec3<f32>(f32(gw() - 1u), f32(gh() - 1u), f32(gd() - 1u));
   let step = P.fwd.w;
   var acc = vec4<f32>(0.0);
+  var bare_acc = 0.0;
   for (var sy = 0u; sy < ss; sy++) {
     for (var sx = 0u; sx < ss; sx++) {
       let u = (f32(g.x) + (f32(sx) + 0.5) / f32(ss)) / 32.0 - 1.0;
@@ -466,11 +469,14 @@ fn march(@builtin(global_invocation_id) g: vec3<u32>) {
       var trans = 1.0;
       var fire = vec3<f32>(0.0);
       var lit = 0.0;
+      var bare = 0.0;
       loop {
-        if (t > tf || trans < 0.01) { break; }
+        if (t > tf) { break; }
         let p = P.eye.xyz + t * dir;
         let s = tri_scal(tap(p));
-        fire += trans * emit(s.x) * (P.d.w * step);
+        let e = emit(s.x) * (P.d.w * step);
+        fire += trans * e;
+        bare += dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
         let smoke = s.z;
         if (smoke > 0.002) {
           lit += trans * smoke * light_at(p) * (P.d.z * step);
@@ -479,7 +485,9 @@ fn march(@builtin(global_invocation_id) g: vec3<u32>) {
         t += step;
       }
       acc += vec4<f32>(fire, lit);
+      bare_acc += bare;
     }
   }
   out[g.y * 64u + g.x] = acc / f32(ss * ss);
+  out[2048u + g.y * 64u + g.x] = vec4<f32>(bare_acc / f32(ss * ss), 0.0, 0.0, 0.0);
 }

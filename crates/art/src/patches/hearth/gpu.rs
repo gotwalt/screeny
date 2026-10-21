@@ -38,7 +38,8 @@ pub const SWEEPS: usize = 32;
 const LIGHT_CELL: u32 = 4;
 
 /// What [`Sim::picture`] reads back: (fire light rgb, lit smoke) per LED,
-/// and the ember slots.
+/// then 2048 more holding the smokeless fire's luminance, and the ember
+/// slots.
 pub type Picture = (Vec<[f32; 4]>, Vec<[f32; 4]>);
 
 struct Pass {
@@ -115,8 +116,8 @@ impl Sim {
         let light = buffer("light", coarse_cells * 4, storage);
         let light2 = buffer("light2", coarse_cells * 4, storage);
         let parts = buffer("parts", (EMBERS * 48) as u64, storage);
-        let out = buffer("out", 2048 * 16, storage);
-        let out_read = buffer("out read", 2048 * 16, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+        let out = buffer("out", 2 * 2048 * 16, storage);
+        let out_read = buffer("out read", 2 * 2048 * 16, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
         let parts_read =
             buffer("parts read", (EMBERS * 48) as u64, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
 
@@ -240,7 +241,7 @@ impl Sim {
             }
             self.run(&mut cp, "march", [8, 4, 1]);
         }
-        enc.copy_buffer_to_buffer(&self.out, 0, &self.out_read, 0, 2048 * 16);
+        enc.copy_buffer_to_buffer(&self.out, 0, &self.out_read, 0, 2 * 2048 * 16);
         enc.copy_buffer_to_buffer(&self.parts, 0, &self.parts_read, 0, (EMBERS * 48) as u64);
         q.submit([enc.finish()]);
 

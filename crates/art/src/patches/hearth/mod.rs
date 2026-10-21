@@ -133,6 +133,11 @@ const FIRE_STEPS: usize = 24;
 const SMOKE_STEPS: usize = 4;
 /// Darkest fire entry's lightness, OKLab; below half of it, black.
 const FIRE_L0: f32 = 0.2;
+/// Soot that has taken more than this share of the fire behind it paints
+/// that LED black.
+const SOOT_BLACK: f32 = 0.6;
+/// The soot greys, OKLab lightness, darkest first. Neutral: no chroma.
+const SMOKE_L: [f32; SMOKE_STEPS] = [0.2, 0.25, 0.3, 0.35];
 /// Lit smoke, as the march returns it, to a step on the smoke ramp at
 /// `smoke` 1.
 const SMOKE_GAIN: f32 = 20.0;
@@ -228,6 +233,8 @@ pub(crate) struct Hearth {
     warm: bool,
     /// The eased fire size the sim is burning at.
     size: f32,
+    /// Soot absorption per cell per unit of smoke.
+    soot: f32,
     gust: Option<Gust>,
     calm_until: f64,
     settle: Option<Settle>,
@@ -285,6 +292,7 @@ impl Hearth {
             clock: 0.0,
             warm: false,
             size: 0.5,
+            soot: 0.28,
             gust: None,
             calm_until: 20.0,
             settle: None,
@@ -324,7 +332,7 @@ impl Hearth {
             // glowing. cool4, cool1, expansion, smoke yield.
             c: [cool4, cool1, 1.5, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
-            d: [0.55, 0.08, 1.0, 0.4],
+            d: [0.55, self.soot, 1.0, 0.4],
             eye: [c.eye[0], c.eye[1], c.eye[2], SAMPLES as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
@@ -356,6 +364,8 @@ impl Hearth {
     /// One fixed step of everything.
     fn step(&mut self, ctx: &Ctx) {
         let dt = STEP as f32;
+        // How strongly soot absorbs the flame behind it: the smoke slider.
+        self.soot = 0.08 + 0.25 * ctx.get("smoke");
         let target = ctx.get("size");
         self.size += (target - self.size) * (1.0 - (-dt / SIZE_EASE).exp());
         self.events(ctx);
@@ -564,9 +574,10 @@ impl Hearth {
             let (c, h) = ((lab[1] * lab[1] + lab[2] * lab[2]).sqrt(), lab[2].atan2(lab[1]).to_degrees());
             pal.push(oklch(lab[0], c * color, h));
         }
+        // Soot: neutral greys, its own entries, never the flame's hue
+        // (card 373: fire-tinted smoke read as a muddy dark red).
         for k in 0..SMOKE_STEPS {
-            let l = 0.16 + 0.04 * k as f32;
-            pal.push(oklch(l, 0.05 * color, 38.0));
+            pal.push(oklch(SMOKE_L[k], 0.0, 0.0));
         }
         self.palette = Some((color, pal.clone()));
         pal
@@ -576,7 +587,11 @@ impl Hearth {
     /// there is lit smoke and no fire, black everywhere else. `leds` is the
     /// march's (fire light rgb, lit smoke) per LED.
     fn paint(&mut self, ctx: &Ctx, leds: &[[f32; 4]]) -> Frame {
+        let (leds, bare) = leds.split_at(N);
         let mut light: Vec<Rgb> = leds.iter().map(|l| Rgb::new(l[0], l[1], l[2])).collect();
+        // How much of each LED's fire the soot in front of it has taken.
+        let soot: Vec<f32> =
+            light.iter().zip(bare).map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 }).collect();
         for k in 0..EMBERS {
             if self.sparks[3 * k][3] > EMBER_OUT {
                 let spark = self.sparks[3 * k..3 * k + 3].to_vec();
@@ -591,6 +606,11 @@ impl Hearth {
                 let thr = dither.threshold(i % W, i / W);
                 let l = to_oklab(light[i])[0];
                 let p = fire_position(&self.fire_l, l);
+                // Flame seen through thick soot goes to black, not to the
+                // ramp's dark reds: smoke on this panel is a silhouette.
+                if soot[i] > SOOT_BLACK {
+                    return 0;
+                }
                 if p >= 0.55 {
                     return (p + 0.5 + thr).floor().clamp(1.0, FIRE_STEPS as f32) as u8;
                 }
