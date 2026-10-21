@@ -230,6 +230,43 @@ fn aligned_dark_changes_no_hearth_pixel() {
     }
 }
 
+/// Card 375: every slider but `flue` and `color` runs to 2. At the all-2
+/// corner the fire must stay a fire for minutes: burning every frame,
+/// nothing non-finite in the fields, no white in what goes out.
+#[test]
+fn the_all_max_corner_stays_stable() {
+    let Some(_gpu) = gpu() else { return };
+    let mut params = Params::defaults(PARAMS);
+    for id in ["size", "gusts", "embers", "smoke", "draft"] {
+        params.set(PARAMS, id, 2.0);
+    }
+    let mut h = Hearth::new(6);
+    let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
+    // Three minutes, a frame every quarter second (the sim still steps
+    // every 1/30 s).
+    let dt = 0.25;
+    let (mut apl, mut gain, mut n) = (0.0f32, 1.0f32, 0);
+    for i in 1..=(3 * 60 * 4) {
+        let f = h.render(&ctx_at(i as f64 * dt, dt, &params));
+        if i as f64 * dt > LIGHTS_WITHIN {
+            let bottom = &indices(&f)[(H - 1) * W..];
+            assert!(bottom.iter().any(|k| *k != 0), "nothing burning at {:.1} s", i as f64 * dt);
+        }
+        let Frame::Indexed { palette, .. } = &f else { panic!("indexed") };
+        for c in palette {
+            assert!(c.b <= 0.6 * c.r + 1e-3 || (c.r - c.b).abs() < 1e-3, "white-ish entry {c:?}");
+        }
+        let out = pipe.process(f, dt);
+        apl += out.stats.apl;
+        gain = gain.min(out.stats.limiter_gain);
+        n += 1;
+    }
+    let Some(Some(sim)) = &h.sim else { return };
+    let bad = sim.scalars().iter().chain(sim.velocities().iter()).filter(|c| c.iter().any(|v| !v.is_finite())).count();
+    assert_eq!(bad, 0, "non-finite cells");
+    eprintln!("hearth all-max: mean APL {:.1}%, lowest limiter gain {gain:.2}", 100.0 * apl / n as f32);
+}
+
 /// Every frame is at most 32 colours - exact on the wire whatever it looks
 /// like - and the pipeline agrees.
 #[test]
@@ -814,6 +851,38 @@ fn palette_levels() {
             crate::color::to_oklab(*c)[0]
         );
     }
+}
+
+/// Not a test: card 375's swatch sheet. Each `dark` choice is a band of
+/// eight rows: its 24 fire entries two LEDs wide, a gap, then its soot.
+/// Shown through the panel model; writes `HEARTH_SWATCH`.
+#[test]
+#[ignore]
+fn swatches() {
+    let Ok(path) = std::env::var("HEARTH_SWATCH") else { return };
+    let mut h = Hearth::new(1);
+    let mut px = vec![Rgb::BLACK; N];
+    for dark in 0..DARK_CHOICES.len() {
+        let p = h.palette(1.0, dark);
+        for y in dark * 8 + 1..dark * 8 + 7 {
+            for (k, c) in p.colours[1..].iter().enumerate() {
+                let x = if k < FIRE_STEPS { 2 * k } else { 2 * k + 4 };
+                if x + 1 < W {
+                    px[y * W + x] = *c;
+                    px[y * W + x + 1] = *c;
+                }
+            }
+        }
+        let codes: Vec<String> = p.colours[1..].iter().map(|c| format!("{:?}", c.to_srgb8())).collect();
+        eprintln!("{}: {}", DARK_CHOICES[dark], codes.join(" "));
+    }
+    let out = crate::Pipeline::new(crate::pipeline::Output::default()).process(Frame::Linear(px), DT);
+    let (w, hgt, rgba) = crate::preview::render_dots(&out.preview, 12);
+    let file = std::fs::File::create(&path).expect("create");
+    let mut e = png::Encoder::new(std::io::BufWriter::new(file), w as u32, hgt as u32);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).expect("png");
 }
 
 /// For the tools: `HEARTH_GRID="k,depth,sweeps,samples,march"`, any prefix

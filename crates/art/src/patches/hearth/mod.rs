@@ -91,13 +91,13 @@ pub const DEF: PatchDef = PatchDef {
 // way up, so card 372's maximum is now about [`OLD_MAX`] of each range, the
 // default sits there, and the rest of the range is headroom above it.
 const PARAMS: &[ParamSpec] = &[
-    param("size", "How big the fire is (eases over tens of seconds)", 0.0, 1.0, 0.01, 0.6),
-    param("gusts", "How often the draught surges", 0.0, 1.0, 0.01, 0.6),
-    param("embers", "How many sparks fly up", 0.0, 1.0, 0.01, 0.6),
-    param("smoke", "How much smoke shows", 0.0, 1.0, 0.01, 0.3),
+    param("size", "How big the fire is (eases over tens of seconds)", 0.0, 2.0, 0.01, 0.6),
+    param("gusts", "How often the draught surges", 0.0, 2.0, 0.01, 0.6),
+    param("embers", "How many sparks fly up", 0.0, 2.0, 0.01, 0.6),
+    param("smoke", "How much smoke shows", 0.0, 2.0, 0.01, 0.3),
     // Card 373: the panel as the inside of a wood stove's firebox, its top
     // edge the ceiling, a chimney flue in the middle of it.
-    param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 1.0, 0.01, 0.7),
+    param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 2.0, 0.01, 0.7),
     param("flue", "How wide the flue is", 0.0, 1.0, 0.01, 0.4),
     param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
     // Card 375: the cool end of the fire and the soot as hand-picked level
@@ -438,7 +438,9 @@ impl Hearth {
         let (cool4, cool1) = if s <= 1.0 {
             (0.9 + 1.5 * (1.0 - s) * (1.0 - s), 0.7 + 2.3 * (1.0 - s) * (1.0 - s))
         } else {
-            (0.9 - 0.3 * (s - 1.0), 0.7 - 0.25 * (s - 1.0))
+            // Floors keep the very top (card 375: sliders to 2) a fire, not a
+            // furnace that never cools.
+            ((0.9 - 0.3 * (s - 1.0)).max(0.25), (0.7 - 0.25 * (s - 1.0)).max(0.15))
         };
         let c = &self.camera;
         let scale = |v: [f32; 3], k: f32| [v[0] * k, v[1] * k, v[2] * k, 0.0];
@@ -453,7 +455,7 @@ impl Hearth {
             // dt, buoyancy, smoke weight, drag
             a: [STEP as f32, 95.0 * k, 1.0 * k, 0.9],
             // wind grip, confinement, burn, fuel heat
-            b: [1.4, 5.0 * k, 2.0 - 0.6 * s, 1.5],
+            b: [1.4, 5.0 * k, (2.0 - 0.6 * s).max(0.5), 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
             c: [cool4, cool1, 1.5, 0.5],
@@ -594,10 +596,10 @@ impl Hearth {
         if gusts > 0.0 && self.gust.is_none() && self.t > self.calm_until {
             let mean = 240.0 * (30.0f64 / 240.0).powf(f64::from(gusts));
             if f64::from(self.dice.f32()) < dt / mean {
-                let peak = self.dice.range(11.0, 18.0) * (0.6 + 0.8 * gusts.min(1.4)) * self.dice.sign();
+                let peak = self.dice.range(11.0, 18.0) * (0.6 + 0.8 * gusts) * self.dice.sign();
                 let length = f64::from(self.dice.range(4.5, 9.0));
                 self.gust = Some(Gust { start: self.t, length, peak });
-                self.calm_until = self.t + length + 15.0;
+                self.calm_until = self.t + length + 15.0 / f64::from(gusts.max(1.0));
                 self.gusts_seen += 1;
             }
         }

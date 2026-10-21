@@ -123,8 +123,9 @@ fn keep_in(p: vec3<f32>) -> vec3<f32> {
 // No gas moves faster than this, cells per second: a guard against the
 // rare runaway (an unbounded confinement kick feeding itself), which once
 // left a whole fire frozen in its logs for seconds. Real flames here move
-// at a third of it.
-const VMAX: f32 = 150.0;
+// at a third of it. Times the step (in grid cells, k = 2/3) it is 2.9 cells:
+// under the 3 cells a semi-Lagrangian trace may cross (card 375).
+const VMAX: f32 = 130.0;
 
 fn tame(v: vec3<f32>) -> vec3<f32> {
   let m = VMAX * P.stove.w;
