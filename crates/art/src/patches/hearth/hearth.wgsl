@@ -72,9 +72,9 @@ const LIGHT_RADIUS: i32 = 6;
 const DRAFT_PULL: f32 = 400.0;
 // The draft's pull toward the flue, at full draft, cells per second
 // squared: strongest under the ceiling, a gentle lean lower down.
-const DRAFT_DRAW: f32 = 120.0;
+const DRAFT_DRAW: f32 = 60.0;
 // How far under the ceiling the draw is at its strongest, rows.
-const DRAFT_POOL: f32 = 30.0;
+const DRAFT_POOL: f32 = 12.0;
 
 fn gw() -> u32 { return P.dims.x; }
 fn gh() -> u32 { return P.dims.y; }
@@ -298,7 +298,7 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
       // Toward the flue's axis, across and in depth.
       let to = vec2<f32>(0.5 * f32(gw() - 1u) - x, 0.5 * f32(gd() - 1u) - z);
       let dir = to / (length(to) + 1.0);
-      let k = 0.3 + 0.7 * smoothstep(P.stove.y - DRAFT_POOL, P.stove.y - 2.0, y);
+      let k = 0.35 + 0.65 * smoothstep(P.stove.y - DRAFT_POOL, P.stove.y - 2.0, y);
       v.x += dt * DRAFT_DRAW * P.stove.x * k * dir.x;
       v.z += dt * DRAFT_DRAW * P.stove.x * k * dir.y;
     }
