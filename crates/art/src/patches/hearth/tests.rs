@@ -184,7 +184,7 @@ fn the_dark_ramps_sit_on_panel_levels() {
     use screeny_panel::model::{duty_16ths, nearest_level};
     let mut h = Hearth::new(1);
     let ceiling = crate::panel::level_triple([2, 2, 2]).luma();
-    for dark in 1..DARK_CHOICES.len() {
+    for (dark, name) in DARK_CHOICES.iter().enumerate().skip(1) {
         for color in [1.0, 0.6, 0.0] {
             let p = h.palette(color, dark);
             for (i, c) in p.colours.iter().enumerate() {
@@ -192,7 +192,7 @@ fn the_dark_ramps_sit_on_panel_levels() {
                     let code = crate::color::linear_to_srgb8(v);
                     let (level, _) = nearest_level(duty_16ths(code));
                     if level < crate::panel::DARK_ALIGN_LEVEL {
-                        assert_eq!(code, crate::panel::level_code(level), "{} entry {i}: {c:?}", DARK_CHOICES[dark]);
+                        assert_eq!(code, crate::panel::level_code(level), "{name} entry {i}: {c:?}");
                     }
                 }
             }
@@ -862,7 +862,7 @@ fn swatches() {
     let Ok(path) = std::env::var("HEARTH_SWATCH") else { return };
     let mut h = Hearth::new(1);
     let mut px = vec![Rgb::BLACK; N];
-    for dark in 0..DARK_CHOICES.len() {
+    for (dark, name) in DARK_CHOICES.iter().enumerate() {
         let p = h.palette(1.0, dark);
         for y in dark * 8 + 1..dark * 8 + 7 {
             for (k, c) in p.colours[1..].iter().enumerate() {
@@ -874,7 +874,7 @@ fn swatches() {
             }
         }
         let codes: Vec<String> = p.colours[1..].iter().map(|c| format!("{:?}", c.to_srgb8())).collect();
-        eprintln!("{}: {}", DARK_CHOICES[dark], codes.join(" "));
+        eprintln!("{name}: {}", codes.join(" "));
     }
     let out = crate::Pipeline::new(crate::pipeline::Output::default()).process(Frame::Linear(px), DT);
     let (w, hgt, rgba) = crate::preview::render_dots(&out.preview, 12);
