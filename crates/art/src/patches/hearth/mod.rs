@@ -94,7 +94,7 @@ const PARAMS: &[ParamSpec] = &[
     param("size", "How big the fire is (eases over tens of seconds)", 0.0, 2.0, 0.01, 0.6),
     param("gusts", "How often the draught surges", 0.0, 2.0, 0.01, 0.6),
     param("embers", "How many sparks fly up", 0.0, 2.0, 0.01, 0.6),
-    param("smoke", "How much smoke shows", 0.0, 2.0, 0.01, 0.3),
+    param("smoke", "How much smoke shows", 0.0, 1.0, 0.01, 0.3),
     // Card 373: the panel as the inside of a wood stove's firebox, its top
     // edge the ceiling, a chimney flue in the middle of it.
     param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 2.0, 0.01, 0.7),
@@ -198,7 +198,7 @@ const SMOKE_STEPS: usize = 4;
 /// The `dark` choices (card 375). `"as before"` is card 374's computed
 /// palette; each other is a [`DARK_RAMPS`] entry, the same index less one.
 pub(crate) const DARK_CHOICES: &[&str] = &["as before", "steady red", "deeper red", "warmer"];
-pub(crate) const DEFAULT_DARK: usize = 1;
+pub(crate) const DEFAULT_DARK: usize = 2;
 
 /// The fire's ramp as panel level triples (brief 2.1.1), darkest first. Every
 /// channel sits on one of the panel's 64 levels, so nothing in the fire is
