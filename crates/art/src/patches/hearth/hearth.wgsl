@@ -494,7 +494,12 @@ fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
     v = vec3<f32>(-abs(v.x) * EMBER_REST, v.y * EMBER_SLIDE, v.z * EMBER_SLIDE);
   }
   if (stove_on() && !in_flue(pos.x, pos.z)) {
-    let top = P.stove.y - 0.5;
+    // The ceiling where the frame shows it: the frame's top edge at this
+    // depth, a little inside, so the bounce is seen (and never above the
+    // gas's ceiling).
+    let dz = pos.z - P.eye.z;
+    let frame_top = P.eye.y + dz * (P.fwd.y / P.fwd.z + length(P.up.xyz)) - 1.5 * f32(gw()) / 64.0;
+    let top = min(P.stove.y - 0.5, frame_top);
     if (pos.y > top) {
       if (v.y > impact) { hits.x += 1.0; hits.z += 1.0; }
       pos.y = top - (pos.y - top) * EMBER_REST;
