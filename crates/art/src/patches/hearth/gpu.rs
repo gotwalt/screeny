@@ -28,6 +28,9 @@ pub struct Params {
     pub right: [f32; 4],
     pub up: [f32; 4],
     pub fwd: [f32; 4],
+    /// The firebox (card 373): draft (0 = open fire), ceiling row, flue
+    /// radius in cells, unused.
+    pub stove: [f32; 4],
     pub wind: [[f32; 4]; 40],
 }
 

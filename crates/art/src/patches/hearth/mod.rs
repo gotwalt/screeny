@@ -84,6 +84,10 @@ const PARAMS: &[ParamSpec] = &[
     param("gusts", "How often the draught surges", 0.0, 1.0, 0.01, 0.6),
     param("embers", "How many sparks fly up", 0.0, 1.0, 0.01, 0.6),
     param("smoke", "How much smoke shows", 0.0, 1.0, 0.01, 0.3),
+    // Card 373: the panel as the inside of a wood stove's firebox, its top
+    // edge the ceiling, a chimney flue in the middle of it.
+    param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 1.0, 0.01, 0.7),
+    param("flue", "How wide the flue is", 0.0, 1.0, 0.01, 0.4),
     param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
 ];
 
@@ -105,6 +109,9 @@ const GD: usize = 48;
 /// The grid row the bottom edge of the frame sits on (at the middle depth):
 /// the logs are below it.
 const BELOW: usize = 9;
+/// The firebox ceiling (card 373): the grid row at the frame's top edge, at
+/// the middle depth. Only with a draft.
+const CEILING: usize = BELOW + 3 * H;
 /// The rows fuel comes in at: the logs themselves.
 const BED_ROWS: usize = 5;
 /// Supersamples per LED, each way.
@@ -235,6 +242,10 @@ pub(crate) struct Hearth {
     size: f32,
     /// Soot absorption per cell per unit of smoke.
     soot: f32,
+    /// The chimney's pull this step, surges included (0: an open fire), and
+    /// the flue's radius in cells.
+    draft: f32,
+    flue: f32,
     gust: Option<Gust>,
     calm_until: f64,
     settle: Option<Settle>,
@@ -293,6 +304,8 @@ impl Hearth {
             warm: false,
             size: 0.5,
             soot: 0.28,
+            draft: 0.0,
+            flue: 13.0,
             gust: None,
             calm_until: 20.0,
             settle: None,
@@ -317,7 +330,7 @@ impl Hearth {
         let (cool4, cool1) = if s <= 1.0 {
             (0.9 + 1.5 * (1.0 - s) * (1.0 - s), 0.7 + 2.3 * (1.0 - s) * (1.0 - s))
         } else {
-            (0.9 - 0.5 * (s - 1.0), 0.7 - 0.45 * (s - 1.0))
+            (0.9 - 0.3 * (s - 1.0), 0.7 - 0.25 * (s - 1.0))
         };
         let c = &self.camera;
         let scale = |v: [f32; 3], k: f32| [v[0] * k, v[1] * k, v[2] * k, 0.0];
@@ -337,6 +350,7 @@ impl Hearth {
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
             fwd: [c.fwd[0], c.fwd[1], c.fwd[2], MARCH_STEP],
+            stove: [self.draft, CEILING as f32, self.flue, 0.0],
             wind: self.wind,
         }
     }
@@ -401,15 +415,23 @@ impl Hearth {
 
         // The air: a calm wandering drift, and a gust when one is blowing,
         // stronger higher up and weakest down among the logs.
-        let drift = 3.0 * noise::fbm1(t / 21.0, self.salt ^ 0xd1f7);
-        let gust = self.gust.as_ref().map_or(0.0, |g| {
+        // In a stove the walls stop any wind: a gust is the chimney drawing
+        // harder for a few seconds (the stove breathing), and the air only
+        // wanders a little.
+        let draft = ctx.get("draft");
+        let stove = draft > 0.0;
+        let drift = 3.0 * noise::fbm1(t / 21.0, self.salt ^ 0xd1f7) * if stove { 0.3 } else { 1.0 };
+        let (gust, surge) = self.gust.as_ref().map_or((0.0, 0.0), |g| {
             let a = ((self.t - g.start) / g.length).clamp(0.0, 1.0) as f32;
-            let env = (std::f32::consts::PI * a).sin().powi(2);
-            g.peak * env * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057))
+            let env = (std::f32::consts::PI * a).sin().powi(2) * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057));
+            (g.peak * env, env * g.peak.abs() / 18.0)
         });
+        let gust = if stove { 0.0 } else { gust };
         for y in 0..GH {
             self.wind[y / 4][y % 4] = (drift + gust) * (0.1 + 0.9 * smoothstep(BELOW as f32, GH as f32 * 0.6, y as f32));
         }
+        self.draft = if stove { draft * (1.0 + 0.9 * surge) } else { 0.0 };
+        self.flue = 6.0 + 18.0 * ctx.get("flue");
 
         let params = self.params();
         if let Some(Some(sim)) = &self.sim {
@@ -608,7 +630,7 @@ impl Hearth {
                 let p = fire_position(&self.fire_l, l);
                 // Flame seen through thick soot goes to black, not to the
                 // ramp's dark reds: smoke on this panel is a silhouette.
-                if soot[i] > SOOT_BLACK {
+                if soot[i] > SOOT_BLACK && p < 0.5 * FIRE_STEPS as f32 {
                     return 0;
                 }
                 if p >= 0.55 {
@@ -702,7 +724,11 @@ impl Patch for Hearth {
         let detail = if self.settle.is_some() {
             "a log settles".to_string()
         } else if let Some(g) = &self.gust {
-            format!("a draught from the {}", if g.peak > 0.0 { "left" } else { "right" })
+            if self.draft > 0.0 {
+                "the chimney draws hard".to_string()
+            } else {
+                format!("a draught from the {}", if g.peak > 0.0 { "left" } else { "right" })
+            }
         } else {
             "burning quietly".to_string()
         };

@@ -320,6 +320,11 @@ fn raw() {
     let (at, size, gain) = (env("HEARTH_AT", 10.0), env("HEARTH_SIZE", 0.5) as f32, env("HEARTH_GAIN", 1.0) as f32);
     let mut params = Params::defaults(PARAMS);
     params.set(PARAMS, "size", size);
+    for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+        if let Some((k, v)) = kv.split_once('=') {
+            params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+        }
+    }
     let mut h = Hearth::new(env("HEARTH_SEED", 1.0) as u64);
     for i in 1..=(at / DT) as usize {
         h.render(&ctx_at(i as f64 * DT, DT, &params));
