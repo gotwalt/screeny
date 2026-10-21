@@ -359,8 +359,10 @@ fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     assert!((10..=40).contains(&gusts), "{gusts} gusts in twenty minutes");
     assert!((3..=20).contains(&settles), "{settles} settles in twenty minutes");
     let mean = ember_sum as f32 / ember_frames as f32;
-    assert!(mean < 1.5, "{mean:.2} embers on average");
-    assert!(ember_max_calm <= 5, "{ember_max_calm} embers at once outside a burst");
+    // Card 373 made the default card 372's maximum: a spark every couple of
+    // seconds, so a few in the air at once is the look, not a fault.
+    assert!(mean < 4.0, "{mean:.2} embers on average");
+    assert!(ember_max_calm <= 9, "{ember_max_calm} embers at once outside a burst");
 }
 
 /// Per-frame measures of a painted frame: lit fraction, the height (in LED
