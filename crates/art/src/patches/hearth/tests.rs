@@ -10,13 +10,16 @@ fn ctx_at<'a>(t: f64, dt: f64, params: &'a Params) -> Ctx<'a> {
 const DT: f64 = 1.0 / 30.0;
 
 /// The fire needs a graphics adapter; a machine without one skips these
-/// (as `tests/rate.rs` skips GPU patches), saying so.
-fn gpu() -> bool {
-    let ok = crate::gpu::Gpu::shared().is_ok();
-    if !ok {
+/// (as `tests/rate.rs` skips GPU patches), saying so. With one, the guard
+/// runs this module's GPU tests one at a time: they share one GPU, and
+/// `the_first_frame_comes_quickly` measures wall time.
+fn gpu() -> Option<std::sync::MutexGuard<'static, ()>> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if crate::gpu::Gpu::shared().is_err() {
         eprintln!("hearth: no graphics adapter here; skipping");
+        return None;
     }
-    ok
+    Some(ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 fn indices(frame: &Frame) -> &[u8] {
@@ -33,9 +36,7 @@ fn level(frame: &Frame) -> f32 {
 
 #[test]
 fn the_same_seed_burns_the_same_fire() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let params = Params::defaults(PARAMS);
     let (mut a, mut b) = (Hearth::new(7), Hearth::new(7));
     let mut c = Hearth::new(8);
@@ -49,18 +50,61 @@ fn the_same_seed_burns_the_same_fire() {
     assert!(differs, "another seed is another fire");
 }
 
-/// The first frame is already a fire, not an empty grate catching.
+/// Card 373's bug: the Studio drops a patch whose frame takes 5 s
+/// (`crates/studio/src/channel.rs`, `WATCHDOG`), and the old five-second
+/// warm-up inside the first render took ~9 s on an M4. There is no warm-up
+/// now; the first frame - pipelines and all - is quick. (The GPU device is
+/// opened before the clock starts: the Studio has it open already.)
 #[test]
-fn the_first_frame_is_already_burning() {
-    if !gpu() {
-        return;
-    }
+fn the_first_frame_comes_quickly() {
+    let Some(_gpu) = gpu() else { return };
+    let params = Params::defaults(PARAMS);
+    let mut h = Hearth::new(1);
+    let start = std::time::Instant::now();
+    h.render(&ctx_at(0.0, 0.0, &params));
+    let took = start.elapsed().as_secs_f64();
+    eprintln!("hearth: first frame in {took:.2} s");
+    assert!(took < 1.0, "the first frame took {took:.2} s; the Studio's watchdog is 5 s");
+}
+
+/// Not a test: where the first frame's time goes.
+#[test]
+#[ignore]
+fn first_frame_parts() {
+    let Ok(gpu) = crate::gpu::Gpu::shared() else { return };
+    let params = Params::defaults(PARAMS);
+    let mut h = Hearth::new(1);
+    let t = std::time::Instant::now();
+    h.sim = Some(Some(Sim::new(gpu, [GW as u32, GH as u32, GD as u32], &h.ramp.table())));
+    let built = t.elapsed().as_secs_f64();
+    let t = std::time::Instant::now();
+    h.render(&ctx_at(0.0, 0.0, &params));
+    eprintln!("pipelines {built:.2} s, first step and picture {:.2} s", t.elapsed().as_secs_f64());
+}
+
+/// With no warm-up the fire lights on screen (card 373, the owner's call):
+/// within a few seconds of the first frame it is burning along the bottom.
+#[test]
+fn the_fire_lights_within_seconds() {
+    let Some(_gpu) = gpu() else { return };
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(3);
-    let f = h.render(&ctx_at(0.0, 0.0, &params));
-    let (lit, _, base, _) = measure(&f);
-    assert!(lit > 0.01 && base > 5, "lit {lit}, base {base}");
+    let mut lit_at = None;
+    for i in 0..=30 * 6 {
+        let f = h.render(&ctx_at(i as f64 * DT, if i == 0 { 0.0 } else { DT }, &params));
+        let (lit, _, base, _) = measure(&f);
+        if lit > 0.03 && base > 15 {
+            lit_at = Some(i as f64 * DT);
+            break;
+        }
+    }
+    let at = lit_at.expect("a fire within six seconds");
+    eprintln!("hearth: burning {at:.2} s after the first frame");
+    assert!(at < LIGHTS_WITHIN, "burning only after {at:.2} s");
 }
+
+/// How long the fire may take to catch, seconds.
+const LIGHTS_WITHIN: f64 = 3.0;
 
 /// Card 373: soot is neutral. Its palette entries are greys (OKLCH chroma
 /// near 0) whatever `color` is, and none of them is a fire colour.
@@ -82,9 +126,7 @@ fn smoke_is_grey() {
 /// into it - no heat, no smoke - while the flue above it carries gas up.
 #[test]
 fn the_ceiling_is_solid_and_the_flue_draws() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let mut params = Params::defaults(PARAMS);
     params.set(PARAMS, "size", 1.0);
     params.set(PARAMS, "draft", 1.0);
@@ -121,9 +163,7 @@ fn the_ceiling_is_solid_and_the_flue_draws() {
 /// The new parameters are as deterministic as the old.
 #[test]
 fn the_stove_is_deterministic() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let mut params = Params::defaults(PARAMS);
     params.set(PARAMS, "draft", 0.9);
     params.set(PARAMS, "flue", 0.8);
@@ -139,9 +179,7 @@ fn the_stove_is_deterministic() {
 /// like - and the pipeline agrees.
 #[test]
 fn every_frame_goes_out_exact() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(5);
     let mut output = crate::pipeline::Output::default();
@@ -211,9 +249,7 @@ fn size_eases_and_never_jumps() {
 /// jump.
 #[test]
 fn the_picture_does_not_jump_when_size_moves() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let mut params = Params::defaults(PARAMS);
     params.set(PARAMS, "size", 0.0);
     let mut h = Hearth::new(2);
@@ -259,9 +295,7 @@ fn the_rare_things_happen_rarely() {
 /// there is fire along the bottom almost all the time.
 #[test]
 fn the_top_is_mostly_black_at_the_default() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let params = Params::defaults(PARAMS);
     for seed in [1] {
         let mut h = Hearth::new(seed);
@@ -271,10 +305,13 @@ fn the_top_is_mostly_black_at_the_default() {
             let idx = indices(&f);
             top_lit += idx[..W * H / 3].iter().filter(|k| **k != 0).count();
             frames += 1;
-            no_fire += usize::from(idx[(H - 1) * W..].iter().all(|k| *k == 0));
+            // Not while it is still catching (card 373: no warm-up).
+            no_fire += usize::from(i as f64 * DT >= LIGHTS_WITHIN && idx[(H - 1) * W..].iter().all(|k| *k == 0));
         }
         let share = top_lit as f32 / (frames * W * H / 3) as f32;
-        assert!(share < 0.01, "seed {seed}: {:.2}% of the top third lit", share * 100.0);
+        // 1% for card 372's default; card 373's default is card 372's
+        // maximum, whose tallest tongues and sparks do reach the top third.
+        assert!(share < 0.03, "seed {seed}: {:.2}% of the top third lit", share * 100.0);
         assert!(no_fire < frames / 50, "seed {seed}: {no_fire} frames with nothing burning at the bottom");
     }
 }
@@ -284,9 +321,7 @@ fn the_top_is_mostly_black_at_the_default() {
 /// small fraction of it.
 #[test]
 fn no_whole_frame_pulse_above_three_hertz() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     for size in [1.0] {
         let mut params = Params::defaults(PARAMS);
         params.set(PARAMS, "size", size);
@@ -295,7 +330,8 @@ fn no_whole_frame_pulse_above_three_hertz() {
         // frame went black from 28 s to 32 s.
         let mut h = Hearth::new(2);
         let frames: Vec<Frame> = (1..=1050).map(|i| h.render(&ctx_at(i as f64 * DT, DT, &params))).collect();
-        let dark = frames.iter().filter(|f| indices(f)[(H - 1) * W..].iter().all(|k| *k == 0)).count();
+        let catching = (LIGHTS_WITHIN / DT) as usize;
+        let dark = frames.iter().skip(catching).filter(|f| indices(f)[(H - 1) * W..].iter().all(|k| *k == 0)).count();
         assert_eq!(dark, 0, "size {size}: {dark} frames with nothing burning");
         let levels: Vec<f32> = frames.iter().map(level).collect();
         // A 3 Hz low-pass: a moving average over a third of a second (ten
@@ -319,9 +355,7 @@ fn no_whole_frame_pulse_above_three_hertz() {
 #[test]
 #[ignore]
 fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
-    if !gpu() {
-        return;
-    }
+    let Some(_gpu) = gpu() else { return };
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(11);
     let dt = 0.1; // ten frames a second is plenty to watch; the sim steps at its own rate
@@ -489,7 +523,7 @@ fn timeline() {
     for _ in 0..30 * 60 * 10 {
         h.step(&ctx);
         h.pending.clear();
-        let at = h.t - WARMUP;
+        let at = h.t;
         if h.gusts_seen > gusts {
             gusts = h.gusts_seen;
             let g = h.gust.as_ref().expect("a gust");

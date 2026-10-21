@@ -28,8 +28,10 @@
 //! **Time.** Everything steps on a fixed [`STEP`] from `ctx.dt` - the fluid,
 //! the eased `size`, the breathing, the dice for gusts, embers and settling
 //! logs - so a snapshot is the same picture every time, and at any frame rate.
-//! The first frame is already a burning fire: [`WARMUP`] seconds are run
-//! invisibly before it.
+//! There is no warm-up: the fire lights on screen, from an empty firebox
+//! (the owner, card 373: "it can just start with zero fire and literally
+//! start while it's on screen"). A five-second warm-up inside the first
+//! frame held it for ~9 s, and the Studio drops a patch after 5.
 //!
 //! **Colour** is painted by palette index ([`Hearth::paint`]): black, a
 //! 24-step blackbody ramp chosen at even perceptual lightness, and four smoke
@@ -137,8 +139,6 @@ const EMBER_OUT: f32 = 0.30;
 
 /// The fixed step, seconds.
 pub(crate) const STEP: f64 = 1.0 / 30.0;
-/// Seconds of fire run before the first frame.
-const WARMUP: f64 = 5.0;
 /// After a stall, at most this many steps are caught up: a paused Studio
 /// resumes the fire, it does not fast-forward it.
 const CATCHUP: i64 = 15;
@@ -543,14 +543,9 @@ impl Hearth {
 
     fn advance(&mut self, ctx: &Ctx) {
         if !self.warm {
+            // The fire starts at its size, not eased up to it from 0.5.
             self.warm = true;
             self.size = ctx.get("size");
-            let warm_steps = (WARMUP / STEP).round() as i64;
-            for _ in 0..warm_steps {
-                self.step(ctx);
-            }
-            // The clock the frame reads restarts from here.
-            self.steps = 0;
         }
         self.clock += ctx.dt.clamp(0.0, 0.25);
         let target = (self.clock / STEP + 1e-6).floor() as i64;
