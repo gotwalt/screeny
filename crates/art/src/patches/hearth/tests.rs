@@ -267,6 +267,68 @@ fn the_all_max_corner_stays_stable() {
     eprintln!("hearth all-max: mean APL {:.1}%, lowest limiter gain {gain:.2}", 100.0 * apl / n as f32);
 }
 
+/// Card 376: the owner's picks.
+#[test]
+fn deeper_red_by_default_and_smoke_to_one() {
+    assert_eq!(DARK_CHOICES[DEFAULT_DARK], "deeper red");
+    let by_id = |id: &str| PARAMS.iter().find(|p| p.id == id).expect(id);
+    assert_eq!(by_id("dark").default as usize, DEFAULT_DARK);
+    assert_eq!(by_id("smoke").max, 1.0);
+    for id in ["size", "gusts", "embers", "draft"] {
+        assert_eq!(by_id(id).max, 2.0, "{id}");
+    }
+}
+
+/// Card 376: sparks in the firebox. Over three minutes at the default no
+/// live spark is ever outside it (the frame's sides at its depth, the
+/// ceiling outside the flue); bounces happen, and rarely; and a bounce off
+/// the ceiling keeps at most the restitution's share of the speed into it.
+#[test]
+fn sparks_stay_in_the_firebox_and_bounce_rarely() {
+    let Some(_gpu) = gpu() else { return };
+    let params = Params::defaults(PARAMS);
+    let mut h = Hearth::new(1);
+    let ceiling = h.grid.ceiling() as f32;
+    let flue = |h: &Hearth, x: f32, z: f32| {
+        let (dx, dz) = (x - 0.5 * (h.grid.gw() - 1) as f32, z - 0.5 * (h.grid.gd() - 1) as f32);
+        dx * dx + dz * dz < (h.flue * h.grid.k).powi(2)
+    };
+    let minutes = 3.0;
+    let mut before = h.sparks.clone();
+    let mut last = h.bounces;
+    let mut checked_bounce = false;
+    for i in 1..=(minutes * 60.0 / DT) as usize {
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+        let c = &h.camera;
+        for k in 0..EMBERS {
+            let [x, y, z, heat] = h.sparks[4 * k];
+            if heat <= EMBER_OUT {
+                continue;
+            }
+            let half = (z - c.eye[2]) * c.tan_w;
+            assert!(x >= c.eye[0] - half - 1e-3 && x <= c.eye[0] + half + 1e-3, "spark {k} at x {x:.2}, frame +-{half:.2} at {:.1} s", i as f64 * DT);
+            assert!(y <= ceiling || flue(&h, x, z), "spark {k} in the ceiling at ({x:.1}, {y:.1}, {z:.1})");
+            // A spark that has just bounced off the ceiling: its speed up
+            // into it is gone, all but the restitution's share, and it is
+            // now moving down.
+            if h.sparks[4 * k + 3][2] > before[4 * k + 3][2] && before[4 * k][3] > EMBER_OUT {
+                let (up, now) = (before[4 * k + 1][1], h.sparks[4 * k + 1][1]);
+                assert!(now <= 0.0, "spark {k} still rising after the ceiling: {now}");
+                assert!(now.abs() <= 0.35 * up.abs() + 3.0, "spark {k} bounced back too fast: {up} -> {now}");
+                checked_bounce = true;
+            }
+        }
+        before = h.sparks.clone();
+        last = h.bounces;
+    }
+    let b = last;
+    let per_minute = (b.walls + b.ceiling) as f64 / minutes;
+    eprintln!("three minutes: {} wall, {} ceiling bounces, {} up the flue", b.walls, b.ceiling, b.flue);
+    assert!((1.0..=15.0).contains(&per_minute), "{per_minute:.1} bounces a minute");
+    assert!(b.flue > 0, "nothing went up the flue");
+    assert!(checked_bounce, "no ceiling bounce was seen to check");
+}
+
 /// Every frame is at most 32 colours - exact on the wire whatever it looks
 /// like - and the pipeline agrees.
 #[test]
