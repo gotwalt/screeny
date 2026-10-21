@@ -412,7 +412,7 @@ impl Hearth {
             // smoke fade, smoke absorption, smoke lighting, emission
             // (Lit smoke is not divided by k: a coarser grid already smears
             // smoke wider, and the wider wisps would show as more grey.)
-            d: [0.55, self.soot / k, 1.0, 0.3 / k],
+            d: [0.55, self.soot / k, 1.0, 0.35 / k],
             eye: [c.eye[0], c.eye[1], c.eye[2], g.samples as f32],
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),

@@ -271,10 +271,10 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   // grid cells per design unit).
   let yd = f32(g.y) / P.stove.w;
   if (yd < 5.0) {
-    // Full through the middle two rows of the log's height, tapering to its
+    // Full through the middle row of the log's height, tapering to its
     // edges. Flat-topped so that a coarser grid, whose rows fall between the
     // design rows, still holds the log at full fuel (card 374).
-    let k = clamp(1.0 - (abs(yd - 2.0) - 1.0) / 2.0, 0.0, 1.0);
+    let k = clamp(1.0 - (abs(yd - 2.0) - 0.5) / 2.5, 0.0, 1.0);
     let b = bed[g.z * gw() + g.x];
     fuel = max(fuel, b.x * k);
     temp = max(temp, b.y * k);
