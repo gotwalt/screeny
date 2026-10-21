@@ -342,7 +342,7 @@ fn gradient(@builtin(global_invocation_id) g: vec3<u32>) {
 // ---------------------------------------------------------------- embers
 //
 // Three vec4s a spark: (position, heat), (velocity, cooling rate),
-// (position one step ago, -). Heat at or below EMBER_OUT is an empty slot;
+// (position one step ago, age in seconds). Heat at or below EMBER_OUT is an empty slot;
 // Rust fills empty slots when the dice say a spark flies.
 
 @compute @workgroup_size(16)
@@ -363,12 +363,15 @@ fn embers(@builtin(global_invocation_id) g: vec3<u32>) {
   var v = b.xyz + dt * (2.2 * (fluid - b.xyz) + vec3<f32>(0.0, lift, 0.0) + jitter);
   let prev = a.xyz;
   let pos = a.xyz + dt * v;
-  var heat = a.w - dt * b.w * a.w * (1.0 - 0.6 * around);
+  var heat = a.w - dt * b.w * a.w * (1.0 - 0.25 * around);
+  // No spark lingers: one that has been alight eight seconds goes out.
+  let age = parts[3u * k + 2u].w + dt;
+  if (age > 8.0) { heat = 0.0; }
   let w = f32(gw());
   if (pos.y > f32(gh()) - 2.0 || pos.x < -6.0 || pos.x > w + 6.0 || pos.z < 0.0 || pos.z > f32(gd())) { heat = 0.0; }
   parts[3u * k] = vec4<f32>(pos, heat);
   parts[3u * k + 1u] = vec4<f32>(v, b.w);
-  parts[3u * k + 2u] = vec4<f32>(prev, 0.0);
+  parts[3u * k + 2u] = vec4<f32>(prev, age);
 }
 
 // ---------------------------------------------------------------- the fire's light
