@@ -70,7 +70,7 @@ const EMBER_OUT: f32 = 0.30;
 // second) that counts as a bounce rather than a touch.
 const EMBER_REST: f32 = 0.3;
 const EMBER_SLIDE: f32 = 0.6;
-const EMBER_IMPACT: f32 = 18.0;
+const EMBER_IMPACT: f32 = 26.0;
 const LIGHT_CELL: u32 = 4u;
 const LIGHT_RADIUS: i32 = 6;
 // Upward acceleration in the flue at full draft, cells per second squared.
