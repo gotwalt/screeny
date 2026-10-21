@@ -582,6 +582,95 @@ fn strip() {
     }
 }
 
+/// A device of the same kind [`crate::gpu::Gpu`] opens, plus timestamp
+/// queries, for the cost tool.
+fn profiling_gpu() -> Option<&'static crate::gpu::Gpu> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        eprintln!("hearth: this adapter has no timestamp queries");
+        return None;
+    }
+    let info = adapter.get_info();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("hearth cost"),
+        required_features: wgpu::Features::TIMESTAMP_QUERY,
+        required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        ..Default::default()
+    }))
+    .ok()?;
+    Some(Box::leak(Box::new(crate::gpu::Gpu {
+        device,
+        queue,
+        adapter: info.name.clone(),
+        backend: format!("{:?}", info.backend),
+        software: false,
+    })))
+}
+
+/// Not a test: card 374's cost table. GPU time per stage per frame, median
+/// and 95th percentile over `HEARTH_FRAMES` (default 300) frames after
+/// `HEARTH_AT` (default 10) seconds of fire, with `HEARTH_SET` params, and
+/// the wall clock per frame alongside.
+/// `cargo test -p screeny-art hearth::tests::stages -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn stages() {
+    let Some(gpu) = profiling_gpu() else { return };
+    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+    let mut params = Params::defaults(PARAMS);
+    for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+        if let Some((k, v)) = kv.split_once('=') {
+            params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+        }
+    }
+    let mut h = Hearth::new(1);
+    let mut sim = Sim::new(gpu, [GW as u32, GH as u32, GD as u32], &h.ramp.table());
+    sim.profile = Some(std::cell::RefCell::new(gpu::Profile::new(&gpu.device)));
+    h.sim = Some(Some(sim));
+    let warm = (env("HEARTH_AT", 10.0) / DT) as usize;
+    let frames = env("HEARTH_FRAMES", 300.0) as usize;
+    let mut i = 0;
+    let mut tick = |h: &mut Hearth| {
+        i += 1;
+        h.render(&ctx_at(i as f64 * DT, DT, &params));
+    };
+    for _ in 0..warm {
+        tick(&mut h);
+    }
+    let take = |h: &Hearth| -> Vec<(&'static str, f64)> {
+        let Some(Some(sim)) = &h.sim else { return Vec::new() };
+        std::mem::take(&mut sim.profile.as_ref().expect("profiling").borrow_mut().times)
+    };
+    take(&h);
+    let mut per_frame: Vec<std::collections::BTreeMap<&'static str, f64>> = Vec::new();
+    let mut wall = Vec::new();
+    for _ in 0..frames {
+        let t = std::time::Instant::now();
+        tick(&mut h);
+        wall.push(t.elapsed().as_secs_f64() * 1e3);
+        let mut f = std::collections::BTreeMap::new();
+        for (name, ns) in take(&h) {
+            *f.entry(name).or_insert(0.0) += ns / 1e6;
+        }
+        per_frame.push(f);
+    }
+    let stat = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        (v[v.len() / 2], v[(v.len() * 95 / 100).min(v.len() - 1)])
+    };
+    let names: Vec<&str> = per_frame[0].keys().copied().collect();
+    eprintln!("{:<12} {:>9} {:>9}   (ms per frame, {} frames)", "stage", "median", "p95", frames);
+    for name in &names {
+        let (m, p) = stat(per_frame.iter().map(|f| f.get(name).copied().unwrap_or(0.0)).collect());
+        eprintln!("{name:<12} {m:>9.2} {p:>9.2}");
+    }
+    let (m, p) = stat(per_frame.iter().map(|f| f.values().sum()).collect());
+    eprintln!("{:<12} {m:>9.2} {p:>9.2}", "gpu total");
+    let (m, p) = stat(wall);
+    eprintln!("{:<12} {m:>9.2} {p:>9.2}", "wall clock");
+}
+
 /// Not a test: how long a frame takes on this machine (two steps and a
 /// picture). `cargo test -p screeny-art hearth::tests::cost -- --ignored --nocapture`
 #[test]

@@ -50,6 +50,46 @@ struct Pass {
     bind: wgpu::BindGroup,
 }
 
+/// Card 374's per-stage GPU clock: a timestamp at the start and end of
+/// every stage's compute pass, read back after each submit. Only for the
+/// `#[ignore]` cost tool, on a device opened with `TIMESTAMP_QUERY`.
+pub struct Profile {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+    names: Vec<&'static str>,
+    /// Nanoseconds per stage, every submit since the last [`Profile::take`].
+    pub times: Vec<(&'static str, f64)>,
+}
+
+#[cfg(test)]
+const PROFILE_SLOTS: u32 = 64;
+
+#[cfg(test)]
+impl Profile {
+    pub fn new(device: &wgpu::Device) -> Profile {
+        let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("hearth stages"),
+            ty: wgpu::QueryType::Timestamp,
+            count: PROFILE_SLOTS,
+        });
+        let size = u64::from(PROFILE_SLOTS) * 8;
+        let resolve = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hearth stages resolve"),
+            size,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hearth stages read"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Profile { set, resolve, read, names: Vec::new(), times: Vec::new() }
+    }
+}
+
 pub struct Sim {
     gpu: &'static Gpu,
     dims: [u32; 3],
@@ -65,6 +105,8 @@ pub struct Sim {
     out_read: wgpu::Buffer,
     parts_read: wgpu::Buffer,
     passes: Vec<(&'static str, Pass)>,
+    /// Card 374's cost tool, when it is measuring.
+    pub profile: Option<std::cell::RefCell<Profile>>,
 }
 
 /// Which bindings each entry point uses: a default pipeline layout holds only
@@ -153,11 +195,56 @@ impl Sim {
                 (*name, Pass { pipeline, bind })
             })
             .collect();
-        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, parts, out, out_read, parts_read, passes }
+        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, parts, out, out_read, parts_read, passes, profile: None }
     }
 
     fn pass(&self, name: &str) -> &Pass {
         &self.passes.iter().find(|(n, _)| *n == name).expect("an entry point hearth.wgsl has").1
+    }
+
+    /// One stage of the work in its own compute pass, timed when profiling.
+    fn stage(&self, enc: &mut wgpu::CommandEncoder, label: &'static str, body: impl FnOnce(&mut wgpu::ComputePass)) {
+        let mut prof = self.profile.as_ref().map(|p| p.borrow_mut());
+        let writes = prof.as_mut().map(|p| {
+            let at = 2 * p.names.len() as u32;
+            p.names.push(label);
+            wgpu::ComputePassTimestampWrites {
+                query_set: &p.set,
+                beginning_of_pass_write_index: Some(at),
+                end_of_pass_write_index: Some(at + 1),
+            }
+        });
+        let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: writes });
+        body(&mut cp);
+    }
+
+    /// Submit, and when profiling, wait and file each stage's time.
+    fn submit(&self, mut enc: wgpu::CommandEncoder) {
+        let Some(p) = &self.profile else {
+            self.gpu.queue.submit([enc.finish()]);
+            return;
+        };
+        let mut p = p.borrow_mut();
+        let n = 2 * p.names.len() as u32;
+        if n > 0 {
+            enc.resolve_query_set(&p.set, 0..n, &p.resolve, 0);
+            enc.copy_buffer_to_buffer(&p.resolve, 0, &p.read, 0, u64::from(n) * 8);
+        }
+        self.gpu.queue.submit([enc.finish()]);
+        if n == 0 {
+            return;
+        }
+        let slice = p.read.slice(..u64::from(n) * 8);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let ticks: Vec<u64> = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
+        p.read.unmap();
+        let period = f64::from(self.gpu.queue.get_timestamp_period());
+        let names = std::mem::take(&mut p.names);
+        for (k, name) in names.into_iter().enumerate() {
+            let ns = ticks[2 * k + 1].saturating_sub(ticks[2 * k]) as f64 * period;
+            p.times.push((name, ns));
+        }
     }
 
     fn run(&self, cp: &mut wgpu::ComputePass, name: &str, groups: [u32; 3]) {
@@ -184,28 +271,29 @@ impl Sim {
         let cells = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
         let g = self.cell_groups();
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut cp = enc.begin_compute_pass(&Default::default());
+        self.stage(&mut enc, "advect", |cp| {
             for name in ["adv_fwd", "adv_back_vel", "adv_back_scal", "adv_fix_vel", "adv_fix_scal"] {
-                self.run(&mut cp, name, g);
+                self.run(cp, name, g);
             }
-        }
+        });
         enc.copy_buffer_to_buffer(&self.vel_next, 0, &self.vel, 0, cells);
         enc.copy_buffer_to_buffer(&self.scal_next, 0, &self.scal, 0, cells);
-        {
-            let mut cp = enc.begin_compute_pass(&Default::default());
-            for name in ["combust", "curl_of", "confine", "divergence"] {
-                self.run(&mut cp, name, g);
-            }
-            let half = [g[0].div_ceil(2), g[1], g[2]];
+        self.stage(&mut enc, "combust", |cp| self.run(cp, "combust", g));
+        self.stage(&mut enc, "vorticity", |cp| {
+            self.run(cp, "curl_of", g);
+            self.run(cp, "confine", g);
+        });
+        self.stage(&mut enc, "divergence", |cp| self.run(cp, "divergence", g));
+        let half = [g[0].div_ceil(2), g[1], g[2]];
+        self.stage(&mut enc, "pressure", |cp| {
             for _ in 0..SWEEPS {
-                self.run(&mut cp, "pres_red", half);
-                self.run(&mut cp, "pres_black", half);
+                self.run(cp, "pres_red", half);
+                self.run(cp, "pres_black", half);
             }
-            self.run(&mut cp, "gradient", g);
-            self.run(&mut cp, "embers", [1, 1, 1]);
-        }
-        q.submit([enc.finish()]);
+        });
+        self.stage(&mut enc, "project", |cp| self.run(cp, "gradient", g));
+        self.stage(&mut enc, "embers", |cp| self.run(cp, "embers", [1, 1, 1]));
+        self.submit(enc);
     }
 
     /// For tuning and tests: the whole scalar field (temperature, fuel,
@@ -248,16 +336,15 @@ impl Sim {
         q.write_buffer(&self.params, 0, bytemuck::bytes_of(params));
         let cg = self.coarse.map(|d| d.div_ceil(4));
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        {
-            let mut cp = enc.begin_compute_pass(&Default::default());
+        self.stage(&mut enc, "light", |cp| {
             for name in ["light_gather", "light_x", "light_y", "light_z"] {
-                self.run(&mut cp, name, cg);
+                self.run(cp, name, cg);
             }
-            self.run(&mut cp, "march", [8, 4, 1]);
-        }
+        });
+        self.stage(&mut enc, "march", |cp| self.run(cp, "march", [8, 4, 1]));
         enc.copy_buffer_to_buffer(&self.out, 0, &self.out_read, 0, 2 * 2048 * 16);
         enc.copy_buffer_to_buffer(&self.parts, 0, &self.parts_read, 0, (EMBERS * 48) as u64);
-        q.submit([enc.finish()]);
+        self.submit(enc);
 
         let (a, b) = (self.out_read.slice(..), self.parts_read.slice(..));
         a.map_async(wgpu::MapMode::Read, |_| {});
