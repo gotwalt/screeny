@@ -598,8 +598,8 @@ impl Hearth {
         }
         // Soot: neutral greys, its own entries, never the flame's hue
         // (card 373: fire-tinted smoke read as a muddy dark red).
-        for k in 0..SMOKE_STEPS {
-            pal.push(oklch(SMOKE_L[k], 0.0, 0.0));
+        for l in SMOKE_L {
+            pal.push(oklch(l, 0.0, 0.0));
         }
         self.palette = Some((color, pal.clone()));
         pal
