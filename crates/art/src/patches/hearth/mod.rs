@@ -103,6 +103,14 @@ const PARAMS: &[ParamSpec] = &[
     // Card 375: the cool end of the fire and the soot as hand-picked level
     // triples, so the panel shows them steadily; several to flip between.
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
+    // Experiment (exp/hearth-speed): the gas and sparks run this many times
+    // faster than wall time, the logs, breathing and gusts do not. By Froude
+    // scaling a real fire in a 7-inch firebox runs about 30 times faster
+    // than 1 does.
+    param("speed", "How fast the gas moves (1: the slow, grand fire; ~30: a real one this size)", 1.0, 32.0, 0.5, 1.0),
+    // Experiment: the ceiling raised into the black margin above the LEDs,
+    // in LEDs (5.4 is the bench panel's 15 mm).
+    param("headroom", "How far above the top row the stove ceiling sits, LEDs", 0.0, 8.0, 0.1, 0.0),
 ];
 
 /// Where card 372's maximum sits on the rescaled `size`, `gusts` and
@@ -177,6 +185,7 @@ impl Grid {
         [self.gw() as u32, self.gh() as u32, self.gd() as u32]
     }
     /// The ceiling's grid row.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn ceiling(&self) -> usize {
         (CEILING * self.k).round() as usize
     }
@@ -353,6 +362,10 @@ pub(crate) struct Hearth {
     /// the flue's radius in cells.
     draft: f32,
     flue: f32,
+    /// The ceiling's rise above the frame's top edge, LEDs (`headroom`).
+    headroom: f32,
+    /// Fluid steps owed: `speed` per fixed step, run whole.
+    owed: f32,
     gust: Option<Gust>,
     calm_until: f64,
     settle: Option<Settle>,
@@ -420,6 +433,8 @@ impl Hearth {
             soot: 0.28,
             draft: 0.0,
             flue: 13.0,
+            headroom: 0.0,
+            owed: 0.0,
             gust: None,
             calm_until: 20.0,
             settle: None,
@@ -473,7 +488,7 @@ impl Hearth {
             right: scale(c.right, c.tan_w),
             up: scale(c.up, c.tan_h),
             fwd: [c.fwd[0], c.fwd[1], c.fwd[2], g.march],
-            stove: [self.draft, g.ceiling() as f32, self.flue * k, k],
+            stove: [self.draft, ((CEILING + 3.0 * self.headroom) * k).round(), self.flue * k, k],
             wind: self.wind,
         }
     }
@@ -557,13 +572,22 @@ impl Hearth {
         }
         self.draft = if stove { draft * (1.0 + 0.9 * surge) } else { 0.0 };
         self.flue = 6.0 + 18.0 * ctx.get("flue");
+        self.headroom = ctx.get("headroom");
 
         let params = self.params();
         if let Some(Some(sim)) = &self.sim {
             for (slot, spark) in self.spawns.drain(..) {
                 sim.spawn(slot, spark);
             }
-            sim.step(&params, &self.bed);
+            self.owed += ctx.get("speed").max(1.0);
+            let mut params = params;
+            while self.owed >= 1.0 {
+                sim.step(&params, &self.bed);
+                self.owed -= 1.0;
+                self.step_no += 1;
+                params.dims[3] = self.step_no as u32;
+            }
+            self.step_no -= 1;
         }
         self.t += STEP;
         self.steps += 1;
