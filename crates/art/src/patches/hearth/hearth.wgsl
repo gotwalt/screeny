@@ -44,6 +44,7 @@ struct Params {
   up: vec4<f32>,       // camera up * tan(half height)
   fwd: vec4<f32>,      // camera forward; w: march step, cells
   stove: vec4<f32>,    // draft (0: an open fire), ceiling row, flue radius, -
+  logs: vec4<f32>,     // rows the woodpile covers, -, -, -
   wind: array<vec4<f32>, 40>,  // per row, four rows to a vec4
 };
 
@@ -56,7 +57,9 @@ struct Params {
 @group(0) @binding(6) var<storage, read_write> scal_back: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read_write> div: array<f32>;
 @group(0) @binding(8) var<storage, read_write> pres: array<f32>;
-@group(0) @binding(9) var<storage, read> bed: array<vec2<f32>>;
+// The woodpile, its own rows of the grid: (fuel level, glow, 1 inside a
+// log, -), cell (x, y, z) at (z * rows + y) * GW + x.
+@group(0) @binding(9) var<storage, read> bed: array<vec4<f32>>;
 @group(0) @binding(10) var<storage, read_write> light: array<f32>;
 @group(0) @binding(11) var<storage, read_write> light2: array<f32>;
 @group(0) @binding(12) var<storage, read_write> parts: array<vec4<f32>>;
@@ -106,6 +109,13 @@ fn wind_at(y: u32) -> f32 { return P.wind[y / 4u][y % 4u]; }
 
 fn stove_on() -> bool { return P.stove.x > 0.0; }
 
+fn bed_rows() -> u32 { return u32(P.logs.x); }
+
+fn in_log(x: i32, y: i32, z: i32) -> bool {
+  if (x < 0 || z < 0 || y < 0 || x >= i32(gw()) || z >= i32(gd()) || y >= i32(bed_rows())) { return false; }
+  return bed[(u32(z) * bed_rows() + u32(y)) * gw() + u32(x)].z > 0.5;
+}
+
 fn in_flue(x: f32, z: f32) -> bool {
   let d = vec2<f32>(x - 0.5 * f32(gw() - 1u), z - 0.5 * f32(gd() - 1u));
   return dot(d, d) < P.stove.z * P.stove.z;
@@ -114,6 +124,7 @@ fn in_flue(x: f32, z: f32) -> bool {
 // Is grid cell (x, y, z) - possibly outside the grid - solid?
 fn solid(x: i32, y: i32, z: i32) -> bool {
   if (y < 0) { return true; }
+  if (in_log(x, y, z)) { return true; }
   if (!stove_on()) { return false; }
   if (x < 0 || z < 0 || x >= i32(gw()) || z >= i32(gd())) { return false; }
   return f32(y) >= P.stove.y && !in_flue(f32(x), f32(z));
@@ -266,26 +277,19 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   if (!inside(g)) { return; }
   let i = idx(g.x, g.y, g.z);
   let dt = P.a.x;
+  var b = vec4<f32>(0.0);
+  if (g.y < bed_rows()) { b = bed[(g.z * bed_rows() + g.y) * gw() + g.x]; }
   if (solid(i32(g.x), i32(g.y), i32(g.z))) {
     vel[i] = vec4<f32>(0.0);
-    scal[i] = vec4<f32>(0.0);
+    // Inside a log: no gas, only the log's own glow.
+    scal[i] = vec4<f32>(b.y, 0.0, 0.0, 0.0);
     return;
   }
   var s = scal[i];
-  var temp = s.x;
-  var fuel = s.y;
-  // The logs: the bottom five rows, in design units (card 374: `stove.w` is
-  // grid cells per design unit).
-  let yd = f32(g.y) / P.stove.w;
-  if (yd < 5.0) {
-    // Full through the middle row of the log's height, tapering to its
-    // edges. Flat-topped so that a coarser grid, whose rows fall between the
-    // design rows, still holds the log at full fuel (card 374).
-    let k = clamp(1.0 - (abs(yd - 2.0) - 0.5) / 2.5, 0.0, 1.0);
-    let b = bed[g.z * gw() + g.x];
-    fuel = max(fuel, b.x * k);
-    temp = max(temp, b.y * k);
-  }
+  // The woodpile (exp/hearth-speed): fuel held at its level in the shell
+  // round each log, the coals' glow under it.
+  var temp = max(s.x, b.y);
+  let fuel = max(s.y, b.x);
   let burnt = fuel * (1.0 - exp(-P.b.z * dt));
   let left = fuel - burnt;
   let cooled = temp - dt * (P.c.x * temp * temp * temp * temp + P.c.y * temp);
@@ -400,7 +404,7 @@ fn relax(h: vec3<u32>, colour: u32) {
   var sum: f32;
   // Clear of every boundary the stove can have: the six neighbours are gas.
   let ceiling = select(f32(gh()), P.stove.y, stove_on());
-  if (g.x > 0u && g.y > 0u && g.z > 0u && g.x + 1u < gw() && f32(g.y + 1u) < ceiling && g.y + 1u < gh() && g.z + 1u < gd()) {
+  if (g.x > 0u && g.y > bed_rows() && g.z > 0u && g.x + 1u < gw() && f32(g.y + 1u) < ceiling && g.y + 1u < gh() && g.z + 1u < gd()) {
     let sy = gw(); let sz = gw() * gh();
     sum = pres[i - 1u] + pres[i + 1u] + pres[i - sy] + pres[i + sy] + pres[i - sz] + pres[i + sz];
   } else {

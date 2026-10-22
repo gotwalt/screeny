@@ -75,7 +75,7 @@ fn first_frame_parts() {
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(1);
     let t = std::time::Instant::now();
-    h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table())));
+    h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table())));
     let built = t.elapsed().as_secs_f64();
     let t = std::time::Instant::now();
     h.render(&ctx_at(0.0, 0.0, &params));
@@ -780,7 +780,7 @@ fn stages() {
         }
     }
     let mut h = Hearth::with_grid(1, grid_from_env());
-    let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table());
+    let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table());
     sim.profile = Some(std::cell::RefCell::new(gpu::Profile::new(&gpu.device)));
     h.sim = Some(Some(sim));
     let warm = (env("HEARTH_AT", 10.0) / DT) as usize;

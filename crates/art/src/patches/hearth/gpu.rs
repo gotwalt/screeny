@@ -31,6 +31,8 @@ pub struct Params {
     /// The firebox (card 373): draft (0 = open fire), ceiling row, flue
     /// radius in cells, unused.
     pub stove: [f32; 4],
+    /// The woodpile (exp/hearth-speed): rows of grid the bed covers, unused.
+    pub logs: [f32; 4],
     pub wind: [[f32; 4]; 40],
 }
 
@@ -120,10 +122,10 @@ const ENTRIES: &[(&str, &[u32])] = &[
     ("combust", &[0, 1, 2, 9]),
     ("curl_of", &[0, 1, 5]),
     ("confine", &[0, 1, 5]),
-    ("divergence", &[0, 1, 2, 7]),
-    ("pres_red", &[0, 7, 8]),
-    ("pres_black", &[0, 7, 8]),
-    ("gradient", &[0, 1, 8]),
+    ("divergence", &[0, 1, 2, 7, 9]),
+    ("pres_red", &[0, 7, 8, 9]),
+    ("pres_black", &[0, 7, 8, 9]),
+    ("gradient", &[0, 1, 8, 9]),
     ("embers", &[0, 1, 2, 12]),
     ("light_gather", &[0, 2, 10, 14]),
     ("light_x", &[0, 10, 11]),
@@ -133,7 +135,7 @@ const ENTRIES: &[(&str, &[u32])] = &[
 ];
 
 impl Sim {
-    pub fn new(gpu: &'static Gpu, dims: [u32; 3], sweeps: usize, lut: &[[f32; 4]; 512]) -> Sim {
+    pub fn new(gpu: &'static Gpu, dims: [u32; 3], bed_rows: u32, sweeps: usize, lut: &[[f32; 4]; 512]) -> Sim {
         let device = &gpu.device;
         let cells = u64::from(dims[0] * dims[1] * dims[2]);
         let coarse = dims.map(|d| d / LIGHT_CELL);
@@ -157,7 +159,7 @@ impl Sim {
         let scal_back = buffer("scal back", cells * 16, storage);
         let div = buffer("div", cells * 4, storage);
         let pres = buffer("pres", cells * 4, storage);
-        let bed = buffer("bed", u64::from(dims[0] * dims[2]) * 8, storage);
+        let bed = buffer("bed", u64::from(dims[0] * bed_rows * dims[2]) * 16, storage);
         let light = buffer("light", coarse_cells * 4, storage);
         let light2 = buffer("light2", coarse_cells * 4, storage);
         let parts = buffer("parts", (EMBERS * 64) as u64, storage);
@@ -263,11 +265,16 @@ impl Sim {
         self.gpu.queue.write_buffer(&self.parts, (slot * 64) as u64, bytemuck::cast_slice(&spark));
     }
 
+    /// The woodpile's cells, `bed_rows` rows of the grid: (fuel level, glow,
+    /// 1 inside a log, unused). Held until the next call.
+    pub fn bed(&self, bed: &[[f32; 4]]) {
+        self.gpu.queue.write_buffer(&self.bed, 0, bytemuck::cast_slice(bed));
+    }
+
     /// One fixed step of the fluid and the embers.
-    pub fn step(&self, params: &Params, bed: &[[f32; 2]]) {
+    pub fn step(&self, params: &Params) {
         let q = &self.gpu.queue;
         q.write_buffer(&self.params, 0, bytemuck::bytes_of(params));
-        q.write_buffer(&self.bed, 0, bytemuck::cast_slice(bed));
         let cells = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
         let g = self.cell_groups();
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
