@@ -198,6 +198,16 @@ pub(crate) const STEP: f64 = 1.0 / 30.0;
 /// After a stall, at most this many steps are caught up: a paused Studio
 /// resumes the fire, it does not fast-forward it.
 const CATCHUP: i64 = 15;
+/// The most fixed steps of gas one GPU substep may cover at `speed` above 1.
+const BIG: f32 = 4.0;
+
+/// At `speed`, how many GPU substeps each fixed step takes, and each one's dt.
+fn substeps(speed: f32) -> (usize, f32) {
+    let speed = speed.max(1.0);
+    let n = (speed / BIG).ceil().max(1.0);
+    (n as usize, STEP as f32 * speed / n)
+}
+
 /// How long `size` takes to follow its parameter: the time constant, seconds.
 const SIZE_EASE: f32 = 18.0;
 
@@ -364,8 +374,6 @@ pub(crate) struct Hearth {
     flue: f32,
     /// The ceiling's rise above the frame's top edge, LEDs (`headroom`).
     headroom: f32,
-    /// Fluid steps owed: `speed` per fixed step, run whole.
-    owed: f32,
     gust: Option<Gust>,
     calm_until: f64,
     settle: Option<Settle>,
@@ -434,7 +442,6 @@ impl Hearth {
             draft: 0.0,
             flue: 13.0,
             headroom: 0.0,
-            owed: 0.0,
             gust: None,
             calm_until: 20.0,
             settle: None,
@@ -579,11 +586,14 @@ impl Hearth {
             for (slot, spark) in self.spawns.drain(..) {
                 sim.spawn(slot, spark);
             }
-            self.owed += ctx.get("speed").max(1.0);
+            // `speed` seconds of gas per second: in substeps of at most
+            // BIG fixed steps each, so the GPU's work grows a quarter as
+            // fast as the speed (a 16x fire is 4 substeps of 4 steps).
+            let (n, dt) = substeps(ctx.get("speed"));
             let mut params = params;
-            while self.owed >= 1.0 {
+            params.a[0] = dt;
+            for _ in 0..n {
                 sim.step(&params, &self.bed);
-                self.owed -= 1.0;
                 self.step_no += 1;
                 params.dims[3] = self.step_no as u32;
             }
@@ -697,7 +707,10 @@ impl Hearth {
         }
         self.clock += ctx.dt.clamp(0.0, 0.25);
         let target = (self.clock / STEP + 1e-6).floor() as i64;
-        self.steps = self.steps.max(target - CATCHUP);
+        // A fast fire catches up less: each step is several on the GPU, and
+        // catching up a stall must not cause the next one.
+        let catchup = (CATCHUP / substeps(ctx.get("speed")).0 as i64).max(1);
+        self.steps = self.steps.max(target - catchup);
         while self.steps < target {
             self.step(ctx);
         }
