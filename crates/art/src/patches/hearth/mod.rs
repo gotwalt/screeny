@@ -509,10 +509,14 @@ pub(crate) struct Hearth {
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Hearth::new(seed))
+    // Experiment: env `HEARTH_K` sets the grid's cells per design unit, for
+    // a coarser, cheaper fire at speed (docs/research/011).
+    let k = std::env::var("HEARTH_K").ok().and_then(|v| v.parse().ok());
+    Box::new(Hearth::with_grid(seed, Grid { k: k.unwrap_or(Grid::SHIPPED.k), ..Grid::SHIPPED }))
 }
 
 impl Hearth {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(seed: u64) -> Hearth {
         Hearth::with_grid(seed, Grid::SHIPPED)
     }

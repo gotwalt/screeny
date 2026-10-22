@@ -145,6 +145,29 @@ GPU ms a frame at speed 11, `BIG=1`, by `HEARTH_GRID` depth and sweeps:
 - The workgroup shape (4x4x4 now) is worth ~13% at 8x8x1, all of it in
   pressure. Not taken yet.
 
+**Resolution is the big lever.** GPU ms a frame at speed 11, `BIG=1`, 8
+sweeps, by cells per design unit (`k`):
+
+| k | grid | total |
+|---|---|---|
+| 0.667 (card 374) | 128x88x32 | 211 |
+| 0.5 | 96x~66x24 | 67 |
+| 0.4 | ~77x~53x20 | 38 |
+| 0.333 | 64x44x16 | 19 |
+
+Card 374 chose 0.667 because 0.5 rounded the tongues, but that was judged in
+slow motion. In stills at speed 11, 0.5 and 0.4 look like 0.667; 0.333 is
+still tongued but taller and fuller (reaches the top row), so `size` wants
+a retune there. Env `HEARTH_K` sets `k` in the player (not in tests).
+
+On the Living Room panel (2026-10-22), k 0.333, speed 11, `BIG=1`, his
+settings above, 30 fps: "that looks pretty good. big step in the right
+direction". The deployed Studio was rendering the Office panel on the same
+GPU meanwhile.
+
+The Living Room panel advertises itself as "Living Room", so a Studio
+reaches it with `{"on":true,"to":"Living Room"}`, not `screeny-4a00a4`.
+
 Where the rest is (planned, in order of expected win):
 
 1. **Advection** (~45% of a step after the sweeps cut): the trilinear taps
