@@ -1,8 +1,10 @@
 # 011: Hearth at a real speed, burning wood
 
 Status of the `exp/hearth-speed` branch, written 2026-10-22 as the work moves
-from the owner's Mac to workbench and another session picks it up. Nothing
-here is merged; `main` still ships card 376's hearth.
+from the owner's Mac to workbench and another session picks it up. Merged
+to `main` the same night, at his word, and deployed to both panels: the
+grid follows `speed`, small steps by default, the slider tops out at 18, and
+the frame is held steady (below).
 
 ## What the owner asked for
 
@@ -165,6 +167,40 @@ settings above, 30 fps: "that looks pretty good. big step in the right
 direction". The deployed Studio was rendering the Office panel on the same
 GPU meanwhile.
 
+**The grid follows `speed`** (`GRIDS` in `mod.rs`): 2/3 up to 1.5, 1/2 up
+to 4.5, 0.4 up to 8, 1/3 up to 12, 1/4 above. Each switch carries the fire
+over (the fields resampled on the CPU, the sparks rescaled), and the old
+grid's sim is kept so going back compiles nothing.
+`the_fire_carries_to_another_grid` checks the first frame after each switch
+is still burning. `HEARTH_K` pins the grid instead.
+
+The owner, same evening, on the panel with the deployed Studio stopped (so
+the GPU was the branch's alone):
+
+- At 4 (1/2): "the detail is noticeable at this pace".
+- At 18 (then on 1/3, ~90% GPU busy at 1400 MHz): "18 is probably the max
+  of gas move speed. it's realistic enough". The `speed` slider now tops
+  out at 18 (was 32).
+- At 18 on 1/4 (~57% busy, the clock down to ~900 MHz), chunkier in
+  stills: "the frame rate makes up for it".
+
+**Small steps by default.** `BIG` is now 1 (it was 4, the jets); the branch
+Studio had run with `HEARTH_BIG=1` all along.
+
+**The bench rule at speed.** `no_whole_frame_pulse_above_three_hertz` now
+runs at speeds 1, 4, 8, 11 and 18. Before a limiter the fast part of the
+whole frame's level was 1.5, 6.4, 13.5, 24 and 35% of its mean (the limit is
+15%; the brief: "no full-field flashing above 3 Hz ... build this in as a
+limiter"). `paint` now holds each painted frame within 5% of its own
+low-passed level (0.3 s), finding the gain by halving, since the ramp makes
+the level rise ~3x faster than the light: 1.3, 5.1, 6.4, 7.7 and 9.4%. A
+two-step secant search in its place jumped 33% in one frame while the fire
+was catching.
+
+A rough GPU monitor for this box without root (`intel_gpu_top` needs perf
+access): whole-GPU busy from `gt/gt0/rc6_residency_ms`, one process's share
+from `drm-engine-render` in its `/proc/<pid>/fdinfo`.
+
 The Living Room panel advertises itself as "Living Room", so a Studio
 reaches it with `{"on":true,"to":"Living Room"}`, not `screeny-4a00a4`.
 
@@ -182,9 +218,12 @@ Where the rest is (planned, in order of expected win):
 
 ## Next
 
-1. Put the woodpile on the panel and get his read.
-2. Motion blur for fast embers: the smear uses only the last substep.
-3. If real speed ships: a whole-panel brightness check under 3 Hz (bench
-   rule), and keep slow reachable - the slow fire is "beautiful".
-4. Try medium steps, or fewer sweeps per substep, for more speed per ms.
-5. Embers do not collide with logs yet; they leave from above them.
+1. Motion blur for fast embers: the smear uses only the last substep.
+2. The default `speed` is still 1 (the slow fire, "beautiful"); the
+   panels play whatever their Studio has saved.
+3. The grid levels are workbench's. A faster GPU (the M4) could hold finer
+   grids at each speed; they could follow measured frame time instead.
+4. Embers do not collide with logs yet; they leave from above them.
+5. `flock::tests::the_shipped_defaults_still_flock` fails on workbench
+   ("a bird turned at x1.028 of its limit"); this branch does not touch
+   flock, so it is not the hearth. Not looked into.

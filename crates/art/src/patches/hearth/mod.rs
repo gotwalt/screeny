@@ -73,7 +73,7 @@ use crate::frame::{Frame, H, N, W};
 use crate::gpu::Gpu;
 use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
-use gpu::{Params, Sim, EMBERS};
+use gpu::{Params, Saved, Sim, EMBERS};
 use ramp::Ramp;
 
 pub const DEF: PatchDef = PatchDef {
@@ -106,8 +106,9 @@ const PARAMS: &[ParamSpec] = &[
     // Experiment (exp/hearth-speed): the gas and sparks run this many times
     // faster than wall time, the logs, breathing and gusts do not. By Froude
     // scaling a real fire in a 7-inch firebox runs about 30 times faster
-    // than 1 does.
-    param("speed", "How fast the gas moves (1: the slow, grand fire; ~30: a real one this size)", 1.0, 32.0, 0.5, 1.0),
+    // than 1 does; the owner, on the panel at 18: "realistic enough", so
+    // that is the top.
+    param("speed", "How fast the gas moves (1: the slow, grand fire; 18: a real one)", 1.0, 18.0, 0.5, 1.0),
     // Experiment: the ceiling raised into the black margin above the LEDs,
     // in LEDs (5.4 is the bench panel's 15 mm).
     param("wood", "How patchily the logs give off gas (0: a steady sheet, like a burner)", 0.0, 1.0, 0.01, 0.0),
@@ -208,6 +209,11 @@ impl Grid {
         (CEILING * self.k).round() as usize
     }
 }
+/// How far the frame's light may stray from its low-passed self, and that
+/// low-pass's time constant, seconds ([`Hearth::paint`]).
+const STEADY: f32 = 0.05;
+const STEADY_TAU: f32 = 0.3;
+
 /// An ember slot at or below this heat is empty.
 const EMBER_OUT: f32 = 0.30;
 
@@ -217,7 +223,10 @@ pub(crate) const STEP: f64 = 1.0 / 30.0;
 /// resumes the fire, it does not fast-forward it.
 const CATCHUP: i64 = 15;
 /// The most fixed steps of gas one GPU substep may cover at `speed` above 1.
-const BIG: f32 = 4.0;
+/// One: bigger substeps smooth the flames into jets (docs/research/011); a
+/// fast fire is paid for with a coarser grid instead ([`GRIDS`]). Env
+/// `HEARTH_BIG` overrides it, for experiments.
+const BIG: f32 = 1.0;
 
 /// At `speed`, how many GPU substeps each fixed step takes, and each one's dt.
 fn substeps(speed: f32) -> (usize, f32) {
@@ -452,6 +461,10 @@ pub(crate) struct Hearth {
     pub(crate) grid: Grid,
     /// `None` until first render; `Some(None)` if there is no GPU.
     sim: Option<Option<Sim>>,
+    /// Whether the grid follows `speed` ([`k_for`]), and the sims of grids
+    /// it has left, kept for the way back.
+    follow: bool,
+    spare: Vec<Sim>,
     camera: Camera,
     /// The ember slots as last read back (three vec4s each), the slots
     /// filled since, and the sparks waiting to go in with the next step.
@@ -502,6 +515,9 @@ pub(crate) struct Hearth {
     fire_l: [f32; FIRE_STEPS],
     fire_theta: [f32; FIRE_STEPS],
     palette: Option<Painting>,
+    /// The frame's light, low-passed: what [`Hearth::paint`] holds the whole
+    /// frame near.
+    steady: Option<f32>,
     // Counters for tests and `playing`.
     pub(crate) gusts_seen: u32,
     pub(crate) settles_seen: u32,
@@ -509,16 +525,132 @@ pub(crate) struct Hearth {
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    // Experiment: env `HEARTH_K` sets the grid's cells per design unit, for
-    // a coarser, cheaper fire at speed (docs/research/011).
-    let k = std::env::var("HEARTH_K").ok().and_then(|v| v.parse().ok());
-    Box::new(Hearth::with_grid(seed, Grid { k: k.unwrap_or(Grid::SHIPPED.k), ..Grid::SHIPPED }))
+    // Experiment: env `HEARTH_K` holds the grid at that many cells per
+    // design unit instead of following `speed` (docs/research/011).
+    match std::env::var("HEARTH_K").ok().and_then(|v| v.parse().ok()) {
+        Some(k) => Box::new(Hearth::with_grid(seed, Grid { k, ..Grid::SHIPPED })),
+        None => Box::new(Hearth::new(seed)),
+    }
+}
+
+/// The grid for each `speed`, up to it: the slow fire on card 374's grid,
+/// a fast one coarser. A step costs about the cells, and a frame holds
+/// `speed` steps, so each is the finest whose frame fits in ~28 ms on
+/// workbench's Intel iGPU (docs/research/011: 19, 6.1, 3.5, 1.7 and ~0.6 ms
+/// a frame per unit of speed). The owner on the panel: 1/3 at speed 11
+/// "pretty good", 1/2's detail "noticeable" at 4. At 18 on 1/3 the GPU was
+/// ~90% busy, so the top speeds step down to a quarter.
+const GRIDS: &[(f32, f32)] = &[(1.5, 2.0 / 3.0), (4.5, 0.5), (8.0, 0.4), (12.0, 1.0 / 3.0), (f32::MAX, 0.25)];
+
+fn k_for(speed: f32) -> f32 {
+    GRIDS.iter().find(|(up_to, _)| speed <= *up_to).map_or(0.25, |g| g.1)
+}
+
+/// `saved`, a fire on a grid of `from` cells per design unit, on a grid of
+/// `dims` at `to`: each field sampled where the new cell sits, and lengths
+/// in cells scaled (velocity once, pressure twice, since it is velocity
+/// times cells).
+fn resample(saved: &Saved, from: f32, dims: [u32; 3], to: f32) -> Saved {
+    let r = to / from;
+    let [ow, oh, od] = saved.dims.map(|d| d as usize);
+    let [nw, nh, nd] = dims.map(|d| d as usize);
+    let mut out = Saved {
+        dims,
+        vel: Vec::with_capacity(nw * nh * nd),
+        scal: Vec::with_capacity(nw * nh * nd),
+        pres: Vec::with_capacity(nw * nh * nd),
+        parts: saved.parts.clone(),
+    };
+    let axis = |n: usize, o: usize| -> (usize, usize, f32) {
+        let p = (n as f32 / r).clamp(0.0, (o - 1) as f32);
+        let i = (p as usize).min(o - 2);
+        (i, i + 1, p - i as f32)
+    };
+    for z in 0..nd {
+        let (z0, z1, fz) = axis(z, od);
+        for y in 0..nh {
+            let (y0, y1, fy) = axis(y, oh);
+            for x in 0..nw {
+                let (x0, x1, fx) = axis(x, ow);
+                let at = |x, y, z| (z * oh + y) * ow + x;
+                let corners = [
+                    (at(x0, y0, z0), (1.0 - fx) * (1.0 - fy) * (1.0 - fz)),
+                    (at(x1, y0, z0), fx * (1.0 - fy) * (1.0 - fz)),
+                    (at(x0, y1, z0), (1.0 - fx) * fy * (1.0 - fz)),
+                    (at(x1, y1, z0), fx * fy * (1.0 - fz)),
+                    (at(x0, y0, z1), (1.0 - fx) * (1.0 - fy) * fz),
+                    (at(x1, y0, z1), fx * (1.0 - fy) * fz),
+                    (at(x0, y1, z1), (1.0 - fx) * fy * fz),
+                    (at(x1, y1, z1), fx * fy * fz),
+                ];
+                let (mut v, mut s, mut p) = ([0.0f32; 4], [0.0f32; 4], 0.0f32);
+                for (i, w) in corners {
+                    for c in 0..4 {
+                        v[c] += w * saved.vel[i][c];
+                        s[c] += w * saved.scal[i][c];
+                    }
+                    p += w * saved.pres[i];
+                }
+                out.vel.push([v[0] * r, v[1] * r, v[2] * r, v[3]]);
+                out.scal.push(s);
+                out.pres.push(p * r * r);
+            }
+        }
+    }
+    // Ember slots: position, velocity and last position are in cells.
+    for (k, slot) in out.parts.iter_mut().enumerate() {
+        if k % 4 < 3 {
+            for v in &mut slot[..3] {
+                *v *= r;
+            }
+        }
+    }
+    out
 }
 
 impl Hearth {
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The player's hearth: its grid follows `speed`.
     pub(crate) fn new(seed: u64) -> Hearth {
-        Hearth::with_grid(seed, Grid::SHIPPED)
+        Hearth { follow: true, ..Hearth::with_grid(seed, Grid::SHIPPED) }
+    }
+
+    /// Everything worked out from the grid, worked out again for `grid`.
+    fn set_grid(&mut self, grid: Grid) {
+        self.grid = grid;
+        self.bed_cells = bed_cells(&self.logs, &grid);
+        self.bed = vec![[0.0; 4]; grid.gw() * grid.bed_rows() * grid.gd()];
+        self.camera = Camera::new(&grid);
+    }
+
+    /// Move the fire to a grid of `k` cells per design unit, carrying it
+    /// over: the fields resampled, the sparks rescaled. The old grid's sim
+    /// is kept, so going back costs no shader compile.
+    fn regrid(&mut self, k: f32, gpu: &'static Gpu) {
+        let from = self.grid.k;
+        self.set_grid(Grid { k, ..self.grid });
+        let dims = self.grid.dims();
+        let old = self.sim.take().flatten();
+        let saved = old.as_ref().map(|sim| sim.save());
+        let sim = match self.spare.iter().position(|s| s.dims() == dims) {
+            Some(i) => self.spare.swap_remove(i),
+            None => Sim::new(gpu, dims, self.grid.bed_rows() as u32, self.grid.sweeps, &self.ramp.table()),
+        };
+        if let Some(saved) = saved {
+            sim.load(&resample(&saved, from, dims, k));
+        }
+        self.spare.extend(old);
+        let r = k / from;
+        for (slot, v) in self.sparks.iter_mut().enumerate() {
+            if slot % 4 < 3 {
+                v[..3].iter_mut().for_each(|c| *c *= r);
+            }
+        }
+        for (_, spark) in &mut self.spawns {
+            for v in &mut spark[..3] {
+                v[..3].iter_mut().for_each(|c| *c *= r);
+            }
+        }
+        self.sim = Some(Some(sim));
     }
 
     pub(crate) fn with_grid(seed: u64, grid: Grid) -> Hearth {
@@ -575,6 +707,8 @@ impl Hearth {
         Hearth {
             grid,
             sim: None,
+            follow: false,
+            spare: Vec::new(),
             camera: Camera::new(&grid),
             sparks: vec![[0.0; 4]; EMBERS * 4],
             bounces_read: [[0.0; 4]; EMBERS],
@@ -608,6 +742,7 @@ impl Hearth {
             fire_l,
             fire_theta,
             palette: None,
+            steady: None,
             gusts_seen: 0,
             settles_seen: 0,
             sparks_thrown: 0,
@@ -760,8 +895,7 @@ impl Hearth {
                 sim.spawn(slot, spark);
             }
             // `speed` seconds of gas per second: in substeps of at most
-            // BIG fixed steps each, so the GPU's work grows a quarter as
-            // fast as the speed (a 16x fire is 4 substeps of 4 steps).
+            // BIG fixed steps each (a 16x fire is 16 substeps at BIG 1).
             let (n, dt) = substeps(ctx.get("speed"));
             let mut params = params;
             params.a[0] = dt;
@@ -988,30 +1122,64 @@ impl Hearth {
         let dark = (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1);
         let Painting { colours: palette, fire_l, soot: soot_steps, .. } = self.palette(ctx.get("color"), dark);
         let dither = Dither::BlueNoise;
-        let indices = (0..N)
-            .map(|i| {
-                let thr = dither.threshold(i % W, i / W);
-                let l = to_oklab(light[i])[0];
-                let p = fire_position(&fire_l, l);
-                // Flame seen through thick soot goes to black, not to the
-                // ramp's dark reds: smoke on this panel is a silhouette.
-                if soot[i] > SOOT_BLACK && p < 0.5 * FIRE_STEPS as f32 {
-                    return 0;
+        let paint = |gain: f32| -> Vec<u8> {
+            (0..N)
+                .map(|i| {
+                    let thr = dither.threshold(i % W, i / W);
+                    let c = light[i];
+                    let l = to_oklab(Rgb::new(c.r * gain, c.g * gain, c.b * gain))[0];
+                    let p = fire_position(&fire_l, l);
+                    // Flame seen through thick soot goes to black, not to the
+                    // ramp's dark reds: smoke on this panel is a silhouette.
+                    if soot[i] > SOOT_BLACK && p < 0.5 * FIRE_STEPS as f32 {
+                        return 0;
+                    }
+                    if p >= 0.35 {
+                        return (p + 0.5 + thr).floor().clamp(1.0, FIRE_STEPS as f32) as u8;
+                    }
+                    let q = amount * SMOKE_GAIN * leds[i][3] * SMOKE_STEPS as f32;
+                    if q >= 0.6 && p < 0.25 {
+                        // Spread over the soot entries this ramp has; below its
+                        // first entry, dithered against black.
+                        let q = q * soot_steps as f32 / SMOKE_STEPS as f32;
+                        let k = (q + 0.5 + thr).floor().clamp(0.0, soot_steps as f32) as usize;
+                        return if k == 0 { 0 } else { (FIRE_STEPS + k) as u8 };
+                    }
+                    0
+                })
+                .collect()
+        };
+        let level = |indices: &[u8]| indices.iter().map(|k| palette[*k as usize].luma()).sum::<f32>() / N as f32;
+        // Brief: no full-field flashing above 3 Hz, built in as a limiter.
+        // A fast fire's whole frame swings (35% of its mean at speed 18), so
+        // the painted frame is held within STEADY of its own low-passed
+        // level: the flames still flicker, the panel as a whole does not.
+        // The level is not proportional to the light (the ramp is steeper)
+        // but rises with it, so the gain is found by halving.
+        let mut indices = paint(1.0);
+        let now = level(&indices);
+        let steady = self.steady.map_or(now, |s| s + (now - s) * (1.0 - (-ctx.dt as f32 / STEADY_TAU).exp()));
+        self.steady = Some(steady);
+        let (low, high) = (steady * (1.0 - STEADY), steady * (1.0 + STEADY));
+        if now > high || now < low {
+            let target = now.clamp(low, high);
+            let (mut lo, mut hi) = if now > high { (0.0f32, 1.0f32) } else { (1.0, 4.0) };
+            let mut best = (f32::MAX, indices);
+            for _ in 0..8 {
+                let g = 0.5 * (lo + hi);
+                let next = paint(g);
+                let l = level(&next);
+                if l > target {
+                    hi = g;
+                } else {
+                    lo = g;
                 }
-                if p >= 0.35 {
-                    return (p + 0.5 + thr).floor().clamp(1.0, FIRE_STEPS as f32) as u8;
+                if (l - target).abs() < best.0 {
+                    best = ((l - target).abs(), next);
                 }
-                let q = amount * SMOKE_GAIN * leds[i][3] * SMOKE_STEPS as f32;
-                if q >= 0.6 && p < 0.25 {
-                    // Spread over the soot entries this ramp has; below its
-                    // first entry, dithered against black.
-                    let q = q * soot_steps as f32 / SMOKE_STEPS as f32;
-                    let k = (q + 0.5 + thr).floor().clamp(0.0, soot_steps as f32) as usize;
-                    return if k == 0 { 0 } else { (FIRE_STEPS + k) as u8 };
-                }
-                0
-            })
-            .collect();
+            }
+            indices = best.1;
+        }
         Frame::Indexed { palette, indices }
     }
 
@@ -1100,6 +1268,11 @@ fn fire_steps(ramp: &Ramp) -> ([f32; FIRE_STEPS], [f32; FIRE_STEPS]) {
 
 impl Patch for Hearth {
     fn render(&mut self, ctx: &Ctx) -> Frame {
+        let k = if self.follow { k_for(ctx.get("speed")) } else { self.grid.k };
+        if self.sim.is_none() && k != self.grid.k {
+            // Nothing burning yet to carry over.
+            self.set_grid(Grid { k, ..self.grid });
+        }
         if self.sim.is_none() {
             self.sim = Some(match Gpu::shared() {
                 Ok(gpu) => Some(Sim::new(gpu, self.grid.dims(), self.grid.bed_rows() as u32, self.grid.sweeps, &self.ramp.table())),
@@ -1111,6 +1284,11 @@ impl Patch for Hearth {
         }
         if !matches!(self.sim, Some(Some(_))) {
             return Frame::black();
+        }
+        if k != self.grid.k {
+            if let Ok(gpu) = Gpu::shared() {
+                self.regrid(k, gpu);
+            }
         }
         self.advance(ctx);
         let params = self.params();
