@@ -31,6 +31,8 @@ pub struct Params {
     /// The firebox (card 373): draft (0 = open fire), ceiling row, flue
     /// radius in cells, unused.
     pub stove: [f32; 4],
+    /// The woodpile (exp/hearth-speed): rows of grid the bed covers, unused.
+    pub logs: [f32; 4],
     pub wind: [[f32; 4]; 40],
 }
 
@@ -42,6 +44,16 @@ const LIGHT_CELL: u32 = 4;
 /// then 2048 more holding the smokeless fire's luminance, and the ember
 /// slots.
 pub type Picture = (Vec<[f32; 4]>, Vec<[f32; 4]>);
+
+/// The fire's state on one grid ([`Sim::save`]): the velocity, scalar and
+/// pressure fields, cell by cell, and the ember slots.
+pub struct Saved {
+    pub dims: [u32; 3],
+    pub vel: Vec<[f32; 4]>,
+    pub scal: Vec<[f32; 4]>,
+    pub pres: Vec<f32>,
+    pub parts: Vec<[f32; 4]>,
+}
 
 struct Pass {
     pipeline: wgpu::ComputePipeline,
@@ -98,6 +110,7 @@ pub struct Sim {
     scal: wgpu::Buffer,
     vel_next: wgpu::Buffer,
     scal_next: wgpu::Buffer,
+    pres: wgpu::Buffer,
     parts: wgpu::Buffer,
     out: wgpu::Buffer,
     out_read: wgpu::Buffer,
@@ -120,10 +133,10 @@ const ENTRIES: &[(&str, &[u32])] = &[
     ("combust", &[0, 1, 2, 9]),
     ("curl_of", &[0, 1, 5]),
     ("confine", &[0, 1, 5]),
-    ("divergence", &[0, 1, 2, 7]),
-    ("pres_red", &[0, 7, 8]),
-    ("pres_black", &[0, 7, 8]),
-    ("gradient", &[0, 1, 8]),
+    ("divergence", &[0, 1, 2, 7, 9]),
+    ("pres_red", &[0, 7, 8, 9]),
+    ("pres_black", &[0, 7, 8, 9]),
+    ("gradient", &[0, 1, 8, 9]),
     ("embers", &[0, 1, 2, 12]),
     ("light_gather", &[0, 2, 10, 14]),
     ("light_x", &[0, 10, 11]),
@@ -133,7 +146,7 @@ const ENTRIES: &[(&str, &[u32])] = &[
 ];
 
 impl Sim {
-    pub fn new(gpu: &'static Gpu, dims: [u32; 3], sweeps: usize, lut: &[[f32; 4]; 512]) -> Sim {
+    pub fn new(gpu: &'static Gpu, dims: [u32; 3], bed_rows: u32, sweeps: usize, lut: &[[f32; 4]; 512]) -> Sim {
         let device = &gpu.device;
         let cells = u64::from(dims[0] * dims[1] * dims[2]);
         let coarse = dims.map(|d| d / LIGHT_CELL);
@@ -157,7 +170,7 @@ impl Sim {
         let scal_back = buffer("scal back", cells * 16, storage);
         let div = buffer("div", cells * 4, storage);
         let pres = buffer("pres", cells * 4, storage);
-        let bed = buffer("bed", u64::from(dims[0] * dims[2]) * 8, storage);
+        let bed = buffer("bed", u64::from(dims[0] * bed_rows * dims[2]) * 16, storage);
         let light = buffer("light", coarse_cells * 4, storage);
         let light2 = buffer("light2", coarse_cells * 4, storage);
         let parts = buffer("parts", (EMBERS * 64) as u64, storage);
@@ -195,7 +208,7 @@ impl Sim {
                 (*name, Pass { pipeline, bind })
             })
             .collect();
-        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, parts, out, out_read, parts_read, passes, profile: None, sweeps }
+        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, pres, parts, out, out_read, parts_read, passes, profile: None, sweeps }
     }
 
     fn pass(&self, name: &str) -> &Pass {
@@ -263,11 +276,16 @@ impl Sim {
         self.gpu.queue.write_buffer(&self.parts, (slot * 64) as u64, bytemuck::cast_slice(&spark));
     }
 
+    /// The woodpile's cells, `bed_rows` rows of the grid: (fuel level, glow,
+    /// 1 inside a log, unused). Held until the next call.
+    pub fn bed(&self, bed: &[[f32; 4]]) {
+        self.gpu.queue.write_buffer(&self.bed, 0, bytemuck::cast_slice(bed));
+    }
+
     /// One fixed step of the fluid and the embers.
-    pub fn step(&self, params: &Params, bed: &[[f32; 2]]) {
+    pub fn step(&self, params: &Params) {
         let q = &self.gpu.queue;
         q.write_buffer(&self.params, 0, bytemuck::bytes_of(params));
-        q.write_buffer(&self.bed, 0, bytemuck::cast_slice(bed));
         let cells = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
         let g = self.cell_groups();
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
@@ -300,31 +318,55 @@ impl Sim {
     /// smoke, source) read back.
     #[cfg(test)]
     pub fn scalars(&self) -> Vec<[f32; 4]> {
-        self.read_field(&self.scal)
+        bytemuck::cast_slice(&self.read(&self.scal)).to_vec()
     }
 
     /// For tests: the whole velocity field read back.
     #[cfg(test)]
     pub fn velocities(&self) -> Vec<[f32; 4]> {
-        self.read_field(&self.vel)
+        bytemuck::cast_slice(&self.read(&self.vel)).to_vec()
     }
 
-    #[cfg(test)]
-    fn read_field(&self, field: &wgpu::Buffer) -> Vec<[f32; 4]> {
-        let size = u64::from(self.dims[0] * self.dims[1] * self.dims[2]) * 16;
+    /// The grid's dimensions, cells.
+    pub fn dims(&self) -> [u32; 3] {
+        self.dims
+    }
+
+    /// The fire's state read back, to carry it to another grid.
+    pub fn save(&self) -> Saved {
+        Saved {
+            dims: self.dims,
+            vel: bytemuck::cast_slice(&self.read(&self.vel)).to_vec(),
+            scal: bytemuck::cast_slice(&self.read(&self.scal)).to_vec(),
+            pres: bytemuck::cast_slice(&self.read(&self.pres)).to_vec(),
+            parts: bytemuck::cast_slice(&self.read(&self.parts)).to_vec(),
+        }
+    }
+
+    /// Put a state on this grid; `saved.dims` must be this grid's.
+    pub fn load(&self, saved: &Saved) {
+        let q = &self.gpu.queue;
+        q.write_buffer(&self.vel, 0, bytemuck::cast_slice(&saved.vel));
+        q.write_buffer(&self.scal, 0, bytemuck::cast_slice(&saved.scal));
+        q.write_buffer(&self.pres, 0, bytemuck::cast_slice(&saved.pres));
+        q.write_buffer(&self.parts, 0, bytemuck::cast_slice(&saved.parts));
+    }
+
+    fn read(&self, buffer: &wgpu::Buffer) -> Vec<u8> {
+        let size = buffer.size();
         let read = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("scal read"),
+            label: Some("hearth read"),
             size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        enc.copy_buffer_to_buffer(field, 0, &read, 0, size);
+        enc.copy_buffer_to_buffer(buffer, 0, &read, 0, size);
         self.gpu.queue.submit([enc.finish()]);
         let slice = read.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let out = bytemuck::cast_slice(&slice.get_mapped_range().expect("mapped")).to_vec();
+        let out = slice.get_mapped_range().expect("mapped").to_vec();
         read.unmap();
         out
     }

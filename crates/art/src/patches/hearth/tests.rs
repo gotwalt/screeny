@@ -75,7 +75,7 @@ fn first_frame_parts() {
     let params = Params::defaults(PARAMS);
     let mut h = Hearth::new(1);
     let t = std::time::Instant::now();
-    h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table())));
+    h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table())));
     let built = t.elapsed().as_secs_f64();
     let t = std::time::Instant::now();
     h.render(&ctx_at(0.0, 0.0, &params));
@@ -105,6 +105,34 @@ fn the_fire_lights_within_seconds() {
 
 /// How long the fire may take to catch, seconds.
 const LIGHTS_WITHIN: f64 = 3.0;
+
+/// The grid follows `speed`, and the fire goes with it: on the first frame
+/// on a new grid, slower or faster, it is still burning along the bottom
+/// (a fresh grid's first frame is black).
+#[test]
+fn the_fire_carries_to_another_grid() {
+    let Some(_gpu) = gpu() else { return };
+    let mut params = Params::defaults(PARAMS);
+    let mut h = Hearth::new(1);
+    let mut i = 0;
+    let mut run = |h: &mut Hearth, params: &Params, frames: usize| {
+        let mut last = (0.0, 0, 0, 0);
+        for _ in 0..frames {
+            i += 1;
+            last = measure(&h.render(&ctx_at(i as f64 * DT, DT, params)));
+        }
+        last
+    };
+    let mut before = run(&mut h, &params, 150);
+    assert_eq!(h.grid.k, Grid::SHIPPED.k);
+    for (speed, k) in [(18.0, 0.25), (11.0, 1.0 / 3.0), (3.0, 0.5), (1.0, Grid::SHIPPED.k)] {
+        params.set(PARAMS, "speed", speed);
+        let after = run(&mut h, &params, 1);
+        assert_eq!(h.grid.k, k, "speed {speed}");
+        assert!(after.0 > 0.5 * before.0 && after.2 > 15, "speed {speed}: lit {before:?} before, {after:?} on the first frame after");
+        before = run(&mut h, &params, 60);
+    }
+}
 
 /// Card 373: soot is neutral. Its palette entries are greys (OKLCH chroma
 /// near 0) whatever `color` is, and none of them is a fire colour.
@@ -472,13 +500,16 @@ fn the_top_is_mostly_black_at_the_default() {
 
 /// Fire flickers locally, but the frame as a whole never pulses: the
 /// part of the whole-frame brightness that changes faster than 3 Hz is a
-/// small fraction of it.
+/// small fraction of it. At every grid `speed` steps through too: a fast
+/// fire flickers faster.
 #[test]
 fn no_whole_frame_pulse_above_three_hertz() {
     let Some(_gpu) = gpu() else { return };
-    for size in [1.0] {
+    for speed in [1.0, 4.0, 8.0, 11.0, 18.0] {
+        let size = 1.0;
         let mut params = Params::defaults(PARAMS);
         params.set(PARAMS, "size", size);
+        params.set(PARAMS, "speed", speed);
         // Seed 2 at size 1 is the run where, before the velocity guard
         // (`tame` in the shader), the fire froze into its logs and the
         // frame went black from 28 s to 32 s.
@@ -486,7 +517,7 @@ fn no_whole_frame_pulse_above_three_hertz() {
         let frames: Vec<Frame> = (1..=1050).map(|i| h.render(&ctx_at(i as f64 * DT, DT, &params))).collect();
         let catching = (LIGHTS_WITHIN / DT) as usize;
         let dark = frames.iter().skip(catching).filter(|f| indices(f)[(H - 1) * W..].iter().all(|k| *k == 0)).count();
-        assert_eq!(dark, 0, "size {size}: {dark} frames with nothing burning");
+        assert_eq!(dark, 0, "speed {speed}: {dark} frames with nothing burning");
         let levels: Vec<f32> = frames.iter().map(level).collect();
         // A 3 Hz low-pass: a moving average over a third of a second (ten
         // frames). What is left over is the fast part.
@@ -496,7 +527,8 @@ fn no_whole_frame_pulse_above_three_hertz() {
             let slow = levels[i - 5..i + 5].iter().sum::<f32>() / 10.0;
             worst = worst.max((levels[i] - slow).abs());
         }
-        assert!(worst < 0.15 * mean, "size {size}: a {worst:.4} swing on a mean of {mean:.4}");
+        eprintln!("speed {speed}: a {worst:.4} swing on a mean of {mean:.4}");
+        assert!(worst < 0.15 * mean, "speed {speed}: a {worst:.4} swing on a mean of {mean:.4}");
     }
 }
 
@@ -780,7 +812,7 @@ fn stages() {
         }
     }
     let mut h = Hearth::with_grid(1, grid_from_env());
-    let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.sweeps, &h.ramp.table());
+    let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table());
     sim.profile = Some(std::cell::RefCell::new(gpu::Profile::new(&gpu.device)));
     h.sim = Some(Some(sim));
     let warm = (env("HEARTH_AT", 10.0) / DT) as usize;
@@ -854,7 +886,8 @@ fn cost() {
     eprintln!("frame ms: median {:.2}  p95 {:.2}  max {:.2}", pick(0.5), pick(0.95), pick(1.0));
 }
 
-/// Not a test: prints how big the fire is over a minute at a few sizes.
+/// Not a test: prints how big the fire is over a minute at a few sizes,
+/// with `HEARTH_SET` params and `HEARTH_GRID`.
 /// `cargo test -p screeny-art hearth::tests::survey -- --ignored --nocapture`
 #[test]
 #[ignore]
@@ -865,6 +898,11 @@ fn survey() {
     for size in sizes {
         for seed in [1, 2, 3] {
             let mut params = Params::defaults(PARAMS);
+            for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+                if let Some((k, v)) = kv.split_once('=') {
+                    params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+                }
+            }
             params.set(PARAMS, "size", size);
             let mut h = Hearth::with_grid(seed, grid_from_env());
             let dt = 1.0 / 30.0;
