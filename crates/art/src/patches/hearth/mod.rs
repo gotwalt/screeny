@@ -177,7 +177,11 @@ impl Grid {
     /// picture can find (16, 32 and 64 measure the same). Three rays per LED
     /// each way look the same as five on the panel. About a third of card
     /// 373's GPU time.
-    pub const SHIPPED: Grid = Grid { k: 2.0 / 3.0, depth: 48.0, sweeps: 16, samples: 3, march: 0.5 };
+    ///
+    /// For speed (docs/research/011): 8 sweeps measure and look as 16 do,
+    /// since the pressure carries from step to step (4 flattens the fire).
+    /// About 0.8 of the step's GPU time.
+    pub const SHIPPED: Grid = Grid { k: 2.0 / 3.0, depth: 48.0, sweeps: 8, samples: 3, march: 0.5 };
 
     fn cells(design: f32, k: f32) -> usize {
         ((design * k / 4.0).ceil() as usize).max(2) * 4

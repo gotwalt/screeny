@@ -854,7 +854,8 @@ fn cost() {
     eprintln!("frame ms: median {:.2}  p95 {:.2}  max {:.2}", pick(0.5), pick(0.95), pick(1.0));
 }
 
-/// Not a test: prints how big the fire is over a minute at a few sizes.
+/// Not a test: prints how big the fire is over a minute at a few sizes,
+/// with `HEARTH_SET` params and `HEARTH_GRID`.
 /// `cargo test -p screeny-art hearth::tests::survey -- --ignored --nocapture`
 #[test]
 #[ignore]
@@ -865,6 +866,11 @@ fn survey() {
     for size in sizes {
         for seed in [1, 2, 3] {
             let mut params = Params::defaults(PARAMS);
+            for kv in std::env::var("HEARTH_SET").unwrap_or_default().split(',') {
+                if let Some((k, v)) = kv.split_once('=') {
+                    params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
+                }
+            }
             params.set(PARAMS, "size", size);
             let mut h = Hearth::with_grid(seed, grid_from_env());
             let dt = 1.0 / 30.0;

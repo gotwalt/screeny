@@ -100,6 +100,63 @@ He judges on the panel, live, sliders in hand. On the Mac this worked:
 Keep it running until he says to stop; don't put a time limit on it. No
 warm-up: the fire lights on screen.
 
+## Renderer performance on workbench (2026-10-22)
+
+Workbench has an Intel UHD (Raptor Lake-P, Vulkan); the deployed Studio
+renders on it too. A fluid step costs about 19 ms of GPU time there, against
+2.6 ms on the M4. At the owner's settings (speed 11), small steps
+(`HEARTH_BIG=1`) take ~210-270 ms of GPU a frame (~4 fps); `BIG=4` takes
+~48 (~15 fps, and jets). Running speed 11 at 30 fps with small steps needs a
+step in ~3 ms: about 6x. The owner's call: improve the renderer.
+
+How to measure here:
+
+- Measure at speed 11, not 1. At light load the iGPU clocks down (100-1400
+  MHz), so `stages` at speed 1 reads ~21 ms a frame whatever the work, and
+  time saved in one stage shows up in another. At speed 11 it holds 1400
+  MHz. `/sys/class/drm/card0/gt_act_freq_mhz` shows the clock.
+- The deployed Studio shares the GPU: expect ±25% between runs.
+- Run `stages` and `cost` one at a time. Together (two devices in one
+  process) they ran past 20 minutes; `cost` alone takes 20 s (33 ms a frame
+  at speed 1).
+- `survey` now takes `HEARTH_SET`. With `BIG=1` a step is the same at any
+  speed, so the picture can be compared at speed 1 with the other settings.
+
+GPU ms a frame at speed 11, `BIG=1`, by `HEARTH_GRID` depth and sweeps:
+
+| depth, sweeps | advect | pressure | total |
+|---|---|---|---|
+| 48, 16 (card 374) | 94 | 126 | 271 |
+| 48, 8 | 98 | 65 | 212 |
+| 36, 16 | 77 | 88 | 197 |
+| 36, 8 | 76 | 46 | 163 |
+| 24, 8 | 54 | 32 | 106 |
+
+- **Sweeps: now 8.** The pressure carries from step to step, so 8 sweeps
+  survey and look as 16 do (lit 33/30/34% against 34/29/32% for seeds 1-3
+  at his settings). 4 flattens the fire (lit ~20%), 2 more so. Every hearth
+  test passes.
+- **Depth: not changed.** `depth` is the firebox's depth, not the cell size,
+  so a shallower box changes the fire: at 36 the default fire is taller and
+  fails `the_top_is_mostly_black_at_the_default` (3.0% of the top third lit
+  at 16 sweeps, 5.4% at 8; the limit is 3%). 36 is the least that holds every
+  woodpile (logs reach ±18 in z); 24 pins the logs into the walls. It needs
+  his eye on the panel and a retune of `size`.
+- The workgroup shape (4x4x4 now) is worth ~13% at 8x8x1, all of it in
+  pressure. Not taken yet.
+
+Where the rest is (planned, in order of expected win):
+
+1. **Advection** (~45% of a step after the sweeps cut): the trilinear taps
+   are 8 buffer reads each, MacCormack takes ~13 of them a cell, and the
+   same backtrace is traced three times (`adv_fwd`, both `adv_fix_*`).
+   Trace once and keep it; then sample half-float 3D textures with the
+   hardware filter (sampled textures are inside the downlevel limits; copy
+   the buffers in once a step).
+2. **Pressure**: a small multigrid instead of more sweeps, if 8 still costs
+   too much.
+3. **Per step on the CPU**: one submit a frame rather than one a substep.
+
 ## Next
 
 1. Put the woodpile on the panel and get his read.
