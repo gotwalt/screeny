@@ -110,6 +110,10 @@ const PARAMS: &[ParamSpec] = &[
     param("speed", "How fast the gas moves (1: the slow, grand fire; ~30: a real one this size)", 1.0, 32.0, 0.5, 1.0),
     // Experiment: the ceiling raised into the black margin above the LEDs,
     // in LEDs (5.4 is the bench panel's 15 mm).
+    param("wood", "How patchily the logs give off gas (0: a steady sheet, like a burner)", 0.0, 1.0, 0.01, 0.0),
+    // Experiment: the burn's expansion, which at a held bed is a nozzle
+    // pushing gas out of the logs. Wood has no such push: only buoyancy.
+    param("expansion", "How hard burning gas pushes out of the bed (1: card 372; wood: near 0)", 0.0, 1.0, 0.01, 1.0),
     param("headroom", "How far above the top row the stove ceiling sits, LEDs", 0.0, 8.0, 0.1, 0.0),
 ];
 
@@ -204,7 +208,9 @@ const BIG: f32 = 4.0;
 /// At `speed`, how many GPU substeps each fixed step takes, and each one's dt.
 fn substeps(speed: f32) -> (usize, f32) {
     let speed = speed.max(1.0);
-    let n = (speed / BIG).ceil().max(1.0);
+    static BIG_ENV: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    let big = *BIG_ENV.get_or_init(|| std::env::var("HEARTH_BIG").ok().and_then(|v| v.parse().ok()).unwrap_or(BIG));
+    let n = (speed / big).ceil().max(1.0);
     (n as usize, STEP as f32 * speed / n)
 }
 
@@ -374,6 +380,13 @@ pub(crate) struct Hearth {
     flue: f32,
     /// The ceiling's rise above the frame's top edge, LEDs (`headroom`).
     headroom: f32,
+    /// Gas time, seconds: wall time times `speed`. The bed's tongues and
+    /// pockets follow it, the logs' own swells keep wall time.
+    gas_t: f64,
+    /// `wood`: how patchy the bed's release is (0: card 372's held sheet).
+    wood: f32,
+    /// `expansion`: the share of card 372's burn expansion kept.
+    expansion: f32,
     gust: Option<Gust>,
     calm_until: f64,
     settle: Option<Settle>,
@@ -442,6 +455,9 @@ impl Hearth {
             draft: 0.0,
             flue: 13.0,
             headroom: 0.0,
+            gas_t: 0.0,
+            wood: 0.0,
+            expansion: 1.0,
             gust: None,
             calm_until: 20.0,
             settle: None,
@@ -486,7 +502,7 @@ impl Hearth {
             b: [1.4, 5.0 * k, (2.0 - 0.6 * s).max(0.5), 1.5],
             // Size is mostly how fast the gas cools: how far it rises still
             // glowing. cool4, cool1, expansion, smoke yield.
-            c: [cool4, cool1, 1.5, 0.5],
+            c: [cool4, cool1, 1.5 * self.expansion, 0.5],
             // smoke fade, smoke absorption, smoke lighting, emission
             // (Lit smoke is not divided by k: a coarser grid already smears
             // smoke wider, and the wider wisps would show as more grey.)
@@ -535,6 +551,8 @@ impl Hearth {
         // where it burns (see the card's Log: a fuel rate is far too
         // touchy), and the coals glow whatever the flames are doing.
         let t = self.t as f32;
+        let gt = self.gas_t as f32;
+        let wood = self.wood;
         let breath = self.breath();
         let strengths: Vec<f32> = (0..self.logs.len()).map(|k| self.log_strength(k)).collect();
         let lo = 0.55 - 0.45 * self.size / OLD_MAX;
@@ -552,8 +570,14 @@ impl Hearth {
                     self.bed[z * gw + x] = [0.0, 0.0];
                     continue;
                 }
-                let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0, t * 0.7, self.salt)).max(0.0).powf(1.2);
-                let level = 1.5 * smoothstep(lo, lo + 0.6, bed * (0.35 + tongues) * breath);
+                let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0, gt * 0.7, self.salt)).max(0.0).powf(1.2);
+                // Wood (experiment): the gas comes out of the logs in
+                // pockets - a crack, an end, a hot gap - each swelling,
+                // burning hard and dying in a second or two of gas time,
+                // not as a burner's steady sheet.
+                let pocket = smoothstep(0.05, 0.45, noise::fbm3(xf / 9.0, zf / 6.0, gt * 0.9, self.salt ^ 0x9e3d));
+                let release = 1.0 - wood + wood * 1.6 * pocket;
+                let level = 1.5 * smoothstep(lo, lo + 0.6, bed * (0.35 + tongues) * breath * release);
                 let shimmer = 0.85 + 0.3 * noise::noise3(xf / 5.0, zf / 5.0, t * 0.3, self.salt ^ 0xc0a1);
                 self.bed[z * gw + x] = [level, 0.75 * (bed / 1.4).min(1.0) * shimmer];
             }
@@ -580,6 +604,9 @@ impl Hearth {
         self.draft = if stove { draft * (1.0 + 0.9 * surge) } else { 0.0 };
         self.flue = 6.0 + 18.0 * ctx.get("flue");
         self.headroom = ctx.get("headroom");
+        self.wood = ctx.get("wood");
+        self.expansion = ctx.get("expansion");
+        self.gas_t += STEP * f64::from(ctx.get("speed").max(1.0));
 
         let params = self.params();
         if let Some(Some(sim)) = &self.sim {
