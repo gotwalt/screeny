@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6
+
+- **hearth** burns wood now: flames rise off a small pile of logs, wrapping
+  round them and burning hardest in the gaps, centred so the fire reaches as
+  far left as right. New settings: **speed** (1 is the slow, grand fire; up
+  to 18, about real speed), **wood** (how patchily the logs give off gas),
+  **expansion** (how hard burning gas pushes up) and **headroom** (how high
+  the stove's ceiling sits). A fast fire is simulated more coarsely so it
+  keeps a smooth frame rate, and the panel's overall brightness is held
+  steady so a fast fire never flashes.
+
 ## 0.1.5
 
 - New patch, **hearth**: a fire in a wood-stove firebox, simulated in 3D on the
