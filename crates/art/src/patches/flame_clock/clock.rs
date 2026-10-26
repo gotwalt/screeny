@@ -117,8 +117,10 @@ impl Shape {
 }
 
 /// Where the numerals stand on the panel, LEDs: left column, one past the
-/// right, top row, one past the bottom; and how much of them has fallen
-/// out of the bottom of the frame, into the woodpile, as they collapse.
+/// right, top row, one past the bottom; how much of them has fallen out of
+/// the bottom of the frame, into the woodpile, as they collapse; and the
+/// pieces of them in motion (collapsing, flung or rising), which burn
+/// without having to catch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
     pub left: usize,
@@ -126,6 +128,7 @@ pub struct Bounds {
     pub top: usize,
     pub bottom: usize,
     pub fallen: f32,
+    pub moving: Mask,
 }
 
 /// Each character of `text` on the panel: its first LED column and width.
@@ -215,8 +218,9 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
     let left = spans.first().map_or(0, |s| s.0);
     let right = spans.last().map_or(0, |s| (s.0 + s.1).min(W));
     let bottom = ((top + tall).round() as usize).min(H);
-    let mut bounds = Bounds { left, right, top: top as usize, bottom, fallen: 0.0 };
+    let mut bounds = Bounds { left, right, top: top as usize, bottom, fallen: 0.0, moving: [[0; 4]; 16] };
     let mut bits = [[false; W]; H];
+    let mut moving = [[false; W]; H];
     let (mut pieces_down, mut pieces_all) = (0.0, 0.0);
     let gap = font.gap();
     let mut x0 = spans.first().map_or(0.0, |s| s.0 as f32);
@@ -242,9 +246,10 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
             }
             let salt = shape.salt ^ (i as u32).wrapping_mul(0x9e37_79b9);
             let (down, fallen) = collapse(&pieces, &bounds, shape.melt.clamp(0.0, 1.0) * COLLAPSE, salt, shape.burst);
-            for (row, d) in bits.iter_mut().zip(down) {
-                for (b, d) in row.iter_mut().zip(d) {
+            for ((row, mrow), d) in bits.iter_mut().zip(moving.iter_mut()).zip(down) {
+                for ((b, m), d) in row.iter_mut().zip(mrow.iter_mut()).zip(d) {
                     *b |= d;
+                    *m |= d;
                 }
             }
             pieces_down += fallen * pieces.len() as f32;
@@ -253,15 +258,23 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
         }
         // Caught from the bottom up: rows above the front hold no fuel yet.
         let front = (bottom as f32 - shape.reveal.clamp(0.0, 1.0) * tall).ceil().max(0.0) as usize;
-        for (row, own) in bits.iter_mut().zip(own).skip(front) {
-            for (b, o) in row.iter_mut().zip(own) {
+        let rising = shape.lift >= 0.5;
+        for ((row, mrow), own) in bits.iter_mut().zip(moving.iter_mut()).zip(own).skip(front) {
+            for ((b, m), o) in row.iter_mut().zip(mrow.iter_mut()).zip(own) {
                 *b |= o;
+                *m |= o && rising;
             }
         }
     }
     if pieces_all > 0.0 {
         bounds.fallen = pieces_down / pieces_all;
     }
+    bounds.moving = packed(&moving);
+    (packed(&bits), bounds)
+}
+
+/// LEDs as a [`Mask`].
+fn packed(bits: &[[bool; W]; H]) -> Mask {
     let mut out = [[0u32; 4]; 16];
     for (y, row) in bits.iter().enumerate() {
         for (x, &on) in row.iter().enumerate() {
@@ -271,7 +284,7 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
             }
         }
     }
-    (out, bounds)
+    out
 }
 
 /// How long the numerals take to collapse, seconds.
@@ -376,6 +389,7 @@ mod tests {
         assert!(at(&m, l + 4, 20));
         assert!(!at(&m, l + 4, 17));
         assert_eq!((b.left, b.right - 1, b.top, b.bottom - 1, b.fallen), (l, r, 13, 27, 0.0));
+        assert_eq!(b.moving, [[0; 4]; 16], "nothing standing is moving");
     }
 
     fn lit(m: &Mask) -> Vec<(usize, usize)> {
@@ -426,6 +440,9 @@ mod tests {
         let (early, _) = at_t(0.1 / COLLAPSE);
         assert!(span(&early) > span(&whole), "{} vs {}", span(&early), span(&whole));
         assert!(top(&early) < top(&whole));
+        // What is flying is all moving.
+        let (_, b) = at_t(0.1 / COLLAPSE);
+        assert_eq!(b.moving, early);
         // Gone within a second: burnt out or out of the frame.
         let (gone, b) = at_t(1.0 / COLLAPSE);
         assert!(lit(&gone).is_empty());

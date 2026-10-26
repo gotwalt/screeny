@@ -113,7 +113,7 @@ const PARAMS: &[ParamSpec] = &[
     // before/after, probably default 5 each").
     toggle("hours24", "24-hour", false),
     // Defaults: the owner's on Office, 2026-10-26.
-    param("before", "Seconds the time shows before the minute turns", 1.0, 25.0, 1.0, 1.0),
+    param("before", "Seconds the time shows before the minute turns", 1.0, 25.0, 1.0, 10.0),
     param("after", "Seconds the new time shows after the minute turns", 4.0, 25.0, 1.0, 10.0),
     param("height", "Where the time stands, up from the bottom of the frame (0.5: the middle)", 0.0, 1.0, 0.01, 0.5),
     param("digits", "How tall the digits are, LEDs", 10.0, 20.0, 1.0, 20.0),
@@ -167,12 +167,15 @@ impl Fixed {
     pub const HEARTH: Fixed = Fixed { flue: 0.4, wood: 0.0, expansion: 1.0, headroom: 0.0, dark: DEFAULT_DARK, logs: 1.0, fire: 1.0, gusts: 0.6 };
 }
 
-/// The time's showing, seconds: the jet lights it over `EMERGE` (the jet
-/// for the first `JET` of it, the numerals catching from `CATCH` on), and
+/// The time's showing, seconds: the fire lights it over `EMERGE` - the jet
+/// for the first `JET` of it, the woodpile handing over from `CATCH` on,
+/// and the numerals readier to catch from `READY` on (the shader's
+/// `numeral_fuel`: until then only the fire's own heat lights them) - and
 /// it melts over `MELT`.
-const EMERGE: f64 = 1.8;
-const JET: f64 = 0.9;
+const EMERGE: f64 = 2.6;
+const JET: f64 = 1.2;
 const CATCH: f64 = 0.3;
+const READY: f64 = 0.6;
 const MELT: f64 = clock::COLLAPSE as f64;
 /// The jet's fuel and lift, the lift in design units per second squared
 /// (buoyancy at full heat is 95).
@@ -618,6 +621,8 @@ pub(crate) struct FlameClock {
     pub(crate) fixed: Fixed,
     /// The time: its shape on the panel, and `Params::clock`.
     glyph: clock::Mask,
+    /// The pieces of it in motion.
+    moving: clock::Mask,
     clock_slab: [f32; 4],
     /// `Params::numerals`, but for gas time, which is the step's.
     numerals: [f32; 4],
@@ -858,6 +863,7 @@ impl FlameClock {
             sparks_thrown: 0,
             fixed: Fixed::PINNED,
             glyph: [[0; 4]; 16],
+            moving: [[0; 4]; 16],
             clock_slab: [0.0; 4],
             numerals: [2.0, 0.0, 0.0, 0.0],
             logs_burn: 1.0,
@@ -913,6 +919,7 @@ impl FlameClock {
             wind: self.wind,
             clock: self.clock_slab,
             glyph: self.glyph,
+            moving: self.moving,
             numerals: [self.numerals[0], self.numerals[1], self.gas_t as f32, self.numerals[3]],
             jet: self.jet,
         }
@@ -949,8 +956,7 @@ impl FlameClock {
         let (showing, glyph, at, phase) = if p >= 60.0 - lead {
             // Before the minute: the time as it is, lit by the jet.
             let q = p - (60.0 - lead);
-            let shape = clock::Shape { reveal: catch(q, CATCH, EMERGE), ..whole };
-            let (g, at) = clock::mask(&clock::text(minute, hours24), middle_row, font, &[shape]);
+            let (g, at) = clock::mask(&clock::text(minute, hours24), middle_row, font, &[whole]);
             (if q < EMERGE { Showing::Emerging } else { Showing::Standing }, g, at, q)
         } else if p < f64::from(clock::COLLAPSE) && !same_len {
             // The hour turns over and the time changes length, so its size
@@ -958,21 +964,24 @@ impl FlameClock {
             // blows up and a new one is launched from the bottom"). The new
             // one starts wholly below the frame and decelerates into place.
             let burst = clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, burst: true, ..whole };
-            let (a, _) = clock::mask(&old, middle_row, font, &[burst]);
+            let (a, flung) = clock::mask(&old, middle_row, font, &[burst]);
             let (_, place) = clock::mask(&new, middle_row, font, &[whole]);
             let u = ((p - LAUNCH_AT) / LAUNCH).clamp(0.0, 1.0) as f32;
             let below = (H - place.top) as f32 + 1.0;
             let rising = clock::Shape { reveal: if p >= LAUNCH_AT { 1.0 } else { 0.0 }, lift: below * (1.0 - u).powi(3), ..whole };
-            let (b, at) = clock::mask(&new, middle_row, font, &[rising]);
+            let (b, mut at) = clock::mask(&new, middle_row, font, &[rising]);
+            at.moving = clock::both(&at.moving, &flung.moving);
             self.lift = rising.lift;
             (Showing::TurningOver, clock::both(&a, &b), at, p)
         } else if p < f64::from(clock::COLLAPSE) {
             // The minute turns: the old digits that change fall, the new
             // ones catch where they stood.
             let gone: Vec<_> = changed.iter().map(|&c| if c { clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, ..whole } } else { whole }).collect();
-            let coming: Vec<_> = changed.iter().map(|&c| clock::Shape { reveal: if c { catch(p, MORPH_CATCH.0, MORPH_CATCH.1) } else { 0.0 }, ..whole }).collect();
-            let (a, _) = clock::mask(&old, middle_row, font, &gone);
-            let (b, at) = clock::mask(&new, middle_row, font, &coming);
+            // The new digits are there at once, to catch from the jet.
+            let coming: Vec<_> = changed.iter().map(|&c| clock::Shape { reveal: if c { 1.0 } else { 0.0 }, ..whole }).collect();
+            let (a, falling) = clock::mask(&old, middle_row, font, &gone);
+            let (b, mut at) = clock::mask(&new, middle_row, font, &coming);
+            at.moving = clock::both(&at.moving, &falling.moving);
             (Showing::Morphing, clock::both(&a, &b), at, p)
         } else if p < after {
             let (g, at) = clock::mask(&new, middle_row, font, &[whole]);
@@ -987,9 +996,19 @@ impl FlameClock {
         };
         self.showing = showing;
         self.glyph = glyph;
+        self.moving = at.moving;
+        // How ready the numerals are to catch: at first only where the
+        // fire is hot, then anywhere.
+        let ready = match showing {
+            Showing::Emerging => catch(phase, READY, EMERGE),
+            Showing::Morphing => catch(phase, MORPH_CATCH.0, MORPH_CATCH.1),
+            _ => 1.0,
+        };
         let gd = self.grid.gd() as f32;
         let half = 0.5 * ctx.get("depth") * gd;
-        self.clock_slab = [0.5 * gd - half, 0.5 * gd + half, 0.0, 0.0];
+        // Which showing, so each catches in its own order.
+        let showing_noise = (salt % 997) as f32 * 0.37;
+        self.clock_slab = [0.5 * gd - half, 0.5 * gd + half, showing_noise, 0.0];
         let burn = ctx.get("fuel");
         // The woodpile: `logs` while the time shows, `fire` between.
         let shown = match showing {
@@ -1072,7 +1091,7 @@ impl FlameClock {
         } else {
             [0.0; 4]
         };
-        self.numerals = [0.0, burn * fuel_share, 0.0, top * k];
+        self.numerals = [ready, burn * fuel_share, 0.0, top * k];
     }
 
     /// A fire knob that is one thing while the time shows and another

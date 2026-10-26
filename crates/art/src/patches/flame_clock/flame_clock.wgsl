@@ -46,9 +46,10 @@ struct Params {
   stove: vec4<f32>,    // draft (0: an open fire), ceiling row, flue radius, -
   logs: vec4<f32>,     // rows the woodpile covers, -, -, -
   wind: array<vec4<f32>, 40>,  // per row, four rows to a vec4
-  clock: vec4<f32>,    // the time's depth slab (from, to), -, -
+  clock: vec4<f32>,    // the time's depth slab (from, to), which showing (for its noise), -
   glyph: array<vec4<u32>, 16>, // the time on the panel, a bit per LED, 2 words to a row
-  numerals: vec4<f32>, // -, fuel held, gas time, jet top row
+  moving: array<vec4<u32>, 16>, // the pieces of it in motion, the same way
+  numerals: vec4<f32>, // readiness to catch, fuel held, gas time, jet top row
   jet: vec4<f32>,      // the jet that lights them: fuel (0: none), lift, columns from, to
 };
 
@@ -69,8 +70,13 @@ struct Params {
 @group(0) @binding(12) var<storage, read_write> parts: array<vec4<f32>>;
 @group(0) @binding(13) var<storage, read_write> out: array<vec4<f32>>;
 @group(0) @binding(14) var<uniform> lut: array<vec4<f32>, 512>;
+// How far each cell of the numerals has caught (2026-10-26), 0 to 1.
+@group(0) @binding(15) var<storage, read_write> caught: array<f32>;
 
 const SOR: f32 = 1.8;
+// How fast a cell of a numeral catches once it is hot enough: per second
+// of gas time, so a quarter of a second to take fully.
+const CATCH_RATE: f32 = 4.0;
 const EMBER_OUT: f32 = 0.30;
 // A spark's bounce (card 376): the share of its speed into a wall it keeps,
 // the share of its slide along it, and the impact speed (design cells per
@@ -126,21 +132,24 @@ fn in_flue(x: f32, z: f32) -> bool {
 }
 
 // The time (2026-10-26): its shape on the panel, carried back along the
-// camera's rays through a slab of the depth.
-fn in_clock(x: i32, y: i32, z: i32) -> bool {
+// camera's rays through a slab of the depth. 0 off it, 1 on it, 2 on a
+// piece of it in motion.
+fn in_clock(x: i32, y: i32, z: i32) -> u32 {
   let zf = f32(z);
-  if (zf < P.clock.x || zf > P.clock.y) { return false; }
+  if (zf < P.clock.x || zf > P.clock.y) { return 0u; }
   let d = vec3<f32>(f32(x), f32(y), zf) - P.eye.xyz;
   let depth = dot(d, P.fwd.xyz);
-  if (depth < 1.0) { return false; }
+  if (depth < 1.0) { return 0u; }
   // As `march` casts them: dir = fwd + u * right + v * up.
   let u = dot(d, P.right.xyz) / (depth * dot(P.right.xyz, P.right.xyz));
   let v = dot(d, P.up.xyz) / (depth * dot(P.up.xyz, P.up.xyz));
   let lx = i32(floor((u + 1.0) * 32.0));
   let ly = i32(floor((1.0 - v) * 16.0));
-  if (lx < 0 || ly < 0 || lx >= 64 || ly >= 32) { return false; }
+  if (lx < 0 || ly < 0 || lx >= 64 || ly >= 32) { return 0u; }
   let w = u32(ly) * 2u + u32(lx) / 32u;
-  return ((P.glyph[w / 4u][w % 4u] >> (u32(lx) % 32u)) & 1u) == 1u;
+  let bit = u32(lx) % 32u;
+  if (((P.moving[w / 4u][w % 4u] >> bit) & 1u) == 1u) { return 2u; }
+  return (P.glyph[w / 4u][w % 4u] >> bit) & 1u;
 }
 
 // Is grid cell (x, y, z) - possibly outside the grid - solid?
@@ -200,15 +209,40 @@ fn vnoise(p: vec3<f32>) -> f32 {
   return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
 }
 
-// The numerals as fuel (2026-10-26, "numerals are the fuel"): how much a
-// cell holds, broken into tongues rising in gas time; 0 off the numerals.
-fn numeral_fuel(x: i32, y: i32, z: i32) -> f32 {
-  if (P.numerals.y <= 0.0 || !in_clock(x, y, z)) { return 0.0; }
+// The numerals as fuel (2026-10-26, "numerals are the fuel"): how much
+// cell `i` holds, broken into tongues rising in gas time; 0 off the
+// numerals.
+//
+// A cell of a numeral holds nothing until it has caught (the owner: "when
+// the clock comes up it looks animated as opposed to a weird feature of
+// the fire itself"). It catches where the fire's own hot gas reaches it -
+// the flames, the jet, the numerals already alight below it - and stays
+// caught while it is part of the time. `numerals.x`, the readiness, lowers
+// the heat it takes as the time comes up, through drifting noise, so that
+// in the end all of it catches, in a different order every time. Pieces in
+// motion burn without catching: they move through cells too fast to.
+fn numeral_fuel(x: i32, y: i32, z: i32, i: u32, temp: f32, dt: f32) -> f32 {
+  let on = in_clock(x, y, z);
+  if (on == 0u || P.numerals.y <= 0.0) {
+    caught[i] = 0.0;
+    return 0.0;
+  }
   let s = 3.0 * P.stove.w / (2.0 / 3.0);
   let t = P.numerals.z;
+  var c = 1.0;
+  if (on == 1u) {
+    c = caught[i];
+    if (c < 1.0) {
+      let q = vec3<f32>(f32(x) / (1.5 * s) + P.clock.z, f32(y) / (1.5 * s) - 0.7 * t, f32(z) / (1.5 * s) + 17.0);
+      if (2.5 * temp + 1.3 * P.numerals.x + 0.7 * vnoise(q) > 1.2) {
+        c = min(1.0, c + dt * CATCH_RATE);
+      }
+      caught[i] = c;
+    }
+  }
   let p = vec3<f32>(f32(x) / s, f32(y) / s - 1.6 * t, f32(z) / s + 0.4 * t);
   let tongues = clamp(1.6 * vnoise(p) - 0.3, 0.0, 1.0);
-  return P.numerals.y * tongues;
+  return P.numerals.y * tongues * c;
 }
 
 // ---------------------------------------------------------------- sampling
@@ -337,7 +371,7 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   // The woodpile (exp/hearth-speed): fuel held at its level in the shell
   // round each log, the coals' glow under it.
   var temp = max(s.x, b.y);
-  var fuel = max(max(s.y, b.x), numeral_fuel(i32(g.x), i32(g.y), i32(g.z)));
+  var fuel = max(max(s.y, b.x), numeral_fuel(i32(g.x), i32(g.y), i32(g.z), i, s.x, dt));
   // The jet (2026-10-26): a burst of gas from the bed up to the numerals'
   // foot, in tongues, pushed up hard - what lights them.
   // Its footprint is round, as wide across as `jet.z..jet.w` and as deep

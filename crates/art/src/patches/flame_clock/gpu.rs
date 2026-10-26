@@ -35,11 +35,15 @@ pub struct Params {
     pub logs: [f32; 4],
     pub wind: [[f32; 4]; 40],
     /// The time (2026-10-26): the depth slab it fills, in grid rows of z
-    /// (from, to), unused, unused.
+    /// (from, to), which showing it is (an offset into the noise it catches
+    /// by), unused.
     pub clock: [f32; 4],
-    /// The time's shape on the panel ([`super::clock::Mask`]).
+    /// The time's shape on the panel ([`super::clock::Mask`]), and the
+    /// pieces of it in motion.
     pub glyph: [[u32; 4]; 16],
-    /// The numerals: unused, the fuel they hold, gas time in seconds, the
+    pub moving: [[u32; 4]; 16],
+    /// The numerals: how ready they are to catch (0: only where the fire
+    /// is hot, 1: at once), the fuel they hold, gas time in seconds, the
     /// jet's top row.
     pub numerals: [f32; 4],
     /// The jet that lights them: fuel, lift (cells/s²), its columns from,
@@ -141,7 +145,7 @@ const ENTRIES: &[(&str, &[u32])] = &[
     ("adv_back_scal", &[0, 1, 4, 6]),
     ("adv_fix_vel", &[0, 1, 3, 5]),
     ("adv_fix_scal", &[0, 1, 2, 4, 6]),
-    ("combust", &[0, 1, 2, 9]),
+    ("combust", &[0, 1, 2, 9, 15]),
     ("curl_of", &[0, 1, 5]),
     ("confine", &[0, 1, 5]),
     ("divergence", &[0, 1, 2, 7, 9]),
@@ -185,6 +189,7 @@ impl Sim {
         let light = buffer("light", coarse_cells * 4, storage);
         let light2 = buffer("light2", coarse_cells * 4, storage);
         let parts = buffer("parts", (EMBERS * 64) as u64, storage);
+        let caught = buffer("caught", cells * 4, storage);
         let out = buffer("out", 2 * 2048 * 16, storage);
         let out_read = buffer("out read", 2 * 2048 * 16, wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
         let parts_read =
@@ -194,8 +199,10 @@ impl Sim {
             label: Some("hearth"),
             source: wgpu::ShaderSource::Wgsl(include_str!("flame_clock.wgsl").into()),
         });
-        let bound: [&wgpu::Buffer; 15] =
-            [&params, &vel, &scal, &vel_next, &scal_next, &curl, &scal_back, &div, &pres, &bed, &light, &light2, &parts, &out, &lut_buf];
+        let bound: [&wgpu::Buffer; 16] = [
+            &params, &vel, &scal, &vel_next, &scal_next, &curl, &scal_back, &div, &pres, &bed, &light, &light2, &parts, &out, &lut_buf,
+            &caught,
+        ];
         let passes = ENTRIES
             .iter()
             .map(|(name, bindings)| {
