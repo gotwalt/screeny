@@ -46,9 +46,9 @@ struct Params {
   stove: vec4<f32>,    // draft (0: an open fire), ceiling row, flue radius, -
   logs: vec4<f32>,     // rows the woodpile covers, -, -, -
   wind: array<vec4<f32>, 40>,  // per row, four rows to a vec4
-  clock: vec4<f32>,    // the time's depth slab (from, to), how much it blocks the light, -
+  clock: vec4<f32>,    // the time's depth slab (from, to), -, -
   glyph: array<vec4<u32>, 16>, // the time on the panel, a bit per LED, 2 words to a row
-  numerals: vec4<f32>, // kind (0 fuel, 1 burning wood, 2 a wall), fuel held, gas time, jet top row
+  numerals: vec4<f32>, // -, fuel held, gas time, jet top row
   jet: vec4<f32>,      // the jet that lights them: fuel (0: none), lift, columns from, to
 };
 
@@ -126,7 +126,7 @@ fn in_flue(x: f32, z: f32) -> bool {
 }
 
 // The time (2026-10-26): its shape on the panel, carried back along the
-// camera's rays through a slab of the depth. A wall, but not drawn.
+// camera's rays through a slab of the depth.
 fn in_clock(x: i32, y: i32, z: i32) -> bool {
   let zf = f32(z);
   if (zf < P.clock.x || zf > P.clock.y) { return false; }
@@ -147,7 +147,6 @@ fn in_clock(x: i32, y: i32, z: i32) -> bool {
 fn solid(x: i32, y: i32, z: i32) -> bool {
   if (y < 0) { return true; }
   if (in_log(x, y, z)) { return true; }
-  if (P.numerals.x > 0.5 && in_clock(x, y, z)) { return true; }
   if (!stove_on()) { return false; }
   if (x < 0 || z < 0 || x >= i32(gw()) || z >= i32(gd())) { return false; }
   return f32(y) >= P.stove.y && !in_flue(f32(x), f32(z));
@@ -203,20 +202,8 @@ fn vnoise(p: vec3<f32>) -> f32 {
 
 // The numerals as fuel (2026-10-26, "numerals are the fuel"): how much a
 // cell holds, broken into tongues rising in gas time; 0 off the numerals.
-// As fuel, the numerals' own cells hold it; as burning wood, the shell of
-// cells just off their surface, as round a log.
 fn numeral_fuel(x: i32, y: i32, z: i32) -> f32 {
-  let kind = P.numerals.x;
-  if (kind > 1.5 || P.numerals.y <= 0.0) { return 0.0; }
-  var on = false;
-  if (kind < 0.5) {
-    on = in_clock(x, y, z);
-  } else {
-    if (in_clock(x, y, z)) { return 0.0; }
-    on = in_clock(x + 1, y, z) || in_clock(x - 1, y, z) || in_clock(x, y + 1, z)
-      || in_clock(x, y - 1, z) || in_clock(x, y, z + 1) || in_clock(x, y, z - 1);
-  }
-  if (!on) { return 0.0; }
+  if (P.numerals.y <= 0.0 || !in_clock(x, y, z)) { return 0.0; }
   let s = 3.0 * P.stove.w / (2.0 / 3.0);
   let t = P.numerals.z;
   let p = vec3<f32>(f32(x) / s, f32(y) / s - 1.6 * t, f32(z) / s + 0.4 * t);
@@ -342,13 +329,8 @@ fn combust(@builtin(global_invocation_id) g: vec3<u32>) {
   if (g.y < bed_rows()) { b = bed[(g.z * bed_rows() + g.y) * gw() + g.x]; }
   if (solid(i32(g.x), i32(g.y), i32(g.z))) {
     vel[i] = vec4<f32>(0.0);
-    // Inside a log: no gas, only the log's own glow. Burning wooden
-    // numerals glow as coals.
-    var glow = b.y;
-    if (P.numerals.x > 0.5 && P.numerals.x < 1.5 && g.y >= bed_rows()) {
-      glow = 0.45 * min(P.numerals.y, 1.0);
-    }
-    scal[i] = vec4<f32>(glow, 0.0, 0.0, 0.0);
+    // Inside a log: no gas, only the log's own glow.
+    scal[i] = vec4<f32>(b.y, 0.0, 0.0, 0.0);
     return;
   }
   var s = scal[i];
@@ -713,10 +695,6 @@ fn march(@builtin(global_invocation_id) g: vec3<u32>) {
         let e = emit(s.x) * (P.d.w * step);
         fire += trans * e;
         bare += dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
-        if (P.clock.z > 0.0) {
-          let c = vec3<i32>(round(p));
-          if (in_clock(c.x, c.y, c.z)) { trans *= exp(-P.clock.z * step); }
-        }
         let smoke = s.z;
         if (smoke > 0.002) {
           lit += trans * smoke * light_at(p) * (P.d.z * step);

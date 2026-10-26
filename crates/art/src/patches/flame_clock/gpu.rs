@@ -34,13 +34,13 @@ pub struct Params {
     /// The woodpile (exp/hearth-speed): rows of grid the bed covers, unused.
     pub logs: [f32; 4],
     pub wind: [[f32; 4]; 40],
-    /// The time as a solid (2026-10-26): the depth slab it fills, in grid
-    /// rows of z (from, to), how much it blocks the light, unused.
+    /// The time (2026-10-26): the depth slab it fills, in grid rows of z
+    /// (from, to), unused, unused.
     pub clock: [f32; 4],
     /// The time's shape on the panel ([`super::clock::Mask`]).
     pub glyph: [[u32; 4]; 16],
-    /// What the numerals are: kind (0 fuel, 1 burning wood, 2 a wall), the
-    /// fuel they hold, gas time in seconds, the jet's top row.
+    /// The numerals: unused, the fuel they hold, gas time in seconds, the
+    /// jet's top row.
     pub numerals: [f32; 4],
     /// The jet that lights them: fuel, lift (cells/s²), its columns from,
     /// to. Fuel 0 is no jet.

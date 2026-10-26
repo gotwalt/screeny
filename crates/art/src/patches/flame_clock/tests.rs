@@ -9,19 +9,24 @@ fn ctx_at<'a>(t: f64, dt: f64, params: &'a Params) -> Ctx<'a> {
 
 const DT: f64 = 1.0 / 30.0;
 
-/// Hearth's own defaults: the numerals give off no fuel and are no wall, the
-/// woodpile burns, the fire is hearth's size. Hearth's tests, copied here,
-/// hold this copy of its fire to what they held it to there.
+/// Hearth's own defaults: the digits give off no fuel, the woodpile
+/// burns, the fire is hearth's. Hearth's tests, copied here, hold this copy
+/// of its fire to what they held it to there.
 fn hearth_defaults() -> Params {
     let mut p = Params::defaults(PARAMS);
-    for (k, v) in [("numerals", 0.0), ("burn", 0.0), ("logs", 1.0), ("size", 0.6), ("gusts", 0.6), ("thickness", 0.1)]
-        .into_iter()
-        .chain([("time_size", 0.6), ("time_gusts", 0.6), ("embers", 0.6), ("smoke", 0.3), ("draft", 0.7), ("flue", 0.4)])
-        .chain([("speed", 1.0), ("wood", 0.0), ("expansion", 1.0)])
-    {
+    for (k, v) in [("fuel", 0.0), ("flames", 0.6), ("size", 0.6), ("gusts", 0.6), ("embers", 0.6), ("smoke", 0.3), ("draft", 0.7), ("speed", 1.0)] {
         assert!(p.set(PARAMS, k, v));
     }
     p
+}
+
+/// The fire with hearth's fixed values, for hearth's tests.
+fn hearth(seed: u64) -> FlameClock {
+    FlameClock { fixed: Fixed::HEARTH, ..FlameClock::new(seed) }
+}
+
+fn hearth_on(seed: u64, grid: Grid) -> FlameClock {
+    FlameClock { fixed: Fixed::HEARTH, ..FlameClock::with_grid(seed, grid) }
 }
 
 /// The fire needs a graphics adapter; a machine without one skips these
@@ -53,8 +58,8 @@ fn level(frame: &Frame) -> f32 {
 fn the_same_seed_burns_the_same_fire() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let (mut a, mut b) = (FlameClock::new(7), FlameClock::new(7));
-    let mut c = FlameClock::new(8);
+    let (mut a, mut b) = (hearth(7), hearth(7));
+    let mut c = hearth(8);
     let mut differs = false;
     for i in 1..=90 {
         let ctx = ctx_at(i as f64 * DT, DT, &params);
@@ -74,7 +79,7 @@ fn the_same_seed_burns_the_same_fire() {
 fn the_first_frame_comes_quickly() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let start = std::time::Instant::now();
     h.render(&ctx_at(0.0, 0.0, &params));
     let took = start.elapsed().as_secs_f64();
@@ -88,7 +93,7 @@ fn the_first_frame_comes_quickly() {
 fn first_frame_parts() {
     let Ok(gpu) = crate::gpu::Gpu::shared() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let t = std::time::Instant::now();
     h.sim = Some(Some(Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table())));
     let built = t.elapsed().as_secs_f64();
@@ -103,7 +108,7 @@ fn first_frame_parts() {
 fn the_fire_lights_within_seconds() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(3);
+    let mut h = hearth(3);
     let mut lit_at = None;
     for i in 0..=30 * 6 {
         let f = h.render(&ctx_at(i as f64 * DT, if i == 0 { 0.0 } else { DT }, &params));
@@ -128,7 +133,7 @@ const LIGHTS_WITHIN: f64 = 3.0;
 fn the_fire_carries_to_another_grid() {
     let Some(_gpu) = gpu() else { return };
     let mut params = hearth_defaults();
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let mut i = 0;
     let mut run = |h: &mut FlameClock, params: &Params, frames: usize| {
         let mut last = (0.0, 0, 0, 0);
@@ -153,7 +158,7 @@ fn the_fire_carries_to_another_grid() {
 /// near 0) whatever `color` is, and none of them is a fire colour.
 #[test]
 fn smoke_is_grey() {
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     for color in [1.0, 0.5, 0.0] {
         let pal = h.palette(color, 0).colours;
         for c in &pal[FIRE_STEPS + 1..] {
@@ -173,7 +178,7 @@ fn the_ceiling_is_solid_and_the_flue_draws() {
     let mut params = hearth_defaults();
     params.set(PARAMS, "size", 1.0);
     params.set(PARAMS, "draft", 1.0);
-    let mut h = FlameClock::new(3);
+    let mut h = hearth(3);
     for i in 1..=120 {
         h.render(&ctx_at(i as f64 * DT, DT, &params));
     }
@@ -210,9 +215,10 @@ fn the_stove_is_deterministic() {
     let Some(_gpu) = gpu() else { return };
     let mut params = hearth_defaults();
     params.set(PARAMS, "draft", 0.9);
-    params.set(PARAMS, "flue", 0.8);
     params.set(PARAMS, "smoke", 0.7);
-    let (mut a, mut b) = (FlameClock::new(9), FlameClock::new(9));
+    let (mut a, mut b) = (hearth(9), hearth(9));
+    a.fixed.flue = 0.8;
+    b.fixed.flue = 0.8;
     for i in 1..=60 {
         let ctx = ctx_at(i as f64 * DT, DT, &params);
         assert_eq!(indices(&a.render(&ctx)), indices(&b.render(&ctx)), "frame {i}");
@@ -225,7 +231,7 @@ fn the_stove_is_deterministic() {
 #[test]
 fn the_dark_ramps_sit_on_panel_levels() {
     use screeny_panel::model::{duty_16ths, nearest_level};
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let ceiling = crate::panel::level_triple([2, 2, 2]).luma();
     for (dark, name) in DARK_CHOICES.iter().enumerate().skip(1) {
         for color in [1.0, 0.6, 0.0] {
@@ -256,7 +262,7 @@ fn aligned_dark_changes_no_hearth_pixel() {
     let mut params = hearth_defaults();
     params.set(PARAMS, "smoke", 1.0);
     params.set(PARAMS, "size", 1.0);
-    let mut h = FlameClock::new(4);
+    let mut h = hearth(4);
     let pipe = |panel| {
         let mut o = crate::pipeline::Output { panel, ..Default::default() };
         o.limiter.enabled = false;
@@ -283,7 +289,7 @@ fn the_all_max_corner_stays_stable() {
     for id in ["size", "gusts", "embers", "smoke", "draft"] {
         params.set(PARAMS, id, 2.0);
     }
-    let mut h = FlameClock::new(6);
+    let mut h = hearth(6);
     let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
     // Three minutes, a frame every quarter second (the sim still steps
     // every 1/30 s).
@@ -315,7 +321,7 @@ fn the_all_max_corner_stays_stable() {
 fn deeper_red_by_default_and_smoke_to_one() {
     assert_eq!(DARK_CHOICES[DEFAULT_DARK], "deeper red");
     let by_id = |id: &str| PARAMS.iter().find(|p| p.id == id).expect(id);
-    assert_eq!(by_id("dark").default as usize, DEFAULT_DARK);
+    assert_eq!(Fixed::PINNED.dark, DEFAULT_DARK);
     assert_eq!(by_id("smoke").max, 1.0);
     for id in ["size", "gusts", "embers", "draft"] {
         assert_eq!(by_id(id).max, 2.0, "{id}");
@@ -330,7 +336,7 @@ fn deeper_red_by_default_and_smoke_to_one() {
 fn sparks_stay_in_the_firebox_and_bounce_rarely() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let ceiling = h.grid.ceiling() as f32;
     let flue = |h: &FlameClock, x: f32, z: f32| {
         let (dx, dz) = (x - 0.5 * (h.grid.gw() - 1) as f32, z - 0.5 * (h.grid.gd() - 1) as f32);
@@ -378,7 +384,7 @@ fn sparks_stay_in_the_firebox_and_bounce_rarely() {
 fn every_frame_goes_out_exact() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(5);
+    let mut h = hearth(5);
     let mut output = crate::pipeline::Output::default();
     output.limiter.enabled = false;
     let mut pipe = crate::Pipeline::new(output);
@@ -398,7 +404,7 @@ fn every_frame_goes_out_exact() {
 /// `smoke_is_grey`.)
 #[test]
 fn the_palette_has_no_white_and_color_zero_is_grey() {
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let pal = h.palette(1.0, 0).colours;
     for c in &pal[..=FIRE_STEPS] {
         assert!(c.b <= 0.6 * c.r + 1e-3 && c.luma() < 0.6, "{c:?}");
@@ -419,7 +425,7 @@ fn the_palette_has_no_white_and_color_zero_is_grey() {
 fn size_eases_and_never_jumps() {
     let mut params = hearth_defaults();
     params.set(PARAMS, "size", 0.0);
-    let mut h = FlameClock::new(2);
+    let mut h = hearth(2);
     h.size = 0.0;
     let ctx = ctx_at(0.0, DT, &params);
     h.step(&ctx);
@@ -449,7 +455,7 @@ fn the_picture_does_not_jump_when_size_moves() {
     let Some(_gpu) = gpu() else { return };
     let mut params = hearth_defaults();
     params.set(PARAMS, "size", 0.0);
-    let mut h = FlameClock::new(2);
+    let mut h = hearth(2);
     let mut t = 0.0;
     let mut lit = Vec::new();
     for i in 0..60 {
@@ -472,7 +478,7 @@ fn the_picture_does_not_jump_when_size_moves() {
 fn the_rare_things_happen_rarely() {
     let params = hearth_defaults();
     for seed in [11] {
-        let mut h = FlameClock::new(seed);
+        let mut h = hearth(seed);
         let ctx = ctx_at(0.0, DT, &params);
         for _ in 0..30 * 60 * 20 {
             h.step(&ctx);
@@ -495,7 +501,7 @@ fn the_top_is_mostly_black_at_the_default() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
     for seed in [1] {
-        let mut h = FlameClock::new(seed);
+        let mut h = hearth(seed);
         let (mut top_lit, mut frames, mut no_fire) = (0usize, 0usize, 0usize);
         for i in 1..=450 {
             let f = h.render(&ctx_at(i as f64 * DT, DT, &params));
@@ -528,7 +534,7 @@ fn no_whole_frame_pulse_above_three_hertz() {
         // Seed 2 at size 1 is the run where, before the velocity guard
         // (`tame` in the shader), the fire froze into its logs and the
         // frame went black from 28 s to 32 s.
-        let mut h = FlameClock::new(2);
+        let mut h = hearth(2);
         let frames: Vec<Frame> = (1..=1050).map(|i| h.render(&ctx_at(i as f64 * DT, DT, &params))).collect();
         let catching = (LIGHTS_WITHIN / DT) as usize;
         let dark = frames.iter().skip(catching).filter(|f| indices(f)[(H - 1) * W..].iter().all(|k| *k == 0)).count();
@@ -558,7 +564,7 @@ fn no_whole_frame_pulse_above_three_hertz() {
 fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     let Some(_gpu) = gpu() else { return };
     let params = hearth_defaults();
-    let mut h = FlameClock::new(11);
+    let mut h = hearth(11);
     let dt = 0.1; // ten frames a second is plenty to watch; the sim steps at its own rate
     let mut prints: Vec<u64> = Vec::new();
     let (mut ember_frames, mut ember_sum, mut ember_max_calm) = (0usize, 0usize, 0usize);
@@ -641,7 +647,7 @@ fn raw() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = FlameClock::with_grid(env("HEARTH_SEED", 1.0) as u64, grid_from_env());
+    let mut h = hearth_on(env("HEARTH_SEED", 1.0) as u64, grid_from_env());
     for i in 1..=(at / DT) as usize {
         h.render(&ctx_at(i as f64 * DT, DT, &params));
     }
@@ -719,7 +725,7 @@ fn raw() {
 fn timeline() {
     let seed = std::env::var("HEARTH_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
     let params = hearth_defaults();
-    let mut h = FlameClock::new(seed);
+    let mut h = hearth(seed);
     let ctx = ctx_at(0.0, DT, &params);
     let (mut gusts, mut settles) = (0, 0);
     for _ in 0..30 * 60 * 10 {
@@ -758,7 +764,7 @@ fn strip() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = FlameClock::with_grid(seed, grid_from_env());
+    let mut h = hearth_on(seed, grid_from_env());
     let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
     let last = times.last().copied().unwrap_or(0.0);
     let mut next = 0;
@@ -826,7 +832,7 @@ fn stages() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = FlameClock::with_grid(1, grid_from_env());
+    let mut h = hearth_on(1, grid_from_env());
     let mut sim = Sim::new(gpu, h.grid.dims(), h.grid.bed_rows() as u32, h.grid.sweeps, &h.ramp.table());
     sim.profile = Some(std::cell::RefCell::new(gpu::Profile::new(&gpu.device)));
     h.sim = Some(Some(sim));
@@ -884,7 +890,7 @@ fn cost() {
             params.set(PARAMS, k.trim(), v.trim().parse().expect("a number"));
         }
     }
-    let mut h = FlameClock::with_grid(1, grid_from_env());
+    let mut h = hearth_on(1, grid_from_env());
     // Ten seconds of fire first, then 300 frames timed one by one, as a
     // player would run them: no per-stage waits.
     for i in 0..300 {
@@ -919,7 +925,7 @@ fn survey() {
                 }
             }
             params.set(PARAMS, "size", size);
-            let mut h = FlameClock::with_grid(seed, grid_from_env());
+            let mut h = hearth_on(seed, grid_from_env());
             let dt = 1.0 / 30.0;
             let (mut lit, mut tall, mut base, mut empty, mut tallmax, mut smoke, mut n) = (0.0, 0, 0, 0, 0, 0, 0);
             let (mut light, mut gold) = (0.0f32, 0usize);
@@ -956,7 +962,7 @@ fn survey() {
 #[test]
 #[ignore]
 fn palette_levels() {
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     for (i, c) in h.palette(1.0, 0).colours.iter().enumerate() {
         let code = c.to_srgb8();
         let lv = code.map(|v| screeny_panel::model::nearest_level(screeny_panel::model::duty_16ths(v)));
@@ -975,7 +981,7 @@ fn palette_levels() {
 #[ignore]
 fn swatches() {
     let Ok(path) = std::env::var("HEARTH_SWATCH") else { return };
-    let mut h = FlameClock::new(1);
+    let mut h = hearth(1);
     let mut px = vec![Rgb::BLACK; N];
     for (dark, name) in DARK_CHOICES.iter().enumerate() {
         let p = h.palette(1.0, dark);
@@ -1015,7 +1021,7 @@ fn bounce_log() {
         }
     }
     let minutes = env("HEARTH_MINUTES", 3.0);
-    let mut h = FlameClock::new(env("HEARTH_SEED", 1.0) as u64);
+    let mut h = hearth(env("HEARTH_SEED", 1.0) as u64);
     let mut last = h.bounces;
     for i in 1..=(minutes * 60.0 / DT) as usize {
         h.render(&ctx_at(i as f64 * DT, DT, &params));
@@ -1132,4 +1138,38 @@ fn look() {
         png(&format!("{dir}/{name}-{tag}.png"), w, hgt, &rgba);
     }
     eprintln!("{dir}/{name}: {n} frames, embers {}", h.ember_count());
+}
+
+/// Not a test: the digits alone at several sizes and weights, as a sheet.
+/// `FLAME_FONTS=file.png cargo test -p screeny-art flame_clock::tests::fonts
+/// -- --ignored`.
+#[test]
+#[ignore]
+fn fonts() {
+    let Ok(path) = std::env::var("FLAME_FONTS") else { return };
+    let (heights, weights) = ([10.0, 13.0, 15.0, 18.0, 20.0], [1.0, 2.0, 3.0, 4.0, 5.0]);
+    let (sc, pad) = (6usize, 12usize);
+    let (cw, ch) = (W * sc + pad, H * sc + pad);
+    let (iw, ih) = (cw * weights.len() + pad, ch * heights.len() + pad);
+    let mut rgba = vec![24u8; iw * ih * 4];
+    for (r, &height) in heights.iter().enumerate() {
+        for (c, &weight) in weights.iter().enumerate() {
+            let (m, _) = clock::mask("10:48", 16.0, clock::Font { height, weight }, &[clock::Shape::WHOLE]);
+            for y in 0..H * sc {
+                for x in 0..W * sc {
+                    let (lx, ly) = (x / sc, y / sc);
+                    let w = ly * 2 + lx / 32;
+                    let on = m[w / 4][w % 4] >> (lx % 32) & 1 == 1;
+                    let i = ((pad + r * ch + y) * iw + pad + c * cw + x) * 4;
+                    let px: [u8; 4] = if on { [240, 150, 60, 255] } else { [0, 0, 0, 255] };
+                    rgba[i..i + 4].copy_from_slice(&px);
+                }
+            }
+        }
+    }
+    let file = std::fs::File::create(&path).expect("create");
+    let mut e = png::Encoder::new(std::io::BufWriter::new(file), iw as u32, ih as u32);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).expect("png");
 }

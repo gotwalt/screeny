@@ -4,8 +4,12 @@
 //! clock? ... put a 3d voxel numeric read of the time as a non-flammable
 //! object interfering with the flames. On an individual frame you might not
 //! be able to see it, but over 30fps the behavior of the flame simulation
-//! should make it visible." A copy of `hearth` (0.1.6) to experiment on; the
-//! time is [`clock`]'s, and everything below is hearth's, as it was.
+//! should make it visible." Then, inverted: "numerals are the fuel". A copy
+//! of `hearth` (0.1.6): the time is fuel held in the shape of its digits
+//! ([`clock`]), shown once a minute around the minute turning
+//! ([`FlameClock::tell_time`]); hearth's sliders it does not offer are held
+//! at the owner's values ([`Fixed`]). Everything below is hearth's, as it
+//! was.
 //!
 //! Hearth: a fire burning just below the bottom edge of the panel.
 //!
@@ -81,7 +85,7 @@ use crate::color::{oklch, smoothstep, to_oklab, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
 use crate::gpu::Gpu;
-use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Saved, Sim, EMBERS};
 use ramp::Ramp;
@@ -101,67 +105,67 @@ pub const DEF: PatchDef = PatchDef {
 // way up, so card 372's maximum is now about [`OLD_MAX`] of each range, the
 // default sits there, and the rest of the range is headroom above it.
 const PARAMS: &[ParamSpec] = &[
-    // The time (2026-10-26).
-    choice("numerals", "What the numerals are", NUMERALS, 0.0),
-    // Below about 0.15 the numerals do not catch; at 1 the frame floods.
-    // The owner's sliders on the Office panel, 2026-10-26: burn 0.36,
-    // gusts 1.72, thickness 0.66.
-    param("burn", "How much fuel the numerals give off", 0.0, 2.0, 0.01, 0.36),
-    param("logs", "How hard the woodpile under the frame burns while the time shows", 0.0, 1.0, 0.01, 0.0),
-    // The showing (2026-10-26): once a minute, around the minute turning.
-    // A jet lights the time `before` seconds ahead; at the minute a jet
-    // under the digits that change turns them into the new ones; `after`
-    // seconds on it collapses into the fire (the owner: "I want it to show
-    // the time change (from one minute to another) and then some number of
-    // seconds before/after, probably default 5 each").
-    param("before", "Seconds the time shows before the minute turns", 1.0, 25.0, 1.0, 5.0),
-    param("after", "Seconds the new time shows after the minute turns", 4.0, 25.0, 1.0, 5.0),
-    param("fire", "How hard the woodpile burns between showings", 0.0, 1.5, 0.01, 1.0),
+    // The time (2026-10-26). Once a minute, around the minute turning: a
+    // jet lights it `before` seconds ahead; at the minute a jet under the
+    // digits that change turns them into the new ones; `after` seconds on
+    // it collapses into the fire (the owner: "I want it to show the time
+    // change (from one minute to another) and then some number of seconds
+    // before/after, probably default 5 each").
     toggle("hours24", "24-hour", false),
+    // Defaults: the owner's on Office, 2026-10-26.
+    param("before", "Seconds the time shows before the minute turns", 1.0, 25.0, 1.0, 1.0),
+    param("after", "Seconds the new time shows after the minute turns", 4.0, 25.0, 1.0, 10.0),
     param("height", "Where the time stands, up from the bottom of the frame (0.5: the middle)", 0.0, 1.0, 0.01, 0.5),
-    param("thickness", "How deep into the fire the numerals reach (1: front to back)", 0.05, 1.0, 0.01, 0.66),
-    param("show", "How much the numerals block the light themselves (0: only the fire shows them)", 0.0, 1.0, 0.01, 0.0),
-    // While the time shows, the fire's size and gusts are these; between
-    // showings, `size` and `gusts` (2026-10-26). Numerals of fuel read best
-    // with short flames; as a wall, they want the fire big (1.2) and the
-    // full depth. 1.72: the owner's gusts on the Office panel.
-    param("time_size", "How big the fire is while the time shows", 0.0, 2.0, 0.01, 0.3),
-    param("time_gusts", "How often the draught surges while the time shows", 0.0, 2.0, 0.01, 1.72),
-    // The fire between showings, and the rest of the fire throughout: the
-    // Living Room panel's hearth, which the owner likes (2026-10-26: "i
-    // like how it looks over there. this one is patchier").
-    param("size", "How big the fire is between showings (eases over tens of seconds)", 0.0, 2.0, 0.01, 1.13),
+    param("digits", "How tall the digits are, LEDs", 10.0, 20.0, 1.0, 20.0),
+    // At most a fifth of the height: heavier fills the holes in 0, 4, 6, 8.
+    param("weight", "How thick the digits' strokes are, LEDs (at most a fifth of their height)", 1.0, 4.0, 1.0, 3.0),
+    param("depth", "How deep into the fire the digits reach (1: front to back)", 0.05, 1.0, 0.01, 0.43),
+    // Below about 0.15 the digits do not catch; at 1 the frame floods.
+    param("fuel", "How much fuel the digits give off", 0.0, 2.0, 0.01, 0.38),
+    param("flames", "How tall the digits' flames are", 0.0, 2.0, 0.01, 1.19),
+    // The fire: the Living Room panel's hearth, which the owner likes
+    // (2026-10-26: "i like how it looks over there. this one is patchier"),
+    // embers as on Office. Card 373's scale: card 372's maximum is 0.6.
+    param("size", "How big the fire is between showings", 0.0, 2.0, 0.01, 1.13),
     param("gusts", "How often the draught surges between showings", 0.0, 2.0, 0.01, 0.75),
-    param("embers", "How many sparks fly up", 0.0, 2.0, 0.01, 2.0),
+    param("embers", "How many sparks fly up", 0.0, 2.0, 0.01, 0.83),
     param("smoke", "How much smoke shows", 0.0, 1.0, 0.01, 0.41),
-    // Card 373: the panel as the inside of a wood stove's firebox, its top
-    // edge the ceiling, a chimney flue in the middle of it.
     param("draft", "How hard the chimney draws (0: an open fire, no stove)", 0.0, 2.0, 0.01, 0.73),
-    param("flue", "How wide the flue is", 0.0, 1.0, 0.01, 0.07),
-    param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
-    // Card 375: the cool end of the fire and the soot as hand-picked level
-    // triples, so the panel shows them steadily; several to flip between.
-    choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
-    // Experiment (exp/hearth-speed): the gas and sparks run this many times
-    // faster than wall time, the logs, breathing and gusts do not. By Froude
-    // scaling a real fire in a 7-inch firebox runs about 30 times faster
-    // than 1 does; the owner, on the panel at 18: "realistic enough", so
-    // that is the top.
+    // The gas and sparks run this many times faster than wall time (hearth,
+    // exp/hearth-speed); 18 is about a real fire.
     param("speed", "How fast the gas moves (1: the slow, grand fire; 18: a real one)", 1.0, 18.0, 0.5, 5.0),
-    // Experiment: the ceiling raised into the black margin above the LEDs,
-    // in LEDs (5.4 is the bench panel's 15 mm).
-    param("wood", "How patchily the logs give off gas (0: a steady sheet, like a burner)", 0.0, 1.0, 0.01, 0.94),
-    // Experiment: the burn's expansion, which at a held bed is a nozzle
-    // pushing gas out of the logs. Wood has no such push: only buoyancy.
-    param("expansion", "How hard burning gas pushes out of the bed (1: card 372; wood: near 0)", 0.0, 1.0, 0.01, 0.06),
-    param("headroom", "How far above the top row the stove ceiling sits, LEDs", 0.0, 8.0, 0.1, 0.0),
+    param("color", "How much colour (0 is pure grayscale)", 0.0, 1.0, 0.01, 1.0),
 ];
 
-/// The `numerals` choices: the time as fuel burning in the air (the owner,
-/// 2026-10-26: "make it conceptually inverted: numerals are the fuel"), as
-/// solid numerals of wood burning at their surfaces, or as an unburnable
-/// wall the fire goes round (the first idea).
-const NUMERALS: &[&str] = &["fuel", "burning wood", "wall"];
+/// What hearth has as sliders and this patch holds fixed (2026-10-26: "let's
+/// look to simplify the control surface"): the values the owner had on the
+/// panels, and, for hearth's tests copied here, hearth's own.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fixed {
+    /// The flue's width, the bed's patchiness, the burn's expansion and the
+    /// ceiling's rise above the frame: hearth's `flue`, `wood`, `expansion`
+    /// and `headroom`.
+    pub flue: f32,
+    pub wood: f32,
+    pub expansion: f32,
+    pub headroom: f32,
+    /// The dark ramp ([`DARK_CHOICES`]).
+    pub dark: usize,
+    /// How hard the woodpile burns while the time shows, and between.
+    pub logs: f32,
+    pub fire: f32,
+    /// How often the draught surges while the time shows.
+    pub gusts: f32,
+}
+
+impl Fixed {
+    /// The Living Room's hearth; the woodpile out while the time shows;
+    /// the owner's gusts on Office for the time.
+    pub const PINNED: Fixed = Fixed { flue: 0.07, wood: 0.94, expansion: 0.06, headroom: 0.0, dark: DEFAULT_DARK, logs: 0.0, fire: 1.0, gusts: 1.72 };
+    /// Hearth's defaults, the woodpile always burning.
+    #[cfg(test)]
+    pub const HEARTH: Fixed = Fixed { flue: 0.4, wood: 0.0, expansion: 1.0, headroom: 0.0, dark: DEFAULT_DARK, logs: 1.0, fire: 1.0, gusts: 0.6 };
+}
 
 /// The time's showing, seconds: the jet lights it over `EMERGE` (the jet
 /// for the first `JET` of it, the numerals catching from `CATCH` on), and
@@ -602,7 +606,9 @@ pub(crate) struct FlameClock {
     pub(crate) gusts_seen: u32,
     pub(crate) settles_seen: u32,
     pub(crate) sparks_thrown: u32,
-    /// The time as a solid: its shape on the panel, and `Params::clock`.
+    /// What hearth has as sliders and this holds fixed.
+    pub(crate) fixed: Fixed,
+    /// The time: its shape on the panel, and `Params::clock`.
     glyph: clock::Mask,
     clock_slab: [f32; 4],
     /// `Params::numerals`, but for gas time, which is the step's.
@@ -840,13 +846,15 @@ impl FlameClock {
             gusts_seen: 0,
             settles_seen: 0,
             sparks_thrown: 0,
+            fixed: Fixed::PINNED,
             glyph: [[0; 4]; 16],
             clock_slab: [0.0; 4],
             numerals: [2.0, 0.0, 0.0, 0.0],
             logs_burn: 1.0,
             jet: [0.0; 4],
             showing: Showing::Standing,
-            shown: 1.0,
+            // The fire alone until the clock has looked at the time.
+            shown: 0.0,
             cycling: false,
         }
     }
@@ -913,6 +921,7 @@ impl FlameClock {
         let after = f64::from(ctx.get("after"));
         let hours24 = ctx.get("hours24") > 0.5;
         let middle_row = (1.0 - ctx.get("height")) * H as f32;
+        let font = clock::Font { height: ctx.get("digits"), weight: ctx.get("weight") };
         let p = ctx.now.rem_euclid(60.0);
         let minute = ctx.now - p;
         let lead = before + EMERGE;
@@ -930,33 +939,33 @@ impl FlameClock {
             // Before the minute: the time as it is, lit by the jet.
             let q = p - (60.0 - lead);
             let shape = clock::Shape { reveal: catch(q, CATCH, EMERGE), ..whole };
-            let (g, at) = clock::mask(&clock::text(minute, hours24), middle_row, &[shape]);
+            let (g, at) = clock::mask(&clock::text(minute, hours24), middle_row, font, &[shape]);
             (if q < EMERGE { Showing::Emerging } else { Showing::Standing }, g, at, q)
         } else if p < f64::from(clock::COLLAPSE) {
             // The minute turns: the old digits that change fall, the new
             // ones catch where they stood.
             let gone: Vec<_> = changed.iter().map(|&c| if c { clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, ..whole } } else { whole }).collect();
             let coming: Vec<_> = changed.iter().map(|&c| clock::Shape { reveal: if c { catch(p, MORPH_CATCH.0, MORPH_CATCH.1) } else { 0.0 }, ..whole }).collect();
-            let (a, _) = clock::mask(&old, middle_row, &gone);
-            let (b, at) = clock::mask(&new, middle_row, &coming);
+            let (a, _) = clock::mask(&old, middle_row, font, &gone);
+            let (b, at) = clock::mask(&new, middle_row, font, &coming);
             (Showing::Morphing, clock::both(&a, &b), at, p)
         } else if p < after {
-            let (g, at) = clock::mask(&new, middle_row, &[whole]);
+            let (g, at) = clock::mask(&new, middle_row, font, &[whole]);
             (Showing::Standing, g, at, p)
         } else if p < after + MELT {
             let m = ((p - after) / MELT) as f32;
-            let (g, at) = clock::mask(&new, middle_row, &[clock::Shape { melt: m, salt, ..whole }]);
+            let (g, at) = clock::mask(&new, middle_row, font, &[clock::Shape { melt: m, salt, ..whole }]);
             (Showing::Melting, g, at, p - after)
         } else {
-            let (g, at) = clock::mask(&new, middle_row, &[clock::Shape { reveal: 0.0, ..whole }]);
+            let (g, at) = clock::mask(&new, middle_row, font, &[clock::Shape { reveal: 0.0, ..whole }]);
             (Showing::Burning, g, at, p)
         };
         self.showing = showing;
         self.glyph = glyph;
         let gd = self.grid.gd() as f32;
-        let half = 0.5 * ctx.get("thickness") * gd;
-        self.clock_slab = [0.5 * gd - half, 0.5 * gd + half, 2.0 * ctx.get("show"), 0.0];
-        let burn = ctx.get("burn");
+        let half = 0.5 * ctx.get("depth") * gd;
+        self.clock_slab = [0.5 * gd - half, 0.5 * gd + half, 0.0, 0.0];
+        let burn = ctx.get("fuel");
         // The woodpile: `logs` while the time shows, `fire` between.
         let shown = match showing {
             // The woodpile burns on while the numerals catch, so the fire
@@ -967,7 +976,7 @@ impl FlameClock {
             Showing::Melting => 1.0 - at.fallen,
             Showing::Burning => 0.0,
         };
-        self.logs_burn = ctx.get("logs") * shown + ctx.get("fire") * (1.0 - shown);
+        self.logs_burn = self.fixed.logs * shown + self.fixed.fire * (1.0 - shown);
         self.shown = shown;
         self.cycling = true;
         // The fuel holds while it falls, and fails as it goes.
@@ -995,7 +1004,7 @@ impl FlameClock {
         let surge_mid = at.left as f32 + dice.f32() * (at.right - at.left) as f32;
         let surge_strength = dice.range(0.8, 1.6);
         // The digits that change, as columns, for the morph's jet.
-        let spans = clock::spans(&new);
+        let spans = clock::spans(&new, font);
         let morph_cols = spans.iter().zip(&changed).filter(|(_, &c)| c).fold((W as f32, 0.0f32), |(l, r), (&(x, w), _)| (l.min(x as f32), r.max((x + w) as f32)));
         // The jets are timed on the wall clock, but the gas runs `speed`
         // times faster: at 5, the unscaled jet filled the whole frame.
@@ -1023,13 +1032,13 @@ impl FlameClock {
         } else {
             [0.0; 4]
         };
-        self.numerals = [ctx.get("numerals").round(), burn * fuel_share, 0.0, top * k];
+        self.numerals = [0.0, burn * fuel_share, 0.0, top * k];
     }
 
     /// A fire knob that is one thing while the time shows and another
-    /// between: `time_id`'s value, handed over to `id`'s as it melts.
-    fn knob(&self, ctx: &Ctx, id: &str, time_id: &str) -> f32 {
-        ctx.get(time_id) * self.shown + ctx.get(id) * (1.0 - self.shown)
+    /// between, handed over as it collapses.
+    fn knob(&self, while_shown: f32, between: f32) -> f32 {
+        while_shown * self.shown + between * (1.0 - self.shown)
     }
 
     /// The fire breathing by itself: slow swells and lulls over minutes.
@@ -1057,7 +1066,7 @@ impl FlameClock {
         let dt = STEP as f32;
         // How strongly soot absorbs the flame behind it: the smoke slider.
         self.soot = 0.08 + 0.25 * ctx.get("smoke");
-        let target = self.knob(ctx, "size", "time_size");
+        let target = self.knob(ctx.get("flames"), ctx.get("size"));
         // A cycling clock changes size with its phases: in a second or two,
         // not hearth's tens of seconds.
         let ease = if self.cycling { TIME_EASE } else { SIZE_EASE };
@@ -1126,10 +1135,10 @@ impl FlameClock {
             self.wind[y / 4][y % 4] = k * (drift + gust) * (0.1 + 0.9 * smoothstep(BELOW, TALL * 0.6, yd));
         }
         self.draft = if stove { draft * (1.0 + 0.9 * surge) } else { 0.0 };
-        self.flue = 6.0 + 18.0 * ctx.get("flue");
-        self.headroom = ctx.get("headroom");
-        self.wood = ctx.get("wood");
-        self.expansion = ctx.get("expansion");
+        self.flue = 6.0 + 18.0 * self.fixed.flue;
+        self.headroom = self.fixed.headroom;
+        self.wood = self.fixed.wood;
+        self.expansion = self.fixed.expansion;
         self.gas_t += STEP * f64::from(ctx.get("speed").max(1.0));
 
         let params = self.params();
@@ -1184,7 +1193,7 @@ impl FlameClock {
     /// The dice: gusts, log settles, and single sparks.
     fn events(&mut self, ctx: &Ctx) {
         let dt = STEP;
-        let gusts = self.knob(ctx, "gusts", "time_gusts") / OLD_MAX;
+        let gusts = self.knob(self.fixed.gusts, ctx.get("gusts")) / OLD_MAX;
         if self.gust.as_ref().is_some_and(|g| self.t > g.start + g.length) {
             self.gust = None;
         }
@@ -1252,7 +1261,7 @@ impl FlameClock {
         if !self.warm {
             // The fire starts at its size, not eased up to it from 0.5.
             self.warm = true;
-            self.size = self.knob(ctx, "size", "time_size");
+            self.size = self.knob(ctx.get("flames"), ctx.get("size"));
         }
         self.clock += ctx.dt.clamp(0.0, 0.25);
         let target = (self.clock / STEP + 1e-6).floor() as i64;
@@ -1362,7 +1371,7 @@ impl FlameClock {
             }
         }
         let amount = ctx.get("smoke");
-        let dark = (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1);
+        let dark = self.fixed.dark.min(DARK_CHOICES.len() - 1);
         let Painting { colours: palette, fire_l, soot: soot_steps, .. } = self.palette(ctx.get("color"), dark);
         let dither = Dither::BlueNoise;
         let paint = |gain: f32| -> Vec<u8> {
