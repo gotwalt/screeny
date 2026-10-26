@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.7
+
+- New patch, **flame clock**: hearth's fire telling the time. Once a minute,
+  around the minute turning, the fire lights the time - the digits are fuel,
+  and catch where the flames reach them. At the minute a jet of flame shoots
+  up under the digits that change, the old ones fall away and the new ones
+  catch in their place; then the time collapses into the fire under a surge
+  and the fire burns on its own until the next minute. In 12-hour time the
+  hour turning over (9:59 to 10:00, 12:59 to 1:00) blows the old time apart
+  and launches the new one from below. Settings: how long the time shows
+  before and after the minute, where it stands, how tall and how heavy the
+  digits are, and the fire's size, gusts, embers, smoke, draft, speed and
+  colour. Needs a real GPU, as hearth does.
+
 ## 0.1.6
 
 - **hearth** burns wood now: flames rise off a small pile of logs, wrapping
