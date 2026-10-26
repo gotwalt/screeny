@@ -105,10 +105,15 @@ pub struct Shape {
     pub melt: f32,
     /// Which collapse: where it gives way, how the pieces fall and burn.
     pub salt: u32,
+    /// Whether it blows apart instead of collapsing: the pieces flung out
+    /// and up from the time's middle, burning out as they fly.
+    pub burst: bool,
+    /// How far below its place it is, LEDs: rising into place.
+    pub lift: f32,
 }
 
 impl Shape {
-    pub const WHOLE: Shape = Shape { reveal: 1.0, melt: 0.0, salt: 0 };
+    pub const WHOLE: Shape = Shape { reveal: 1.0, melt: 0.0, salt: 0, burst: false, lift: 0.0 };
 }
 
 /// Where the numerals stand on the panel, LEDs: left column, one past the
@@ -218,7 +223,7 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
     for (i, c) in text.chars().enumerate() {
         let shape = shapes[if shapes.len() == 1 { 0 } else { i }];
         let mut own = [[false; W]; H];
-        stroke(c, x0, top, cell, font.weight(cell), &mut own);
+        stroke(c, x0, top + shape.lift.max(0.0).round(), cell, font.weight(cell), &mut own);
         x0 += if c == ':' { cell } else { 3.0 * cell } + gap;
         if shape.melt > 0.0 {
             // Pieces of fuel: the character's LEDs in tiles.
@@ -236,7 +241,7 @@ pub fn mask(text: &str, middle: f32, font: Font, shapes: &[Shape]) -> (Mask, Bou
                 }
             }
             let salt = shape.salt ^ (i as u32).wrapping_mul(0x9e37_79b9);
-            let (down, fallen) = collapse(&pieces, &bounds, shape.melt.clamp(0.0, 1.0) * COLLAPSE, salt);
+            let (down, fallen) = collapse(&pieces, &bounds, shape.melt.clamp(0.0, 1.0) * COLLAPSE, salt, shape.burst);
             for (row, d) in bits.iter_mut().zip(down) {
                 for (b, d) in row.iter_mut().zip(d) {
                     *b |= d;
@@ -286,7 +291,12 @@ pub const COLLAPSE: f32 = 3.5;
 /// Also answers the share of the pieces that has fallen out of the frame.
 /// Worked out afresh from `t`, so it is the same at any frame rate, and for
 /// a given `salt` the same every time.
-fn collapse(pieces: &[(usize, usize, [bool; TILE * TILE])], at: &Bounds, t: f32, salt: u32) -> ([[bool; W]; H], f32) {
+///
+/// With `burst` it blows apart instead (2026-10-26, the hour turning over:
+/// "the old format probably blows up"): every piece goes at once, flung
+/// out from the time's middle and up, arcing down under gravity and
+/// burning out as it flies, as sparks do.
+fn collapse(pieces: &[(usize, usize, [bool; TILE * TILE])], at: &Bounds, t: f32, salt: u32, burst: bool) -> ([[bool; W]; H], f32) {
     // LEDs per second squared: slow enough to watch, fast enough to fall.
     const GRAVITY: f32 = 110.0;
     const BURN_THROUGH: f32 = 0.5;
@@ -295,21 +305,31 @@ fn collapse(pieces: &[(usize, usize, [bool; TILE * TILE])], at: &Bounds, t: f32,
     let fails_at = at.left as f32 + dice.f32() * (at.right - at.left) as f32;
     let mut bits = [[false; W]; H];
     let mut fallen = 0;
+    let middle = (0.5 * (at.left + at.right) as f32, 0.5 * (at.top + at.bottom) as f32);
     for &(x, y, lit) in pieces {
         let (x, y) = (x as f32, y as f32);
-        let from = (x + c / 2.0 - fails_at) / c;
-        let height = (at.bottom as f32 - (y + c)) / c;
-        let drop = BURN_THROUGH + 0.04 * from.abs() + 0.08 * height + dice.range(0.0, 0.25);
-        let vx = from.signum() * dice.range(0.5, 5.0) + dice.range(-1.5, 1.5);
         let mut burns = [0.0; TILE * TILE];
-        for b in &mut burns {
-            // A few burn through early; the rest as it comes down.
-            *b = if dice.f32() < 0.12 { dice.range(0.1, BURN_THROUGH + 0.4) } else { dice.range(1.4, COLLAPSE - 0.2) };
-        }
-        // Falling freely from `drop`: no step-by-step needed.
+        let (drop, vx, vy) = if burst {
+            let (dx, dy) = (x + c / 2.0 - middle.0, y + c / 2.0 - middle.1);
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            let speed = dice.range(18.0, 42.0);
+            for b in &mut burns {
+                *b = dice.range(0.2, 0.8);
+            }
+            (dice.range(0.0, 0.08), dx / len * speed + dice.range(-4.0, 4.0), dy / len * speed - dice.range(15.0, 35.0))
+        } else {
+            let from = (x + c / 2.0 - fails_at) / c;
+            let height = (at.bottom as f32 - (y + c)) / c;
+            for b in &mut burns {
+                // A few burn through early; the rest as it comes down.
+                *b = if dice.f32() < 0.12 { dice.range(0.1, BURN_THROUGH + 0.4) } else { dice.range(1.4, COLLAPSE - 0.2) };
+            }
+            (BURN_THROUGH + 0.04 * from.abs() + 0.08 * height + dice.range(0.0, 0.25), from.signum() * dice.range(0.5, 5.0) + dice.range(-1.5, 1.5), 0.0)
+        };
+        // Flying freely from `drop`: no step-by-step needed.
         let fall = (t - drop).max(0.0);
-        let (x, y) = (x + vx * fall, y + 0.5 * GRAVITY * fall * fall);
-        if y >= H as f32 {
+        let (x, y) = (x + vx * fall, y + vy * fall + 0.5 * GRAVITY * fall * fall);
+        if y >= H as f32 || x <= -c || x >= W as f32 || t >= burns.iter().copied().fold(0.0, f32::max) {
             fallen += 1;
             continue;
         }
@@ -394,6 +414,25 @@ mod tests {
     }
 
     #[test]
+    fn a_burst_flings_the_pieces_out_and_they_burn_away() {
+        let at_t = |melt: f32| mask("9:59", 16.0, Font::SHIPPED, &[Shape { melt, burst: true, ..Shape::WHOLE }]);
+        let (whole, _) = mask("9:59", 16.0, Font::SHIPPED, &[Shape::WHOLE]);
+        let span = |m: &Mask| {
+            let xs: Vec<usize> = lit(m).iter().map(|p| p.0).collect();
+            xs.iter().max().unwrap_or(&0) - xs.iter().min().unwrap_or(&0)
+        };
+        let top = |m: &Mask| lit(m).iter().map(|p| p.1).min().unwrap_or(H);
+        // A tenth of a second in, it is flying apart: wider and higher.
+        let (early, _) = at_t(0.1 / COLLAPSE);
+        assert!(span(&early) > span(&whole), "{} vs {}", span(&early), span(&whole));
+        assert!(top(&early) < top(&whole));
+        // Gone within a second: burnt out or out of the frame.
+        let (gone, b) = at_t(1.0 / COLLAPSE);
+        assert!(lit(&gone).is_empty());
+        assert_eq!(b.fallen, 1.0);
+    }
+
+    #[test]
     fn size_and_weight_change_the_digits() {
         let draw = |height: f32, weight: f32| mask("10:48", 16.0, Font { height, weight }, &[Shape::WHOLE]).0;
         let rows = |m: &Mask| {
@@ -425,6 +464,9 @@ mod tests {
     fn the_mask_stays_on_the_panel() {
         let (m, _) = mask("12:59", 100.0, Font::SHIPPED, &[Shape::WHOLE]);
         assert!((0..W).any(|x| at(&m, x, H - 1)));
+        // Lifted far enough, a character is below the frame altogether.
+        let (m, _) = mask("12:59", 16.0, Font::SHIPPED, &[Shape { lift: 30.0, ..Shape::WHOLE }]);
+        assert!(lit(&m).is_empty());
         let (m, _) = mask("12:59", -100.0, Font::SHIPPED, &[Shape::WHOLE]);
         assert!((0..W).any(|x| at(&m, x, 0)));
     }

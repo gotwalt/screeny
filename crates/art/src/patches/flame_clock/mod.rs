@@ -189,6 +189,13 @@ const SURGE_FUEL: f32 = 0.5;
 /// the new ones start and finish catching, seconds after the minute.
 const MORPH_JET: f64 = 1.2;
 const MORPH_CATCH: (f64, f64) = (0.5, 1.9);
+/// The hour turning over in 12-hour time, when the time changes length
+/// (9:59 to 10:00, 12:59 to 1:00): the old time blows apart in a flare
+/// over `FLARE` seconds, and the new one is launched from below the frame
+/// at `LAUNCH_AT`, rising into place over `LAUNCH` seconds on a jet.
+const FLARE: f64 = 0.5;
+const LAUNCH_AT: f64 = 0.5;
+const LAUNCH: f64 = 1.4;
 
 /// Where in its showing the time is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +203,7 @@ enum Showing {
     Emerging,
     Standing,
     Morphing,
+    TurningOver,
     Melting,
     Burning,
 }
@@ -618,6 +626,8 @@ pub(crate) struct FlameClock {
     /// The jet, as `Params::jet`.
     jet: [f32; 4],
     showing: Showing,
+    /// How far below its place the new time is as it is launched, LEDs.
+    lift: f32,
     /// How much the time is showing (1 standing, 0 the fire alone), and
     /// whether the time comes and goes at all.
     shown: f32,
@@ -853,6 +863,7 @@ impl FlameClock {
             logs_burn: 1.0,
             jet: [0.0; 4],
             showing: Showing::Standing,
+            lift: 0.0,
             // The fire alone until the clock has looked at the time.
             shown: 0.0,
             cycling: false,
@@ -941,6 +952,20 @@ impl FlameClock {
             let shape = clock::Shape { reveal: catch(q, CATCH, EMERGE), ..whole };
             let (g, at) = clock::mask(&clock::text(minute, hours24), middle_row, font, &[shape]);
             (if q < EMERGE { Showing::Emerging } else { Showing::Standing }, g, at, q)
+        } else if p < f64::from(clock::COLLAPSE) && !same_len {
+            // The hour turns over and the time changes length, so its size
+            // and place change too (2026-10-26: "the old format probably
+            // blows up and a new one is launched from the bottom"). The new
+            // one starts wholly below the frame and decelerates into place.
+            let burst = clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, burst: true, ..whole };
+            let (a, _) = clock::mask(&old, middle_row, font, &[burst]);
+            let (_, place) = clock::mask(&new, middle_row, font, &[whole]);
+            let u = ((p - LAUNCH_AT) / LAUNCH).clamp(0.0, 1.0) as f32;
+            let below = (H - place.top) as f32 + 1.0;
+            let rising = clock::Shape { reveal: if p >= LAUNCH_AT { 1.0 } else { 0.0 }, lift: below * (1.0 - u).powi(3), ..whole };
+            let (b, at) = clock::mask(&new, middle_row, font, &[rising]);
+            self.lift = rising.lift;
+            (Showing::TurningOver, clock::both(&a, &b), at, p)
         } else if p < f64::from(clock::COLLAPSE) {
             // The minute turns: the old digits that change fall, the new
             // ones catch where they stood.
@@ -971,7 +996,7 @@ impl FlameClock {
             // The woodpile burns on while the numerals catch, so the fire
             // narrows into them rather than going out first.
             Showing::Emerging => catch(phase, CATCH, EMERGE),
-            Showing::Standing | Showing::Morphing => 1.0,
+            Showing::Standing | Showing::Morphing | Showing::TurningOver => 1.0,
             // The fuel goes into the woodpile as it falls out of the frame.
             Showing::Melting => 1.0 - at.fallen,
             Showing::Burning => 0.0,
@@ -1019,6 +1044,21 @@ impl FlameClock {
             Showing::Morphing if phase < MORPH_JET && morph_cols.1 > morph_cols.0 => {
                 let e = envelope(phase, MORPH_JET);
                 (e / fast.sqrt(), e / fast, morph_cols.0, morph_cols.1, middle)
+            }
+            // The old time blows apart in a flare across it, then a jet
+            // carries the new one up from below the frame, its top at the
+            // new time's foot as it rises.
+            Showing::TurningOver if phase < FLARE => {
+                let e = envelope(phase, FLARE);
+                let old_spans = clock::spans(&old, font);
+                let from = old_spans.first().map_or(0, |s| s.0) as f32;
+                let to = old_spans.last().map_or(0, |s| s.0 + s.1) as f32;
+                (e / fast.sqrt(), e / fast, from, to, middle)
+            }
+            Showing::TurningOver if (LAUNCH_AT..LAUNCH_AT + LAUNCH).contains(&phase) => {
+                let e = envelope(phase - LAUNCH_AT, LAUNCH);
+                let rising_foot = BELOW + 3.0 * (H as f32 - (at.bottom as f32 + self.lift));
+                (e / fast.sqrt(), e / fast, at.left as f32, at.right as f32, rising_foot)
             }
             Showing::Melting if phase >= surge_at && phase < surge_at + SURGE => {
                 let e = surge_strength * envelope(phase - surge_at, SURGE);
@@ -1566,6 +1606,8 @@ impl Patch for FlameClock {
             "the time flares up".to_string()
         } else if self.showing == Showing::Morphing {
             "the minute turns".to_string()
+        } else if self.showing == Showing::TurningOver {
+            "the hour turns over".to_string()
         } else if self.showing == Showing::Melting {
             "the time collapses".to_string()
         } else if self.settle.is_some() {
