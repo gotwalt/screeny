@@ -12,7 +12,7 @@ pub(crate) mod ghosts;
 pub(crate) mod hearth;
 // Hearth's fire with the time standing in it (2026-10-26, an experiment).
 #[cfg(feature = "gpu")]
-pub(crate) mod flame_clock;
+pub(crate) mod flavortime;
 // Card 321: leaves became a mesh-based GPU patch (real lighting, a real depth
 // buffer, heavy supersampling - the owner's direction was to spend the GPU on
 // the picture, not avoid it), so it needs the adapter exactly as knot,
@@ -53,7 +53,7 @@ pub static ALL: &[PatchDef] = &[
     #[cfg(feature = "gpu")]
     hearth::DEF,
     #[cfg(feature = "gpu")]
-    flame_clock::DEF,
+    flavortime::DEF,
     #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
@@ -87,7 +87,7 @@ static GPU_PATCHES: &[(&str, Need)] = &[
     #[cfg(feature = "gpu")]
     (hearth::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
-    (flame_clock::DEF.id, Need::Hardware),
+    (flavortime::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
@@ -211,7 +211,7 @@ mod tests {
         }
         assert!(blocked(&hardware).is_empty());
         if cfg!(feature = "gpu") {
-            assert_eq!(blocked(&software), vec!["hearth", "flame-clock", "ghosts", "overland"]);
+            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "ghosts", "overland"]);
             assert_eq!(blocked(&none).len(), 7);
             let why = playable("overland", &software).unwrap_err();
             assert!(why.contains("software (llvmpipe)"), "{why}");

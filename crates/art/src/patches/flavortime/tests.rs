@@ -21,12 +21,12 @@ fn hearth_defaults() -> Params {
 }
 
 /// The fire with hearth's fixed values, for hearth's tests.
-fn hearth(seed: u64) -> FlameClock {
-    FlameClock { fixed: Fixed::HEARTH, ..FlameClock::new(seed) }
+fn hearth(seed: u64) -> Flavortime {
+    Flavortime { fixed: Fixed::HEARTH, ..Flavortime::new(seed) }
 }
 
-fn hearth_on(seed: u64, grid: Grid) -> FlameClock {
-    FlameClock { fixed: Fixed::HEARTH, ..FlameClock::with_grid(seed, grid) }
+fn hearth_on(seed: u64, grid: Grid) -> Flavortime {
+    Flavortime { fixed: Fixed::HEARTH, ..Flavortime::with_grid(seed, grid) }
 }
 
 /// The fire needs a graphics adapter; a machine without one skips these
@@ -135,7 +135,7 @@ fn the_fire_carries_to_another_grid() {
     let mut params = hearth_defaults();
     let mut h = hearth(1);
     let mut i = 0;
-    let mut run = |h: &mut FlameClock, params: &Params, frames: usize| {
+    let mut run = |h: &mut Flavortime, params: &Params, frames: usize| {
         let mut last = (0.0, 0, 0, 0);
         for _ in 0..frames {
             i += 1;
@@ -338,7 +338,7 @@ fn sparks_stay_in_the_firebox_and_bounce_rarely() {
     let params = hearth_defaults();
     let mut h = hearth(1);
     let ceiling = h.grid.ceiling() as f32;
-    let flue = |h: &FlameClock, x: f32, z: f32| {
+    let flue = |h: &Flavortime, x: f32, z: f32| {
         let (dx, dz) = (x - 0.5 * (h.grid.gw() - 1) as f32, z - 0.5 * (h.grid.gd() - 1) as f32);
         dx * dx + dz * dz < (h.flue * h.grid.k).powi(2)
     };
@@ -419,7 +419,7 @@ fn the_palette_has_no_white_and_color_zero_is_grey() {
 
 /// HA moves `size` whenever it likes; the fire follows over tens of
 /// seconds and never jumps. The easing is the CPU's: stepped here without a
-/// GPU attached (a `FlameClock` that has not rendered yet steps everything but
+/// GPU attached (a `Flavortime` that has not rendered yet steps everything but
 /// the fluid), so a minute and a half costs nothing.
 #[test]
 fn size_eases_and_never_jumps() {
@@ -839,14 +839,14 @@ fn stages() {
     let warm = (env("HEARTH_AT", 10.0) / DT) as usize;
     let frames = env("HEARTH_FRAMES", 300.0) as usize;
     let mut i = 0;
-    let mut tick = |h: &mut FlameClock| {
+    let mut tick = |h: &mut Flavortime| {
         i += 1;
         h.render(&ctx_at(i as f64 * DT, DT, &params));
     };
     for _ in 0..warm {
         tick(&mut h);
     }
-    let take = |h: &FlameClock| -> Vec<(&'static str, f64)> {
+    let take = |h: &Flavortime| -> Vec<(&'static str, f64)> {
         let Some(Some(sim)) = &h.sim else { return Vec::new() };
         std::mem::take(&mut sim.profile.as_ref().expect("profiling").borrow_mut().times)
     };
@@ -1072,7 +1072,7 @@ fn grid_from_env() -> Grid {
 }
 
 /// Not a test: what the clock looks like. `FLAME_LOOK=dir cargo test -p
-/// screeny-art flame_clock::tests::look -- --ignored --nocapture` runs
+/// screeny-art flavortime::tests::look -- --ignored --nocapture` runs
 /// `FLAME_SECONDS` (default 20) at 10:42 with `HEARTH_SET`, and writes into
 /// `dir`: `<name>-frame-t<s>.png`, single frames at the last three seconds;
 /// `<name>-mean1s.png` and `<name>-mean3s.png`, the frames averaged over the
@@ -1100,7 +1100,7 @@ fn look() {
     };
     let frames_dir = format!("{dir}/{name}-frames");
     std::fs::create_dir_all(&frames_dir).expect("frames dir");
-    let mut h = FlameClock::new(1);
+    let mut h = Flavortime::new(1);
     let mut pipe = crate::Pipeline::new(crate::pipeline::Output::default());
     // `FLAME_NOW`: the clock at the start, seconds into the day.
     let now: f64 = std::env::var("FLAME_NOW").ok().and_then(|s| s.parse().ok()).unwrap_or((10 * 3600 + 42 * 60) as f64);
@@ -1141,7 +1141,7 @@ fn look() {
 }
 
 /// Not a test: the digits alone at several sizes and weights, as a sheet.
-/// `FLAME_FONTS=file.png cargo test -p screeny-art flame_clock::tests::fonts
+/// `FLAME_FONTS=file.png cargo test -p screeny-art flavortime::tests::fonts
 /// -- --ignored`.
 #[test]
 #[ignore]

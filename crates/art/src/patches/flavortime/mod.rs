@@ -1,4 +1,4 @@
-//! Flame clock: hearth's fire, with the time standing in it.
+//! Flavortime: hearth's fire, with the time standing in it.
 //!
 //! The owner, 2026-10-26: "could we modify the flames patch to function as a
 //! clock? ... put a 3d voxel numeric read of the time as a non-flammable
@@ -7,7 +7,7 @@
 //! should make it visible." Then, inverted: "numerals are the fuel". A copy
 //! of `hearth` (0.1.6): the time is fuel held in the shape of its digits
 //! ([`clock`]), shown once a minute around the minute turning
-//! ([`FlameClock::tell_time`]); hearth's sliders it does not offer are held
+//! ([`Flavortime::tell_time`]); hearth's sliders it does not offer are held
 //! at the owner's values ([`Fixed`]). Everything below is hearth's, as it
 //! was.
 //!
@@ -19,7 +19,7 @@
 //! And, on how: "i want maximum fire realism". Card 372.
 //!
 //! **What is simulated.** A real 3D Eulerian fluid fire, stepped in wgpu
-//! compute shaders ([`gpu`], `flame_clock.wgsl`): fuel from a bed of a few seeded
+//! compute shaders ([`gpu`], `flavortime.wgsl`): fuel from a bed of a few seeded
 //! logs, burning to heat and an expansion at the flame (Nguyen, Fedkiw and
 //! Jensen), heat lifting the gas, vorticity confinement keeping the curl at
 //! the flame tips, MacCormack advection keeping them sharp, a pressure
@@ -46,7 +46,7 @@
 //! start while it's on screen"). A five-second warm-up inside the first
 //! frame held it for ~9 s, and the Studio drops a patch after 5.
 //!
-//! **Colour** is painted by palette index ([`FlameClock::paint`]): black, a
+//! **Colour** is painted by palette index ([`Flavortime::paint`]): black, a
 //! 24-step blackbody ramp chosen at even perceptual lightness, and four smoke
 //! tints. 29 colours, so every frame is exact whatever it looks like.
 //!
@@ -91,8 +91,8 @@ use gpu::{Params, Saved, Sim, EMBERS};
 use ramp::Ramp;
 
 pub const DEF: PatchDef = PatchDef {
-    id: "flame-clock",
-    name: "Flame clock",
+    id: "flavortime",
+    name: "Flavortime",
     blurb: "GPU. Hearth's 3D fluid fire with the time standing in it as an unseen, unburnable solid: the flames part round the numerals, and over a few seconds they read.",
     params: PARAMS,
     make,
@@ -303,7 +303,7 @@ impl Grid {
     }
 }
 /// How far the frame's light may stray from its low-passed self, and that
-/// low-pass's time constant, seconds ([`FlameClock::paint`]).
+/// low-pass's time constant, seconds ([`Flavortime::paint`]).
 const STEADY: f32 = 0.05;
 const STEADY_TAU: f32 = 0.3;
 
@@ -552,7 +552,7 @@ impl Camera {
     }
 }
 
-pub(crate) struct FlameClock {
+pub(crate) struct Flavortime {
     pub(crate) grid: Grid,
     /// `None` until first render; `Some(None)` if there is no GPU.
     sim: Option<Option<Sim>>,
@@ -610,7 +610,7 @@ pub(crate) struct FlameClock {
     fire_l: [f32; FIRE_STEPS],
     fire_theta: [f32; FIRE_STEPS],
     palette: Option<Painting>,
-    /// The frame's light, low-passed: what [`FlameClock::paint`] holds the whole
+    /// The frame's light, low-passed: what [`Flavortime::paint`] holds the whole
     /// frame near.
     steady: Option<f32>,
     // Counters for tests and `playing`.
@@ -643,8 +643,8 @@ fn make(seed: u64) -> Box<dyn Patch> {
     // Experiment: env `HEARTH_K` holds the grid at that many cells per
     // design unit instead of following `speed` (docs/research/011).
     match std::env::var("HEARTH_K").ok().and_then(|v| v.parse().ok()) {
-        Some(k) => Box::new(FlameClock::with_grid(seed, Grid { k, ..Grid::SHIPPED })),
-        None => Box::new(FlameClock::new(seed)),
+        Some(k) => Box::new(Flavortime::with_grid(seed, Grid { k, ..Grid::SHIPPED })),
+        None => Box::new(Flavortime::new(seed)),
     }
 }
 
@@ -723,10 +723,10 @@ fn resample(saved: &Saved, from: f32, dims: [u32; 3], to: f32) -> Saved {
     out
 }
 
-impl FlameClock {
+impl Flavortime {
     /// The player's hearth: its grid follows `speed`.
-    pub(crate) fn new(seed: u64) -> FlameClock {
-        FlameClock { follow: true, ..FlameClock::with_grid(seed, Grid::SHIPPED) }
+    pub(crate) fn new(seed: u64) -> Flavortime {
+        Flavortime { follow: true, ..Flavortime::with_grid(seed, Grid::SHIPPED) }
     }
 
     /// Everything worked out from the grid, worked out again for `grid`.
@@ -768,7 +768,7 @@ impl FlameClock {
         self.sim = Some(Some(sim));
     }
 
-    pub(crate) fn with_grid(seed: u64, grid: Grid) -> FlameClock {
+    pub(crate) fn with_grid(seed: u64, grid: Grid) -> Flavortime {
         let mut rng = Rng::new(seed ^ 0x4ea7_7a11);
         let salt = rng.u64() as u32;
         // Three or four logs on the floor across the width, never evenly
@@ -819,7 +819,7 @@ impl FlameClock {
         let bed_cells = bed_cells(&logs, &grid);
         let ramp = Ramp::new();
         let (fire_theta, fire_l) = fire_steps(&ramp);
-        FlameClock {
+        Flavortime {
             grid,
             sim: None,
             follow: false,
@@ -1577,7 +1577,7 @@ fn fire_steps(ramp: &Ramp) -> ([f32; FIRE_STEPS], [f32; FIRE_STEPS]) {
     (thetas, ls)
 }
 
-impl Patch for FlameClock {
+impl Patch for Flavortime {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let k = if self.follow { k_for(ctx.get("speed")) } else { self.grid.k };
         if self.sim.is_none() && k != self.grid.k {
@@ -1588,7 +1588,7 @@ impl Patch for FlameClock {
             self.sim = Some(match Gpu::shared() {
                 Ok(gpu) => Some(Sim::new(gpu, self.grid.dims(), self.grid.bed_rows() as u32, self.grid.sweeps, &self.ramp.table())),
                 Err(e) => {
-                    eprintln!("screeny-art: flame-clock: {e}; rendering black");
+                    eprintln!("screeny-art: flavortime: {e}; rendering black");
                     None
                 }
             });

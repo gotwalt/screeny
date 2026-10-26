@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8
+
+- **flame clock** is now called **Flavortime**. Its settings start over at
+  their defaults on a panel that was showing it.
+
 ## 0.1.7
 
 - New patch, **flame clock**: hearth's fire telling the time. Once a minute,

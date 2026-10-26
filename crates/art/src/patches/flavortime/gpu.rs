@@ -1,5 +1,5 @@
 //! The GPU side of the hearth: the buffers, one compute pipeline per entry
-//! point of `flame_clock.wgsl`, a fixed step and a picture.
+//! point of `flavortime.wgsl`, a fixed step and a picture.
 //!
 //! Everything is in storage buffers rather than textures: wgpu's downlevel
 //! limits (the ones [`Gpu`] asks for) allow no read-write storage textures,
@@ -197,7 +197,7 @@ impl Sim {
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hearth"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("flame_clock.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("flavortime.wgsl").into()),
         });
         let bound: [&wgpu::Buffer; 16] = [
             &params, &vel, &scal, &vel_next, &scal_next, &curl, &scal_back, &div, &pres, &bed, &light, &light2, &parts, &out, &lut_buf,
@@ -230,7 +230,7 @@ impl Sim {
     }
 
     fn pass(&self, name: &str) -> &Pass {
-        &self.passes.iter().find(|(n, _)| *n == name).expect("an entry point flame_clock.wgsl has").1
+        &self.passes.iter().find(|(n, _)| *n == name).expect("an entry point flavortime.wgsl has").1
     }
 
     /// One stage of the work in its own compute pass, timed when profiling.
