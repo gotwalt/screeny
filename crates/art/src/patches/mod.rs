@@ -13,6 +13,9 @@ pub(crate) mod hearth;
 // Hearth's fire with the time standing in it (2026-10-26, an experiment).
 #[cfg(feature = "gpu")]
 pub(crate) mod flavortime;
+// After Sage Jenson's 36 Points (2026-10-27, an experiment).
+#[cfg(feature = "gpu")]
+pub(crate) mod physarum;
 // Card 321: leaves became a mesh-based GPU patch (real lighting, a real depth
 // buffer, heavy supersampling - the owner's direction was to spend the GPU on
 // the picture, not avoid it), so it needs the adapter exactly as knot,
@@ -55,6 +58,8 @@ pub static ALL: &[PatchDef] = &[
     #[cfg(feature = "gpu")]
     flavortime::DEF,
     #[cfg(feature = "gpu")]
+    physarum::DEF,
+    #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
     leaves::DEF,
@@ -88,6 +93,8 @@ static GPU_PATCHES: &[(&str, Need)] = &[
     (hearth::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (flavortime::DEF.id, Need::Hardware),
+    #[cfg(feature = "gpu")]
+    (physarum::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
@@ -211,8 +218,8 @@ mod tests {
         }
         assert!(blocked(&hardware).is_empty());
         if cfg!(feature = "gpu") {
-            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "ghosts", "overland"]);
-            assert_eq!(blocked(&none).len(), 7);
+            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "physarum", "ghosts", "overland"]);
+            assert_eq!(blocked(&none).len(), 8);
             let why = playable("overland", &software).unwrap_err();
             assert!(why.contains("software (llvmpipe)"), "{why}");
             for id in ["leaves", "lattice", "knot"] {
