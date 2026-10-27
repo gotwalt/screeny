@@ -1,75 +1,102 @@
-//! Physarum: a slime-mould colony of a million and more agents, seen through
-//! the panel as through a window onto a much larger world.
+//! Physarum: a slime-mould colony foraging on the panel.
 //!
 //! The owner, 2026-10-27: a piece "inspired by Sage Jenson's 36 Points", to
 //! "make the most of the vast compute environment relative to the tiny
 //! display size to create a visual experience that feels like magic even
-//! despite the tiny resolution". An experiment (`exp/physarum`).
+//! despite the tiny resolution". Then, on the first version - six organisms
+//! drifting past a window: "pretty hard to differentiate or make sense out
+//! of ... basically rotating between various forms of blue noise". A
+//! network's identity is in its filaments, and at 64 x 32 every network
+//! averages to the same mesh. So this one is about what the colony *does*:
+//! "we need to adapt the ideas for the actual medium". An experiment
+//! (`exp/physarum`).
 //!
 //! **What is simulated.** Jones's agent model (2010): each agent senses the
 //! trail ahead and to either side, turns toward the most, steps and
 //! deposits; the trail spreads and fades. Jenson's extension makes every
-//! agent parameter a law of the trail it stands in, `base + amp * s^exp`,
-//! which is what lets one colony hold structure at several scales. A
-//! [`Point`] is one set of those laws: one organism.
+//! agent parameter a law of the trail it stands in, `base + amp * s^exp`.
 //!
-//! **Why so many agents for 2048 LEDs.** The world is 1024 x 512 cells and
-//! the camera sees a window of it, a few to sixteen cells per LED; each LED
-//! is the average of the trail over its footprint, so hundreds of agents
-//! stand behind every one. That is what keeps the picture calm: no
-//! sparkle, smooth gradients that go out exact. And each frame is exposed
-//! over several substeps, so filaments sliding under an LED move its value
-//! continuously instead of in steps.
+//! **What is seen: foraging.** A few food sources sit on the panel,
+//! breathing scent into the trail. The colony finds them, throws out fans,
+//! and prunes back to the few thick veins that link them - the network the
+//! Tokyo-rail experiment made famous. Food is eaten where the colony is
+//! thick on it; a spent source goes dark, its veins starve, and the colony
+//! reaches for the next one somewhere else. A handful of bright nodes, the
+//! veins between them, and black: something the eye can follow at this
+//! size.
 //!
-//! **Colour** is painted by palette index: black, then a ramp in one hue.
+//! **The time.** Once a minute, food is laid along the strokes of the time
+//! (vesta's numerals, [`crate::faces::stroked`]): the colony draws `HH:MM`
+//! as a network, holds it, and lets it go when the food fades.
+//!
+//! **Why so many agents for 2048 LEDs.** The world is 512 x 256 cells, the
+//! panel a window six cells to the LED with a margin all round; each LED is
+//! the average over its footprint, with hundreds of agents behind it, and
+//! each frame is exposed over several substeps. That is what keeps the
+//! picture calm and its motion continuous.
+//!
+//! **Colour** comes from the colony's structure, not its density alone: the
+//! agents lay down which way they lie as well as trail, so every vein has
+//! an orientation, and that picks its hue from a muted palette - rust,
+//! ochre, moss, verdigris, slate, mauve. Where veins cross the orientation
+//! is mixed, and the colour goes to stone. Lightness is density. The owner:
+//! "a muted but varied palette to provide some additional complexity that
+//! the resolution lacks".
 //!
 //! Credit: Jeff Jones, "Characteristics of pattern formation and evolution
 //! in approximations of Physarum transport networks" (Artificial Life,
-//! 2010); Sage Jenson, "36 Points" (2022); Antoine Bleuje's
-//! interactive-physarum, studied, not copied.
+//! 2010); Tero et al., "Rules for biologically inspired adaptive network
+//! design" (Science, 2010); Sage Jenson, "36 Points" (2022); Antoine
+//! Bleuje's interactive-physarum, studied, not copied.
 
 mod gpu;
 
 use crate::color::{oklch, smoothstep, Rgb};
 use crate::dither::Dither;
-use crate::frame::{Frame, W};
+use crate::faces::stroked;
+use crate::frame::{Frame, H, W};
 use crate::gpu::Gpu;
-use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
+use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Sim};
 
 pub const DEF: PatchDef = PatchDef {
     id: "physarum",
     name: "Physarum",
-    blurb: "GPU. A slime-mould colony of a million agents, seen through a window onto a far larger world: veins, cells and labyrinths that grow, hold and dissolve.",
+    blurb: "GPU. A slime-mould colony foraging: it finds food, links it with veins, eats it and moves on. Once a minute it draws the time.",
     params: PARAMS,
     make,
-    // The seed scatters the agents and starts the camera.
+    // The seed scatters the agents and places the food.
     seeded: true,
 };
 
 const PARAMS: &[ParamSpec] = &[
-    choice("point", "Organism", POINT_NAMES, 0.0),
-    param("cycle", "Minutes on each organism before growing into the next (0: stay)", 0.0, 60.0, 0.5, 0.0),
-    param("zoom", "Closer (above 1) or further than each organism's own scale", 0.25, 4.0, 0.05, 1.0),
-    param("breathe", "How far the camera breathes in and out, octaves", 0.0, 2.0, 0.05, 0.0),
-    param("drift", "How fast the camera drifts, LEDs per second", 0.0, 4.0, 0.05, 0.4),
-    param("hue", "Hue of the faintest veins, degrees", 0.0, 360.0, 1.0, 195.0),
-    param("spread", "How far the hue turns from the faintest veins to the densest, degrees", -180.0, 180.0, 1.0, 25.0),
-    param("saturation", "How much colour (0: white light only)", 0.0, 2.0, 0.01, 1.0),
-    param("white", "How far the densest cores burn toward white (0: they keep their colour)", 0.0, 1.0, 0.01, 1.0),
-    param("exposure", "How bright, against the world's mean trail", 0.05, 2.0, 0.01, 0.7),
-    param("contrast", "How steeply the veins fall off into black", 0.5, 4.0, 0.05, 2.0),
-    param("cap", "How much trail a vein can hold, times the mean (stops a few highways taking everything)", 1.5, 40.0, 0.5, 6.0),
-    param("flow", "How hard a slow current bends every path", 0.0, 0.3, 0.005, 0.04),
+    choice("habit", "How the colony grows", HABIT_NAMES, 0.0),
+    param("food", "How many food sources at once", 1.0, 8.0, 1.0, 4.0),
+    param("appetite", "How fast a source is eaten (1: about a minute, well fed)", 0.0, 4.0, 0.05, 1.0),
+    param("scent", "How strongly food draws the colony", 0.0, 4.0, 0.05, 1.0),
+    toggle("time", "Draw the time once a minute", true),
+    toggle("24h", "24-hour time", false),
+    param("hold", "How long the time stays, seconds", 5.0, 50.0, 1.0, 25.0),
+    param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
+    param("palette", "Turns the palette: which orientation wears which colour", 0.0, 1.0, 0.01, 0.0),
+    param("drift", "How fast the palette turns by itself, turns per hour", 0.0, 4.0, 0.05, 0.5),
+    param("mute", "How much colour (0: stone only; 1: muted; 2: rich)", 0.0, 2.0, 0.01, 1.0),
+    param("exposure", "How bright, against the world's mean trail", 0.05, 2.0, 0.01, 0.5),
+    param("contrast", "How steeply the veins fall off into black", 0.5, 4.0, 0.05, 1.6),
+    param("cap", "How much trail a vein can hold, times the mean", 1.5, 40.0, 0.5, 8.0),
     param("renewal", "Agents scattered afresh, thousandths per substep", 0.0, 5.0, 0.05, 0.5),
-    param("agents", "Agents, millions (rebuilds the colony)", 0.25, 4.0, 0.25, 1.5),
-    param("steps", "Substeps per frame: exposure, and speed", 1.0, 8.0, 1.0, 3.0),
+    param("agents", "Agents, millions (rebuilds the colony)", 0.1, 2.0, 0.05, 0.5),
+    param("steps", "Substeps per frame: exposure, and speed", 1.0, 8.0, 1.0, 4.0),
 ];
 
-/// The world, cells. Sixteen per LED across at the widest zoom.
-const WORLD_W: u32 = 1024;
-const WORLD_H: u32 = 512;
+/// The world, cells: the panel's window at the widest `scale` and a margin.
+const WORLD_W: u32 = 512;
+const WORLD_H: u32 = 256;
+/// World cells to a food cell.
+const FOOD_K: u32 = 4;
+const FOOD_W: usize = (WORLD_W / FOOD_K) as usize;
+const FOOD_H: usize = (WORLD_H / FOOD_K) as usize;
 
 /// One substep's law for an agent parameter: `base + amp * s^exp`, `s` the
 /// trail under the agent relative to the world's mean.
@@ -80,123 +107,72 @@ impl Law {
     const fn k(v: f32) -> Law {
         Law(v, 0.0, 1.0)
     }
-    fn lerp(self, o: Law, t: f32) -> Law {
-        Law(self.0 + (o.0 - self.0) * t, self.1 + (o.1 - self.1) * t, self.2 + (o.2 - self.2) * t)
-    }
 }
 
-/// One organism: the laws for sensor distance (cells), sensor angle and
-/// rotation angle (radians) and move distance (cells per substep), and the
-/// trail's fade and spread per substep.
+/// How a colony grows: the laws for sensor distance (cells), sensor angle
+/// and rotation angle (radians) and move distance (cells per substep), the
+/// trail's fade and spread per substep, and a small random turn.
 #[derive(Clone, Copy, Debug)]
-struct Point {
-    name: &'static str,
+struct Habit {
     sd: Law,
     sa: Law,
     ra: Law,
     md: Law,
     decay: f32,
     diffuse: f32,
-    /// A small random turn per substep, radians, full width.
     wobble: f32,
-    /// World cells per LED at which its structure reads best on the panel.
-    zoom: f32,
 }
 
-impl Point {
-    fn lerp(&self, o: &Point, t: f32) -> Point {
-        let m = |a: f32, b: f32| a + (b - a) * t;
-        Point {
-            name: if t < 0.5 { self.name } else { o.name },
-            sd: self.sd.lerp(o.sd, t),
-            sa: self.sa.lerp(o.sa, t),
-            ra: self.ra.lerp(o.ra, t),
-            md: self.md.lerp(o.md, t),
-            decay: m(self.decay, o.decay),
-            diffuse: m(self.diffuse, o.diffuse),
-            wobble: m(self.wobble, o.wobble),
-            // In octaves, so a change of scale moves at an even pace.
-            zoom: (self.zoom.ln() + (o.zoom.ln() - self.zoom.ln()) * t).exp(),
-        }
-    }
-}
+const HABIT_NAMES: &[&str] = &["veins", "searching", "worms"];
 
-const POINT_NAMES: &[&str] = &["veins", "honeycomb", "labyrinth", "multiscale", "worms", "lace"];
-
-const POINTS: [Point; 6] = [
+const HABITS: [Habit; 3] = [
     // Jones's classic network: narrow sensors, a wider turn.
-    Point {
-        name: "veins",
-        sd: Law::k(9.0),
-        sa: Law::k(0.39),
-        ra: Law::k(0.78),
-        md: Law::k(1.0),
-        decay: 0.06,
-        diffuse: 0.6,
-        wobble: 0.05,
-        zoom: 10.0,
-    },
-    // Far sensors and long steps: big, clean cells.
-    Point {
-        name: "honeycomb",
-        sd: Law::k(26.0),
-        sa: Law::k(0.6),
-        ra: Law::k(0.45),
-        md: Law::k(1.6),
-        decay: 0.04,
-        diffuse: 0.5,
-        wobble: 0.05,
-        zoom: 12.0,
-    },
-    // Wide sensors, a narrow turn: walls that wander and fold.
-    Point {
-        name: "labyrinth",
-        sd: Law::k(7.0),
-        sa: Law::k(1.4),
-        ra: Law::k(0.35),
-        md: Law::k(0.9),
-        decay: 0.07,
-        diffuse: 0.7,
-        wobble: 0.08,
-        zoom: 4.0,
-    },
-    // Jenson's idea: in thick trail, sense further and turn harder.
-    Point {
-        name: "multiscale",
-        sd: Law(3.0, 18.0, 0.6),
-        sa: Law(0.3, 0.35, 0.8),
-        ra: Law(0.25, 0.6, 1.2),
-        md: Law::k(1.1),
-        decay: 0.05,
-        diffuse: 0.6,
-        wobble: 0.05,
-        zoom: 14.0,
-    },
+    Habit { sd: Law::k(9.0), sa: Law::k(0.39), ra: Law::k(0.78), md: Law::k(1.0), decay: 0.06, diffuse: 0.6, wobble: 0.05 },
+    // Jenson's idea: in thick trail, sense further and turn harder; thin
+    // trail searches close.
+    Habit { sd: Law(3.0, 18.0, 0.6), sa: Law(0.3, 0.35, 0.8), ra: Law(0.25, 0.6, 1.2), md: Law::k(1.1), decay: 0.05, diffuse: 0.6, wobble: 0.05 },
     // Fast where it is dense, slow where it is not: travelling worms.
-    Point {
-        name: "worms",
-        sd: Law::k(11.0),
-        sa: Law::k(0.5),
-        ra: Law::k(0.22),
-        md: Law(0.3, 1.8, 1.3),
-        decay: 0.05,
-        diffuse: 0.5,
-        wobble: 0.1,
-        zoom: 6.0,
-    },
-    // Short sensors, short steps: a fine, even mesh.
-    Point { name: "lace", sd: Law::k(5.0), sa: Law::k(0.7), ra: Law::k(0.35), md: Law::k(0.7), decay: 0.08, diffuse: 0.8, wobble: 0.05, zoom: 3.0 },
+    Habit { sd: Law::k(11.0), sa: Law::k(0.5), ra: Law::k(0.22), md: Law(0.3, 1.8, 1.3), decay: 0.05, diffuse: 0.5, wobble: 0.1 },
 ];
 
-/// The ramp: index 0 is black, 1..=STEPS one hue rising to near white.
-const STEPS: usize = 24;
-/// Below this much of the first step, black: faint trail does not glow.
+/// The palette's hues, around the loop of orientations: muted, mineral.
+/// (OKLCH hue in degrees, chroma.)
+const ANCHORS: [(f32, f32); 6] = [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
+/// Stone: where the orientation is mixed. A warm grey.
+const STONE: (f32, f32) = (80.0, 0.02);
+/// Hue bins around the loop, and lightness steps per hue.
+const HUES: usize = 12;
+const LIGHTS: usize = 10;
+/// Below this much of the first lightness step, black.
 const FLOOR: f32 = 0.6;
+/// How coherent a vein's orientation must be to wear a colour.
+const COHERENT: f32 = 0.3;
+
 /// The fixed step, seconds, and how many a stalled run may catch up.
 const STEP: f64 = 1.0 / 30.0;
 const CATCHUP: u32 = 3;
-/// How fast the exposure follows the picture, seconds.
-const GAIN_TAU: f32 = 2.0;
+
+/// A food source, in LEDs.
+struct Node {
+    x: f32,
+    y: f32,
+    /// How big, LEDs, and how much is left (1 is a whole source).
+    r: f32,
+    left: f32,
+    born: f64,
+}
+
+/// How long a source takes to fill in, and to fade once spent, seconds.
+const NODE_IN: f64 = 3.0;
+/// A source this close to empty is gone.
+const SPENT: f32 = 0.02;
+/// The time's food: fades in and out over these, seconds.
+const TIME_IN: f64 = 3.0;
+const TIME_OUT: f64 = 6.0;
+/// While the time is drawn, the other food breathes at this share.
+const QUIET: f32 = 0.1;
+/// The time's scent against a food source's.
+const TIME_SCENT: f32 = 1.6;
 
 struct Physarum {
     seed: u64,
@@ -205,99 +181,250 @@ struct Physarum {
     t: f64,
     owed: f64,
     substep: u32,
-    /// The camera's middle, world cells, and its heading, radians.
-    cam: [f64; 2],
-    heading: f64,
-    gain: Option<f32>,
-    point: Point,
+    nodes: Vec<Node>,
+    dice: Rng,
+    next_node: f64,
+    /// The minute last drawn, and when it was laid down.
+    minute: Option<i64>,
+    time_at: f64,
+    time_text: Vec<char>,
+    food: Vec<f32>,
+    /// The last exposure, for how thick the colony is on each source.
+    last_leds: Option<Vec<[f32; 4]>>,
     last: Option<Frame>,
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    let mut rng = Rng::new(seed ^ 0x5157);
-    let cam = [f64::from(rng.f32()) * f64::from(WORLD_W), f64::from(rng.f32()) * f64::from(WORLD_H)];
-    let heading = f64::from(rng.f32()) * std::f64::consts::TAU;
-    Box::new(Physarum { seed, sim: None, t: 0.0, owed: 0.0, substep: 0, cam, heading, gain: None, point: POINTS[0], last: None })
+    Box::new(Physarum {
+        seed,
+        sim: None,
+        t: 0.0,
+        owed: 0.0,
+        substep: 0,
+        nodes: Vec::new(),
+        dice: Rng::new(seed ^ 0xf00d),
+        next_node: 0.0,
+        minute: None,
+        time_at: f64::NEG_INFINITY,
+        time_text: Vec::new(),
+        food: vec![0.0; FOOD_W * FOOD_H],
+        last_leds: None,
+        last: None,
+    })
 }
 
-fn agents_for(millions: f32, seed: u64) -> Vec<[f32; 4]> {
-    let n = ((millions * 1e6) as usize).clamp(1 << 16, 8_000_000 - 1);
+fn agent_count(millions: f32) -> u32 {
+    ((millions * 1e6) as u32).clamp(1 << 16, 8_000_000 - 1)
+}
+
+fn agents_for(n: u32, seed: u64) -> Vec<[f32; 4]> {
     let mut rng = Rng::new(seed);
     (0..n).map(|_| [rng.f32() * WORLD_W as f32, rng.f32() * WORLD_H as f32, rng.f32() * std::f32::consts::TAU, 0.0]).collect()
 }
 
+/// The panel's window on the world: its top-left cell, at `scale` cells per
+/// LED, centred.
+fn window(scale: f32) -> (f32, f32) {
+    ((WORLD_W as f32 - W as f32 * scale) * 0.5, (WORLD_H as f32 - H as f32 * scale) * 0.5)
+}
+
+/// `HH:MM` (or `H:MM`) for the local time `now`.
+fn time_text(now: f64, h24: bool) -> Vec<char> {
+    let minutes = (now / 60.0).floor() as i64;
+    let (h, m) = ((minutes / 60).rem_euclid(24), minutes.rem_euclid(60));
+    let h = if h24 { h } else if h % 12 == 0 { 12 } else { h % 12 };
+    let text = if h24 { format!("{h:02}:{m:02}") } else { format!("{h}:{m:02}") };
+    text.chars().collect()
+}
+
+/// Where each glyph of `text` sits, its centre in LEDs, centred on the
+/// panel: a digit is vesta's 10 x 20 box and a gap, the colon narrower.
+fn layout(text: &[char]) -> Vec<(char, f32)> {
+    const DIGIT: f32 = 13.0;
+    const COLON: f32 = 6.0;
+    let advance = |c: char| if c == ':' { COLON } else { DIGIT };
+    let total: f32 = text.iter().map(|c| advance(*c)).sum();
+    let mut x = (W as f32 - total) * 0.5;
+    text.iter()
+        .map(|c| {
+            let at = x + advance(*c) * 0.5;
+            x += advance(*c);
+            (*c, at)
+        })
+        .collect()
+}
+
 impl Physarum {
-    /// The organism now: the chosen one, or with `cycle`, each in turn for
-    /// that many minutes, the last part of each growing into the next.
-    fn point(&self, ctx: &Ctx) -> Point {
-        let chosen = (ctx.get("point") as usize).min(POINTS.len() - 1);
-        let minutes = f64::from(ctx.get("cycle"));
-        if minutes <= 0.0 {
-            return POINTS[chosen];
-        }
-        let phase = self.t / (minutes * 60.0);
-        let i = (chosen + phase.floor() as usize) % POINTS.len();
-        let blend = smoothstep(0.7, 1.0, phase.fract() as f32);
-        POINTS[i].lerp(&POINTS[(i + 1) % POINTS.len()], blend)
+    fn habit(ctx: &Ctx) -> Habit {
+        HABITS[(ctx.get("habit") as usize).min(HABITS.len() - 1)]
     }
 
-    fn ramp(ctx: &Ctx) -> Vec<Rgb> {
-        let (hue, spread, saturation, white) = (ctx.get("hue"), ctx.get("spread"), ctx.get("saturation"), ctx.get("white"));
+    /// The time's food now, 0..1: fading in when the minute turns, held,
+    /// fading out.
+    fn time_strength(&self, ctx: &Ctx) -> f32 {
+        let age = self.t - self.time_at;
+        let hold = f64::from(ctx.get("hold"));
+        if age < 0.0 || age > hold + TIME_OUT {
+            return 0.0;
+        }
+        let up = smoothstep(0.0, TIME_IN as f32, age as f32);
+        let down = 1.0 - smoothstep(hold as f32, (hold + TIME_OUT) as f32, age as f32);
+        up * down
+    }
+
+    /// Food comes and goes: a spent source is dropped, and a new one is
+    /// placed a while later, away from the others.
+    fn forage(&mut self, ctx: &Ctx, leds: Option<&[[f32; 4]]>, dt: f32, scale: f32) {
+        let appetite = ctx.get("appetite");
+        let cap = ctx.get("cap");
+        if let Some(leds) = leds {
+            for n in &mut self.nodes {
+                // How thick the colony is on it, a share of the cap.
+                let (cx, cy) = (n.x.round() as i32, n.y.round() as i32);
+                let mut sum = 0.0;
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (x, y) = ((cx + dx).clamp(0, W as i32 - 1) as usize, (cy + dy).clamp(0, H as i32 - 1) as usize);
+                        sum += leds[y * W + x][0];
+                    }
+                }
+                let fed = (sum / 9.0 / cap).clamp(0.0, 1.0);
+                n.left -= dt * appetite * fed / 60.0;
+            }
+        }
+        self.nodes.retain(|n| n.left > SPENT);
+        let want = ctx.get("food") as usize;
+        if self.nodes.len() < want && self.t >= self.next_node {
+            let first = self.nodes.is_empty() && self.t < 1.0;
+            // A few tries for a spot clear of the others.
+            let mut best = (f32::MIN, 0.0, 0.0);
+            for _ in 0..12 {
+                let (x, y) = (self.dice.range(5.0, W as f32 - 5.0), self.dice.range(4.0, H as f32 - 4.0));
+                let clear = self.nodes.iter().map(|n| (n.x - x).hypot((n.y - y) * 1.3)).fold(f32::MAX, f32::min);
+                if clear > best.0 {
+                    best = (clear, x, y);
+                }
+            }
+            let left = if first { self.dice.range(0.4, 1.0) } else { 1.0 };
+            self.nodes.push(Node { x: best.1, y: best.2, r: self.dice.range(0.7, 1.4) * 6.0 / scale, left, born: self.t });
+            // At the start, all at once; after, one at a time.
+            self.next_node = if self.nodes.len() < want && self.t < 1.0 { self.t } else { self.t + f64::from(self.dice.range(2.0, 10.0)) };
+        }
+    }
+
+    /// The food grid: each source a soft blob, the time along its strokes.
+    fn lay_food(&mut self, ctx: &Ctx, scale: f32) {
+        let (ox, oy) = window(scale);
+        let time = self.time_strength(ctx);
+        let quiet = 1.0 - (1.0 - QUIET) * time;
+        let glyphs = layout(&self.time_text);
+        // A food cell's centre in panel LEDs.
+        let to_led = |i: usize, j: usize| {
+            (((i as f32 + 0.5) * FOOD_K as f32 - ox) / scale, ((j as f32 + 0.5) * FOOD_K as f32 - oy) / scale)
+        };
+        for j in 0..FOOD_H {
+            for i in 0..FOOD_W {
+                let (x, y) = to_led(i, j);
+                let mut f = 0.0;
+                for n in &self.nodes {
+                    let grow = smoothstep(0.0, NODE_IN as f32, (self.t - n.born) as f32);
+                    let d2 = ((x - n.x).powi(2) + (y - n.y).powi(2)) / (n.r * n.r);
+                    f += grow * n.left.sqrt() * (-d2).exp() * quiet;
+                }
+                if time > 0.0 && (-1.0..H as f32 + 1.0).contains(&y) {
+                    let mut d = f32::MAX;
+                    for (c, cx) in &glyphs {
+                        d = d.min(match c.to_digit(10) {
+                            Some(digit) => stroked::distance(digit as usize, x - cx, y - H as f32 * 0.5),
+                            // The colon: two dots.
+                            None => (x - cx).hypot((y - H as f32 * 0.5).abs() - 5.0),
+                        });
+                    }
+                    f += TIME_SCENT * time * (-(d / 0.9).powi(2)).exp();
+                }
+                self.food[j * FOOD_W + i] = f;
+            }
+        }
+    }
+
+    /// The palette: black, then for each colour (`HUES` around the loop of
+    /// orientations, then stone) `LIGHTS` steps of lightness.
+    fn palette(ctx: &Ctx, turn: f32) -> Vec<Rgb> {
+        let mute = ctx.get("mute");
         let mut palette = vec![Rgb::BLACK];
-        for i in 1..=STEPS {
-            let t = i as f32 / STEPS as f32;
-            // Toward white, the top runs lighter; keeping its colour, it
-            // stops short of the lightness no saturated colour reaches.
-            let l = 0.32 + (0.48 + 0.15 * white) * t.powf(0.9);
-            // With `white`, chroma swells through the middle and lets go at
-            // the top, so the densest veins burn toward white; without, it
-            // rises and holds.
-            let burn = (std::f32::consts::PI * (t * 0.85 + 0.1)).sin().max(0.0);
-            let hold = smoothstep(0.0, 0.35, t) * 0.8 + 0.2;
-            let c = 0.17 * saturation * (hold + (burn - hold) * white);
-            palette.push(oklch(l, c, hue + spread * t));
+        let shade = |hue: f32, chroma: f32, i: usize| {
+            let t = (i + 1) as f32 / LIGHTS as f32;
+            let l = 0.36 + 0.5 * t.powf(0.9);
+            // The densest veins pale toward bone.
+            oklch(l, chroma * mute * (1.0 - 0.55 * t.powi(3)), hue)
+        };
+        for h in 0..HUES {
+            let (hue, chroma) = anchor(((h as f32 + 0.5) / HUES as f32 + turn).rem_euclid(1.0));
+            for i in 0..LIGHTS {
+                palette.push(shade(hue, chroma, i));
+            }
+        }
+        for i in 0..LIGHTS {
+            palette.push(shade(STONE.0, STONE.1 / mute.max(0.5), i));
         }
         palette
     }
 
-    fn paint(&mut self, ctx: &Ctx, leds: &[f32]) -> Frame {
-        // A fixed exposure against the world's mean, eased only so a change
-        // of the slider does not jump.
-        let want = ctx.get("exposure");
-        let gain = match self.gain {
-            Some(g) => g + (want - g) * (1.0 - (-ctx.dt as f32 / GAIN_TAU).exp()),
-            None => want,
-        };
-        self.gain = Some(gain);
-        let contrast = ctx.get("contrast");
+    fn paint(&self, ctx: &Ctx, leds: &[[f32; 4]]) -> Frame {
+        let (exposure, contrast) = (ctx.get("exposure"), ctx.get("contrast"));
+        let turn = ctx.get("palette") + ctx.get("drift") * (ctx.now / 3600.0).rem_euclid(1.0) as f32;
         let dither = Dither::BlueNoise;
         let indices = leds
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                // A soft shoulder: dense veins approach white, never clip flat.
-                let pos = (1.0 - (-(v * gain).max(0.0).powf(contrast)).exp()) * STEPS as f32;
+                let (x, y) = (i % W, i / W);
+                let pos = (1.0 - (-(v[0] * exposure).max(0.0).powf(contrast)).exp()) * LIGHTS as f32;
                 if pos < FLOOR {
                     return 0;
                 }
-                let thr = dither.threshold(i % W, i / W);
-                (pos + 0.5 + thr).floor().clamp(1.0, STEPS as f32) as u8
+                let light = (pos - 0.5 + dither.threshold(x, y)).round().clamp(0.0, LIGHTS as f32 - 1.0) as usize;
+                let coherence = v[1].hypot(v[2]) / v[0].max(1e-6);
+                // Hue and stone are not dithered: a vein keeps one colour
+                // along its length, which is cheaper on the wire and reads
+                // as a thing rather than as speckle.
+                if coherence < COHERENT {
+                    return (1 + HUES * LIGHTS + light) as u8;
+                }
+                // Orientation, 0..1 around the loop (a half turn of angle).
+                let around = v[2].atan2(v[1]) / std::f32::consts::TAU + 0.5;
+                let hue = ((around * HUES as f32).round() as usize) % HUES;
+                (1 + hue * LIGHTS + light) as u8
             })
             .collect();
-        Frame::Indexed { palette: Self::ramp(ctx), indices }
+        Frame::Indexed { palette: Self::palette(ctx, turn), indices }
     }
+}
+
+/// The palette's hue and chroma at `t` around the loop: the anchors, mixed
+/// in OKLab between neighbours.
+fn anchor(t: f32) -> (f32, f32) {
+    let k = ANCHORS.len();
+    let at = t * k as f32;
+    let (i, f) = (at.floor() as usize % k, at.fract());
+    let lab = |(h, c): (f32, f32)| {
+        let (s, co) = h.to_radians().sin_cos();
+        (c * co, c * s)
+    };
+    let (a, b) = (lab(ANCHORS[i]), lab(ANCHORS[(i + 1) % k]));
+    let (x, y) = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+    (y.atan2(x).to_degrees(), x.hypot(y))
 }
 
 impl Patch for Physarum {
     fn render(&mut self, ctx: &Ctx) -> Frame {
-        let millions = ctx.get("agents");
-        let wanted = agents_for_count(millions);
+        let wanted = agent_count(ctx.get("agents"));
         if matches!(&self.sim, Some(Some(s)) if s.agents() != wanted) {
             self.sim = None;
         }
         if self.sim.is_none() {
             self.sim = Some(match Gpu::shared() {
-                Ok(gpu) => Some(Sim::new(gpu, WORLD_W, WORLD_H, &agents_for(millions, self.seed))),
+                Ok(gpu) => Some(Sim::new(gpu, WORLD_W, WORLD_H, &agents_for(wanted, self.seed), FOOD_W * FOOD_H)),
                 Err(e) => {
                     eprintln!("screeny-art: physarum: {e}; rendering black");
                     None
@@ -317,66 +444,70 @@ impl Patch for Physarum {
             }
             steps = 1;
         }
-        self.t += STEP * f64::from(steps);
+        let dt = STEP * f64::from(steps);
+        self.t += dt;
 
-        let point = self.point(ctx);
-        self.point = point;
-        let base = point.zoom / ctx.get("zoom");
-        let scale = base * 2f32.powf(ctx.get("breathe") * (self.t * std::f64::consts::TAU / 150.0).sin() as f32);
-        // The camera wanders: a heading that turns slowly back and forth.
-        self.heading += STEP * f64::from(steps) * (0.02 + 0.05 * (self.t / 53.0).sin());
-        let speed = f64::from(ctx.get("drift") * scale) * STEP * f64::from(steps);
-        self.cam[0] = (self.cam[0] + speed * self.heading.cos()).rem_euclid(f64::from(WORLD_W));
-        self.cam[1] = (self.cam[1] + speed * self.heading.sin()).rem_euclid(f64::from(WORLD_H));
+        // The minute turns: the time is laid down. The first frame lays it
+        // too, so a patch just picked says what time it is.
+        let minute = (ctx.now / 60.0).floor() as i64;
+        if ctx.get("time") > 0.5 && self.minute != Some(minute) {
+            self.time_at = self.t;
+            self.time_text = time_text(ctx.now, ctx.get("24h") > 0.5);
+        }
+        self.minute = Some(minute);
 
-        let Some(Some(sim)) = &mut self.sim else {
-            return Frame::black();
-        };
+        let scale = ctx.get("scale");
+        let leds = self.last_leds.take();
+        self.forage(ctx, leds.as_deref(), dt as f32, scale);
+        self.lay_food(ctx, scale);
+
+        let habit = Self::habit(ctx);
+        let Some(Some(sim)) = &mut self.sim else { return Frame::black() };
         let substeps = (ctx.get("steps") as u32).max(1) * steps;
         let density = sim.agents() as f32 / (WORLD_W * WORLD_H) as f32;
-        let laws = [point.sd, point.sa, point.ra, point.md].map(|l| [l.0, l.1, l.2]).concat();
+        let mut laws = [0.0; 12];
+        for (k, l) in [habit.sd, habit.sa, habit.ra, habit.md].iter().enumerate() {
+            laws[3 * k..3 * k + 3].copy_from_slice(&[l.0, l.1, l.2]);
+        }
+        let (ox, oy) = window(scale);
         let params: Vec<Params> = (0..substeps)
-            .map(|k| {
+            .map(|_| {
                 self.substep = self.substep.wrapping_add(1);
-                let _ = k;
                 Params {
                     w: WORLD_W,
                     h: WORLD_H,
                     n: sim.agents(),
                     seed: self.substep.wrapping_mul(0x9e37_79b9),
-                    laws: laws.clone().try_into().unwrap_or([0.0; 12]),
+                    laws,
                     deposit: 1.0,
-                    decay: point.decay,
-                    diffuse: point.diffuse,
-                    inv_ref: point.decay / density,
-                    cx: self.cam[0] as f32,
-                    cy: self.cam[1] as f32,
+                    decay: habit.decay,
+                    diffuse: habit.diffuse,
+                    inv_ref: habit.decay / density,
+                    ox,
+                    oy,
                     scale,
                     first: 0,
-                    wobble: point.wobble,
+                    wobble: habit.wobble,
                     respawn: ctx.get("renewal") * 1e-3,
                     cap: ctx.get("cap"),
-                    flow: ctx.get("flow"),
-                    time: self.t as f32,
-                    pad: [0.0; 2],
+                    emit: ctx.get("scent") * 0.5,
+                    food_k: FOOD_K,
+                    pad: [0; 3],
                 }
             })
             .collect();
-        let Some(mut leds) = sim.frame(&params) else {
-            return Frame::black();
-        };
+        let Some(mut leds) = sim.frame(&params, &self.food) else { return Frame::black() };
         let inv = 1.0 / substeps as f32;
-        leds.iter_mut().for_each(|v| *v *= inv);
+        leds.iter_mut().for_each(|v| v.iter_mut().for_each(|c| *c *= inv));
         let frame = self.paint(ctx, &leds);
+        self.last_leds = Some(leds);
         self.last = Some(frame.clone());
         frame
     }
 
     fn playing(&self) -> Option<Playing> {
-        Some(Playing { title: self.point.name.to_string(), detail: String::new(), actions: Vec::new(), notes: Vec::new() })
+        let title = format!("{} food source{}", self.nodes.len(), if self.nodes.len() == 1 { "" } else { "s" });
+        let detail = if self.t - self.time_at < 40.0 { format!("drawing {}", self.time_text.iter().collect::<String>()) } else { "foraging".to_string() };
+        Some(Playing { title, detail, actions: Vec::new(), notes: Vec::new() })
     }
-}
-
-fn agents_for_count(millions: f32) -> u32 {
-    ((millions * 1e6) as usize).clamp(1 << 16, 8_000_000 - 1) as u32
 }

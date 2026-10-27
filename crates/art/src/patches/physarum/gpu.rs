@@ -1,5 +1,6 @@
 //! The colony on the GPU: agents, two trail buffers in turn, the deposits
-//! banked atomically, and a 64 x 32 exposure read back once a frame.
+//! banked atomically, the food the CPU lays, and a 64 x 32 exposure read
+//! back once a frame.
 
 use crate::gpu::Gpu;
 
@@ -19,16 +20,17 @@ pub struct Params {
     pub decay: f32,
     pub diffuse: f32,
     pub inv_ref: f32,
-    pub cx: f32,
-    pub cy: f32,
+    /// The world cell at the panel's top-left, and cells per LED.
+    pub ox: f32,
+    pub oy: f32,
     pub scale: f32,
     pub first: u32,
     pub wobble: f32,
     pub respawn: f32,
     pub cap: f32,
-    pub flow: f32,
-    pub time: f32,
-    pub pad: [f32; 2],
+    pub emit: f32,
+    pub food_k: u32,
+    pub pad: [u32; 3],
 }
 
 /// A uniform slot: `Params` padded to the copy alignment every backend
@@ -55,6 +57,7 @@ pub struct Sim {
     /// `params` between passes: a frame is one submission.
     slots: wgpu::Buffer,
     leds: wgpu::Buffer,
+    food: wgpu::Buffer,
     /// The exposure read back, two in turn: a frame returns the one before
     /// it, so the GPU steps this frame while the CPU paints the last.
     leds_read: [wgpu::Buffer; 2],
@@ -68,20 +71,22 @@ pub struct Sim {
 }
 
 impl Sim {
-    /// A `w` x `h` world with `agents` scattered over it at random.
-    pub fn new(gpu: &'static Gpu, w: u32, h: u32, agents: &[[f32; 4]]) -> Sim {
+    /// A `w` x `h` world with `agents` scattered over it at random, and a
+    /// food grid of `food_cells` (a cell every `food_k` world cells).
+    pub fn new(gpu: &'static Gpu, w: u32, h: u32, agents: &[[f32; 4]], food_cells: usize) -> Sim {
         let device = &gpu.device;
         use wgpu::BufferUsages as U;
         let buffer =
             |label, size: u64, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false });
-        let cells = u64::from(w * h) * 4;
+        let cells = u64::from(w * h) * 16;
         let params = buffer("physarum params", SLOT, U::UNIFORM | U::COPY_DST);
         let agent_buf = buffer("physarum agents", agents.len() as u64 * 16, U::STORAGE | U::COPY_DST);
         gpu.queue.write_buffer(&agent_buf, 0, bytemuck::cast_slice(agents));
         let trails = [buffer("physarum trail a", cells, U::STORAGE), buffer("physarum trail b", cells, U::STORAGE)];
-        let dep = buffer("physarum deposits", cells, U::STORAGE);
-        let leds = buffer("physarum leds", 2048 * 4, U::STORAGE | U::COPY_SRC);
-        let leds_read = [0, 1].map(|_| buffer("physarum leds read", 2048 * 4, U::MAP_READ | U::COPY_DST));
+        let dep = buffer("physarum deposits", cells / 4 * 3, U::STORAGE);
+        let leds = buffer("physarum leds", 2048 * 16, U::STORAGE | U::COPY_SRC);
+        let leds_read = [0, 1].map(|_| buffer("physarum leds read", 2048 * 16, U::MAP_READ | U::COPY_DST));
+        let food = buffer("physarum food", food_cells as u64 * 4, U::STORAGE | U::COPY_DST);
         let slots = buffer("physarum slots", SLOT * MAX_SUBSTEPS as u64, U::COPY_SRC | U::COPY_DST);
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -89,7 +94,7 @@ impl Sim {
             source: wgpu::ShaderSource::Wgsl(include_str!("physarum.wgsl").into()),
         });
         // Binding numbers as in the shader: 0 params, 1 agents, 2 trail
-        // (read), 3 deposits, 4 trail (written), 5 leds.
+        // (read), 3 deposits, 4 trail (written), 5 leds, 6 food.
         let pass = |name: &str, bindings: &[u32]| {
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(name),
@@ -100,7 +105,7 @@ impl Sim {
                 cache: None,
             });
             let bind = |parity: usize| {
-                let bound = [&params, &agent_buf, &trails[parity], &dep, &trails[1 - parity], &leds];
+                let bound = [&params, &agent_buf, &trails[parity], &dep, &trails[1 - parity], &leds, &food];
                 let entries: Vec<wgpu::BindGroupEntry> =
                     bindings.iter().map(|b| wgpu::BindGroupEntry { binding: *b, resource: bound[*b as usize].as_entire_binding() }).collect();
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -113,22 +118,24 @@ impl Sim {
             Pass { pipeline, binds }
         };
         let step = pass("step", &[0, 1, 2, 3]);
-        let diffuse = pass("diffuse", &[0, 2, 3, 4]);
+        let diffuse = pass("diffuse", &[0, 2, 3, 4, 6]);
         let picture = pass("picture", &[0, 2, 5]);
-        Sim { gpu, w, h, n: agents.len() as u32, params, slots, leds, leds_read, pending: None, turn: 0, step, diffuse, picture, parity: 0 }
+        Sim { gpu, w, h, n: agents.len() as u32, params, slots, leds, food, leds_read, pending: None, turn: 0, step, diffuse, picture, parity: 0 }
     }
 
     pub fn agents(&self) -> u32 {
         self.n
     }
 
-    /// A frame's steps of the colony, one per `params`, the camera exposed
-    /// after each. Returns the exposure of the frame *before* this one (the
-    /// first frame waits for its own): one value per LED, summed over its
+    /// A frame's steps of the colony, one per `params`, over `food`, the
+    /// panel exposed after each. Returns the exposure of the frame *before*
+    /// this one (the first frame waits for its own): per LED, the trail and
+    /// its orientation (cos 2a, sin 2a weighted by it), summed over the
     /// substeps, relative to the world's mean trail.
-    pub fn frame(&mut self, params: &[Params]) -> Option<Vec<f32>> {
+    pub fn frame(&mut self, params: &[Params], food: &[f32]) -> Option<Vec<[f32; 4]>> {
         let params = &params[..params.len().min(MAX_SUBSTEPS)];
         let q = &self.gpu.queue;
+        q.write_buffer(&self.food, 0, bytemuck::cast_slice(food));
         let mut bytes = vec![0u8; SLOT as usize * params.len()];
         for (k, p) in params.iter().enumerate() {
             let p = Params { first: u32::from(k == 0), ..*p };
@@ -152,13 +159,13 @@ impl Sim {
         }
         let turn = self.turn;
         self.turn = 1 - turn;
-        enc.copy_buffer_to_buffer(&self.leds, 0, &self.leds_read[turn], 0, 2048 * 4);
+        enc.copy_buffer_to_buffer(&self.leds, 0, &self.leds_read[turn], 0, 2048 * 16);
         let index = q.submit([enc.finish()]);
         let (read, index) = self.pending.replace((turn, index.clone())).unwrap_or((turn, index));
         self.read(read, index)
     }
 
-    fn read(&self, which: usize, index: wgpu::SubmissionIndex) -> Option<Vec<f32>> {
+    fn read(&self, which: usize, index: wgpu::SubmissionIndex) -> Option<Vec<[f32; 4]>> {
         let buf = &self.leds_read[which];
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
