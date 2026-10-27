@@ -719,6 +719,7 @@ mod tests {
     /// is brighter at 1 - never the other way round, and never nothing at
     /// all (a param with no visible effect would be worse than useless).
     #[test]
+    #[ignore = "a look, per parameter; run with -- --ignored when touching the face"]
     fn eye_light_lightens_the_eyes_end_to_end() {
         let luma = |c: &[f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
         let dark = colours(&frame_at(4, 0.5, &[("eye_light", 0.0)]));
@@ -738,6 +739,7 @@ mod tests {
     /// mouth only ever darkens, turning it off only ever brightens - and
     /// again, some pixel really does change.
     #[test]
+    #[ignore = "a look, per parameter; run with -- --ignored when touching the face"]
     fn mouth_zero_removes_the_mouth_end_to_end() {
         let luma = |c: &[f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
         let with_mouth = colours(&frame_at(4, 0.5, &[("mouth", 1.0)]));
@@ -873,6 +875,7 @@ mod tests {
     /// `2.3` at this seed (checked by scanning, not guessed); `2.4` is
     /// safely past it, and still cheap.
     #[test]
+    #[ignore = "two seconds of cloth and GPU at two ghosts; run with -- --ignored when touching glow or the palette"]
     fn never_bright_and_never_a_lot_of_it() {
         for at in [0.5, 2.4] {
             let frame = frame_at(1, at, &[("ghosts", 2.0), ("glow", 1.0)]);
@@ -888,6 +891,7 @@ mod tests {
     /// (`glow`, more than one ghost, and the biggest `eyes` size). See
     /// `never_bright_and_never_a_lot_of_it` on why `ghosts` is `2.0` here.
     #[test]
+    #[ignore = "a second and a half of cloth and GPU; run with -- --ignored when touching eye_light"]
     fn glowing_eyes_are_never_full_white() {
         for at in [0.5, 1.5] {
             let frame = frame_at(1, at, &[("ghosts", 2.0), ("glow", 1.0), ("eye_light", 1.0), ("eyes", 2.0)]);

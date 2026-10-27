@@ -25,7 +25,7 @@
 //! Bounded: ephemeral ports, compressed timings, and every wait inside the
 //! suite has its own deadline.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

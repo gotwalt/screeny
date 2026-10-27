@@ -4,7 +4,7 @@
 //! Nothing here touches the real device: the receiver binds ephemeral ports on
 //! 127.0.0.1 and speaks the protocol through `screeny_proto`.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

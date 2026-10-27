@@ -6,7 +6,7 @@
 //! UDP port is the thing being modelled, and a simulator that survived
 //! nonsense by accident would be no evidence at all.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

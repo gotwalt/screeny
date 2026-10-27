@@ -1,7 +1,7 @@
 //! The deliberate misbehaviour a sender needs to be tested against, and the
 //! frame sink `--dump-dir` is built on.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -8,7 +8,7 @@
 //! Over loopback against the in-process receiver in `tests/common`. Nothing
 //! here touches the bench device or the LAN.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;

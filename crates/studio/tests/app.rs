@@ -5,7 +5,7 @@
 //! studio's side of both contracts - which broker it uses when, and who it
 //! lets in - and that a plain deployment (no `peers`) is untouched.
 
-mod common;
+use crate::common;
 
 use common::{get, post, test_config, until_json, PATIENCE};
 use screeny_studio::ha::supervisor::Supervisor;

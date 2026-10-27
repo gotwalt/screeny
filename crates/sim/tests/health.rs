@@ -12,7 +12,7 @@
 //! that stays up carries `--exit-after` as a backstop and is killed when the
 //! test is done; the refusals never get as far as binding a socket.
 
-mod common;
+use crate::common;
 
 use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;

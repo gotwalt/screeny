@@ -16,7 +16,7 @@
 //! The SSID used is a made-up one that appears nowhere else in the repo, so a
 //! grep for it in the output cannot match something innocent.
 
-mod common;
+use crate::common;
 
 use common::{post, until_json, Temp};
 use std::io::Read;
@@ -114,10 +114,11 @@ async fn the_ssid_never_reaches_the_log_or_the_state_file() {
 }
 
 /// A simulator with a known frame port and a known HTTP port, mDNS off,
-/// loopback only. `(device, frame port, http port)`.
+/// loopback only, in a band clear of `ha_mqtt.rs`'s 51200..51300. `(device,
+/// frame port, http port)`.
 fn start_sim() -> (SimDevice, u16, u16) {
     for i in 0..40u16 {
-        let (frame, http) = (51_200 + i * 2, 51_400 + i);
+        let (frame, http) = (51_700 + i * 2, 51_800 + i);
         let cfg = SimConfig {
             frame_port: frame,
             control_port: frame + 1,
@@ -130,7 +131,7 @@ fn start_sim() -> (SimDevice, u16, u16) {
             return (dev, frame, http);
         }
     }
-    panic!("no free simulator ports in 51200..51280 / 51400..51440");
+    panic!("no free simulator ports in 51700..51780 / 51800..51840");
 }
 
 /// Read the binary's own "studio: http://HOST:PORT/" line, which is where an

@@ -13,7 +13,7 @@
 //! **No test in this file may touch the bench device.** Loopback only, a port
 //! band well away from the spec's, mDNS off, and every wait has a deadline.
 
-mod common;
+use crate::common;
 
 use common::{get, post, studio_and_state, until_json, Ws, PATIENCE};
 use std::collections::{BTreeMap, HashSet};

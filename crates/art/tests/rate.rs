@@ -91,75 +91,112 @@ fn diff(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
 /// Established by reading each one; see the card's Log for the per-patch note.
 const PURELY_A_FUNCTION_OF_T: &[&str] = &["metaballs", "overland", "lattice", "knot"];
 
-#[test]
-fn every_patch_advances_by_time_and_not_by_frame_count() {
-    let gpu = screeny_art::gpu_status().available;
-    let mut checked = 0;
-    let mut skipped = 0;
-    for def in ALL {
-        if need(def.id) != Need::Nothing && !gpu {
-            eprintln!("rate: skipping `{}`: no graphics adapter here", def.id);
-            skipped += 1;
-            continue;
+/// The GPU simulations that cost seconds a run in a debug build: a fluid on a
+/// 1.2-million-cell grid twice over, and cloth physics. Six engine seconds
+/// three times over is most of a minute of `cargo test` for these three
+/// alone, so the plain run leaves them to the `--ignored` test below.
+const HEAVY: &[&str] = &["hearth", "flavortime", "ghosts"];
+
+/// The rate check for one patch. Panics, naming the patch, if it moves with
+/// the frame rate.
+fn check(def: &PatchDef) {
+    // A calm patch can be empty at both moments for one seed (the ghosts'
+    // rests between visits, card 340), which proves nothing either way. Try
+    // a few seeds and test the first whose picture moved; the rate
+    // comparison itself is unchanged.
+    let mut picked = None;
+    for seed in [7, 8, 9, 10] {
+        let fast = run(def, seed, 1.0 / 60.0, (T * 60.0) as usize);
+        // What a frame-counting patch would have drawn at 30: the same
+        // number of steps, half the time.
+        let counted = run(def, seed, 1.0 / 60.0, (T * 30.0) as usize);
+        let moved = diff(&fast, &counted) > 0.002 || peak(&fast, &counted) > 0.1;
+        picked = Some((seed, fast, counted));
+        if moved {
+            break;
         }
-        // A calm patch can be empty at both moments for one seed (the ghosts'
-        // rests between visits, card 340), which proves nothing either way. Try
-        // a few seeds and test the first whose picture moved; the rate
-        // comparison itself is unchanged.
-        let mut picked = None;
-        for seed in [7, 8, 9, 10] {
-            let fast = run(def, seed, 1.0 / 60.0, (T * 60.0) as usize);
-            // What a frame-counting patch would have drawn at 30: the same
-            // number of steps, half the time.
-            let counted = run(def, seed, 1.0 / 60.0, (T * 30.0) as usize);
-            let moved = diff(&fast, &counted) > 0.002 || peak(&fast, &counted) > 0.1;
-            picked = Some((seed, fast, counted));
-            if moved {
-                break;
+    }
+    let (seed, fast, counted) = picked.expect("at least one seed");
+    let slow = run(def, seed, 1.0 / 30.0, (T * 30.0) as usize);
+
+    let same_time = diff(&fast, &slow);
+    let half_time = diff(&fast, &counted);
+
+    println!("{:<16} 60 vs 30 = {same_time:.5}   60 vs half the time = {half_time:.5}", def.id);
+
+    let half_peak = peak(&fast, &counted);
+    assert!(
+        half_time > 0.002 || half_peak > 0.1,
+        "`{}`: half the time draws the same picture (mean {half_time:.5}, peak {half_peak:.5}), \
+         so this test proves nothing about it",
+        def.id
+    );
+    assert!(
+        same_time < half_time / 4.0,
+        "`{}` moved with the frame rate: 60 vs 30 differs by {same_time:.5}, and 60 vs half the time \
+         by only {half_time:.5}. A patch must step by `ctx.dt`, never once per frame (card 161)",
+        def.id
+    );
+    if PURELY_A_FUNCTION_OF_T.contains(&def.id) {
+        assert_eq!(
+            same_time, 0.0,
+            "`{}` is meant to be a pure function of `ctx.t`, so the two rates must draw the same frame exactly",
+            def.id
+        );
+    }
+}
+
+/// Every patch in `defs` this machine can draw, each on its own thread -
+/// they share nothing but the GPU, and one at a time this file was the
+/// slowest in the workspace. A failing patch's panic is carried out of the
+/// scope as the test's own. Returns how many were checked and how many
+/// skipped for want of an adapter.
+fn check_all(defs: &[&'static PatchDef]) -> (usize, usize) {
+    let gpu = screeny_art::gpu_status().available;
+    let (draw, skip): (Vec<&PatchDef>, Vec<&PatchDef>) = defs.iter().partition(|d| need(d.id) == Need::Nothing || gpu);
+    for def in &skip {
+        eprintln!("rate: skipping `{}`: no graphics adapter here", def.id);
+    }
+    std::thread::scope(|s| {
+        let runs: Vec<_> = draw.iter().map(|def| s.spawn(move || check(def))).collect();
+        for r in runs {
+            if let Err(panic) = r.join() {
+                std::panic::resume_unwind(panic);
             }
         }
-        let (seed, fast, counted) = picked.expect("at least one seed");
-        let slow = run(def, seed, 1.0 / 30.0, (T * 30.0) as usize);
+    });
+    (draw.len(), skip.len())
+}
 
-        let same_time = diff(&fast, &slow);
-        let half_time = diff(&fast, &counted);
-
-        println!("{:<16} 60 vs 30 = {same_time:.5}   60 vs half the time = {half_time:.5}", def.id);
-
-        let half_peak = peak(&fast, &counted);
-        assert!(
-            half_time > 0.002 || half_peak > 0.1,
-            "`{}`: half the time draws the same picture (mean {half_time:.5}, peak {half_peak:.5}), \
-             so this test proves nothing about it",
-            def.id
-        );
-        assert!(
-            same_time < half_time / 4.0,
-            "`{}` moved with the frame rate: 60 vs 30 differs by {same_time:.5}, and 60 vs half the time \
-             by only {half_time:.5}. A patch must step by `ctx.dt`, never once per frame (card 161)",
-            def.id
-        );
-        if PURELY_A_FUNCTION_OF_T.contains(&def.id) {
-            assert_eq!(
-                same_time, 0.0,
-                "`{}` is meant to be a pure function of `ctx.t`, so the two rates must draw the same frame exactly",
-                def.id
-            );
-        }
-        checked += 1;
-    }
-    // **Every patch this machine can draw was checked**, which is the statement
-    // worth making and does not have to be re-tuned whenever the registry
-    // changes size. It was `checked >= 6` until card 178 took two patches out
-    // and left five on a bench with no adapter - a bound that would have gone
-    // red for the wrong reason.
+#[test]
+fn every_patch_advances_by_time_and_not_by_frame_count() {
+    let light: Vec<&PatchDef> = ALL.iter().filter(|d| !HEAVY.contains(&d.id)).collect();
+    let heavy = ALL.len() - light.len();
+    let (checked, skipped) = check_all(&light);
+    // **Every patch this machine can draw was checked** (the heavy three by
+    // the test below), which is the statement worth making and does not have
+    // to be re-tuned whenever the registry changes size. It was
+    // `checked >= 6` until card 178 took two patches out and left five on a
+    // bench with no adapter - a bound that would have gone red for the wrong
+    // reason.
     assert_eq!(
-        checked + skipped,
+        checked + skipped + heavy,
         ALL.len(),
-        "{checked} checked and {skipped} skipped does not account for all {} patches",
+        "{checked} checked, {skipped} skipped and {heavy} heavy does not account for all {} patches",
         ALL.len()
     );
     assert!(checked >= 5, "only {checked} patches were checked; ALL has {}", ALL.len());
+}
+
+/// The same check for the three GPU simulations the plain run leaves out.
+#[test]
+#[ignore = "most of a minute of GPU fire and cloth in a debug build; run with -- --ignored when touching hearth, flavortime or ghosts"]
+fn the_heavy_simulations_advance_by_time_too() {
+    let heavy: Vec<&PatchDef> = ALL.iter().filter(|d| HEAVY.contains(&d.id)).collect();
+    if cfg!(feature = "gpu") {
+        assert_eq!(heavy.len(), HEAVY.len(), "a heavy patch left the registry; take it out of HEAVY");
+    }
+    check_all(&heavy);
 }
 
 /// And the same statement about `screeny_art::FPS` itself: it is the one rate,

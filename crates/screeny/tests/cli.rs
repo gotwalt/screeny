@@ -5,7 +5,7 @@
 //! 30 fps. The device on the bench is never involved - `--addr` points at
 //! loopback and the receiver is two sockets in this process.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::process::{Command, Stdio};

@@ -11,8 +11,6 @@
 //! Everything is in-process and on loopback, and the timings are tenths of a
 //! second, because what is being tested is an order of events.
 
-mod common;
-
 use std::time::{Duration, Instant};
 
 use screeny_device_api::route;

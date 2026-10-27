@@ -11,7 +11,7 @@
 //! **No test in this file may touch the bench device.** Loopback only, ports
 //! well above the spec's, mDNS off, and every wait has a deadline.
 
-mod common;
+use crate::common;
 
 use common::{get, post, until_json};
 use std::io::{Read, Write};

@@ -9,7 +9,7 @@
 //! for an attempt - that behaviour is `crates/provision`'s to test, and it
 //! does, in microseconds.
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::time::Duration;

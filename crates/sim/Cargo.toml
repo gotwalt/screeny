@@ -4,10 +4,17 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 description = "A fake screeny panel: speaks the full v1 protocol over UDP, shows an LED-dot window, and drives integration tests with no hardware"
+# The integration tests are modules of one binary, `tests/sim.rs`, so they
+# wait out their timers side by side rather than one file at a time.
+autotests = false
 
 [[bin]]
 name = "screeny-sim"
 path = "src/bin/screeny-sim.rs"
+
+[[test]]
+name = "sim"
+path = "tests/sim.rs"
 
 [features]
 default = ["window"]

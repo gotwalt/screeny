@@ -11,7 +11,7 @@
 //! dropping a frame where it stands, which is exactly what already happened to
 //! a browser too slow to read one.
 
-mod common;
+use crate::common;
 
 use common::{get, pause, post, studio, studio_and_state, until, until_json, Ws, PATIENCE};
 use std::time::Duration;

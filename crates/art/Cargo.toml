@@ -3,6 +3,13 @@ name = "screeny-art"
 version = "0.1.0"
 edition = "2021"
 description = "Generative art patches and the output pipeline for the screeny 64x32 LED panel"
+# The integration tests are modules of one binary, `tests/art.rs`, so they run
+# side by side rather than one file at a time.
+autotests = false
+
+[[test]]
+name = "art"
+path = "tests/art.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

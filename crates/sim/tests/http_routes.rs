@@ -8,7 +8,7 @@
 //! Everything is in-process, on an ephemeral port, and every request has a
 //! five-second timeout (`common::http::TIMEOUT`).
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::time::Duration;

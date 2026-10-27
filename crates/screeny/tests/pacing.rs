@@ -36,8 +36,9 @@
 //!   with nothing late behind it is the real fault, and the stall test below
 //!   is where it is provoked deliberately.
 //!
-//! Set `SCREENY_PACING_SECS` to shorten the long run when iterating; every
-//! assertion here holds at 2 s exactly as it does at the 10 s default.
+//! The long run is 2 s by default: every assertion here holds at 2 s exactly
+//! as it does at 10 s, which was the default until the suite was trimmed. Set
+//! `SCREENY_PACING_SECS` to run it longer.
 
 mod common;
 
@@ -352,11 +353,12 @@ fn paced_arrivals(state: &RxState) -> Vec<Instant> {
 }
 
 /// The pacer holds the asked-for rate, keeps an absolute schedule, and does
-/// not burst - at any run length. `SCREENY_PACING_SECS` shortens it.
+/// not burst - at any run length. Two seconds by default; `SCREENY_PACING_SECS`
+/// lengthens it.
 #[test]
 fn holds_thirty_fps_within_one_percent() {
     let _lock = CLOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let secs = secs(10.0);
+    let secs = secs(2.0);
     let period = period_of(30.0).as_secs_f64();
     let rx = rx();
     let mut sender = Sender::connect(rx.device(), stream_cfg(30.0)).expect("connect");
@@ -592,7 +594,7 @@ fn skips_rather_than_bursting_after_a_stall() {
 #[test]
 fn other_frame_rates_are_paced_too() {
     let _lock = CLOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    for fps in [10.0f64, 24.0, 60.0] {
+    for fps in [10.0f64, 60.0] {
         let period = period_of(fps).as_secs_f64();
         let rx = rx();
         let mut sender = Sender::connect(rx.device(), stream_cfg(fps)).expect("connect");

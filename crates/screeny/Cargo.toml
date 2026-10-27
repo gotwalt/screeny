@@ -6,6 +6,18 @@ license.workspace = true
 description = "screeny host sender: frame encoders, per-frame codec chooser, mDNS discovery, paced UDP sender, and the screeny CLI"
 default-run = "screeny"
 autobenches = false
+# The integration tests are modules of one binary, `tests/host.rs`, so they
+# wait on their loopback streams side by side. `pacing.rs` keeps a process to
+# itself because it measures the wall clock.
+autotests = false
+
+[[test]]
+name = "host"
+path = "tests/host.rs"
+
+[[test]]
+name = "pacing"
+path = "tests/pacing.rs"
 
 [dependencies]
 screeny-proto = { path = "../proto" }

@@ -9,7 +9,7 @@
 //! back against `SimHandle`'s own view so that a field filled in at the wrong
 //! offset is caught.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 
