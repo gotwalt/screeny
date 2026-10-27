@@ -13,7 +13,7 @@
 //! frame, and `render_display()` - whether the *panel* is showing the frame,
 //! the status screen or an `IDENTIFY` overlay.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

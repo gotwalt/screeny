@@ -14,7 +14,7 @@
 //! Every wait has a deadline and every simulator is dropped by the test that
 //! started it.
 
-mod common;
+use crate::common;
 
 use common::{get, post, until_json, Temp};
 use std::net::SocketAddr;
@@ -32,10 +32,11 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// has a band of its own, because the two run at the same time in one binary
 /// and each probes its whole band.
 ///
-/// Clear of `tests/fleet.rs` (50800..50900) and `tests/device_status.rs`
-/// (50800..50920, 51000..51060), so two test binaries running at once do not
-/// take each other's ports either.
-const BAND: u16 = 50_940;
+/// Clear of every other file's band (`tests/studio.rs` runs them all in one
+/// process at once): `fleet.rs` 50800..50900, `soak.rs` 50920..50948,
+/// `channels.rs` 51000..51100, `device_status.rs` 53200..53320 and
+/// 53400..53460.
+const BAND: u16 = 50_960;
 /// The second test's band.
 const BAND2: u16 = BAND + PAIRS * 2;
 /// How many frame/control pairs are in each. Three panels' worth of room, so
@@ -250,7 +251,7 @@ async fn the_status_poll_follows_a_panel_that_moved() {
     let dir = Temp::new("movedhttp");
     // A known HTTP port: the studio reads one port for every device, and the
     // replacement simulator takes the same one back.
-    let http_port = 51_090;
+    let http_port = 53_490;
     let (mover, was_at) = start_sim(BAND2, "mov003", Some(http_port), &[]);
     let studio = studio_probing(BAND2, &dir.0, Some(http_port)).await;
     let at = studio.addr;

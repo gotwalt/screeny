@@ -3,6 +3,9 @@ name = "screeny-studio"
 version = "0.1.0"
 edition = "2021"
 description = "Screeny Studio: an HTTP + WebSocket server for designing generative art for the panel"
+# The integration tests are modules of one binary, `tests/studio.rs`, so they
+# wait out their fades and polls side by side rather than one file at a time.
+autotests = false
 
 [lib]
 name = "screeny_studio"
@@ -11,6 +14,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "screeny-studio"
 path = "src/main.rs"
+
+[[test]]
+name = "studio"
+path = "tests/studio.rs"
 
 [features]
 default = ["gpu"]

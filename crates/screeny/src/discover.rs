@@ -852,12 +852,14 @@ mod tests {
         );
         assert_eq!(pick(found, "screeny-bbbb").unwrap().instance, "screeny-bbbb");
 
-        // Unnamed, wanting every device: the whole window, as before.
+        // Unnamed, wanting every device: the whole window, as before. A short
+        // window says that as well as the default one, for a sixth of the wait.
+        let window = Duration::from_millis(500);
         let started = Instant::now();
-        let found = collect_until(DEFAULT_TIMEOUT, scripted(script()), |_| false);
+        let found = collect_until(window, scripted(script()), |_| false);
         let all = started.elapsed();
         assert!(
-            all >= DEFAULT_TIMEOUT,
+            all >= window,
             "an unnamed browse returned after {all:?}, short of the window"
         );
         assert_eq!(found.len(), 3, "an unnamed browse still returns every device");
@@ -933,7 +935,7 @@ mod tests {
         let nobody = SocketAddr::from(([127, 0, 0, 1], 1));
 
         let started = Instant::now();
-        let found = probe(Duration::from_secs(2), &[nobody, at]).expect("the socket");
+        let found = probe(Duration::from_millis(500), &[nobody, at]).expect("the socket");
         let took = started.elapsed();
         responder.join().expect("the responder finished");
 

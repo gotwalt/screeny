@@ -10,7 +10,7 @@
 //! Every test here is bounded by `PATIENCE` (2 s) or by an explicit short
 //! deadline. Nothing sleeps for a wall-clock timeout it did not choose.
 
-mod simfix;
+use crate::simfix;
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};

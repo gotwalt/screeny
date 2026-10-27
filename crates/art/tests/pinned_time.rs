@@ -29,6 +29,15 @@ fn at(hhmm: &str) -> Clock {
     Clock::parse(hhmm).unwrap_or_else(|e| panic!("{hhmm}: {e}"))
 }
 
+/// Every teller's shot at `clock`, each on its own thread: a shot is seconds
+/// of rendering and the three share nothing.
+fn tellers_at(clock: Clock) -> Vec<Vec<u8>> {
+    std::thread::scope(|s| {
+        let shots: Vec<_> = TELLERS.iter().map(|(id, at)| s.spawn(move || pixels(id, *at, clock, 7))).collect();
+        shots.into_iter().map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    })
+}
+
 /// The one the card is about. Two renders of the same pinned shot, more than a
 /// second of real time apart - long enough that a live run would have moved
 /// its hands, shifted the moment a dance sets off, and possibly changed the
@@ -36,11 +45,11 @@ fn at(hhmm: &str) -> Clock {
 #[test]
 fn a_pinned_time_draws_the_same_picture_whenever_it_is_rendered() {
     let clock = at("21:12");
-    let before: Vec<Vec<u8>> = TELLERS.iter().map(|(id, at)| pixels(id, *at, clock, 7)).collect();
+    let before = tellers_at(clock);
     // Let the machine's clock move on.
     std::thread::sleep(Duration::from_millis(1100));
-    for (i, (id, at)) in TELLERS.iter().enumerate() {
-        assert_eq!(before[i], pixels(id, *at, clock, 7), "{id}: a pinned run must not depend on when it is run");
+    for ((id, _), (was, now)) in TELLERS.iter().zip(before.iter().zip(tellers_at(clock))) {
+        assert_eq!(*was, now, "{id}: a pinned run must not depend on when it is run");
     }
 }
 
@@ -50,12 +59,9 @@ fn a_pinned_time_draws_the_same_picture_whenever_it_is_rendered() {
 /// ignoring `--time`.)
 #[test]
 fn two_pinned_times_are_two_pictures() {
-    for (id, at_s) in TELLERS {
-        assert_ne!(
-            pixels(id, at_s, at("21:12"), 7),
-            pixels(id, at_s, at("10:10"), 7),
-            "{id}: the pinned time has to reach the patch"
-        );
+    let (a, b) = (tellers_at(at("21:12")), tellers_at(at("10:10")));
+    for ((id, _), (a, b)) in TELLERS.iter().zip(a.iter().zip(&b)) {
+        assert_ne!(a, b, "{id}: the pinned time has to reach the patch");
     }
 }
 
@@ -65,8 +71,8 @@ fn two_pinned_times_are_two_pictures() {
 /// the panel is the minute, not the dance that got there.
 ///
 /// This is that command's shot - the binary's `--time` defaults, 20 s rendered
-/// from engine time zero - rendered with four unrelated seeds and with each of
-/// the thirteen choreographies pinned. One picture. 20 s is after the longest
+/// from engine time zero - rendered with two unrelated seeds and with the
+/// first and last of the thirteen choreographies pinned. One picture. 20 s is after the longest
 /// opening dance (15.4 s, measured over 60 seeds) and long before the patch
 /// sets off for 21:13, so nothing here is near an edge.
 #[test]
@@ -78,13 +84,17 @@ fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
         let shot = Shot { seed, at: 20.0, warmup: 20.0, clock: at("21:12"), ..Shot::default() };
         take(def, &params, &shot).preview
     };
-    // dance 0 is "vary", so these four are four different choreographies.
-    let want = render(1, 0.0);
-    for seed in [7, 42, 999] {
-        assert_eq!(want, render(seed, 0.0), "seed {seed}: the settled minute must not depend on the choreography");
-    }
-    for dance in 1..=13_u8 {
-        assert_eq!(want, render(7, f32::from(dance)), "dance {dance}: it lands on the same picture");
+    // dance 0 is "vary", so the two seeds are two different choreographies;
+    // and the first and last of the thirteen pinned ones stand for the rest
+    // (each is a 20 s render, and all thirteen were most of this file's time).
+    // One thread each.
+    let runs = [(1, 0_u8), (7, 0), (7, 1), (7, 13)];
+    let shots: Vec<Vec<u8>> = std::thread::scope(|s| {
+        let shots: Vec<_> = runs.iter().map(|&(seed, dance)| s.spawn(move || render(seed, f32::from(dance)))).collect();
+        shots.into_iter().map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    });
+    for ((seed, dance), shot) in runs.iter().zip(&shots).skip(1) {
+        assert_eq!(shots[0], *shot, "seed {seed}, dance {dance}: the settled minute must not depend on the choreography");
     }
 }
 

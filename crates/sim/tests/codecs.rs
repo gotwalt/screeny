@@ -5,7 +5,7 @@
 //! the sender meant. Anything less and a sender author cannot tell their own
 //! encoder's error from the device's.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

@@ -11,7 +11,7 @@
 //! server, or both, in any order, and the panel comes back showing what it was
 //! showing with nobody doing anything.
 
-mod common;
+use crate::common;
 
 use common::{get, post, studio_in, until, until_json, Temp, Ws, PATIENCE};
 use std::net::SocketAddr;

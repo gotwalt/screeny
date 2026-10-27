@@ -16,7 +16,7 @@
 //! wait is for the read that carries the *new number*, so the verdicts are
 //! asserted out of the same moment that produced them.
 
-mod common;
+use crate::common;
 
 use common::{post, until_json};
 use std::net::SocketAddr;

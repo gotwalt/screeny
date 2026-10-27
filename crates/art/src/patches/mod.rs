@@ -189,6 +189,32 @@ mod tests {
         assert_eq!(frame_of(def, 1), frame_of(def, 999_983));
     }
 
+    /// The cheap smoke over the whole registry: every patch this machine can
+    /// draw renders a few frames at its defaults without panicking, and every
+    /// pixel it hands the pipeline is a number. The long looks at each patch
+    /// are its own `--ignored` tests; this is what a plain `cargo test` keeps.
+    #[test]
+    fn every_patch_renders_a_few_finite_frames() {
+        let gpu = crate::gpu_status().available;
+        for def in ALL {
+            if need(def.id) != Need::Nothing && !gpu {
+                eprintln!("smoke: skipping `{}`: no graphics adapter here", def.id);
+                continue;
+            }
+            let params = Params::defaults(def.params);
+            let mut patch = (def.make)(7);
+            let dt = 1.0 / crate::FPS;
+            for i in 0..4 {
+                let t = f64::from(i) * dt;
+                let frame = patch.render(&Ctx { t, dt: if i == 0 { 0.0 } else { dt }, now: 1_700_000_000.0 + t, params: &params });
+                for k in 0..crate::frame::N {
+                    let c = frame.pixel(k);
+                    assert!(c.r.is_finite() && c.g.is_finite() && c.b.is_finite(), "`{}` frame {i} pixel {k}: {c:?}", def.id);
+                }
+            }
+        }
+    }
+
     /// Card 357: the one rule, over the three adapter states and every patch.
     #[test]
     fn playable_follows_what_each_patch_needs_over_every_adapter_state() {

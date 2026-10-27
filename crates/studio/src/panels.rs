@@ -1003,6 +1003,11 @@ mod tests {
         let panels = Panels::quiet(SharedMemory::default());
         let (a, b) = two(&panels);
         let home = panels.home();
+        // Watched, so it runs at the full rate: unconnected panels alone would
+        // leave it at `IDLE_FPS` once their fades are over, and 90 ticks at 5 a
+        // second is 18 s of `cargo test` that proves nothing more.
+        let mut viewer = home.screen().viewer();
+        viewer.set_wants_frames(true);
         render_a_while(&panels, 90);
         let ticks = home.ticks();
         assert!(ticks >= 90);

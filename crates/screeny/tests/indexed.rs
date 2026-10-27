@@ -12,7 +12,7 @@
 //! The second half of the file pins the fallback: what happens when no exact
 //! encoding fits, which must be lossy-but-visible rather than silent.
 
-mod simfix;
+use crate::simfix;
 
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
