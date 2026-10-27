@@ -79,11 +79,12 @@ pub const DEF: PatchDef = PatchDef {
 const PARAMS: &[ParamSpec] = &[
     choice("habit", "How the colony grows", HABIT_NAMES, 0.0),
     param("food", "How many food sources at once", 1.0, 8.0, 1.0, 4.0),
-    param("appetite", "How fast a source is eaten (1: about a minute, well fed)", 0.0, 4.0, 0.05, 1.0),
+    param("appetite", "How fast a source is eaten (1: about a minute, well fed)", 0.0, 4.0, 0.05, 0.5),
     param("scent", "How strongly food draws the colony", 0.0, 4.0, 0.05, 1.0),
     toggle("time", "Draw the time once a minute", true),
     toggle("24h", "24-hour time", false),
     param("hold", "How long the time's food lasts at most, seconds", 5.0, 50.0, 1.0, 25.0),
+    param("gather", "How far the colony changes its habit to write the time (0: writes as it lives)", 0.0, 1.0, 0.01, 0.85),
     param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.0),
     param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 1.0),
     param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
@@ -93,9 +94,11 @@ const PARAMS: &[ParamSpec] = &[
     param("exposure", "How bright, against the world's mean trail", 0.05, 2.0, 0.01, 0.5),
     param("contrast", "How steeply the veins fall off into black", 0.5, 4.0, 0.05, 1.6),
     param("cap", "How much trail a vein can hold, times the mean", 1.5, 40.0, 0.5, 8.0),
-    param("renewal", "Agents scattered afresh, thousandths per substep", 0.0, 5.0, 0.05, 0.5),
+    param("renewal", "Agents scattered afresh, thousandths per substep", 0.0, 5.0, 0.05, 0.2),
     param("agents", "Agents, millions (rebuilds the colony)", 0.1, 2.0, 0.05, 0.5),
-    param("steps", "Substeps per frame: exposure, and speed", 1.0, 8.0, 1.0, 4.0),
+    param("steps", "Substeps per frame: how smooth the motion is", 1.0, 8.0, 1.0, 4.0),
+    param("tempo", "How fast the colony lives (1: as first built; lower is gentler)", 0.1, 1.5, 0.05, 0.5),
+    param("glow", "How long an LED holds its light, seconds: motion glides rather than flutters", 0.0, 2.0, 0.05, 0.4),
 ];
 
 /// The world, cells: the panel's window at the widest `scale` and a margin.
@@ -115,6 +118,9 @@ impl Law {
     const fn k(v: f32) -> Law {
         Law(v, 0.0, 1.0)
     }
+    fn lerp(self, o: Law, t: f32) -> Law {
+        Law(self.0 + (o.0 - self.0) * t, self.1 + (o.1 - self.1) * t, self.2 + (o.2 - self.2) * t)
+    }
 }
 
 /// How a colony grows: the laws for sensor distance (cells), sensor angle
@@ -131,16 +137,38 @@ struct Habit {
     wobble: f32,
 }
 
-const HABIT_NAMES: &[&str] = &["veins", "searching", "worms"];
+impl Habit {
+    fn lerp(&self, o: &Habit, t: f32) -> Habit {
+        let m = |a: f32, b: f32| a + (b - a) * t;
+        Habit {
+            sd: self.sd.lerp(o.sd, t),
+            sa: self.sa.lerp(o.sa, t),
+            ra: self.ra.lerp(o.ra, t),
+            md: self.md.lerp(o.md, t),
+            decay: m(self.decay, o.decay),
+            diffuse: m(self.diffuse, o.diffuse),
+            wobble: m(self.wobble, o.wobble),
+        }
+    }
+}
+
+/// The habit the colony gathers toward to write the time: the classic
+/// network, the one that holds a numeral's shape.
+const WRITING: usize = 0;
+
+const HABIT_NAMES: &[&str] = &["veins", "rivers", "worms"];
 
 const HABITS: [Habit; 3] = [
     // Jones's classic network: narrow sensors, a wider turn.
     Habit { sd: Law::k(9.0), sa: Law::k(0.39), ra: Law::k(0.78), md: Law::k(1.0), decay: 0.06, diffuse: 0.6, wobble: 0.05 },
-    // Jenson's idea: in thick trail, sense further and turn harder; thin
-    // trail searches close.
-    Habit { sd: Law(3.0, 18.0, 0.6), sa: Law(0.3, 0.35, 0.8), ra: Law(0.25, 0.6, 1.2), md: Law::k(1.1), decay: 0.05, diffuse: 0.6, wobble: 0.05 },
-    // Fast where it is dense, slow where it is not: travelling worms.
-    Habit { sd: Law::k(11.0), sa: Law::k(0.5), ra: Law::k(0.22), md: Law(0.3, 1.8, 1.3), decay: 0.05, diffuse: 0.5, wobble: 0.1 },
+    // Long sensors, small turns: long flowing arcs. Takes the place of
+    // "searching" (Jenson's turn-harder-where-thick law), which at a gentle
+    // tempo circled in place into bright clumps and could not hold a
+    // numeral (the owner: "has the problem of the clock being illegible").
+    Habit { sd: Law(14.0, 4.0, 0.5), sa: Law::k(0.3), ra: Law::k(0.16), md: Law::k(1.0), decay: 0.05, diffuse: 0.6, wobble: 0.03 },
+    // Faster where it is dense: travelling worms. Calmed (the owner:
+    // "super frenetic and busy"): a gentler surge, less wobble.
+    Habit { sd: Law::k(11.0), sa: Law::k(0.5), ra: Law::k(0.22), md: Law(0.5, 0.6, 1.0), decay: 0.07, diffuse: 0.5, wobble: 0.03 },
 ];
 
 /// The palette's hues, around the loop of orientations: muted, mineral.
@@ -177,7 +205,7 @@ struct Node {
 }
 
 /// How long a source takes to fill in, and to fade once spent, seconds.
-const NODE_IN: f64 = 3.0;
+const NODE_IN: f64 = 8.0;
 /// A source this close to empty is gone.
 const SPENT: f32 = 0.02;
 /// The time's food: fades in and out over these, seconds.
@@ -214,6 +242,8 @@ struct Physarum {
     palette: Option<(f32, Vec<Rgb>)>,
     /// The last exposure, for how thick the colony is on each source.
     last_leds: Option<Vec<[f32; 4]>>,
+    /// The exposure as shown, after the afterglow.
+    glowing: Option<Vec<[f32; 4]>>,
     last: Option<Frame>,
 }
 
@@ -234,6 +264,7 @@ fn make(seed: u64) -> Box<dyn Patch> {
         food: vec![0.0; FOOD_W * FOOD_H],
         palette: None,
         last_leds: None,
+        glowing: None,
         last: None,
     })
 }
@@ -322,8 +353,12 @@ fn morsels(text: &[char], spacing: f32, dice: &mut Rng, now: f64) -> Vec<Node> {
 }
 
 impl Physarum {
-    fn habit(ctx: &Ctx) -> Habit {
-        HABITS[(ctx.get("habit") as usize).min(HABITS.len() - 1)]
+    /// The habit now: the chosen one, gathered toward [`WRITING`] while the
+    /// time is up - the colony changes how it lives to write, and relaxes
+    /// back after, as 36 Points moves between its points.
+    fn habit(&self, ctx: &Ctx) -> Habit {
+        let own = HABITS[(ctx.get("habit") as usize).min(HABITS.len() - 1)];
+        own.lerp(&HABITS[WRITING], ctx.get("gather") * self.time_strength(ctx))
     }
 
     /// The time's food now, 0..1: fading in when the minute turns, held,
@@ -589,13 +624,21 @@ impl Patch for Physarum {
         self.forage(ctx, leds.as_deref(), dt as f32, scale);
         self.lay_food(ctx, scale);
 
-        let habit = Self::habit(ctx);
+        let habit = self.habit(ctx);
         let Some(Some(sim)) = &mut self.sim else { return Frame::black() };
         let substeps = (ctx.get("steps") as u32).max(1) * steps;
         let density = sim.agents() as f32 / (WORLD_W * WORLD_H) as f32;
+        // `tempo` slows the colony's time, not its shape: a shorter step and
+        // a smaller turn per substep, and the trail fading and spreading
+        // per substep as it would over that share of one.
+        let tempo = ctx.get("tempo");
+        let (decay, diffuse) = (1.0 - (1.0 - habit.decay).powf(tempo), 1.0 - (1.0 - habit.diffuse).powf(tempo));
         let mut laws = [0.0; 12];
         for (k, l) in [habit.sd, habit.sa, habit.ra, habit.md].iter().enumerate() {
-            laws[3 * k..3 * k + 3].copy_from_slice(&[l.0, l.1, l.2]);
+            // Sensor distance and angle are shape; the turn and the step
+            // are per substep, so they scale.
+            let per = if k >= 2 { tempo } else { 1.0 };
+            laws[3 * k..3 * k + 3].copy_from_slice(&[l.0 * per, l.1 * per, l.2]);
         }
         let (ox, oy) = window(scale);
         let params: Vec<Params> = (0..substeps)
@@ -607,16 +650,16 @@ impl Patch for Physarum {
                     n: sim.agents(),
                     seed: self.substep.wrapping_mul(0x9e37_79b9),
                     laws,
-                    deposit: 1.0,
-                    decay: habit.decay,
-                    diffuse: habit.diffuse,
-                    inv_ref: habit.decay / density,
+                    deposit: tempo,
+                    decay,
+                    diffuse,
+                    inv_ref: decay / (density * tempo),
                     ox,
                     oy,
                     scale,
                     first: 0,
-                    wobble: habit.wobble,
-                    respawn: ctx.get("renewal") * 1e-3,
+                    wobble: habit.wobble * tempo.sqrt(),
+                    respawn: ctx.get("renewal") * 1e-3 * tempo,
                     cap: ctx.get("cap"),
                     emit: ctx.get("scent") * 0.5,
                     food_k: FOOD_K,
@@ -627,6 +670,18 @@ impl Patch for Physarum {
         let Some(mut leds) = sim.frame(&params, &self.food) else { return Frame::black() };
         let inv = 1.0 / substeps as f32;
         leds.iter_mut().for_each(|v| v.iter_mut().for_each(|c| *c *= inv));
+        // Afterglow: each LED eases toward its new light rather than taking
+        // it at once. Display only - the colony does not see it.
+        let glow = ctx.get("glow");
+        if let Some(prev) = &self.glowing {
+            let keep = if glow > 0.0 { (-(dt as f32) / glow).exp() } else { 0.0 };
+            for (v, p) in leds.iter_mut().zip(prev) {
+                for c in 0..4 {
+                    v[c] = p[c] + (v[c] - p[c]) * (1.0 - keep);
+                }
+            }
+        }
+        self.glowing = Some(leds.clone());
         let frame = self.paint(ctx, &leds);
         self.last_leds = Some(leds);
         self.last = Some(frame.clone());
