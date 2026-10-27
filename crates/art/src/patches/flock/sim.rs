@@ -1168,7 +1168,15 @@ impl Sim {
         // is why a dive reads as a dive from inside the flock: the birds are
         // going somewhere faster, not merely lower.
         let along = (a.dot(fwd) - TRADE * sin_g * if camera { 0.35 } else { 1.0 }).clamp(-3.5, 3.5);
-        let across = a.across(fwd).clamp_len(turn * speed);
+        // The heading swings by `across / v` against the speed *after* this
+        // step, so braking through a turn at the limit overshoots it: a
+        // camera slowing at 3.5 m/s^2 from 4 m/s turned at x1.03 (seed 29 of
+        // the shipped defaults). The camera is clamped against the speed it
+        // will have. A bird is not: its overshoot sits inside the dodge
+        // allowance, and clamping it too made the long run's flight measurably
+        // more periodic (r over 0.6 on 4 seeds of 12, against 1 without).
+        let v = if camera { (speed + along.min(0.0) * dt).max(0.1) } else { speed };
+        let across = a.across(fwd).clamp_len(turn * v);
         let a = fwd.scale(along).add(across);
 
         me.vel = me.vel.add(a.scale(dt));
