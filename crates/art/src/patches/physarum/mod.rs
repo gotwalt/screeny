@@ -25,9 +25,14 @@
 //! veins between them, and black: something the eye can follow at this
 //! size.
 //!
-//! **The time.** Once a minute, food is laid along the strokes of the time
-//! (vesta's numerals, [`crate::faces::stroked`]): the colony draws `HH:MM`
-//! as a network, holds it, and lets it go when the food fades.
+//! **The time.** Once a minute, food is scattered along the strokes of the
+//! time (vesta's numerals, [`crate::faces::stroked`]) as morsels, a couple
+//! of LEDs apart, arriving over a few seconds left to right. Nothing of the
+//! time is drawn: the colony finds the morsels and links them with veins of
+//! its own, so each numeral is the colony's guess at the glyph - bending,
+//! shortcutting - and it eats them as it goes, so the time erodes unevenly
+//! while you read it. The owner: "I'd kind of rather have an unstable
+//! temporary rendering of the time than a fixed static render".
 //!
 //! **Why so many agents for 2048 LEDs.** The world is 512 x 256 cells, the
 //! panel a window six cells to the LED with a margin all round; each LED is
@@ -77,7 +82,9 @@ const PARAMS: &[ParamSpec] = &[
     param("scent", "How strongly food draws the colony", 0.0, 4.0, 0.05, 1.0),
     toggle("time", "Draw the time once a minute", true),
     toggle("24h", "24-hour time", false),
-    param("hold", "How long the time stays, seconds", 5.0, 50.0, 1.0, 25.0),
+    param("hold", "How long the time's food lasts at most, seconds", 5.0, 50.0, 1.0, 25.0),
+    param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.0),
+    param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 1.0),
     param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
     param("palette", "Turns the palette: which orientation wears which colour", 0.0, 1.0, 0.01, 0.0),
     param("drift", "How fast the palette turns by itself, turns per hour", 0.0, 4.0, 0.05, 0.5),
@@ -171,8 +178,13 @@ const TIME_IN: f64 = 3.0;
 const TIME_OUT: f64 = 6.0;
 /// While the time is drawn, the other food breathes at this share.
 const QUIET: f32 = 0.1;
-/// The time's scent against a food source's.
-const TIME_SCENT: f32 = 1.6;
+/// A time morsel's scent against a food source's, and its size, LEDs.
+const TIME_SCENT: f32 = 2.2;
+const MORSEL: f32 = 0.8;
+/// The morsels arrive over this long, left to right, seconds, give or take
+/// `ARRIVE_JITTER`.
+const ARRIVE: f32 = 4.0;
+const ARRIVE_JITTER: f32 = 1.5;
 
 struct Physarum {
     seed: u64,
@@ -188,6 +200,8 @@ struct Physarum {
     minute: Option<i64>,
     time_at: f64,
     time_text: Vec<char>,
+    /// The time's food, as morsels.
+    morsels: Vec<Node>,
     food: Vec<f32>,
     /// The last exposure, for how thick the colony is on each source.
     last_leds: Option<Vec<[f32; 4]>>,
@@ -207,6 +221,7 @@ fn make(seed: u64) -> Box<dyn Patch> {
         minute: None,
         time_at: f64::NEG_INFINITY,
         time_text: Vec::new(),
+        morsels: Vec::new(),
         food: vec![0.0; FOOD_W * FOOD_H],
         last_leds: None,
         last: None,
@@ -254,6 +269,48 @@ fn layout(text: &[char]) -> Vec<(char, f32)> {
         .collect()
 }
 
+/// The time's food: morsels scattered along the strokes of `text`, about
+/// `spacing` LEDs apart, each arriving a little after the one to its left.
+fn morsels(text: &[char], spacing: f32, dice: &mut Rng, now: f64) -> Vec<Node> {
+    const FINE: f32 = 0.25;
+    let mid = H as f32 * 0.5;
+    // Every point on a stroke's skeleton, on a fine grid, in a shuffled
+    // order; then keep each that is clear of those kept.
+    let mut on: Vec<(f32, f32)> = Vec::new();
+    for (c, cx) in layout(text) {
+        match c.to_digit(10) {
+            Some(d) => {
+                for j in 0..=((2.0 * stroked::B + 2.0) / FINE) as i32 {
+                    for i in 0..=((2.0 * stroked::A + 2.0) / FINE) as i32 {
+                        let (x, y) = (i as f32 * FINE - stroked::A - 1.0, j as f32 * FINE - stroked::B - 1.0);
+                        if stroked::distance(d as usize, x, y) < FINE * 0.75 {
+                            on.push((cx + x, mid + y));
+                        }
+                    }
+                }
+            }
+            // The colon: its two dots.
+            None => on.extend([(cx, mid - 5.0), (cx, mid + 5.0)]),
+        }
+    }
+    for k in (1..on.len()).rev() {
+        let j = (dice.u64() % (k as u64 + 1)) as usize;
+        on.swap(k, j);
+    }
+    let mut kept: Vec<(f32, f32)> = Vec::new();
+    for p in on {
+        if kept.iter().all(|q| (p.0 - q.0).hypot(p.1 - q.1) >= spacing) {
+            kept.push(p);
+        }
+    }
+    kept.into_iter()
+        .map(|(x, y)| {
+            let arrive = ARRIVE * x / W as f32 + dice.range(0.0, ARRIVE_JITTER);
+            Node { x: x + dice.range(-0.3, 0.3), y: y + dice.range(-0.3, 0.3), r: MORSEL, left: 1.0, born: now + f64::from(arrive) }
+        })
+        .collect()
+}
+
 impl Physarum {
     fn habit(ctx: &Ctx) -> Habit {
         HABITS[(ctx.get("habit") as usize).min(HABITS.len() - 1)]
@@ -275,11 +332,10 @@ impl Physarum {
     /// Food comes and goes: a spent source is dropped, and a new one is
     /// placed a while later, away from the others.
     fn forage(&mut self, ctx: &Ctx, leds: Option<&[[f32; 4]]>, dt: f32, scale: f32) {
-        let appetite = ctx.get("appetite");
         let cap = ctx.get("cap");
         if let Some(leds) = leds {
-            for n in &mut self.nodes {
-                // How thick the colony is on it, a share of the cap.
+            // How thick the colony is on a node, a share of the cap.
+            let fed = |n: &Node| {
                 let (cx, cy) = (n.x.round() as i32, n.y.round() as i32);
                 let mut sum = 0.0;
                 for dy in -1..=1 {
@@ -288,11 +344,24 @@ impl Physarum {
                         sum += leds[y * W + x][0];
                     }
                 }
-                let fed = (sum / 9.0 / cap).clamp(0.0, 1.0);
-                n.left -= dt * appetite * fed / 60.0;
+                (sum / 9.0 / cap).clamp(0.0, 1.0)
+            };
+            let appetite = ctx.get("appetite") / 60.0;
+            for n in &mut self.nodes {
+                n.left -= dt * appetite * fed(n);
+            }
+            let erode = ctx.get("erode") / 20.0;
+            for n in &mut self.morsels {
+                if n.born <= self.t {
+                    n.left -= dt * erode * fed(n);
+                }
             }
         }
         self.nodes.retain(|n| n.left > SPENT);
+        self.morsels.retain(|n| n.left > SPENT);
+        if self.time_strength(ctx) <= 0.0 && self.t > self.time_at {
+            self.morsels.clear();
+        }
         let want = ctx.get("food") as usize;
         if self.nodes.len() < want && self.t >= self.next_node {
             let first = self.nodes.is_empty() && self.t < 1.0;
@@ -317,7 +386,6 @@ impl Physarum {
         let (ox, oy) = window(scale);
         let time = self.time_strength(ctx);
         let quiet = 1.0 - (1.0 - QUIET) * time;
-        let glyphs = layout(&self.time_text);
         // A food cell's centre in panel LEDs.
         let to_led = |i: usize, j: usize| {
             (((i as f32 + 0.5) * FOOD_K as f32 - ox) / scale, ((j as f32 + 0.5) * FOOD_K as f32 - oy) / scale)
@@ -331,16 +399,14 @@ impl Physarum {
                     let d2 = ((x - n.x).powi(2) + (y - n.y).powi(2)) / (n.r * n.r);
                     f += grow * n.left.sqrt() * (-d2).exp() * quiet;
                 }
-                if time > 0.0 && (-1.0..H as f32 + 1.0).contains(&y) {
-                    let mut d = f32::MAX;
-                    for (c, cx) in &glyphs {
-                        d = d.min(match c.to_digit(10) {
-                            Some(digit) => stroked::distance(digit as usize, x - cx, y - H as f32 * 0.5),
-                            // The colon: two dots.
-                            None => (x - cx).hypot((y - H as f32 * 0.5).abs() - 5.0),
-                        });
+                if time > 0.0 {
+                    for n in &self.morsels {
+                        let d2 = ((x - n.x).powi(2) + (y - n.y).powi(2)) / (n.r * n.r);
+                        if d2 < 9.0 {
+                            let grow = smoothstep(0.0, 1.5, (self.t - n.born) as f32);
+                            f += TIME_SCENT * time * grow * n.left.sqrt() * (-d2).exp();
+                        }
                     }
-                    f += TIME_SCENT * time * (-(d / 0.9).powi(2)).exp();
                 }
                 self.food[j * FOOD_W + i] = f;
             }
@@ -453,6 +519,8 @@ impl Patch for Physarum {
         if ctx.get("time") > 0.5 && self.minute != Some(minute) {
             self.time_at = self.t;
             self.time_text = time_text(ctx.now, ctx.get("24h") > 0.5);
+            let mut dice = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+            self.morsels = morsels(&self.time_text, ctx.get("spacing"), &mut dice, self.t);
         }
         self.minute = Some(minute);
 
