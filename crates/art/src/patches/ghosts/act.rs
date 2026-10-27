@@ -282,7 +282,8 @@ pub(crate) fn arm_gesture(shape: Shape, el: f32) -> Arms {
 
     let mut left = ArmPose { pitch, elbow: 0.16 };
     let mut right = ArmPose { pitch, elbow: 0.16 };
-    let waved = ArmPose { pitch: pitch + waving * WAVE_PITCH_AMP * wave_osc, elbow: 0.16 + waving * WAVE_ELBOW_AMP * wave_osc };
+    let waved =
+        ArmPose { pitch: pitch + waving * WAVE_PITCH_AMP * wave_osc, elbow: 0.16 + waving * WAVE_ELBOW_AMP * wave_osc };
     if shape.wave_side > 0.0 {
         right = waved;
     } else {
@@ -449,12 +450,20 @@ impl Act {
                 let depth = if self.kind == Kind::Boo {
                     boo_depth(p.shape, active_el, dur)
                 } else {
-                    p.shape.depth_amp * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin()
+                    p.shape.depth_amp
+                        * (p.shape.depth_rate * active_el + p.shape.phase0 * 0.7 + std::f32::consts::FRAC_PI_2).sin()
                 };
                 let gaze = self.gaze_of(i, active_el, dur, &centres);
-                let arms = if self.kind == Kind::Boo { boo_arms(p.shape, active_el, dur) } else { arm_gesture(p.shape, active_el) };
-                let alpha =
-                    if self.kind == Kind::Materialize { materialize_alpha(p.shape, active_el, dur) } else { p.shape.alpha };
+                let arms = if self.kind == Kind::Boo {
+                    boo_arms(p.shape, active_el, dur)
+                } else {
+                    arm_gesture(p.shape, active_el)
+                };
+                let alpha = if self.kind == Kind::Materialize {
+                    materialize_alpha(p.shape, active_el, dur)
+                } else {
+                    p.shape.alpha
+                };
                 Some(Pose { key, shape: p.shape, cx: x, cy: y, depth, yaw, gaze, arms, alpha })
             })
             .collect()
@@ -550,8 +559,11 @@ impl Act {
             Kind::Rise => {
                 let vmargin = super::cloth::total_height(p.shape) + 1.6;
                 let u = (el / dur).clamp(0.0, 1.0);
-                let (y0, y1) =
-                    if p.flip { (-vmargin, crate::frame::H as f32 + vmargin) } else { (crate::frame::H as f32 + vmargin, -vmargin) };
+                let (y0, y1) = if p.flip {
+                    (-vmargin, crate::frame::H as f32 + vmargin)
+                } else {
+                    (crate::frame::H as f32 + vmargin, -vmargin)
+                };
                 let y = lerp(y0, y1, u);
                 let x = p.y + p.amp * (TAU * p.freq * el + p.shape.phase0).sin();
                 (x, y, el)
@@ -783,7 +795,8 @@ fn boo_arms(shape: Shape, el: f32, dur: f32) -> Arms {
     } else {
         1.0 - smooth01((el - enter - hold) / leave)
     };
-    let mix = |a: ArmPose, b: ArmPose, t: f32| ArmPose { pitch: lerp(a.pitch, b.pitch, t), elbow: lerp(a.elbow, b.elbow, t) };
+    let mix =
+        |a: ArmPose, b: ArmPose, t: f32| ArmPose { pitch: lerp(a.pitch, b.pitch, t), elbow: lerp(a.elbow, b.elbow, t) };
     Arms { left: mix(base, raised, u), right: mix(base, raised, u) }
 }
 
@@ -1052,7 +1065,13 @@ impl Director {
                 let max_hop = (ground - shapes[0].head_r - 1.0).max(1.0);
                 let hop_amp = (shapes[0].total_height() * self.rng.range(0.8, 1.3) * (0.6 + 0.6 * bounce)).min(max_hop);
                 let plan = Plan { shape: shapes[0], flip, y: ground, amp: hop_amp, freq: bounce, bounces, delay: 0.0 };
-                (format!("bounce x{} {}", bounces as u32, side_word(flip)), vec!["kind:bounce".into(), side_tag(flip)], vec![plan], dur, dur)
+                (
+                    format!("bounce x{} {}", bounces as u32, side_word(flip)),
+                    vec!["kind:bounce".into(), side_tag(flip)],
+                    vec![plan],
+                    dur,
+                    dur,
+                )
             }
             Kind::Peek => {
                 // At least the whole sheet's own extent, with headroom - a
@@ -1110,7 +1129,13 @@ impl Director {
                         delay,
                     })
                     .collect();
-                (format!("chase, {}", side_word(flip)), vec!["kind:chase".into(), side_tag(flip)], plans, dur, dur + delay)
+                (
+                    format!("chase, {}", side_word(flip)),
+                    vec!["kind:chase".into(), side_tag(flip)],
+                    plans,
+                    dur,
+                    dur + delay,
+                )
             }
             Kind::Boo => {
                 let dur = self.rng.range(4.5, 7.0) as f64 / f64::from(pace);
@@ -1152,7 +1177,8 @@ impl Director {
                 let x_lo = hmargin;
                 let x_hi = (crate::frame::W as f32 - hmargin).max(x_lo + 0.5);
                 let x = self.rng.range(x_lo, x_hi);
-                let plan = Plan { shape: shapes[0], flip, y: x, amp: bob_amp * 0.5, freq: bob_freq, bounces: 0.0, delay: 0.0 };
+                let plan =
+                    Plan { shape: shapes[0], flip, y: x, amp: bob_amp * 0.5, freq: bob_freq, bounces: 0.0, delay: 0.0 };
                 let name = if flip { "sink, out the bottom" } else { "rise, from below" };
                 (name.to_string(), vec!["kind:rise".into()], vec![plan], dur, dur)
             }
@@ -1224,7 +1250,9 @@ mod tests {
             }
             d.poses_at(119.5)
         };
-        let key = |poses: &[Pose]| -> Vec<(i64, i64)> { poses.iter().map(|p| ((p.cx * 1000.0) as i64, (p.cy * 1000.0) as i64)).collect() };
+        let key = |poses: &[Pose]| -> Vec<(i64, i64)> {
+            poses.iter().map(|p| ((p.cx * 1000.0) as i64, (p.cy * 1000.0) as i64)).collect()
+        };
         assert_eq!(key(&coarse), key(&fine));
     }
 
@@ -1262,12 +1290,20 @@ mod tests {
                 if act.kind == Kind::Rise {
                     let vmargin = pose.shape.total_height() + 1.6;
                     let clear = pose.cy < -vmargin + 0.5 || pose.cy > crate::frame::H as f32 + vmargin - 0.5;
-                    assert!(clear, "{}: ghost at y={} (vmargin {vmargin}) is on screen at an edge of its act", act.name, pose.cy);
+                    assert!(
+                        clear,
+                        "{}: ghost at y={} (vmargin {vmargin}) is on screen at an edge of its act",
+                        act.name, pose.cy
+                    );
                     continue;
                 }
                 let margin = pose.shape.margin();
                 let clear = pose.cx < -margin + 0.5 || pose.cx > W as f32 + margin - 0.5;
-                assert!(clear, "{}: ghost at x={} (margin {margin}) is on screen at an edge of its act", act.name, pose.cx);
+                assert!(
+                    clear,
+                    "{}: ghost at x={} (margin {margin}) is on screen at an edge of its act",
+                    act.name, pose.cx
+                );
             }
         }
     }
@@ -1305,7 +1341,10 @@ mod tests {
             assert!(end[0].alpha < 0.05, "not near-invisible at the end: {}", end[0].alpha);
             assert!(mid[0].alpha > start[0].shape.alpha * 0.9, "not near full alpha mid-hold: {}", mid[0].alpha);
             // Never moves.
-            assert!((start[0].cx - mid[0].cx).abs() < 1e-3 && (start[0].cy - mid[0].cy).abs() < 1e-3, "a materialize moved");
+            assert!(
+                (start[0].cx - mid[0].cx).abs() < 1e-3 && (start[0].cy - mid[0].cy).abs() < 1e-3,
+                "a materialize moved"
+            );
         }
         assert!(found, "no `materialize` act landed in 300s at seed 42 - not a meaningful run of this test");
     }
@@ -1357,7 +1396,10 @@ mod tests {
             assert_eq!(keys.len(), before, "two ghosts shared a key at t={t}: {poses:?}");
             t += 0.2;
         }
-        assert!(saw_more_than_one, "never saw more than one ghost at once in ten minutes - not a meaningful run of this test");
+        assert!(
+            saw_more_than_one,
+            "never saw more than one ghost at once in ten minutes - not a meaningful run of this test"
+        );
     }
 
     /// A long run keeps finding new combinations rather than settling into a

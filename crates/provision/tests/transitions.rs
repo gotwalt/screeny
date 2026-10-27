@@ -4,11 +4,10 @@
 //!
 //! No radio, no clock, no sleeping: the whole table runs in microseconds.
 
-use screeny_provision::{
-    Action, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, TrialOrigin,
-    TrialOutcome, UriForm,
-};
 use screeny_proto::control::{state as tstate, wifi_state};
+use screeny_provision::{
+    Action, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, TrialOrigin, TrialOutcome, UriForm,
+};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -27,12 +26,7 @@ const T: Timing = Timing {
 };
 
 fn cfg(stored: bool) -> Config<'static> {
-    Config {
-        ap_ssid: "screeny-4a00a4",
-        has_stored: stored,
-        form: UriForm::NoPass,
-        timing: T,
-    }
+    Config { ap_ssid: "screeny-4a00a4", has_stored: stored, form: UriForm::NoPass, timing: T }
 }
 
 fn booted(stored: bool) -> (Provisioner, Vec<Action>) {
@@ -71,13 +65,7 @@ fn provisioned_through_the_portal() -> Provisioner {
 fn boot_with_stored_credentials_joins() {
     let (p, actions) = booted(true);
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        actions,
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(actions, [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
     assert_eq!(p.wifi_state(), wifi_state::CONNECTING);
     assert!(!p.ap_up(), "no soft-AP while the stored credentials are tried");
 }
@@ -100,11 +88,7 @@ fn joining_that_succeeds_goes_online_and_announces() {
     let (mut p, _) = booted(true);
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, 40);
     assert_eq!(p.state(), State::Online);
-    assert_eq!(
-        a.as_slice(),
-        [Action::Announce],
-        "stored credentials are already stored: nothing to commit"
-    );
+    assert_eq!(a.as_slice(), [Action::Announce], "stored credentials are already stored: nothing to commit");
     assert_eq!(p.wifi_state(), wifi_state::CONNECTED);
     assert_eq!(p.overlay_state(), None, "ONLINE is not a provisioning state");
     assert_eq!(p.ip(), Some([192, 168, 7, 221]));
@@ -119,14 +103,8 @@ fn three_failed_attempts_raise_the_portal() {
     assert_eq!(
         a,
         [
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 2
-            },
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 3
-            },
+            Action::StartJoin { which: JoinTarget::Stored, attempt: 2 },
+            Action::StartJoin { which: JoinTarget::Stored, attempt: 3 },
             Action::RaiseAp,
         ]
     );
@@ -138,10 +116,7 @@ fn three_failed_attempts_raise_the_portal() {
 /// `3 x join_attempt_ms`, which at [`Timing::SPEC`] is 007's "~45 s".
 #[test]
 fn a_silent_radio_reaches_the_portal_after_three_attempt_windows() {
-    let mut p = Provisioner::new(&Config {
-        timing: Timing::SPEC,
-        ..cfg(true)
-    });
+    let mut p = Provisioner::new(&Config { timing: Timing::SPEC, ..cfg(true) });
     p.step(Event::Boot, 0);
     // One tick a second, as the firmware will.
     let mut now = 0;
@@ -160,13 +135,7 @@ fn a_posted_credential_starts_a_trial_and_commits_nothing() {
     let (mut p, _) = booted(false);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
     assert_eq!(p.state(), State::Trial);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Trial,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Trial, attempt: 1 }]);
     assert!(p.ap_up(), "the AP is never dropped for a trial");
     assert!(!p.has_stored(), "nothing is committed before it works");
     assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Trying);
@@ -182,15 +151,7 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, 600);
     assert_eq!(p.state(), State::Online);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::CommitCredentials {
-                which: JoinTarget::Trial
-            },
-            Action::Announce,
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::CommitCredentials { which: JoinTarget::Trial }, Action::Announce,]);
     assert!(p.has_stored());
     assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Connected);
     assert_eq!(p.trial().unwrap().ip, Some([192, 168, 7, 221]));
@@ -204,7 +165,7 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
     assert!(p.ap_up());
     assert!(p.trial_is_current());
 
-    let a = p.step(Event::Tick, 600 + T.ap_grace_ms, );
+    let a = p.step(Event::Tick, 600 + T.ap_grace_ms);
     assert_eq!(a.as_slice(), [Action::DropAp]);
     assert!(!p.ap_up());
     // With the AP gone nobody is on the portal, and the station speaks for
@@ -226,17 +187,9 @@ fn a_trial_that_fails_reports_why_and_leaves_the_store_alone() {
     assert!(p.has_stored());
 
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 100);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        200,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::AuthError }, 200);
     assert_eq!(p.state(), State::Portal);
-    assert!(
-        a.is_empty(),
-        "the AP never went down, so nothing has to be raised again"
-    );
+    assert!(a.is_empty(), "the AP never went down, so nothing has to be raised again");
     assert!(p.ap_up());
     assert!(p.has_stored(), "a failed trial must not touch the store");
     let t = p.trial().unwrap();
@@ -250,11 +203,9 @@ fn a_trial_that_fails_reports_why_and_leaves_the_store_alone() {
 /// 007 section 7 gives `GET /api/v1/wifi`.
 #[test]
 fn every_failure_reason_reaches_the_page() {
-    for (reason, word) in [
-        (FailReason::AuthError, "auth"),
-        (FailReason::NetworkNotFound, "not_found"),
-        (FailReason::Other, "other"),
-    ] {
+    for (reason, word) in
+        [(FailReason::AuthError, "auth"), (FailReason::NetworkNotFound, "not_found"), (FailReason::Other, "other")]
+    {
         let (mut p, _) = booted(false);
         p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
         // A transient reason is retried; drive it to the end either way.
@@ -275,31 +226,15 @@ fn every_failure_reason_reaches_the_page() {
 fn an_auth_error_is_not_retried_but_a_transient_failure_is() {
     let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        20,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::AuthError }, 20);
     assert_eq!(p.state(), State::Portal);
     assert!(a.is_empty());
 
     let (mut p, _) = booted(false);
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 10);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::NetworkNotFound,
-        },
-        20,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::NetworkNotFound }, 20);
     assert_eq!(p.state(), State::Trial);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Trial,
-            attempt: 2
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Trial, attempt: 2 }]);
 }
 
 /// Row 8: `PORTAL` + a retry tick with no station associated -> `JOINING`.
@@ -316,17 +251,8 @@ fn the_portal_retries_the_stored_credentials_when_nobody_is_on_it() {
 
     let a = p.step(Event::Tick, T.portal_retry_ms + 10);
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
-    assert!(
-        p.ap_up(),
-        "the retry keeps the AP up: APSTA, so the portal survives it"
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
+    assert!(p.ap_up(), "the retry keeps the AP up: APSTA, so the portal survives it");
     // And if it works this time, the AP comes down after the grace window.
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, T.portal_retry_ms + 20);
     assert_eq!(a.as_slice(), [Action::Announce]);
@@ -351,13 +277,7 @@ fn the_retry_is_suppressed_while_a_phone_is_on_the_portal() {
     assert_eq!(p.ap_clients(), 0);
     let a = p.step(Event::Tick, T.portal_retry_ms * 5 + 2);
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
 }
 
 /// Card 221: with an empty store there is nothing to retry, so the portal
@@ -387,13 +307,7 @@ fn a_link_that_stays_down_goes_back_to_joining() {
 
     let a = p.step(Event::Tick, 2_000 + T.link_down_ms);
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
     assert_eq!(p.ip(), None);
 }
 
@@ -449,10 +363,7 @@ fn button_wipe_from_every_state() {
     assert_eq!(p.state(), State::Joining);
     let a = p.step(Event::ButtonWipe, 5);
     assert_eq!(p.state(), State::Portal);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StopJoin, Action::ClearCredentials, Action::RaiseAp]
-    );
+    assert_eq!(a.as_slice(), [Action::StopJoin, Action::ClearCredentials, Action::RaiseAp]);
 
     // Online: no AP is up, so it has to be raised.
     let mut p = provisioned_through_the_portal();
@@ -473,11 +384,7 @@ fn button_wipe_from_every_state() {
     assert_eq!(p.state(), State::Portal);
     assert_eq!(a.as_slice(), [Action::ClearCredentials]);
     assert!(!p.has_stored());
-    assert_eq!(
-        p.wifi_state(),
-        wifi_state::DISCONNECTED,
-        "a wipe is not a failure"
-    );
+    assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED, "a wipe is not a failure");
 
     // Trial.
     let (mut p, _) = booted(false);
@@ -519,10 +426,7 @@ fn every_timer_survives_the_49_day_wrap() {
     let a = p.step(Event::Tick, NEAR.wrapping_add(T.join_attempt_ms));
     assert_eq!(
         a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 2
-        }],
+        [Action::StartJoin { which: JoinTarget::Stored, attempt: 2 }],
         "the attempt window must not be either instant or infinite across a wrap"
     );
 
@@ -533,9 +437,7 @@ fn every_timer_survives_the_49_day_wrap() {
     assert_eq!(p.state(), State::Portal);
     // `fail_n` spent three milliseconds getting here, so the retry is due
     // three milliseconds later too.
-    assert!(p
-        .step(Event::Tick, NEAR.wrapping_add(T.portal_retry_ms + 2))
-        .is_empty());
+    assert!(p.step(Event::Tick, NEAR.wrapping_add(T.portal_retry_ms + 2)).is_empty());
     p.step(Event::Tick, NEAR.wrapping_add(T.portal_retry_ms + 3));
     assert_eq!(p.state(), State::Joining);
 
@@ -549,9 +451,7 @@ fn every_timer_survives_the_49_day_wrap() {
     assert_eq!(a.as_slice(), [Action::DropAp]);
 
     p.step(Event::LinkDown, NEAR.wrapping_add(100));
-    assert!(p
-        .step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms - 1))
-        .is_empty());
+    assert!(p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms - 1)).is_empty());
     p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms));
     assert_eq!(p.state(), State::Joining);
 
@@ -570,16 +470,7 @@ fn a_very_late_tick_still_fires_every_timer() {
     // both long expired.
     p.step(Event::LinkDown, 1_100);
     let a = p.step(Event::Tick, 3_600_000);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::DropAp,
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 1
-            }
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::DropAp, Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
     assert_eq!(p.state(), State::Joining);
 }
 
@@ -592,16 +483,7 @@ fn a_second_post_during_a_trial_restarts_it() {
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 10);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 20);
     assert_eq!(p.state(), State::Trial);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::StopJoin,
-            Action::StartJoin {
-                which: JoinTarget::Trial,
-                attempt: 1
-            }
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::StopJoin, Action::StartJoin { which: JoinTarget::Trial, attempt: 1 }]);
     assert_eq!(p.trial().unwrap().ssid.as_str(), "Example-Wifi1");
 }
 
@@ -616,9 +498,7 @@ fn events_that_do_not_apply_are_ignored() {
     for ev in [
         Event::Boot,
         Event::Joined { ip: [1, 2, 3, 4] },
-        Event::JoinFailed {
-            reason: FailReason::Other,
-        },
+        Event::JoinFailed { reason: FailReason::Other },
         Event::LinkDown,
         Event::LinkUp,
     ] {
@@ -682,12 +562,7 @@ fn the_state_bytes_match_007_section_5_2() {
     assert_eq!(p.wifi_state(), wifi_state::CONNECTING); // TRIAL
     assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
 
-    p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        20,
-    );
+    p.step(Event::JoinFailed { reason: FailReason::AuthError }, 20);
     assert_eq!(p.wifi_state(), wifi_state::FAILED); // PORTAL after a failure
     assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
 }
@@ -719,12 +594,7 @@ fn the_panel_shows_the_portal_then_the_address_then_nothing() {
 
     // Then the address, for exactly `connected_screen_ms`.
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 200);
-    assert_eq!(
-        p.screen(200),
-        Some(Screen::Connected {
-            ip: [192, 168, 7, 221]
-        })
-    );
+    assert_eq!(p.screen(200), Some(Screen::Connected { ip: [192, 168, 7, 221] }));
     assert!(p.screen(200 + T.connected_screen_ms - 1).is_some());
     assert_eq!(p.screen(200 + T.connected_screen_ms), None);
 }
@@ -745,10 +615,7 @@ fn a_boot_time_join_does_not_take_the_panel() {
 fn a_name_that_cannot_be_a_qr_gets_the_text_layout_every_time() {
     use screeny_provision::{render, Layout, Screen};
 
-    let mut p = Provisioner::new(&Config {
-        ap_ssid: "screeny-a-very-long-name",
-        ..cfg(false)
-    });
+    let mut p = Provisioner::new(&Config { ap_ssid: "screeny-a-very-long-name", ..cfg(false) });
     p.step(Event::Boot, 0);
     for t in [0, 40, 4_000, 8_000, u32::MAX] {
         match p.screen(t) {
@@ -793,16 +660,8 @@ fn the_firmware_knows_exactly_what_this_crate_costs_it() {
         size_of::<screeny_provision::Qr>(),
         size_of::<screeny_provision::Actions>()
     );
-    assert!(
-        size_of::<Provisioner>() <= 192,
-        "Provisioner is {} bytes",
-        size_of::<Provisioner>()
-    );
-    assert!(
-        size_of::<screeny_provision::Qr>() <= 80,
-        "Qr is {} bytes",
-        size_of::<screeny_provision::Qr>()
-    );
+    assert!(size_of::<Provisioner>() <= 192, "Provisioner is {} bytes", size_of::<Provisioner>());
+    assert!(size_of::<screeny_provision::Qr>() <= 80, "Qr is {} bytes", size_of::<screeny_provision::Qr>());
     // An `Actions` batch is passed by value out of every `step`.
     assert!(
         size_of::<screeny_provision::Actions>() <= 32,
@@ -838,16 +697,10 @@ fn a_post_while_online_starts_a_trial_without_raising_the_ap() {
     assert_eq!(p.state(), State::Trial);
     assert_eq!(
         a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Trial,
-            attempt: 1
-        }],
+        [Action::StartJoin { which: JoinTarget::Trial, attempt: 1 }],
         "no StopJoin: nothing was in flight; and above all no RaiseAp"
     );
-    assert!(
-        !p.ap_up(),
-        "there is nobody on a setup network to keep informed"
-    );
+    assert!(!p.ap_up(), "there is nobody on a setup network to keep informed");
     assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
     assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Trying);
     assert!(p.has_stored(), "nothing is committed and nothing is cleared");
@@ -882,15 +735,7 @@ fn an_online_origin_trial_that_works_commits_and_needs_no_grace() {
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
     let a = p.step(Event::Joined { ip: [192, 168, 7, 9] }, 1_200);
     assert_eq!(p.state(), State::Online);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::CommitCredentials {
-                which: JoinTarget::Trial
-            },
-            Action::Announce,
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::CommitCredentials { which: JoinTarget::Trial }, Action::Announce,]);
     assert!(!p.ap_up());
     assert_eq!(p.ip(), Some([192, 168, 7, 9]));
     assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Connected);
@@ -910,20 +755,9 @@ fn an_online_origin_trial_that_works_commits_and_needs_no_grace() {
 fn an_online_origin_trial_that_fails_goes_back_to_the_old_network() {
     let mut p = online_from_stored();
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        1_150,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::AuthError }, 1_150);
     assert_eq!(p.state(), State::Joining, "not Portal");
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
     assert!(!p.ap_up(), "no portal was raised on the way");
     assert!(p.has_stored(), "a failed trial must not touch the store");
     let t = p.trial().unwrap();
@@ -948,16 +782,9 @@ fn a_failed_online_origin_trial_still_reads_failed_once_the_old_network_is_back(
     p.step(Event::Joined { ip: [192, 168, 7, 221] }, 1_200);
     assert_eq!(p.state(), State::Online);
     assert_eq!(p.ip(), Some([192, 168, 7, 221]));
-    assert_eq!(
-        p.wifi_state(),
-        wifi_state::FAILED,
-        "the question was whether the posted credentials worked"
-    );
+    assert_eq!(p.wifi_state(), wifi_state::FAILED, "the question was whether the posted credentials worked");
     assert!(p.trial_is_current());
-    assert_eq!(
-        p.trial().unwrap().outcome,
-        TrialOutcome::Failed(FailReason::NetworkNotFound)
-    );
+    assert_eq!(p.trial().unwrap().outcome, TrialOutcome::Failed(FailReason::NetworkNotFound));
     // Time alone does not clear it.
     p.step(Event::Tick, 500_000);
     assert_eq!(p.wifi_state(), wifi_state::FAILED);
@@ -975,53 +802,20 @@ fn an_online_origin_trial_retries_a_transient_failure_and_not_a_bad_password() {
     let mut p = online_from_stored();
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
     for attempt in 2..=T.trial_attempts {
-        let a = p.step(
-            Event::JoinFailed {
-                reason: FailReason::Other,
-            },
-            1_100 + u32::from(attempt),
-        );
+        let a = p.step(Event::JoinFailed { reason: FailReason::Other }, 1_100 + u32::from(attempt));
         assert_eq!(p.state(), State::Trial);
-        assert_eq!(
-            a.as_slice(),
-            [Action::StartJoin {
-                which: JoinTarget::Trial,
-                attempt
-            }]
-        );
+        assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Trial, attempt }]);
     }
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::Other,
-        },
-        1_200,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::Other }, 1_200);
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
 
     // An auth error skips all of that and falls back at once.
     let mut q = online_from_stored();
     q.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
-    let a = q.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        1_110,
-    );
+    let a = q.step(Event::JoinFailed { reason: FailReason::AuthError }, 1_110);
     assert_eq!(q.state(), State::Joining);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
 }
 
 /// And if the stored credentials then fail too, the ordinary `JOINING` ->
@@ -1030,26 +824,15 @@ fn an_online_origin_trial_retries_a_transient_failure_and_not_a_bad_password() {
 fn stored_credentials_failing_after_the_fallback_still_reach_the_portal() {
     let mut p = online_from_stored();
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
-    p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        1_150,
-    );
+    p.step(Event::JoinFailed { reason: FailReason::AuthError }, 1_150);
     assert_eq!(p.state(), State::Joining);
     let a = fail_n(&mut p, 3, FailReason::AuthError, 1_200);
     assert_eq!(p.state(), State::Portal);
     assert_eq!(
         a.as_slice(),
         [
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 2
-            },
-            Action::StartJoin {
-                which: JoinTarget::Stored,
-                attempt: 3
-            },
+            Action::StartJoin { which: JoinTarget::Stored, attempt: 2 },
+            Action::StartJoin { which: JoinTarget::Stored, attempt: 3 },
             Action::RaiseAp,
         ]
     );
@@ -1065,16 +848,7 @@ fn a_post_while_joining_cancels_the_attempt_in_flight() {
     assert_eq!(p.state(), State::Joining);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 50);
     assert_eq!(p.state(), State::Trial);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::StopJoin,
-            Action::StartJoin {
-                which: JoinTarget::Trial,
-                attempt: 1
-            }
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::StopJoin, Action::StartJoin { which: JoinTarget::Trial, attempt: 1 }]);
     assert!(!p.ap_up());
     assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
     // The attempt window restarts with the trial rather than running out of
@@ -1092,12 +866,7 @@ fn a_post_to_the_portal_is_a_portal_trial_even_with_an_empty_store() {
     assert!(!p.has_stored());
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 10);
     assert_eq!(p.trial().unwrap().origin, TrialOrigin::Portal);
-    let a = p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        20,
-    );
+    let a = p.step(Event::JoinFailed { reason: FailReason::AuthError }, 20);
     assert_eq!(p.state(), State::Portal);
     assert!(a.is_empty(), "the AP never went down");
     assert_eq!(p.overlay_state(), Some(tstate::PROVISIONING));
@@ -1111,26 +880,12 @@ fn a_second_post_during_an_online_origin_trial_keeps_its_origin() {
     p.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
     let a = p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_110);
     assert_eq!(p.state(), State::Trial);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::StopJoin,
-            Action::StartJoin {
-                which: JoinTarget::Trial,
-                attempt: 1
-            }
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::StopJoin, Action::StartJoin { which: JoinTarget::Trial, attempt: 1 }]);
     assert_eq!(p.trial().unwrap().ssid.as_str(), "Example-Wifi1");
     assert_eq!(p.trial().unwrap().origin, TrialOrigin::Online);
     assert!(!p.ap_up(), "still no AP");
     // And failing now goes back to the old network, not to the portal.
-    p.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        1_120,
-    );
+    p.step(Event::JoinFailed { reason: FailReason::AuthError }, 1_120);
     assert_eq!(p.state(), State::Joining);
 }
 
@@ -1143,14 +898,7 @@ fn button_wipe_during_an_online_origin_trial_still_reaches_the_portal() {
     p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 1_100);
     let a = p.step(Event::ButtonWipe, 1_150);
     assert_eq!(p.state(), State::Portal);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::StopJoin,
-            Action::ClearCredentials,
-            Action::RaiseAp
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::StopJoin, Action::ClearCredentials, Action::RaiseAp]);
     assert!(!p.has_stored());
     assert!(p.trial().is_none());
     assert!(!p.trial_is_current());
@@ -1159,12 +907,7 @@ fn button_wipe_during_an_online_origin_trial_still_reaches_the_portal() {
     // ...and after a trial that already failed, the sticky FAILED goes too.
     let mut q = online_from_stored();
     q.step(Event::CredentialsPosted { ssid: "Typo-Network" }, 1_100);
-    q.step(
-        Event::JoinFailed {
-            reason: FailReason::AuthError,
-        },
-        1_150,
-    );
+    q.step(Event::JoinFailed { reason: FailReason::AuthError }, 1_150);
     assert_eq!(q.wifi_state(), wifi_state::FAILED);
     q.step(Event::ButtonWipe, 1_200);
     assert_eq!(q.wifi_state(), wifi_state::DISCONNECTED);
@@ -1179,43 +922,24 @@ fn an_online_origin_trial_survives_the_49_day_wrap() {
     assert_eq!(p.state(), State::Online);
 
     // Post 10 ms before the wrap; the attempt window straddles it.
-    p.step(
-        Event::CredentialsPosted { ssid: "Example-Wifi1" },
-        NEAR.wrapping_add(10),
-    );
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, NEAR.wrapping_add(10));
     assert_eq!(p.state(), State::Trial);
     assert!(
-        p.step(Event::Tick, NEAR.wrapping_add(10 + T.join_attempt_ms - 1))
-            .is_empty(),
+        p.step(Event::Tick, NEAR.wrapping_add(10 + T.join_attempt_ms - 1)).is_empty(),
         "the window has not expired, wrap or no wrap"
     );
     // One millisecond later it has, and a timed-out trial attempt is a
     // transient failure, so it is retried.
     let a = p.step(Event::Tick, NEAR.wrapping_add(10 + T.join_attempt_ms));
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Trial,
-            attempt: 2
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Trial, attempt: 2 }]);
     // Let it run out for good, past the wrap.
     let a = fail_n(&mut p, 2, FailReason::Other, NEAR.wrapping_add(200));
     assert_eq!(p.state(), State::Joining);
-    assert_eq!(
-        a.last(),
-        Some(&Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        })
-    );
+    assert_eq!(a.last(), Some(&Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }));
     assert_eq!(p.wifi_state(), wifi_state::FAILED);
     // The old network comes back after the wrap and the failure is still
     // readable.
-    p.step(
-        Event::Joined { ip: [192, 168, 7, 221] },
-        NEAR.wrapping_add(400),
-    );
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, NEAR.wrapping_add(400));
     assert_eq!(p.state(), State::Online);
     assert_eq!(p.wifi_state(), wifi_state::FAILED);
 }
@@ -1226,21 +950,13 @@ fn an_online_origin_trial_survives_the_49_day_wrap() {
 fn a_post_before_boot_is_ignored() {
     let mut p = Provisioner::new(&cfg(true));
     assert_eq!(p.state(), State::Boot);
-    assert!(p
-        .step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 0)
-        .is_empty());
+    assert!(p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 0).is_empty());
     assert_eq!(p.state(), State::Boot);
     assert!(p.trial().is_none());
     assert_eq!(p.wifi_state(), wifi_state::DISCONNECTED);
     // And `Boot` still does what it always did.
     let a = p.step(Event::Boot, 1);
-    assert_eq!(
-        a.as_slice(),
-        [Action::StartJoin {
-            which: JoinTarget::Stored,
-            attempt: 1
-        }]
-    );
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
 }
 
 /// A post that arrives while the AP is in its post-trial grace window is
@@ -1262,15 +978,7 @@ fn a_post_during_the_ap_grace_window_is_an_online_origin_trial() {
     assert!(p.ap_up());
     // It restarts from the moment the new network came up, and then fires.
     let a = p.step(Event::Joined { ip: [192, 168, 7, 9] }, 520);
-    assert_eq!(
-        a.as_slice(),
-        [
-            Action::CommitCredentials {
-                which: JoinTarget::Trial
-            },
-            Action::Announce,
-        ]
-    );
+    assert_eq!(a.as_slice(), [Action::CommitCredentials { which: JoinTarget::Trial }, Action::Announce,]);
     assert!(p.step(Event::Tick, 520 + T.ap_grace_ms - 1).is_empty());
     let a = p.step(Event::Tick, 520 + T.ap_grace_ms);
     assert_eq!(a.as_slice(), [Action::DropAp], "the AP is still dropped");

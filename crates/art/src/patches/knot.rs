@@ -15,7 +15,8 @@ use wgpu::util::DeviceExt;
 pub const DEF: PatchDef = PatchDef {
     id: "knot",
     name: "Torus knot",
-    blurb: "GPU, rasterized mesh with a depth buffer, then mapped onto a 31-colour designed palette so it is sent exactly.",
+    blurb:
+        "GPU, rasterized mesh with a depth buffer, then mapped onto a 31-colour designed palette so it is sent exactly.",
     params: PARAMS,
     make,
     // The seed picks which of five (p, q) torus knots is tied and the tilt it
@@ -92,7 +93,8 @@ fn curve(u: f32, (p, q): (f32, f32)) -> [f32; 3] {
 fn mesh(winding: (f32, f32)) -> (Vec<Vertex>, Vec<u16>) {
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let add = |a: [f32; 3], b: [f32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let cross =
+        |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let unit = |a: [f32; 3]| {
         let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
         [a[0] / l, a[1] / l, a[2] / l]

@@ -75,8 +75,7 @@ fn stats_req_on_the_frame_port(cx: &mut Ctx) -> Result<Outcome, String> {
     // source port ... and a sender MUST accept it there". Section 6.2: it
     // carries REPLY and req_id 0, because nobody asked for it by id.
     let mut link = cx.claim()?;
-    link.send(codec::SOLID, F_KEY | F_STATS_REQ, &dim())
-        .map_err(|e| e.to_string())?;
+    link.send(codec::SOLID, F_KEY | F_STATS_REQ, &dim()).map_err(|e| e.to_string())?;
     let d = match link.recv(Duration::from_millis(600)) {
         Some(d) => d,
         None => return verdict(false, "no TELEMETRY came back on the frame socket"),
@@ -89,13 +88,9 @@ fn stats_req_on_the_frame_port(cx: &mut Ctx) -> Result<Outcome, String> {
     // so that this is unambiguous.
     let on_ctrl = cx.ctrl.recv(Duration::from_millis(100)).is_some();
     let body_ok = pkt.body.len() == 48; // section 6.7
-    let decoded = matches!(
-        Reply::decode(pkt.op, pkt.flags, pkt.body),
-        Ok(Reply::Telemetry(_))
-    );
+    let decoded = matches!(Reply::decode(pkt.op, pkt.flags, pkt.body), Ok(Reply::Telemetry(_)));
     verdict(
-        pkt.op == op::TELEMETRY && pkt.is_reply() && pkt.req_id == 0 && body_ok && decoded
-            && !on_ctrl,
+        pkt.op == op::TELEMETRY && pkt.is_reply() && pkt.req_id == 0 && body_ok && decoded && !on_ctrl,
         format!(
             "op {:#04x} reply {} req_id {} body {} B, control socket saw {}",
             pkt.op,
@@ -115,8 +110,7 @@ fn telemetry_rate_limit(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut link = cx.claim()?;
     let p = dim();
     for _ in 0..12 {
-        link.send(codec::SOLID, F_KEY | F_STATS_REQ, &p)
-            .map_err(|e| e.to_string())?;
+        link.send(codec::SOLID, F_KEY | F_STATS_REQ, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(5));
     }
     std::thread::sleep(Duration::from_millis(60));
@@ -124,8 +118,7 @@ fn telemetry_rate_limit(cx: &mut Ctx) -> Result<Outcome, String> {
 
     // Past the window, another one.
     std::thread::sleep(Duration::from_millis(150));
-    link.send(codec::SOLID, F_KEY | F_STATS_REQ, &p)
-        .map_err(|e| e.to_string())?;
+    link.send(codec::SOLID, F_KEY | F_STATS_REQ, &p).map_err(|e| e.to_string())?;
     let reopened = link.recv(Duration::from_millis(600)).is_some();
     verdict(
         (1..=2).contains(&replies) && reopened,
@@ -140,10 +133,7 @@ fn telemetry_requests_are_not_limited(cx: &mut Ctx) -> Result<Outcome, String> {
     let t0 = Instant::now();
     let mut answers = 0;
     while t0.elapsed() < Duration::from_millis(400) {
-        if matches!(
-            cx.ctrl.request(Request::Telemetry)?,
-            OwnedReply::Telemetry(_)
-        ) {
+        if matches!(cx.ctrl.request(Request::Telemetry)?, OwnedReply::Telemetry(_)) {
             answers += 1;
         }
     }
@@ -157,22 +147,17 @@ fn stats_req_on_a_stale_frame(cx: &mut Ctx) -> Result<Outcome, String> {
     // afford to lose track of.
     let link = cx.claim()?;
     let p = dim();
-    link.send_seq(codec::SOLID, F_KEY, 500, &p)
-        .map_err(|e| e.to_string())?;
+    link.send_seq(codec::SOLID, F_KEY, 500, &p).map_err(|e| e.to_string())?;
     cx.settle();
     let _ = link.drain();
     // Past the 100 ms unsolicited window, so this reply is not suppressed.
     std::thread::sleep(Duration::from_millis(120));
 
     // seq 499 is not newer than 500: stale, and still answered.
-    link.send_seq(codec::SOLID, F_KEY | F_STATS_REQ, 499, &p)
-        .map_err(|e| e.to_string())?;
+    link.send_seq(codec::SOLID, F_KEY | F_STATS_REQ, 499, &p).map_err(|e| e.to_string())?;
     let answered = link.recv(Duration::from_millis(600)).is_some();
     let t = cx.telemetry()?;
-    verdict(
-        answered && t.frames_dropped_stale == 1,
-        format!("answered: {answered}, stale {}", t.frames_dropped_stale),
-    )
+    verdict(answered && t.frames_dropped_stale == 1, format!("answered: {answered}, stale {}", t.frames_dropped_stale))
 }
 
 fn interarrival(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -185,8 +170,7 @@ fn interarrival(cx: &mut Ctx) -> Result<Outcome, String> {
     let period = Duration::from_millis(33);
     let mut next = Instant::now();
     for _ in 0..50 {
-        link.send(codec::SOLID, F_KEY, &p)
-            .map_err(|e| e.to_string())?;
+        link.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
         next += period;
         let now = Instant::now();
         if next > now {
@@ -212,8 +196,7 @@ fn reset_stats_zeroes(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut link = cx.claim()?;
     let p = dim();
     for _ in 0..5 {
-        link.send(codec::SOLID, F_KEY, &p)
-            .map_err(|e| e.to_string())?;
+        link.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(20));
     }
     cx.settle();
@@ -233,12 +216,7 @@ fn reset_stats_zeroes(cx: &mut Ctx) -> Result<Outcome, String> {
             && t.interarrival_max_us == 0,
         format!(
             "rx {} -> {}, shown {} -> {}, decode_us_max {} -> {}",
-            before.frames_rx,
-            t.frames_rx,
-            before.frames_shown,
-            t.frames_shown,
-            before.decode_us_max,
-            t.decode_us_max
+            before.frames_rx, t.frames_rx, before.frames_shown, t.frames_shown, before.decode_us_max, t.decode_us_max
         ),
     )
 }
@@ -250,16 +228,14 @@ fn reset_stats_keeps(cx: &mut Ctx) -> Result<Outcome, String> {
     // `last_seq`, or blank the panel."
     let link = cx.claim()?;
     let p = dim();
-    link.send_seq(codec::SOLID, F_KEY, 700, &p)
-        .map_err(|e| e.to_string())?;
+    link.send_seq(codec::SOLID, F_KEY, 700, &p).map_err(|e| e.to_string())?;
     cx.settle();
     let before = cx.telemetry()?;
     cx.reset_stats()?;
     let after = cx.telemetry()?;
 
     // `last_seq` survived, so a repeat of 700 is still stale.
-    link.send_seq(codec::SOLID, F_KEY, 700, &p)
-        .map_err(|e| e.to_string())?;
+    link.send_seq(codec::SOLID, F_KEY, 700, &p).map_err(|e| e.to_string())?;
     cx.settle();
     let t = cx.telemetry()?;
     verdict(

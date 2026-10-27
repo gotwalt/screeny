@@ -14,8 +14,8 @@ use screeny_device_api::enums::{
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply,
-    StatusReply, TelemetryReply, UpdateRecord, WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply,
+    UpdateRecord, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::text::{ipv4_text, text};
@@ -231,21 +231,11 @@ fn wifi_states() {
     check("wifi_disconnected", &WifiReply::disconnected());
     check(
         "wifi_failed",
-        &WifiReply {
-            state: WifiState::Failed,
-            ssid: text("Example-Wifi1"),
-            ip: None,
-            reason: Some(FailReason::Auth),
-        },
+        &WifiReply { state: WifiState::Failed, ssid: text("Example-Wifi1"), ip: None, reason: Some(FailReason::Auth) },
     );
     check(
         "wifi_trying",
-        &WifiReply {
-            state: WifiState::Connecting,
-            ssid: text("Example-Wifi1"),
-            ip: None,
-            reason: None,
-        },
+        &WifiReply { state: WifiState::Connecting, ssid: text("Example-Wifi1"), ip: None, reason: None },
     );
 }
 
@@ -263,13 +253,7 @@ fn settings() {
         },
     );
     // A brightness slider, which knows nothing about the other two settings.
-    check(
-        "settings_request_brightness_only",
-        &SettingsRequest {
-            brightness: Some(200),
-            ..SettingsRequest::default()
-        },
-    );
+    check("settings_request_brightness_only", &SettingsRequest { brightness: Some(200), ..SettingsRequest::default() });
     // The reply is the whole state, with the firmware's cap already applied:
     // 200 asked for, 128 in effect.
     check(
@@ -289,10 +273,7 @@ fn firmware() {
     check("firmware_ok", &FirmwareReply::ok(761_232));
     // The default: the device is about to reboot into it (card 241).
     check("firmware_activating", &FirmwareReply::activating(998_448));
-    check(
-        "firmware_failed",
-        &FirmwareReply::failed(4_096, FirmwareError::WrongProject),
-    );
+    check("firmware_failed", &FirmwareReply::failed(4_096, FirmwareError::WrongProject));
 }
 
 #[test]
@@ -304,41 +285,17 @@ fn accepted() {
 
 #[test]
 fn reboot_and_identify() {
-    check(
-        "reboot_request",
-        &RebootRequest {
-            confirm: text("RBOO").unwrap(),
-            pin: None,
-            counter: None,
-        },
-    );
-    check(
-        "identify_request",
-        &IdentifyRequest {
-            duration_ms: 10_000,
-            pin: None,
-            counter: None,
-        },
-    );
+    check("reboot_request", &RebootRequest { confirm: text("RBOO").unwrap(), pin: None, counter: None });
+    check("identify_request", &IdentifyRequest { duration_ms: 10_000, pin: None, counter: None });
     // What a request looks like once parked card 041 gives the PIN meaning.
     // It parses today and is ignored today; the shape does not change then.
-    check(
-        "identify_request_with_pin",
-        &IdentifyRequest {
-            duration_ms: 10_000,
-            pin: text("2468"),
-            counter: Some(17),
-        },
-    );
+    check("identify_request_with_pin", &IdentifyRequest { duration_ms: 10_000, pin: text("2468"), counter: Some(17) });
 }
 
 #[test]
 fn errors() {
     check("error", &ErrorReply::new(ErrorCode::Busy));
-    check(
-        "error_with_detail",
-        &ErrorReply::with_detail(ErrorCode::OutOfRange, "ssid is longer than 32 bytes"),
-    );
+    check("error_with_detail", &ErrorReply::with_detail(ErrorCode::OutOfRange, "ssid is longer than 32 bytes"));
 }
 
 #[test]

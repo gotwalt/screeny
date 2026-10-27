@@ -45,9 +45,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// [`Error::Mdns`] if the daemon could not be started or the browse rejected.
 pub fn browse(timeout: Duration, want: Option<usize>) -> Result<Vec<Device>> {
-    browse_until(timeout, |found| {
-        want.is_some_and(|n| found.len() >= n)
-    })
+    browse_until(timeout, |found| want.is_some_and(|n| found.len() >= n))
 }
 
 /// Browse for one instance by name, stopping as soon as **that** instance has
@@ -125,14 +123,9 @@ fn collect_until(
 }
 
 /// [`collect_until`] driven by a real mDNS daemon.
-fn browse_until(
-    timeout: Duration,
-    stop: impl FnMut(&BTreeMap<String, Device>) -> bool,
-) -> Result<Vec<Device>> {
+fn browse_until(timeout: Duration, stop: impl FnMut(&BTreeMap<String, Device>) -> bool) -> Result<Vec<Device>> {
     let daemon = ServiceDaemon::new().map_err(|e| Error::Mdns(e.to_string()))?;
-    let rx = daemon
-        .browse(SERVICE_TYPE)
-        .map_err(|e| Error::Mdns(e.to_string()))?;
+    let rx = daemon.browse(SERVICE_TYPE).map_err(|e| Error::Mdns(e.to_string()))?;
 
     let found = collect_until(
         timeout,
@@ -188,20 +181,11 @@ fn match_kind(d: &Device, want: &str) -> Option<Match> {
 /// name can never be ambiguous, so naming a panel in full always works.
 fn pick(found: Vec<Device>, want: &str) -> Result<Device> {
     let Some(best) = found.iter().filter_map(|d| match_kind(d, want)).min() else {
-        return Err(Error::NoSuchDevice {
-            wanted: want.to_string(),
-            found: names_of(&found),
-        });
+        return Err(Error::NoSuchDevice { wanted: want.to_string(), found: names_of(&found) });
     };
-    let mut hits: Vec<Device> = found
-        .into_iter()
-        .filter(|d| match_kind(d, want) == Some(best))
-        .collect();
+    let mut hits: Vec<Device> = found.into_iter().filter(|d| match_kind(d, want) == Some(best)).collect();
     if hits.len() > 1 {
-        return Err(Error::AmbiguousName {
-            wanted: want.to_string(),
-            found: names_of(&hits),
-        });
+        return Err(Error::AmbiguousName { wanted: want.to_string(), found: names_of(&hits) });
     }
     Ok(hits.remove(0))
 }
@@ -209,30 +193,18 @@ fn pick(found: Vec<Device>, want: &str) -> Result<Device> {
 /// Instance names, in the order given, for an error that has to say what did
 /// answer.
 fn names_of(devices: &[Device]) -> String {
-    devices
-        .iter()
-        .map(|d| d.instance.clone())
-        .collect::<Vec<_>>()
-        .join(", ")
+    devices.iter().map(|d| d.instance.clone()).collect::<Vec<_>>().join(", ")
 }
 
 /// Instance name of a DNS-SD full name: everything before the service type.
 fn instance_of(fullname: &str) -> String {
-    fullname
-        .strip_suffix(&format!(".{SERVICE_TYPE}"))
-        .unwrap_or(fullname)
-        .to_string()
+    fullname.strip_suffix(&format!(".{SERVICE_TYPE}")).unwrap_or(fullname).to_string()
 }
 
 fn device_from_service(svc: &mdns_sd::ResolvedService) -> Option<Device> {
     let addresses: Vec<IpAddr> = svc.addresses.iter().map(mdns_sd::ScopedIp::to_ip_addr).collect();
     let ip = net::pick_address(&addresses)?;
-    let info = DeviceInfo::from_pairs(
-        svc.txt_properties
-            .iter()
-            .map(|p| (p.key(), p.val().unwrap_or(b""))),
-    )
-    .ok()?;
+    let info = DeviceInfo::from_pairs(svc.txt_properties.iter().map(|p| (p.key(), p.val().unwrap_or(b"")))).ok()?;
     // Spec 5.2: a service missing a required key MUST be ignored, which
     // `from_pairs` already enforces; this is the version check.
     if !info.speaks_v1() {
@@ -333,42 +305,23 @@ impl Target {
         // An address, with or without a port. `[::1]` (brackets, no port) is
         // not an `IpAddr` and not a `SocketAddr`, and people write it.
         if let Ok(a) = s.parse::<SocketAddr>() {
-            return Target {
-                addr: Some(a),
-                ..Target::default()
-            };
+            return Target { addr: Some(a), ..Target::default() };
         }
-        let unbracketed = s
-            .strip_prefix('[')
-            .and_then(|r| r.strip_suffix(']'))
-            .unwrap_or(s);
+        let unbracketed = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')).unwrap_or(s);
         if let Ok(ip) = unbracketed.parse::<IpAddr>() {
-            return Target {
-                addr: Some(SocketAddr::new(ip, screeny_proto::DEFAULT_FRAME_PORT)),
-                ..Target::default()
-            };
+            return Target { addr: Some(SocketAddr::new(ip, screeny_proto::DEFAULT_FRAME_PORT)), ..Target::default() };
         }
         // `name:port`. A port pins it to the resolver: an instance name has no
         // port, because the SRV record carries one.
         if let Some((h, p)) = s.rsplit_once(':') {
             if let (false, Ok(port)) = (h.is_empty(), p.parse::<u16>()) {
-                return Target {
-                    host: Some(h.to_string()),
-                    port: Some(port),
-                    ..Target::default()
-                };
+                return Target { host: Some(h.to_string()), port: Some(port), ..Target::default() };
             }
         }
         if bare_is_a_host || s.contains('.') {
-            return Target {
-                host: Some(s.to_string()),
-                ..Target::default()
-            };
+            return Target { host: Some(s.to_string()), ..Target::default() };
         }
-        Target {
-            name: Some(s.to_string()),
-            ..Target::default()
-        }
+        Target { name: Some(s.to_string()), ..Target::default() }
     }
 
     /// Resolve to exactly one device.
@@ -430,10 +383,7 @@ impl Target {
                  nothing was browsed"
             ),
         };
-        Err(Error::Unresolved {
-            name: self.label(),
-            tried: said + &then,
-        })
+        Err(Error::Unresolved { name: self.label(), tried: said + &then })
     }
 
     /// Browse (or broadcast-probe) and pick the one instance asked for.
@@ -450,10 +400,7 @@ impl Target {
             (false, None) => browse(timeout, Some(1))?,
         };
         if found.is_empty() {
-            return Err(Error::NotFound {
-                service: SERVICE_TYPE,
-                secs: timeout.as_secs_f64(),
-            });
+            return Err(Error::NotFound { service: SERVICE_TYPE, secs: timeout.as_secs_f64() });
         }
         match want {
             None => Ok(found.remove(0)),
@@ -516,10 +463,7 @@ pub fn broadcast_targets(port: u16) -> Vec<SocketAddr> {
     if targets.is_empty() {
         targets.push(Ipv4Addr::BROADCAST);
     }
-    targets
-        .into_iter()
-        .map(|t| SocketAddr::new(IpAddr::V4(t), port))
-        .collect()
+    targets.into_iter().map(|t| SocketAddr::new(IpAddr::V4(t), port)).collect()
 }
 
 /// Ask for `GET_INFO` on the subnet broadcast address and collect the unicast
@@ -559,9 +503,7 @@ pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>> {
     let req = Request::GetInfo;
     let mut out = vec![0u8; req.encoded_len()];
     let req_id = 0x5350u16; // arbitrary and non-zero: zero means "no reply"
-    let n = req
-        .write(req_id, &mut out)
-        .map_err(|e| Error::Metadata(format!("{e:?} building GET_INFO")))?;
+    let n = req.write(req_id, &mut out).map_err(|e| Error::Metadata(format!("{e:?} building GET_INFO")))?;
 
     for t in to {
         // A refused broadcast on one interface should not stop the others.
@@ -579,24 +521,14 @@ pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>> {
         sock.set_read_timeout(Some(left))?;
         let (got, from) = match sock.recv_from(&mut buf) {
             Ok(v) => v,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                break
-            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => break,
             // An ICMP port-unreachable for one destination, reported on the
             // next read: some stacks do this, and a probe is *expected* to ask
             // addresses where nothing is listening - that is what a broadcast
             // does. It says nothing about the other destinations, so keep
             // listening until the window closes.
             Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
-                ) =>
+                if matches!(e.kind(), std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset) =>
             {
                 continue
             }
@@ -627,21 +559,10 @@ pub fn probe(timeout: Duration, to: &[SocketAddr]) -> Result<Vec<Device>> {
         };
         let frame = SocketAddr::new(from.ip(), frame_port);
         let control = SocketAddr::new(from.ip(), info.ctrl);
-        let instance = if info.id.is_empty() {
-            from.ip().to_string()
-        } else {
-            format!("screeny-{}", info.id)
-        };
+        let instance = if info.id.is_empty() { from.ip().to_string() } else { format!("screeny-{}", info.id) };
         found.insert(
             instance.clone(),
-            Device {
-                instance,
-                host: None,
-                frame,
-                control,
-                addresses: vec![from.ip()],
-                info: Some(info),
-            },
+            Device { instance, host: None, frame, control, addresses: vec![from.ip()], info: Some(info) },
         );
     }
     Ok(found.into_values().collect())
@@ -666,11 +587,7 @@ mod tests {
 
         // A name with a dot, or a port, or both: the system resolver's.
         for (s, host, port) in [
-            (
-                "host.docker.internal:49374",
-                "host.docker.internal",
-                Some(49374),
-            ),
+            ("host.docker.internal:49374", "host.docker.internal", Some(49374)),
             ("host.docker.internal", "host.docker.internal", None),
             ("localhost:5000", "localhost", Some(5000)),
             ("workbench.local", "workbench.local", None),
@@ -692,10 +609,7 @@ mod tests {
         let t = Target::direct("workbench");
         assert_eq!(t.host.as_deref(), Some("workbench"));
         assert!(t.name.is_none());
-        assert_eq!(
-            Target::direct("10.0.0.5").addr.map(|a| a.port()),
-            Some(49374)
-        );
+        assert_eq!(Target::direct("10.0.0.5").addr.map(|a| a.port()), Some(49374));
     }
 
     #[test]
@@ -711,18 +625,9 @@ mod tests {
     /// cannot be an instance name and is not browsed for at all.
     #[test]
     fn only_an_undotted_name_can_also_be_an_instance() {
-        assert_eq!(
-            instance_candidate("screeny-4a00a4.local"),
-            Some("screeny-4a00a4")
-        );
-        assert_eq!(
-            instance_candidate("screeny-4a00a4.local."),
-            Some("screeny-4a00a4")
-        );
-        assert_eq!(
-            instance_candidate("screeny-4a00a4.Local"),
-            Some("screeny-4a00a4")
-        );
+        assert_eq!(instance_candidate("screeny-4a00a4.local"), Some("screeny-4a00a4"));
+        assert_eq!(instance_candidate("screeny-4a00a4.local."), Some("screeny-4a00a4"));
+        assert_eq!(instance_candidate("screeny-4a00a4.Local"), Some("screeny-4a00a4"));
         assert_eq!(instance_candidate("workbench"), Some("workbench"));
         assert_eq!(instance_candidate("host.docker.internal"), None);
         assert_eq!(instance_candidate("a.b.local"), None);
@@ -734,18 +639,12 @@ mod tests {
     /// given directly.
     #[test]
     fn a_host_name_resolves_through_the_system_resolver() {
-        let d = Target::parse("localhost:49374")
-            .resolve()
-            .expect("localhost resolves everywhere this crate builds");
+        let d = Target::parse("localhost:49374").resolve().expect("localhost resolves everywhere this crate builds");
         // IPv4 wins over `::1`, because that is the family a panel - and the
         // simulator - listens on.
         assert_eq!(d.frame.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST), "{:?}", d.frame);
         assert_eq!(d.frame.port(), 49374);
-        assert_eq!(
-            d.control.port(),
-            DEFAULT_CONTROL_PORT,
-            "frame + 1 by convention"
-        );
+        assert_eq!(d.control.port(), DEFAULT_CONTROL_PORT, "frame + 1 by convention");
         assert_eq!(d.instance, "localhost");
         assert_eq!(d.host.as_deref(), Some("localhost"));
 
@@ -760,31 +659,18 @@ mod tests {
     fn a_name_that_resolves_to_nothing_says_which_name_and_what_was_tried() {
         // `.invalid` is reserved by RFC 2606 and must never resolve, so this
         // is a lookup failure by definition rather than by luck.
-        let t = Target {
-            timeout: Some(Duration::from_millis(1)),
-            ..Target::parse("no-such-host.invalid:49374")
-        };
+        let t = Target { timeout: Some(Duration::from_millis(1)), ..Target::parse("no-such-host.invalid:49374") };
         let started = Instant::now();
         let e = t.resolve().expect_err("must not resolve");
         let msg = e.to_string();
         assert!(matches!(e, Error::Unresolved { .. }), "{e:?}");
         assert!(msg.contains("no-such-host.invalid:49374"), "{msg}");
         assert!(msg.contains("is not an address"), "{msg}");
-        assert!(
-            msg.contains("it has a dot in it"),
-            "a dotted name is not browsed for: {msg}"
-        );
-        assert!(
-            !msg.contains("no screeny device found"),
-            "this is not a missing panel: {msg}"
-        );
+        assert!(msg.contains("it has a dot in it"), "a dotted name is not browsed for: {msg}");
+        assert!(!msg.contains("no screeny device found"), "this is not a missing panel: {msg}");
         assert!(e.hint().is_some_and(|h| h.contains("--addr")), "{e:?}");
         // No browse was started, so this is a lookup and nothing else.
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            started.elapsed()
-        );
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     }
 
     // ---- Card 176: when a browse may stop -------------------------------
@@ -798,10 +684,7 @@ mod tests {
     fn dev(instance: &str, friendly: &str) -> Device {
         let mut d = Device::from_addr("10.0.0.5:49374".parse().unwrap());
         d.instance = instance.to_string();
-        d.info = Some(DeviceInfo {
-            name: friendly.to_string(),
-            ..DeviceInfo::default()
-        });
+        d.info = Some(DeviceInfo { name: friendly.to_string(), ..DeviceInfo::default() });
         d
     }
 
@@ -842,14 +725,9 @@ mod tests {
 
         // Named: stops at the wanted instance, ~60 ms into a 3 s window.
         let started = Instant::now();
-        let found = collect_until(DEFAULT_TIMEOUT, scripted(script()), |f| {
-            f.contains_key("screeny-bbbb")
-        });
+        let found = collect_until(DEFAULT_TIMEOUT, scripted(script()), |f| f.contains_key("screeny-bbbb"));
         let named = started.elapsed();
-        assert!(
-            named < Duration::from_millis(600),
-            "a named browse waited {named:?} of a {DEFAULT_TIMEOUT:?} window"
-        );
+        assert!(named < Duration::from_millis(600), "a named browse waited {named:?} of a {DEFAULT_TIMEOUT:?} window");
         assert_eq!(pick(found, "screeny-bbbb").unwrap().instance, "screeny-bbbb");
 
         // Unnamed, wanting every device: the whole window, as before. A short
@@ -858,10 +736,7 @@ mod tests {
         let started = Instant::now();
         let found = collect_until(window, scripted(script()), |_| false);
         let all = started.elapsed();
-        assert!(
-            all >= window,
-            "an unnamed browse returned after {all:?}, short of the window"
-        );
+        assert!(all >= window, "an unnamed browse returned after {all:?}, short of the window");
         assert_eq!(found.len(), 3, "an unnamed browse still returns every device");
         println!("card 176: named browse {named:?}, collect-everything browse {all:?}");
     }
@@ -987,17 +862,9 @@ mod tests {
         // A friendly name resolves when only one panel wears it, and is
         // ambiguous when two do - the same rule as a prefix.
         assert_eq!(pick(all(), "shelf").unwrap().instance, "screeny-9c");
-        assert!(matches!(
-            pick(all(), "desk"),
-            Err(Error::AmbiguousName { .. })
-        ));
+        assert!(matches!(pick(all(), "desk"), Err(Error::AmbiguousName { .. })));
         assert_eq!(
-            pick(
-                vec![dev("screeny-aaaa", "kitchen"), dev("screeny-bbbb", "desk")],
-                "kitchen"
-            )
-            .unwrap()
-            .instance,
+            pick(vec![dev("screeny-aaaa", "kitchen"), dev("screeny-bbbb", "desk")], "kitchen").unwrap().instance,
             "screeny-aaaa"
         );
         // A prefix of two instances names neither.

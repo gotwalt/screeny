@@ -146,14 +146,15 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
     // says why ten seconds; there is deliberately no flag to go faster.
     cfg.device_http_every = screeny_studio::MIN_DEVICE_HTTP_EVERY;
     if let Some(v) = env("SCREENY_DEVICE_HTTP_PORT") {
-        cfg.device_http_port = v
-            .parse()
-            .map_err(|_| format!("SCREENY_DEVICE_HTTP_PORT {v}: expected a port number"))?;
+        cfg.device_http_port =
+            v.parse().map_err(|_| format!("SCREENY_DEVICE_HTTP_PORT {v}: expected a port number"))?;
     }
 
     // Card 364: the firmware this Studio offers. The Dockerfile puts the image
     // at the default; a laptop has none there, and then nothing is offered.
-    cfg.firmware = Some(PathBuf::from(env("SCREENY_FIRMWARE_FILE").unwrap_or_else(|| screeny_studio::firmware::DEFAULT_PATH.to_string())));
+    cfg.firmware = Some(PathBuf::from(
+        env("SCREENY_FIRMWARE_FILE").unwrap_or_else(|| screeny_studio::firmware::DEFAULT_PATH.to_string()),
+    ));
 
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -172,7 +173,8 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
             "--no-device-http" => cfg.device_http = false,
             "--device-http-port" => {
                 let v = value()?;
-                cfg.device_http_port = v.parse().map_err(|_| format!("--device-http-port {v}: expected a port number"))?;
+                cfg.device_http_port =
+                    v.parse().map_err(|_| format!("--device-http-port {v}: expected a port number"))?;
             }
             "--ui-dir" => {
                 let v = value()?;
@@ -241,7 +243,8 @@ mod tests {
         assert_eq!(cfg.state_dir.as_deref().map(std::path::Path::to_string_lossy).as_deref(), Some(DEFAULT_STATE_DIR));
         assert!(cfg.discover, "the product browses; only tests do not");
 
-        let cfg = parse_env(&[], &[("SCREENY_LISTEN", "0.0.0.0:9999"), ("SCREENY_STATE_DIR", "/data")]).unwrap().unwrap();
+        let cfg =
+            parse_env(&[], &[("SCREENY_LISTEN", "0.0.0.0:9999"), ("SCREENY_STATE_DIR", "/data")]).unwrap().unwrap();
         assert_eq!(cfg.listen.to_string(), "0.0.0.0:9999");
         assert_eq!(cfg.state_dir.as_deref().map(std::path::Path::to_string_lossy).as_deref(), Some("/data"));
 
@@ -291,11 +294,18 @@ mod tests {
     fn only_the_supervisors_token_makes_it_an_app() {
         let plain = parse_env(&[], &[("SCREENY_LISTEN", "0.0.0.0:8787")]).unwrap().unwrap();
         assert_eq!(plain.listen.to_string(), "0.0.0.0:8787");
-        assert!(plain.peers.is_none() && plain.direct.is_none() && plain.supervisor.is_none(), "no check in a plain deployment");
+        assert!(
+            plain.peers.is_none() && plain.direct.is_none() && plain.supervisor.is_none(),
+            "no check in a plain deployment"
+        );
 
         let app = parse_env(
             &[],
-            &[("SCREENY_LISTEN", "0.0.0.0:8787"), ("SUPERVISOR_TOKEN", "s3cr3t-value"), ("SCREENY_APP_OPTIONS", "/no/such/options.json")],
+            &[
+                ("SCREENY_LISTEN", "0.0.0.0:8787"),
+                ("SUPERVISOR_TOKEN", "s3cr3t-value"),
+                ("SCREENY_APP_OPTIONS", "/no/such/options.json"),
+            ],
         )
         .unwrap()
         .unwrap();

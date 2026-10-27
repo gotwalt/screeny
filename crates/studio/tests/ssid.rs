@@ -82,14 +82,10 @@ async fn the_ssid_never_reaches_the_log_or_the_state_file() {
 
     // **The page can see it.** That is the point of reading the status at all,
     // and it is what makes the two greps below worth anything.
-    let seen = until_json(at, PATIENCE, "the device's own status", "/api/v1/status", |v| {
-        !v["devices"][0]["facts"].is_null()
-    })
-    .await;
-    assert_eq!(
-        seen["devices"][0]["facts"]["ssid"], SECRET,
-        "the author's page is where the network name belongs"
-    );
+    let seen =
+        until_json(at, PATIENCE, "the device's own status", "/api/v1/status", |v| !v["devices"][0]["facts"].is_null())
+            .await;
+    assert_eq!(seen["devices"][0]["facts"]["ssid"], SECRET, "the author's page is where the network name belongs");
 
     // Stop it the way `docker stop` does, so the state file is written the way
     // it is in life rather than by a `kill -9`.
@@ -110,7 +106,11 @@ async fn the_ssid_never_reaches_the_log_or_the_state_file() {
     assert!(!saved.contains("stack_free"), "device facts do not belong in the state file: {saved}");
     assert!(!saved.contains("boot_id"), "device facts do not belong in the state file: {saved}");
 
-    println!("ssid: {} bytes of log and {} bytes of state, neither naming the network", out.len() + err.len(), saved.len());
+    println!(
+        "ssid: {} bytes of log and {} bytes of state, neither naming the network",
+        out.len() + err.len(),
+        saved.len()
+    );
 }
 
 /// A simulator with a known frame port and a known HTTP port, mDNS off,
@@ -226,8 +226,5 @@ async fn debug_output_redacts_the_ssid() {
 
     // But the page really can have it, from the route that draws the page.
     let facts = reg.get(&id).expect("there").facts.expect("facts");
-    assert_eq!(
-        serde_json::to_value(&facts).expect("json")["ssid"],
-        serde_json::Value::String(ssid.to_string())
-    );
+    assert_eq!(serde_json::to_value(&facts).expect("json")["ssid"], serde_json::Value::String(ssid.to_string()));
 }

@@ -140,13 +140,7 @@ fn header(d: &[u8]) -> Result<Header, Reject> {
     if HEADER_LEN + len > d.len() {
         return Err(Reject::BadLength);
     }
-    Ok(Header {
-        ty: d[1] & 0x0f,
-        b2: d[2],
-        flags: d[3],
-        id: u16::from_le_bytes([d[4], d[5]]),
-        len,
-    })
+    Ok(Header { ty: d[1] & 0x0f, b2: d[2], flags: d[3], id: u16::from_le_bytes([d[4], d[5]]), len })
 }
 
 /// Reserve a `CONTROL` datagram of `body_len` bytes in `out`, write its
@@ -231,13 +225,7 @@ impl<'a> FramePacket<'a> {
         } else {
             (None, body)
         };
-        Ok(FramePacket {
-            codec: h.b2,
-            flags: h.flags,
-            seq: h.id,
-            timestamp_us,
-            payload,
-        })
+        Ok(FramePacket { codec: h.b2, flags: h.flags, seq: h.id, timestamp_us, payload })
     }
 
     /// Total datagram length this packet will occupy.
@@ -249,13 +237,7 @@ impl<'a> FramePacket<'a> {
     fn body_len(&self) -> usize {
         // payload.len() is bounded by the caller's buffer; saturating keeps
         // `encoded_len` honest for an over-long payload that `write` rejects.
-        self.payload
-            .len()
-            .saturating_add(if self.timestamp_us.is_some() {
-                TS_LEN
-            } else {
-                0
-            })
+        self.payload.len().saturating_add(if self.timestamp_us.is_some() { TS_LEN } else { 0 })
     }
 
     /// Serialise into `out`, returning the datagram length.
@@ -347,12 +329,7 @@ impl<'a> ControlPacket<'a> {
         if h.ty != TYPE_CONTROL {
             return Err(Reject::BadType);
         }
-        Ok(ControlPacket {
-            op: h.b2,
-            flags: h.flags,
-            req_id: h.id,
-            body: &datagram[HEADER_LEN..HEADER_LEN + h.len],
-        })
+        Ok(ControlPacket { op: h.b2, flags: h.flags, req_id: h.id, body: &datagram[HEADER_LEN..HEADER_LEN + h.len] })
     }
 
     /// Total datagram length this packet will occupy.
@@ -375,14 +352,7 @@ impl<'a> ControlPacket<'a> {
         if out.len() < total {
             return Err(BuildError::BufferTooSmall);
         }
-        put_header(
-            out,
-            VER_TYPE_CONTROL,
-            self.op,
-            self.flags,
-            self.req_id,
-            self.body.len(),
-        );
+        put_header(out, VER_TYPE_CONTROL, self.op, self.flags, self.req_id, self.body.len());
         out[HEADER_LEN..total].copy_from_slice(self.body);
         Ok(total)
     }

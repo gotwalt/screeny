@@ -52,26 +52,16 @@ fn pal5_index_is_low_nibble_or_high_bit() {
     dec::decode(codec::PAL5, &p, &mut f).unwrap();
     for i in 0..NPIX {
         let idx = i % 32;
-        assert_eq!(
-            px(&f, i % W, i / W),
-            [(idx * 8) as u8, (idx * 8 + 1) as u8, (idx * 8 + 2) as u8],
-            "pixel {i}"
-        );
+        assert_eq!(px(&f, i % W, i / W), [(idx * 8) as u8, (idx * 8 + 1) as u8, (idx * 8 + 2) as u8], "pixel {i}");
     }
 
     // Fixed size, exactly.
     let mut short = p.clone();
     short.pop();
-    assert_eq!(
-        dec::decode(codec::PAL5, &short, &mut f),
-        Err(dec::DecodeError::Short)
-    );
+    assert_eq!(dec::decode(codec::PAL5, &short, &mut f), Err(dec::DecodeError::Short));
     let mut long = p.clone();
     long.push(0);
-    assert_eq!(
-        dec::decode(codec::PAL5, &long, &mut f),
-        Err(dec::DecodeError::Long)
-    );
+    assert_eq!(dec::decode(codec::PAL5, &long, &mut f), Err(dec::DecodeError::Long));
 }
 
 // ---------------------------------------------------------------------------
@@ -111,12 +101,7 @@ fn lz_stream(items: &[Item]) -> Vec<u8> {
 
 #[test]
 fn lz_literals_and_matches_are_packed_as_section_4_4_says() {
-    let stream = lz_stream(&[
-        Item::Lit(b'A'),
-        Item::Lit(b'B'),
-        Item::Lit(b'C'),
-        Item::Mat { off: 3, len: 9 },
-    ]);
+    let stream = lz_stream(&[Item::Lit(b'A'), Item::Lit(b'B'), Item::Lit(b'C'), Item::Mat { off: 3, len: 9 }]);
     // flags 1110_0000, three literals, then offset-1 = 2 and length-3 = 6.
     assert_eq!(stream, vec![0b1110_0000, b'A', b'B', b'C', 0x00, 0x26]);
 
@@ -132,14 +117,8 @@ fn lz_literals_and_matches_are_packed_as_section_4_4_says() {
     assert_eq!(&out[..19], &[b'Z'; 19]);
 
     // Offset and length are at their extremes.
-    assert_eq!(
-        lz_stream(&[Item::Mat { off: 4096, len: 18 }]),
-        vec![0b0000_0000, 0xFF, 0xFF]
-    );
-    assert_eq!(
-        lz_stream(&[Item::Mat { off: 1, len: 3 }]),
-        vec![0b0000_0000, 0x00, 0x00]
-    );
+    assert_eq!(lz_stream(&[Item::Mat { off: 4096, len: 18 }]), vec![0b0000_0000, 0xFF, 0xFF]);
+    assert_eq!(lz_stream(&[Item::Mat { off: 1, len: 3 }]), vec![0b0000_0000, 0x00, 0x00]);
 
     // A group stops at the item that completes the output: the encoder need
     // not pad, and a decoder must not read the bytes that are not there.
@@ -182,19 +161,13 @@ fn pal8_lz_is_palette_count_minus_one_then_palette_then_stream() {
     let mut bad = vec![2u8];
     bad.extend_from_slice(&[10, 11, 12, 20, 21, 22, 30, 31, 32]);
     bad.extend_from_slice(&flat_stream(3, NPIX));
-    assert_eq!(
-        dec::decode(codec::PAL8_LZ, &bad, &mut f),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(dec::decode(codec::PAL8_LZ, &bad, &mut f), Err(dec::DecodeError::Corrupt));
 
     // A stream that produces too few bytes is short, not a partial frame.
     let mut truncated = vec![2u8];
     truncated.extend_from_slice(&[10, 11, 12, 20, 21, 22, 30, 31, 32]);
     truncated.extend_from_slice(&flat_stream(1, NPIX - 100));
-    assert_eq!(
-        dec::decode(codec::PAL8_LZ, &truncated, &mut f),
-        Err(dec::DecodeError::Short)
-    );
+    assert_eq!(dec::decode(codec::PAL8_LZ, &truncated, &mut f), Err(dec::DecodeError::Short));
 }
 
 #[test]
@@ -212,11 +185,7 @@ fn pal4_lz_is_sixteen_colours_then_a_nibble_plane() {
     dec::decode(codec::PAL4_LZ, &p, &mut f).unwrap();
     for i in 0..NPIX {
         let idx: u8 = if i % 2 == 0 { 5 } else { 10 };
-        assert_eq!(
-            px(&f, i % W, i / W),
-            [idx * 16, 255 - idx * 16, idx],
-            "pixel {i}"
-        );
+        assert_eq!(px(&f, i % W, i / W), [idx * 16, 255 - idx * 16, idx], "pixel {i}");
     }
 }
 
@@ -312,14 +281,8 @@ fn solid_is_three_bytes() {
     for i in 0..NPIX {
         assert_eq!(px(&f, i % W, i / W), [1, 2, 3]);
     }
-    assert_eq!(
-        dec::decode(codec::SOLID, &[1, 2], &mut f),
-        Err(dec::DecodeError::Short)
-    );
-    assert_eq!(
-        dec::decode(codec::SOLID, &[1, 2, 3, 4], &mut f),
-        Err(dec::DecodeError::Long)
-    );
+    assert_eq!(dec::decode(codec::SOLID, &[1, 2], &mut f), Err(dec::DecodeError::Short));
+    assert_eq!(dec::decode(codec::SOLID, &[1, 2, 3, 4], &mut f), Err(dec::DecodeError::Long));
 }
 
 #[test]
@@ -327,15 +290,9 @@ fn reserved_and_lab_only_codecs_are_rejected() {
     let mut f = blank();
     // 0x00 and 0xFF: "MUST be rejected". 0x01/0x03/0x20-0x27/0x30/0x31: the
     // lab-only ids. 0xF0-0xFE: experimental, which this device does not offer.
-    for c in [
-        0x00u8, 0x01, 0x03, 0x04, 0x20, 0x21, 0x27, 0x30, 0x31, 0x7E, 0x80, 0xF0, 0xFE, 0xFF,
-    ] {
+    for c in [0x00u8, 0x01, 0x03, 0x04, 0x20, 0x21, 0x27, 0x30, 0x31, 0x7E, 0x80, 0xF0, 0xFE, 0xFF] {
         assert!(!dec::is_supported(c), "0x{c:02x}");
-        assert_eq!(
-            dec::decode(c, &[0; 1400], &mut f),
-            Err(dec::DecodeError::UnsupportedCodec),
-            "0x{c:02x}"
-        );
+        assert_eq!(dec::decode(c, &[0; 1400], &mut f), Err(dec::DecodeError::UnsupportedCodec), "0x{c:02x}");
     }
     for c in dec::SUPPORTED_CODECS {
         assert!(dec::is_supported(c), "0x{c:02x}");

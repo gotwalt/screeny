@@ -33,8 +33,8 @@ use screeny_receiver as rx;
 use screeny_provision::button::ButtonEvent;
 
 use crate::config::{Config, Health, PanelModel};
-use crate::net::display_addr;
 use crate::event::Event;
+use crate::net::display_addr;
 use crate::panel;
 use crate::stats::Stats;
 use crate::wifi::WifiModel;
@@ -68,9 +68,7 @@ impl Outbox {
     /// True if there is nothing to send and nothing to say.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.from_frame_sock.is_empty()
-            && self.from_control_sock.is_empty()
-            && self.events.is_empty()
+        self.from_frame_sock.is_empty() && self.from_control_sock.is_empty() && self.events.is_empty()
     }
 }
 
@@ -174,10 +172,7 @@ impl rx::Host for Sim<'_> {
         // Logged first, exactly as before: the event carries the SSID and the
         // persist flag and has no field for a PSK, which is how section 8.4's
         // invariant is kept rather than remembered.
-        self.out.events.push(Event::SetWifi {
-            ssid: w.ssid.to_string(),
-            persist: w.persist,
-        });
+        self.out.events.push(Event::SetWifi { ssid: w.ssid.to_string(), persist: w.persist });
         // ...and now it feeds the provisioning machine, which is the same one
         // `POST /api/v1/wifi` feeds. `w.psk` is not passed on and is not kept:
         // the scripted radio decides the outcome, so the simulator has no use
@@ -193,12 +188,8 @@ impl rx::Host for Sim<'_> {
         // and `SimHandle::post_wifi` drive the new transition and UDP does not,
         // and the asymmetry is written down here rather than discovered.
         // Proposed card 238 closes it deliberately, with those tests in hand.
-        if matches!(
-            self.wifi.phase(),
-            screeny_provision::State::Portal | screeny_provision::State::Trial
-        ) {
-            self.wifi
-                .post_credentials(w.ssid, self.now_us, &mut self.out.events);
+        if matches!(self.wifi.phase(), screeny_provision::State::Portal | screeny_provision::State::Trial) {
+            self.wifi.post_credentials(w.ssid, self.now_us, &mut self.out.events);
         }
         // Spec section 8.2 is "reply before disconnecting", and the reply is
         // built by the caller the moment this returns, before any scripted
@@ -338,15 +329,8 @@ impl Core {
         let brightness = r.brightness();
         Core {
             rx: r,
-            env: Env {
-                panel_model: cfg.panel,
-                boot: Instant::now(),
-            },
-            panel: Panel {
-                front: Box::new([0u8; NBYTES]),
-                out: Box::new([0u8; NBYTES]),
-                brightness,
-            },
+            env: Env { panel_model: cfg.panel, boot: Instant::now() },
+            panel: Panel { front: Box::new([0u8; NBYTES]), out: Box::new([0u8; NBYTES]), brightness },
             back: Box::new([0u8; NBYTES]),
             survivor: None,
             wifi: WifiModel::new(cfg, display_addr(cfg.bind), events),
@@ -517,23 +501,8 @@ impl Core {
     /// survivor, superseding any earlier one (section 3.3). Nothing is
     /// decoded or displayed until [`Core::flush_frames`].
     pub fn offer_frame(&mut self, now_us: u64, from: SocketAddr, data: &[u8], out: &mut Outbox) {
-        let Core {
-            rx,
-            env,
-            panel,
-            survivor,
-            wifi,
-            ident,
-            ..
-        } = self;
-        let mut h = Sim {
-            out,
-            env,
-            panel,
-            wifi,
-            ident,
-            now_us,
-        };
+        let Core { rx, env, panel, survivor, wifi, ident, .. } = self;
+        let mut h = Sim { out, env, panel, wifi, ident, now_us };
         if rx.offer_frame(&mut h, now_us, from, data) == rx::Offer::Keep {
             // The device swaps two static buffers here; a simulator can afford
             // the copy, and it keeps `Core` free of borrowed datagrams.
@@ -544,47 +513,17 @@ impl Core {
     /// Close the drain: decode the survivor, swap it onto the panel, then
     /// answer any `STATS_REQ` seen during the drain.
     pub fn flush_frames(&mut self, now_us: u64, out: &mut Outbox) {
-        let Core {
-            rx,
-            env,
-            panel,
-            back,
-            survivor,
-            wifi,
-            ident,
-            ..
-        } = self;
+        let Core { rx, env, panel, back, survivor, wifi, ident, .. } = self;
         let kept = survivor.take();
-        let mut h = Sim {
-            out,
-            env,
-            panel,
-            wifi,
-            ident,
-            now_us,
-        };
+        let mut h = Sim { out, env, panel, wifi, ident, now_us };
         rx.flush_frames(&mut h, now_us, kept.as_deref(), back);
     }
 
     /// Advance the timers: `LIVE -> HOLD`, `HOLD -> IDLE`, `IDENTIFY` expiry,
     /// and the provisioning machine's own (card 224).
     pub fn tick(&mut self, now_us: u64, out: &mut Outbox) {
-        let Core {
-            rx,
-            env,
-            panel,
-            wifi,
-            ident,
-            ..
-        } = self;
-        let mut h = Sim {
-            out,
-            env,
-            panel,
-            wifi,
-            ident,
-            now_us,
-        };
+        let Core { rx, env, panel, wifi, ident, .. } = self;
+        let mut h = Sim { out, env, panel, wifi, ident, now_us };
         rx.tick(&mut h, now_us);
         self.wifi.tick(now_us, &mut out.events);
     }
@@ -593,22 +532,8 @@ impl Core {
     /// provisioning machine's own link timer, from one call so they cannot be
     /// done by halves.
     pub fn set_link_down(&mut self, down: bool, now_us: u64, out: &mut Outbox) {
-        let Core {
-            rx,
-            env,
-            panel,
-            wifi,
-            ident,
-            ..
-        } = self;
-        let mut h = Sim {
-            out,
-            env,
-            panel,
-            wifi,
-            ident,
-            now_us,
-        };
+        let Core { rx, env, panel, wifi, ident, .. } = self;
+        let mut h = Sim { out, env, panel, wifi, ident, now_us };
         if down {
             rx.link_down(&mut h, now_us);
         }
@@ -658,8 +583,7 @@ impl Core {
         let duration_ms = screeny_provision::button::STATUS_MS.min(u16::MAX as u32) as u16;
         let mut buf = [0u8; 16];
         // `req_id` 0 is section 6.1's "no reply wanted", so nothing is sent.
-        let Ok(n) = screeny_proto::control::Request::Identify { duration_ms }.write(0, &mut buf)
-        else {
+        let Ok(n) = screeny_proto::control::Request::Identify { duration_ms }.write(0, &mut buf) else {
             return;
         };
         let from = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -674,22 +598,8 @@ impl Core {
     pub fn control(&mut self, now_us: u64, from: SocketAddr, data: &[u8], out: &mut Outbox) {
         let mut buf = [0u8; MAX_UDP_PAYLOAD];
         let n = {
-            let Core {
-                rx,
-                env,
-                panel,
-                wifi,
-                ident,
-                ..
-            } = self;
-            let mut h = Sim {
-                out,
-                env,
-                panel,
-                wifi,
-                ident,
-                now_us,
-            };
+            let Core { rx, env, panel, wifi, ident, .. } = self;
+            let mut h = Sim { out, env, panel, wifi, ident, now_us };
             rx.control(&mut h, now_us, from, data, &mut buf)
         };
         if let Some(n) = n {
@@ -711,9 +621,7 @@ pub fn draw_boot_id() -> u32 {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
     let mut x = nanos ^ SEQ.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::SeqCst);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);

@@ -33,12 +33,7 @@ impl Advertisement {
     ///
     /// Anything `mdns-sd` refuses: no usable interface, a malformed instance
     /// name, a TXT key it will not carry.
-    pub fn start(
-        cfg: &Config,
-        frame_port: u16,
-        info_bytes: &[u8],
-        addr: Ipv4Addr,
-    ) -> io::Result<Self> {
+    pub fn start(cfg: &Config, frame_port: u16, info_bytes: &[u8], addr: Ipv4Addr) -> io::Result<Self> {
         let daemon = ServiceDaemon::new().map_err(other)?;
         // Section 1: v1 is IPv4 only.
         let _ = daemon.disable_interface(mdns_sd::IfKind::IPv6);

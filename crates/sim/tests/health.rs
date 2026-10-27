@@ -28,11 +28,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_screeny-sim");
 
 /// A device on loopback with ephemeral ports, and its HTTP address.
 fn device(health: Health) -> (SimDevice, SocketAddr) {
-    let dev = SimDevice::start(Config {
-        health,
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { health, ..Config::for_test() }).expect("bind loopback");
     let addr = dev.http_addr().expect("the HTTP API is on by default");
     (dev, addr)
 }
@@ -156,10 +152,7 @@ fn every_enum_variant_round_trips_through_its_flag() {
 
     for name in Health::reset_reason_names() {
         let parsed = Health::parse_reset_reason(&name).expect(&name);
-        sim.set_health(Health {
-            reset_reason: parsed,
-            ..Health::default()
-        });
+        sim.set_health(Health { reset_reason: parsed, ..Health::default() });
         let res = http::get(addr, route::STATUS);
         assert_eq!(res.parse::<StatusReply>().reset_reason, parsed, "{name}");
         assert!(
@@ -171,10 +164,7 @@ fn every_enum_variant_round_trips_through_its_flag() {
 
     for name in Health::fw_slot_names() {
         let parsed = Health::parse_fw_slot(&name).expect(&name);
-        sim.set_health(Health {
-            fw_slot: parsed,
-            ..Health::default()
-        });
+        sim.set_health(Health { fw_slot: parsed, ..Health::default() });
         let res = http::get(addr, route::STATUS);
         assert_eq!(res.parse::<StatusReply>().fw_slot, parsed, "{name}");
         assert!(
@@ -186,10 +176,7 @@ fn every_enum_variant_round_trips_through_its_flag() {
 
     for name in Health::fw_state_names() {
         let parsed = Health::parse_fw_state(&name).expect(&name);
-        sim.set_health(Health {
-            fw_state: parsed,
-            ..Health::default()
-        });
+        sim.set_health(Health { fw_state: parsed, ..Health::default() });
         let res = http::get(addr, route::STATUS);
         assert_eq!(res.parse::<StatusReply>().fw_state, parsed, "{name}");
         assert!(
@@ -208,20 +195,11 @@ fn every_enum_variant_round_trips_through_its_flag() {
 fn the_two_bad_command_lines_are_refused_with_a_message() {
     let cases: &[(&[&str], &[&str])] = &[
         // A misspelling gets the whole list back.
-        (
-            &["--reset-reason", "brownedout"],
-            &["brownedout", "brownout", "power_on", "deep_sleep"],
-        ),
+        (&["--reset-reason", "brownedout"], &["brownedout", "brownout", "power_on", "deep_sleep"]),
         (&["--fw-slot", "ota_2"], &["ota_0", "ota_1", "unknown"]),
-        (
-            &["--fw-state", "fine"],
-            &["pending_verify", "invalid", "undefined"],
-        ),
+        (&["--fw-state", "fine"], &["pending_verify", "invalid", "undefined"]),
         // A device cannot use more heap than it has.
-        (
-            &["--heap-used", "200000", "--heap-size", "98304"],
-            &["--heap-used", "--heap-size"],
-        ),
+        (&["--heap-used", "200000", "--heap-size", "98304"], &["--heap-used", "--heap-size"]),
     ];
     for (args, wants) in cases {
         let out = Command::new(BIN).args(*args).output().expect("run");
@@ -314,8 +292,7 @@ fn a_reboot_over_udp_makes_the_reset_reason_software_too() {
     let ctrl = common::Ctrl::new(dev.control_addr());
     assert_eq!(status(addr).reset_reason, ResetReason::Brownout);
 
-    ctrl.call(&screeny_proto::control::Request::Reboot, 7)
-        .expect("REBOOT is answered");
+    ctrl.call(&screeny_proto::control::Request::Reboot, 7).expect("REBOOT is answered");
 
     assert_eq!(
         status(addr).reset_reason,
@@ -381,21 +358,13 @@ impl Running {
             }
             banner.push_str(&line);
             if let Some(rest) = line.split("http://").nth(1) {
-                http = rest
-                    .trim()
-                    .trim_end_matches('/')
-                    .parse::<SocketAddr>()
-                    .ok();
+                http = rest.trim().trim_end_matches('/').parse::<SocketAddr>().ok();
             }
             if http.is_some() && banner.contains("health:") {
                 break;
             }
         }
-        Running {
-            child,
-            http: http.unwrap_or_else(|| panic!("no HTTP address in the banner: {banner:?}")),
-            banner,
-        }
+        Running { child, http: http.unwrap_or_else(|| panic!("no HTTP address in the banner: {banner:?}")), banner }
     }
 
     /// Stop it now rather than waiting out `--exit-after`.

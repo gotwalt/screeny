@@ -63,7 +63,13 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16, Seen) {
         if port == avoid {
             continue;
         }
-        let cfg = SimConfig { frame_port: port, control_port: port + 1, id: id.to_string(), instance: format!("sim-{id}"), ..SimConfig::for_test() };
+        let cfg = SimConfig {
+            frame_port: port,
+            control_port: port + 1,
+            id: id.to_string(),
+            instance: format!("sim-{id}"),
+            ..SimConfig::for_test()
+        };
         let shown = Arc::clone(&seen.shown);
         let sink = Box::new(move |f: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
             let mut v = shown.lock().expect("shown");
@@ -98,7 +104,12 @@ async fn ok(at: SocketAddr, path: &str, body: &str) -> serde_json::Value {
 
 /// The overview's card for one panel.
 fn card<'a>(panels: &'a serde_json::Value, device: &str) -> &'a serde_json::Value {
-    panels["panels"].as_array().expect("panels").iter().find(|p| p["device"] == device).unwrap_or_else(|| panic!("no `{device}` in {panels}"))
+    panels["panels"]
+        .as_array()
+        .expect("panels")
+        .iter()
+        .find(|p| p["device"] == device)
+        .unwrap_or_else(|| panic!("no `{device}` in {panels}"))
 }
 
 /// **Byte for byte**: pair the two panels' datagrams by sequence number - each
@@ -146,7 +157,9 @@ fn nearest(a: &[Vec<u8>], b: &[Vec<u8>]) -> f64 {
         .iter()
         .map(|fa| {
             b.iter()
-                .map(|fb| fa.iter().zip(fb).map(|(x, y)| f64::from(x.abs_diff(*y))).sum::<f64>() / fa.len().max(1) as f64)
+                .map(|fb| {
+                    fa.iter().zip(fb).map(|(x, y)| f64::from(x.abs_diff(*y))).sum::<f64>() / fa.len().max(1) as f64
+                })
                 .fold(f64::INFINITY, f64::min)
         })
         .collect();
@@ -160,7 +173,8 @@ async fn two_panels(at: SocketAddr, a_port: u16, b_port: u16) {
         ok(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","play":true}}"#)).await;
     }
     until_json(at, PATIENCE * 2, "both panels known by their own ids and connected", "/api/v1/panels", |p| {
-        let ids: Vec<&str> = p["panels"].as_array().map(|a| a.iter().filter_map(|x| x["device"].as_str()).collect()).unwrap_or_default();
+        let ids: Vec<&str> =
+            p["panels"].as_array().map(|a| a.iter().filter_map(|x| x["device"].as_str()).collect()).unwrap_or_default();
         ids == ["aa0001", "bb0002"] && p["panels"].as_array().is_some_and(|a| a.iter().all(|x| x["connected"] == true))
     })
     .await;
@@ -187,8 +201,16 @@ async fn panels_on_one_channel_are_sent_the_same_bytes() {
     // 1. Both on Channel 1: the same bytes, one encode per tick.
     let panels = get(at, "/api/v1/panels").await.json();
     let (ca, cb) = (card(&panels, "aa0001"), card(&panels, "bb0002"));
-    assert_eq!((ca["channel"].as_u64(), cb["channel"].as_u64()), (Some(1), Some(1)), "new panels join Channel 1: {panels}");
-    assert_eq!((ca["fading"].as_bool(), cb["fading"].as_bool()), (Some(false), Some(false)), "their fades in are over: {panels}");
+    assert_eq!(
+        (ca["channel"].as_u64(), cb["channel"].as_u64()),
+        (Some(1), Some(1)),
+        "new panels join Channel 1: {panels}"
+    );
+    assert_eq!(
+        (ca["fading"].as_bool(), cb["fading"].as_bool()),
+        (Some(false), Some(false)),
+        "their fades in are over: {panels}"
+    );
     let home = st.panels.home();
     let pa = st.panels.get("aa0001").expect("a");
     let pb = st.panels.get("bb0002").expect("b");
@@ -214,10 +236,19 @@ async fn panels_on_one_channel_are_sent_the_same_bytes() {
     assert!(encodes.abs_diff(ticks) <= 1, "**one encode per tick**, for two panels: {encodes} encodes, {ticks} ticks");
     for (who, s0, s1) in [("a", sa0, sa1), ("b", sb0, sb1)] {
         assert_eq!(s1.own - s0.own, 0, "{who}: not one frame of its own once it is on the channel");
-        assert!((s1.shared - s0.shared).abs_diff(ticks) <= 1, "{who}: every tick's shared frame: {} for {ticks} ticks", s1.shared - s0.shared);
+        assert!(
+            (s1.shared - s0.shared).abs_diff(ticks) <= 1,
+            "{who}: every tick's shared frame: {} for {ticks} ticks",
+            s1.shared - s0.shared
+        );
     }
     assert!(wa.len() >= 40 && wb.len() >= 40, "both sims were sent frames: {} and {}", wa.len(), wb.len());
-    assert!(pairs + 2 >= wb.len().min(wa.len()), "the two streams pair up by sequence: {pairs} pairs of {} and {}", wa.len(), wb.len());
+    assert!(
+        pairs + 2 >= wb.len().min(wa.len()),
+        "the two streams pair up by sequence: {pairs} pairs of {} and {}",
+        wa.len(),
+        wb.len()
+    );
     assert_eq!(same, pairs, "**byte-identical pixel payloads for the same ticks**: {same} of {pairs}");
 
     // 2. A new channel (a copy of Channel 1), a different picture on it, and
@@ -237,7 +268,11 @@ async fn panels_on_one_channel_are_sent_the_same_bytes() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let (wa, wb) = (a.wire_since(ma), b.wire_since(mb));
     let (fa, fb) = (a.shown_since(ma), b.shown_since(mb));
-    eprintln!("two channels: {:.0}% of b's payloads also sent to a; decoded nearest {:.2}", shared_payloads(&wa, &wb) * 100.0, nearest(&fa, &fb));
+    eprintln!(
+        "two channels: {:.0}% of b's payloads also sent to a; decoded nearest {:.2}",
+        shared_payloads(&wa, &wb) * 100.0,
+        nearest(&fa, &fb)
+    );
     assert!(wa.len() >= 20 && wb.len() >= 20, "both still streaming: {} and {}", wa.len(), wb.len());
     assert!(shared_payloads(&wa, &wb) < 0.05, "two pictures, two sets of bytes");
     assert!(nearest(&fa, &fb) > 10.0, "and the sims show two different pictures: {:.2}", nearest(&fa, &fb));
@@ -298,11 +333,22 @@ async fn channels_are_made_renamed_and_deleted() {
     let at = studio.addr;
     let list = get(at, "/api/v1/channels").await.json();
     assert_eq!(list["channels"].as_array().map(Vec::len), Some(1), "a fresh studio has Channel 1: {list}");
-    assert_eq!((list["channels"][0]["id"].as_u64(), list["channels"][0]["name"].as_str(), list["channels"][0]["home"].as_bool()), (Some(1), Some("Channel 1"), Some(true)));
+    assert_eq!(
+        (
+            list["channels"][0]["id"].as_u64(),
+            list["channels"][0]["name"].as_str(),
+            list["channels"][0]["home"].as_bool()
+        ),
+        (Some(1), Some("Channel 1"), Some(true))
+    );
 
     ok(at, "/api/v1/set_seed", r#"{"seed":31}"#).await;
     let two = ok(at, "/api/v1/channels/new", "{}").await;
-    assert_eq!((two["channel"].as_u64(), two["channel_name"].as_str(), two["seed"].as_u64()), (Some(2), Some("Channel 2"), Some(31)), "a copy of Channel 1: {two}");
+    assert_eq!(
+        (two["channel"].as_u64(), two["channel_name"].as_str(), two["seed"].as_u64()),
+        (Some(2), Some("Channel 2"), Some(31)),
+        "a copy of Channel 1: {two}"
+    );
     let three = ok(at, "/api/v1/channels/new", r#"{"name":"Kitchen","from":2}"#).await;
     assert_eq!((three["channel"].as_u64(), three["channel_name"].as_str()), (Some(3), Some("Kitchen")));
     assert_eq!(post(at, "/api/v1/channels/new", r#"{"from":9}"#).await.status, 404);
@@ -314,17 +360,29 @@ async fn channels_are_made_renamed_and_deleted() {
     // Picture routes by channel, and one that is not there.
     let dials = ok(at, "/api/v1/set_patch", r#"{"id":"clocks-dials","channel":3}"#).await;
     assert_eq!((dials["channel"].as_u64(), dials["patch"].as_str()), (Some(3), Some("clocks-dials")));
-    assert_eq!(get(at, "/api/v1/bootstrap?channel=1").await.json()["state"]["patch"], "clocks-numerals", "Channel 1 as it was");
+    assert_eq!(
+        get(at, "/api/v1/bootstrap?channel=1").await.json()["state"]["patch"],
+        "clocks-numerals",
+        "Channel 1 as it was"
+    );
     assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"channel":9}"#).await.status, 404);
     assert_eq!(post(at, "/api/v1/set_seed", r#"{"seed":1,"panel":"nope"}"#).await.status, 404);
     // Card 356: output is the studio's - one setting, for every channel. A
     // `channel` (an older client's) is accepted and does not scope it.
     let mut output = dials["output"].clone();
-    assert_eq!((output["panel"].as_str(), output["dither"].as_str()), (Some("aligned_dark"), Some("blue_noise")), "the live default");
+    assert_eq!(
+        (output["panel"].as_str(), output["dither"].as_str()),
+        (Some("aligned_dark"), Some("blue_noise")),
+        "the live default"
+    );
     output["dither"] = "bayer4".into();
     let out = ok(at, "/api/v1/set_output", &serde_json::json!({ "output": output, "channel": 3 }).to_string()).await;
     assert_eq!(out["output"]["dither"], "bayer4");
-    assert_eq!(get(at, "/api/v1/bootstrap").await.json()["state"]["output"]["dither"], "bayer4", "Channel 1 has it too");
+    assert_eq!(
+        get(at, "/api/v1/bootstrap").await.json()["state"]["output"]["dither"],
+        "bayer4",
+        "Channel 1 has it too"
+    );
     for c in get(at, "/api/v1/channels").await.json()["channels"].as_array().expect("list") {
         assert_eq!(c["output"]["dither"], "bayer4", "every channel reports the studio's: {c}");
     }
@@ -340,7 +398,12 @@ async fn channels_are_made_renamed_and_deleted() {
 
     let gone = ok(at, "/api/v1/channels/delete", r#"{"channel":2}"#).await;
     assert_eq!(gone["channel"], 1);
-    let ids: Vec<u64> = get(at, "/api/v1/channels").await.json()["channels"].as_array().expect("list").iter().filter_map(|c| c["id"].as_u64()).collect();
+    let ids: Vec<u64> = get(at, "/api/v1/channels").await.json()["channels"]
+        .as_array()
+        .expect("list")
+        .iter()
+        .filter_map(|c| c["id"].as_u64())
+        .collect();
     assert_eq!(ids, [1, 3]);
     assert_eq!(ok(at, "/api/v1/channels/new", "{}").await["channel"], 4, "ids are never reused");
     studio.stop().await;
@@ -360,17 +423,26 @@ async fn a_socket_is_about_a_channel() {
 
     let mut thumb = Ws::connect_asking(at, "channel=2&fps=4&overview=false").await;
     let hello = thumb.event("state").await;
-    assert_eq!((hello["channel"].as_u64(), hello["state"]["patch"].as_str()), (Some(2), Some("clocks-dials")), "{hello}");
+    assert_eq!(
+        (hello["channel"].as_u64(), hello["state"]["patch"].as_str()),
+        (Some(2), Some("clocks-dials")),
+        "{hello}"
+    );
     thumb.frame().await;
     let t = thumb.measure(Duration::from_secs(2)).await;
-    assert!((5..=10).contains(&t.frames), "about four frames a second of an empty, watched channel: {} in 2 s", t.frames);
+    assert!(
+        (5..=10).contains(&t.frames),
+        "about four frames a second of an empty, watched channel: {} in 2 s",
+        t.frames
+    );
 
     // A socket about a panel is about its channel, and follows it.
     let mut b_sock = Ws::connect_asking(at, "panel=bb0002&fps=0&overview=false").await;
     let hello = b_sock.event("state").await;
     assert_eq!((hello["channel"].as_u64(), hello["panel"].as_str()), (Some(1), Some("bb0002")), "{hello}");
     ok(at, "/api/v1/panel/channel", r#"{"panel":"bb0002","channel":2}"#).await;
-    let on_two = |t: &str| serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v["type"] == "state" && v["channel"] == 2);
+    let on_two =
+        |t: &str| serde_json::from_str::<serde_json::Value>(t).is_ok_and(|v| v["type"] == "state" && v["channel"] == 2);
     let moved = b_sock.next_matching(|m| matches!(m, common::Msg::Text(t) if on_two(t))).await;
     if let common::Msg::Text(t) = moved {
         let v: serde_json::Value = serde_json::from_str(&t).expect("json");
@@ -383,7 +455,8 @@ async fn a_socket_is_about_a_channel() {
     let hello = page.event("state").await;
     assert_eq!(hello["channel"], 1);
     let channels = page.event("channels").await;
-    let names: Vec<&str> = channels["channels"].as_array().expect("channels").iter().filter_map(|c| c["name"].as_str()).collect();
+    let names: Vec<&str> =
+        channels["channels"].as_array().expect("channels").iter().filter_map(|c| c["name"].as_str()).collect();
     assert_eq!(names, ["Channel 1", "Hall"], "{channels}");
 
     // A socket about a channel or a panel that is not there is told so.
@@ -413,7 +486,11 @@ async fn a_device_the_registry_learns_about_joins_channel_1() {
     })
     .await;
     let p = card(&panels, &id);
-    assert_eq!((p["channel"].as_u64(), p["channel_name"].as_str(), p["on"].as_bool()), (Some(1), Some("Channel 1"), Some(true)), "{panels}");
+    assert_eq!(
+        (p["channel"].as_u64(), p["channel_name"].as_str(), p["on"].as_bool()),
+        (Some(1), Some("Channel 1"), Some(true)),
+        "{panels}"
+    );
     assert_ne!(p["link"], "off");
     let state = get(at, "/api/v1/bootstrap").await.json();
     assert_eq!(state["state"]["panels"], serde_json::json!([id]), "{state}");

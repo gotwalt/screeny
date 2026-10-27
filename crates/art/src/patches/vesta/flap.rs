@@ -316,4 +316,3 @@ mod tests {
         assert!(side.widen(0.0) == 1.0, "the axle does not move");
     }
 }
-

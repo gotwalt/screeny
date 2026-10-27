@@ -44,11 +44,7 @@ impl Rgb {
     }
 
     pub fn lerp(self, o: Rgb, t: f32) -> Self {
-        Rgb::new(
-            self.r + (o.r - self.r) * t,
-            self.g + (o.g - self.g) * t,
-            self.b + (o.b - self.b) * t,
-        )
+        Rgb::new(self.r + (o.r - self.r) * t, self.g + (o.g - self.g) * t, self.b + (o.b - self.b) * t)
     }
 
     pub fn clamp01(self) -> Self {

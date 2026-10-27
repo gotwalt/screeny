@@ -242,11 +242,7 @@ impl OtaModel {
                     // Card 246 item 3: the running slot's own state, which
                     // during a trial is `pending_verify` and after the confirm
                     // is `valid`.
-                    state: if phase == Phase::Confirmed {
-                        FwState::Valid
-                    } else {
-                        FwState::PendingVerify
-                    },
+                    state: if phase == Phase::Confirmed { FwState::Valid } else { FwState::PendingVerify },
                 })
             }
         }
@@ -272,9 +268,7 @@ impl OtaModel {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -323,10 +317,7 @@ mod tests {
         assert!(m.activate("0.7.2", FwSlot::Ota0, "0.7.0"));
         // The instant after the reply: this is where the probe used to decide.
         assert_eq!(m.phase(), Phase::OldImage);
-        assert!(
-            m.running_image().is_none(),
-            "the old image answers with its own boot_id"
-        );
+        assert!(m.running_image().is_none(), "the old image answers with its own boot_id");
         assert!(m.update_record().is_none(), "nothing has been activated yet");
     }
 

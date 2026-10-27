@@ -108,11 +108,7 @@ pub fn ssid_text(bytes: &[u8]) -> Option<SsidText> {
 pub fn ipv4_text(octets: [u8; 4]) -> IpText {
     let mut out = IpText::new();
     // Cannot fail: "255.255.255.255" is exactly MAX_IP_LEN.
-    let _ = write!(
-        out,
-        "{}.{}.{}.{}",
-        octets[0], octets[1], octets[2], octets[3]
-    );
+    let _ = write!(out, "{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]);
     out
 }
 

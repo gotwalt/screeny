@@ -15,10 +15,12 @@
 //! [`crate::panels::Panels::pick`]).
 
 use super::client::{self, Handle};
-use super::{fleet, ChannelOption, ChannelView, Command, Fleet, Order, PanelView, PatchState, Picture, Snapshot, Target};
-use crate::state::DEFAULT_SETTING;
+use super::{
+    fleet, ChannelOption, ChannelView, Command, Fleet, Order, PanelView, PatchState, Picture, Snapshot, Target,
+};
 use crate::channel::Channel;
 use crate::panel::Panel;
+use crate::state::DEFAULT_SETTING;
 use crate::AppState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,16 +56,30 @@ pub fn fleet_of(st: &AppState) -> Fleet {
     let views = if panels.is_empty() {
         // With no panel at all, the one device HA is shown is Channel 1's
         // picture, with no light behind it.
-        vec![PanelView { device: String::new(), key: None, name: String::new(), snapshot: Snapshot { channels: options.clone(), ..home } }]
+        vec![PanelView {
+            device: String::new(),
+            key: None,
+            name: String::new(),
+            snapshot: Snapshot { channels: options.clone(), ..home },
+        }]
     } else {
         let devices: Vec<String> = panels.iter().map(|p| p.device()).collect();
         panels
             .iter()
             .zip(fleet::keys(&devices))
             .map(|(panel, key)| {
-                let mut snapshot = Snapshot { channels: options.clone(), channel: panel.channel().map(|c| c.id()), ..panel_of(st, panel) };
+                let mut snapshot = Snapshot {
+                    channels: options.clone(),
+                    channel: panel.channel().map(|c| c.id()),
+                    ..panel_of(st, panel)
+                };
                 if key.is_none() {
-                    snapshot = Snapshot { patch: home.patch.clone(), pictures: home.pictures.clone(), picture: home.picture.clone(), ..snapshot };
+                    snapshot = Snapshot {
+                        patch: home.patch.clone(),
+                        pictures: home.pictures.clone(),
+                        picture: home.picture.clone(),
+                        ..snapshot
+                    };
                 }
                 PanelView {
                     device: panel.device(),
@@ -77,7 +93,10 @@ pub fn fleet_of(st: &AppState) -> Fleet {
             })
             .collect()
     };
-    let channels = channels.iter().map(|c| ChannelView { id: c.id(), name: c.name(), snapshot: picture_of(st, c, &pictures) }).collect();
+    let channels = channels
+        .iter()
+        .map(|c| ChannelView { id: c.id(), name: c.name(), snapshot: picture_of(st, c, &pictures) })
+        .collect();
     Fleet { panels: views, channels }
 }
 
@@ -116,7 +135,12 @@ fn picture_of(st: &AppState, channel: &Arc<Channel>, pictures: &[Picture]) -> Sn
     // channel is not showing.
     let picture = (!page.modified).then(|| Picture::label(&patch_name, &page.setting));
     Snapshot {
-        patch: PatchState { id: page.patch.clone(), name: patch_name, setting: page.setting.clone(), modified: page.modified },
+        patch: PatchState {
+            id: page.patch.clone(),
+            name: patch_name,
+            setting: page.setting.clone(),
+            modified: page.modified,
+        },
         picture: picture.filter(|l| pictures.iter().any(|p| &p.label == l)),
         pictures: pictures.to_vec(),
         ..Snapshot::default()
@@ -130,7 +154,8 @@ fn panel_of(st: &AppState, panel: &Arc<Panel>) -> Snapshot {
     let device = panel.device();
     let record = st.devices.get(&device);
     let facts = record.as_ref().and_then(|r| r.facts.as_ref());
-    let view = st.firmware.view(&device, facts.map(|f| f.reply.fw.to_string()).as_deref(), facts.map(|f| f.reply.fw_state));
+    let view =
+        st.firmware.view(&device, facts.map(|f| f.reply.fw.to_string()).as_deref(), facts.map(|f| f.reply.fw_state));
     Snapshot {
         firmware: super::FirmwareState::of(&view),
         brightness: status.brightness,
@@ -153,7 +178,11 @@ pub fn pictures(st: &AppState) -> Vec<Picture> {
     let mut out = Vec::new();
     for p in playable_patches(st.cfg.fault_patches, &screeny_art::gpu_status()) {
         let settings = std::iter::once(DEFAULT_SETTING.to_string()).chain(st.memory.setting_names(p.id));
-        out.extend(settings.map(|setting| Picture { label: Picture::label(p.name, &setting), patch: p.id.to_string(), setting }));
+        out.extend(settings.map(|setting| Picture {
+            label: Picture::label(p.name, &setting),
+            patch: p.id.to_string(),
+            setting,
+        }));
     }
     out
 }
@@ -231,7 +260,8 @@ pub fn execute(st: &AppState, order: &Order) -> Result<(), String> {
             if !st.memory.setting_names(patch).iter().any(|n| n == setting) && !crate::state::is_default_name(setting) {
                 return Err(format!("`{patch}` has no setting called `{setting}` any more"));
             }
-            let def = crate::channel::find_patch(patch, st.cfg.fault_patches).ok_or_else(|| format!("no patch called `{patch}`"))?;
+            let def = crate::channel::find_patch(patch, st.cfg.fault_patches)
+                .ok_or_else(|| format!("no patch called `{patch}`"))?;
             st.panels.pick(&channel, def, setting, None)?;
             channel.ensure_running();
         }

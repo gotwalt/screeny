@@ -55,8 +55,8 @@ pub mod value;
 
 pub use debounce::{Debounce, Field, QUIET_MS};
 pub use store::{
-    key, Fields, LoadReport, MapConfigError, SchemaState, Scratch, Store, StoreError, Write,
-    MAX_ITEM_LEN, SCHEMA_VERSION, SCRATCH_LEN, SCRATCH_MIN,
+    key, Fields, LoadReport, MapConfigError, SchemaState, Scratch, Store, StoreError, Write, MAX_ITEM_LEN,
+    SCHEMA_VERSION, SCRATCH_LEN, SCRATCH_MIN,
 };
 pub use value::{ColourOrder, Name, Psk, SettingError, Settings, Ssid, Wifi, DEFAULT_BRIGHTNESS};
 

@@ -27,12 +27,8 @@ fn quick_timing() -> WifiTiming {
 }
 
 fn online() -> SimDevice {
-    let dev = SimDevice::start(Config {
-        wifi_join_ms: 40,
-        wifi_timing: quick_timing(),
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { wifi_join_ms: 40, wifi_timing: quick_timing(), ..Config::for_test() })
+        .expect("bind loopback");
     assert_eq!(dev.handle().wifi_phase(), WifiPhase::Online);
     assert!(dev.handle().stored_ssid().is_some());
     dev
@@ -51,10 +47,7 @@ fn a_five_second_hold_forgets_the_network_and_raises_the_portal() {
     assert_eq!(sim.stored_ssid(), None, "the credentials are gone");
     assert!(sim.snapshot().portal, "the setup network is up");
     // A wipe is not a failure: `GET_WIFI` reads `disconnected` (card 221).
-    assert_eq!(
-        sim.snapshot().wifi_state,
-        screeny_proto::control::wifi_state::DISCONNECTED
-    );
+    assert_eq!(sim.snapshot().wifi_state, screeny_proto::control::wifi_state::DISCONNECTED);
     dev.shutdown();
 }
 
@@ -145,9 +138,6 @@ fn a_wipe_leaves_the_portal_screen_on_the_panel() {
     // screen and the cancelled screen have nothing like it.
     let lit_top_row = (0..31).filter(|x| shown[x * 3] > 0x80).count();
     assert_eq!(lit_top_row, 31, "the QR's quiet zone is not on the panel");
-    assert!(
-        (31..W).all(|x| shown[x * 3] < 0x80),
-        "and it is the portal layout, not something white"
-    );
+    assert!((31..W).all(|x| shown[x * 3] < 0x80), "and it is the portal layout, not something white");
     dev.shutdown();
 }

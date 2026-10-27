@@ -36,13 +36,7 @@ pub struct PreviewOpts {
 
 impl Default for PreviewOpts {
     fn default() -> Self {
-        PreviewOpts {
-            panel: crate::panel::NOMINAL,
-            scale: 12,
-            dot: 0.58,
-            bloom: 0.20,
-            mask: 0.010,
-        }
+        PreviewOpts { panel: crate::panel::NOMINAL, scale: 12, dot: 0.58, bloom: 0.20, mask: 0.010 }
     }
 }
 
@@ -86,11 +80,7 @@ impl Img {
         for y in 0..src.h {
             for x in 0..src.w {
                 let o = (y * src.w + x) * 3;
-                self.set(
-                    ox + x as i32,
-                    oy + y as i32,
-                    [src.px[o], src.px[o + 1], src.px[o + 2]],
-                );
+                self.set(ox + x as i32, oy + y as i32, [src.px[o], src.px[o + 1], src.px[o + 2]]);
             }
         }
     }
@@ -117,12 +107,8 @@ impl Img {
         // png 0.18 renamed the levels; High is what Best meant (card 016 put the
         // whole workspace on one png version).
         enc.set_compression(png::Compression::High);
-        let mut writer = enc
-            .write_header()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        writer
-            .write_image_data(&self.px)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut writer = enc.write_header().map_err(|e| std::io::Error::other(e.to_string()))?;
+        writer.write_image_data(&self.px).map_err(|e| std::io::Error::other(e.to_string()))?;
         Ok(())
     }
 }
@@ -158,19 +144,11 @@ impl LinImg {
     }
 
     fn blur1(&mut self, r: usize, horiz: bool) {
-        let (n, m) = if horiz {
-            (self.w, self.h)
-        } else {
-            (self.h, self.w)
-        };
+        let (n, m) = if horiz { (self.w, self.h) } else { (self.h, self.w) };
         let mut line = vec![[0f32; 3]; n];
         for j in 0..m {
             for (i, slot) in line.iter_mut().enumerate() {
-                *slot = if horiz {
-                    self.px[j * self.w + i]
-                } else {
-                    self.px[i * self.w + j]
-                };
+                *slot = if horiz { self.px[j * self.w + i] } else { self.px[i * self.w + j] };
             }
             for i in 0..n {
                 let lo = i.saturating_sub(r);
@@ -197,22 +175,14 @@ impl LinImg {
 
 fn composite(frame: &Frame, o: &PreviewOpts) -> LinImg {
     let s = o.scale;
-    let mut img = LinImg {
-        w: W * s,
-        h: H * s,
-        px: vec![[0.0; 3]; W * s * H * s],
-    };
+    let mut img = LinImg { w: W * s, h: H * s, px: vec![[0.0; 3]; W * s * H * s] };
     let r = o.dot * s as f32 / 2.0;
     let sigma = 0.40 * s as f32;
     let reach = (r + 2.0 * sigma.max(1.0)).ceil() as i32;
     for y in 0..H {
         for x in 0..W {
             let emitted = o.panel.emit(frame.get(x, y));
-            let core = [
-                emitted[0] + o.mask,
-                emitted[1] + o.mask,
-                emitted[2] + o.mask,
-            ];
+            let core = [emitted[0] + o.mask, emitted[1] + o.mask, emitted[2] + o.mask];
             let cx = x as f32 * s as f32 + s as f32 / 2.0 - 0.5;
             let cy = y as f32 * s as f32 + s as f32 / 2.0 - 0.5;
             let x0 = (cx as i32 - reach).max(0);
@@ -274,11 +244,7 @@ pub fn render_squint(frame: &Frame, o: &PreviewOpts) -> Img {
             out.set(
                 x as i32,
                 y as i32,
-                [
-                    lin_to_srgb8(acc[0] / 4.0),
-                    lin_to_srgb8(acc[1] / 4.0),
-                    lin_to_srgb8(acc[2] / 4.0),
-                ],
+                [lin_to_srgb8(acc[0] / 4.0), lin_to_srgb8(acc[1] / 4.0), lin_to_srgb8(acc[2] / 4.0)],
             );
         }
     }
@@ -309,13 +275,7 @@ pub fn sheet(title: &str, tiles: Vec<Tile>, cols: usize) -> Img {
         let x = PAD + col * cw;
         let y = PAD + 22 + row * ch;
         c.text(&t.label, x, y, 1, [170, 178, 195]);
-        c.rect(
-            x - 1,
-            y + LBL - 1,
-            t.img.w as i32 + 2,
-            t.img.h as i32 + 2,
-            [60, 60, 70],
-        );
+        c.rect(x - 1, y + LBL - 1, t.img.w as i32 + 2, t.img.h as i32 + 2, [60, 60, 70]);
         c.blit(&t.img, x, y + LBL);
     }
     c
@@ -333,17 +293,11 @@ pub fn save_apng(path: &Path, frames: &[Img], fps: u16) -> std::io::Result<()> {
     let mut enc = png::Encoder::new(w, frames[0].w as u32, frames[0].h as u32);
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Eight);
-    enc.set_animated(frames.len() as u32, 0)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    enc.set_frame_delay(1, fps)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let mut writer = enc
-        .write_header()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    enc.set_animated(frames.len() as u32, 0).map_err(|e| std::io::Error::other(e.to_string()))?;
+    enc.set_frame_delay(1, fps).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut writer = enc.write_header().map_err(|e| std::io::Error::other(e.to_string()))?;
     for f in frames {
-        writer
-            .write_image_data(&f.px)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        writer.write_image_data(&f.px).map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     Ok(())
 }

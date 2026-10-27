@@ -18,9 +18,8 @@ use crate::enums::{
     StreamState, UpdateOutcome, WifiState,
 };
 use crate::text::{
-    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, PanicWhatText,
-    SsidText, MAX_FW_LEN, MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN,
-    MAX_PANIC_WHAT_LEN, MAX_SSID_LEN,
+    ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, PanicWhatText, SsidText, MAX_FW_LEN,
+    MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN, MAX_PANIC_WHAT_LEN, MAX_SSID_LEN,
 };
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN, MIN_I8_LEN};
 
@@ -187,9 +186,7 @@ impl StatusReply {
         + field("fw_slot", FwSlot::MAX_JSON_LEN)
         + field("fw_state", FwState::MAX_JSON_LEN)
         + field("reset_reason", ResetReason::MAX_JSON_LEN)
-        + field("store_errors", MAX_U32_LEN)
-
-;
+        + field("store_errors", MAX_U32_LEN);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,10 +427,8 @@ pub struct Network {
 }
 
 impl Network {
-    pub(crate) const MAX_JSON_LEN: usize = 1
-        + field("ssid", 2 + MAX_SSID_LEN * ESCAPE_MAX)
-        + field("rssi", MIN_I8_LEN)
-        + field("secure", "false".len());
+    pub(crate) const MAX_JSON_LEN: usize =
+        1 + field("ssid", 2 + MAX_SSID_LEN * ESCAPE_MAX) + field("rssi", MIN_I8_LEN) + field("secure", "false".len());
 }
 
 /// `GET /api/v1/networks`: what a scan found, strongest first, at most
@@ -473,11 +468,7 @@ impl NetworksReply {
         let Some(ssid) = ssid_text(ssid) else {
             return false;
         };
-        let at = self
-            .networks
-            .iter()
-            .position(|n| n.rssi < rssi_dbm)
-            .unwrap_or(self.networks.len());
+        let at = self.networks.iter().position(|n| n.rssi < rssi_dbm).unwrap_or(self.networks.len());
         if at >= MAX_NETWORKS {
             return false;
         }
@@ -485,16 +476,7 @@ impl NetworksReply {
             self.networks.pop();
         }
         // `at` is <= len and len < MAX_NETWORKS now, so this cannot fail.
-        self.networks
-            .insert(
-                at,
-                Network {
-                    ssid,
-                    rssi: rssi_dbm,
-                    secure,
-                },
-            )
-            .is_ok()
+        self.networks.insert(at, Network { ssid, rssi: rssi_dbm, secure }).is_ok()
     }
 }
 
@@ -532,12 +514,7 @@ impl WifiReply {
     /// Nothing configured, nothing tried.
     #[must_use]
     pub fn disconnected() -> Self {
-        Self {
-            state: WifiState::Disconnected,
-            ssid: None,
-            ip: None,
-            reason: None,
-        }
+        Self { state: WifiState::Disconnected, ssid: None, ip: None, reason: None }
     }
 }
 
@@ -553,12 +530,7 @@ impl From<&Trial> for WifiReply {
             TrialOutcome::Connected => (WifiState::Connected, None),
             TrialOutcome::Failed(r) => (WifiState::Failed, Some(r.into())),
         };
-        Self {
-            state,
-            ssid: crate::text::text(t.ssid.as_str()),
-            ip: t.ip.map(ipv4_text),
-            reason,
-        }
+        Self { state, ssid: crate::text::text(t.ssid.as_str()), ip: t.ip.map(ipv4_text), reason }
     }
 }
 
@@ -668,34 +640,19 @@ impl FirmwareReply {
     /// what boots**: the image is staged in the inactive slot and that is all.
     #[must_use]
     pub const fn ok(written: u32) -> Self {
-        Self {
-            ok: true,
-            written,
-            error: None,
-            activating: false,
-        }
+        Self { ok: true, written, error: None, activating: false }
     }
 
     /// A successful upload the device is about to reboot into.
     #[must_use]
     pub const fn activating(written: u32) -> Self {
-        Self {
-            ok: true,
-            written,
-            error: None,
-            activating: true,
-        }
+        Self { ok: true, written, error: None, activating: true }
     }
 
     /// A failed upload, having written `written` bytes.
     #[must_use]
     pub const fn failed(written: u32, error: FirmwareError) -> Self {
-        Self {
-            ok: false,
-            written,
-            error: Some(error),
-            activating: false,
-        }
+        Self { ok: false, written, error: Some(error), activating: false }
     }
 }
 
@@ -717,17 +674,11 @@ impl AcceptedReply {
     pub const MAX_JSON_LEN: usize = 1 + field("result", Accepted::MAX_JSON_LEN);
 
     /// `{"result":"trying"}`, for `POST /api/v1/wifi`.
-    pub const TRYING: Self = Self {
-        result: Accepted::Trying,
-    };
+    pub const TRYING: Self = Self { result: Accepted::Trying };
     /// `{"result":"rebooting"}`, for `POST /api/v1/reboot`.
-    pub const REBOOTING: Self = Self {
-        result: Accepted::Rebooting,
-    };
+    pub const REBOOTING: Self = Self { result: Accepted::Rebooting };
     /// `{"result":"identifying"}`, for `POST /api/v1/identify`.
-    pub const IDENTIFYING: Self = Self {
-        result: Accepted::Identifying,
-    };
+    pub const IDENTIFYING: Self = Self { result: Accepted::Identifying };
 }
 
 /// `"key":value` plus the comma or brace in front of it.

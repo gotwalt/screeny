@@ -36,11 +36,7 @@ fn q565(c: [f32; 3]) -> [u8; 3] {
 }
 
 fn q888(c: [f32; 3]) -> [u8; 3] {
-    [
-        c[0].round().clamp(0.0, 255.0) as u8,
-        c[1].round().clamp(0.0, 255.0) as u8,
-        c[2].round().clamp(0.0, 255.0) as u8,
-    ]
+    [c[0].round().clamp(0.0, 255.0) as u8, c[1].round().clamp(0.0, 255.0) as u8, c[2].round().clamp(0.0, 255.0) as u8]
 }
 
 fn quantise(ends: Ends, c: [f32; 3]) -> [u8; 3] {
@@ -66,11 +62,7 @@ fn weights(levels: usize) -> &'static [u32] {
 fn ramp(a: [u8; 3], b: [u8; 3], levels: usize, out: &mut [[u8; 3]; 8]) {
     let w = weights(levels);
     for k in 0..levels {
-        out[k] = [
-            lerp8(a[0], b[0], w[k]),
-            lerp8(a[1], b[1], w[k]),
-            lerp8(a[2], b[2], w[k]),
-        ];
+        out[k] = [lerp8(a[0], b[0], w[k]), lerp8(a[1], b[1], w[k]), lerp8(a[2], b[2], w[k])];
     }
 }
 
@@ -104,12 +96,7 @@ fn principal_axis(px: &[[f32; 3]; 16], mean: [f32; 3]) -> [f32; 3] {
 
 /// Fit a two-endpoint ramp to a block. Returns the quantised endpoints, the
 /// per-pixel index assignment, and the resulting Oklab error.
-fn fit_ramp(
-    px: &[[f32; 3]; 16],
-    lab: &[[f32; 3]; 16],
-    ends: Ends,
-    levels: usize,
-) -> ([u8; 3], [u8; 3], [u8; 16], f64) {
+fn fit_ramp(px: &[[f32; 3]; 16], lab: &[[f32; 3]; 16], ends: Ends, levels: usize) -> ([u8; 3], [u8; 3], [u8; 16], f64) {
     let mut mean = [0f32; 3];
     for p in px {
         for k in 0..3 {
@@ -251,11 +238,7 @@ pub fn encode(f: &Rgb888Frame, hist: &Hist) -> Vec<u8> {
             let n = by * (W / 4) + bx;
             for j in 0..16 {
                 let p = (by * 4 + (j >> 2)) * W + bx * 4 + (j & 3);
-                px[j] = [
-                    f[p * 3] as f32,
-                    f[p * 3 + 1] as f32,
-                    f[p * 3 + 2] as f32,
-                ];
+                px[j] = [f[p * 3] as f32, f[p * 3 + 1] as f32, f[p * 3 + 2] as f32];
                 lab[j] = labs[bin_of[p] as usize];
             }
             let (a5, b5, i5, e5) = fit_ramp(&px, &lab, Ends::Rgb565, 8);

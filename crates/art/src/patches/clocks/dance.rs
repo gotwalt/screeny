@@ -111,11 +111,23 @@ pub enum Formation {
 #[derive(Clone, Copy, Debug)]
 pub enum Timing {
     Together,
-    Columns { gap: f32, reverse: bool },
-    Rows { gap: f32, reverse: bool },
-    Diagonal { gap: f32 },
+    Columns {
+        gap: f32,
+        reverse: bool,
+    },
+    Rows {
+        gap: f32,
+        reverse: bool,
+    },
+    Diagonal {
+        gap: f32,
+    },
     /// Outwards from a focus (or inwards to it), `gap` seconds per clock of distance.
-    Ripple { focus: (f32, f32), gap: f32, inward: bool },
+    Ripple {
+        focus: (f32, f32),
+        gap: f32,
+        inward: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -389,7 +401,13 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
         ],
         // Rings round a focus; a ripple turns them to spokes and back out to digits.
         3 => vec![
-            step(Rings { focus, spokes: false }, Timing::Ripple { focus, gap: 0.25, inward: false }, Turn::Shortest, 0, -1.0),
+            step(
+                Rings { focus, spokes: false },
+                Timing::Ripple { focus, gap: 0.25, inward: false },
+                Turn::Shortest,
+                0,
+                -1.0,
+            ),
             step(Rings { focus, spokes: true }, Timing::Ripple { focus, gap: 0.3, inward: false }, way, 1, -1.0),
             step(Digits, Timing::Ripple { focus, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
         ],
@@ -418,26 +436,50 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
         8 => vec![
             step(Needles(0.0), Timing::Together, Turn::Shortest, 0, 0.3),
             step(Lines(90.0), Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, -0.8),
-            step(Chevron { axis: 180.0, spread: 90.0 }, Timing::Ripple { focus: middle, gap: 0.2, inward: false }, Turn::Counter, 0, 0.2),
+            step(
+                Chevron { axis: 180.0, spread: 90.0 },
+                Timing::Ripple { focus: middle, gap: 0.2, inward: false },
+                Turn::Counter,
+                0,
+                0.2,
+            ),
             step(Digits, Timing::Ripple { focus: middle, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
         ],
         // Folded needles settle into a shallow wave, which deepens and rolls
         // on before the digits surface out of it.
         9 => vec![
             step(Flow { wave, open: 6.0 }, sweep, Turn::Shortest, 0, -1.0),
-            step(Flow { wave: Wave { amp: wave.amp * 3.0, phase: wave.phase + 2.0, ..wave }, open: 6.0 }, sweep, way, 0, -1.0),
+            step(
+                Flow { wave: Wave { amp: wave.amp * 3.0, phase: wave.phase + 2.0, ..wave }, open: 6.0 },
+                sweep,
+                way,
+                0,
+                -1.0,
+            ),
             step(Digits, sweep_back, Turn::Shortest, 0, 0.0),
         ],
         // The new time appears at once but scattered, each clock's corner
         // turned by a wave, then the wave drains away.
         10 => vec![
-            step(Turned { wave: Wave { base: 0.0, amp: rng.range(90.0, 150.0), ..wave } }, Timing::Ripple { focus, gap: 0.2, inward: false }, way, 0, 0.3),
+            step(
+                Turned { wave: Wave { base: 0.0, amp: rng.range(90.0, 150.0), ..wave } },
+                Timing::Ripple { focus, gap: 0.2, inward: false },
+                way,
+                0,
+                0.3,
+            ),
             step(Digits, Timing::Ripple { focus, gap: 0.3, inward: true }, Turn::Shortest, 0, 0.0),
         ],
         // A vortex: rings about the middle, spun a full turn from the rim inwards.
         _ => vec![
             step(Rings { focus: middle, spokes: false }, Timing::Together, Turn::Shortest, 0, 0.2),
-            step(Rings { focus: middle, spokes: false }, Timing::Ripple { focus: middle, gap: 0.35, inward: true }, way, 1, -1.5),
+            step(
+                Rings { focus: middle, spokes: false },
+                Timing::Ripple { focus: middle, gap: 0.35, inward: true },
+                way,
+                1,
+                -1.5,
+            ),
             step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, way, 0, 0.0),
         ],
     };
@@ -589,7 +631,9 @@ impl Formation {
                 Flow { wave: Wave { amp: wave.amp * 2.8, phase: wave.phase + 2.0, ..wave }, open }
             }
             (Turned { wave }, Develop::Quarter) => Turned { wave: Wave { base: wave.base + 90.0, ..wave } },
-            (Turned { wave }, Develop::Swell) => Turned { wave: Wave { amp: wave.amp * 0.4, phase: wave.phase + 2.0, ..wave } },
+            (Turned { wave }, Develop::Swell) => {
+                Turned { wave: Wave { amp: wave.amp * 0.4, phase: wave.phase + 2.0, ..wave } }
+            }
             (Compass { focus }, Develop::Carry) => Compass { focus: (COLS as f32 - focus.0, ROWS as f32 - focus.1) },
             (f, _) => f,
         }
@@ -641,10 +685,17 @@ fn sketch(rng: &mut Rng) -> Composition {
     if rng.u64().is_multiple_of(5) {
         let (turn, turn_name) = pick(
             rng,
-            &[(way, "together"), (Turn::Counter, "counter"), (Turn::Mirror, "mirror"), (Turn::CounterMirror, "bloom"), (Turn::Checker, "checker")],
+            &[
+                (way, "together"),
+                (Turn::Counter, "counter"),
+                (Turn::Mirror, "mirror"),
+                (Turn::CounterMirror, "bloom"),
+                (Turn::Checker, "checker"),
+            ],
         );
         tags.extend(["motif:direct".to_string(), format!("turn:{turn_name}")]);
-        let phase = Phase { to: Formation::Digits, with: None, timing: theme.timing(gap, false), turn, extra: 1, rest: 0.0 };
+        let phase =
+            Phase { to: Formation::Digits, with: None, timing: theme.timing(gap, false), turn, extra: 1, rest: 0.0 };
         return Composition { name: format!("direct {turn_name}, {}", theme.name()), phases: vec![phase], tags };
     }
 
@@ -696,7 +747,13 @@ fn sketch(rng: &mut Rng) -> Composition {
         match how {
             Develop::Weave => {
                 let mask = pick(rng, &[Mask::Checker, Mask::Columns, Mask::Rows]);
-                phases.push(phase(shape, Some((shape.develop(Develop::Quarter), mask)), Turn::Shortest, 0, overlap(rng)));
+                phases.push(phase(
+                    shape,
+                    Some((shape.develop(Develop::Quarter), mask)),
+                    Turn::Shortest,
+                    0,
+                    overlap(rng),
+                ));
                 tags.push(format!("mask:{}", mask.name()));
             }
             Develop::Split => {
@@ -751,7 +808,8 @@ fn sketch(rng: &mut Rng) -> Composition {
         extra: 0,
         rest: 0.0,
     });
-    let themes: Vec<&str> = tags.iter().filter_map(|t| t.strip_prefix("theme:").or(t.strip_prefix("theme2:"))).collect();
+    let themes: Vec<&str> =
+        tags.iter().filter_map(|t| t.strip_prefix("theme:").or(t.strip_prefix("theme2:"))).collect();
     let name = format!("{name}, {}", themes.join(" then "));
     Composition { name, phases, tags }
 }
@@ -822,7 +880,10 @@ pub fn compose(
         // Flow alone would always choose the simplest dance, where everything
         // moves all the time; structure is worth something too.
         let structure = 0.17 * (c.phases.len().min(4) as f32 - 1.0);
-        let score = 1.2 * r.flow + structure - (r.total / pace - 12.0).abs() / 6.0 - r.frozen - (r.peak - 1.3).max(0.0)
+        let score = 1.2 * r.flow + structure
+            - (r.total / pace - 12.0).abs() / 6.0
+            - r.frozen
+            - (r.peak - 1.3).max(0.0)
             - 3.0 * variety.staleness(&c.tags)
             + rng.range(0.0, 0.5);
         if best.as_ref().is_none_or(|(s, _)| score > *s) {
@@ -897,7 +958,10 @@ mod tests {
         assert!(fell_back < 15, "critic rejected everything {fell_back} times");
         assert!((20..100).contains(&direct_runs), "{direct_runs} of 300 took the plain route: the critic is biased");
         let direct = names.iter().filter(|n| n.starts_with("direct")).count();
-        eprintln!("{} distinct shapes in 300; {direct_runs} runs direct ({direct} shapes); {fell_back} fell back", names.len());
+        eprintln!(
+            "{} distinct shapes in 300; {direct_runs} runs direct ({direct} shapes); {fell_back} fell back",
+            names.len()
+        );
     }
 
     /// A day of dances, one a minute, each starting where the last ended. The
@@ -927,10 +991,15 @@ mod tests {
         let share = |prefix: &str| {
             let of: Vec<(&String, &usize)> = uses.iter().filter(|(t, _)| t.starts_with(prefix)).collect();
             let total: usize = of.iter().map(|(_, n)| **n).sum();
-            let (lo, hi) = (of.iter().map(|(_, n)| **n).min().unwrap_or(0), of.iter().map(|(_, n)| **n).max().unwrap_or(0));
+            let (lo, hi) =
+                (of.iter().map(|(_, n)| **n).min().unwrap_or(0), of.iter().map(|(_, n)| **n).max().unwrap_or(0));
             (of.len(), lo as f32 / total as f32, hi as f32 / total as f32)
         };
-        let table: Vec<String> = uses.iter().filter(|(t, _)| t.starts_with("motif:") || t.starts_with("op:")).map(|(t, n)| format!("{t}={n}")).collect();
+        let table: Vec<String> = uses
+            .iter()
+            .filter(|(t, _)| t.starts_with("motif:") || t.starts_with("op:"))
+            .map(|(t, n)| format!("{t}={n}"))
+            .collect();
         eprintln!("{}", table.join(" "));
         let (motifs, rarest, commonest) = share("motif:");
         let (ops, rarest_op, commonest_op) = share("op:");

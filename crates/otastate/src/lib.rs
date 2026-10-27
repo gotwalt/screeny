@@ -88,9 +88,7 @@ impl Health {
     /// [`decide`] asks both.
     #[must_use]
     pub fn is_healthy(&self) -> bool {
-        self.has_ip
-            && self.swaps > 0
-            && (self.http_requests > 0 || self.uptime_ms >= HTTP_GRACE_MS)
+        self.has_ip && self.swaps > 0 && (self.http_requests > 0 || self.uptime_ms >= HTTP_GRACE_MS)
     }
 }
 
@@ -295,29 +293,20 @@ mod tests {
     fn a_serial_flashed_device_is_settled_and_writes_nothing() {
         // What `tools/fw-run.sh` leaves behind: otadata erased, so the
         // bootloader writes seq 1 VALID for ota_0 and boots it.
-        assert_eq!(
-            classify(FwSlot::Ota0, FwSlot::Ota0, FwState::Valid),
-            Boot::Settled
-        );
+        assert_eq!(classify(FwSlot::Ota0, FwSlot::Ota0, FwState::Valid), Boot::Settled);
         assert!(!Boot::Settled.on_trial());
     }
 
     #[test]
     fn the_first_boot_of_an_activated_image_is_a_trial() {
-        assert_eq!(
-            classify(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify),
-            Boot::Trial
-        );
+        assert_eq!(classify(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify), Boot::Trial);
     }
 
     #[test]
     fn new_that_the_bootloader_never_promoted_is_still_a_trial() {
         // A bootloader without APP_ROLLBACK_ENABLE. The app-side deadline is
         // then the only thing standing between a bad image and a permanent one.
-        assert_eq!(
-            classify(FwSlot::Ota1, FwSlot::Ota1, FwState::New),
-            Boot::Trial
-        );
+        assert_eq!(classify(FwSlot::Ota1, FwSlot::Ota1, FwState::New), Boot::Trial);
     }
 
     #[test]
@@ -330,19 +319,10 @@ mod tests {
 
     #[test]
     fn booted_is_not_selected_means_the_update_was_rolled_back() {
-        assert_eq!(
-            classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Aborted),
-            Boot::Reverted(RevertReason::Aborted)
-        );
-        assert_eq!(
-            classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Invalid),
-            Boot::Reverted(RevertReason::Deadline)
-        );
+        assert_eq!(classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Aborted), Boot::Reverted(RevertReason::Aborted));
+        assert_eq!(classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Invalid), Boot::Reverted(RevertReason::Deadline));
         // Neither: the bootloader could not verify the image it selected.
-        assert_eq!(
-            classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Valid),
-            Boot::Reverted(RevertReason::Rejected)
-        );
+        assert_eq!(classify(FwSlot::Ota0, FwSlot::Ota1, FwState::Valid), Boot::Reverted(RevertReason::Rejected));
     }
 
     #[test]
@@ -388,23 +368,14 @@ mod tests {
 
     #[test]
     fn a_device_that_cannot_say_which_slot_it_runs_reports_what_it_read() {
-        assert_eq!(
-            running_state(FwSlot::Unknown, FwSlot::Ota0, FwState::Aborted),
-            FwState::Aborted
-        );
-        assert_eq!(
-            running_state(FwSlot::Ota0, FwSlot::Unknown, FwState::Undefined),
-            FwState::Undefined
-        );
+        assert_eq!(running_state(FwSlot::Unknown, FwSlot::Ota0, FwState::Aborted), FwState::Aborted);
+        assert_eq!(running_state(FwSlot::Ota0, FwSlot::Unknown, FwState::Undefined), FwState::Undefined);
     }
 
     #[test]
     fn a_trial_still_reads_pending_verify_for_the_whole_of_it() {
         // Spec 8.10 step 2, and the one reading a client acts on.
-        assert_eq!(
-            running_state(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify),
-            FwState::PendingVerify
-        );
+        assert_eq!(running_state(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify), FwState::PendingVerify);
     }
 
     // --- the inactive slot (card 246, item 1) -----------------------------
@@ -414,14 +385,8 @@ mod tests {
         // The whole of card 246's first bug, as three lines. Firmware 0.7.0
         // had only the first of them and stayed there until a reboot.
         assert!(slot_is_spoken_for(Boot::Trial, false, false), "on trial");
-        assert!(
-            !slot_is_spoken_for(Boot::Trial, true, false),
-            "confirmed: the rollback image is not needed any more"
-        );
-        assert!(
-            slot_is_spoken_for(Boot::Settled, false, true),
-            "an accepted upload is on its way to being booted"
-        );
+        assert!(!slot_is_spoken_for(Boot::Trial, true, false), "confirmed: the rollback image is not needed any more");
+        assert!(slot_is_spoken_for(Boot::Settled, false, true), "an accepted upload is on its way to being booted");
     }
 
     #[test]
@@ -439,22 +404,14 @@ mod tests {
             Boot::Reverted(RevertReason::Rejected),
             Boot::Unknown,
         ] {
-            assert!(
-                !slot_is_spoken_for(boot, false, false),
-                "{boot:?} has nothing on trial"
-            );
+            assert!(!slot_is_spoken_for(boot, false, false), "{boot:?} has nothing on trial");
         }
     }
 
     // --- decide -----------------------------------------------------------
 
     fn healthy_at(uptime_ms: u32) -> Health {
-        Health {
-            uptime_ms,
-            has_ip: true,
-            http_requests: 1,
-            swaps: 1,
-        }
+        Health { uptime_ms, has_ip: true, http_requests: 1, swaps: 1 }
     }
 
     #[test]
@@ -462,34 +419,17 @@ mod tests {
         for t in [0, 1_000, 30_000, CONFIRM_NOT_BEFORE_MS - 1] {
             assert_eq!(decide(healthy_at(t)), TrialAction::Wait, "at {t} ms");
         }
-        assert_eq!(
-            decide(healthy_at(CONFIRM_NOT_BEFORE_MS)),
-            TrialAction::Confirm
-        );
+        assert_eq!(decide(healthy_at(CONFIRM_NOT_BEFORE_MS)), TrialAction::Confirm);
     }
 
     #[test]
     fn every_part_of_the_criterion_is_needed() {
         let base = healthy_at(CONFIRM_NOT_BEFORE_MS);
         assert_eq!(decide(base), TrialAction::Confirm);
+        assert_eq!(decide(Health { has_ip: false, ..base }), TrialAction::Wait, "no DHCP address");
+        assert_eq!(decide(Health { swaps: 0, ..base }), TrialAction::Wait, "the panel never swapped");
         assert_eq!(
-            decide(Health {
-                has_ip: false,
-                ..base
-            }),
-            TrialAction::Wait,
-            "no DHCP address"
-        );
-        assert_eq!(
-            decide(Health { swaps: 0, ..base }),
-            TrialAction::Wait,
-            "the panel never swapped"
-        );
-        assert_eq!(
-            decide(Health {
-                http_requests: 0,
-                ..base
-            }),
+            decide(Health { http_requests: 0, ..base }),
             TrialAction::Wait,
             "nobody has talked to it, and it is not 120 s yet"
         );
@@ -497,38 +437,16 @@ mod tests {
 
     #[test]
     fn a_device_nobody_visits_confirms_at_two_minutes() {
-        let quiet = Health {
-            uptime_ms: HTTP_GRACE_MS - 1,
-            has_ip: true,
-            http_requests: 0,
-            swaps: 1,
-        };
+        let quiet = Health { uptime_ms: HTTP_GRACE_MS - 1, has_ip: true, http_requests: 0, swaps: 1 };
         assert_eq!(decide(quiet), TrialAction::Wait);
-        assert_eq!(
-            decide(Health {
-                uptime_ms: HTTP_GRACE_MS,
-                ..quiet
-            }),
-            TrialAction::Confirm
-        );
+        assert_eq!(decide(Health { uptime_ms: HTTP_GRACE_MS, ..quiet }), TrialAction::Confirm);
     }
 
     #[test]
     fn an_image_that_never_becomes_healthy_is_reverted_at_three_minutes() {
-        let sick = Health {
-            uptime_ms: REVERT_AT_MS - 1,
-            has_ip: false,
-            http_requests: 0,
-            swaps: 1,
-        };
+        let sick = Health { uptime_ms: REVERT_AT_MS - 1, has_ip: false, http_requests: 0, swaps: 1 };
         assert_eq!(decide(sick), TrialAction::Wait);
-        assert_eq!(
-            decide(Health {
-                uptime_ms: REVERT_AT_MS,
-                ..sick
-            }),
-            TrialAction::Revert
-        );
+        assert_eq!(decide(Health { uptime_ms: REVERT_AT_MS, ..sick }), TrialAction::Revert);
     }
 
     #[test]

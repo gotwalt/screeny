@@ -194,12 +194,7 @@ impl Recognizer {
     /// A recogniser that has not seen the pin yet.
     #[must_use]
     pub const fn new() -> Self {
-        Recognizer {
-            phase: Phase::WaitRelease,
-            raw: Level::High,
-            raw_since: 0,
-            stable: Level::High,
-        }
+        Recognizer { phase: Phase::WaitRelease, raw: Level::High, raw_since: 0, stable: Level::High }
     }
 
     /// Is a gesture (or a bounce) in flight?
@@ -237,10 +232,7 @@ impl Recognizer {
         // readings have to agree: a recogniser built while the button is held
         // sees `stable` high and `raw` low on its very first poll, and leaving
         // here on that would arm the ladder for a press nobody made.
-        if self.phase == Phase::WaitRelease
-            && self.stable == Level::High
-            && self.raw == Level::High
-        {
+        if self.phase == Phase::WaitRelease && self.stable == Level::High && self.raw == Level::High {
             self.phase = Phase::Up;
             return ButtonEvent::None;
         }
@@ -254,9 +246,7 @@ impl Recognizer {
         match edge {
             Some(Level::Low) => {
                 if let Phase::Up = self.phase {
-                    self.phase = Phase::Down {
-                        since: self.raw_since,
-                    };
+                    self.phase = Phase::Down { since: self.raw_since };
                 }
                 return ButtonEvent::None;
             }
@@ -304,10 +294,7 @@ impl Recognizer {
                 // and let the next poll fire the wipe: the panel must always
                 // have said what was about to happen.
                 let left = seconds_left(held.min(WIPE_MS - 1));
-                self.phase = Phase::Counting {
-                    since: at,
-                    shown: left,
-                };
+                self.phase = Phase::Counting { since: at, shown: left };
                 ButtonEvent::HoldStarted { seconds_left: left }
             }
             Phase::Counting { since: at, shown } => {
@@ -322,10 +309,7 @@ impl Recognizer {
                 }
                 let left = seconds_left(held);
                 if left != shown {
-                    self.phase = Phase::Counting {
-                        since: at,
-                        shown: left,
-                    };
+                    self.phase = Phase::Counting { since: at, shown: left };
                     return ButtonEvent::HoldTick { seconds_left: left };
                 }
                 ButtonEvent::None

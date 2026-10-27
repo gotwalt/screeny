@@ -66,10 +66,7 @@ fn info_state_and_scan_through_the_client() {
     let mut s = connect(&dev);
 
     let f = query(&mut s, Ask::Info, T).unwrap();
-    assert_eq!(
-        render(Ask::Info, &f),
-        ["firmware: screeny-sim", "version: sim", "chip: sim", "name: screeny-sim"]
-    );
+    assert_eq!(render(Ask::Info, &f), ["firmware: screeny-sim", "version: sim", "chip: sim", "name: screeny-sim"]);
     let f = query(&mut s, Ask::State, T).unwrap();
     assert_eq!(render(Ask::State, &f), ["state: Authorized"]);
     let f = query(&mut s, Ask::Scan, T).unwrap();
@@ -84,9 +81,7 @@ fn a_provision_over_the_socket_ends_provisioned_with_the_url_and_no_password_ech
     let n = encode_wifi_settings(&mut f, SSID.as_bytes(), PSK.as_bytes()).unwrap();
     s.write_all(&f[..n]).unwrap();
 
-    let (frames, raw) = collect(&mut s, |fr| {
-        fr.iter().any(|f| matches!(f, Frame::Result { command: 1, .. }))
-    });
+    let (frames, raw) = collect(&mut s, |fr| fr.iter().any(|f| matches!(f, Frame::Result { command: 1, .. })));
     assert!(frames.contains(&Frame::State(State::Provisioning)), "{frames:?}");
     assert!(frames.contains(&Frame::State(State::Provisioned)), "{frames:?}");
     let url = frames.iter().find_map(|f| match f {
@@ -115,8 +110,7 @@ fn a_failed_join_reports_unable_to_connect_and_commits_nothing() {
     s.write_all(&f[..n]).unwrap();
 
     let (frames, _) = collect(&mut s, |fr| {
-        fr.contains(&Frame::Error(ErrorCode::UnableToConnect))
-            && fr.last() == Some(&Frame::State(State::Authorized))
+        fr.contains(&Frame::Error(ErrorCode::UnableToConnect)) && fr.last() == Some(&Frame::State(State::Authorized))
     });
     assert!(frames.contains(&Frame::Error(ErrorCode::UnableToConnect)), "{frames:?}");
     assert_eq!(frames.last(), Some(&Frame::State(State::Authorized)));
@@ -178,9 +172,10 @@ impl Write for Slow {
 fn query_resends_until_answered_and_reassembles_split_frames() {
     // 494d.. state Authorized, preceded by log text.
     let mut out = b"ets Jun  8 2016 rst:0x1 (POWERON_RESET)\r\n".to_vec();
-    out.extend((0..hex_len("494d50524f5601010102e2")).map(|i| {
-        u8::from_str_radix(&"494d50524f5601010102e2"[2 * i..2 * i + 2], 16).unwrap()
-    }));
+    out.extend(
+        (0..hex_len("494d50524f5601010102e2"))
+            .map(|i| u8::from_str_radix(&"494d50524f5601010102e2"[2 * i..2 * i + 2], 16).unwrap()),
+    );
     let mut p = Slow { writes: 0, out };
     let port: &mut dyn Port = &mut p;
     let f = query(port, Ask::State, Duration::from_secs(5)).unwrap();

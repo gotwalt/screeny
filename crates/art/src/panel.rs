@@ -282,9 +282,7 @@ mod tests {
                 assert_eq!(p.shown(v), model.code(v), "{p:?} code {v}");
             }
         }
-        let distinct = |p: Panel| {
-            (0..64u8).map(|v| p.shown(v)).collect::<std::collections::BTreeSet<_>>().len()
-        };
+        let distinct = |p: Panel| (0..64u8).map(|v| p.shown(v)).collect::<std::collections::BTreeSet<_>>().len();
         assert_eq!(distinct(Panel::Dithered), 39);
         assert_eq!(distinct(Panel::BitPlanes), 4);
     }

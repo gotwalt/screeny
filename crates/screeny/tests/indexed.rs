@@ -60,15 +60,10 @@ fn assert_exact(label: &str, pal: &[[u8; 3]], idx: &[u8]) {
     let (dev, sim, mut sender) = connect(SenderConfig::default());
     let sent = sender.send_indexed(pal, idx).expect("sends");
 
-    let shot = sim
-        .wait_for_frames(1, PATIENCE)
-        .unwrap_or_else(|| panic!("{label}: the simulator never displayed a frame"));
+    let shot =
+        sim.wait_for_frames(1, PATIENCE).unwrap_or_else(|| panic!("{label}: the simulator never displayed a frame"));
 
-    assert!(
-        sent.exact(),
-        "{label}: the sender does not claim {} colours are exact",
-        pal.len()
-    );
+    assert!(sent.exact(), "{label}: the sender does not claim {} colours are exact", pal.len());
     assert_eq!(
         &shot.decoded[..],
         expand(pal, idx).as_slice(),
@@ -142,9 +137,7 @@ fn the_pixels_enum_takes_the_same_path() {
     let pal = palette(16);
     let idx = noise(16, 7);
     let (dev, sim, mut sender) = connect(SenderConfig::default());
-    let sent = sender
-        .send(screeny::Pixels::indexed(&pal, &idx))
-        .expect("sends");
+    let sent = sender.send(screeny::Pixels::indexed(&pal, &idx)).expect("sends");
     assert!(sent.exact());
     let shot = sim.wait_for_frames(1, PATIENCE).expect("displayed");
     assert_eq!(&shot.decoded[..], expand(&pal, &idx).as_slice());
@@ -169,9 +162,7 @@ fn exactness_holds_over_a_stream() {
         // the last frame, and this test is about all thirty.
         std::thread::sleep(Duration::from_millis(4));
     }
-    let shot = sim
-        .wait_until(PATIENCE, |s| s.telemetry.frames_shown >= N)
-        .expect("all thirty displayed");
+    let shot = sim.wait_until(PATIENCE, |s| s.telemetry.frames_shown >= N).expect("all thirty displayed");
     assert_eq!(&shot.decoded[..], expand(&pal, &last).as_slice());
     assert_eq!(sender.stats().indexed_exact, u64::from(N));
     assert_eq!(sender.stats().indexed_fallback, 0);
@@ -201,11 +192,7 @@ fn an_over_budget_indexed_frame_falls_back_and_says_so() {
     assert_eq!(sender.stats().last_fallback_colours, 200);
 
     let shot = sim.wait_for_frames(1, PATIENCE).expect("displayed");
-    assert_ne!(
-        &shot.decoded[..],
-        expand(&pal, &idx).as_slice(),
-        "if this were exact the test above it is wrong"
-    );
+    assert_ne!(&shot.decoded[..], expand(&pal, &idx).as_slice(), "if this were exact the test above it is wrong");
     assert_eq!(shot.telemetry.frames_dropped_decode, 0);
     assert!(sent.bytes() <= sender.budget());
     drop(sender);
@@ -236,10 +223,7 @@ fn a_large_but_compressible_palette_is_still_exact() {
 fn a_budget_below_the_pal5_floor_forces_the_fallback() {
     let pal = palette(32);
     let idx = noise(32, 99);
-    let cfg = SenderConfig {
-        budget: Some(MIN_BUDGET - 1),
-        ..SenderConfig::default()
-    };
+    let cfg = SenderConfig { budget: Some(MIN_BUDGET - 1), ..SenderConfig::default() };
     let (dev, sim, mut sender) = connect(cfg);
     assert!(sender.budget_is_tight());
     let sent = sender.send_indexed(&pal, &idx).expect("sends");
@@ -260,10 +244,7 @@ fn a_budget_below_the_pal5_floor_forces_the_fallback() {
 fn a_short_index_plane_is_rejected_before_any_packet() {
     let (dev, sim, mut sender) = connect(SenderConfig::default());
     let err = sender.send_indexed(&palette(4), &[0u8; 100]).unwrap_err();
-    assert!(
-        matches!(err, screeny::Error::Frame { got: 100, want: NPIX, .. }),
-        "got {err:?}"
-    );
+    assert!(matches!(err, screeny::Error::Frame { got: 100, want: NPIX, .. }), "got {err:?}");
     assert_eq!(sender.stats().frames_sent, 0);
     assert_eq!(sim.telemetry().frames_rx, 0);
     drop(sender);
@@ -276,17 +257,7 @@ fn an_index_outside_the_palette_names_the_pixel() {
     let mut idx = vec![0u8; NPIX];
     idx[1234] = 9;
     let err = sender.send_indexed(&palette(4), &idx).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            screeny::Error::BadIndex {
-                index: 9,
-                pixel: 1234,
-                palette: 4
-            }
-        ),
-        "got {err:?}"
-    );
+    assert!(matches!(err, screeny::Error::BadIndex { index: 9, pixel: 1234, palette: 4 }), "got {err:?}");
     drop(sender);
     drop(dev);
 }
@@ -294,9 +265,7 @@ fn an_index_outside_the_palette_names_the_pixel() {
 #[test]
 fn a_wrongly_sized_rgb_frame_is_rejected() {
     let (dev, _sim, mut sender) = connect(SenderConfig::default());
-    let err = sender
-        .send(screeny::Pixels::rgb(&[0u8; 1000]))
-        .unwrap_err();
+    let err = sender.send(screeny::Pixels::rgb(&[0u8; 1000])).unwrap_err();
     assert!(matches!(err, screeny::Error::Frame { got: 1000, .. }), "got {err:?}");
     drop(sender);
     drop(dev);
@@ -307,11 +276,7 @@ fn a_wrongly_sized_rgb_frame_is_rejected() {
 /// `io::Error` with `?` and keep its message.
 #[test]
 fn errors_convert_to_io_errors_without_losing_the_message() {
-    let e = screeny::Error::Frame {
-        what: "an RGB frame",
-        got: 10,
-        want: 6144,
-    };
+    let e = screeny::Error::Frame { what: "an RGB frame", got: 10, want: 6144 };
     let text = e.to_string();
     let io: std::io::Error = e.into();
     assert_eq!(io.to_string(), text);
@@ -398,9 +363,7 @@ struct ClockSource {
 impl ClockSource {
     fn at(hhmmss: &str, limit: usize) -> Self {
         let t = chrono::NaiveTime::parse_from_str(hhmmss, "%H:%M:%S").expect("a time");
-        let base = chrono::NaiveDate::from_ymd_opt(2026, 9, 19)
-            .expect("a date")
-            .and_time(t);
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 9, 19).expect("a date").and_time(t);
         ClockSource {
             clock: WordClock::at(base),
             buf: Indexed::default(),
@@ -422,8 +385,7 @@ impl IndexedSource for ClockSource {
             return None;
         }
         if self.clock.render_indexed(t.elapsed, &mut self.buf) {
-            self.produced
-                .push(expand(&self.buf.palette, &self.buf.indices[..]));
+            self.produced.push(expand(&self.buf.palette, &self.buf.indices[..]));
             Some(Pixels::indexed(&self.buf.palette, &self.buf.indices[..]))
         } else {
             // The fallback the CLI keeps for the fractal. The word clock is
@@ -443,18 +405,13 @@ impl IndexedSource for ClockSource {
 /// times the phrasing special-cases.
 #[test]
 fn the_word_clock_arrives_exactly_at_every_kind_of_moment() {
-    for at in [
-        "11:42:00", "11:43:00", "11:43:30", "12:00:00", "00:00:00", "06:15:00",
-    ] {
+    for at in ["11:42:00", "11:43:00", "11:43:30", "12:00:00", "00:00:00", "06:15:00"] {
         let mut src = ClockSource::at(at, 1);
         let (dev, sim, mut sender) = connect(SenderConfig::default());
-        sender
-            .run_indexed(&mut src, &AtomicBool::new(false))
-            .expect("streams");
+        sender.run_indexed(&mut src, &AtomicBool::new(false)).expect("streams");
 
-        let shot = sim
-            .wait_for_frames(1, PATIENCE)
-            .unwrap_or_else(|| panic!("{at}: the simulator never displayed a frame"));
+        let shot =
+            sim.wait_for_frames(1, PATIENCE).unwrap_or_else(|| panic!("{at}: the simulator never displayed a frame"));
 
         assert_eq!(src.expanded, 0, "{at}: the clock went through the RGB door");
         assert_eq!(
@@ -482,9 +439,7 @@ fn streaming_the_word_clock_is_exact_for_every_frame() {
     const N: usize = 20;
     let mut src = ClockSource::at("11:42:50", N);
     let (dev, sim, mut sender) = connect(SenderConfig::default());
-    sender
-        .run_indexed(&mut src, &AtomicBool::new(false))
-        .expect("streams");
+    sender.run_indexed(&mut src, &AtomicBool::new(false)).expect("streams");
 
     let s = sender.stats().clone();
     assert_eq!(src.expanded, 0, "the encoder saw an expanded frame");
@@ -501,24 +456,14 @@ fn streaming_the_word_clock_is_exact_for_every_frame() {
         s.by_codec
     );
     // A few hundred bytes a frame; the README claims about 280.
-    assert!(
-        s.mean_bytes() < 600.0,
-        "{:.0} B/frame mean, expected a few hundred",
-        s.mean_bytes()
-    );
+    assert!(s.mean_bytes() < 600.0, "{:.0} B/frame mean, expected a few hundred", s.mean_bytes());
 
-    let shot = sim
-        .wait_for_frames(1, PATIENCE)
-        .expect("the simulator displayed something");
+    let shot = sim.wait_for_frames(1, PATIENCE).expect("the simulator displayed something");
     // Sequence numbers start at zero and count transmissions, so the frame the
     // simulator is showing says which of ours it is. The `FINAL` frame is a
     // retransmission of the last one, hence the clamp.
     let i = (shot.shown.expect("a frame was shown").seq as usize).min(src.produced.len() - 1);
-    assert_eq!(
-        &shot.decoded[..],
-        src.produced[i].as_slice(),
-        "frame {i} is not palette[index]"
-    );
+    assert_eq!(&shot.decoded[..], src.produced[i].as_slice(), "frame {i} is not palette[index]");
     assert_eq!(shot.telemetry.frames_dropped_decode, 0);
     drop(sender);
     drop(dev);

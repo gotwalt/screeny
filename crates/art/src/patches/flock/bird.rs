@@ -164,8 +164,7 @@ fn beat(b: Bird) -> Beat {
     let amp = DIHEDRAL * (1.0 - 0.75 * b.glide);
     let travel = rate(lagged);
     let inner = amp * warp(b.phase) + GLIDE_INNER * b.glide;
-    let hand = amp * TIP_GAIN * warp(lagged) - CAMBER * travel * (1.0 - b.glide)
-        + GLIDE_HAND * b.glide;
+    let hand = amp * TIP_GAIN * warp(lagged) - CAMBER * travel * (1.0 - b.glide) + GLIDE_HAND * b.glide;
     // Folded through the upstroke, spread through the downstroke, and the
     // change between them is quick: a wing does not ease into its own fold.
     let fold = smoothstep(-0.35, 0.75, travel);
@@ -207,8 +206,7 @@ pub(crate) fn pose(b: Bird, span: f32, area: f32) -> Pose {
         // the outside one, which stays reached out. Positive `lean` puts the
         // right wing up, so the left wing is the inside one there.
         let fold = (fold + TUCK * (-sgn * b.lean / TUCK_AT).clamp(0.0, 1.0)).min(1.0);
-        let shoulder =
-            b.pos.add(fwd.scale(SHOULDER_FWD * span)).add(side.scale(SHOULDER_OUT * span));
+        let shoulder = b.pos.add(fwd.scale(SHOULDER_FWD * span)).add(side.scale(SHOULDER_OUT * span));
         // Out along the span at each segment's own dihedral.
         let (si, ci) = inner.sin_cos();
         let out_in = side.scale(ci).add(up.scale(si));
@@ -226,10 +224,7 @@ pub(crate) fn pose(b: Bird, span: f32, area: f32) -> Pose {
 
         Wing {
             spar: [shoulder, wrist, tip],
-            trail: [
-                shoulder.sub(fwd.scale(ROOT_CHORD * span * area)),
-                wrist.sub(fwd.scale(WRIST_CHORD * span * area)),
-            ],
+            trail: [shoulder.sub(fwd.scale(ROOT_CHORD * span * area)), wrist.sub(fwd.scale(WRIST_CHORD * span * area))],
             normal: up.scale(ci).sub(side.scale(si)),
         }
     };

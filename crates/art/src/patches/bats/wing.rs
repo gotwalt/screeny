@@ -118,12 +118,8 @@ pub(crate) fn pose(b: Bat, span: f32, area: f32) -> Pose {
         // size and vanishes cleanly at `area` 0.
         let chord_at = |t: f32| ROOT_CHORD + (WRIST_CHORD - ROOT_CHORD) * t;
         let root_trail = shoulder.sub(fwd.scale(chord_at(0.0) * span * area));
-        let notch = shoulder
-            .lerp(wrist, 0.42)
-            .sub(fwd.scale(chord_at(0.42) * span * area * (1.0 - SCALLOP)));
-        let scallop = shoulder
-            .lerp(wrist, 0.74)
-            .sub(fwd.scale(chord_at(0.74) * span * area * (1.0 + SCALLOP * 0.5)));
+        let notch = shoulder.lerp(wrist, 0.42).sub(fwd.scale(chord_at(0.42) * span * area * (1.0 - SCALLOP)));
+        let scallop = shoulder.lerp(wrist, 0.74).sub(fwd.scale(chord_at(0.74) * span * area * (1.0 + SCALLOP * 0.5)));
         let wrist_trail = wrist.sub(fwd.scale(WRIST_CHORD * span * area));
 
         let thumb = (area > THUMB_AREA).then(|| {
@@ -143,10 +139,7 @@ pub(crate) fn pose(b: Bat, span: f32, area: f32) -> Pose {
         let head = body[0];
         let spread = span * EAR_SPREAD * smoothstep(EAR_AREA, 1.0, area);
         let len = span * EAR_LEN * smoothstep(EAR_AREA, 1.0, area);
-        [
-            head.add(right.scale(spread)).add(up.scale(len)),
-            head.sub(right.scale(spread)).add(up.scale(len)),
-        ]
+        [head.add(right.scale(spread)).add(up.scale(len)), head.sub(right.scale(spread)).add(up.scale(len))]
     });
 
     Pose { body, ears, wings: [wing(-1.0), wing(1.0)] }

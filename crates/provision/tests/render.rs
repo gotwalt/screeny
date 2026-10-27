@@ -13,8 +13,8 @@
 //!    `cargo run -p screeny-provision --example portal-png`, look at them,
 //!    and paste the new hash in.
 
-use screeny_provision::{render, Layout, Screen, UriForm};
 use screeny_proto::{H, NBYTES, W};
+use screeny_provision::{render, Layout, Screen, UriForm};
 
 /// Upscale so a QR *detector* has something to work with. The panel really is
 /// one LED per module; a decoder needs several samples per module to find the
@@ -37,14 +37,9 @@ fn luma(f: &[u8; NBYTES], x: usize, y: usize) -> u8 {
 
 /// Read the panel back with a decoder that has never seen our encoder.
 fn decode(f: &[u8; NBYTES]) -> Vec<String> {
-    let mut img = rqrr::PreparedImage::prepare_from_greyscale(W * SCALE, H * SCALE, |x, y| {
-        luma(f, x / SCALE, y / SCALE)
-    });
-    img.detect_grids()
-        .iter()
-        .filter_map(|g| g.decode().ok())
-        .map(|(_, s)| s)
-        .collect()
+    let mut img =
+        rqrr::PreparedImage::prepare_from_greyscale(W * SCALE, H * SCALE, |x, y| luma(f, x / SCALE, y / SCALE));
+    img.detect_grids().iter().filter_map(|g| g.decode().ok()).map(|(_, s)| s).collect()
 }
 
 /// FNV-1a over the frame bytes. Small, stable, and defined here so the golden
@@ -101,20 +96,12 @@ fn inverting_the_polarity_breaks_the_decode() {
     for b in inverted.iter_mut() {
         *b = 255 - *b;
     }
-    assert!(
-        decode(&inverted).is_empty(),
-        "if this passes, the decode test above is not proving anything"
-    );
+    assert!(decode(&inverted).is_empty(), "if this passes, the decode test above is not proving anything");
 }
 
 #[test]
 fn the_text_screens_carry_no_qr_at_all() {
-    for s in [
-        portal("screeny-4a00a4", Layout::Text, UriForm::NoPass),
-        Screen::Connected {
-            ip: [192, 168, 7, 221],
-        },
-    ] {
+    for s in [portal("screeny-4a00a4", Layout::Text, UriForm::NoPass), Screen::Connected { ip: [192, 168, 7, 221] }] {
         assert!(decode(&frame_of(&s)).is_empty());
     }
 }
@@ -139,16 +126,10 @@ fn the_layouts_are_exactly_what_was_last_looked_at() {
     let frames = [
         frame_of(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass)),
         frame_of(&portal("screeny-4a00a4", Layout::Text, UriForm::NoPass)),
-        frame_of(&Screen::Connected {
-            ip: [192, 168, 7, 221],
-        }),
+        frame_of(&Screen::Connected { ip: [192, 168, 7, 221] }),
     ];
     for (f, (name, want)) in frames.iter().zip(GOLDEN) {
-        assert_eq!(
-            fnv1a(f),
-            want,
-            "{name} changed; regenerate the PNG, look at it, then update GOLDEN"
-        );
+        assert_eq!(fnv1a(f), want, "{name} changed; regenerate the PNG, look at it, then update GOLDEN");
     }
 }
 
@@ -162,8 +143,8 @@ fn the_pngs_are_committed_and_current() {
         .expect("docs/research/img");
     for (name, _) in GOLDEN {
         let p = dir.join(format!("{name}.png"));
-        let meta = std::fs::metadata(&p)
-            .unwrap_or_else(|e| panic!("{}: {e} - run the portal-png example", p.display()));
+        let meta =
+            std::fs::metadata(&p).unwrap_or_else(|e| panic!("{}: {e} - run the portal-png example", p.display()));
         assert!(meta.len() > 0 && meta.len() < 64 * 1024, "{name}.png is {} bytes", meta.len());
     }
 }
@@ -179,16 +160,8 @@ fn the_pngs_are_committed_and_current() {
 fn the_lit_area_stays_inside_what_the_author_accepted() {
     let f = frame_of(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass));
     let full_white = f.as_chunks::<3>().0.iter().filter(|p| **p == [0xff, 0xff, 0xff]).count();
-    assert!(
-        full_white <= 31 * 31,
-        "{full_white} full-white pixels; the measured block is 31x31 = 961"
-    );
-    for s in [
-        portal("screeny-4a00a4", Layout::Text, UriForm::NoPass),
-        Screen::Connected {
-            ip: [192, 168, 7, 221],
-        },
-    ] {
+    assert!(full_white <= 31 * 31, "{full_white} full-white pixels; the measured block is 31x31 = 961");
+    for s in [portal("screeny-4a00a4", Layout::Text, UriForm::NoPass), Screen::Connected { ip: [192, 168, 7, 221] }] {
         let f = frame_of(&s);
         assert_eq!(
             f.as_chunks::<3>().0.iter().filter(|p| **p == [0xff, 0xff, 0xff]).count(),
@@ -222,11 +195,7 @@ fn only_the_qr_screen_asks_for_a_fixed_brightness() {
         wants_fixed_brightness(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass)),
         "the QR screen is the one screen a camera has to read"
     );
-    assert!(wants_fixed_brightness(&portal(
-        "screeny-4a00a4",
-        Layout::QrAndName,
-        UriForm::ShortOpen
-    )));
+    assert!(wants_fixed_brightness(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::ShortOpen)));
 
     // Everything else is for a human eye and follows the setting.
     assert!(
@@ -234,19 +203,14 @@ fn only_the_qr_screen_asks_for_a_fixed_brightness() {
         "the text fallback carries no code, so there is nothing to scan"
     );
     for s in [
-        Screen::Connected {
-            ip: [192, 168, 7, 221],
-        },
+        Screen::Connected { ip: [192, 168, 7, 221] },
         Screen::Updating { percent: Some(50) },
         Screen::Installing,
         Screen::WipeCountdown { seconds_left: 3 },
         Screen::WipeCancelled,
         Screen::WipeUnavailable,
     ] {
-        assert!(
-            !wants_fixed_brightness(&s),
-            "{s:?} is drawn for an eye and must honour the brightness setting"
-        );
+        assert!(!wants_fixed_brightness(&s), "{s:?} is drawn for an eye and must honour the brightness setting");
     }
 }
 
@@ -257,10 +221,6 @@ fn only_the_qr_screen_asks_for_a_fixed_brightness() {
 #[test]
 fn asking_for_a_fixed_brightness_changes_no_pixel() {
     let f = frame_of(&portal("screeny-4a00a4", Layout::QrAndName, UriForm::NoPass));
-    assert_eq!(
-        fnv1a(&f),
-        GOLDEN[0].1,
-        "the QR bitmap is bit for bit the one decision 1 measured"
-    );
+    assert_eq!(fnv1a(&f), GOLDEN[0].1, "the QR bitmap is bit for bit the one decision 1 measured");
     assert_eq!(decode(&f), ["WIFI:T:nopass;S:screeny-4a00a4;;"]);
 }

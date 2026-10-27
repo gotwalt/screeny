@@ -94,7 +94,10 @@ fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
         shots.into_iter().map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
     });
     for ((seed, dance), shot) in runs.iter().zip(&shots).skip(1) {
-        assert_eq!(shots[0], *shot, "seed {seed}, dance {dance}: the settled minute must not depend on the choreography");
+        assert_eq!(
+            shots[0], *shot,
+            "seed {seed}, dance {dance}: the settled minute must not depend on the choreography"
+        );
     }
 }
 

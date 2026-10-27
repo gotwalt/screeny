@@ -114,10 +114,7 @@ fn index_html() -> String {
             route::Method::Post => "POST",
         };
         if matches!(r.method, route::Method::Get) {
-            s.push_str(&format!(
-                "<li>{method} <a href=\"{path}\"><code>{path}</code></a></li>",
-                path = r.path
-            ));
+            s.push_str(&format!("<li>{method} <a href=\"{path}\"><code>{path}</code></a></li>", path = r.path));
         } else {
             s.push_str(&format!("<li>{method} <code>{}</code></li>", r.path));
         }
@@ -130,18 +127,12 @@ fn index_html() -> String {
 #[must_use]
 pub fn error_response(code: ErrorCode, detail: &str) -> Response {
     let reply = ErrorReply::with_detail(code, detail);
-    Response::json(
-        reply.status(),
-        serde_json::to_vec(&reply).unwrap_or_else(|_| b"{\"error\":\"internal\"}".to_vec()),
-    )
+    Response::json(reply.status(), serde_json::to_vec(&reply).unwrap_or_else(|_| b"{\"error\":\"internal\"}".to_vec()))
 }
 
 fn bare(code: ErrorCode) -> Response {
     let reply = ErrorReply::new(code);
-    Response::json(
-        reply.status(),
-        serde_json::to_vec(&reply).unwrap_or_else(|_| b"{\"error\":\"internal\"}".to_vec()),
-    )
+    Response::json(reply.status(), serde_json::to_vec(&reply).unwrap_or_else(|_| b"{\"error\":\"internal\"}".to_vec()))
 }
 
 fn ok_json<T: serde::Serialize>(value: &T) -> Response {
@@ -206,10 +197,7 @@ impl ApiState {
     /// A fresh one. Nothing has scanned yet, so the first request always does.
     #[must_use]
     pub fn new() -> Self {
-        ApiState {
-            boot: Instant::now(),
-            scan: Mutex::new(route::RateLimit::new(route::SCAN_MIN_INTERVAL_MS)),
-        }
+        ApiState { boot: Instant::now(), scan: Mutex::new(route::RateLimit::new(route::SCAN_MIN_INTERVAL_MS)) }
     }
 
     /// Milliseconds since this state was built, as the `u32` the limiter takes.
@@ -221,20 +209,14 @@ impl ApiState {
     /// does **not** push the window out - see [`route::RateLimit`].
     fn allow_scan(&self) -> bool {
         let now = self.now_ms();
-        self.scan
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .allow(now)
+        self.scan.lock().unwrap_or_else(std::sync::PoisonError::into_inner).allow(now)
     }
 
     /// How long until the next scan would be allowed, for the refusal's
     /// `detail`.
     fn scan_retry_after_ms(&self) -> u32 {
         let now = self.now_ms();
-        self.scan
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retry_after_ms(now)
+        self.scan.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retry_after_ms(now)
     }
 }
 
@@ -272,10 +254,7 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
     if !host_is_ours(head.host.as_deref(), shared.instance()) {
         let in_portal = {
             let core = shared.core().lock().unwrap();
-            matches!(
-                core.wifi().phase(),
-                screeny_provision::State::Portal | screeny_provision::State::Trial
-            )
+            matches!(core.wifi().phase(), screeny_provision::State::Portal | screeny_provision::State::Trial)
         };
         return if in_portal {
             // **The setup page itself, `200`, never a `302` to it**, which is
@@ -365,10 +344,8 @@ fn status(shared: &Shared) -> Response {
         api: route::API_VERSION,
         id: screeny_device_api::text::text(&ident.id).unwrap_or_default(),
         name: screeny_device_api::text::text(core.name()).unwrap_or_default(),
-        fw: screeny_device_api::text::text(
-            running.as_ref().map_or(ident.fw.as_str(), |r| r.version.as_str()),
-        )
-        .unwrap_or_default(),
+        fw: screeny_device_api::text::text(running.as_ref().map_or(ident.fw.as_str(), |r| r.version.as_str()))
+            .unwrap_or_default(),
         boot_id: running.as_ref().map_or(ident.boot_id, |r| r.boot_id),
         uptime_ms: t.uptime_ms,
         heap_used: ident.heap_used,
@@ -489,10 +466,7 @@ fn buffered(body: Body<'_>) -> Result<Vec<u8>, Response> {
 fn within_bound(path: &str, method: route::Method, len: usize) -> Result<(), Response> {
     let bound = route::find(path, method).map_or(0, |r| r.max_request_len);
     if bound > 0 && len > bound {
-        return Err(error_response(
-            ErrorCode::PayloadTooLarge,
-            "body is longer than this route accepts",
-        ));
+        return Err(error_response(ErrorCode::PayloadTooLarge, "body is longer than this route accepts"));
     }
     Ok(())
 }
@@ -509,10 +483,7 @@ fn post_wifi(shared: &Shared, _head: &Head, body: Body<'_>) -> Response {
         Ok(f) => f,
         Err(e) => {
             let reply = e.reply();
-            return Response::json(
-                reply.status(),
-                serde_json::to_vec(&reply).unwrap_or_default(),
-            );
+            return Response::json(reply.status(), serde_json::to_vec(&reply).unwrap_or_default());
         }
     };
     if let Err(code) = screeny_device_api::request::check_auth(form.auth()) {
@@ -548,10 +519,9 @@ fn post_wifi(shared: &Shared, _head: &Head, body: Body<'_>) -> Response {
         // says `trying` when nothing is being tried would be a lie, and card
         // 224's "do not answer `trying` when the machine did not start a
         // trial" is the rule whatever the remaining state turns out to be.
-        Posted::Ignored(phase) => error_response(
-            ErrorCode::Unavailable,
-            &format!("no trial join from {}", phase.name()),
-        ),
+        Posted::Ignored(phase) => {
+            error_response(ErrorCode::Unavailable, &format!("no trial join from {}", phase.name()))
+        }
     }
 }
 
@@ -665,13 +635,7 @@ fn post_identify(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
     let mut events = Vec::new();
     let result = {
         let mut core = shared.core().lock().unwrap();
-        control(
-            &mut core,
-            head.peer,
-            now,
-            Request::Identify { duration_ms },
-            &mut events,
-        )
+        control(&mut core, head.peer, now, Request::Identify { duration_ms }, &mut events)
     };
     shared.publish(&events);
     match result {

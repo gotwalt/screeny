@@ -116,10 +116,7 @@ fn a_frame_under_identify_is_decoded_and_counted_and_not_shown() {
 
     // A stream is live and the panel is showing it.
     assert!(one_frame(&mut rx, &mut h, 0, 1, [10, 20, 30], &mut frame));
-    assert!(
-        rx.intent(0).shows_frames(),
-        "a plain live stream shows its frames"
-    );
+    assert!(rx.intent(0).shows_frames(), "a plain live stream shows its frames");
     assert_eq!(rx.stats().counters.frames_shown, 1);
 
     // The overlay goes up, over the top of it.
@@ -144,11 +141,7 @@ fn a_frame_under_identify_is_decoded_and_counted_and_not_shown() {
         before + 1,
         "and still counted - an overlay must not make the sender's numbers lie"
     );
-    assert_eq!(
-        rx.state(),
-        screeny_receiver::State::Live,
-        "the stream state is untouched by an overlay (section 7.3)"
-    );
+    assert_eq!(rx.state(), screeny_receiver::State::Live, "the stream state is untouched by an overlay (section 7.3)");
     // What the caller must *not* do with it:
     assert!(!rx.intent(2_000).shows_frames());
 }

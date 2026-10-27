@@ -106,7 +106,8 @@ pub fn decode(status: u16, body: &[u8]) -> Result<MqttConfig, Fault> {
     if status != 200 {
         return Err(Fault::Other(format!("the Supervisor answered {status}")));
     }
-    let env: Envelope = serde_json::from_slice(body).map_err(|_| Fault::Other("the Supervisor's answer was not understood".into()))?;
+    let env: Envelope =
+        serde_json::from_slice(body).map_err(|_| Fault::Other("the Supervisor's answer was not understood".into()))?;
     if env.result.as_deref().is_some_and(|r| r != "ok") {
         return Err(Fault::NotProvided);
     }
@@ -138,7 +139,10 @@ pub fn decode(status: u16, body: &[u8]) -> Result<MqttConfig, Fault> {
 
 async fn get(sup: &Supervisor, path: &str) -> Result<(u16, Vec<u8>), Fault> {
     let other = |e: std::io::Error| Fault::Other(format!("talking to the Supervisor: {e}"));
-    let rest = sup.base.strip_prefix("http://").ok_or_else(|| Fault::Other("the Supervisor's address is not http://".into()))?;
+    let rest = sup
+        .base
+        .strip_prefix("http://")
+        .ok_or_else(|| Fault::Other("the Supervisor's address is not http://".into()))?;
     let authority = rest.trim_end_matches('/');
     let target = if authority.contains(':') { authority.to_string() } else { format!("{authority}:80") };
     let mut stream = TcpStream::connect(&target).await.map_err(other)?;
@@ -159,7 +163,10 @@ async fn get(sup: &Supervisor, path: &str) -> Result<(u16, Vec<u8>), Fault> {
             return Err(Fault::Other("the Supervisor's answer was too long".into()));
         }
     }
-    let end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| Fault::Other("no HTTP head in the answer".into()))?;
+    let end = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| Fault::Other("no HTTP head in the answer".into()))?;
     let head = String::from_utf8_lossy(&raw[..end]).to_string();
     let status = head
         .lines()
@@ -176,7 +183,8 @@ async fn get(sup: &Supervisor, path: &str) -> Result<(u16, Vec<u8>), Fault> {
 fn dechunk(mut b: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     while let Some(nl) = b.windows(2).position(|w| w == b"\r\n") {
-        let size = usize::from_str_radix(String::from_utf8_lossy(&b[..nl]).split(';').next().unwrap_or("").trim(), 16).unwrap_or(0);
+        let size = usize::from_str_radix(String::from_utf8_lossy(&b[..nl]).split(';').next().unwrap_or("").trim(), 16)
+            .unwrap_or(0);
         if size == 0 || b.len() < nl + 2 + size {
             break;
         }
@@ -237,7 +245,10 @@ mod tests {
     #[test]
     fn the_documented_answer_is_read() {
         let c = decode(200, GOOD.as_bytes()).unwrap();
-        assert_eq!((c.host.as_str(), c.port, c.username.as_deref(), c.password.as_deref()), ("172.30.32.1", 1883, Some("u"), Some("password9")));
+        assert_eq!(
+            (c.host.as_str(), c.port, c.username.as_deref(), c.password.as_deref()),
+            ("172.30.32.1", 1883, Some("u"), Some("password9"))
+        );
         assert!(!format!("{c:?}").contains("password9"));
         let n = decode(200, br#"{"result":"ok","data":{"host":"b","port":1884}}"#).unwrap();
         assert_eq!((n.port, n.username, n.password), (1884, None, None));
@@ -249,8 +260,14 @@ mod tests {
         assert_eq!(decode(200, br#"{"result":"error"}"#).unwrap_err(), Fault::NotProvided);
         assert!(matches!(decode(500, b"").unwrap_err(), Fault::Other(_)));
         assert!(matches!(decode(200, b"nope").unwrap_err(), Fault::Other(_)));
-        assert_eq!(decode(200, br#"{"result":"ok","data":{"host":"b","port":8883,"ssl":true}}"#).unwrap_err(), Fault::Tls);
-        assert!(matches!(decode(200, br#"{"result":"ok","data":{"host":"b","port":0}}"#).unwrap_err(), Fault::Other(_)));
+        assert_eq!(
+            decode(200, br#"{"result":"ok","data":{"host":"b","port":8883,"ssl":true}}"#).unwrap_err(),
+            Fault::Tls
+        );
+        assert!(matches!(
+            decode(200, br#"{"result":"ok","data":{"host":"b","port":0}}"#).unwrap_err(),
+            Fault::Other(_)
+        ));
     }
 
     #[test]

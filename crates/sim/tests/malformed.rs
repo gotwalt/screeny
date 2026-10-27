@@ -19,14 +19,8 @@ use screeny_sim::{Config, Event, SimDevice, Timing};
 const T: Duration = Duration::from_secs(2);
 
 fn device() -> SimDevice {
-    SimDevice::start(Config {
-        timing: Timing {
-            info_min_interval_ms: 0,
-            ..Timing::SPEC
-        },
-        ..Config::for_test()
-    })
-    .unwrap()
+    SimDevice::start(Config { timing: Timing { info_min_interval_ms: 0, ..Timing::SPEC }, ..Config::for_test() })
+        .unwrap()
 }
 
 #[test]
@@ -48,56 +42,16 @@ fn every_way_a_frame_datagram_can_be_wrong_is_counted() {
     let cases: &[(&[u8], Reject, &str)] = &[
         (&[], Reject::Short, "an empty datagram"),
         (&[0x53], Reject::Short, "one byte"),
-        (
-            &[0x53, 0x10, 0x7F, 0x01, 0, 0, 3],
-            Reject::Short,
-            "seven bytes: one short of a header",
-        ),
-        (
-            &[0x52, 0x10, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-            Reject::BadMagic,
-            "the wrong magic byte",
-        ),
-        (
-            &[0x53, 0x20, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-            Reject::BadVersion,
-            "version 2",
-        ),
-        (
-            &[0x53, 0x00, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-            Reject::BadVersion,
-            "version 0",
-        ),
-        (
-            &[0x53, 0x11, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-            Reject::BadType,
-            "the reserved FRAME_FRAG type",
-        ),
-        (
-            &[0x53, 0x1F, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3],
-            Reject::BadType,
-            "a reserved packet type",
-        ),
-        (
-            &[0x53, 0x12, 0x01, 0x00, 1, 0, 0, 0],
-            Reject::BadType,
-            "a CONTROL on the frame port",
-        ),
-        (
-            &[0x53, 0x10, 0x7F, 0x01, 0, 0, 200, 0, 1, 2, 3],
-            Reject::BadLength,
-            "a len the datagram does not back up",
-        ),
-        (
-            &too_long_len,
-            Reject::TooLong,
-            "a len over MAX_PIXEL_PAYLOAD",
-        ),
-        (
-            &[0x53, 0x10, 0x7F, 0x09, 0, 0, 2, 0, 1, 2],
-            Reject::ShortTimestamp,
-            "HAS_TS with no room for the timestamp",
-        ),
+        (&[0x53, 0x10, 0x7F, 0x01, 0, 0, 3], Reject::Short, "seven bytes: one short of a header"),
+        (&[0x52, 0x10, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3], Reject::BadMagic, "the wrong magic byte"),
+        (&[0x53, 0x20, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3], Reject::BadVersion, "version 2"),
+        (&[0x53, 0x00, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3], Reject::BadVersion, "version 0"),
+        (&[0x53, 0x11, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3], Reject::BadType, "the reserved FRAME_FRAG type"),
+        (&[0x53, 0x1F, 0x7F, 0x01, 0, 0, 3, 0, 1, 2, 3], Reject::BadType, "a reserved packet type"),
+        (&[0x53, 0x12, 0x01, 0x00, 1, 0, 0, 0], Reject::BadType, "a CONTROL on the frame port"),
+        (&[0x53, 0x10, 0x7F, 0x01, 0, 0, 200, 0, 1, 2, 3], Reject::BadLength, "a len the datagram does not back up"),
+        (&too_long_len, Reject::TooLong, "a len over MAX_PIXEL_PAYLOAD"),
+        (&[0x53, 0x10, 0x7F, 0x09, 0, 0, 2, 0, 1, 2], Reject::ShortTimestamp, "HAS_TS with no room for the timestamp"),
     ];
 
     for (bytes, want, what) in cases {
@@ -185,10 +139,7 @@ fn random_bytes_on_either_port_cannot_stop_the_device() {
 
     std::thread::sleep(Duration::from_millis(200));
     // Both threads still answer.
-    assert!(
-        ctrl.call(&Request::Ping, 1).is_some(),
-        "the control thread survived"
-    );
+    assert!(ctrl.call(&Request::Ping, 1).is_some(), "the control thread survived");
 
     // Some of that noise will have been a well-formed header from one of
     // these two sockets, so a third source may be holding the lock out for
@@ -198,8 +149,7 @@ fn random_bytes_on_either_port_cannot_stop_the_device() {
     let mut got = None;
     for _ in 0..30 {
         tx2.send(codec::SOLID, F_KEY, &p);
-        if let Some(s) = sim.wait_until(Duration::from_millis(100), |s| s.decoded[..3] == [7, 8, 9])
-        {
+        if let Some(s) = sim.wait_until(Duration::from_millis(100), |s| s.decoded[..3] == [7, 8, 9]) {
             got = Some(s);
             break;
         }
@@ -263,9 +213,7 @@ fn corrupt_payloads_of_the_right_length_are_decode_drops_at_worst() {
     std::thread::sleep(Duration::from_millis(600)); // let the lock lapse
     let (p, e) = solid([1, 1, 1]);
     tx2.send(codec::SOLID, F_KEY, &p);
-    let s = sim
-        .wait_until(T, |s| s.decoded[..3] == [1, 1, 1])
-        .expect("a clean frame after the noise");
+    let s = sim.wait_until(T, |s| s.decoded[..3] == [1, 1, 1]).expect("a clean frame after the noise");
     assert_frames_eq(&s.decoded[..], &e, "recovered");
 }
 
@@ -283,15 +231,7 @@ fn a_datagram_larger_than_the_protocol_allows_is_rejected() {
     d.resize(2000, 0x5A);
     tx.send_raw(&d);
 
-    let ev = sim
-        .wait_for(&mut cursor, T, |e| matches!(e, Event::Rejected { .. }))
-        .expect("rejected");
-    assert!(matches!(
-        ev,
-        Event::Rejected {
-            reason: Some(Reject::TooLong),
-            ..
-        }
-    ));
+    let ev = sim.wait_for(&mut cursor, T, |e| matches!(e, Event::Rejected { .. })).expect("rejected");
+    assert!(matches!(ev, Event::Rejected { reason: Some(Reject::TooLong), .. }));
     assert_eq!(sim.telemetry().frames_shown, 0);
 }

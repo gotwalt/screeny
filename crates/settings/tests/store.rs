@@ -9,9 +9,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use screeny_settings::{
-    key, ColourOrder, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch,
-    SettingError, Settings, Ssid, Store, StoreError, Wifi, DEFAULT_BRIGHTNESS, SCHEMA_VERSION,
-    SCRATCH_MIN,
+    key, ColourOrder, Debounce, Field, Fields, IdleMode, LoadReport, Name, Psk, SchemaState, Scratch, SettingError,
+    Settings, Ssid, Store, StoreError, Wifi, DEFAULT_BRIGHTNESS, SCHEMA_VERSION, SCRATCH_MIN,
 };
 use sequential_storage::cache::Cache;
 use sequential_storage::map::{MapConfig, MapStorage};
@@ -60,22 +59,14 @@ fn wifi() -> Wifi {
 /// Write a raw item through the map, behind `Store`'s back, so a test can put
 /// something in flash that `Store` would never write.
 fn poke_bytes(flash: Flash, k: u8, v: &[u8]) -> Flash {
-    let mut map = MapStorage::<u8, _, _>::new(
-        flash,
-        MapConfig::try_new(0..LEN).unwrap(),
-        Cache::new_uncached(),
-    );
+    let mut map = MapStorage::<u8, _, _>::new(flash, MapConfig::try_new(0..LEN).unwrap(), Cache::new_uncached());
     let mut scratch = Scratch::new();
     block_on(map.store_item::<&[u8]>(scratch.as_mut_slice(), &k, &v)).unwrap();
     map.destroy().0
 }
 
 fn poke_u8(flash: Flash, k: u8, v: u8) -> Flash {
-    let mut map = MapStorage::<u8, _, _>::new(
-        flash,
-        MapConfig::try_new(0..LEN).unwrap(),
-        Cache::new_uncached(),
-    );
+    let mut map = MapStorage::<u8, _, _>::new(flash, MapConfig::try_new(0..LEN).unwrap(), Cache::new_uncached());
     let mut scratch = Scratch::new();
     block_on(map.store_item::<u8>(scratch.as_mut_slice(), &k, &v)).unwrap();
     map.destroy().0
@@ -112,11 +103,7 @@ fn a_blank_load_does_not_write_anything() {
     let before = st.flash().stats_snapshot();
     let _ = load(&mut st);
     let d = before.compare_to(st.flash().stats_snapshot());
-    assert_eq!(
-        (d.writes, d.erases),
-        (0, 0),
-        "load must never write or erase"
-    );
+    assert_eq!((d.writes, d.erases), (0, 0), "load must never write or erase");
 }
 
 // -- round trip -----------------------------------------------------------
@@ -150,24 +137,15 @@ fn the_schema_version_is_written_on_the_first_save() {
     let mut st = store(blank_flash());
     block_on(st.save_brightness(scratch.as_mut_slice(), 12)).unwrap();
 
-    let mut map = MapStorage::<u8, _, _>::new(
-        st.flash().clone(),
-        MapConfig::try_new(0..LEN).unwrap(),
-        Cache::new_uncached(),
-    );
-    let stored =
-        block_on(map.fetch_item::<u8>(scratch.as_mut_slice(), &key::SCHEMA_VERSION)).unwrap();
+    let mut map =
+        MapStorage::<u8, _, _>::new(st.flash().clone(), MapConfig::try_new(0..LEN).unwrap(), Cache::new_uncached());
+    let stored = block_on(map.fetch_item::<u8>(scratch.as_mut_slice(), &key::SCHEMA_VERSION)).unwrap();
     assert_eq!(stored, Some(SCHEMA_VERSION));
 }
 
 #[test]
 fn every_idle_mode_round_trips() {
-    for mode in [
-        IdleMode::Status,
-        IdleMode::HoldForever,
-        IdleMode::Dim,
-        IdleMode::Black,
-    ] {
+    for mode in [IdleMode::Status, IdleMode::HoldForever, IdleMode::Dim, IdleMode::Black] {
         let mut scratch = Scratch::new();
         let mut st = store(blank_flash());
         block_on(st.save_idle_mode(scratch.as_mut_slice(), mode)).unwrap();
@@ -237,10 +215,7 @@ fn the_documented_scratch_minimum_is_enough_and_below_it_is_a_clean_error() {
     assert_eq!(settings, Settings::default());
     assert_eq!(report.error, Some(StoreError::Scratch(SCRATCH_MIN)));
     assert_eq!(report.schema, SchemaState::Unreadable);
-    assert_eq!(
-        block_on(st.save_brightness(&mut small, 3)),
-        Err(StoreError::Scratch(SCRATCH_MIN))
-    );
+    assert_eq!(block_on(st.save_brightness(&mut small, 3)), Err(StoreError::Scratch(SCRATCH_MIN)));
     let d = before.compare_to(st.flash().stats_snapshot());
     assert_eq!((d.writes, d.erases, d.reads), (0, 0, 0));
 }
@@ -261,11 +236,7 @@ fn an_unknown_schema_version_falls_back_to_defaults() {
     let (settings, report) = load(&mut st);
     assert_eq!(report.schema, SchemaState::Unknown(99));
     assert_eq!(report.error, None, "a future version is not a fault");
-    assert_eq!(
-        settings,
-        Settings::default(),
-        "ignore the rest, use defaults"
-    );
+    assert_eq!(settings, Settings::default(), "ignore the rest, use defaults");
 }
 
 #[test]
@@ -281,10 +252,7 @@ fn the_next_save_after_an_unknown_schema_version_rewrites_the_partition() {
     let (settings, report) = load(&mut st);
     assert_eq!(report.schema, SchemaState::Current);
     assert_eq!(settings.idle_mode, IdleMode::Black);
-    assert_eq!(
-        settings.brightness, DEFAULT_BRIGHTNESS,
-        "the foreign-version items are gone, not reinterpreted"
-    );
+    assert_eq!(settings.brightness, DEFAULT_BRIGHTNESS, "the foreign-version items are gone, not reinterpreted");
 }
 
 #[test]
@@ -316,10 +284,7 @@ fn an_idle_mode_this_build_does_not_know_falls_back_without_an_error() {
     let mut st = store(flash);
     let (settings, report) = load(&mut st);
     assert_eq!(settings.idle_mode, IdleMode::Status);
-    assert_eq!(
-        settings.brightness, 77,
-        "one bad field does not spoil the rest"
-    );
+    assert_eq!(settings.brightness, 77, "one bad field does not spoil the rest");
     assert!(report.fallback.contains(Fields::IDLE_MODE));
     assert_eq!(report.error, None);
 }
@@ -335,10 +300,7 @@ fn a_stored_name_that_is_not_utf8_is_reported_and_defaulted() {
     let (settings, report) = load(&mut st);
     assert!(settings.name.is_empty());
     assert!(report.fallback.contains(Fields::NAME));
-    assert_eq!(
-        report.error,
-        Some(StoreError::Invalid(SettingError::NameNotUtf8))
-    );
+    assert_eq!(report.error, Some(StoreError::Invalid(SettingError::NameNotUtf8)));
     assert_eq!(settings.brightness, 77);
 }
 
@@ -363,11 +325,7 @@ fn oversize_values_are_refused_before_the_type_exists() {
     assert_eq!(Ssid::new(&[b'x'; 33]), Err(SettingError::SsidTooLong));
     assert_eq!(Ssid::new(b""), Err(SettingError::SsidEmpty));
     assert_eq!(Psk::new(&[b'x'; 65]), Err(SettingError::PskTooLong));
-    assert_eq!(
-        Name::new(&"x".repeat(33)),
-        Err(SettingError::NameTooLong),
-        "32 bytes is MAX_NAME_LEN"
-    );
+    assert_eq!(Name::new(&"x".repeat(33)), Err(SettingError::NameTooLong), "32 bytes is MAX_NAME_LEN");
     assert_eq!(
         Name::from_bytes(&[0x80]),
         Err(SettingError::NameNotUtf8),
@@ -385,10 +343,7 @@ fn nothing_reaches_flash_when_a_value_is_refused() {
     // itself has to make are the scratch-buffer floor and the empty SSID.
     let mut scratch = Scratch::new();
     let mut st = store(blank_flash());
-    let one_byte_ssid = Wifi {
-        ssid: Ssid::new(b"x").unwrap(),
-        psk: Psk::open(),
-    };
+    let one_byte_ssid = Wifi { ssid: Ssid::new(b"x").unwrap(), psk: Psk::open() };
     // A one-byte SSID is legal and does reach flash...
     let before = st.flash().stats_snapshot();
     assert!(block_on(st.save_wifi(scratch.as_mut_slice(), &one_byte_ssid)).is_ok());
@@ -397,22 +352,10 @@ fn nothing_reaches_flash_when_a_value_is_refused() {
     // ...but a short buffer is refused with nothing read, written or erased.
     let before = st.flash().stats_snapshot();
     let mut too_small = [0u8; 8];
-    assert_eq!(
-        block_on(st.save_wifi(&mut too_small, &one_byte_ssid)),
-        Err(StoreError::Scratch(SCRATCH_MIN))
-    );
-    assert_eq!(
-        block_on(st.save_name(&mut too_small, &Name::new("x").unwrap())),
-        Err(StoreError::Scratch(SCRATCH_MIN))
-    );
-    assert_eq!(
-        block_on(st.save_idle_mode(&mut too_small, IdleMode::Dim)),
-        Err(StoreError::Scratch(SCRATCH_MIN))
-    );
-    assert_eq!(
-        block_on(st.clear_wifi(&mut too_small)),
-        Err(StoreError::Scratch(SCRATCH_MIN))
-    );
+    assert_eq!(block_on(st.save_wifi(&mut too_small, &one_byte_ssid)), Err(StoreError::Scratch(SCRATCH_MIN)));
+    assert_eq!(block_on(st.save_name(&mut too_small, &Name::new("x").unwrap())), Err(StoreError::Scratch(SCRATCH_MIN)));
+    assert_eq!(block_on(st.save_idle_mode(&mut too_small, IdleMode::Dim)), Err(StoreError::Scratch(SCRATCH_MIN)));
+    assert_eq!(block_on(st.clear_wifi(&mut too_small)), Err(StoreError::Scratch(SCRATCH_MIN)));
     let d = before.compare_to(st.flash().stats_snapshot());
     assert_eq!((d.writes, d.erases, d.reads), (0, 0, 0));
 }
@@ -442,20 +385,14 @@ fn a_save_of_the_stored_value_writes_nothing() {
     let mut aligned = Aligned::<128>::new();
     let b2 = aligned.buf();
     block_on(fresh.save_brightness(b2, 1)).unwrap();
-    assert_eq!(
-        block_on(fresh.save_name(b2, &Name::empty())),
-        Ok(Write::Skipped)
-    );
+    assert_eq!(block_on(fresh.save_name(b2, &Name::empty())), Ok(Write::Skipped));
 
     assert_eq!(
         block_on(st.save_idle_mode(buf, IdleMode::Status)),
         Ok(Write::Committed),
         "an explicit Status is still recorded, so a later default change cannot move it"
     );
-    assert_eq!(
-        block_on(st.save_idle_mode(buf, IdleMode::Status)),
-        Ok(Write::Skipped)
-    );
+    assert_eq!(block_on(st.save_idle_mode(buf, IdleMode::Status)), Ok(Write::Skipped));
 
     assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(Write::Committed));
     assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(Write::Skipped));
@@ -475,11 +412,7 @@ fn clear_wifi_leaves_the_other_settings_alone() {
     block_on(st.save_name(buf, &Name::new("shed").unwrap())).unwrap();
 
     assert_eq!(block_on(st.clear_wifi(buf)), Ok(Write::Committed));
-    assert_eq!(
-        block_on(st.clear_wifi(buf)),
-        Ok(Write::Skipped),
-        "clearing a cleared store writes nothing"
-    );
+    assert_eq!(block_on(st.clear_wifi(buf)), Ok(Write::Skipped), "clearing a cleared store writes nothing");
 
     let (settings, report) = load(&mut st);
     assert_eq!(settings.wifi, None);
@@ -507,10 +440,7 @@ fn erase_all_is_a_factory_reset() {
     assert_eq!(settings, Settings::default());
     assert!(report.is_blank());
     // The PSK bytes are physically gone, which `clear_wifi` does not promise.
-    assert!(
-        !st.flash().as_bytes().windows(PSK.len()).any(|w| w == PSK),
-        "erase_all really removes the key material"
-    );
+    assert!(!st.flash().as_bytes().windows(PSK.len()).any(|w| w == PSK), "erase_all really removes the key material");
 }
 
 #[test]
@@ -544,18 +474,14 @@ fn thousands_of_brightness_writes_still_round_trip() {
     let before = st.flash().stats_snapshot();
     for i in 0..N {
         let level = (i % 251) as u8;
-        block_on(st.save_brightness(buf, level))
-            .unwrap_or_else(|e| panic!("write {i} failed: {e:?}"));
+        block_on(st.save_brightness(buf, level)).unwrap_or_else(|e| panic!("write {i} failed: {e:?}"));
     }
     let d = before.compare_to(st.flash().stats_snapshot());
     assert!(
         d.erases >= 1,
         "{N} writes erased nothing - the partition never filled, so page recycling was not exercised"
     );
-    println!(
-        "endurance: {N} writes -> {} flash writes, {} erases",
-        d.writes, d.erases
-    );
+    println!("endurance: {N} writes -> {} flash writes, {} erases", d.writes, d.erases);
 
     let last = ((N - 1) % 251) as u8;
     let (settings, report) = load(&mut st);
@@ -570,11 +496,7 @@ fn thousands_of_brightness_writes_still_round_trip() {
     }
     let (settings, report) = load(&mut st);
     assert_eq!(report.error, None, "{report:?}");
-    assert_eq!(
-        settings.wifi,
-        Some(wifi()),
-        "migrated across page recycling"
-    );
+    assert_eq!(settings.wifi, Some(wifi()), "migrated across page recycling");
 }
 
 // -- power failure ---------------------------------------------------------
@@ -600,14 +522,8 @@ fn a_write_cut_short_leaves_the_old_value_or_the_new_one() {
         let mut st = store(st.flash().clone());
         let (settings, _report) = load(&mut st);
         let name = settings.name.as_str();
-        assert!(
-            name == "before" || name == "after",
-            "cut at {cut}: name was {name:?} after {outcome:?}"
-        );
-        assert_eq!(
-            settings.brightness, 10,
-            "cut at {cut}: an unrelated key must not be damaged"
-        );
+        assert!(name == "before" || name == "after", "cut at {cut}: name was {name:?} after {outcome:?}");
+        assert_eq!(settings.brightness, 10, "cut at {cut}: an unrelated key must not be damaged");
         if outcome.is_err() {
             checked += 1;
         }
@@ -732,23 +648,13 @@ fn a_sixty_second_brightness_sweep_costs_a_handful_of_writes() {
 
     let d = before.compare_to(st.flash().stats_snapshot());
     assert_eq!(changes, 1_800);
-    assert!(
-        commits <= 5,
-        "{changes} changes became {commits} commits, which is not a handful"
-    );
-    assert!(
-        d.writes <= 20,
-        "{changes} changes became {} flash writes",
-        d.writes
-    );
+    assert!(commits <= 5, "{changes} changes became {commits} commits, which is not a handful");
+    assert!(d.writes <= 20, "{changes} changes became {} flash writes", d.writes);
     assert_eq!(d.erases, 0, "a sweep must not erase a page");
     assert_eq!(load(&mut st).0.brightness, live, "the last value did land");
 
     // Printed so the card's Log can quote a number rather than a bound.
-    println!(
-        "sweep: {changes} changes -> {commits} commits -> {} flash writes, {} erases",
-        d.writes, d.erases
-    );
+    println!("sweep: {changes} changes -> {commits} commits -> {} flash writes, {} erases", d.writes, d.erases);
 }
 
 // -- colour order (card 361) -------------------------------------------------

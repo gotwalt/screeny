@@ -200,8 +200,8 @@ impl Sim {
             source: wgpu::ShaderSource::Wgsl(include_str!("flavortime.wgsl").into()),
         });
         let bound: [&wgpu::Buffer; 16] = [
-            &params, &vel, &scal, &vel_next, &scal_next, &curl, &scal_back, &div, &pres, &bed, &light, &light2, &parts, &out, &lut_buf,
-            &caught,
+            &params, &vel, &scal, &vel_next, &scal_next, &curl, &scal_back, &div, &pres, &bed, &light, &light2, &parts,
+            &out, &lut_buf, &caught,
         ];
         let passes = ENTRIES
             .iter()
@@ -226,7 +226,25 @@ impl Sim {
                 (*name, Pass { pipeline, bind })
             })
             .collect();
-        Sim { gpu, dims, coarse, params, bed, vel, scal, vel_next, scal_next, pres, parts, out, out_read, parts_read, passes, profile: None, sweeps }
+        Sim {
+            gpu,
+            dims,
+            coarse,
+            params,
+            bed,
+            vel,
+            scal,
+            vel_next,
+            scal_next,
+            pres,
+            parts,
+            out,
+            out_read,
+            parts_read,
+            passes,
+            profile: None,
+            sweeps,
+        }
     }
 
     fn pass(&self, name: &str) -> &Pass {
@@ -245,7 +263,8 @@ impl Sim {
                 end_of_pass_write_index: Some(at + 1),
             }
         });
-        let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: writes });
+        let mut cp =
+            enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: writes });
         body(&mut cp);
     }
 

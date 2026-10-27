@@ -88,7 +88,9 @@ impl<'a> UpdateState<'a> {
             installed_version: f.installed.as_deref(),
             latest_version: f.latest.as_deref(),
             title: "Screeny firmware",
-            release_summary: f.failed.as_ref().map_or_else(String::new, |why| format!("The last update failed: {why}").chars().take(SUMMARY_MAX).collect()),
+            release_summary: f.failed.as_ref().map_or_else(String::new, |why| {
+                format!("The last update failed: {why}").chars().take(SUMMARY_MAX).collect()
+            }),
             in_progress: f.in_progress,
             update_percentage: f.percent,
         }
@@ -115,12 +117,21 @@ pub fn state_messages(topics: &Topics, snap: &Snapshot) -> Vec<Message> {
         Some(b) => LightState { state: Some("ON"), brightness: Some(b), color_mode: Some("brightness") },
     };
     let patch = Message { topic: topics.patch.state.clone(), payload: json(&snap.patch) };
-    let picture = Message { topic: topics.picture.state.clone(), payload: snap.picture.clone().unwrap_or_else(|| NO_OPTION.to_string()) };
+    let picture = Message {
+        topic: topics.picture.state.clone(),
+        payload: snap.picture.clone().unwrap_or_else(|| NO_OPTION.to_string()),
+    };
     let brightness = Message { topic: topics.brightness.state.clone(), payload: json(&light) };
-    let level = Message { topic: topics.level.state.clone(), payload: snap.brightness.map_or_else(|| NO_OPTION.to_string(), |b| percent_of(b).to_string()) };
+    let level = Message {
+        topic: topics.level.state.clone(),
+        payload: snap.brightness.map_or_else(|| NO_OPTION.to_string(), |b| percent_of(b).to_string()),
+    };
     let panel = Message { topic: topics.panel.state.clone(), payload: on_off(snap.panel_connected) };
     // The channel this panel is on, by the label its select shows.
-    let on = snap.channel.and_then(|id| snap.channels.iter().find(|c| c.id == id)).map_or_else(|| NO_OPTION.to_string(), |c| c.label.clone());
+    let on = snap
+        .channel
+        .and_then(|id| snap.channels.iter().find(|c| c.id == id))
+        .map_or_else(|| NO_OPTION.to_string(), |c| c.label.clone());
     let channel = Message { topic: topics.channel.state.clone(), payload: on };
     let firmware = Message { topic: topics.firmware.state.clone(), payload: json(&UpdateState::of(&snap.firmware)) };
     match topics.role {
@@ -160,7 +171,13 @@ struct LightCommand {
 /// # Errors
 ///
 /// A sentence for the log: which topic, and what was wrong with the payload.
-pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapshot, last_lit: Option<u8>) -> Result<Command, String> {
+pub fn parse_command(
+    topics: &Topics,
+    topic: &str,
+    payload: &[u8],
+    snap: &Snapshot,
+    last_lit: Option<u8>,
+) -> Result<Command, String> {
     if payload.len() > MAX_COMMAND_BYTES {
         return Err(format!("{topic}: {} bytes is not a command", payload.len()));
     }
@@ -192,7 +209,11 @@ pub fn parse_command(topics: &Topics, topic: &str, payload: &[u8], snap: &Snapsh
     }
     if topic == topics.firmware.set {
         // HA's default `payload_install`; anything else is not Install.
-        return if text == INSTALL { Ok(Command::InstallFirmware) } else { Err(format!("{topic}: `{text}` is not {INSTALL}")) };
+        return if text == INSTALL {
+            Ok(Command::InstallFirmware)
+        } else {
+            Err(format!("{topic}: `{text}` is not {INSTALL}"))
+        };
     }
     if topic == topics.channel.set {
         return match snap.channels.iter().find(|c| c.label == text) {
@@ -243,7 +264,11 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn pictures() -> Vec<Picture> {
-        let p = |name: &str, id: &str, setting: &str| Picture { label: Picture::label(name, setting), patch: id.into(), setting: setting.into() };
+        let p = |name: &str, id: &str, setting: &str| Picture {
+            label: Picture::label(name, setting),
+            patch: id.into(),
+            setting: setting.into(),
+        };
         vec![
             p("Overland", "overland", "Default"),
             p("Overland", "overland", "Dusk"),
@@ -254,14 +279,23 @@ pub(crate) mod tests {
 
     fn snap() -> Snapshot {
         Snapshot {
-            patch: PatchState { id: "overland".into(), name: "Overland".into(), setting: "Dusk".into(), modified: false },
+            patch: PatchState {
+                id: "overland".into(),
+                name: "Overland".into(),
+                setting: "Dusk".into(),
+                modified: false,
+            },
             brightness: Some(96),
             pictures: pictures(),
             picture: Some("Overland · Dusk".into()),
             panel_connected: true,
             channels: crate::ha::ChannelOption::all(&[(1, "Channel 1".into()), (2, "Drawing room".into())]),
             channel: Some(2),
-            firmware: crate::ha::FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..Default::default() },
+            firmware: crate::ha::FirmwareState {
+                installed: Some("0.10.0".into()),
+                latest: Some("0.11.0".into()),
+                ..Default::default()
+            },
         }
     }
 
@@ -278,7 +312,10 @@ pub(crate) mod tests {
         // byte, and pinned as they were.
         let (firmware, rest) = all.split_last().unwrap();
         let (channel, old) = rest.split_last().unwrap();
-        assert_eq!((channel.topic.as_str(), channel.payload.as_str()), ("screeny/studio/channel/state", "Drawing room"));
+        assert_eq!(
+            (channel.topic.as_str(), channel.payload.as_str()),
+            ("screeny/studio/channel/state", "Drawing room")
+        );
         snapshot_json("state-lit.txt", &render(old));
         assert_eq!(firmware.topic, "screeny/studio/firmware/state");
         snapshot_json("firmware-state.txt", &render(std::slice::from_ref(firmware)));
@@ -296,20 +333,34 @@ pub(crate) mod tests {
             let m = all.into_iter().find(|m| m.topic == topics.firmware.state).unwrap();
             serde_json::from_str::<serde_json::Value>(&m.payload).unwrap()
         };
-        let available = FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..FirmwareState::default() };
+        let available = FirmwareState {
+            installed: Some("0.10.0".into()),
+            latest: Some("0.11.0".into()),
+            ..FirmwareState::default()
+        };
         let v = state(available.clone());
         assert_eq!((v["installed_version"].as_str(), v["latest_version"].as_str()), (Some("0.10.0"), Some("0.11.0")));
         assert_eq!(v["in_progress"], false);
         let going = state(FirmwareState { in_progress: true, percent: Some(42), ..available.clone() });
         assert_eq!((going["in_progress"].clone(), going["update_percentage"].clone()), (true.into(), 42.into()));
         let waiting = state(FirmwareState { in_progress: true, ..available.clone() });
-        assert!(waiting["in_progress"] == true && waiting["update_percentage"].is_null(), "restarting has no percentage: {waiting}");
+        assert!(
+            waiting["in_progress"] == true && waiting["update_percentage"].is_null(),
+            "restarting has no percentage: {waiting}"
+        );
         let failed = state(FirmwareState { failed: Some("the panel refused the image".into()), ..available });
         assert_eq!(failed["release_summary"], "The last update failed: the panel refused the image");
-        let up_to_date = state(FirmwareState { installed: Some("0.11.0".into()), latest: Some("0.11.0".into()), ..FirmwareState::default() });
+        let up_to_date = state(FirmwareState {
+            installed: Some("0.11.0".into()),
+            latest: Some("0.11.0".into()),
+            ..FirmwareState::default()
+        });
         assert_eq!(up_to_date["installed_version"], up_to_date["latest_version"], "HA shows it up to date");
         let unknown = state(FirmwareState::default());
-        assert!(unknown.get("installed_version").is_none() && unknown.get("latest_version").is_none(), "left out, never null: {unknown}");
+        assert!(
+            unknown.get("installed_version").is_none() && unknown.get("latest_version").is_none(),
+            "left out, never null: {unknown}"
+        );
         // HA's MQTT_JSON_UPDATE_SCHEMA: these keys are `cv.string`, which
         // refuses null, and one bad key drops the whole message (card 368).
         for f in [up_to_date_state(), FirmwareState::default()] {
@@ -325,7 +376,11 @@ pub(crate) mod tests {
     }
 
     fn up_to_date_state() -> crate::ha::FirmwareState {
-        crate::ha::FirmwareState { installed: Some("0.11.0".into()), latest: Some("0.11.0".into()), ..Default::default() }
+        crate::ha::FirmwareState {
+            installed: Some("0.11.0".into()),
+            latest: Some("0.11.0".into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -342,12 +397,7 @@ pub(crate) mod tests {
     #[test]
     fn state_when_dark_unscheduled_and_nothing_matches() {
         let topics = Topics::new(&config());
-        let s = Snapshot {
-            brightness: Some(0),
-            picture: None,
-            panel_connected: false,
-            ..snap()
-        };
+        let s = Snapshot { brightness: Some(0), picture: None, panel_connected: false, ..snap() };
         let all = state_messages(&topics, &s);
         // Without the channel select's state and the firmware's, which are later additions.
         snapshot_json("state-dark.txt", &render(&all[..all.len() - 2]));
@@ -377,8 +427,15 @@ pub(crate) mod tests {
         assert_eq!(parse("light", r#"{"state":"ON","brightness":200}"#), Ok(Command::SetBrightness(200)));
         assert_eq!(parse("light", r#"{"state":"ON","brightness":12.6}"#), Ok(Command::SetBrightness(13)));
         assert_eq!(parse("light", r#"{"state":"OFF"}"#), Ok(Command::SetBrightness(0)));
-        assert_eq!(parse("light", r#"{"state":"ON"}"#), Ok(Command::SetBrightness(40)), "a bare on restores the last lit level");
-        assert_eq!(parse("light", r#"{"state":"ON","brightness":255,"transition":2}"#), Ok(Command::SetBrightness(255)));
+        assert_eq!(
+            parse("light", r#"{"state":"ON"}"#),
+            Ok(Command::SetBrightness(40)),
+            "a bare on restores the last lit level"
+        );
+        assert_eq!(
+            parse("light", r#"{"state":"ON","brightness":255,"transition":2}"#),
+            Ok(Command::SetBrightness(255))
+        );
         assert!(parse("light", r#"{"state":"ON","brightness":256}"#).is_err());
         assert!(parse("light", r#"{"state":"ON","brightness":-1}"#).is_err());
         assert!(parse("light", r#"{"state":"DIM"}"#).is_err());
@@ -397,7 +454,11 @@ pub(crate) mod tests {
         let show = |patch: &str, setting: &str| Command::ShowPicture { patch: patch.into(), setting: setting.into() };
         assert_eq!(parse("picture", "Vesta"), Ok(show("vesta", "Default")), "a bare patch name is its Default");
         assert_eq!(parse("picture", "Vesta · Wall Clock"), Ok(show("vesta", "Wall Clock")));
-        assert_eq!(parse("picture", " Overland · Dusk\n"), Ok(show("overland", "Dusk")), "whitespace is not part of a label");
+        assert_eq!(
+            parse("picture", " Overland · Dusk\n"),
+            Ok(show("overland", "Dusk")),
+            "whitespace is not part of a label"
+        );
         assert!(parse("picture", "vesta").is_err(), "HA sends the option exactly as declared");
         assert!(parse("picture", "Vesta · Default").is_err(), "Default is the bare name");
         assert!(parse("picture", "Flock").is_err(), "not in the list");
@@ -425,7 +486,16 @@ pub(crate) mod tests {
         assert_eq!(topics, ["screeny/studio/ch2/patch/state", "screeny/studio/ch2/picture/state"]);
         let panel = state_messages(&Topics::for_panel(&cfg, Some("b")), &snap());
         let topics: Vec<&str> = panel.iter().map(|m| m.topic.as_str()).collect();
-        assert_eq!(topics, ["screeny/studio/b/brightness/state", "screeny/studio/b/level/state", "screeny/studio/b/panel/state", "screeny/studio/b/channel/state", "screeny/studio/b/firmware/state"]);
+        assert_eq!(
+            topics,
+            [
+                "screeny/studio/b/brightness/state",
+                "screeny/studio/b/level/state",
+                "screeny/studio/b/panel/state",
+                "screeny/studio/b/channel/state",
+                "screeny/studio/b/firmware/state"
+            ]
+        );
         assert_eq!(panel[3].payload, "Drawing room");
         let none = state_messages(&Topics::for_panel(&cfg, Some("b")), &Snapshot { channel: None, ..snap() });
         assert_eq!(none[3].payload, NO_OPTION);

@@ -32,11 +32,7 @@ fn hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
         4 => (t, p, v),
         _ => (v, p, q),
     };
-    [
-        (r * 255.0 + 0.5) as u8,
-        (g * 255.0 + 0.5) as u8,
-        (b * 255.0 + 0.5) as u8,
-    ]
+    [(r * 255.0 + 0.5) as u8, (g * 255.0 + 0.5) as u8, (b * 255.0 + 0.5) as u8]
 }
 
 fn supersample<F: Fn(f32, f32) -> [u8; 3]>(f: F) -> Frame {
@@ -56,15 +52,7 @@ fn supersample<F: Fn(f32, f32) -> [u8; 3]>(f: F) -> Frame {
                     }
                 }
             }
-            out.set(
-                x,
-                y,
-                [
-                    lin_to_srgb8(acc[0] / n),
-                    lin_to_srgb8(acc[1] / n),
-                    lin_to_srgb8(acc[2] / n),
-                ],
-            );
+            out.set(x, y, [lin_to_srgb8(acc[0] / n), lin_to_srgb8(acc[1] / n), lin_to_srgb8(acc[2] / n)]);
         }
     }
     out
@@ -76,17 +64,13 @@ fn plasma() -> Clip {
         .map(|i| {
             let t = i as f32 * 0.08;
             supersample(|x, y| {
-                let v = (x * 0.13 + t).sin()
-                    + (y * 0.17 - t * 0.7).sin()
-                    + ((x * x + y * y).sqrt() * 0.11 + t * 1.3).sin();
+                let v =
+                    (x * 0.13 + t).sin() + (y * 0.17 - t * 0.7).sin() + ((x * x + y * y).sqrt() * 0.11 + t * 1.3).sin();
                 hsv(v * 0.17 + t * 0.05, 0.85, 0.45 + 0.35 * (v * 0.5).cos())
             })
         })
         .collect();
-    Clip {
-        name: "plasma",
-        frames,
-    }
+    Clip { name: "plasma", frames }
 }
 
 /// Zooming fractal: fine detail everywhere, the hardest case for block codecs.
@@ -115,10 +99,7 @@ fn mandelbrot() -> Clip {
             })
         })
         .collect();
-    Clip {
-        name: "mandelbrot",
-        frames,
-    }
+    Clip { name: "mandelbrot", frames }
 }
 
 /// Pixel-authored UI: a handful of flat colours, hard edges, one moving
@@ -171,10 +152,7 @@ fn textui() -> Clip {
             f
         })
         .collect();
-    Clip {
-        name: "textui",
-        frames,
-    }
+    Clip { name: "textui", frames }
 }
 
 /// Photographic: a soft sky gradient, a few out-of-focus blobs and film-like
@@ -185,11 +163,7 @@ fn photo() -> Clip {
             let t = i as f32 * 0.05;
             supersample(|x, y| {
                 let sky = 1.0 - y / H as f32;
-                let mut c = [
-                    0.22 + 0.5 * sky,
-                    0.33 + 0.45 * sky,
-                    0.55 + 0.4 * sky,
-                ];
+                let mut c = [0.22 + 0.5 * sky, 0.33 + 0.45 * sky, 0.55 + 0.4 * sky];
                 for (k, (bx, by, r, tint)) in [
                     (18.0f32, 20.0f32, 11.0f32, [0.9f32, 0.55, 0.2]),
                     (44.0, 14.0, 8.0, [0.35, 0.7, 0.3]),
@@ -211,18 +185,11 @@ fn photo() -> Clip {
                 for ch in &mut c {
                     *ch = (*ch + (g - 0.5) * 0.045).clamp(0.0, 1.0);
                 }
-                [
-                    (c[0] * 255.0 + 0.5) as u8,
-                    (c[1] * 255.0 + 0.5) as u8,
-                    (c[2] * 255.0 + 0.5) as u8,
-                ]
+                [(c[0] * 255.0 + 0.5) as u8, (c[1] * 255.0 + 0.5) as u8, (c[2] * 255.0 + 0.5) as u8]
             })
         })
         .collect();
-    Clip {
-        name: "photo",
-        frames,
-    }
+    Clip { name: "photo", frames }
 }
 
 /// A dark scene fading down: where the panel's bit depth is coarsest and
@@ -234,18 +201,11 @@ fn darkfade() -> Clip {
             supersample(|x, y| {
                 let d = ((x - 32.0).powi(2) / 400.0 + (y - 16.0).powi(2) / 120.0).sqrt();
                 let v = ((1.2 - d).clamp(0.0, 1.0) * k * 0.28).clamp(0.0, 1.0);
-                [
-                    (v * 255.0 * 1.0 + 0.5) as u8,
-                    (v * 255.0 * 0.7 + 0.5) as u8,
-                    (v * 255.0 * 1.3).min(255.0) as u8,
-                ]
+                [(v * 255.0 * 1.0 + 0.5) as u8, (v * 255.0 * 0.7 + 0.5) as u8, (v * 255.0 * 1.3).min(255.0) as u8]
             })
         })
         .collect();
-    Clip {
-        name: "darkfade",
-        frames,
-    }
+    Clip { name: "darkfade", frames }
 }
 
 /// The whole corpus.

@@ -437,11 +437,7 @@ impl Scan {
                 let after = self.pos + n as u32;
                 if self.head_len >= HEADER_LEN {
                     self.check_header()?;
-                    self.phase = if self.segments_left == 0 {
-                        self.begin_padding(after)
-                    } else {
-                        Phase::SegmentHeader
-                    };
+                    self.phase = if self.segments_left == 0 { self.begin_padding(after) } else { Phase::SegmentHeader };
                 }
                 n
             }
@@ -449,20 +445,15 @@ impl Scan {
                 let want = 8 - self.seg_hdr_len;
                 let n = want.min(bytes.len());
                 let after = self.pos + n as u32;
-                self.seg_hdr[self.seg_hdr_len..self.seg_hdr_len + n]
-                    .copy_from_slice(&bytes[..n]);
+                self.seg_hdr[self.seg_hdr_len..self.seg_hdr_len + n].copy_from_slice(&bytes[..n]);
                 self.seg_hdr_len += n;
                 // The head copy runs through the first segment header and into
                 // the app descriptor, so it is fed from here too.
                 self.fill_head(&bytes[..n]);
                 if self.seg_hdr_len == 8 {
                     self.seg_hdr_len = 0;
-                    let data_len = u32::from_le_bytes([
-                        self.seg_hdr[4],
-                        self.seg_hdr[5],
-                        self.seg_hdr[6],
-                        self.seg_hdr[7],
-                    ]);
+                    let data_len =
+                        u32::from_le_bytes([self.seg_hdr[4], self.seg_hdr[5], self.seg_hdr[6], self.seg_hdr[7]]);
                     // The ROM loader's own rules: a segment is a whole number
                     // of words and cannot be bigger than the address space it
                     // is loaded into. A table that breaks them is a broken
@@ -494,11 +485,7 @@ impl Scan {
                 self.fill_head(chunk);
                 self.seg_remaining -= n as u32;
                 if self.seg_remaining == 0 {
-                    self.phase = if self.segments_left == 0 {
-                        self.begin_padding(after)
-                    } else {
-                        Phase::SegmentHeader
-                    };
+                    self.phase = if self.segments_left == 0 { self.begin_padding(after) } else { Phase::SegmentHeader };
                 }
                 n
             }
@@ -537,11 +524,7 @@ impl Scan {
         // Hash everything up to, but not including, the appended digest.
         if matches!(
             self.phase,
-            Phase::Header
-                | Phase::SegmentHeader
-                | Phase::SegmentData
-                | Phase::Padding
-                | Phase::Checksum
+            Phase::Header | Phase::SegmentHeader | Phase::SegmentData | Phase::Padding | Phase::Checksum
         ) || self.hash_start == Some(self.pos + n as u32)
         {
             self.sha.update(&bytes[..n]);
@@ -671,13 +654,7 @@ impl Scan {
         }
         let hash_start = self.hash_start.unwrap_or(self.pos);
         let len = hash_start + HASH_LEN as u32;
-        Ok(Image {
-            len,
-            trailing: self.pos.saturating_sub(len),
-            digest: self.digest,
-            version,
-            segments: self.segments,
-        })
+        Ok(Image { len, trailing: self.pos.saturating_sub(len), digest: self.digest, version, segments: self.segments })
     }
 
     /// Run checks 1-4 as soon as the first sector has arrived, without

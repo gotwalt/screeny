@@ -87,12 +87,7 @@ pub const NO_ANSWER: u16 = 0;
 /// A "response" that closes the connection without writing anything.
 #[must_use]
 pub fn no_answer() -> Response {
-    Response {
-        status: NO_ANSWER,
-        content_type: "application/json",
-        body: Vec::new(),
-        headers: Vec::new(),
-    }
+    Response { status: NO_ANSWER, content_type: "application/json", body: Vec::new(), headers: Vec::new() }
 }
 
 /// What to answer with.
@@ -112,12 +107,7 @@ impl Response {
     /// A JSON reply.
     #[must_use]
     pub fn json(status: u16, body: Vec<u8>) -> Self {
-        Response {
-            status,
-            content_type: "application/json",
-            body,
-            headers: Vec::new(),
-        }
+        Response { status, content_type: "application/json", body, headers: Vec::new() }
     }
 
     /// An HTML reply.
@@ -190,11 +180,7 @@ impl Server {
     ///
     /// # Errors
     /// Anything that stops the listener binding.
-    pub fn start(
-        bind: SocketAddr,
-        handler: Arc<Handler>,
-        wants_stream: Arc<WantsStream>,
-    ) -> io::Result<Self> {
+    pub fn start(bind: SocketAddr, handler: Arc<Handler>, wants_stream: Arc<WantsStream>) -> io::Result<Self> {
         let listener = TcpListener::bind(bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -205,11 +191,7 @@ impl Server {
                 .name("sim-http".into())
                 .spawn(move || accept_loop(&listener, &stop, &handler, &wants_stream))?
         };
-        Ok(Server {
-            addr,
-            stop,
-            thread: Some(thread),
-        })
+        Ok(Server { addr, stop, thread: Some(thread) })
     }
 
     /// The address the listener is actually bound to.
@@ -253,11 +235,9 @@ fn accept_loop(
                 workers.retain(|w| !w.is_finished());
                 let handler = Arc::clone(handler);
                 let wants_stream = Arc::clone(wants_stream);
-                match thread::Builder::new()
-                    .name("sim-http-conn".into())
-                    .spawn(move || {
-                        let _ = serve_one(stream, peer, &handler, &wants_stream);
-                    }) {
+                match thread::Builder::new().name("sim-http-conn".into()).spawn(move || {
+                    let _ = serve_one(stream, peer, &handler, &wants_stream);
+                }) {
                     Ok(w) => workers.push(w),
                     // Out of threads: the connection is dropped, which is what
                     // a device out of sockets does too.
@@ -312,23 +292,11 @@ fn serve_one(
 
     let response = if head.chunked {
         // A `no_std` server on a fixed buffer will not decode chunked either.
-        crate::api::error_response(
-            screeny_device_api::ErrorCode::BadRequest,
-            "chunked request bodies are not accepted",
-        )
+        crate::api::error_response(screeny_device_api::ErrorCode::BadRequest, "chunked request bodies are not accepted")
     } else if wants_stream(&head) {
         let len = head.content_length;
-        let mut limited = LimitedRead {
-            inner: &mut reader,
-            left: len.unwrap_or(0),
-        };
-        handler(
-            &head,
-            Body::Stream {
-                reader: &mut limited,
-                len,
-            },
-        )
+        let mut limited = LimitedRead { inner: &mut reader, left: len.unwrap_or(0) };
+        handler(&head, Body::Stream { reader: &mut limited, len })
     } else {
         match read_body(&mut reader, head.content_length) {
             Ok(body) => handler(&head, Body::Buffered(body)),
@@ -356,11 +324,7 @@ fn read_head(reader: &mut BufReader<TcpStream>, peer: SocketAddr) -> Result<Opti
             Err(_) => return Ok(None),
         };
         if n == 0 {
-            return if lines.is_empty() {
-                Ok(None)
-            } else {
-                Err("unterminated request head".into())
-            };
+            return if lines.is_empty() { Ok(None) } else { Err("unterminated request head".into()) };
         }
         total += n;
         if total > MAX_HEAD_LEN {
@@ -401,12 +365,8 @@ fn read_head(reader: &mut BufReader<TcpStream>, peer: SocketAddr) -> Result<Opti
         host: headers.get("host").map(|h| h.to_ascii_lowercase()),
         peer,
         content_length: headers.get("content-length").and_then(|v| v.parse().ok()),
-        expect_continue: headers
-            .get("expect")
-            .is_some_and(|v| v.eq_ignore_ascii_case("100-continue")),
-        chunked: headers
-            .get("transfer-encoding")
-            .is_some_and(|v| v.to_ascii_lowercase().contains("chunked")),
+        expect_continue: headers.get("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue")),
+        chunked: headers.get("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")),
     }))
 }
 

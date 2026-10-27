@@ -44,9 +44,7 @@ impl Default for Frame {
 
 impl Frame {
     pub fn black() -> Self {
-        Frame {
-            px: Box::new([0u8; NBYTES]),
-        }
+        Frame { px: Box::new([0u8; NBYTES]) }
     }
 
     /// Take ownership of an existing pixel array.
@@ -104,10 +102,7 @@ pub struct Indexed {
 
 impl Default for Indexed {
     fn default() -> Self {
-        Indexed {
-            palette: vec![[0, 0, 0]],
-            indices: Box::new([0u8; NPIX]),
-        }
+        Indexed { palette: vec![[0, 0, 0]], indices: Box::new([0u8; NPIX]) }
     }
 }
 
@@ -116,10 +111,7 @@ impl Indexed {
     /// encoder's exact `PAL4_LZ`/`PAL5` path takes. No copy: the two types are
     /// the owned and the borrowed form of the same thing.
     pub fn as_proto(&self) -> IndexedFrame<'_> {
-        IndexedFrame {
-            palette: &self.palette,
-            indices: &self.indices,
-        }
+        IndexedFrame { palette: &self.palette, indices: &self.indices }
     }
 
     pub fn to_frame(&self) -> Frame {
@@ -168,11 +160,7 @@ pub struct LinBuf {
 
 impl LinBuf {
     pub fn new(ss: usize) -> Self {
-        LinBuf {
-            w: W * ss,
-            h: H * ss,
-            px: vec![[0.0; 3]; W * ss * H * ss],
-        }
+        LinBuf { w: W * ss, h: H * ss, px: vec![[0.0; 3]; W * ss * H * ss] }
     }
 
     pub fn clear(&mut self) {
@@ -206,11 +194,7 @@ impl LinBuf {
                         acc[2] += p[2];
                     }
                 }
-                out.set(
-                    x,
-                    y,
-                    crate::color::lin_to_srgb8_3([acc[0] / n, acc[1] / n, acc[2] / n]),
-                );
+                out.set(x, y, crate::color::lin_to_srgb8_3([acc[0] / n, acc[1] / n, acc[2] / n]));
             }
         }
     }
@@ -246,10 +230,7 @@ mod tests {
     /// Card 016 made that true by construction; this keeps it true.
     #[test]
     fn the_owned_and_borrowed_indexed_frames_agree() {
-        let mut idx = Indexed {
-            palette: vec![[0, 0, 0], [255, 0, 0], [7, 8, 9]],
-            ..Indexed::default()
-        };
+        let mut idx = Indexed { palette: vec![[0, 0, 0], [255, 0, 0], [7, 8, 9]], ..Indexed::default() };
         for p in 0..NPIX {
             idx.indices[p] = (p % 3) as u8;
         }

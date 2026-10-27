@@ -103,7 +103,11 @@ impl RenderVertex {
         let inv = from.orient.conjugate();
         let local_pos = inv.rotate(self.pos.sub(from.pos));
         let local_normal = inv.rotate(self.normal);
-        RenderVertex { pos: to.orient.rotate(local_pos).add(to.pos), normal: to.orient.rotate(local_normal), fold: self.fold }
+        RenderVertex {
+            pos: to.orient.rotate(local_pos).add(to.pos),
+            normal: to.orient.rotate(local_normal),
+            fold: self.fold,
+        }
     }
 }
 
@@ -200,7 +204,8 @@ impl LeafShell {
         let (edges, bend_edges) = build_edges();
         let positions: Vec<Vector> = local.iter().map(|&l| to_rapier(attach.to_world(l, scale))).collect();
 
-        let material = SoftBodyMaterial { edge_softness: EDGE_SOFTNESS, bend_softness: BEND_SOFTNESS, ..Default::default() };
+        let material =
+            SoftBodyMaterial { edge_softness: EDGE_SOFTNESS, bend_softness: BEND_SOFTNESS, ..Default::default() };
         let builder = SoftBodyBuilder::new(positions)
             .pinned_particles(pinned.iter().map(|&i| i as u32))
             .edges(edges)
@@ -353,7 +358,9 @@ impl LeafShell {
     /// Every vertex, ready for the renderer: world position, a normal from
     /// the live geometry, and its fold/crease scalar.
     pub(crate) fn render_vertices(&self) -> Vec<RenderVertex> {
-        (0..VERTS).map(|i| RenderVertex { pos: self.pos(i), normal: self.normal_at(i), fold: self.fold_at(i) }).collect()
+        (0..VERTS)
+            .map(|i| RenderVertex { pos: self.pos(i), normal: self.normal_at(i), fold: self.fold_at(i) })
+            .collect()
     }
 
     /// This leaf's own triangles, in [`render_vertices`]'s indexing - the

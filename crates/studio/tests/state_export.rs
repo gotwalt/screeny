@@ -96,7 +96,10 @@ async fn the_export_is_a_download_with_no_password_and_no_addresses() {
     for secret in [PASSWORD, "broker.old.example", "192.0.2.", "screeny-bb0001", "pending"] {
         assert!(!text.contains(secret), "the export leaked `{secret}`:\n{text}");
     }
-    assert_eq!(doc["devices"], serde_json::json!([{"id": "bb0001", "name": "Office"}, {"id": "bb0002", "name": "Hall"}]));
+    assert_eq!(
+        doc["devices"],
+        serde_json::json!([{"id": "bb0001", "name": "Office"}, {"id": "bb0002", "name": "Hall"}])
+    );
     assert_eq!(doc["panels"].as_array().unwrap().len(), 2, "the provisional device's panel does not travel: {text}");
     assert_eq!(doc["channels"].as_array().unwrap().len(), 2);
     assert_eq!(doc["patches"]["metaballs"]["settings"]["Lava"]["seed"], 111);
@@ -115,7 +118,11 @@ async fn a_round_trip_gives_the_same_panels_channels_and_settings() {
     let r = post(b.addr, "/api/v1/state/import", &String::from_utf8(export.body).unwrap()).await;
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
     let answer = r.json();
-    assert_eq!((answer["applied"].as_str(), answer["panels"].as_u64(), answer["channels"].as_u64()), (Some("live"), Some(2), Some(2)), "{answer}");
+    assert_eq!(
+        (answer["applied"].as_str(), answer["panels"].as_u64(), answer["channels"].as_u64()),
+        (Some("live"), Some(2), Some(2)),
+        "{answer}"
+    );
 
     // Live: no restart, and the picture is the old Studio's.
     let after = picture_of(b.addr).await;
@@ -156,10 +163,15 @@ async fn no_address_is_trusted_and_the_importing_studios_own_are_kept() {
     assert_eq!(post(b.addr, "/api/v1/state/import", &doc.to_string()).await.status, 200);
     b.stop().await;
     let file = state_file(&dir_b);
-    let dev = |id: &str| file["devices"].as_array().unwrap().iter().find(|d| d["id"] == id).cloned().unwrap_or_default();
+    let dev =
+        |id: &str| file["devices"].as_array().unwrap().iter().find(|d| d["id"] == id).cloned().unwrap_or_default();
     let known = dev("bb0001");
     assert_eq!(known["name"], "Office", "the name travels");
-    assert_eq!((known["address"].as_str(), known["instance"].as_str()), (Some("192.0.2.77"), Some("mine")), "the new Studio's own: {file}");
+    assert_eq!(
+        (known["address"].as_str(), known["instance"].as_str()),
+        (Some("192.0.2.77"), Some("mine")),
+        "the new Studio's own: {file}"
+    );
     let fresh = dev("bb0002");
     assert_eq!(fresh["name"], "Hall");
     for k in ["address", "instance", "manual"] {
@@ -184,9 +196,17 @@ async fn an_older_schema_export_imports_through_the_migrations() {
     assert_eq!(r.json()["from_version"], 7);
     let panels = get(b.addr, "/api/v1/panels").await.json();
     let p = &panels["panels"][0];
-    assert_eq!((p["device"].as_str(), p["name"].as_str(), p["picture"]["patch"].as_str()), (Some("bb0001"), Some("Desk"), Some("clocks-dials")), "{panels}");
+    assert_eq!(
+        (p["device"].as_str(), p["name"].as_str(), p["picture"]["patch"].as_str()),
+        (Some("bb0001"), Some("Desk"), Some("clocks-dials")),
+        "{panels}"
+    );
     let state = get(b.addr, &format!("/api/v1/bootstrap?channel={}", p["channel"])).await.json();
-    assert_eq!((state["state"]["seed"].as_u64(), state["state"]["params"]["dwell"].as_f64()), (Some(5), Some(30.0)), "{state}");
+    assert_eq!(
+        (state["state"]["seed"].as_u64(), state["state"]["params"]["dwell"].as_f64()),
+        (Some(5), Some(30.0)),
+        "{state}"
+    );
     // The named setting came with it.
     let on = format!(r#"{{"id":"metaballs","channel":{}}}"#, p["channel"]);
     assert_eq!(post(b.addr, "/api/v1/set_patch", &on).await.status, 200);
@@ -233,7 +253,11 @@ async fn a_bad_file_changes_nothing() {
     studio.stop().await;
     let after = state_file(&dir);
     for (was, now) in file_before["channels"].as_array().unwrap().iter().zip(after["channels"].as_array().unwrap()) {
-        assert_eq!((&was["name"], &was["patch"], &was["params"]), (&now["name"], &now["patch"], &now["params"]), "nor the file");
+        assert_eq!(
+            (&was["name"], &was["patch"], &was["params"]),
+            (&now["name"], &now["patch"], &now["params"]),
+            "nor the file"
+        );
     }
     assert_eq!(after["patches"], file_before["patches"]);
 }
@@ -248,11 +272,20 @@ async fn the_importing_studios_own_broker_is_kept() {
 
     let dir_b = Temp::new("keep-broker-b");
     let b = studio_in(&dir_b.0, false).await;
-    let set = post(b.addr, "/api/v1/home_assistant/set", r#"{"host":"broker.mine.example","username":"me","password":"password8","enabled":false}"#).await;
+    let set = post(
+        b.addr,
+        "/api/v1/home_assistant/set",
+        r#"{"host":"broker.mine.example","username":"me","password":"password8","enabled":false}"#,
+    )
+    .await;
     assert_eq!(set.status, 200);
     assert_eq!(post(b.addr, "/api/v1/state/import", &doc.to_string()).await.status, 200);
     let view = get(b.addr, "/api/v1/home_assistant").await.json();
-    assert_eq!((view["host"].as_str(), view["username"].as_str(), view["enabled"].clone(), view["password_set"].clone()), (Some("broker.mine.example"), Some("me"), false.into(), true.into()), "{view}");
+    assert_eq!(
+        (view["host"].as_str(), view["username"].as_str(), view["enabled"].clone(), view["password_set"].clone()),
+        (Some("broker.mine.example"), Some("me"), false.into(), true.into()),
+        "{view}"
+    );
     b.stop().await;
     let file = state_file(&dir_b);
     assert_eq!(file["home_assistant"]["host"], "broker.mine.example");
@@ -284,14 +317,21 @@ async fn in_app_mode_the_supervisors_broker_survives_an_import() {
     let (base, _fake) = fake_supervisor(offer.to_string()).await;
     let cfg = Config { supervisor: Some(Supervisor { base, token: "dummy-token".into() }), ..test_config() };
     let app = Studio::bind(cfg).await.unwrap().spawn();
-    until_json(app.addr, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| v["from_supervisor"] == true).await;
+    until_json(app.addr, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| {
+        v["from_supervisor"] == true
+    })
+    .await;
 
     let (_dir_a, a) = old_studio("app-a").await;
     let export = String::from_utf8(get(a.addr, "/api/v1/state/export").await.body).unwrap();
     let r = post(app.addr, "/api/v1/state/import", &export).await;
     assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
 
-    let view = until_json(app.addr, PATIENCE, "the Supervisor's broker after the import", "/api/v1/home_assistant", |v| v["from_supervisor"] == true).await;
+    let view =
+        until_json(app.addr, PATIENCE, "the Supervisor's broker after the import", "/api/v1/home_assistant", |v| {
+            v["from_supervisor"] == true
+        })
+        .await;
     assert_eq!((view["host"].as_str(), view["username"].as_str()), (Some("127.0.0.1"), Some("ha")), "{view}");
     assert_ne!(view["host"], "broker.old.example");
     let text = String::from_utf8_lossy(&get(app.addr, "/api/v1/home_assistant").await.body).to_string();
@@ -320,11 +360,23 @@ async fn importing_over_a_studio_that_is_running_replaces_what_it_had_live() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| (c["id"].as_u64().unwrap(), c["name"].as_str().unwrap().to_string(), c["picture"]["patch"].as_str().unwrap().to_string()))
+        .map(|c| {
+            (
+                c["id"].as_u64().unwrap(),
+                c["name"].as_str().unwrap().to_string(),
+                c["picture"]["patch"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
-    assert_eq!(names, vec![(1, "Living room".into(), "metaballs".into()), (2, "Hall".into(), "clocks-dials".into())], "Spare is gone, Mine became Hall");
+    assert_eq!(
+        names,
+        vec![(1, "Living room".into(), "metaballs".into()), (2, "Hall".into(), "clocks-dials".into())],
+        "Spare is gone, Mine became Hall"
+    );
     let panels = get(at, "/api/v1/panels").await.json();
-    let on = |id: &str| panels["panels"].as_array().unwrap().iter().find(|p| p["device"] == id).map(|p| p["channel"].as_u64().unwrap());
+    let on = |id: &str| {
+        panels["panels"].as_array().unwrap().iter().find(|p| p["device"] == id).map(|p| p["channel"].as_u64().unwrap())
+    };
     assert_eq!(on("bb0001"), Some(1));
     assert_eq!(on("bb0002"), Some(2));
     assert_eq!(on("cc0003"), Some(1), "a panel the file does not name stays, on Channel 1 now that its channel went");

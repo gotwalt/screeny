@@ -90,10 +90,7 @@ impl Entry {
         match self {
             Entry::Erased => true,
             Entry::Torn => false,
-            Entry::Live { seq, state } => {
-                seq == UNINITIALIZED
-                    || matches!(state, FwState::Invalid | FwState::Aborted)
-            }
+            Entry::Live { seq, state } => seq == UNINITIALIZED || matches!(state, FwState::Invalid | FwState::Aborted),
         }
     }
 
@@ -150,9 +147,7 @@ impl OtaData {
     /// What `tools/fw-run.sh`'s `--erase-data-parts ota` leaves behind.
     #[must_use]
     pub fn erased() -> Self {
-        OtaData {
-            entries: [Entry::Erased; SLOTS],
-        }
+        OtaData { entries: [Entry::Erased; SLOTS] }
     }
 
     fn seqs(&self) -> (u32, u32) {
@@ -258,10 +253,7 @@ impl OtaData {
             // The crate reads the target entry, changes `ota_seq` and `crc`,
             // and writes all 32 bytes back: the **state is carried over**,
             // which is interruption 5b's whole story.
-            None => Entry::Live {
-                seq: new_seq,
-                state: self.entries[target].state(),
-            },
+            None => Entry::Live { seq: new_seq, state: self.entries[target].state() },
         };
         Ok(Some(target))
     }
@@ -279,10 +271,7 @@ impl OtaData {
         let i = self.current_entry();
         self.entries[i] = match cut {
             Some(d) => Entry::damaged(d),
-            None => Entry::Live {
-                seq: self.entries[i].seq(),
-                state,
-            },
+            None => Entry::Live { seq: self.entries[i].seq(), state },
         };
         Ok(i)
     }
@@ -297,15 +286,8 @@ impl OtaData {
     fn select_boot(&mut self) -> Option<u8> {
         // Lines 445-451: unconditional, on every reset, whatever the reason.
         for e in &mut self.entries {
-            if let Entry::Live {
-                seq,
-                state: FwState::PendingVerify,
-            } = *e
-            {
-                *e = Entry::Live {
-                    seq,
-                    state: FwState::Aborted,
-                };
+            if let Entry::Live { seq, state: FwState::PendingVerify } = *e {
+                *e = Entry::Live { seq, state: FwState::Aborted };
             }
         }
 
@@ -316,18 +298,13 @@ impl OtaData {
 
         // `bootloader_common_get_active_otadata`: the highest sequence among
         // the *valid* entries, or nothing.
-        let active = (0..SLOTS)
-            .filter(|i| self.entries[*i].is_valid())
-            .max_by_key(|i| self.entries[*i].seq())?;
+        let active = (0..SLOTS).filter(|i| self.entries[*i].is_valid()).max_by_key(|i| self.entries[*i].seq())?;
         let seq = self.entries[active].seq();
         let boot_index = ((seq - 1) % SLOTS as u32) as u8;
 
         // Lines 510-515.
         if self.entries[active].state() == FwState::New {
-            self.entries[active] = Entry::Live {
-                seq,
-                state: FwState::PendingVerify,
-            };
+            self.entries[active] = Entry::Live { seq, state: FwState::PendingVerify };
         }
         Some(boot_index)
     }
@@ -405,12 +382,7 @@ impl Device {
     /// erased `ota_1`, and an erased `otadata`.
     #[must_use]
     pub fn freshly_flashed() -> Self {
-        Device {
-            slots: [Image::Good, Image::Absent],
-            otadata: OtaData::erased(),
-            running: None,
-            boot: Boot::Unknown,
-        }
+        Device { slots: [Image::Good, Image::Absent], otadata: OtaData::erased(), running: None, boot: Boot::Unknown }
     }
 
     /// Run the bootloader, then work out what kind of boot this is.
@@ -433,21 +405,14 @@ impl Device {
             // otadata, the bootloader writes a fresh, VALID entry 0 - which is
             // why a serial-flashed device reports `fw_state valid` and never
             // goes anywhere near the trial machinery.
-            self.otadata.entries[0] = Entry::Live {
-                seq: 1,
-                state: FwState::Valid,
-            };
+            self.otadata.entries[0] = Entry::Live { seq: 1, state: FwState::Valid };
         }
 
         self.boot = match self.running {
             None => Boot::Unknown,
             Some(run) => classify(
                 slot(run),
-                self.otadata
-                    .current_app()
-                    .ok()
-                    .flatten()
-                    .map_or(FwSlot::Unknown, slot),
+                self.otadata.current_app().ok().flatten().map_or(FwSlot::Unknown, slot),
                 self.otadata.current_state().unwrap_or(FwState::Undefined),
             ),
         };

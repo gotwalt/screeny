@@ -71,9 +71,7 @@ impl Frame {
     pub fn pixel(&self, i: usize) -> Rgb {
         match self {
             Frame::Linear(px) => px[i],
-            Frame::Indexed { palette, indices } => {
-                palette.get(indices[i] as usize).copied().unwrap_or(Rgb::BLACK)
-            }
+            Frame::Indexed { palette, indices } => palette.get(indices[i] as usize).copied().unwrap_or(Rgb::BLACK),
         }
     }
 

@@ -39,15 +39,8 @@ pub enum Pattern {
 
 impl Pattern {
     /// Every pattern, in the order `screeny pattern --list` prints them.
-    pub const ALL: [Pattern; 7] = [
-        Pattern::Bars,
-        Pattern::Grey,
-        Pattern::Gradient,
-        Pattern::F,
-        Pattern::Checker,
-        Pattern::Sweep,
-        Pattern::Dark,
-    ];
+    pub const ALL: [Pattern; 7] =
+        [Pattern::Bars, Pattern::Grey, Pattern::Gradient, Pattern::F, Pattern::Checker, Pattern::Sweep, Pattern::Dark];
 
     /// The name used on the command line.
     #[must_use]
@@ -121,16 +114,8 @@ impl FrameSource for Pattern {
     }
 }
 
-const BAR_COLOURS: [[u8; 3]; 8] = [
-    [255, 255, 255],
-    [255, 255, 0],
-    [0, 255, 255],
-    [0, 255, 0],
-    [255, 0, 255],
-    [255, 0, 0],
-    [0, 0, 255],
-    [0, 0, 0],
-];
+const BAR_COLOURS: [[u8; 3]; 8] =
+    [[255, 255, 255], [255, 255, 0], [0, 255, 255], [0, 255, 0], [255, 0, 255], [255, 0, 0], [0, 0, 255], [0, 0, 0]];
 
 fn bars(f: &mut Frame) {
     for y in 0..H {
@@ -216,12 +201,8 @@ fn letter_f(f: &mut Frame) {
     }
     // Corner markers: red top-left, green top-right, blue bottom-left,
     // yellow bottom-right.
-    let corners: [([u8; 3], usize, usize); 4] = [
-        ([255, 0, 0], 0, 0),
-        ([0, 255, 0], W - 3, 0),
-        ([0, 0, 255], 0, H - 3),
-        ([255, 255, 0], W - 3, H - 3),
-    ];
+    let corners: [([u8; 3], usize, usize); 4] =
+        [([255, 0, 0], 0, 0), ([0, 255, 0], W - 3, 0), ([0, 0, 255], 0, H - 3), ([255, 255, 0], W - 3, H - 3)];
     for (c, cx, cy) in corners {
         for dy in 0..3 {
             for dx in 0..3 {
@@ -238,11 +219,7 @@ fn checker(f: &mut Frame) {
             // middle third where the eye can judge it against the coarse one.
             let coarse = ((x / 8) + (y / 8)) % 2 == 0;
             let fine = (x + y) % 2 == 0;
-            let on = if (16..48).contains(&x) && (8..24).contains(&y) {
-                fine
-            } else {
-                coarse
-            };
+            let on = if (16..48).contains(&x) && (8..24).contains(&y) { fine } else { coarse };
             f.set(x, y, if on { [255; 3] } else { [0; 3] });
         }
     }
@@ -301,11 +278,7 @@ fn dark_step(k: usize) -> u8 {
 /// neutral half below cannot show.
 fn warm(v: u8) -> [u8; 3] {
     let v16 = u16::from(v);
-    [
-        v,
-        ((v16 * 205 + 128) >> 8) as u8,
-        ((v16 * 141 + 128) >> 8) as u8,
-    ]
+    [v, ((v16 * 205 + 128) >> 8) as u8, ((v16 * 141 + 128) >> 8) as u8]
 }
 
 /// A **held** dark ramp: warm monochrome on the top half, neutral grey on the
@@ -358,14 +331,8 @@ mod tests {
             assert!(w[1] > w[0], "{steps:?} must rise");
         }
         // Even in code: no two gaps differ by more than one.
-        let gaps: Vec<i32> = steps
-            .windows(2)
-            .map(|w| i32::from(w[1]) - i32::from(w[0]))
-            .collect();
-        assert!(
-            gaps.iter().max().unwrap() - gaps.iter().min().unwrap() <= 1,
-            "{gaps:?}"
-        );
+        let gaps: Vec<i32> = steps.windows(2).map(|w| i32::from(w[1]) - i32::from(w[0])).collect();
+        assert!(gaps.iter().max().unwrap() - gaps.iter().min().unwrap() <= 1, "{gaps:?}");
     }
 
     /// Four pixels per step, and the same value all the way down each half.

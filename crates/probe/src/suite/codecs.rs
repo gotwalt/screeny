@@ -67,10 +67,7 @@ pub fn rules() -> Vec<Rule> {
 /// One frame per drain, spaced out. Sent back to back they would be a single
 /// drain and all but one would be *superseded* before anything tried to
 /// decode them - correct behaviour, and a useless test.
-fn send_each(
-    cx: &mut Ctx,
-    frames: &[(u8, Vec<u8>, &'static str)],
-) -> Result<(u32, u32, u32, Vec<String>), String> {
+fn send_each(cx: &mut Ctx, frames: &[(u8, Vec<u8>, &'static str)]) -> Result<(u32, u32, u32, Vec<String>), String> {
     let mut link = cx.claim()?;
     let mut last = Vec::new();
     for (c, p, what) in frames {
@@ -83,12 +80,7 @@ fn send_each(
     }
     cx.settle();
     let t = cx.telemetry()?;
-    Ok((
-        t.frames_shown,
-        t.frames_dropped_decode,
-        t.frames_rejected,
-        last,
-    ))
+    Ok((t.frames_shown, t.frames_dropped_decode, t.frames_rejected, last))
 }
 
 fn every_codec(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -137,16 +129,10 @@ fn checked_in_vectors(cx: &mut Ctx) -> Result<Outcome, String> {
     // These are what tie a device's decoders to the encoders card 002
     // actually measured: payloads nobody wrote for this device, decoded by it.
     let vs = vectors::load(&vectors::default_dir())?;
-    let frames: Vec<(u8, Vec<u8>, &'static str)> = vs
-        .iter()
-        .map(|v| (v.codec, v.payload.clone(), "vector"))
-        .collect();
+    let frames: Vec<(u8, Vec<u8>, &'static str)> = vs.iter().map(|v| (v.codec, v.payload.clone(), "vector")).collect();
     let n = frames.len() as u32;
     let (shown, dec, rej, _) = send_each(cx, &frames)?;
-    verdict(
-        shown == n && dec == 0 && rej == 0,
-        format!("{shown}/{n} shown, decode drops {dec}, rejected {rej}"),
-    )
+    verdict(shown == n && dec == 0 && rej == 0, format!("{shown}/{n} shown, decode drops {dec}, rejected {rej}"))
 }
 
 fn reserved_codecs(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -197,10 +183,8 @@ fn lz_trailing(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut p = enc::pal4_lz(&f);
     p.push(0x00); // one byte past the item that completed the index plane
     let good = enc::solid([30, 40, 50]).0;
-    let frames: Vec<(u8, Vec<u8>, &'static str)> = vec![
-        (codec::SOLID, good, "a good frame first"),
-        (codec::PAL4_LZ, p, "PAL4_LZ with one trailing byte"),
-    ];
+    let frames: Vec<(u8, Vec<u8>, &'static str)> =
+        vec![(codec::SOLID, good, "a good frame first"), (codec::PAL4_LZ, p, "PAL4_LZ with one trailing byte")];
     let (shown, dec, rej, _) = send_each(cx, &frames)?;
     verdict(
         shown == 1 && dec == 1 && rej == 0,

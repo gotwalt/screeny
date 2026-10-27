@@ -15,8 +15,7 @@ use std::time::Duration;
 
 use common::http::{self, Res};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
-    WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use screeny_device_api::route::{self, Method, Route};
 use screeny_device_api::{Accepted, FirmwareError, StreamState, WifiState};
@@ -26,12 +25,8 @@ use screeny_sim::{Config, SimDevice, WifiOutcome};
 /// including `POST /api/v1/wifi` - has something to do. `Slow` keeps the
 /// trial join in flight for the whole test instead of completing under it.
 fn portal_device() -> SimDevice {
-    SimDevice::start(Config {
-        start_in_portal: true,
-        wifi_outcome: WifiOutcome::Slow,
-        ..Config::for_test()
-    })
-    .expect("bind loopback")
+    SimDevice::start(Config { start_in_portal: true, wifi_outcome: WifiOutcome::Slow, ..Config::for_test() })
+        .expect("bind loopback")
 }
 
 fn online_device() -> SimDevice {
@@ -59,9 +54,7 @@ fn image() -> Vec<u8> {
 fn exercise(addr: SocketAddr, r: &Route) -> Res {
     match (r.method, r.path) {
         (Method::Get, path) => http::get(addr, path),
-        (Method::Post, route::WIFI) => {
-            http::post_form(addr, r.path, "ssid=Example-Wifi1&psk=password9")
-        }
+        (Method::Post, route::WIFI) => http::post_form(addr, r.path, "ssid=Example-Wifi1&psk=password9"),
         (Method::Post, route::SETTINGS) => http::post_json(addr, r.path, r#"{"brightness":96}"#),
         (Method::Post, route::FIRMWARE) => http::post_bytes(addr, r.path, &image()),
         (Method::Post, route::REBOOT) => http::post_json(addr, r.path, r#"{"confirm":"RBOO"}"#),
@@ -80,34 +73,10 @@ fn every_route_in_the_table_is_served() {
     let addr = api(&dev);
     for r in route::ROUTES {
         let res = exercise(addr, r);
-        assert_ne!(
-            res.status, 404,
-            "{:?} {} answered not_found: {}",
-            r.method,
-            r.path,
-            res.text()
-        );
-        assert_ne!(
-            res.status, 405,
-            "{:?} {} answered method_not_allowed: {}",
-            r.method,
-            r.path,
-            res.text()
-        );
-        assert_eq!(
-            res.status,
-            200,
-            "{:?} {} should have succeeded: {}",
-            r.method,
-            r.path,
-            res.text()
-        );
-        assert_eq!(
-            res.header("content-type"),
-            Some("application/json"),
-            "{} is not JSON",
-            r.path
-        );
+        assert_ne!(res.status, 404, "{:?} {} answered not_found: {}", r.method, r.path, res.text());
+        assert_ne!(res.status, 405, "{:?} {} answered method_not_allowed: {}", r.method, r.path, res.text());
+        assert_eq!(res.status, 200, "{:?} {} should have succeeded: {}", r.method, r.path, res.text());
+        assert_eq!(res.header("content-type"), Some("application/json"), "{} is not JSON", r.path);
     }
     dev.shutdown();
 }
@@ -134,20 +103,15 @@ fn every_reply_parses_as_the_type_the_firmware_will_send() {
     for w in nets.networks.windows(2) {
         assert!(w[0].rssi >= w[1].rssi, "strongest first");
     }
-    assert!(
-        nets.networks.len() <= screeny_device_api::reply::MAX_NETWORKS,
-        "the cap is the crate's"
-    );
+    assert!(nets.networks.len() <= screeny_device_api::reply::MAX_NETWORKS, "the cap is the crate's");
 
     let wifi: WifiReply = http::get(addr, route::WIFI).parse();
     assert_eq!(wifi.state, WifiState::Disconnected);
 
-    let accepted: AcceptedReply =
-        http::post_form(addr, route::WIFI, "ssid=Example-Wifi1&psk=password9").parse();
+    let accepted: AcceptedReply = http::post_form(addr, route::WIFI, "ssid=Example-Wifi1&psk=password9").parse();
     assert_eq!(accepted.result, Accepted::Trying);
 
-    let settings: SettingsReply = http::post_json(addr, route::SETTINGS, r#"{"brightness":96}"#)
-        .parse();
+    let settings: SettingsReply = http::post_json(addr, route::SETTINGS, r#"{"brightness":96}"#).parse();
     assert_eq!(settings.brightness, 96);
 
     let img = image();
@@ -155,12 +119,10 @@ fn every_reply_parses_as_the_type_the_firmware_will_send() {
     assert!(fw.ok);
     assert_eq!(fw.written as usize, img.len());
 
-    let rebooting: AcceptedReply =
-        http::post_json(addr, route::REBOOT, r#"{"confirm":"RBOO"}"#).parse();
+    let rebooting: AcceptedReply = http::post_json(addr, route::REBOOT, r#"{"confirm":"RBOO"}"#).parse();
     assert_eq!(rebooting.result, Accepted::Rebooting);
 
-    let identifying: AcceptedReply =
-        http::post_json(addr, route::IDENTIFY, r#"{"duration_ms":200}"#).parse();
+    let identifying: AcceptedReply = http::post_json(addr, route::IDENTIFY, r#"{"duration_ms":200}"#).parse();
     assert_eq!(identifying.result, Accepted::Identifying);
 
     dev.shutdown();
@@ -346,11 +308,7 @@ fn the_firmware_route_checks_what_it_can_and_installs_nothing() {
 
 #[test]
 fn settings_are_clamped_by_the_same_code_udp_clamps_with() {
-    let dev = SimDevice::start(Config {
-        brightness_cap: 100,
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { brightness_cap: 100, ..Config::for_test() }).expect("bind loopback");
     let addr = api(&dev);
     let sim = dev.handle();
 
@@ -360,8 +318,7 @@ fn settings_are_clamped_by_the_same_code_udp_clamps_with() {
 
     // A subset request leaves the rest alone, and the reply is the whole
     // state rather than an echo.
-    let res: SettingsReply =
-        http::post_json(addr, route::SETTINGS, r#"{"name":"Desk panel"}"#).parse();
+    let res: SettingsReply = http::post_json(addr, route::SETTINGS, r#"{"name":"Desk panel"}"#).parse();
     assert_eq!(res.name.as_str(), "Desk panel");
     assert_eq!(res.brightness, 100);
     assert_eq!(sim.snapshot().name, "Desk panel");
@@ -392,14 +349,12 @@ fn the_colour_order_is_a_setting_the_simulator_stores_and_reports() {
     let res: SettingsReply = http::post_json(addr, route::SETTINGS, "{}").parse();
     assert_eq!(res.colour_order, Some(ColourOrder::Rotated));
 
-    let res: SettingsReply =
-        http::post_json(addr, route::SETTINGS, r#"{"colour_order":"published"}"#).parse();
+    let res: SettingsReply = http::post_json(addr, route::SETTINGS, r#"{"colour_order":"published"}"#).parse();
     assert_eq!(res.colour_order, Some(ColourOrder::Published));
     assert_eq!(sim.colour_order(), ColourOrder::Published);
 
     // A request that does not mention it leaves it alone.
-    let res: SettingsReply =
-        http::post_json(addr, route::SETTINGS, r#"{"brightness":10}"#).parse();
+    let res: SettingsReply = http::post_json(addr, route::SETTINGS, r#"{"brightness":10}"#).parse();
     assert_eq!(res.colour_order, Some(ColourOrder::Published));
 
     // A word the API does not have is refused, not guessed at.
@@ -409,11 +364,8 @@ fn the_colour_order_is_a_setting_the_simulator_stores_and_reports() {
     dev.shutdown();
 
     // And it can start out the other way round.
-    let dev = SimDevice::start(Config {
-        colour_order: ColourOrder::Published,
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev =
+        SimDevice::start(Config { colour_order: ColourOrder::Published, ..Config::for_test() }).expect("bind loopback");
     let res: SettingsReply = http::post_json(api(&dev), route::SETTINGS, "{}").parse();
     assert_eq!(res.colour_order, Some(ColourOrder::Published));
     dev.shutdown();
@@ -429,25 +381,16 @@ fn a_reboot_draws_a_new_boot_id_over_http_and_over_udp() {
 
     let first: StatusReply = http::get(addr, route::STATUS).parse();
     let again: StatusReply = http::get(addr, route::STATUS).parse();
-    assert_eq!(
-        first.boot_id, again.boot_id,
-        "the id is stable while the device is not restarting"
-    );
+    assert_eq!(first.boot_id, again.boot_id, "the id is stable while the device is not restarting");
 
-    assert_eq!(
-        http::post_json(addr, route::REBOOT, r#"{"confirm":"RBOO"}"#).status,
-        200
-    );
+    assert_eq!(http::post_json(addr, route::REBOOT, r#"{"confirm":"RBOO"}"#).status, 200);
     let after: StatusReply = http::get(addr, route::STATUS).parse();
     assert_ne!(after.boot_id, first.boot_id, "HTTP reboot: a new boot_id");
 
     // The same must be true of the UDP op, because it is the same code path.
     let ctrl = common::Ctrl::new(sim.control_addr());
     ctrl.call(&Request::Reboot, 77).expect("reboot reply");
-    let sim_id = sim
-        .wait_until(Duration::from_secs(2), |_| true)
-        .map(|_| sim.boot_id())
-        .unwrap();
+    let sim_id = sim.wait_until(Duration::from_secs(2), |_| true).map(|_| sim.boot_id()).unwrap();
     assert_ne!(sim_id, after.boot_id, "UDP reboot: a new boot_id too");
 
     dev.shutdown();
@@ -479,8 +422,7 @@ fn in_the_portal_a_foreign_host_gets_the_setup_page_not_a_redirect() {
         assert_eq!(res.status, 200, "{host}{path}");
         assert_eq!(res.header("location"), None, "{host}{path}: a redirect");
         assert!(
-            res.header("content-type")
-                .is_some_and(|c| c.starts_with("text/html")),
+            res.header("content-type").is_some_and(|c| c.starts_with("text/html")),
             "{host}{path}: {:?}",
             res.header("content-type")
         );
@@ -494,11 +436,7 @@ fn in_the_portal_a_foreign_host_gets_the_setup_page_not_a_redirect() {
             "{host}{path}: the length has to be there for Android to read it"
         );
         // The sheet must not cache the setup page: it changes on every post.
-        assert_eq!(
-            res.header("cache-control"),
-            Some("no-store"),
-            "{host}{path}"
-        );
+        assert_eq!(res.header("cache-control"), Some("no-store"), "{host}{path}");
     }
     dev.shutdown();
 }
@@ -530,11 +468,7 @@ fn our_own_hosts_never_get_the_catch_all_even_in_the_portal() {
         assert_eq!(res.status, 200, "{host}");
         // Both answers are a 200 now, so the *body* is what tells them apart:
         // the real route, not the setup page standing in for it.
-        assert_eq!(
-            res.header("content-type"),
-            Some("application/json"),
-            "{host} got the catch-all"
-        );
+        assert_eq!(res.header("content-type"), Some("application/json"), "{host} got the catch-all");
     }
     dev.shutdown();
 }
@@ -545,9 +479,7 @@ fn the_index_is_a_placeholder_that_says_so_and_links_the_api() {
     let addr = api(&dev);
     let res = http::get(addr, "/");
     assert_eq!(res.status, 200);
-    assert!(res
-        .header("content-type")
-        .is_some_and(|c| c.starts_with("text/html")));
+    assert!(res.header("content-type").is_some_and(|c| c.starts_with("text/html")));
     let body = res.text();
     assert!(body.contains("card 222"), "it should say whose page this is");
     for r in route::ROUTES {
@@ -564,11 +496,7 @@ fn the_index_is_a_placeholder_that_says_so_and_links_the_api() {
 fn shutdown_releases_the_port() {
     use std::net::TcpListener;
 
-    let dev = SimDevice::start(Config {
-        http_port: 0,
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { http_port: 0, ..Config::for_test() }).expect("bind loopback");
     let addr = api(&dev);
     assert_eq!(http::get(addr, route::STATUS).status, 200);
     dev.shutdown();
@@ -576,11 +504,7 @@ fn shutdown_releases_the_port() {
     // If the acceptor thread were still alive the listener would still hold
     // the port. This is the portable version of "no thread left behind".
     let re = TcpListener::bind(addr);
-    assert!(
-        re.is_ok(),
-        "the HTTP listener outlived shutdown(): {:?}",
-        re.err()
-    );
+    assert!(re.is_ok(), "the HTTP listener outlived shutdown(): {:?}", re.err());
 }
 
 /// Two simulators started with the *default* HTTP settings both come up.
@@ -593,10 +517,7 @@ fn shutdown_releases_the_port() {
 /// HTTP port is under test.
 #[test]
 fn two_simulators_with_default_http_settings_both_start() {
-    let cfg = || Config {
-        http_port: screeny_sim::DEFAULT_HTTP_PORT,
-        ..Config::for_test()
-    };
+    let cfg = || Config { http_port: screeny_sim::DEFAULT_HTTP_PORT, ..Config::for_test() };
     // The first may itself fall back, if another process on this machine
     // already holds 8080. That is the behaviour, not a caveat.
     let a = SimDevice::start(cfg()).expect("the first simulator starts");
@@ -617,11 +538,7 @@ fn a_named_http_port_that_is_busy_is_an_error() {
     let first = SimDevice::start(Config::for_test()).expect("bind loopback");
     let taken = api(&first).port();
 
-    let started = SimDevice::start(Config {
-        http_port: taken,
-        http_port_explicit: true,
-        ..Config::for_test()
-    });
+    let started = SimDevice::start(Config { http_port: taken, http_port_explicit: true, ..Config::for_test() });
     match started {
         Ok(dev) => {
             dev.shutdown();
@@ -635,11 +552,7 @@ fn a_named_http_port_that_is_busy_is_an_error() {
 
 #[test]
 fn the_http_server_can_be_turned_off() {
-    let dev = SimDevice::start(Config {
-        http: false,
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { http: false, ..Config::for_test() }).expect("bind loopback");
     assert_eq!(dev.http_addr(), None);
     assert_eq!(dev.handle().http_url(), None);
     // ...and the UDP half is entirely unaffected, which is the whole point of
@@ -653,10 +566,7 @@ fn a_request_with_no_host_header_is_served_rather_than_caught() {
     // HTTP/1.0, or a script on a raw socket. Not a captive-portal probe.
     let dev = portal_device();
     let addr = api(&dev);
-    let wire = http::raw(
-        addr,
-        format!("GET {} HTTP/1.1\r\nConnection: close\r\n\r\n", route::STATUS).as_bytes(),
-    );
+    let wire = http::raw(addr, format!("GET {} HTTP/1.1\r\nConnection: close\r\n\r\n", route::STATUS).as_bytes());
     let res = http::parse(&wire);
     assert_eq!(res.status, 200);
     assert_eq!(res.header("content-type"), Some("application/json"));

@@ -22,14 +22,7 @@ const DIGITS_COLON: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'
 
 /// The named stops of a `font` parameter, in order. Hand this straight to
 /// `choice(..)`: `choice("font", "Numerals", faces::NAMES, faces::DEFAULT)`.
-pub const NAMES: &[&str] = &[
-    "Vesta",
-    "Terminus Bold",
-    "Terminus",
-    "Spleen",
-    "Dina",
-    "Micro Grotesk",
-];
+pub const NAMES: &[&str] = &["Vesta", "Terminus Bold", "Terminus", "Spleen", "Dina", "Micro Grotesk"];
 
 /// Which face a patch starts on.
 pub const DEFAULT: f32 = 1.0;
@@ -48,75 +41,35 @@ pub static FACES: &[Face] = &[
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/terminus-font-4.39/ter-u32b.bdf",
         note: "13 x 20 at 1:1, 3-LED strokes",
         glyphs: DIGITS_COLON,
-        ink: Ink::Bits(Bitmap {
-            w: 13,
-            h: 20,
-            scale: 1.0,
-            x0: -7.0,
-            y0: -10.0,
-            crisp: true,
-            rows: &TERMINUS_BOLD,
-        }),
+        ink: Ink::Bits(Bitmap { w: 13, h: 20, scale: 1.0, x0: -7.0, y0: -10.0, crisp: true, rows: &TERMINUS_BOLD }),
     },
     Face {
         name: "Terminus",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/terminus-font-4.39/ter-u32n.bdf",
         note: "12 x 20 at 1:1, 2-LED strokes",
         glyphs: DIGITS_COLON,
-        ink: Ink::Bits(Bitmap {
-            w: 12,
-            h: 20,
-            scale: 1.0,
-            x0: -6.0,
-            y0: -10.0,
-            crisp: true,
-            rows: &TERMINUS,
-        }),
+        ink: Ink::Bits(Bitmap { w: 12, h: 20, scale: 1.0, x0: -6.0, y0: -10.0, crisp: true, rows: &TERMINUS }),
     },
     Face {
         name: "Spleen",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/spleen/spleen-16x32.bdf",
         note: "12 x 20 at 1:1, 2-LED strokes, squarer",
         glyphs: DIGITS_COLON,
-        ink: Ink::Bits(Bitmap {
-            w: 12,
-            h: 20,
-            scale: 1.0,
-            x0: -6.0,
-            y0: -10.0,
-            crisp: true,
-            rows: &SPLEEN,
-        }),
+        ink: Ink::Bits(Bitmap { w: 12, h: 20, scale: 1.0, x0: -6.0, y0: -10.0, crisp: true, rows: &SPLEEN }),
     },
     Face {
         name: "Dina",
         source: "github.com/Tecate/bitmap-fonts 5c101c91bf bitmap/dina/Dina_r400-10.bdf",
         note: "6 x 9 at x2: 2 x 2-LED pixels",
         glyphs: DIGITS_COLON,
-        ink: Ink::Bits(Bitmap {
-            w: 6,
-            h: 9,
-            scale: 2.0,
-            x0: -6.0,
-            y0: -9.0,
-            crisp: true,
-            rows: &DINA,
-        }),
+        ink: Ink::Bits(Bitmap { w: 6, h: 9, scale: 2.0, x0: -6.0, y0: -9.0, crisp: true, rows: &DINA }),
     },
     Face {
         name: "Micro Grotesk",
         source: "github.com/eliheuer/micro-grotesk 86a679272a fonts/MicroGrotesk[wght].ttf",
         note: "an outline face, 4 samples per LED; no colon of its own",
         glyphs: DIGITS,
-        ink: Ink::Bits(Bitmap {
-            w: 49,
-            h: 88,
-            scale: 0.25,
-            x0: -6.0,
-            y0: -11.0,
-            crisp: false,
-            rows: &MICRO_GROTESK,
-        }),
+        ink: Ink::Bits(Bitmap { w: 49, h: 88, scale: 0.25, x0: -6.0, y0: -11.0, crisp: false, rows: &MICRO_GROTESK }),
     },
 ];
 
@@ -619,4 +572,3 @@ static MICRO_GROTESK: [u64; 880] = [
     0x00000003fffffc00, 0x00000001fffff800, 0x000000007fffe000,
     0x000000001fff8000,
 ];
-

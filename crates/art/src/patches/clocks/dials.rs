@@ -25,12 +25,12 @@
 //! Motion is the clocks' ambient engine (`clocks/ambient.rs`): every hand a
 //! servo under one motor's speed and acceleration.
 
-use crate::frame::{Frame, W};
-use crate::patch::{choice, param, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use super::ambient::{Ambient, Mood, MOODS};
 use super::dance::Motor;
 use super::draw::{Dials, Tint};
 use super::Hands as Pair;
+use crate::frame::{Frame, W};
+use crate::patch::{choice, param, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 
 pub const DEF: PatchDef = PatchDef {
@@ -128,7 +128,18 @@ fn make(seed: u64) -> Box<dyn Patch> {
     let grid = 0;
     let field = Ambient::new(&mut rng, mood, GRIDS[grid].0, GRIDS[grid].1, W as f32 / GRIDS[grid].0 as f32);
     eprintln!("dials: t=0 {}", field.name());
-    Box::new(Flow { rng, grid, angles: rest(GRIDS[grid]), field, mood, change_at: -1.0, variety: Default::default(), tinge: None, doing: String::new(), move_on: false })
+    Box::new(Flow {
+        rng,
+        grid,
+        angles: rest(GRIDS[grid]),
+        field,
+        mood,
+        change_at: -1.0,
+        variety: Default::default(),
+        tinge: None,
+        doing: String::new(),
+        move_on: false,
+    })
 }
 
 /// Every dial starts with both hands at 7:30, as an idle ClockClock does.
@@ -267,10 +278,31 @@ impl Patch for Flow {
         let tints = [
             // Light enough to stay legible when the highlight falls on blue,
             // the panel's weakest primary.
-            Tint { hue: hue + ctx.get("contrast") * lit, chroma: mix(ctx.get("chroma"), 0.15), light: mix(ctx.get("light"), 0.82) },
-            Tint { hue: ctx.get("hue2") + wheel, chroma: mix(ctx.get("chroma2"), 0.01), light: mix(ctx.get("light"), 0.97) },
+            Tint {
+                hue: hue + ctx.get("contrast") * lit,
+                chroma: mix(ctx.get("chroma"), 0.15),
+                light: mix(ctx.get("light"), 0.82),
+            },
+            Tint {
+                hue: ctx.get("hue2") + wheel,
+                chroma: mix(ctx.get("chroma2"), 0.01),
+                light: mix(ctx.get("light"), 0.97),
+            },
         ];
         let mark = grip * ctx.get("mark");
-        Dials { angles: &self.angles, cols, rows, cell, lens, half, tip: ctx.get("tip"), tints, rest: &[], ring: 0.0, mark }.draw()
+        Dials {
+            angles: &self.angles,
+            cols,
+            rows,
+            cell,
+            lens,
+            half,
+            tip: ctx.get("tip"),
+            tints,
+            rest: &[],
+            ring: 0.0,
+            mark,
+        }
+        .draw()
     }
 }

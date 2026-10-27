@@ -9,9 +9,7 @@
 //! selection code and `esp-bootloader-esp-idf 0.6.0`'s sequence arithmetic
 //! written down.
 
-use screeny_otastate::model::{
-    every_cut, upload_and_activate, Cut, Damage, Device, Image, OtaData, Ran,
-};
+use screeny_otastate::model::{every_cut, upload_and_activate, Cut, Damage, Device, Image, OtaData, Ran};
 use screeny_otastate::{Boot, FwSlot, FwState, RevertReason};
 
 /// A device as `tools/fw-run.sh` leaves it, booted once.
@@ -41,10 +39,7 @@ fn a_settled_boot_writes_nothing_to_otadata_however_many_times_it_reboots() {
         dev.power_on();
         assert_eq!(dev.run(), Ran::Settled);
     }
-    assert_eq!(
-        dev.otadata, before,
-        "a boot that is not a trial must not rewrite otadata"
-    );
+    assert_eq!(dev.otadata, before, "a boot that is not a trial must not rewrite otadata");
 }
 
 #[test]
@@ -79,15 +74,9 @@ fn every_interruption_of_an_activation_leaves_a_device_that_boots() {
         // Whether or not the activation reached its own reset, the next event
         // is a boot: losing power *is* a reset.
         dev.power_on();
-        assert!(
-            dev.running.is_some(),
-            "{cut:?}: the device did not boot at all"
-        );
+        assert!(dev.running.is_some(), "{cut:?}: the device did not boot at all");
         let ran = dev.slots[dev.running.unwrap() as usize];
-        assert!(
-            ran == Image::Good,
-            "{cut:?}: booted {ran:?}, which is not a working image"
-        );
+        assert!(ran == Image::Good, "{cut:?}: booted {ran:?}, which is not a working image");
         assert!(reached_reset || cut != Cut::None);
     }
 }
@@ -113,11 +102,7 @@ fn an_activation_interrupted_before_the_state_write_still_puts_the_image_on_tria
     upload_and_activate(&mut dev, Image::Good, Cut::BeforeMarkNew);
     dev.power_on();
     assert_eq!(dev.running, Some(1), "the staged slot is selected");
-    assert_eq!(
-        dev.boot,
-        Boot::Unproven,
-        "and the bootloader did not put it on trial"
-    );
+    assert_eq!(dev.boot, Boot::Unproven, "and the bootloader did not put it on trial");
     assert!(dev.boot.on_trial(), "so the firmware does");
     assert_eq!(dev.run(), Ran::Confirmed);
     assert_eq!(dev.otadata.current_state(), Ok(FwState::Valid));
@@ -186,11 +171,7 @@ fn a_panic_during_the_trial_is_rolled_back_by_the_bootloader_alone() {
     upload_and_activate(&mut dev, Image::Panics, Cut::None);
     dev.power_on();
     assert_eq!(dev.running, Some(1));
-    assert_eq!(
-        dev.run(),
-        Ran::ResetWithoutConfirming,
-        "the app writes nothing at all on this path"
-    );
+    assert_eq!(dev.run(), Ran::ResetWithoutConfirming, "the app writes nothing at all on this path");
 
     dev.power_on();
     assert_eq!(dev.running, Some(0));
@@ -233,11 +214,7 @@ fn power_lost_during_the_confirm_write_un_installs_rather_than_half_installs() {
         let _ = dev.otadata.set_state(FwState::Valid, Some(damage));
 
         dev.power_on();
-        assert_eq!(
-            dev.running,
-            Some(0),
-            "{damage:?}: an interrupted confirm reverts, which is the safe direction"
-        );
+        assert_eq!(dev.running, Some(0), "{damage:?}: an interrupted confirm reverts, which is the safe direction");
     }
 }
 
@@ -274,11 +251,7 @@ fn an_update_after_a_rollback_still_activates() {
     assert_eq!(dev.settle(5), 2);
     assert_eq!(dev.running, Some(0));
     assert_eq!(dev.boot, Boot::Reverted(RevertReason::Aborted));
-    assert_eq!(
-        dev.otadata.current_app(),
-        Ok(Some(1)),
-        "otadata still names the slot it rolled back from"
-    );
+    assert_eq!(dev.otadata.current_app(), Ok(Some(1)), "otadata still names the slot it rolled back from");
 
     // Now a good image into the same slot.
     assert_eq!(dev.inactive(), Some(1));
@@ -308,14 +281,7 @@ fn a_run_of_bad_updates_never_leaves_the_device_off_the_air() {
     // Six updates in a row, each one bad in a different way, each one reverted.
     // The device runs the same good image throughout.
     let mut dev = flashed();
-    for bad in [
-        Image::NeverHealthy,
-        Image::Panics,
-        Image::Hangs,
-        Image::NeverHealthy,
-        Image::Panics,
-        Image::Hangs,
-    ] {
+    for bad in [Image::NeverHealthy, Image::Panics, Image::Hangs, Image::NeverHealthy, Image::Panics, Image::Hangs] {
         upload_and_activate(&mut dev, bad, Cut::None);
         assert_eq!(dev.settle(5), 2, "{bad:?} took more than one retry");
         assert_eq!(dev.running, Some(0), "{bad:?}");
@@ -386,8 +352,5 @@ fn the_slot_words_are_the_ones_the_api_reports() {
     upload_and_activate(&mut dev, Image::Good, Cut::None);
     dev.power_on();
     assert_eq!(dev.running, Some(1));
-    assert_eq!(
-        screeny_otastate::classify(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify),
-        dev.boot
-    );
+    assert_eq!(screeny_otastate::classify(FwSlot::Ota1, FwSlot::Ota1, FwState::PendingVerify), dev.boot);
 }

@@ -107,7 +107,10 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
     for _ in 0..80 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         status = get(at, "/api/v1/panel_status").await.json();
-        if status["connected"] == true && status["frames_sent"].as_u64().unwrap_or(0) > 5 && status["indexed_exact"].as_u64().unwrap_or(0) > 0 {
+        if status["connected"] == true
+            && status["frames_sent"].as_u64().unwrap_or(0) > 5
+            && status["indexed_exact"].as_u64().unwrap_or(0) > 0
+        {
             break;
         }
     }
@@ -165,10 +168,7 @@ async fn send_to_panel_streams_the_picture_to_the_device() {
         assert_eq!(s.decoded, last.decoded, "a paused patch sent two different frames");
     }
     let now = get(at, "/api/v1/panel_status").await.json();
-    assert_eq!(
-        now["frames_dropped"], dropped_while_connecting,
-        "the link dropped a frame after it was up: {now}"
-    );
+    assert_eq!(now["frames_dropped"], dropped_while_connecting, "the link dropped a frame after it was up: {now}");
     println!(
         "send_to_panel: {} offered, {} sent, {} coalesced, {} dropped before the link was up; \
          codec {:#04x}, {} B/frame, exact {}, fallback {}",
@@ -208,12 +208,11 @@ async fn set_panel_hands_the_panel_over_and_takes_it_back() {
     let at = studio.addr;
 
     // A panel the studio is attached to and streaming to, the ordinary way.
-    let added = post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"bench","play":true}}"#)).await;
+    let added =
+        post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"bench","play":true}}"#)).await;
     assert_eq!(added.status, 200, "{}", String::from_utf8_lossy(&added.body));
-    until(Duration::from_secs(20), "the panel to be LIVE", || async {
-        dev.handle().snapshot().state == State::Live
-    })
-    .await;
+    until(Duration::from_secs(20), "the panel to be LIVE", || async { dev.handle().snapshot().state == State::Live })
+        .await;
 
     // ---- {"on":false} : the panel is really let go. ----
     let off = post(at, "/api/v1/set_panel", r#"{"on":false}"#).await;
@@ -423,10 +422,7 @@ async fn a_panel_that_comes_back_twice_says_two() {
         // `>=`, not `==`: the studio re-aims on its own when it learns where a
         // device is, and that is one more link-up at a moment this test does
         // not control. `reconnects` is the number that has to be exact.
-        assert!(
-            ups(&back) >= base + round,
-            "each round away is at least one more link-up: {health}"
-        );
+        assert!(ups(&back) >= base + round, "each round away is at least one more link-up: {health}");
     }
 
     // And the studio letting the panel go is not the panel dropping: output

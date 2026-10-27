@@ -60,7 +60,6 @@ impl V3 {
             fallback
         }
     }
-
 }
 
 /// A unit quaternion, `w + xi + yj + zk`, rotating leaf-local space into

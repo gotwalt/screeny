@@ -114,11 +114,7 @@ fn parse_args() -> Result<Args, String> {
             "--name" => {
                 let v = it.next().ok_or("--name needs a value")?;
                 let v = v.trim_end_matches('.');
-                a.host = if v.ends_with(".local") {
-                    v.to_string()
-                } else {
-                    format!("{v}.local")
-                };
+                a.host = if v.ends_with(".local") { v.to_string() } else { format!("{v}.local") };
             }
             "--ctrl" => a.ctrl_port = it.next().ok_or("--ctrl needs a value")?.parse().map_err(|_| "bad port")?,
             "--vectors" => a.vectors = it.next().ok_or("--vectors needs a value")?,
@@ -173,10 +169,7 @@ fn run() -> Result<bool, String> {
         "wifi" => cmd_wifi(ctrl_addr),
         "brightness" => {
             let n = arg_num(rest, 0).ok_or("brightness needs a level 0..=255")?;
-            match Control::connect(ctrl_addr)
-                .map_err(|e| e.to_string())?
-                .request(Request::SetBrightness(n as u8))?
-            {
+            match Control::connect(ctrl_addr).map_err(|e| e.to_string())?.request(Request::SetBrightness(n as u8))? {
                 OwnedReply::Brightness { applied } => {
                     println!("brightness applied {applied}");
                     Ok(true)
@@ -189,12 +182,7 @@ fn run() -> Result<bool, String> {
         }
         "identify" => {
             let ms = arg_num(rest, 0).ok_or("identify needs a duration in ms")?;
-            simple(
-                ctrl_addr,
-                Request::Identify {
-                    duration_ms: ms as u16,
-                },
-            )
+            simple(ctrl_addr, Request::Identify { duration_ms: ms as u16 })
         }
         "idle" => {
             let m = arg_num(rest, 0).ok_or("idle needs a mode 0..=3")?;
@@ -246,9 +234,7 @@ fn has_flag(rest: &[String], name: &str) -> bool {
 }
 
 fn simple(addr: SocketAddr, req: Request<'_>) -> Result<bool, String> {
-    let r = Control::connect(addr)
-        .map_err(|e| e.to_string())?
-        .request(req)?;
+    let r = Control::connect(addr).map_err(|e| e.to_string())?.request(req)?;
     match r.err_code() {
         Some(c) => {
             println!("error reply {:?} ({c:#04x})", ErrorCode::from_u8(c));
@@ -266,19 +252,13 @@ fn simple(addr: SocketAddr, req: Request<'_>) -> Result<bool, String> {
 // ---------------------------------------------------------------------------
 
 fn cmd_info(addr: SocketAddr) -> Result<bool, String> {
-    let r = Control::connect(addr)
-        .map_err(|e| e.to_string())?
-        .request(Request::GetInfo)?;
+    let r = Control::connect(addr).map_err(|e| e.to_string())?.request(Request::GetInfo)?;
     let OwnedReply::Info(body) = r else {
         return Err(format!("expected an info reply, got {r:?}"));
     };
     println!("GET_INFO body: {} bytes", body.len());
     for e in txt::iter(&body) {
-        println!(
-            "  {}={}",
-            String::from_utf8_lossy(e.key),
-            String::from_utf8_lossy(e.value.unwrap_or(b""))
-        );
+        println!("  {}={}", String::from_utf8_lossy(e.key), String::from_utf8_lossy(e.value.unwrap_or(b"")));
     }
     match txt::DeviceInfo::parse(&body) {
         Ok(info) => {
@@ -289,10 +269,7 @@ fn cmd_info(addr: SocketAddr) -> Result<bool, String> {
             );
             println!(
                 "codecs: {}",
-                info.codec_ids()
-                    .map(|c| format!("{} ({})", vectors::codec_name(c), c))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                info.codec_ids().map(|c| format!("{} ({})", vectors::codec_name(c), c)).collect::<Vec<_>>().join(", ")
             );
             println!("best common codec: {:?}", info.best_codec(&mine));
             Ok(info.codec_ids().count() == 5)
@@ -353,19 +330,13 @@ fn cmd_ping(addr: SocketAddr, n: u64) -> Result<bool, String> {
         } else {
             format!("{:5.0}", edges[i - 1])
         };
-        println!(
-            "  {label} ms  {:4}  {}",
-            count,
-            "#".repeat((count * 40 / rtts.len()).max(1))
-        );
+        println!("  {label} ms  {:4}  {}", count, "#".repeat((count * 40 / rtts.len()).max(1)));
     }
     Ok(lost == 0)
 }
 
 fn cmd_stats(addr: SocketAddr) -> Result<bool, String> {
-    let r = Control::connect(addr)
-        .map_err(|e| e.to_string())?
-        .request(Request::Telemetry)?;
+    let r = Control::connect(addr).map_err(|e| e.to_string())?.request(Request::Telemetry)?;
     let OwnedReply::Telemetry(t) = r else {
         return Err(format!("expected telemetry, got {r:?}"));
     };
@@ -390,22 +361,12 @@ fn print_telemetry(t: &Telemetry) {
     println!("render_us_max             {}", t.render_us_max);
     println!("rssi_dbm                  {}", t.rssi_dbm);
     println!("brightness                {}", t.brightness);
-    println!(
-        "state                     {} ({})",
-        t.state,
-        state_name(t.state)
-    );
-    println!(
-        "last_codec                {:#04x} ({})",
-        t.last_codec,
-        vectors::codec_name(t.last_codec)
-    );
+    println!("state                     {} ({})", t.state, state_name(t.state));
+    println!("last_codec                {:#04x} ({})", t.last_codec, vectors::codec_name(t.last_codec));
 }
 
 fn cmd_wifi(addr: SocketAddr) -> Result<bool, String> {
-    let r = Control::connect(addr)
-        .map_err(|e| e.to_string())?
-        .request(Request::GetWifi)?;
+    let r = Control::connect(addr).map_err(|e| e.to_string())?.request(Request::GetWifi)?;
     match r {
         OwnedReply::Wifi { ssid, state } => {
             println!("ssid {ssid:?} state {state}");
@@ -423,16 +384,8 @@ fn cmd_bench(addr: SocketAddr, rest: &[String]) -> Result<bool, String> {
     let c = rest.first().ok_or("bench needs a command letter")?;
     let arg = arg_num(rest, 1).ok_or("bench needs an argument")? as u8;
     let cmd = c.as_bytes()[0];
-    let mut pkt = vec![
-        screeny_proto::MAGIC,
-        (screeny_proto::VERSION << 4) | screeny_proto::TYPE_CONTROL,
-        0x80,
-        0,
-        7,
-        0,
-        2,
-        0,
-    ];
+    let mut pkt =
+        vec![screeny_proto::MAGIC, (screeny_proto::VERSION << 4) | screeny_proto::TYPE_CONTROL, 0x80, 0, 7, 0, 2, 0];
     pkt.push(cmd);
     pkt.push(arg);
     let mut ctrl = Control::connect(addr).map_err(|e| e.to_string())?;
@@ -454,20 +407,9 @@ enum Source {
     Pattern,
 }
 
-fn cmd_stream(
-    args: &Args,
-    frame_addr: SocketAddr,
-    ctrl_addr: SocketAddr,
-    rest: &[String],
-) -> Result<bool, String> {
-    let fps: f64 = flag(rest, "--fps")
-        .unwrap_or_else(|| "30".into())
-        .parse()
-        .map_err(|_| "bad --fps")?;
-    let secs: f64 = flag(rest, "--secs")
-        .unwrap_or_else(|| "10".into())
-        .parse()
-        .map_err(|_| "bad --secs")?;
+fn cmd_stream(args: &Args, frame_addr: SocketAddr, ctrl_addr: SocketAddr, rest: &[String]) -> Result<bool, String> {
+    let fps: f64 = flag(rest, "--fps").unwrap_or_else(|| "30".into()).parse().map_err(|_| "bad --fps")?;
+    let secs: f64 = flag(rest, "--secs").unwrap_or_else(|| "10".into()).parse().map_err(|_| "bad --secs")?;
     let want = flag(rest, "--codec").unwrap_or_else(|| "all".into());
     let send_final = has_flag(rest, "--final");
 
@@ -495,9 +437,7 @@ fn cmd_stream(
     // its first half-dozen frames are correctly refused with `BUSY` - which
     // is the device behaving and the measurement being wrong.
     ctrl.request(Request::Release)?;
-    std::thread::sleep(Duration::from_millis(
-        screeny_proto::LOCK_MS as u64 / 5 + 50,
-    ));
+    std::thread::sleep(Duration::from_millis(screeny_proto::LOCK_MS as u64 / 5 + 50));
     // A clean slate, so every number below is about this run and nothing else.
     ctrl.request(Request::ResetStats)?;
     let before = telemetry(&mut ctrl)?;
@@ -521,12 +461,7 @@ fn cmd_stream(
             Source::Vectors(v) => {
                 let v = &v[(n as usize) % v.len()];
                 if n == 0 {
-                    println!(
-                        "  first vector: {} ({}, {} B)",
-                        v.name,
-                        vectors::codec_name(v.codec),
-                        v.payload.len()
-                    );
+                    println!("  first vector: {} ({}, {} B)", v.name, vectors::codec_name(v.codec), v.payload.len());
                 }
                 (v.codec, v.payload.clone())
             }
@@ -538,10 +473,7 @@ fn cmd_stream(
                 if n % 8 == 7 {
                     (screeny_proto::dec::codec::SOLID, vectors::solid_frame(n))
                 } else {
-                    (
-                        screeny_proto::dec::codec::PAL4_LZ,
-                        vectors::pal4_frame(n),
-                    )
+                    (screeny_proto::dec::codec::PAL4_LZ, vectors::pal4_frame(n))
                 }
             }
         };
@@ -551,8 +483,7 @@ fn cmd_stream(
         if stats_req {
             flags |= screeny_proto::F_STATS_REQ;
         }
-        link.send(codec, flags, &payload)
-            .map_err(|e| e.to_string())?;
+        link.send(codec, flags, &payload).map_err(|e| e.to_string())?;
         bytes += payload.len() as u64 + 8;
 
         for r in link.poll() {
@@ -577,8 +508,7 @@ fn cmd_stream(
             Source::Vectors(v) => (v[0].codec, v[0].payload.clone()),
             Source::Pattern => (screeny_proto::dec::codec::SOLID, vectors::solid_frame(0)),
         };
-        link.send(codec, screeny_proto::F_KEY | screeny_proto::F_FINAL, &payload)
-            .map_err(|e| e.to_string())?;
+        link.send(codec, screeny_proto::F_KEY | screeny_proto::F_FINAL, &payload).map_err(|e| e.to_string())?;
     }
 
     // Let the last frames land and the last telemetry come back.
@@ -600,10 +530,7 @@ fn cmd_stream(
     let rx = d(after.frames_rx, before.frames_rx);
     let shown = d(after.frames_shown, before.frames_shown);
     let stale = d(after.frames_dropped_stale, before.frames_dropped_stale);
-    let sup = d(
-        after.frames_dropped_superseded,
-        before.frames_dropped_superseded,
-    );
+    let sup = d(after.frames_dropped_superseded, before.frames_dropped_superseded);
     let dec = d(after.frames_dropped_decode, before.frames_dropped_decode);
     let rej = d(after.frames_rejected, before.frames_rejected);
     let gaps = d(after.seq_gaps, before.seq_gaps);
@@ -623,14 +550,8 @@ fn cmd_stream(
         bytes as f64 / elapsed / 1000.0,
         pacer.skipped
     );
-    println!(
-        "frames_rx                 {rx}   ({:.2}% of sent)",
-        100.0 * rx as f64 / sent as f64
-    );
-    println!(
-        "frames_shown              {shown}   ({:.2}% of sent)",
-        100.0 * shown as f64 / sent as f64
-    );
+    println!("frames_rx                 {rx}   ({:.2}% of sent)", 100.0 * rx as f64 / sent as f64);
+    println!("frames_shown              {shown}   ({:.2}% of sent)", 100.0 * shown as f64 / sent as f64);
     println!("dropped stale             {stale}");
     println!("dropped superseded        {sup}");
     println!("dropped decode            {dec}");
@@ -645,10 +566,7 @@ fn cmd_stream(
         "interarrival / jitter     {} us / {} us  (max {} us)",
         timing.interarrival_us, timing.jitter_us, after.interarrival_max_us
     );
-    println!(
-        "decode                    {} us ewma, {} us max",
-        timing.decode_us, after.decode_us_max
-    );
+    println!("decode                    {} us ewma, {} us max", timing.decode_us, after.decode_us_max);
     println!("render_us_max             {} us", after.render_us_max);
     println!(
         "state / last_codec        {} / {} ({:#04x})",
@@ -662,25 +580,15 @@ fn cmd_stream(
         // Section 3.3's identity. If this does not hold, a counter is lying
         // and every diagnosis in section 6.9 built on it is worthless.
         let lhs = t.frames_rx;
-        let rhs = t
-            .frames_shown
-            .wrapping_add(t.frames_dropped_superseded)
-            .wrapping_add(t.frames_dropped_decode);
-        println!(
-            "identity rx = shown+sup+dec   {lhs} vs {rhs}  {}",
-            if lhs == rhs { "OK" } else { "MISMATCH" }
-        );
+        let rhs = t.frames_shown.wrapping_add(t.frames_dropped_superseded).wrapping_add(t.frames_dropped_decode);
+        println!("identity rx = shown+sup+dec   {lhs} vs {rhs}  {}", if lhs == rhs { "OK" } else { "MISMATCH" });
     }
 
     let loss = sent.saturating_sub(rx) as f64 / sent as f64;
     let ok = dec == 0 && loss < 0.01 && rej == 0;
     println!(
         "verdict                   {}",
-        if ok {
-            "PASS (no decode drops, <1% loss, nothing rejected)"
-        } else {
-            "FAIL"
-        }
+        if ok { "PASS (no decode drops, <1% loss, nothing rejected)" } else { "FAIL" }
     );
     Ok(ok)
 }
@@ -723,13 +631,7 @@ fn cmd_conformance(
             if r.flags & suite::CAP_PROBE != 0 {
                 tags.push("cap-probe");
             }
-            println!(
-                "  {:<5} {:<62} ~{:>4.1}s {}",
-                r.section,
-                r.name,
-                r.secs,
-                tags.join(",")
-            );
+            println!("  {:<5} {:<62} ~{:>4.1}s {}", r.section, r.name, r.secs, tags.join(","));
         }
         return Ok(true);
     }
@@ -745,9 +647,7 @@ fn cmd_conformance(
     let opts = suite::Opts {
         frame_addr,
         ctrl_addr,
-        only: force_only
-            .map(str::to_string)
-            .or_else(|| flag(rest, "--only")),
+        only: force_only.map(str::to_string).or_else(|| flag(rest, "--only")),
         slow: has_flag(rest, "--slow"),
         cap_probe: has_flag(rest, "--cap-probe"),
         restore_idle,
@@ -765,11 +665,7 @@ fn cmd_http_list() -> Result<bool, String> {
     use screeny_probe::http;
 
     let rules = http::all();
-    println!(
-        "{} rules (CARD_223_LANDED is {}):",
-        rules.len(),
-        http::CARD_223_LANDED
-    );
+    println!("{} rules (CARD_223_LANDED is {}):", rules.len(), http::CARD_223_LANDED);
     for r in &rules {
         let mut tags = Vec::new();
         if r.flags & http::ALLOW_REBOOT != 0 {
@@ -787,14 +683,7 @@ fn cmd_http_list() -> Result<bool, String> {
         if r.flags & http::KNOWN_223 != 0 {
             tags.push("known-223");
         }
-        println!(
-            "  #{:<3} {:<10} {:<60} ~{:>4.1}s {}",
-            r.n,
-            r.section,
-            r.name,
-            r.secs,
-            tags.join(",")
-        );
+        println!("  #{:<3} {:<10} {:<60} ~{:>4.1}s {}", r.n, r.section, r.name, r.secs, tags.join(","));
         println!("       {:<10} {}", r.route, r.cite);
     }
     Ok(true)
@@ -814,10 +703,9 @@ fn cmd_http(args: &Args, ctrl_addr: SocketAddr, rest: &[String]) -> Result<bool,
     // on the device this run is already pointed at, on port 80.
     let (host, port) = match flag(rest, "--http") {
         Some(v) => match v.rsplit_once(':') {
-            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (
-                h.to_string(),
-                p.parse::<u16>().map_err(|_| "bad --http port")?,
-            ),
+            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
+                (h.to_string(), p.parse::<u16>().map_err(|_| "bad --http port")?)
+            }
             _ => (v, 80),
         },
         None => (args.host.clone(), 80),
@@ -882,11 +770,7 @@ fn report_scan(path: &str, bytes: &[u8]) -> bool {
                 img.segments,
                 img.trailing
             );
-            println!(
-                "  esp_app_desc.version {:?} | sha256 {}",
-                img.version,
-                hex32(&img.digest)
-            );
+            println!("  esp_app_desc.version {:?} | sha256 {}", img.version, hex32(&img.digest));
             println!(
                 "  {} of a {} byte slot ({:.1}%), {} sectors to stage",
                 img.len,
@@ -898,12 +782,7 @@ fn report_scan(path: &str, bytes: &[u8]) -> bool {
             true
         }
         Err(e) => {
-            println!(
-                "{path}: {} bytes on disk | REFUSED: {:?} after {} bytes",
-                bytes.len(),
-                e,
-                scan.seen()
-            );
+            println!("{path}: {} bytes on disk | REFUSED: {:?} after {} bytes", bytes.len(), e, scan.seen());
             false
         }
     }
@@ -934,19 +813,16 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let good = report_scan(path, &bytes);
     if !good && !has_flag(rest, "--force") {
-        return Err(
-            "this image would be refused; pass --force to send it anyway (which is what a \
+        return Err("this image would be refused; pass --force to send it anyway (which is what a \
              deliberate bad-image test wants)"
-                .into(),
-        );
+            .into());
     }
 
     let (host, port) = match flag(rest, "--http") {
         Some(v) => match v.rsplit_once(':') {
-            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (
-                h.to_string(),
-                p.parse::<u16>().map_err(|_| "bad --http port")?,
-            ),
+            Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
+                (h.to_string(), p.parse::<u16>().map_err(|_| "bad --http port")?)
+            }
             _ => (v, 80),
         },
         None => (args.host.clone(), 80),
@@ -960,11 +836,7 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     // the thing you ask for and staging is what you get by default - the same
     // judgement that keeps the suite's rebooting rules behind `--allow-reboot`.
     let activate = has_flag(rest, "--activate");
-    let path = if activate {
-        route::FIRMWARE.to_owned()
-    } else {
-        format!("{}?activate=0", route::FIRMWARE)
-    };
+    let path = if activate { route::FIRMWARE.to_owned() } else { format!("{}?activate=0", route::FIRMWARE) };
     // Far longer than the client's ordinary timeout: an upload is tens of
     // seconds of flash writes and the reply only comes at the end of them.
     let client = Client::new(addr, host.clone()).with_timeout(Duration::from_secs(240));
@@ -973,9 +845,8 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     // only be answered against the `boot_id` it had beforehand (card 246,
     // item 2). A short-timeout client of its own: this is one small GET and
     // the upload client waits four minutes.
-    let before = screeny_probe::http::update::boot_id(
-        &Client::new(addr, host.clone()).with_timeout(Duration::from_secs(3)),
-    );
+    let before =
+        screeny_probe::http::update::boot_id(&Client::new(addr, host.clone()).with_timeout(Duration::from_secs(3)));
     match before {
         Some(b) => println!("the device is running boot_id {b}"),
         None => println!("the device did not answer GET {} before the upload", route::STATUS),
@@ -995,10 +866,7 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
         return Ok(false);
     }
     let reply: FirmwareReply = res.parse()?;
-    println!(
-        "  ok {} written {} error {:?} activating {}",
-        reply.ok, reply.written, reply.error, reply.activating
-    );
+    println!("  ok {} written {} error {:?} activating {}", reply.ok, reply.written, reply.error, reply.activating);
     if !reply.ok {
         return Ok(false);
     }
@@ -1012,9 +880,9 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     // The waiting is `screeny_probe::http::update`, so that a test can drive
     // it against the simulator rather than against the one panel on the bench.
     let watch = screeny_probe::http::Watch::default();
-    let outcome = screeny_probe::http::watch(&client.clone().with_timeout(Duration::from_secs(3)), before, &watch, &mut |line| {
-        println!("{line}");
-    });
+    let outcome =
+        screeny_probe::http::watch(&client.clone().with_timeout(Duration::from_secs(3)), before, &watch, &mut |line| {
+            println!("{line}");
+        });
     Ok(outcome.ok())
 }
-

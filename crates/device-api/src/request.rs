@@ -14,8 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::ErrorCode;
 use crate::enums::{ColourOrder, IdleMode};
+use crate::error::ErrorCode;
 use crate::text::{NameText, PinText, MAX_NAME_LEN, MAX_PIN_LEN};
 use crate::{ESCAPE_MAX, MAX_U32_LEN, MAX_U8_LEN};
 
@@ -122,19 +122,13 @@ impl SettingsRequest {
     /// error, but the caller may want to skip the flash write.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.name.is_none()
-            && self.brightness.is_none()
-            && self.idle_mode.is_none()
-            && self.colour_order.is_none()
+        self.name.is_none() && self.brightness.is_none() && self.idle_mode.is_none() && self.colour_order.is_none()
     }
 }
 
 impl Mutating for SettingsRequest {
     fn auth(&self) -> Auth<'_> {
-        Auth {
-            pin: self.pin.as_deref(),
-            counter: self.counter,
-        }
+        Auth { pin: self.pin.as_deref(), counter: self.counter }
     }
 }
 
@@ -171,10 +165,7 @@ impl RebootRequest {
 
 impl Mutating for RebootRequest {
     fn auth(&self) -> Auth<'_> {
-        Auth {
-            pin: self.pin.as_deref(),
-            counter: self.counter,
-        }
+        Auth { pin: self.pin.as_deref(), counter: self.counter }
     }
 }
 
@@ -217,10 +208,7 @@ impl IdentifyRequest {
 
 impl Mutating for IdentifyRequest {
     fn auth(&self) -> Auth<'_> {
-        Auth {
-            pin: self.pin.as_deref(),
-            counter: self.counter,
-        }
+        Auth { pin: self.pin.as_deref(), counter: self.counter }
     }
 }
 
@@ -236,19 +224,12 @@ mod tests {
 
     #[test]
     fn the_reboot_word_is_the_udp_magic() {
-        assert_eq!(
-            REBOOT_CONFIRM.as_bytes(),
-            screeny_proto::control::REBOOT_MAGIC.to_le_bytes()
-        );
+        assert_eq!(REBOOT_CONFIRM.as_bytes(), screeny_proto::control::REBOOT_MAGIC.to_le_bytes());
     }
 
     #[test]
     fn identify_refuses_what_the_wire_cannot_carry() {
-        let mut r = IdentifyRequest {
-            duration_ms: 10_000,
-            pin: None,
-            counter: None,
-        };
+        let mut r = IdentifyRequest { duration_ms: 10_000, pin: None, counter: None };
         assert_eq!(r.duration_u16(), Ok(10_000));
         r.duration_ms = MAX_IDENTIFY_MS;
         assert_eq!(r.duration_u16(), Ok(u16::MAX));
@@ -274,16 +255,8 @@ mod tests {
     #[test]
     fn an_empty_settings_request_is_recognised() {
         assert!(SettingsRequest::default().is_empty());
-        assert!(!SettingsRequest {
-            brightness: Some(1),
-            ..SettingsRequest::default()
-        }
-        .is_empty());
+        assert!(!SettingsRequest { brightness: Some(1), ..SettingsRequest::default() }.is_empty());
         // A pin on its own still asks for nothing.
-        assert!(SettingsRequest {
-            pin: crate::text::text("1234"),
-            ..SettingsRequest::default()
-        }
-        .is_empty());
+        assert!(SettingsRequest { pin: crate::text::text("1234"), ..SettingsRequest::default() }.is_empty());
     }
 }

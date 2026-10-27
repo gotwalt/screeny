@@ -281,9 +281,7 @@ async fn the_http_and_control_paths_are_counted_separately() {
     // paths, nothing for HTTP, where user space cannot see the segments.
     let d = device(&after);
     let t = &d["traffic"];
-    let udp = |p: &str, dir: &str| {
-        u(&t[p][dir]["bytes"]) as f64 + IP_AND_UDP * u(&t[p][dir]["packets"]) as f64
-    };
+    let udp = |p: &str, dir: &str| u(&t[p][dir]["bytes"]) as f64 + IP_AND_UDP * u(&t[p][dir]["packets"]) as f64;
     let total_out = udp("frames", "out") + udp("control", "out") + u(&t["http"]["out"]["bytes"]) as f64;
     assert!(
         (u(&t["total"]["out"]["bytes"]) as f64 - total_out).abs() < 1.0,

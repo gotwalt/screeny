@@ -28,10 +28,8 @@ const ROLL_SECS: f32 = 0.66;
 /// Extra delay per line, so the phrase turns over as a cascade.
 const LINE_STAGGER: f32 = 0.07;
 
-const HOURS: [&str; 12] = [
-    "TWELVE", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN",
-    "ELEVEN",
-];
+const HOURS: [&str; 12] =
+    ["TWELVE", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN", "ELEVEN"];
 
 /// The phrase for a rounded time, as up to three lines.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,12 +122,7 @@ pub fn layout(p: &Phrase) -> Vec<Placed> {
             xs[i]
         };
         for w in line.split(' ') {
-            out.push(Placed {
-                word: w,
-                line: i,
-                x,
-                y: ys[i],
-            });
+            out.push(Placed { word: w, line: i, x, y: ys[i] });
             x += font::word_width(w) as i32 + font::WORD_GAP as i32;
         }
     }
@@ -138,11 +131,7 @@ pub fn layout(p: &Phrase) -> Vec<Placed> {
 
 /// Width in pixels of the widest line of a phrase, including its indent.
 pub fn phrase_extent(p: &Phrase) -> i32 {
-    layout(p)
-        .iter()
-        .map(|w| w.x + font::word_width(w.word) as i32)
-        .max()
-        .unwrap_or(0)
+    layout(p).iter().map(|w| w.x + font::word_width(w.word) as i32).max().unwrap_or(0)
 }
 
 /// Seconds since midnight of the moment the phrase last changed, and how long
@@ -217,8 +206,7 @@ impl WordClock {
         (1..=TEXT_LEVELS)
             .map(|k| {
                 let a = k as f32 / TEXT_LEVELS as f32;
-                self.panel
-                    .snap(lin_to_srgb8_3([full[0] * a, full[1] * a, full[2] * a]))
+                self.panel.snap(lin_to_srgb8_3([full[0] * a, full[1] * a, full[2] * a]))
             })
             .collect()
     }
@@ -228,8 +216,7 @@ impl WordClock {
         (1..=ACCENT_LEVELS)
             .map(|k| {
                 let a = k as f32 / ACCENT_LEVELS as f32;
-                self.panel
-                    .snap(lin_to_srgb8_3([full[0] * a, full[1] * a, full[2] * a]))
+                self.panel.snap(lin_to_srgb8_3([full[0] * a, full[1] * a, full[2] * a]))
             })
             .collect()
     }

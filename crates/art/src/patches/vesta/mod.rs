@@ -493,7 +493,6 @@ impl Pose {
     }
 }
 
-
 struct Vesta {
     /// The time of day on the first frame; a sped-up clock (`pace` < 60) runs
     /// on from here, exactly as the other clock patches do.
@@ -522,7 +521,15 @@ struct Vesta {
 }
 
 fn make(_seed: u64) -> Box<dyn Patch> {
-    Box::new(Vesta { born: None, modules: std::array::from_fn(|_| Module::default()), want: [0; 4], minute: None, face: [0; 4], asked: false, doing: String::new() })
+    Box::new(Vesta {
+        born: None,
+        modules: std::array::from_fn(|_| Module::default()),
+        want: [0; 4],
+        minute: None,
+        face: [0; 4],
+        asked: false,
+        doing: String::new(),
+    })
 }
 
 /// The hours and minutes a minute-of-day shows.
@@ -546,8 +553,18 @@ fn cards(minute: i64, hours24: bool, zero: bool) -> [u8; 4] {
 impl Patch for Vesta {
     fn playing(&self) -> Option<Playing> {
         let card = |d: u8| if d == BLANK { " ".to_string() } else { d.to_string() };
-        let face: String = self.face.iter().enumerate().map(|(i, c)| if i == 2 { format!(":{}", card(*c)) } else { card(*c) }).collect();
-        Some(Playing { title: face, detail: self.doing.clone(), actions: vec![Action { id: "flip", label: "Flip" }], notes: vec![] })
+        let face: String = self
+            .face
+            .iter()
+            .enumerate()
+            .map(|(i, c)| if i == 2 { format!(":{}", card(*c)) } else { card(*c) })
+            .collect();
+        Some(Playing {
+            title: face,
+            detail: self.doing.clone(),
+            actions: vec![Action { id: "flip", label: "Flip" }],
+            notes: vec![],
+        })
     }
 
     /// **Flip**: turn every drum once, now, and land back on the time.
@@ -921,7 +938,10 @@ mod tests {
                         // Well inside the ink and clear of the seam, so a
                         // pixel that is dark here is the numeral not being
                         // drawn rather than an anti-aliased edge.
-                        if v.abs() >= g.seam + 0.5 && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight) && !lit[y * W + x] {
+                        if v.abs() >= g.seam + 0.5
+                            && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight)
+                            && !lit[y * W + x]
+                        {
                             wrong += 1;
                         }
                     }
@@ -938,7 +958,9 @@ mod tests {
                 (0..H)
                     .flat_map(|y| (0..W).map(move |x| (x, y)))
                     .filter(|(x, y)| {
-                        inside(*x, *y).is_some_and(|(u, v)| v.abs() >= g.seam + 0.5 && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight))
+                        inside(*x, *y).is_some_and(|(u, v)| {
+                            v.abs() >= g.seam + 0.5 && g.face.core(glyph(d as u8), u / g.size, v / g.size, g.weight)
+                        })
                     })
                     .count()
             };
@@ -970,7 +992,9 @@ mod tests {
     /// zero would be.
     #[test]
     fn the_modules_show_the_time_of_day() {
-        for (when, want) in [("21:12", [2, 1, 1, 2]), ("00:00", [B, 0, 0, 0]), ("09:05", [B, 9, 0, 5]), ("14:47", [1, 4, 4, 7])] {
+        for (when, want) in
+            [("21:12", [2, 1, 1, 2]), ("00:00", [B, 0, 0, 0]), ("09:05", [B, 9, 0, 5]), ("14:47", [1, 4, 4, 7])]
+        {
             assert_eq!(read_back(&run(when, 3.0, &[]), &geom(&[])), want, "{when}");
         }
         // And `zero` puts the numeral back on that one module.
@@ -1033,7 +1057,11 @@ mod tests {
     /// cannot be.
     #[test]
     fn every_module_lands_on_the_right_card_for_every_minute_of_a_day() {
-        let modes = [(Flips::Rotation, Timing::rotation(1.15, 0.2)), (Flips::Between, Timing::slow(0.2)), (Flips::Changed, Timing::slow(0.2))];
+        let modes = [
+            (Flips::Rotation, Timing::rotation(1.15, 0.2)),
+            (Flips::Between, Timing::slow(0.2)),
+            (Flips::Changed, Timing::slow(0.2)),
+        ];
         for (flips, tm) in modes {
             for zero in [false, true] {
                 for hours24 in [true, false] {
@@ -1047,11 +1075,19 @@ mod tests {
                             let was = slot.shown(0.0);
                             slot.plan(0.0, want[i], drum(i, zero), flips, &tm.at_rate(RATE[i]), SKEW[i]);
                             let end = slot.ends().max(0.0) + 1.0;
-                            assert_eq!(slot.shown(end), want[i], "{flips:?} zero={zero} h24={hours24} minute {minute} module {i}");
+                            assert_eq!(
+                                slot.shown(end),
+                                want[i],
+                                "{flips:?} zero={zero} h24={hours24} minute {minute} module {i}"
+                            );
                             if flips == Flips::Rotation {
                                 let turned: Vec<u8> = slot.run.iter().map(|c| c.to).collect();
                                 for card in drum(i, zero) {
-                                    assert!(turned.contains(card), "{flips:?} minute {minute} module {i}: {was} -> {} skipped {card}", want[i]);
+                                    assert!(
+                                        turned.contains(card),
+                                        "{flips:?} minute {minute} module {i}: {was} -> {} skipped {card}",
+                                        want[i]
+                                    );
                                 }
                             }
                             // Retire the run so the next minute plans from a
@@ -1239,7 +1275,9 @@ mod tests {
         let once = film_pressing("10:08:20", 4.0, &[], &[("flip", 1.0)]);
         // The same, with three more presses while the drums are turning.
         let twice = film_pressing("10:08:20", 4.0, &[], &[("flip", 1.0), ("flip", 1.2), ("flip", 1.5), ("flip", 2.0)]);
-        let settled = |f: &Vec<(f64, Frame, Vec<u8>)>| f.iter().rposition(|(_, _, px)| *px != f.last().unwrap().2).map(|i| f[i].0).unwrap();
+        let settled = |f: &Vec<(f64, Frame, Vec<u8>)>| {
+            f.iter().rposition(|(_, _, px)| *px != f.last().unwrap().2).map(|i| f[i].0).unwrap()
+        };
         assert!((settled(&once) - settled(&twice)).abs() < 1e-9, "the second press changed the run");
         // And the picture is the same all the way through: the press was not
         // taken at all.
@@ -1292,7 +1330,8 @@ mod tests {
         }
         // The drum turns *past* the new time on its way round, so "landed"
         // is the first frame that reads it and never moves again.
-        let last_move = film.windows(2).rev().find(|w| w[0].2 != w[1].2).map(|w| w[1].0).expect("the modules never moved");
+        let last_move =
+            film.windows(2).rev().find(|w| w[0].2 != w[1].2).map(|w| w[1].0).expect("the modules never moved");
         let ended = film
             .iter()
             .find(|(t, frame, _)| *t >= last_move && reads(frame, &g) == Some([1, 0, 0, 0]))
@@ -1347,7 +1386,8 @@ mod tests {
     /// exact on the wire whatever the picture does, settled or mid-flip.
     #[test]
     fn the_palette_is_one_ramp_and_black() {
-        let sets: [&[(&str, f32)]; 6] = [&[], &[("fill", 0.5)], &[("size", 0.6)], &[("hue", 40.0)], &[("light", 220.0)], &[("spin", 0.7)]];
+        let sets: [&[(&str, f32)]; 6] =
+            [&[], &[("fill", 0.5)], &[("size", 0.6)], &[("hue", 40.0)], &[("light", 220.0)], &[("spin", 0.7)]];
         // Right through a rotation - a dozen cards in the air across the four
         // modules, which is the busiest the picture gets - and then settled.
         let moments = [1.03, 1.10, 1.17, 1.23, 1.30, 1.40, 1.55, 1.70, 1.85, 2.00, 2.20, 3.0];
@@ -1427,7 +1467,13 @@ mod tests {
         // resting picture.
         let rotation = 2.2 - 0.95;
         let minute = (mean * rotation + resting * (60.0 - rotation)) / 60.0;
-        println!("APL resting {:.3}%  rotation mean {:.3}%  peak {:.3}%  whole minute {:.3}%", resting * 100.0, mean * 100.0, peak * 100.0, minute * 100.0);
+        println!(
+            "APL resting {:.3}%  rotation mean {:.3}%  peak {:.3}%  whole minute {:.3}%",
+            resting * 100.0,
+            mean * 100.0,
+            peak * 100.0,
+            minute * 100.0
+        );
         assert!(peak < 0.030, "a rotation peaks at {:.2}% of the panel", peak * 100.0);
         assert!(mean < 0.020, "a rotation averages {:.2}%", mean * 100.0);
         assert!(minute < 0.012, "a minute with a rotation in it averages {:.2}%", minute * 100.0);
@@ -1485,7 +1531,8 @@ mod tests {
                 for y in 0..H {
                     for x in 0..W {
                         let v = y as f32 + 0.5 - g.axle;
-                        let in_module = g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) && v.abs() <= g.h * 0.5;
+                        let in_module =
+                            g.centres.iter().any(|c| (x as f32 + 0.5 - c).abs() <= g.w * 0.5) && v.abs() <= g.h * 0.5;
                         if !(in_module || whole) {
                             continue;
                         }
@@ -1521,14 +1568,20 @@ mod tests {
         let frame = run("08:38", 3.0, &[("zero", 1.0)]);
         for (i, cx) in g.centres.iter().enumerate() {
             for y in [15, 16] {
-                let lit = (0..W).filter(|x| (*x as f32 + 0.5 - cx).abs() <= g.w * 0.5 && frame.pixel(y * W + x).luma() > 1e-4).count();
+                let lit = (0..W)
+                    .filter(|x| (*x as f32 + 0.5 - cx).abs() <= g.w * 0.5 && frame.pixel(y * W + x).luma() > 1e-4)
+                    .count();
                 assert_eq!(lit, 0, "module {i} row {y}: no seam");
             }
             // And the rows either side of it are not dark, or the "seam"
             // would just be a gap in the numerals.
             let around: usize = [13, 14, 17, 18]
                 .iter()
-                .map(|y| (0..W).filter(|x| (*x as f32 + 0.5 - cx).abs() <= g.w * 0.5 && frame.pixel(y * W + x).luma() > 1e-4).count())
+                .map(|y| {
+                    (0..W)
+                        .filter(|x| (*x as f32 + 0.5 - cx).abs() <= g.w * 0.5 && frame.pixel(y * W + x).luma() > 1e-4)
+                        .count()
+                })
                 .sum();
             assert!(around > 4, "module {i} is dark either side of the seam too");
         }
@@ -1553,7 +1606,9 @@ mod tests {
         // 5, 6, 7, 8, 9, 0.
         let moments: Vec<f64> = (30..=60).map(|k| f64::from(k) / crate::snapshot::FPS).collect();
         for frame in run_through("09:59:59", &moments, &[]) {
-            let rows = |ys: std::ops::Range<usize>| ys.map(|y| (0..W).filter(|x| inside(*x) && frame.pixel(y * W + x).luma() > 1e-4).count()).sum::<usize>();
+            let rows = |ys: std::ops::Range<usize>| {
+                ys.map(|y| (0..W).filter(|x| inside(*x) && frame.pixel(y * W + x).luma() > 1e-4).count()).sum::<usize>()
+            };
             let (above, below) = (rows(2..14), rows(18..30));
             if above > 0 && below > 0 {
                 both_halves += 1;
@@ -1561,7 +1616,10 @@ mod tests {
             if above == 0 && below == 0 {
                 all_dark += 1;
             }
-            let brightest = (0..H).flat_map(|y| (0..W).filter(move |x| inside(*x)).map(move |x| (x, y))).map(|(x, y)| frame.pixel(y * W + x).r).fold(0.0_f32, f32::max);
+            let brightest = (0..H)
+                .flat_map(|y| (0..W).filter(move |x| inside(*x)).map(move |x| (x, y)))
+                .map(|(x, y)| frame.pixel(y * W + x).r)
+                .fold(0.0_f32, f32::max);
             if brightest > numeral * 1.5 {
                 lit_edge += 1;
             }
@@ -1597,7 +1655,9 @@ mod tests {
             return flap::angle(((t - c.at) / c.fall) as f32);
         }
         match m.run.iter().rev().find(|c| t >= c.at + c.fall) {
-            Some(c) if t - c.at - c.fall < c.fall * SETTLE => 180.0 - flap::settle(((t - c.at - c.fall) / (c.fall * SETTLE)) as f32, SETTLE_DEG),
+            Some(c) if t - c.at - c.fall < c.fall * SETTLE => {
+                180.0 - flap::settle(((t - c.at - c.fall) / (c.fall * SETTLE)) as f32, SETTLE_DEG)
+            }
             _ => 0.0,
         }
     }
@@ -1647,7 +1707,9 @@ mod tests {
         assert_eq!(theta_at(0.6, 29), 0.0, "nothing moves before the minute");
         assert_eq!(theta_at(0.6, 30), 0.0, "the minute turns on frame 30 and the card lets go");
         assert!(theta_at(0.6, 31) > 0.0, "and it is moving on frame 31");
-        for (secs, frame, want) in [(1.2, 36, 29.7), (1.3333, 40, 61.4), (1.4333, 43, 97.1), (1.5, 45, 127.4), (1.5333, 46, 144.3)] {
+        for (secs, frame, want) in
+            [(1.2, 36, 29.7), (1.3333, 40, 61.4), (1.4333, 43, 97.1), (1.5, 45, 127.4), (1.5333, 46, 144.3)]
+        {
             assert_eq!((secs * crate::snapshot::FPS).round() as i32, frame, "--at {secs} is not frame {frame}");
             let got = theta_at(0.6, frame);
             assert!((got - want).abs() < 0.15, "--at {secs} is {got:.1} degrees, not {want}");
@@ -1668,7 +1730,10 @@ mod tests {
             let g = geom(&[("size", size)]);
             assert!(g.centres[0] - g.w * 0.5 >= 0.0, "size {size} runs off the left");
             assert!(g.centres[3] + g.w * 0.5 <= W as f32, "size {size} runs off the right");
-            assert!(g.axle + g.h * 0.5 <= H as f32 && g.axle - g.h * 0.5 >= 0.0, "size {size} runs off the top or bottom");
+            assert!(
+                g.axle + g.h * 0.5 <= H as f32 && g.axle - g.h * 0.5 >= 0.0,
+                "size {size} runs off the top or bottom"
+            );
             for pair in g.centres.windows(2) {
                 assert!(pair[1] - pair[0] >= g.w + PAIR_GAP * size - 1e-4, "size {size}: modules touch");
             }
@@ -1708,4 +1773,3 @@ mod tests {
         }
     }
 }
-

@@ -141,10 +141,7 @@ impl Opts {
     /// `Ok(None)` means `--help` was asked for.
     fn parse(args: &[String]) -> Result<Option<Opts>, String> {
         let mut o = Opts {
-            cfg: Config {
-                mdns: true,
-                ..Config::default()
-            },
+            cfg: Config { mdns: true, ..Config::default() },
             link_down: false,
             headless: false,
             scale: 14,
@@ -156,11 +153,8 @@ impl Opts {
         };
         let mut it = args.iter().peekable();
         while let Some(a) = it.next() {
-            let mut value = || -> Result<String, String> {
-                it.next()
-                    .cloned()
-                    .ok_or_else(|| format!("{a} needs a value"))
-            };
+            let mut value =
+                || -> Result<String, String> { it.next().cloned().ok_or_else(|| format!("{a} needs a value")) };
             match a.as_str() {
                 "-h" | "--help" => return Ok(None),
                 "--headless" => o.headless = true,
@@ -179,27 +173,18 @@ impl Opts {
                 "--ap-ssid" => o.cfg.ap_ssid = value()?,
                 "--wifi-join-ms" => o.cfg.wifi_join_ms = num(&value()?, "--wifi-join-ms")?,
                 "--wifi-result" => {
-                    o.cfg.wifi_outcome =
-                        WifiOutcome::parse(&value()?).map_err(|e| format!("--wifi-result: {e}"))?;
+                    o.cfg.wifi_outcome = WifiOutcome::parse(&value()?).map_err(|e| format!("--wifi-result: {e}"))?;
                 }
                 "--verbose" => o.verbose = true,
                 "--quiet" => o.quiet = true,
-                "--bind" => {
-                    o.cfg.bind = value()?
-                        .parse::<IpAddr>()
-                        .map_err(|e| format!("--bind: {e}"))?
-                }
+                "--bind" => o.cfg.bind = value()?.parse::<IpAddr>().map_err(|e| format!("--bind: {e}"))?,
                 "--frame-port" => o.cfg.frame_port = num(&value()?, "--frame-port")?,
                 "--control-port" => o.cfg.control_port = num(&value()?, "--control-port")?,
                 "--instance" => o.cfg.instance = value()?,
                 "--name" => o.cfg.name = value()?,
                 "--id" => o.cfg.id = value()?,
                 "--scale" => o.scale = num::<usize>(&value()?, "--scale")?.max(4),
-                "--levels" => {
-                    o.cfg.panel = PanelModel {
-                        levels: num(&value()?, "--levels")?,
-                    }
-                }
+                "--levels" => o.cfg.panel = PanelModel { levels: num(&value()?, "--levels")? },
                 "--brightness" => o.cfg.brightness = num(&value()?, "--brightness")?,
                 "--brightness-cap" => o.cfg.brightness_cap = num(&value()?, "--brightness-cap")?,
                 "--rssi" => o.cfg.rssi_dbm = num(&value()?, "--rssi")?,
@@ -271,20 +256,18 @@ where
 
 fn run(opts: Opts) -> Result<(), String> {
     let dumper = match &opts.dump_dir {
-        Some(dir) => Some(Arc::new(Mutex::new(
-            Dumper::new(dir, opts.dump_every).map_err(|e| format!("--dump-dir {dir}: {e}"))?,
-        ))),
+        Some(dir) => {
+            Some(Arc::new(Mutex::new(Dumper::new(dir, opts.dump_every).map_err(|e| format!("--dump-dir {dir}: {e}"))?)))
+        }
         None => None,
     };
     let sink = dumper.as_ref().map(|d| {
         let d = Arc::clone(d);
-        Box::new(
-            move |frame: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
-                if let Err(e) = d.lock().unwrap().offer(frame) {
-                    eprintln!("screeny-sim: dump: {e}");
-                }
-            },
-        ) as screeny_sim::FrameSink
+        Box::new(move |frame: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {
+            if let Err(e) = d.lock().unwrap().offer(frame) {
+                eprintln!("screeny-sim: dump: {e}");
+            }
+        }) as screeny_sim::FrameSink
     });
 
     let headless = opts.headless;
@@ -307,11 +290,7 @@ fn run(opts: Opts) -> Result<(), String> {
     }
 
     if !quiet {
-        println!(
-            "screeny-sim: frames on {}, control on {}",
-            dev.frame_addr(),
-            dev.control_addr()
-        );
+        println!("screeny-sim: frames on {}, control on {}", dev.frame_addr(), dev.control_addr());
         // A second line, deliberately: `tests/cli.rs` reads the addresses off
         // the first one and has since card 006.
         if let Some(addr) = dev.http_addr() {
@@ -327,21 +306,14 @@ fn run(opts: Opts) -> Result<(), String> {
             println!(
                 "screeny-sim: wifi: result {}{}",
                 wifi_outcome.as_str(),
-                if start_in_portal {
-                    ", starting in the captive portal"
-                } else {
-                    ""
-                }
+                if start_in_portal { ", starting in the captive portal" } else { "" }
             );
         }
         // Card 192: a run that is claiming to be unwell says so on startup,
         // and says it is only claiming. A default one says nothing, so the
         // banner `tests/cli.rs` reads is unchanged for everybody else.
         if health != Health::default() {
-            println!(
-                "screeny-sim: health: {} (reported, not simulated)",
-                health.describe()
-            );
+            println!("screeny-sim: health: {} (reported, not simulated)", health.describe());
         }
         if !faults.is_clean() {
             println!(
@@ -391,13 +363,8 @@ fn window_loop(
     use screeny_sim::window::Led;
 
     let mut led = Led::new(scale);
-    let mut win = Window::new(
-        "screeny-sim",
-        led.width(),
-        led.height(),
-        WindowOptions::default(),
-    )
-    .map_err(|e| format!("cannot open a window: {e} (try --headless)"))?;
+    let mut win = Window::new("screeny-sim", led.width(), led.height(), WindowOptions::default())
+        .map_err(|e| format!("cannot open a window: {e} (try --headless)"))?;
     win.set_target_fps(60);
 
     while win.is_open() && !win.is_key_down(Key::Escape) {
@@ -411,8 +378,7 @@ fn window_loop(
         for (i, (text, colour)) in stats.overlay().iter().enumerate() {
             led.overlay_text(i, 8, text, *colour);
         }
-        win.update_with_buffer(&led.buf, led.width(), led.height())
-            .map_err(|e| e.to_string())?;
+        win.update_with_buffer(&led.buf, led.width(), led.height()).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -449,35 +415,16 @@ impl Line {
         let t = &self.t;
         vec![
             (
-                format!(
-                    "{:>5.1} fps  {:<8}  {:>4} B  {}",
-                    self.fps,
-                    codec_name(self.codec),
-                    self.bytes,
-                    self.state
-                ),
+                format!("{:>5.1} fps  {:<8}  {:>4} B  {}", self.fps, codec_name(self.codec), self.bytes, self.state),
                 0xF0_F0_F0,
             ),
-            (
-                format!(
-                    "rx {}  shown {}  gaps {}",
-                    t.frames_rx, t.frames_shown, t.seq_gaps
-                ),
-                0x9A_D8_FF,
-            ),
+            (format!("rx {}  shown {}  gaps {}", t.frames_rx, t.frames_shown, t.seq_gaps), 0x9A_D8_FF),
             (
                 format!(
                     "stale {}  super {}  dec {}  rej {}",
-                    t.frames_dropped_stale,
-                    t.frames_dropped_superseded,
-                    t.frames_dropped_decode,
-                    t.frames_rejected
+                    t.frames_dropped_stale, t.frames_dropped_superseded, t.frames_dropped_decode, t.frames_rejected
                 ),
-                if t.frames_dropped_decode > 0 || t.frames_rejected > 0 {
-                    0xFF_A8_60
-                } else {
-                    0x80_90_A0
-                },
+                if t.frames_dropped_decode > 0 || t.frames_rejected > 0 { 0xFF_A8_60 } else { 0x80_90_A0 },
             ),
             (format!("src {}", self.source), 0x80_90_A0),
         ]
@@ -507,13 +454,7 @@ impl Line {
 
 impl Reporter {
     fn new(sim: &SimHandle, verbose: bool) -> Self {
-        Reporter {
-            cursor: sim.event_cursor(),
-            verbose,
-            last_report: Instant::now(),
-            last_shown: 0,
-            fps: 0.0,
-        }
+        Reporter { cursor: sim.event_cursor(), verbose, last_report: Instant::now(), last_shown: 0, fps: 0.0 }
     }
 
     /// Drain events, and emit the once-a-second line when it is due.
@@ -596,25 +537,16 @@ fn codec_name(c: u8) -> &'static str {
 /// The events worth a line even without `--verbose`.
 fn describe_important(e: &Event) -> Option<String> {
     match e {
-        Event::Shown { .. } | Event::TelemetrySent { .. } | Event::TelemetryRateLimited { .. } => {
-            None
-        }
-        Event::Dropped {
-            cause: DropCause::Stale | DropCause::Superseded,
-            ..
-        } => None,
-        Event::Rejected { .. }
-        | Event::ControlRejected { .. }
-        | Event::Busy { sent: false, .. } => None,
+        Event::Shown { .. } | Event::TelemetrySent { .. } | Event::TelemetryRateLimited { .. } => None,
+        Event::Dropped { cause: DropCause::Stale | DropCause::Superseded, .. } => None,
+        Event::Rejected { .. } | Event::ControlRejected { .. } | Event::Busy { sent: false, .. } => None,
         other => describe(other),
     }
 }
 
 fn describe(e: &Event) -> Option<String> {
     Some(match e {
-        Event::Shown {
-            seq, codec, bytes, ..
-        } => format!("shown seq {seq} {} {bytes} B", codec_name(*codec)),
+        Event::Shown { seq, codec, bytes, .. } => format!("shown seq {seq} {} {bytes} B", codec_name(*codec)),
         Event::Dropped { seq, cause, .. } => format!("dropped seq {seq}: {cause:?}"),
         Event::Rejected { from, reason } => match reason {
             Some(r) => format!("rejected from {from}: {r:?}"),
@@ -625,13 +557,7 @@ fn describe(e: &Event) -> Option<String> {
         }
         Event::TelemetrySent { to } => format!("telemetry -> {to}"),
         Event::TelemetryRateLimited { to } => format!("telemetry -> {to} (suppressed)"),
-        Event::Control {
-            from,
-            op,
-            req_id,
-            error,
-            replied,
-        } => format!(
+        Event::Control { from, op, req_id, error, replied } => format!(
             "control op {op:#04x} req {req_id} from {from}{}{}",
             match error {
                 Some(c) => format!(" -> error {c:#04x}"),
@@ -694,18 +620,10 @@ mod tests {
         ] {
             assert!(USAGE.contains(flag), "{flag} is not in --help");
             for n in names {
-                assert!(
-                    USAGE.contains(&n),
-                    "{flag}: {n:?} is a value the API has and --help does not mention"
-                );
+                assert!(USAGE.contains(&n), "{flag}: {n:?} is a value the API has and --help does not mention");
             }
         }
-        for flag in [
-            "--store-errors",
-            "--heap-used",
-            "--heap-size",
-            "--stack-free",
-        ] {
+        for flag in ["--store-errors", "--heap-used", "--heap-size", "--stack-free"] {
             assert!(USAGE.contains(flag), "{flag} is not in --help");
         }
     }
@@ -714,11 +632,7 @@ mod tests {
     #[test]
     fn the_help_prints_the_real_defaults() {
         let h = Health::default();
-        for want in [
-            format!("[{}]", h.heap_used),
-            format!("[{}]", h.heap_size),
-            format!("[{}]", h.stack_free),
-        ] {
+        for want in [format!("[{}]", h.heap_used), format!("[{}]", h.heap_size), format!("[{}]", h.stack_free)] {
             assert!(USAGE.contains(&want), "--help does not say {want}");
         }
     }

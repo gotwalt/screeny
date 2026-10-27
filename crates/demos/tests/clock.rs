@@ -11,27 +11,15 @@ use screeny_demos::stats;
 use std::time::Duration;
 
 fn at(h: u32, m: u32, s: u32) -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 9, 19)
-        .unwrap()
-        .and_time(NaiveTime::from_hms_opt(h, m, s).unwrap())
+    NaiveDate::from_ymd_opt(2026, 9, 19).unwrap().and_time(NaiveTime::from_hms_opt(h, m, s).unwrap())
 }
 
 /// Independently spelled expectation, written from the rules rather than from
 /// the implementation, so the test can disagree with the code.
 fn expected(h24: u32, m: u32) -> String {
-    const HOURS: [&str; 12] = [
-        "TWELVE", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN",
-        "ELEVEN",
-    ];
-    const MINUTES: [&str; 7] = [
-        "",
-        "FIVE",
-        "TEN",
-        "QUARTER",
-        "TWENTY",
-        "TWENTY FIVE",
-        "HALF",
-    ];
+    const HOURS: [&str; 12] =
+        ["TWELVE", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN", "ELEVEN"];
+    const MINUTES: [&str; 7] = ["", "FIVE", "TEN", "QUARTER", "TWENTY", "TWENTY FIVE", "HALF"];
     let total = (h24 * 60 + m + 2) / 5 % 288 * 5;
     let (rh, rm) = (total / 60, total % 60);
     if rm == 0 {
@@ -42,17 +30,9 @@ fn expected(h24: u32, m: u32) -> String {
         };
     }
     if rm <= 30 {
-        format!(
-            "{} PAST {}",
-            MINUTES[(rm / 5) as usize],
-            HOURS[(rh % 12) as usize]
-        )
+        format!("{} PAST {}", MINUTES[(rm / 5) as usize], HOURS[(rh % 12) as usize])
     } else {
-        format!(
-            "{} TILL {}",
-            MINUTES[((60 - rm) / 5) as usize],
-            HOURS[((rh + 1) % 12) as usize]
-        )
+        format!("{} TILL {}", MINUTES[((60 - rm) / 5) as usize], HOURS[((rh + 1) % 12) as usize])
     }
 }
 
@@ -93,12 +73,7 @@ fn every_phrase_fits_the_panel() {
         let p = phrase(h, m);
         assert!(p.lines.len() <= 3, "{:?} has too many lines", p);
         let w = phrase_extent(&p);
-        assert!(
-            w <= W as i32,
-            "{:?} is {} px wide at {h:02}:{m:02}",
-            p.text(),
-            w
-        );
+        assert!(w <= W as i32, "{:?} is {} px wide at {h:02}:{m:02}", p.text(), w);
         for word in layout(&p) {
             assert!(word.x >= 0);
             assert!(
@@ -128,18 +103,10 @@ fn stays_within_sixteen_colours_including_mid_transition() {
             let mut c = WordClock::at(at(h, m, 0));
             let mut idx = Indexed::default();
             assert!(c.render_indexed(Duration::from_millis(age_ms), &mut idx));
-            assert!(
-                idx.palette.len() <= 16,
-                "palette of {} at {h:02}:{m:02}+{age_ms}ms",
-                idx.palette.len()
-            );
+            assert!(idx.palette.len() <= 16, "palette of {} at {h:02}:{m:02}+{age_ms}ms", idx.palette.len());
             let f = idx.to_frame();
             let s = stats::frame_stats(&f, &panel::NOMINAL);
-            assert!(
-                s.colors <= 16,
-                "{} colours at {h:02}:{m:02}+{age_ms}ms",
-                s.colors
-            );
+            assert!(s.colors <= 16, "{} colours at {h:02}:{m:02}+{age_ms}ms", s.colors);
             assert_eq!(
                 s.wire,
                 // The name is the sender's own `codec_name` spelling since
@@ -170,10 +137,7 @@ fn only_the_words_that_change_move() {
     let a = layout(&phrase(11, 20));
     let b = layout(&phrase(11, 25));
     assert!(b.iter().any(|w| w.word == "FIVE"));
-    assert!(
-        b.iter().filter(|w| a.contains(w)).count() == 3,
-        "TWENTY, PAST and ELEVEN should hold still"
-    );
+    assert!(b.iter().filter(|w| a.contains(w)).count() == 3, "TWENTY, PAST and ELEVEN should hold still");
 }
 
 #[test]

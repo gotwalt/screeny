@@ -231,9 +231,15 @@ async fn rig(s: Setup) -> Rig {
     let body = format!(r#"{{"to":"127.0.0.1:{frame}","name":"bench","play":false}}"#);
     let added = post(studio.addr, "/api/v1/devices/add", &body).await;
     assert_eq!(added.status, 200, "{}", String::from_utf8_lossy(&added.body));
-    until_json(studio.addr, PATIENCE, "the studio to resolve the simulator", "/api/v1/status", |v| v["devices"][0]["resolved"] == true).await;
+    until_json(studio.addr, PATIENCE, "the studio to resolve the simulator", "/api/v1/status", |v| {
+        v["devices"][0]["resolved"] == true
+    })
+    .await;
     if !s.no_http {
-        until_json(studio.addr, PATIENCE, "the panel's own status", "/api/v1/status", |v| !v["devices"][0]["facts"].is_null()).await;
+        until_json(studio.addr, PATIENCE, "the panel's own status", "/api/v1/status", |v| {
+            !v["devices"][0]["facts"].is_null()
+        })
+        .await;
     }
     let id = added.json()["id"].as_str().expect("an id").to_string();
     let id = st.devices.ids().into_iter().next().unwrap_or(id);
@@ -246,7 +252,8 @@ impl Rig {
     }
 
     async fn install(&self) -> common::Response {
-        post(self.studio.addr, "/api/v1/device/firmware", &format!(r#"{{"device":"{}","confirm":true}}"#, self.id)).await
+        post(self.studio.addr, "/api/v1/device/firmware", &format!(r#"{{"device":"{}","confirm":true}}"#, self.id))
+            .await
     }
 
     /// Wait until the attempt has ended one way or the other; returns the view.
@@ -255,7 +262,8 @@ impl Rig {
             let u = &v["devices"][0]["update"];
             let phase = u["run"]["phase"].as_str();
             // Started (we have seen a run) and not going any more.
-            !matches!(phase, Some("uploading" | "restarting" | "trial")) && (phase == Some("failed") || u["run"].is_null())
+            !matches!(phase, Some("uploading" | "restarting" | "trial"))
+                && (phase == Some("failed") || u["run"].is_null())
         })
         .await;
         v["devices"][0]["update"].clone()
@@ -269,10 +277,17 @@ async fn an_update_is_offered_pushed_and_the_panel_comes_back_on_the_new_version
 
     // The offer: what the panel runs, what is carried, and that Install works.
     let u = r.update().await;
-    assert_eq!((u["installed"].as_str(), u["offered"].as_str(), u["available"].clone()), (Some("0.10.0"), Some("0.11.0"), true.into()), "{u}");
+    assert_eq!(
+        (u["installed"].as_str(), u["offered"].as_str(), u["available"].clone()),
+        (Some("0.10.0"), Some("0.11.0"), true.into()),
+        "{u}"
+    );
     // ... and what Home Assistant's update entity would be told.
     let fw = bridge::fleet_of(&r.st).panels[0].snapshot.firmware.clone();
-    assert_eq!((fw.installed.as_deref(), fw.latest.as_deref(), fw.in_progress), (Some("0.10.0"), Some("0.11.0"), false));
+    assert_eq!(
+        (fw.installed.as_deref(), fw.latest.as_deref(), fw.in_progress),
+        (Some("0.10.0"), Some("0.11.0"), false)
+    );
 
     let before = r.dev.handle().boot_id();
     let started = r.install().await;
@@ -282,7 +297,12 @@ async fn an_update_is_offered_pushed_and_the_panel_comes_back_on_the_new_version
     // While it is going on the panel is not available for a second Install,
     // and Home Assistant is told it is in progress.
     let going = r.install().await;
-    assert_eq!(going.status, 409, "a second Install while one runs is refused: {}", String::from_utf8_lossy(&going.body));
+    assert_eq!(
+        going.status,
+        409,
+        "a second Install while one runs is refused: {}",
+        String::from_utf8_lossy(&going.body)
+    );
     assert!(bridge::fleet_of(&r.st).panels[0].snapshot.firmware.in_progress);
 
     let done = r.until_settled("the update to finish").await;
@@ -300,7 +320,10 @@ async fn an_update_is_offered_pushed_and_the_panel_comes_back_on_the_new_version
     // And there is nothing left to install.
     assert_eq!(now["devices"][0]["update"]["available"], false, "{now}");
     let fw = bridge::fleet_of(&r.st).panels[0].snapshot.firmware.clone();
-    assert_eq!((fw.installed.as_deref(), fw.latest.as_deref(), fw.in_progress), (Some("0.11.0"), Some("0.11.0"), false));
+    assert_eq!(
+        (fw.installed.as_deref(), fw.latest.as_deref(), fw.in_progress),
+        (Some("0.11.0"), Some("0.11.0"), false)
+    );
     drop(r.studio);
 }
 
@@ -308,13 +331,15 @@ async fn an_update_is_offered_pushed_and_the_panel_comes_back_on_the_new_version
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn home_assistants_install_starts_the_same_update() {
     let r = rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), model: true, ..Setup::default() }).await;
-    bridge::execute(&r.st, &Order { target: Target::Panel(r.id.clone()), command: Command::InstallFirmware }).expect("Install is accepted");
+    bridge::execute(&r.st, &Order { target: Target::Panel(r.id.clone()), command: Command::InstallFirmware })
+        .expect("Install is accepted");
     assert!(r.st.firmware.active(&r.id), "an update is running");
     let done = r.until_settled("the update to finish").await;
     assert!(done["run"].is_null(), "{done}");
     assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Confirmed);
     // Nothing to install now: Install is refused, in a sentence.
-    let again = bridge::execute(&r.st, &Order { target: Target::Panel(r.id.clone()), command: Command::InstallFirmware });
+    let again =
+        bridge::execute(&r.st, &Order { target: Target::Panel(r.id.clone()), command: Command::InstallFirmware });
     assert!(again.is_err(), "{again:?}");
 }
 
@@ -363,7 +388,9 @@ async fn a_studio_with_no_firmware_offers_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_image_is_a_reported_failure() {
     let wrong = Builder::wrong_project().build();
-    let r = rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), unchecked: Some(wrong), model: true, ..Setup::default() }).await;
+    let r =
+        rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), unchecked: Some(wrong), model: true, ..Setup::default() })
+            .await;
     assert_eq!(r.install().await.status, 200);
     let done = r.until_settled("the refusal").await;
     let why = done["run"]["why"].as_str().unwrap_or_default().to_string();
@@ -375,7 +402,10 @@ async fn a_refused_image_is_a_reported_failure() {
     assert!(!fw.in_progress && fw.failed.as_ref().is_some_and(|f| f.contains("refused")), "{fw:?}");
     // A failure is not a lock: Install is available again.
     assert_eq!(done["available"], true, "{done}");
-    assert_eq!(r.st.devices.get(&r.id).and_then(|d| d.facts).map(|f| f.reply.fw.to_string()).as_deref(), Some("0.10.0"));
+    assert_eq!(
+        r.st.devices.get(&r.id).and_then(|d| d.facts).map(|f| f.reply.fw.to_string()).as_deref(),
+        Some("0.10.0")
+    );
 }
 
 /// Failure: the panel goes away in the middle of the upload.
@@ -384,20 +414,27 @@ async fn a_panel_that_vanishes_mid_upload_is_a_reported_failure() {
     // Halfway through the image, whatever its size.
     let half = image("0.11.0").len() / 2;
     assert!(half > 0);
-    let r = rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), model: true, cut_after: Some(half), ..Setup::default() }).await;
+    let r =
+        rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), model: true, cut_after: Some(half), ..Setup::default() })
+            .await;
     assert_eq!(r.install().await.status, 200);
     let done = r.until_settled("the failure").await;
     assert_eq!(done["run"]["phase"], "failed", "{done}");
     let why = done["run"]["why"].as_str().unwrap_or_default();
     assert!(!why.is_empty(), "it says why: {done}");
-    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle, "the image never completed, so nothing activated");
+    assert_eq!(
+        r.dev.handle().ota_phase(),
+        screeny_sim::OtaPhase::Idle,
+        "the image never completed, so nothing activated"
+    );
     assert_eq!(done["available"], true, "and it can be tried again: {done}");
 }
 
 /// Failure: accepted, and the panel never comes back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_panel_that_does_not_come_back_is_a_reported_failure() {
-    let r = rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), model: true, gone_for_good: true, ..Setup::default() }).await;
+    let r = rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), model: true, gone_for_good: true, ..Setup::default() })
+        .await;
     assert_eq!(r.install().await.status, 200);
     let done = r.until_settled("the failure").await;
     let why = done["run"]["why"].as_str().unwrap_or_default();

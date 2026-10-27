@@ -63,31 +63,16 @@ fn run(args: &[&str]) -> (bool, String, String) {
 
 #[test]
 fn pattern_bars_drives_a_receiver_at_thirty_fps() {
-    let rx = Receiver::start_adjacent(RxConfig {
-        keep_pixels: true,
-        ..RxConfig::default()
-    });
+    let rx = Receiver::start_adjacent(RxConfig { keep_pixels: true, ..RxConfig::default() });
     let addr = rx.frame_addr.to_string();
-    let (ok, stdout, stderr) = run(&[
-        "pattern",
-        "bars",
-        "--addr",
-        &addr,
-        "--fps",
-        "30",
-        "--duration",
-        "2",
-    ]);
+    let (ok, stdout, stderr) = run(&["pattern", "bars", "--addr", &addr, "--fps", "30", "--duration", "2"]);
     assert!(ok, "screeny failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.contains("streaming bars"), "{stdout}");
 
     let state = rx.shutdown();
     assert!(state.decode_errors.is_empty(), "{:?}", state.decode_errors);
     let n = state.frames.len();
-    assert!(
-        (55..=65).contains(&n),
-        "{n} frames in 2 s, expected about 60"
-    );
+    assert!((55..=65).contains(&n), "{n} frames in 2 s, expected about 60");
     let fps = state.fps();
     assert!((29.4..=30.6).contains(&fps), "receiver measured {fps:.2} fps");
 
@@ -109,30 +94,14 @@ fn pattern_bars_drives_a_receiver_at_thirty_fps() {
 /// frames, not one repeated.
 #[test]
 fn clock_streams_its_own_palette_exactly() {
-    let rx = Receiver::start_adjacent(RxConfig {
-        keep_pixels: true,
-        ..RxConfig::default()
-    });
+    let rx = Receiver::start_adjacent(RxConfig { keep_pixels: true, ..RxConfig::default() });
     let addr = rx.frame_addr.to_string();
-    let (ok, stdout, stderr) = run(&[
-        "clock",
-        "--at",
-        "11:42:50",
-        "--addr",
-        &addr,
-        "--fps",
-        "30",
-        "--duration",
-        "1",
-    ]);
+    let (ok, stdout, stderr) = run(&["clock", "--at", "11:42:50", "--addr", &addr, "--fps", "30", "--duration", "1"]);
     assert!(ok, "screeny failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.contains("streaming clock"), "{stdout}");
     // The summary says the exactness claim out loud, and says nothing about
     // requantised frames.
-    assert!(
-        stdout.contains("indexed frames exact on the wire"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("indexed frames exact on the wire"), "{stdout}");
     assert!(!stdout.contains("requantised"), "{stdout}");
     assert!(stdout.contains("pal4-lz 100%"), "{stdout}");
 
@@ -173,10 +142,7 @@ fn ping_and_brightness_and_identify_work_over_the_control_port() {
 
     let (ok, stdout, stderr) = run(&["brightness", "200", "--addr", &addr]);
     assert!(ok, "{stderr}");
-    assert!(
-        stdout.contains("brightness 60") && stdout.contains("cap"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("brightness 60") && stdout.contains("cap"), "{stdout}");
 
     let (ok, stdout, stderr) = run(&["identify", "--addr", &addr, "--ms", "500"]);
     assert!(ok, "{stderr}");
@@ -242,9 +208,7 @@ fn pipe_streams_raw_frames_from_stdin() {
         .spawn()
         .expect("spawn");
 
-    let frames: Vec<screeny::Frame> = (0..10)
-        .map(|i| screeny::Frame::solid([i * 20, 40, 90]))
-        .collect();
+    let frames: Vec<screeny::Frame> = (0..10).map(|i| screeny::Frame::solid([i * 20, 40, 90])).collect();
     {
         let mut stdin = child.stdin.take().unwrap();
         for f in &frames {
@@ -252,11 +216,7 @@ fn pipe_streams_raw_frames_from_stdin() {
         }
     }
     let out = child.wait_with_output().expect("wait");
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
     let state = rx.shutdown();
     assert!(state.decode_errors.is_empty());
@@ -296,24 +256,13 @@ fn a_truncated_frame_on_stdin_is_reported_not_displayed() {
 
 #[test]
 fn encode_stats_reports_without_sending_anything() {
-    let (ok, stdout, stderr) = run(&[
-        "encode-stats",
-        "--pattern",
-        "gradient",
-        "-n",
-        "4",
-        "--per-frame",
-        "--quality",
-    ]);
+    let (ok, stdout, stderr) = run(&["encode-stats", "--pattern", "gradient", "-n", "4", "--per-frame", "--quality"]);
     assert!(ok, "{stderr}");
     assert!(stdout.contains("4 frames, budget 1464 B, profile full"), "{stdout}");
     assert!(stdout.contains("0 over budget"), "{stdout}");
     assert!(stdout.contains("dE"), "{stdout}");
     // Four per-frame lines plus the header.
-    assert!(
-        stdout.lines().filter(|l| l.contains("bc1-dual") || l.contains("pal")).count() >= 4,
-        "{stdout}"
-    );
+    assert!(stdout.lines().filter(|l| l.contains("bc1-dual") || l.contains("pal")).count() >= 4, "{stdout}");
 }
 
 #[test]
@@ -327,9 +276,7 @@ fn encode_stats_reads_raw_frames_from_stdin() {
     {
         let mut stdin = child.stdin.take().unwrap();
         for i in 0..3u8 {
-            stdin
-                .write_all(screeny::Pattern::Sweep.frame(u64::from(i)).as_bytes())
-                .unwrap();
+            stdin.write_all(screeny::Pattern::Sweep.frame(u64::from(i)).as_bytes()).unwrap();
         }
     }
     let out = child.wait_with_output().expect("wait");
@@ -375,18 +322,9 @@ fn an_unreachable_device_fails_with_a_hint() {
 fn help_lists_every_subcommand() {
     let (ok, stdout, _) = run(&["--help"]);
     assert!(ok);
-    for cmd in [
-        "discover",
-        "info",
-        "stats",
-        "brightness",
-        "identify",
-        "reboot",
-        "ping",
-        "pattern",
-        "pipe",
-        "encode-stats",
-    ] {
+    for cmd in
+        ["discover", "info", "stats", "brightness", "identify", "reboot", "ping", "pattern", "pipe", "encode-stats"]
+    {
         assert!(stdout.contains(cmd), "{cmd} missing from --help\n{stdout}");
     }
 }

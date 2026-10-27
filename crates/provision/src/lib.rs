@@ -87,11 +87,9 @@ pub mod screen;
 pub mod uri;
 
 pub use machine::{
-    Action, Actions, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, Trial,
-    TrialOrigin, TrialOutcome, CONNECTED_SCREEN_MS, MAX_ACTIONS, SSID_MAX,
+    Action, Actions, Config, Event, FailReason, JoinTarget, Provisioner, State, Timing, Trial, TrialOrigin,
+    TrialOutcome, CONNECTED_SCREEN_MS, MAX_ACTIONS, SSID_MAX,
 };
 pub use qr::{Qr, QrError, QR_MODULES, QR_VERSION};
-pub use screen::{
-    render, wants_fixed_brightness, Layout, RenderError, Screen, PORTAL_IP, QUIET, TEXT_COLS,
-};
+pub use screen::{render, wants_fixed_brightness, Layout, RenderError, Screen, PORTAL_IP, QUIET, TEXT_COLS};
 pub use uri::{fits, wifi_uri, UriError, UriForm, SSID_MAX_NOPASS, SSID_MAX_SHORT};

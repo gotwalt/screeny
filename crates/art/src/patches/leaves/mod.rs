@@ -439,7 +439,10 @@ impl LeavesPatch {
                 (w.x, w.y, w.z)
             };
             let strength = (gx * gx + gz * gz).sqrt();
-            if strength > GUST_RELAUNCH_THRESHOLD && t - self.last_relaunch > GUST_RELAUNCH_COOLDOWN && !self.resting.is_empty() {
+            if strength > GUST_RELAUNCH_THRESHOLD
+                && t - self.last_relaunch > GUST_RELAUNCH_COOLDOWN
+                && !self.resting.is_empty()
+            {
                 self.last_relaunch = t;
                 if let Some(plucked) = self.resting.pop_back() {
                     // Rising from wherever it actually lay (`plucked.pos`),
@@ -589,8 +592,11 @@ impl Patch for LeavesPatch {
         let frame = live.render(falling, ground, sun_deg, color, &FAMILIES, BLUR_TRAIL);
 
         let hues: Vec<f32> = FAMILIES.iter().map(|f| f.hue).collect();
-        Palette::ramps(&hues, PALETTE_STEPS, PALETTE_RANGE, PALETTE_CHROMA * color.max(0.0))
-            .map(&frame, Dither::BlueNoise, PALETTE_DITHER)
+        Palette::ramps(&hues, PALETTE_STEPS, PALETTE_RANGE, PALETTE_CHROMA * color.max(0.0)).map(
+            &frame,
+            Dither::BlueNoise,
+            PALETTE_DITHER,
+        )
     }
 }
 

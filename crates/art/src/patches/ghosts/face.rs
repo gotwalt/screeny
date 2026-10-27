@@ -484,7 +484,10 @@ mod tests {
                 let lit_between = (lx + 1..rx).any(|x| luma(row[x]) > 0.5);
                 assert!(lit_between, "head_r {head_r}: no lit pixel between the eyes at row {y} ({lx}..{rx})");
             }
-            assert!(saw_both_eyes, "head_r {head_r}: never saw a dark pixel on both sides - test not exercising the eyes");
+            assert!(
+                saw_both_eyes,
+                "head_r {head_r}: never saw a dark pixel on both sides - test not exercising the eyes"
+            );
         }
     }
 }

@@ -36,8 +36,8 @@ pub fn all() -> Vec<Vector> {
 /// Read `manifest.tsv` and every payload it names.
 pub fn load(dir: &Path) -> Result<Vec<Vector>, String> {
     let manifest = dir.join("manifest.tsv");
-    let text = fs::read_to_string(&manifest)
-        .map_err(|e| format!("{}: {e}\n(pass --vectors DIR)", manifest.display()))?;
+    let text =
+        fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}\n(pass --vectors DIR)", manifest.display()))?;
     let mut out = Vec::new();
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -52,26 +52,14 @@ pub fn load(dir: &Path) -> Result<Vec<Vector>, String> {
         let path = dir.join(format!("{name}.bin"));
         let payload = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         if payload.len() != want {
-            return Err(format!(
-                "{name}: manifest says {want} bytes, file has {}",
-                payload.len()
-            ));
+            return Err(format!("{name}: manifest says {want} bytes, file has {}", payload.len()));
         }
         let rgb = dir.join(format!("{name}.rgb"));
         let expect = fs::read(&rgb).map_err(|e| format!("{}: {e}", rgb.display()))?;
         if expect.len() != screeny_proto::NBYTES {
-            return Err(format!(
-                "{name}: expected frame is {} bytes, not {}",
-                expect.len(),
-                screeny_proto::NBYTES
-            ));
+            return Err(format!("{name}: expected frame is {} bytes, not {}", expect.len(), screeny_proto::NBYTES));
         }
-        out.push(Vector {
-            name: name.to_string(),
-            codec,
-            payload,
-            expect,
-        });
+        out.push(Vector { name: name.to_string(), codec, payload, expect });
     }
     if out.is_empty() {
         return Err(format!("no vectors in {}", dir.display()));
@@ -113,11 +101,7 @@ pub fn codec_by_name(s: &str) -> Option<u8> {
 pub fn solid_frame(n: u64) -> Vec<u8> {
     let t = (n % 360) as f64 * std::f64::consts::PI / 180.0;
     let c = |p: f64| ((t + p).sin() * 0.35 + 0.4).clamp(0.0, 1.0);
-    vec![
-        (c(0.0) * 90.0) as u8,
-        (c(2.09) * 90.0) as u8,
-        (c(4.19) * 90.0) as u8,
-    ]
+    vec![(c(0.0) * 90.0) as u8, (c(2.09) * 90.0) as u8, (c(4.19) * 90.0) as u8]
 }
 
 /// Frame `n` of a moving pattern, as a `PAL4_LZ` payload.
@@ -228,8 +212,7 @@ mod tests {
         for n in [0u64, 1, 7, 33, 1000, 65_535] {
             let p = pal4_frame(n);
             assert!(p.len() <= screeny_proto::MAX_PIXEL_PAYLOAD, "{} bytes", p.len());
-            screeny_proto::decode(codec::PAL4_LZ, &p, &mut dst)
-                .unwrap_or_else(|e| panic!("frame {n}: {e:?}"));
+            screeny_proto::decode(codec::PAL4_LZ, &p, &mut dst).unwrap_or_else(|e| panic!("frame {n}: {e:?}"));
         }
     }
 
@@ -256,11 +239,7 @@ mod tests {
             let mut src = vec![0u8; 1024];
             for b in src.iter_mut() {
                 // Long runs sometimes, noise other times.
-                *b = if trial % 3 == 0 {
-                    (rnd() % 4) as u8
-                } else {
-                    (rnd() % 256) as u8
-                };
+                *b = if trial % 3 == 0 { (rnd() % 4) as u8 } else { (rnd() % 256) as u8 };
             }
             if trial % 5 == 0 {
                 src = vec![0x5a; 1024];

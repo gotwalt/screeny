@@ -29,28 +29,13 @@ fn no_target_degenerates_at_any_depth() {
             // A flat frame (the smooth-exterior failure) has a handful of
             // colours; a starved frame (the black-rectangle failure) has an
             // APL near zero. Both are caught here.
-            assert!(
-                s.colors >= 24,
-                "{} at {age:.0}s went flat: {} colours",
-                t.name,
-                s.colors
-            );
+            assert!(s.colors >= 24, "{} at {age:.0}s went flat: {} colours", t.name, s.colors);
             // The floor is low on purpose: the seahorse leg passes through a
             // thin red spike on black at 2% APL, which is one of the best
             // frames in the tour. Darkness is only a fault when there is
             // nothing left, and the colour count above already catches that.
-            assert!(
-                s.apl > 0.005,
-                "{} at {age:.0}s went dark: APL {:.3}",
-                t.name,
-                s.apl
-            );
-            assert!(
-                s.apl < 0.42,
-                "{} at {age:.0}s is too bright for the panel: APL {:.3}",
-                t.name,
-                s.apl
-            );
+            assert!(s.apl > 0.005, "{} at {age:.0}s went dark: APL {:.3}", t.name, s.apl);
+            assert!(s.apl < 0.42, "{} at {age:.0}s is too bright for the panel: APL {:.3}", t.name, s.apl);
             worst_colors = worst_colors.min(s.colors);
             worst_apl = worst_apl.max(s.apl);
         }
@@ -77,10 +62,7 @@ fn typical_colour_count_and_wire_size() {
         sum += s.colors;
         n += 1;
     }
-    println!(
-        "full-colour path: {} colours mean, {exact}/{n} frames bit-exact by the estimate",
-        sum / n
-    );
+    println!("full-colour path: {} colours mean, {exact}/{n} frames bit-exact by the estimate", sum / n);
 }
 
 #[test]
@@ -153,11 +135,7 @@ fn bisection_lands_on_the_boundary() {
                 }
             }
         }
-        assert!(
-            inside > 0 && outside > 0,
-            "{} is not on the boundary",
-            t.name
-        );
+        assert!(inside > 0 && outside > 0, "{} is not on the boundary", t.name);
     }
 }
 

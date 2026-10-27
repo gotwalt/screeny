@@ -152,11 +152,7 @@ impl SenderOutput {
     #[must_use]
     pub fn deferred(target: Target) -> Self {
         let label = label_of(&target);
-        SenderOutput {
-            link: Link::open_deferred(target, LinkConfig::default()),
-            label,
-            last: None,
-        }
+        SenderOutput { link: Link::open_deferred(target, LinkConfig::default()), label, last: None }
     }
 
     /// As [`SenderOutput::deferred`], with the link configured by the caller -
@@ -250,7 +246,13 @@ impl SenderOutput {
     /// # Errors
     ///
     /// As [`Output::send`]: only a malformed frame, never the network.
-    pub fn send_shared(&mut self, wire: &WireFrame, encoded: &crate::Encoded, exact: bool, indexed: bool) -> io::Result<bool> {
+    pub fn send_shared(
+        &mut self,
+        wire: &WireFrame,
+        encoded: &crate::Encoded,
+        exact: bool,
+        indexed: bool,
+    ) -> io::Result<bool> {
         if !self.link.accepts(encoded) {
             self.send(wire)?;
             return Ok(false);

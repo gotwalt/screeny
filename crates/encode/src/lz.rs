@@ -64,8 +64,7 @@ impl LzScratch {
 
 #[inline(always)]
 fn hash3(s: &[u8], i: usize) -> usize {
-    (((s[i] as usize) << 8) ^ ((s[i + 1] as usize) << 4) ^ (s[i + 2] as usize))
-        & ((1 << HASH_BITS) - 1)
+    (((s[i] as usize) << 8) ^ ((s[i + 1] as usize) << 4) ^ (s[i + 2] as usize)) & ((1 << HASH_BITS) - 1)
 }
 
 fn best_match(src: &[u8], i: usize, head: &[i32], prev: &[i32], chain: usize) -> (usize, usize) {

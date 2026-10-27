@@ -82,17 +82,11 @@ const EXPLAINS_A_SHORT_GAP: f64 = 1.0 - BURST_FRACTION;
 const DISTURBED: f64 = 0.5;
 
 fn secs(default: f64) -> f64 {
-    std::env::var("SCREENY_PACING_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    std::env::var("SCREENY_PACING_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 fn rx() -> Receiver {
-    Receiver::start(RxConfig {
-        keep_pixels: false,
-        ..RxConfig::default()
-    })
+    Receiver::start(RxConfig { keep_pixels: false, ..RxConfig::default() })
 }
 
 fn stream_cfg(fps: f64) -> SenderConfig {
@@ -121,11 +115,7 @@ type Log = Arc<Mutex<Vec<Tick>>>;
 ///
 /// `work` runs before the frame is painted, which is where a test that wants
 /// to stall the pacer puts the stall.
-fn recording_source(
-    log: &Log,
-    limit: Option<u64>,
-    mut work: impl FnMut(u64),
-) -> impl screeny::FrameSource {
+fn recording_source(log: &Log, limit: Option<u64>, mut work: impl FnMut(u64)) -> impl screeny::FrameSource {
     let log = Arc::clone(log);
     screeny::FnSource::new("cheap", move |t: FrameTime, out: &mut Frame| {
         if !limit.is_none_or(|n| t.index < n) {
@@ -135,9 +125,7 @@ fn recording_source(
         // handed control back, which is the closest the test can stand to the
         // schedule itself.
         let at = Instant::now();
-        log.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(Tick { slot: t.index, at });
+        log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(Tick { slot: t.index, at });
         work(t.index);
         let v = (t.index % 200) as u8;
         for p in 0..screeny::proto::NPIX {
@@ -156,20 +144,9 @@ struct Timeline {
 
 impl Timeline {
     fn take(log: &Log, fps: f64) -> Timeline {
-        let ticks = std::mem::take(
-            &mut *log
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        assert!(
-            ticks.len() >= 8,
-            "only {} wake-ups recorded: the run never got going",
-            ticks.len()
-        );
-        Timeline {
-            period: period_of(fps).as_secs_f64(),
-            ticks,
-        }
+        let ticks = std::mem::take(&mut *log.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        assert!(ticks.len() >= 8, "only {} wake-ups recorded: the run never got going", ticks.len());
+        Timeline { period: period_of(fps).as_secs_f64(), ticks }
     }
 
     fn len(&self) -> usize {
@@ -188,10 +165,7 @@ impl Timeline {
     }
 
     fn span(&self) -> f64 {
-        self.ticks[self.len() - 1]
-            .at
-            .duration_since(self.ticks[0].at)
-            .as_secs_f64()
+        self.ticks[self.len() - 1].at.duration_since(self.ticks[0].at).as_secs_f64()
     }
 
     /// One estimate of the frame period per pair of wake-ups, each divided by
@@ -200,18 +174,13 @@ impl Timeline {
     fn per_slot(&self) -> Vec<f64> {
         self.ticks
             .windows(2)
-            .map(|w| {
-                w[1].at.duration_since(w[0].at).as_secs_f64() / (w[1].slot - w[0].slot) as f64
-            })
+            .map(|w| w[1].at.duration_since(w[0].at).as_secs_f64() / (w[1].slot - w[0].slot) as f64)
             .collect()
     }
 
     /// Raw interval between consecutive wake-ups, in periods.
     fn gaps(&self) -> Vec<f64> {
-        self.ticks
-            .windows(2)
-            .map(|w| w[1].at.duration_since(w[0].at).as_secs_f64() / self.period)
-            .collect()
+        self.ticks.windows(2).map(|w| w[1].at.duration_since(w[0].at).as_secs_f64() / self.period).collect()
     }
 
     /// How far each wake-up sat from where the absolute schedule put it, in
@@ -222,10 +191,7 @@ impl Timeline {
         let t0 = self.ticks[0];
         self.ticks
             .iter()
-            .map(|t| {
-                (t.at.duration_since(t0.at).as_secs_f64() - (t.slot - t0.slot) as f64 * self.period)
-                    / self.period
-            })
+            .map(|t| (t.at.duration_since(t0.at).as_secs_f64() - (t.slot - t0.slot) as f64 * self.period) / self.period)
             .collect()
     }
 
@@ -271,9 +237,7 @@ impl Timeline {
     /// busy host can only ever make the *previous* wake-up late.
     fn unexplained_bursts(&self) -> Vec<usize> {
         let (gaps, late) = (self.gaps(), self.lateness());
-        (0..gaps.len())
-            .filter(|&i| gaps[i] < BURST_FRACTION && late[i] <= EXPLAINS_A_SHORT_GAP)
-            .collect()
+        (0..gaps.len()).filter(|&i| gaps[i] < BURST_FRACTION && late[i] <= EXPLAINS_A_SHORT_GAP).collect()
     }
 
     /// Wake-ups the host held up by more than [`DISTURBED`] of a period. The
@@ -291,12 +255,7 @@ impl Timeline {
         assert_eq!(arrivals.len(), self.len(), "an arrival per paced frame");
         Timeline {
             period: self.period,
-            ticks: self
-                .ticks
-                .iter()
-                .zip(arrivals)
-                .map(|(t, at)| Tick { slot: t.slot, at: *at })
-                .collect(),
+            ticks: self.ticks.iter().zip(arrivals).map(|(t, at)| Tick { slot: t.slot, at: *at }).collect(),
         }
     }
 
@@ -411,22 +370,14 @@ fn holds_thirty_fps_within_one_percent() {
     // because a correct pacer's drift is a constant - it is one wake-up's
     // lateness at each end of the run, not a per-frame error times the number
     // of frames.
-    assert!(
-        tl.drift().abs() <= 1.5 * period,
-        "drifted {:+.1} ms off an absolute schedule: {report}",
-        tl.drift() * 1e3
-    );
+    assert!(tl.drift().abs() <= 1.5 * period, "drifted {:+.1} ms off an absolute schedule: {report}", tl.drift() * 1e3);
 
     // The schedule is absolute, which is to say no frame is ever sent before
     // the slot it belongs to. This is also why the burst check below cannot
     // be tripped by a busy host: a gap can only be short if the wake-up
     // before it was late, and the host can only make wake-ups late.
     let late = sorted(tl.lateness());
-    assert!(
-        late[0] >= -0.02,
-        "a frame went out {:.2} ms before its slot: {report}",
-        late[0] * period * 1e3
-    );
+    assert!(late[0] >= -0.02, "a frame went out {:.2} ms before its slot: {report}", late[0] * period * 1e3);
 
     // No two frames close together with nothing to explain it. An absolute
     // schedule does answer a late frame with a short gap - that is the error
@@ -466,13 +417,7 @@ fn holds_thirty_fps_within_one_percent() {
     // taken before the encoder runs, so on its own it would not notice a
     // sender that paced its wake-ups and then sat on the datagrams.
     let arrivals = paced_arrivals(&state);
-    assert_eq!(
-        arrivals.len(),
-        tl.len(),
-        "{} frames sent but {} arrived: {report}",
-        tl.len(),
-        arrivals.len()
-    );
+    assert_eq!(arrivals.len(), tl.len(), "{} frames sent but {} arrived: {report}", tl.len(), arrivals.len());
     let wire = tl.at_the_receiver(&arrivals);
     assert!(
         wire.rate_error().abs() <= 0.01,
@@ -507,11 +452,8 @@ fn skips_rather_than_bursting_after_a_stall() {
     // Nine and a bit frame periods each, at three different points within a
     // period, and far enough apart that the stream is back on the schedule
     // before the next one.
-    let stalls: [(u64, Duration); 3] = [
-        (20, period.mul_f64(9.17)),
-        (50, period.mul_f64(9.50)),
-        (80, period.mul_f64(9.83)),
-    ];
+    let stalls: [(u64, Duration); 3] =
+        [(20, period.mul_f64(9.17)), (50, period.mul_f64(9.50)), (80, period.mul_f64(9.83))];
     let log: Log = Log::default();
     let mut src = recording_source(&log, Some(100), move |slot| {
         if let Some((_, d)) = stalls.iter().find(|(at, _)| *at == slot) {
@@ -552,10 +494,7 @@ fn skips_rather_than_bursting_after_a_stall() {
             resumed.push((tl.ticks[i].slot, late[i] - late[i - 1]));
         }
     }
-    assert!(
-        resumed.len() >= stalls.len(),
-        "expected a resync per stall, saw {resumed:?}: {report}"
-    );
+    assert!(resumed.len() >= stalls.len(), "expected a resync per stall, saw {resumed:?}: {report}");
     let off_slot = resumed.iter().filter(|(_, l)| *l > 0.25).count();
     assert!(
         off_slot <= 1,
@@ -570,17 +509,8 @@ fn skips_rather_than_bursting_after_a_stall() {
     // threshold is five periods, not one and a half: the stalls are nine
     // periods long and no amount of host jitter reaches a sixth of a second,
     // so this counts stalls and only stalls.
-    let long = state
-        .gaps()
-        .iter()
-        .filter(|g| **g > period.mul_f64(5.0))
-        .count();
-    assert_eq!(
-        long,
-        stalls.len(),
-        "{long} long gaps, expected exactly the {} stalls: {report}",
-        stalls.len()
-    );
+    let long = state.gaps().iter().filter(|g| **g > period.mul_f64(5.0)).count();
+    assert_eq!(long, stalls.len(), "{long} long gaps, expected exactly the {} stalls: {report}", stalls.len());
     eprintln!("smallest gap between datagrams after the stalls: {min_gap:?}");
 
     // Sequence numbers count frames *sent*, so they stay contiguous even
@@ -619,15 +549,8 @@ fn other_frame_rates_are_paced_too() {
             tl.rate_error() * 100.0,
             period * 1e3
         );
-        assert!(
-            tl.unexplained_bursts().is_empty(),
-            "burst at {fps} fps: {report}"
-        );
-        assert_eq!(
-            paced_arrivals(&state).len(),
-            tl.len(),
-            "frames went missing at {fps} fps: {report}"
-        );
+        assert!(tl.unexplained_bursts().is_empty(), "burst at {fps} fps: {report}");
+        assert_eq!(paced_arrivals(&state).len(), tl.len(), "frames went missing at {fps} fps: {report}");
     }
 }
 

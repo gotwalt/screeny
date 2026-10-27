@@ -55,17 +55,10 @@ impl Running {
         let mut line = String::new();
         out.read_line(&mut line).expect("the banner line");
         // "screeny-sim: frames on 127.0.0.1:1234, control on 127.0.0.1:5678"
-        let addrs: Vec<SocketAddr> = line
-            .split_whitespace()
-            .filter_map(|w| w.trim_end_matches(',').parse().ok())
-            .collect();
+        let addrs: Vec<SocketAddr> =
+            line.split_whitespace().filter_map(|w| w.trim_end_matches(',').parse().ok()).collect();
         assert_eq!(addrs.len(), 2, "could not read the banner: {line:?}");
-        Running {
-            child,
-            frame: addrs[0],
-            control: addrs[1],
-            out,
-        }
+        Running { child, frame: addrs[0], control: addrs[1], out }
     }
 
     fn wait(mut self) -> (bool, String) {
@@ -93,8 +86,7 @@ fn headless_logs_statistics_and_exits_when_told() {
         std::thread::sleep(Duration::from_millis(20));
     }
     // And a control op, so the "not acted on" path is exercised too.
-    ctrl.call(&screeny_proto::control::Request::Ping, 1)
-        .expect("PING answered by the real binary");
+    ctrl.call(&screeny_proto::control::Request::Ping, 1).expect("PING answered by the real binary");
 
     run.child.wait().expect("it exits on its own");
     let mut log = String::new();
@@ -107,29 +99,16 @@ fn headless_logs_statistics_and_exits_when_told() {
     assert!(log.contains("fps"), "expected a statistics line:\n{log}");
     assert!(log.contains("SOLID"), "expected the codec:\n{log}");
     assert!(log.contains("shown"), "expected the counters:\n{log}");
-    assert!(
-        log.contains("LIVE") || log.contains("HOLD"),
-        "state:\n{log}"
-    );
+    assert!(log.contains("LIVE") || log.contains("HOLD"), "state:\n{log}");
 }
 
 #[test]
 fn dump_dir_writes_every_nth_displayed_frame() {
-    let dir = std::env::temp_dir().join(format!(
-        "screeny-sim-cli-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("screeny-sim-cli-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);
 
-    let mut run = Running::start(&[
-        "--exit-after",
-        "1.5",
-        "--dump-dir",
-        dir.to_str().unwrap(),
-        "--dump-every",
-        "3",
-    ]);
+    let mut run = Running::start(&["--exit-after", "1.5", "--dump-dir", dir.to_str().unwrap(), "--dump-every", "3"]);
     let mut tx = Sender::new(run.frame);
     let mut expected = Vec::new();
     for i in 0..12u8 {
@@ -142,10 +121,7 @@ fn dump_dir_writes_every_nth_displayed_frame() {
     }
     run.child.wait().expect("exit");
 
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .expect("the dump directory")
-        .map(|e| e.unwrap().path())
-        .collect();
+    let mut files: Vec<_> = std::fs::read_dir(&dir).expect("the dump directory").map(|e| e.unwrap().path()).collect();
     files.sort();
     assert_eq!(files.len(), expected.len(), "one PNG in every three frames");
 
@@ -155,11 +131,7 @@ fn dump_dir_writes_every_nth_displayed_frame() {
         let mut buf = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         assert_eq!((info.width, info.height), (64, 32));
-        assert_frames_eq(
-            &buf[..info.buffer_size()],
-            want,
-            path.file_name().unwrap().to_str().unwrap(),
-        );
+        assert_frames_eq(&buf[..info.buffer_size()], want, path.file_name().unwrap().to_str().unwrap());
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -168,16 +140,11 @@ fn dump_dir_writes_every_nth_displayed_frame() {
 #[test]
 fn the_real_devices_mdns_name_is_refused_before_anything_binds() {
     for name in ["screeny", "screeny-a4cf12", "SCREENY.local"] {
-        let out = Command::new(BIN)
-            .args(["--headless", "--instance", name, "--exit-after", "0.1"])
-            .output()
-            .expect("run");
+        let out =
+            Command::new(BIN).args(["--headless", "--instance", name, "--exit-after", "0.1"]).output().expect("run");
         assert!(!out.status.success(), "{name} should have been refused");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            err.contains("reserved"),
-            "{name}: expected a clear refusal, got {err:?}"
-        );
+        assert!(err.contains("reserved"), "{name}: expected a clear refusal, got {err:?}");
     }
 }
 
@@ -217,12 +184,6 @@ fn fault_flags_reach_the_running_device() {
     assert!(log.contains("gaps"), "expected the counters:\n{log}");
     // 60% loss of 40 frames leaves holes in the sequence, and the stats line
     // reports them.
-    let gaps_line = log
-        .lines()
-        .find(|l| l.contains("gaps"))
-        .expect("a stats line");
-    assert!(
-        !gaps_line.contains("gaps 0 "),
-        "expected some gaps: {gaps_line}"
-    );
+    let gaps_line = log.lines().find(|l| l.contains("gaps")).expect("a stats line");
+    assert!(!gaps_line.contains("gaps 0 "), "expected some gaps: {gaps_line}");
 }

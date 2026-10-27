@@ -182,11 +182,7 @@ async fn without_http_nothing_complains() {
     assert_eq!(d["last_error"], serde_json::Value::Null, "a missing status API is not a control fault: {d}");
 
     assert_eq!(seen["ok"], true, "a panel with no HTTP server is not a problem: {}", seen["problems"]);
-    assert!(
-        seen["problems"].as_array().expect("problems").is_empty(),
-        "{}",
-        seen["problems"]
-    );
+    assert!(seen["problems"].as_array().expect("problems").is_empty(), "{}", seen["problems"]);
     assert_eq!(get(at, "/healthz").await.status, 200);
     drop(dev);
     studio.stop().await;
@@ -205,10 +201,9 @@ async fn a_device_that_reboots_is_counted_from_its_boot_id() {
     let at = studio.addr;
     attach(at, ports).await;
 
-    let seen = until_json(at, PATIENCE, "the first status read", "/api/v1/status", |v| {
-        !v["devices"][0]["facts"].is_null()
-    })
-    .await;
+    let seen =
+        until_json(at, PATIENCE, "the first status read", "/api/v1/status", |v| !v["devices"][0]["facts"].is_null())
+            .await;
     let before = seen["devices"][0]["facts"]["boot_id"].as_u64().expect("a boot id");
     assert_eq!(seen["devices"][0]["facts"]["reboots"], 0);
 
@@ -420,11 +415,16 @@ async fn the_studio_never_opens_a_second_connection_to_a_device() {
     .await;
 
     let (served, most, closed, hosts) = counter.report();
-    println!("one-at-a-time: {served} requests served, at most {most} open at once, {closed} asked for Connection: close");
+    println!(
+        "one-at-a-time: {served} requests served, at most {most} open at once, {closed} asked for Connection: close"
+    );
     assert!(served >= 5, "the studio only made {served} requests");
     assert_eq!(most, 1, "the studio had {most} connections open to one device at once");
     assert_eq!(closed, served, "every request must say Connection: close");
-    assert!(hosts.iter().all(|h| h.contains(&counter.addr.port().to_string())), "the Host header names the device: {hosts:?}");
+    assert!(
+        hosts.iter().all(|h| h.contains(&counter.addr.port().to_string())),
+        "the Host header names the device: {hosts:?}"
+    );
     drop(dev);
     studio.stop().await;
     counter.stop();

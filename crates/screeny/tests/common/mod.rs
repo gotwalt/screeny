@@ -25,9 +25,7 @@ use std::time::{Duration, Instant};
 
 use screeny::proto::control::{op, Reply, Request, Telemetry};
 use screeny::proto::txt::DeviceInfo as TxtInfo;
-use screeny::proto::{
-    ControlPacket, FramePacket, Rgb888Frame, MAX_UDP_PAYLOAD, NBYTES,
-};
+use screeny::proto::{ControlPacket, FramePacket, Rgb888Frame, MAX_UDP_PAYLOAD, NBYTES};
 
 /// One accepted frame.
 pub struct RxFrame {
@@ -70,9 +68,7 @@ impl RxState {
     /// measured from these frames bimodal. `Sender`'s own `min_gap` leaves it
     /// out for the same reason.
     pub fn paced(&self) -> impl Iterator<Item = &RxFrame> {
-        self.frames
-            .iter()
-            .filter(|f| f.flags & screeny::proto::F_FINAL == 0)
+        self.frames.iter().filter(|f| f.flags & screeny::proto::F_FINAL == 0)
     }
 
     /// Gaps between successive arrivals in the paced stream.
@@ -108,11 +104,7 @@ pub struct RxConfig {
 
 impl Default for RxConfig {
     fn default() -> Self {
-        RxConfig {
-            keep_pixels: true,
-            drop_one_in: 0,
-            info: OwnedInfo::default(),
-        }
+        RxConfig { keep_pixels: true, drop_one_in: 0, info: OwnedInfo::default() }
     }
 }
 
@@ -179,19 +171,12 @@ impl Receiver {
     }
 
     fn start_on(fsock: UdpSocket, csock: UdpSocket, cfg: RxConfig) -> Receiver {
-        fsock
-            .set_read_timeout(Some(Duration::from_millis(20)))
-            .unwrap();
-        csock
-            .set_read_timeout(Some(Duration::from_millis(20)))
-            .unwrap();
+        fsock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        csock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
         let frame_addr = fsock.local_addr().unwrap();
         let control_addr = csock.local_addr().unwrap();
 
-        let state = Arc::new(Mutex::new(RxState {
-            started: Some(Instant::now()),
-            ..RxState::default()
-        }));
+        let state = Arc::new(Mutex::new(RxState { started: Some(Instant::now()), ..RxState::default() }));
         let stop = Arc::new(AtomicBool::new(false));
         let brightness = Arc::new(AtomicU32::new(30));
 
@@ -216,14 +201,7 @@ impl Receiver {
             }));
         }
 
-        Receiver {
-            frame_addr,
-            control_addr,
-            state,
-            brightness,
-            stop,
-            threads,
-        }
+        Receiver { frame_addr, control_addr, state, brightness, stop, threads }
     }
 
     /// Like [`Receiver::start`], but with the control port one above the
@@ -276,19 +254,11 @@ impl Receiver {
         for t in self.threads {
             let _ = t.join();
         }
-        Arc::try_unwrap(self.state)
-            .map(|m| m.into_inner().unwrap())
-            .unwrap_or_default()
+        Arc::try_unwrap(self.state).map(|m| m.into_inner().unwrap()).unwrap_or_default()
     }
 }
 
-fn frame_loop(
-    sock: &UdpSocket,
-    state: &Arc<Mutex<RxState>>,
-    stop: &AtomicBool,
-    keep: bool,
-    drop_one_in: u32,
-) {
+fn frame_loop(sock: &UdpSocket, state: &Arc<Mutex<RxState>>, stop: &AtomicBool, keep: bool, drop_one_in: u32) {
     let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
     let mut seen = 0u32;
     let mut out = vec![0u8; MAX_UDP_PAYLOAD];
@@ -344,9 +314,7 @@ fn frame_loop(
 
         if pkt.wants_stats() {
             s.stats_requests += 1;
-            s.telemetry.uptime_ms = s
-                .started
-                .map_or(0, |t| t.elapsed().as_millis() as u32);
+            s.telemetry.uptime_ms = s.started.map_or(0, |t| t.elapsed().as_millis() as u32);
             let t = s.telemetry;
             drop(s);
             // Spec 6.4: the reply goes out of the *frame* socket, to the
@@ -358,13 +326,7 @@ fn frame_loop(
     }
 }
 
-fn control_loop(
-    sock: &UdpSocket,
-    state: &Arc<Mutex<RxState>>,
-    stop: &AtomicBool,
-    txt: &[u8],
-    brightness: &AtomicU32,
-) {
+fn control_loop(sock: &UdpSocket, state: &Arc<Mutex<RxState>>, stop: &AtomicBool, txt: &[u8], brightness: &AtomicU32) {
     let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
     let mut out = vec![0u8; MAX_UDP_PAYLOAD];
     while !stop.load(Ordering::Relaxed) {
@@ -382,9 +344,7 @@ fn control_loop(
         let (uptime, tel) = {
             let mut s = state.lock().unwrap();
             s.control_requests += 1;
-            s.telemetry.uptime_ms = s
-                .started
-                .map_or(0, |t| t.elapsed().as_millis() as u32);
+            s.telemetry.uptime_ms = s.started.map_or(0, |t| t.elapsed().as_millis() as u32);
             s.telemetry.brightness = brightness.load(Ordering::Relaxed) as u8;
             (s.telemetry.uptime_ms, s.telemetry)
         };
@@ -410,15 +370,12 @@ fn control_loop(
             }
             Ok(Request::Release) => Reply::Release,
             Ok(Request::SetName(_)) => Reply::SetName,
-            Ok(Request::GetWifi) => Reply::Wifi {
-                ssid: "Example-Wifi1",
-                state: screeny::proto::control::wifi_state::CONNECTED,
-            },
+            Ok(Request::GetWifi) => {
+                Reply::Wifi { ssid: "Example-Wifi1", state: screeny::proto::control::wifi_state::CONNECTED }
+            }
             Ok(Request::SetWifi(_)) => Reply::SetWifi,
             Ok(Request::Reboot) => Reply::Reboot,
-            Err(code) => Reply::Err {
-                code: code.as_u8(),
-            },
+            Err(code) => Reply::Err { code: code.as_u8() },
         };
         if pkt.req_id == 0 {
             continue; // spec 6.1: no reply wanted

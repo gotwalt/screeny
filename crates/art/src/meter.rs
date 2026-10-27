@@ -123,9 +123,7 @@ impl Meter {
                 let f = IndexedFrame { palette, indices: &self.idx };
                 // Infallible: `usable_indexed` has just checked both of the
                 // things `encode_indexed` rejects.
-                self.enc
-                    .encode_indexed(&f, self.budget)
-                    .unwrap_or_else(|_| unreachable!("checked by usable_indexed"))
+                self.enc.encode_indexed(&f, self.budget).unwrap_or_else(|_| unreachable!("checked by usable_indexed"))
             }
             _ => {
                 let f: &Rgb888Frame = wire.rgb.as_slice().try_into().unwrap_or(&[0; NPIX * 3]);
@@ -197,12 +195,8 @@ fn usable_indexed(palette: &[[u8; 3]], indices: &[u8]) -> bool {
 /// Distinct sRGB colours in an `N * 3` frame.
 #[must_use]
 pub fn distinct_colours(rgb: &[u8]) -> usize {
-    let mut keys: Vec<u32> = rgb
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
-        .collect();
+    let mut keys: Vec<u32> =
+        rgb.as_chunks::<3>().0.iter().map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
     keys.sort_unstable();
     keys.dedup();
     keys.len()

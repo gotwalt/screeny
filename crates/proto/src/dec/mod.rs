@@ -51,13 +51,7 @@ pub mod codec {
 
 /// Every codec a v1 device must decode, in the preference order the `codecs=`
 /// TXT key advertises (most preferred first).
-pub const SUPPORTED_CODECS: [u8; 5] = [
-    codec::PAL8_LZ,
-    codec::PAL4_LZ,
-    codec::BC1_DUAL,
-    codec::PAL5,
-    codec::SOLID,
-];
+pub const SUPPORTED_CODECS: [u8; 5] = [codec::PAL8_LZ, codec::PAL4_LZ, codec::BC1_DUAL, codec::PAL5, codec::SOLID];
 
 /// [`SUPPORTED_CODECS`] preformatted for the `codecs=` TXT key.
 pub const CODECS_TXT: &str = "16,17,40,2,127";
@@ -89,10 +83,7 @@ pub enum DecodeError {
 /// True if [`decode`] will attempt this codec id.
 #[must_use]
 pub fn is_supported(codec: u8) -> bool {
-    matches!(
-        codec,
-        codec::PAL5 | codec::PAL8_LZ | codec::PAL4_LZ | codec::BC1_DUAL | codec::SOLID
-    )
+    matches!(codec, codec::PAL5 | codec::PAL8_LZ | codec::PAL4_LZ | codec::BC1_DUAL | codec::SOLID)
 }
 
 /// Decode one frame payload into `dst`.

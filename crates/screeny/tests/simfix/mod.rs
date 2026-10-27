@@ -29,11 +29,7 @@ pub fn sim_config(frame_port: u16, control_port: u16) -> Config {
         frame_port,
         control_port,
         // Compressed so a test never waits out the spec's ten-second HOLD.
-        timing: screeny_sim::Timing {
-            hold_ms: 300,
-            fade_ms: 50,
-            ..screeny_sim::Timing::SPEC
-        },
+        timing: screeny_sim::Timing { hold_ms: 300, fade_ms: 50, ..screeny_sim::Timing::SPEC },
         ..Config::for_test()
     }
 }
@@ -45,14 +41,7 @@ pub fn sim_config(frame_port: u16, control_port: u16) -> Config {
 /// the ephemeral pair a test gets.
 #[must_use]
 pub fn device_for(frame: SocketAddr, control: SocketAddr) -> Device {
-    Device {
-        instance: "screeny-sim".into(),
-        host: None,
-        frame,
-        control,
-        addresses: vec![frame.ip()],
-        info: None,
-    }
+    Device { instance: "screeny-sim".into(), host: None, frame, control, addresses: vec![frame.ip()], info: None }
 }
 
 /// Start a simulator on ephemeral ports and connect a sender to it.

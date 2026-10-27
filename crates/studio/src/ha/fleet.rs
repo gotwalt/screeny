@@ -11,8 +11,8 @@
 //! named after the channel, with the picture and the patch.
 
 use super::payload::{self, Message};
-use super::topics::{sanitize, Topics};
 use super::topics::is_channel_key;
+use super::topics::{sanitize, Topics};
 use super::{discovery, ChannelView, Fleet, MqttConfig, PanelView, Snapshot};
 use std::collections::HashSet;
 
@@ -97,7 +97,10 @@ pub fn announce(cfg: &MqttConfig, fleet: &Fleet) -> Vec<Message> {
     for (i, view) in fleet.panels.iter().enumerate() {
         let dcfg = device_cfg(cfg, view);
         let topics = topics_of(&dcfg, view);
-        out.push(Message { topic: topics.discovery.clone(), payload: discovery::payload(&dcfg, &topics, &view.snapshot).to_string() });
+        out.push(Message {
+            topic: topics.discovery.clone(),
+            payload: discovery::payload(&dcfg, &topics, &view.snapshot).to_string(),
+        });
         if i == 0 {
             out.push(online());
         }
@@ -106,7 +109,10 @@ pub fn announce(cfg: &MqttConfig, fleet: &Fleet) -> Vec<Message> {
     for view in channel_devices(fleet) {
         let dcfg = channel_cfg(cfg, view);
         let topics = Topics::for_channel(cfg, view.id);
-        out.push(Message { topic: topics.discovery.clone(), payload: discovery::payload(&dcfg, &topics, &view.snapshot).to_string() });
+        out.push(Message {
+            topic: topics.discovery.clone(),
+            payload: discovery::payload(&dcfg, &topics, &view.snapshot).to_string(),
+        });
         out.extend(payload::state_messages(&topics, &view.snapshot));
     }
     out
@@ -122,7 +128,9 @@ pub fn announce(cfg: &MqttConfig, fleet: &Fleet) -> Vec<Message> {
 /// first has no panel.
 #[must_use]
 pub fn stale_topics(cfg: &MqttConfig, fleet: &Fleet) -> Vec<String> {
-    let Some(first) = fleet.panels.first().filter(|v| v.key.is_none() && !v.device.is_empty()) else { return Vec::new() };
+    let Some(first) = fleet.panels.first().filter(|v| v.key.is_none() && !v.device.is_empty()) else {
+        return Vec::new();
+    };
     let was = Topics::for_panel(cfg, Some(&panel_key(&first.device)));
     if devices(cfg, fleet).iter().any(|t| t.device_id == was.device_id) {
         return Vec::new();
@@ -165,14 +173,23 @@ mod tests {
 
     fn snap(setting: &str, channel: u32) -> Snapshot {
         Snapshot {
-            patch: PatchState { id: "overland".into(), name: "Overland".into(), setting: setting.into(), modified: false },
+            patch: PatchState {
+                id: "overland".into(),
+                name: "Overland".into(),
+                setting: setting.into(),
+                modified: false,
+            },
             brightness: Some(96),
             pictures: pictures(),
             picture: Some(format!("Overland · {setting}")),
             panel_connected: true,
             channels: options(),
             channel: Some(channel),
-            firmware: crate::ha::FirmwareState { installed: Some("0.10.0".into()), latest: Some("0.11.0".into()), ..Default::default() },
+            firmware: crate::ha::FirmwareState {
+                installed: Some("0.10.0".into()),
+                latest: Some("0.11.0".into()),
+                ..Default::default()
+            },
         }
     }
 
@@ -228,19 +245,38 @@ mod tests {
         // the config does not carry.
         snapshot_json("discovery.json", &text);
         assert_eq!((rest[0].topic.as_str(), rest[0].payload.as_str()), ("screeny/studio/status", "online"));
-        let states: String = rest[1..6].iter().map(|m| format!("{} {}", m.topic, m.payload)).collect::<Vec<_>>().join("\n");
+        let states: String =
+            rest[1..6].iter().map(|m| format!("{} {}", m.topic, m.payload)).collect::<Vec<_>>().join("\n");
         snapshot_json("state-lit.txt", &states);
-        assert_eq!((rest[6].topic.as_str(), rest[6].payload.as_str()), ("screeny/studio/channel/state", "Channel 1"), "card 355's addition");
+        assert_eq!(
+            (rest[6].topic.as_str(), rest[6].payload.as_str()),
+            ("screeny/studio/channel/state", "Channel 1"),
+            "card 355's addition"
+        );
         assert_eq!(rest[7].topic, "screeny/studio/firmware/state", "card 364's, last");
 
         // Every id and topic, spelt out.
         let v = json(config_msg);
         assert_eq!(v["device"]["identifiers"], serde_json::json!(["screeny_studio"]));
-        assert_eq!(v["device"]["name"], "Living Room", "card 368: named after the panel; the id is what automations use");
-        let mut ids: Vec<String> =
-            ["brightness", "level", "picture", "patch", "panel"].iter().map(|k| v["components"][k]["unique_id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(
+            v["device"]["name"], "Living Room",
+            "card 368: named after the panel; the id is what automations use"
+        );
+        let mut ids: Vec<String> = ["brightness", "level", "picture", "patch", "panel"]
+            .iter()
+            .map(|k| v["components"][k]["unique_id"].as_str().unwrap().to_string())
+            .collect();
         ids.sort();
-        assert_eq!(ids, ["screeny_studio_brightness", "screeny_studio_level", "screeny_studio_panel", "screeny_studio_patch", "screeny_studio_picture"]);
+        assert_eq!(
+            ids,
+            [
+                "screeny_studio_brightness",
+                "screeny_studio_level",
+                "screeny_studio_panel",
+                "screeny_studio_patch",
+                "screeny_studio_picture"
+            ]
+        );
         assert_eq!(v["components"]["picture"]["command_topic"], "screeny/studio/picture/set");
         assert_eq!(v["components"]["picture"]["state_topic"], "screeny/studio/picture/state");
         assert_eq!(v["components"]["patch"]["state_topic"], "screeny/studio/patch/state");
@@ -267,7 +303,10 @@ mod tests {
     fn channel_1_is_the_first_devices_and_the_others_get_devices_of_their_own() {
         let out = announce(&config(), &one("x"));
         let configs: Vec<&str> = out.iter().map(|m| m.topic.as_str()).filter(|t| t.ends_with("/config")).collect();
-        assert_eq!(configs, ["homeassistant/device/screeny_studio/config", "homeassistant/device/screeny_studio_ch2/config"]);
+        assert_eq!(
+            configs,
+            ["homeassistant/device/screeny_studio/config", "homeassistant/device/screeny_studio_ch2/config"]
+        );
         let ch2 = out.iter().find(|m| m.topic.ends_with("_ch2/config")).unwrap();
         let v = json(ch2);
         assert_eq!(v["device"]["identifiers"], serde_json::json!(["screeny_studio_ch2"]));
@@ -290,7 +329,8 @@ mod tests {
     #[test]
     fn a_later_panel_is_its_own_device_with_a_channel_select_and_no_picture() {
         let cfg = config();
-        let panels = vec![view("aa0001", None, "Living room"), view("screeny-4a00a5", Some("screeny-4a00a5"), "Kitchen")];
+        let panels =
+            vec![view("aa0001", None, "Living room"), view("screeny-4a00a5", Some("screeny-4a00a5"), "Kitchen")];
         let out = announce(&cfg, &fleet(panels));
         let topics: Vec<&str> = out.iter().map(|m| m.topic.as_str()).collect();
         assert_eq!(topics[0], "homeassistant/device/screeny_studio/config");
@@ -309,11 +349,18 @@ mod tests {
         // platform and nothing else.
         assert_eq!(second["components"]["picture"], serde_json::json!({ "platform": "select" }));
         assert_eq!(second["components"]["patch"], serde_json::json!({ "platform": "sensor" }));
-        assert_eq!(second["components"].as_object().unwrap().len(), 7, "brightness, level, panel, channel, firmware, and two removals");
+        assert_eq!(
+            second["components"].as_object().unwrap().len(),
+            7,
+            "brightness, level, panel, channel, firmware, and two removals"
+        );
         assert_eq!(second["components"]["firmware"]["platform"], "update");
         assert_eq!(second["components"]["firmware"]["unique_id"], "screeny_studio_screeny-4a00a5_firmware");
         assert_eq!(second["components"]["firmware"]["command_topic"], "screeny/studio/screeny-4a00a5/firmware/set");
-        assert!(!out.iter().any(|m| m.topic == "screeny/studio/screeny-4a00a5/picture/state"), "no state for what it does not have");
+        assert!(
+            !out.iter().any(|m| m.topic == "screeny/studio/screeny-4a00a5/picture/state"),
+            "no state for what it does not have"
+        );
         let first = json(&out[0]);
         assert_eq!(first["device"]["name"], "Living room", "card 368: the first is named after its panel too");
     }
@@ -326,12 +373,19 @@ mod tests {
         f.channels[1].name = "Den".into();
         let after = announce(&cfg, &f);
         assert_ne!(before[0], after[0], "card 368: the first panel's device follows its panel's name");
-        assert_eq!(json(&after[0])["device"]["identifiers"], json(&before[0])["device"]["identifiers"], "and keeps its id");
+        assert_eq!(
+            json(&after[0])["device"]["identifiers"],
+            json(&before[0])["device"]["identifiers"],
+            "and keeps its id"
+        );
         let find = |o: &[Message], end: &str| o.iter().find(|m| m.topic.ends_with(end)).cloned().unwrap();
         assert!(find(&after, "_b/config").payload.contains(r#""name":"Pantry""#));
         assert_ne!(find(&before, "_b/config").payload, find(&after, "_b/config").payload);
         assert!(find(&before, "_ch2/config").payload.contains(r#""name":"Drawing room""#));
-        assert!(find(&after, "_ch2/config").payload.contains(r#""name":"Den""#), "a channel's device is named after the channel");
+        assert!(
+            find(&after, "_ch2/config").payload.contains(r#""name":"Den""#),
+            "a channel's device is named after the channel"
+        );
     }
 
     /// A channel rename or delete changes the options of every channel select
@@ -347,7 +401,10 @@ mod tests {
         }
         let after = announce(&cfg, &renamed);
         for end in ["screeny_studio/config", "_b/config"] {
-            let (b, a) = (before.iter().find(|m| m.topic.ends_with(end)).unwrap(), after.iter().find(|m| m.topic.ends_with(end)).unwrap());
+            let (b, a) = (
+                before.iter().find(|m| m.topic.ends_with(end)).unwrap(),
+                after.iter().find(|m| m.topic.ends_with(end)).unwrap(),
+            );
             assert_ne!(b.payload, a.payload, "{end}");
             assert!(a.payload.contains("Den") && !a.payload.contains("Drawing room"));
         }
@@ -390,13 +447,25 @@ mod tests {
         assert!(ch2["device"].get("sw_version").is_none(), "a channel has no firmware");
         let mut unknown = one("x");
         unknown.panels[0].snapshot.firmware = crate::ha::FirmwareState::default();
-        assert!(json(&announce(&cfg, &unknown)[0])["device"].get("sw_version").is_none(), "left out until the panel has said");
+        assert!(
+            json(&announce(&cfg, &unknown)[0])["device"].get("sw_version").is_none(),
+            "left out until the panel has said"
+        );
     }
 
     #[test]
     fn keys_are_first_none_then_safe_and_unique() {
         let devices: Vec<String> = ["aa0001", "bb0002", "bb 0002", "///", "addr:192.168.7.9"].map(String::from).into();
-        assert_eq!(keys(&devices), [None, Some("bb0002".into()), Some("bb_0002".into()), Some("panel".into()), Some("addr_192_168_7_9".into())]);
+        assert_eq!(
+            keys(&devices),
+            [
+                None,
+                Some("bb0002".into()),
+                Some("bb_0002".into()),
+                Some("panel".into()),
+                Some("addr_192_168_7_9".into())
+            ]
+        );
         let same: Vec<String> = ["a", "x y", "x/y"].map(String::from).into();
         assert_eq!(keys(&same), [None, Some("x_y".into()), Some("x_y_2".into())]);
         assert_eq!(keys(&[]), Vec::<Option<String>>::new());
@@ -412,10 +481,24 @@ mod tests {
         let topics = retained_topics(&t);
         assert_eq!(topics[0], "homeassistant/device/screeny_studio_b/config");
         assert!(topics[1..].iter().all(|t| t.starts_with("screeny/studio/b/")), "{topics:?}");
-        assert_eq!(topics.len(), 8, "the config; brightness, level, panel, channel, firmware and card 352's picture and patch");
+        assert_eq!(
+            topics.len(),
+            8,
+            "the config; brightness, level, panel, channel, firmware and card 352's picture and patch"
+        );
         assert!(topics.contains(&"screeny/studio/b/firmware/state".to_string()));
-        assert!(topics.contains(&"screeny/studio/b/picture/state".to_string()) && topics.contains(&"screeny/studio/b/patch/state".to_string()));
+        assert!(
+            topics.contains(&"screeny/studio/b/picture/state".to_string())
+                && topics.contains(&"screeny/studio/b/patch/state".to_string())
+        );
         let c = retained_topics(&Topics::for_channel(&cfg, 2));
-        assert_eq!(c, ["homeassistant/device/screeny_studio_ch2/config", "screeny/studio/ch2/patch/state", "screeny/studio/ch2/picture/state"]);
+        assert_eq!(
+            c,
+            [
+                "homeassistant/device/screeny_studio_ch2/config",
+                "screeny/studio/ch2/patch/state",
+                "screeny/studio/ch2/picture/state"
+            ]
+        );
     }
 }

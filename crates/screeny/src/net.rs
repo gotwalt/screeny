@@ -179,11 +179,7 @@ impl Iface {
     /// True if `a` is on this interface's subnet.
     #[must_use]
     pub fn contains(&self, a: Ipv4Addr) -> bool {
-        let (a, n, m) = (
-            u32::from(a),
-            u32::from(self.addr),
-            u32::from(self.mask),
-        );
+        let (a, n, m) = (u32::from(a), u32::from(self.addr), u32::from(self.mask));
         m != 0 && (a & m) == (n & m)
     }
 }

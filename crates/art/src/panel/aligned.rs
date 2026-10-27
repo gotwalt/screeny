@@ -73,7 +73,8 @@ pub fn nearest_aligned(target: Rgb, floor: f32) -> Aligned {
                     if lab[0] <= floor + ALIGNED_RISE {
                         continue;
                     }
-                    let e = (lab[0] - want[0]).powi(2) + ALIGNED_HUE_WEIGHT * ((lab[1] - want[1]).powi(2) + (lab[2] - want[2]).powi(2));
+                    let e = (lab[0] - want[0]).powi(2)
+                        + ALIGNED_HUE_WEIGHT * ((lab[1] - want[1]).powi(2) + (lab[2] - want[2]).powi(2));
                     if best.is_none_or(|(be, _)| e < be) {
                         best = Some((e, Aligned { rgb, levels, l: lab[0], clipped: false }));
                     }

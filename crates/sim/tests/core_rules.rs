@@ -19,10 +19,7 @@ use screeny_sim::{Config, Core, Event, Outbox, ReleaseReason, State, Timing};
 const MS: u64 = 1_000;
 
 fn cfg() -> Config {
-    Config {
-        timing: Timing::SPEC,
-        ..Config::for_test()
-    }
+    Config { timing: Timing::SPEC, ..Config::for_test() }
 }
 
 fn addr(s: &str) -> SocketAddr {
@@ -31,13 +28,7 @@ fn addr(s: &str) -> SocketAddr {
 
 /// Build a `FRAME` datagram the way a sender would.
 fn frame(codec: u8, flags: u8, seq: u16, payload: &[u8]) -> Vec<u8> {
-    let pkt = FramePacket {
-        codec,
-        flags,
-        seq,
-        timestamp_us: None,
-        payload,
-    };
+    let pkt = FramePacket { codec, flags, seq, timestamp_us: None, payload };
     let mut buf = vec![0u8; pkt.encoded_len()];
     let n = pkt.write(&mut buf).unwrap();
     buf.truncate(n);
@@ -68,22 +59,10 @@ fn the_lock_lapses_exactly_at_lock_ms() {
     // One microsecond before LOCK_MS: still A's.
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.active_source(), Some(a));
     out.clear();
-    deliver(
-        &mut core,
-        lock_us - 1,
-        b,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, lock_us - 1, b, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.active_source(), Some(a), "one microsecond too early");
     assert_eq!(core.stats().counters.frames_rejected, 1);
     assert_eq!(out.from_frame_sock.len(), 1, "and B is told it is BUSY");
@@ -91,21 +70,9 @@ fn the_lock_lapses_exactly_at_lock_ms() {
     // Exactly at LOCK_MS: B's.
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     out.clear();
-    deliver(
-        &mut core,
-        lock_us,
-        b,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, lock_us, b, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.active_source(), Some(b), "section 7.4 says >=");
     assert_eq!(core.stats().counters.frames_rejected, 0);
     assert!(out.from_frame_sock.is_empty(), "a takeover is not BUSY");
@@ -119,32 +86,16 @@ fn busy_reports_how_long_the_holder_has_left() {
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     out.clear();
-    deliver(
-        &mut core,
-        200 * MS,
-        b,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 200 * MS, b, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     let (_, d) = out.from_frame_sock.first().expect("a BUSY");
     let pkt = ControlPacket::parse(d).unwrap();
     assert_eq!(pkt.op, op::BUSY);
     match Reply::decode(pkt.op, pkt.flags, pkt.body).unwrap() {
-        Reply::Busy {
-            lock_holder_ms_remaining,
-            ..
-        } => assert_eq!(
-            lock_holder_ms_remaining, 300,
-            "LOCK_MS 500 minus the 200 ms since the last accepted frame"
-        ),
+        Reply::Busy { lock_holder_ms_remaining, .. } => {
+            assert_eq!(lock_holder_ms_remaining, 300, "LOCK_MS 500 minus the 200 ms since the last accepted frame")
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -158,75 +109,30 @@ fn busy_is_rate_limited_per_source_and_not_globally() {
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     out.clear();
 
     // B and C are both locked out; each gets its own first BUSY.
-    deliver(
-        &mut core,
-        MS,
-        b,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
-    deliver(
-        &mut core,
-        MS,
-        c,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, MS, b, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
+    deliver(&mut core, MS, c, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(out.from_frame_sock.len(), 2);
     out.clear();
 
     // A keeps streaming, so its lock never lapses.
-    deliver(
-        &mut core,
-        100 * MS,
-        a,
-        &frame(codec::SOLID, F_KEY, 2, &p),
-        &mut out,
-    );
+    deliver(&mut core, 100 * MS, a, &frame(codec::SOLID, F_KEY, 2, &p), &mut out);
     out.clear();
 
     // B tries again inside BUSY_MIN_INTERVAL_MS: silence.
-    deliver(
-        &mut core,
-        101 * MS,
-        b,
-        &frame(codec::SOLID, F_KEY, 2, &p),
-        &mut out,
-    );
+    deliver(&mut core, 101 * MS, b, &frame(codec::SOLID, F_KEY, 2, &p), &mut out);
     assert!(out.from_frame_sock.is_empty());
-    assert!(out
-        .events
-        .iter()
-        .any(|e| matches!(e, Event::Busy { sent: false, .. })));
+    assert!(out.events.iter().any(|e| matches!(e, Event::Busy { sent: false, .. })));
     out.clear();
 
     // And once the interval is up, one more.
     let after = MS + Timing::SPEC.busy_min_interval_ms as u64 * MS;
-    deliver(
-        &mut core,
-        after - MS,
-        a,
-        &frame(codec::SOLID, F_KEY, 3, &p),
-        &mut out,
-    );
+    deliver(&mut core, after - MS, a, &frame(codec::SOLID, F_KEY, 3, &p), &mut out);
     out.clear();
-    deliver(
-        &mut core,
-        after,
-        b,
-        &frame(codec::SOLID, F_KEY, 3, &p),
-        &mut out,
-    );
+    deliver(&mut core, after, b, &frame(codec::SOLID, F_KEY, 3, &p), &mut out);
     assert_eq!(out.from_frame_sock.len(), 1);
 }
 
@@ -242,13 +148,7 @@ fn release_matches_on_the_address_and_not_the_port() {
 
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
-    deliver(
-        &mut core,
-        0,
-        stream,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, stream, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     out.clear();
 
     // A stranger's RELEASE is acknowledged and does nothing.
@@ -256,28 +156,14 @@ fn release_matches_on_the_address_and_not_the_port() {
     assert_eq!(core.active_source(), Some(stream), "not the holder");
     let (_, d) = out.from_control_sock.first().expect("an ack");
     let pkt = ControlPacket::parse(d).unwrap();
-    assert!(
-        !pkt.is_error(),
-        "an ineffective RELEASE is still not an error"
-    );
+    assert!(!pkt.is_error(), "an ineffective RELEASE is still not an error");
     out.clear();
 
     // The holder's own, from a different port, does.
-    core.control(
-        2 * MS,
-        same_ip_other_port,
-        &request(&Request::Release, 2),
-        &mut out,
-    );
+    core.control(2 * MS, same_ip_other_port, &request(&Request::Release, 2), &mut out);
     assert_eq!(core.active_source(), None);
     assert_eq!(core.state(), State::Hold);
-    assert!(out.events.iter().any(|e| matches!(
-        e,
-        Event::LockReleased {
-            reason: ReleaseReason::Released,
-            ..
-        }
-    )));
+    assert!(out.events.iter().any(|e| matches!(e, Event::LockReleased { reason: ReleaseReason::Released, .. })));
 }
 
 #[test]
@@ -287,13 +173,7 @@ fn hold_becomes_idle_exactly_at_hold_ms() {
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.state(), State::Live);
 
     // Section 7.3: STREAM_TIMEOUT_MS with no accepted frame -> HOLD.
@@ -319,19 +199,8 @@ fn hold_forever_stays_in_hold_for_a_day() {
     let mut core = Core::new(&cfg());
     let mut out = Outbox::default();
 
-    core.control(
-        0,
-        a,
-        &request(&Request::SetIdle(IdleMode::HoldForever), 1),
-        &mut out,
-    );
-    deliver(
-        &mut core,
-        MS,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    core.control(0, a, &request(&Request::SetIdle(IdleMode::HoldForever), 1), &mut out);
+    deliver(&mut core, MS, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     core.tick(86_400 * 1_000 * MS, &mut out);
     assert_eq!(core.state(), State::Hold);
     assert_eq!(core.idle_mode(), IdleMode::HoldForever);
@@ -348,33 +217,15 @@ fn a_final_frame_that_does_not_decode_does_not_release_the_lock() {
     let mut out = Outbox::default();
     let (good, _) = solid([1, 2, 3]);
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &good),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &good), &mut out);
     assert_eq!(core.active_source(), Some(a));
 
-    deliver(
-        &mut core,
-        MS,
-        a,
-        &frame(codec::SOLID, F_KEY | F_FINAL, 2, &[1, 2]),
-        &mut out,
-    );
+    deliver(&mut core, MS, a, &frame(codec::SOLID, F_KEY | F_FINAL, 2, &[1, 2]), &mut out);
     assert_eq!(core.active_source(), Some(a), "still A's panel");
     assert_eq!(core.stats().counters.frames_dropped_decode, 1);
 
     // A FINAL frame that does decode releases it.
-    deliver(
-        &mut core,
-        2 * MS,
-        a,
-        &frame(codec::SOLID, F_KEY | F_FINAL, 3, &good),
-        &mut out,
-    );
+    deliver(&mut core, 2 * MS, a, &frame(codec::SOLID, F_KEY | F_FINAL, 3, &good), &mut out);
     assert_eq!(core.active_source(), None);
 }
 
@@ -390,12 +241,7 @@ fn a_whole_drain_is_counted_then_only_the_survivor_is_shown() {
     let mut expect = Vec::new();
     for i in 1..=5u8 {
         let (p, e) = solid([i, i, i]);
-        core.offer_frame(
-            i as u64 * MS,
-            a,
-            &frame(codec::SOLID, F_KEY, i as u16, &p),
-            &mut out,
-        );
+        core.offer_frame(i as u64 * MS, a, &frame(codec::SOLID, F_KEY, i as u16, &p), &mut out);
         expect = e;
     }
     assert_eq!(core.stats().counters.frames_rx, 5);
@@ -422,12 +268,7 @@ fn one_telemetry_answers_a_whole_drain_of_stats_requests() {
     let (p, _) = solid([1, 2, 3]);
 
     for i in 1..=5u16 {
-        core.offer_frame(
-            i as u64 * MS,
-            a,
-            &frame(codec::SOLID, F_KEY | F_STATS_REQ, i, &p),
-            &mut out,
-        );
+        core.offer_frame(i as u64 * MS, a, &frame(codec::SOLID, F_KEY | F_STATS_REQ, i, &p), &mut out);
     }
     core.flush_frames(5 * MS, &mut out);
     assert_eq!(out.from_frame_sock.len(), 1, "one reply for the drain");
@@ -460,35 +301,17 @@ fn a_stats_request_is_answered_even_when_the_frame_is_not_shown() {
     let mut out = Outbox::default();
     let (p, _) = solid([1, 2, 3]);
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 10, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 10, &p), &mut out);
     out.clear();
 
     // Stale, and still answered.
-    deliver(
-        &mut core,
-        200 * MS,
-        a,
-        &frame(codec::SOLID, F_KEY | F_STATS_REQ, 3, &p),
-        &mut out,
-    );
+    deliver(&mut core, 200 * MS, a, &frame(codec::SOLID, F_KEY | F_STATS_REQ, 3, &p), &mut out);
     assert_eq!(out.from_frame_sock.len(), 1, "stale frame, telemetry sent");
     assert_eq!(core.stats().counters.frames_dropped_stale, 1);
     out.clear();
 
     // Undecodable, and still answered - after the rate limit has elapsed.
-    deliver(
-        &mut core,
-        400 * MS,
-        a,
-        &frame(codec::SOLID, F_KEY | F_STATS_REQ, 11, &[9]),
-        &mut out,
-    );
+    deliver(&mut core, 400 * MS, a, &frame(codec::SOLID, F_KEY | F_STATS_REQ, 11, &[9]), &mut out);
     assert_eq!(out.from_frame_sock.len(), 1, "bad payload, telemetry sent");
     assert_eq!(core.stats().counters.frames_dropped_decode, 1);
 }
@@ -504,21 +327,9 @@ fn a_locked_out_sender_gets_busy_and_not_telemetry() {
     let mut out = Outbox::default();
     let (p, _) = solid([1, 2, 3]);
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     out.clear();
-    deliver(
-        &mut core,
-        MS,
-        b,
-        &frame(codec::SOLID, F_KEY | F_STATS_REQ, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, MS, b, &frame(codec::SOLID, F_KEY | F_STATS_REQ, 1, &p), &mut out);
     assert_eq!(out.from_frame_sock.len(), 1);
     let (to, d) = &out.from_frame_sock[0];
     assert_eq!(*to, b);
@@ -532,20 +343,8 @@ fn reset_stats_clears_the_counters_and_leaves_the_stream_alone() {
     let mut out = Outbox::default();
     let (p, expect) = solid([4, 5, 6]);
 
-    deliver(
-        &mut core,
-        0,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
-    deliver(
-        &mut core,
-        MS,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 0, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
+    deliver(&mut core, MS, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.stats().counters.frames_shown, 1);
     assert_eq!(core.stats().counters.frames_dropped_stale, 1);
 
@@ -560,13 +359,7 @@ fn reset_stats_clears_the_counters_and_leaves_the_stream_alone() {
     assert_frames_eq(&core.decoded()[..], &expect, "nor does it blank the panel");
 
     // And last_seq survives, so the next frame is judged the same way.
-    deliver(
-        &mut core,
-        3 * MS,
-        a,
-        &frame(codec::SOLID, F_KEY, 1, &p),
-        &mut out,
-    );
+    deliver(&mut core, 3 * MS, a, &frame(codec::SOLID, F_KEY, 1, &p), &mut out);
     assert_eq!(core.stats().counters.frames_dropped_stale, 1);
 }
 
@@ -580,11 +373,6 @@ fn uptime_and_telemetry_agree_with_the_clock_they_are_given() {
     assert_eq!(t.last_codec, 0, "nothing has been shown");
 
     let mut out = Outbox::default();
-    core.control(
-        2_000_000,
-        addr("10.0.0.1:1"),
-        &request(&Request::SetBrightness(40), 1),
-        &mut out,
-    );
+    core.control(2_000_000, addr("10.0.0.1:1"), &request(&Request::SetBrightness(40), 1), &mut out);
     assert_eq!(core.telemetry(2_000_000).brightness, 40);
 }

@@ -84,7 +84,14 @@ const PARAMS: &[ParamSpec] = &[
     toggle("time", "Draw the time once a minute", true),
     toggle("24h", "24-hour time", false),
     param("hold", "How long the time's food lasts at most, seconds", 5.0, 50.0, 1.0, 25.0),
-    param("gather", "How far the colony changes its habit to write the time (0: writes as it lives)", 0.0, 1.0, 0.01, 0.85),
+    param(
+        "gather",
+        "How far the colony changes its habit to write the time (0: writes as it lives)",
+        0.0,
+        1.0,
+        0.01,
+        0.85,
+    ),
     param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.0),
     param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 1.0),
     param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
@@ -160,21 +167,46 @@ const HABIT_NAMES: &[&str] = &["veins", "rivers", "worms"];
 
 const HABITS: [Habit; 3] = [
     // Jones's classic network: narrow sensors, a wider turn.
-    Habit { sd: Law::k(9.0), sa: Law::k(0.39), ra: Law::k(0.78), md: Law::k(1.0), decay: 0.06, diffuse: 0.6, wobble: 0.05 },
+    Habit {
+        sd: Law::k(9.0),
+        sa: Law::k(0.39),
+        ra: Law::k(0.78),
+        md: Law::k(1.0),
+        decay: 0.06,
+        diffuse: 0.6,
+        wobble: 0.05,
+    },
     // Long sensors, small turns: long flowing arcs. Takes the place of
     // "searching" (Jenson's turn-harder-where-thick law), which at a gentle
     // tempo circled in place into bright clumps and could not hold a
     // numeral (the owner: "has the problem of the clock being illegible").
-    Habit { sd: Law(14.0, 4.0, 0.5), sa: Law::k(0.3), ra: Law::k(0.16), md: Law::k(1.0), decay: 0.05, diffuse: 0.6, wobble: 0.03 },
+    Habit {
+        sd: Law(14.0, 4.0, 0.5),
+        sa: Law::k(0.3),
+        ra: Law::k(0.16),
+        md: Law::k(1.0),
+        decay: 0.05,
+        diffuse: 0.6,
+        wobble: 0.03,
+    },
     // Faster where it is dense: travelling worms. Calmed (the owner:
     // "super frenetic and busy"): a gentler surge, less wobble.
-    Habit { sd: Law::k(11.0), sa: Law::k(0.5), ra: Law::k(0.22), md: Law(0.5, 0.6, 1.0), decay: 0.07, diffuse: 0.5, wobble: 0.03 },
+    Habit {
+        sd: Law::k(11.0),
+        sa: Law::k(0.5),
+        ra: Law::k(0.22),
+        md: Law(0.5, 0.6, 1.0),
+        decay: 0.07,
+        diffuse: 0.5,
+        wobble: 0.03,
+    },
 ];
 
 /// The palette's hues, around the loop of orientations: muted, mineral.
 /// (OKLCH hue in degrees, chroma.) A vein wears the one nearest its
 /// orientation; `palette` and `drift` turn which orientation is which.
-const ANCHORS: [(f32, f32); 6] = [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
+const ANCHORS: [(f32, f32); 6] =
+    [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
 /// Stone: where the orientation is mixed. A warm grey.
 const STONE: (f32, f32) = (80.0, 0.02);
 /// Hues around the loop, and lightness steps per hue.
@@ -275,7 +307,9 @@ fn agent_count(millions: f32) -> u32 {
 
 fn agents_for(n: u32, seed: u64) -> Vec<[f32; 4]> {
     let mut rng = Rng::new(seed);
-    (0..n).map(|_| [rng.f32() * WORLD_W as f32, rng.f32() * WORLD_H as f32, rng.f32() * std::f32::consts::TAU, 0.0]).collect()
+    (0..n)
+        .map(|_| [rng.f32() * WORLD_W as f32, rng.f32() * WORLD_H as f32, rng.f32() * std::f32::consts::TAU, 0.0])
+        .collect()
 }
 
 /// The panel's window on the world: its top-left cell, at `scale` cells per
@@ -288,7 +322,13 @@ fn window(scale: f32) -> (f32, f32) {
 fn time_text(now: f64, h24: bool) -> Vec<char> {
     let minutes = (now / 60.0).floor() as i64;
     let (h, m) = ((minutes / 60).rem_euclid(24), minutes.rem_euclid(60));
-    let h = if h24 { h } else if h % 12 == 0 { 12 } else { h % 12 };
+    let h = if h24 {
+        h
+    } else if h % 12 == 0 {
+        12
+    } else {
+        h % 12
+    };
     let text = if h24 { format!("{h:02}:{m:02}") } else { format!("{h}:{m:02}") };
     text.chars().collect()
 }
@@ -347,7 +387,13 @@ fn morsels(text: &[char], spacing: f32, dice: &mut Rng, now: f64) -> Vec<Node> {
     kept.into_iter()
         .map(|(x, y)| {
             let arrive = ARRIVE * x / W as f32 + dice.range(0.0, ARRIVE_JITTER);
-            Node { x: x + dice.range(-0.3, 0.3), y: y + dice.range(-0.3, 0.3), r: MORSEL, left: 1.0, born: now + f64::from(arrive) }
+            Node {
+                x: x + dice.range(-0.3, 0.3),
+                y: y + dice.range(-0.3, 0.3),
+                r: MORSEL,
+                left: 1.0,
+                born: now + f64::from(arrive),
+            }
         })
         .collect()
 }
@@ -385,7 +431,8 @@ impl Physarum {
                 let mut sum = 0.0;
                 for dy in -1..=1 {
                     for dx in -1..=1 {
-                        let (x, y) = ((cx + dx).clamp(0, W as i32 - 1) as usize, (cy + dy).clamp(0, H as i32 - 1) as usize);
+                        let (x, y) =
+                            ((cx + dx).clamp(0, W as i32 - 1) as usize, (cy + dy).clamp(0, H as i32 - 1) as usize);
                         sum += leds[y * W + x][0];
                     }
                 }
@@ -420,9 +467,19 @@ impl Physarum {
                 }
             }
             let left = if first { self.dice.range(0.4, 1.0) } else { 1.0 };
-            self.nodes.push(Node { x: best.1, y: best.2, r: self.dice.range(0.7, 1.4) * 6.0 / scale, left, born: self.t });
+            self.nodes.push(Node {
+                x: best.1,
+                y: best.2,
+                r: self.dice.range(0.7, 1.4) * 6.0 / scale,
+                left,
+                born: self.t,
+            });
             // At the start, all at once; after, one at a time.
-            self.next_node = if self.nodes.len() < want && self.t < 1.0 { self.t } else { self.t + f64::from(self.dice.range(2.0, 10.0)) };
+            self.next_node = if self.nodes.len() < want && self.t < 1.0 {
+                self.t
+            } else {
+                self.t + f64::from(self.dice.range(2.0, 10.0))
+            };
         }
     }
 
@@ -529,7 +586,12 @@ fn palette_dump(palette: &[Rgb]) -> String {
     let mut out = String::new();
     for (k, c) in palette.iter().enumerate().skip(1) {
         let [r, g, b] = c.to_srgb8();
-        out += &format!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}\n", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
+        out += &format!(
+            "physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}\n",
+            (k - 1) / LIGHTS,
+            (k - 1) % LIGHTS,
+            to_oklab(*c)[0]
+        );
     }
     out
 }
@@ -647,7 +709,11 @@ impl Patch for Physarum {
 
     fn playing(&self) -> Option<Playing> {
         let title = format!("{} food source{}", self.nodes.len(), if self.nodes.len() == 1 { "" } else { "s" });
-        let detail = if self.t - self.time_at < 40.0 { format!("drawing {}", self.time_text.iter().collect::<String>()) } else { "foraging".to_string() };
+        let detail = if self.t - self.time_at < 40.0 {
+            format!("drawing {}", self.time_text.iter().collect::<String>())
+        } else {
+            "foraging".to_string()
+        };
         Some(Playing { title, detail, actions: Vec::new(), notes: Vec::new() })
     }
 }
@@ -662,9 +728,14 @@ mod tests {
     #[test]
     fn the_palette_is_pinned() {
         let fnv = |palette: &[Rgb]| {
-            palette.iter().flat_map(|c| c.to_srgb8()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+            palette
+                .iter()
+                .flat_map(|c| c.to_srgb8())
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
         };
-        for (mute, want) in [(0.0, 0x8b26_b305_3308_4b88u64), (1.0, 0x98e0_adb5_2e82_f4ee), (2.0, 0x454d_e693_0c5f_d1a1)] {
+        for (mute, want) in
+            [(0.0, 0x8b26_b305_3308_4b88u64), (1.0, 0x98e0_adb5_2e82_f4ee), (2.0, 0x454d_e693_0c5f_d1a1)]
+        {
             let palette = palette_for(mute);
             assert_eq!(palette.len(), 1 + (HUES + 1) * LIGHTS);
             let got = fnv(&palette);

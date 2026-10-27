@@ -56,7 +56,8 @@ fn sim_on(port: u16, id: &str) -> Option<SimDevice> {
 
 /// Add a panel by address and start playing on it, the way the dashboard does.
 async fn add_and_play(at: SocketAddr, port: u16) -> String {
-    let added = post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"desk","play":true}}"#)).await;
+    let added =
+        post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"desk","play":true}}"#)).await;
     assert_eq!(added.status, 200, "{}", String::from_utf8_lossy(&added.body));
     added.json()["id"].as_str().expect("an id").to_string()
 }
@@ -231,7 +232,8 @@ async fn the_panel_comes_back_whatever_is_restarted() {
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
     wait_until_streaming(at, "the chosen patch to start playing").await;
 
-    for (round, what) in [(1, "the simulator"), (2, "the server"), (3, "both, server first"), (4, "both, panel first")] {
+    for (round, what) in [(1, "the simulator"), (2, "the server"), (3, "both, server first"), (4, "both, panel first")]
+    {
         match round {
             1 => {
                 drop(sim);
@@ -270,7 +272,11 @@ async fn the_panel_comes_back_whatever_is_restarted() {
         assert_eq!(d["player"]["fps"], 30.0, "after restarting {what}, it is not on the one rate: {d}");
         println!(
             "after restarting {what}: {} playing {} seed {}, {} frames sent, link {}",
-            d["id"], d["player"]["patch"], d["player"]["seed"], d["player"]["panel"]["frames_sent"], d["player"]["panel"]["state"]
+            d["id"],
+            d["player"]["patch"],
+            d["player"]["seed"],
+            d["player"]["panel"]["frames_sent"],
+            d["player"]["panel"]["state"]
         );
     }
     studio.stop().await;
@@ -355,14 +361,26 @@ async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
             &format!("the {kind} patch to be replaced"),
             "/api/v1/status",
             |s| {
-                let bad_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "bad001")).cloned().unwrap_or_default();
+                let bad_dev = s["devices"]
+                    .as_array()
+                    .and_then(|d| d.iter().find(|x| x["id"] == "bad001"))
+                    .cloned()
+                    .unwrap_or_default();
                 bad_dev["player"]["patch"] != bad && bad_dev["player"]["running"] == true
             },
         )
         .await;
 
-        let bad_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "bad001")).cloned().expect("the bad panel");
-        let good_dev = s["devices"].as_array().and_then(|d| d.iter().find(|x| x["id"] == "good01")).cloned().expect("the good panel");
+        let bad_dev = s["devices"]
+            .as_array()
+            .and_then(|d| d.iter().find(|x| x["id"] == "bad001"))
+            .cloned()
+            .expect("the bad panel");
+        let good_dev = s["devices"]
+            .as_array()
+            .and_then(|d| d.iter().find(|x| x["id"] == "good01"))
+            .cloned()
+            .expect("the good panel");
         assert_ne!(bad_dev["player"]["patch"], bad, "the bad patch is still loaded: {bad_dev}");
         assert_eq!(bad_dev["player"]["health"]["fell_back_from"], bad, "{bad_dev}");
         assert_eq!(bad_dev["player"]["running"], true, "the bad panel's player did not come back: {bad_dev}");
@@ -375,7 +393,12 @@ async fn a_bad_patch_is_contained_and_the_rest_carries_on() {
 
         // And the server itself is still well: a contained fault is not a 503.
         let h = get(at, "/healthz").await;
-        assert_eq!(h.status, 200, "a contained fault should not make the server unhealthy: {}", String::from_utf8_lossy(&h.body));
+        assert_eq!(
+            h.status,
+            200,
+            "a contained fault should not make the server unhealthy: {}",
+            String::from_utf8_lossy(&h.body)
+        );
 
         println!(
             "{kind}: bad panel now plays {} (panics {}, stalls {}, restarts {}, abandoned {}); good panel still on {} with {} frames sent",
@@ -400,7 +423,8 @@ async fn the_fault_patches_are_not_on_the_menu() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     add_and_play(at, port).await;
-    until(Duration::from_secs(20), "the panel to resolve", || async { device_status(at).await["resolved"] == true }).await;
+    until(Duration::from_secs(20), "the panel to resolve", || async { device_status(at).await["resolved"] == true })
+        .await;
 
     let refused = post(at, "/api/v1/player/set", r#"{"device":"aa55aa","patch":"fault-panic"}"#).await;
     assert_eq!(refused.status, 400, "{}", String::from_utf8_lossy(&refused.body));
@@ -408,7 +432,8 @@ async fn the_fault_patches_are_not_on_the_menu() {
 
     // And it is not in the patch list a browser is handed either.
     let patches = get(at, "/api/v1/bootstrap").await.json()["patches"].clone();
-    let ids: Vec<String> = patches.as_array().expect("a list").iter().map(|p| p["id"].as_str().unwrap_or("").to_string()).collect();
+    let ids: Vec<String> =
+        patches.as_array().expect("a list").iter().map(|p| p["id"].as_str().unwrap_or("").to_string()).collect();
     assert!(!ids.iter().any(|i| i.starts_with("fault-")), "{ids:?}");
     studio.stop().await;
 }
@@ -430,7 +455,12 @@ async fn a_missing_panel_is_never_unhealthy() {
     post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:1","name":"ghost","play":true}"#).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     let h = get(at, "/healthz").await;
-    assert_eq!(h.status, 200, "a panel that is not there must not make the server unhealthy: {}", String::from_utf8_lossy(&h.body));
+    assert_eq!(
+        h.status,
+        200,
+        "a panel that is not there must not make the server unhealthy: {}",
+        String::from_utf8_lossy(&h.body)
+    );
     let s = get(at, "/api/v1/status").await.json();
     assert_eq!(s["ok"], true, "{s}");
     assert_eq!(s["problems"].as_array().map(Vec::len), Some(0));
@@ -446,7 +476,12 @@ async fn a_missing_panel_is_never_unhealthy() {
     drop(sim);
     tokio::time::sleep(Duration::from_secs(8)).await;
     let h = get(at, "/healthz").await;
-    assert_eq!(h.status, 200, "a panel that vanished must not make the server unhealthy: {}", String::from_utf8_lossy(&h.body));
+    assert_eq!(
+        h.status,
+        200,
+        "a panel that vanished must not make the server unhealthy: {}",
+        String::from_utf8_lossy(&h.body)
+    );
     println!("healthz with a dead panel: {} {}", h.status, String::from_utf8_lossy(&h.body).trim());
     studio.stop().await;
 }
@@ -574,7 +609,8 @@ async fn the_device_controls_reach_the_device() {
     let studio = studio_in(&dir.0, false).await;
     let at = studio.addr;
     add_and_play(at, port).await;
-    until(Duration::from_secs(20), "the panel to resolve", || async { device_status(at).await["resolved"] == true }).await;
+    until(Duration::from_secs(20), "the panel to resolve", || async { device_status(at).await["resolved"] == true })
+        .await;
 
     // Brightness: the simulator's cap is 120, so asking for 200 applies 120.
     let b = post(at, "/api/v1/device/brightness", r#"{"device":"aa88aa","level":200}"#).await;
@@ -649,14 +685,21 @@ async fn the_brightness_policy_survives_the_panel_rebooting() {
         sim.handle().telemetry().brightness == 33
     })
     .await;
-    println!("brightness policy re-applied after a panel reboot: {before} -> 33 -> reboot -> {}", sim.handle().telemetry().brightness);
+    println!(
+        "brightness policy re-applied after a panel reboot: {before} -> 33 -> reboot -> {}",
+        sim.handle().telemetry().brightness
+    );
     studio.stop().await;
 }
 
 /// A state file that cannot be used must not stop the server, end to end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_broken_state_file_starts_a_working_server() {
-    for (tag, content) in [("corrupt-e2e", "{{{{"), ("truncated-e2e", r#"{"version":1,"players":[{"dev"#), ("future-e2e", r#"{"version":99}"#)] {
+    for (tag, content) in [
+        ("corrupt-e2e", "{{{{"),
+        ("truncated-e2e", r#"{"version":1,"players":[{"dev"#),
+        ("future-e2e", r#"{"version":99}"#),
+    ] {
         let dir = Temp::new(tag);
         std::fs::write(dir.0.join("state.json"), content).expect("write");
         let studio = studio_in(&dir.0, false).await;

@@ -49,11 +49,8 @@ fn main() {
             let mut codecs: std::collections::BTreeMap<u8, usize> = Default::default();
 
             for pass in 0..PASSES {
-                let mut enc = Encoder::new(EncodeConfig {
-                    profile,
-                    measure_stages: pass == 0,
-                    ..EncodeConfig::default()
-                });
+                let mut enc =
+                    Encoder::new(EncodeConfig { profile, measure_stages: pass == 0, ..EncodeConfig::default() });
                 for (i, f) in clip.frames.iter().enumerate() {
                     let out = enc.encode(f, MAX_PIXEL_PAYLOAD);
                     let st = enc.last_stats();
@@ -154,18 +151,10 @@ fn print_stages(s: &Stages, frames: usize) {
             "    {:<10} {:>7.0} us  {:>4.0}%",
             name,
             d.as_secs_f64() * 1e6 / frames as f64,
-            if total.is_zero() {
-                0.0
-            } else {
-                d.as_secs_f64() / total.as_secs_f64() * 100.0
-            }
+            if total.is_zero() { 0.0 } else { d.as_secs_f64() / total.as_secs_f64() * 100.0 }
         );
     }
-    println!(
-        "    {:<10} {:>7.0} us",
-        "accounted",
-        total.as_secs_f64() * 1e6 / frames as f64
-    );
+    println!("    {:<10} {:>7.0} us", "accounted", total.as_secs_f64() * 1e6 / frames as f64);
 }
 
 /// A named sequence of frames.

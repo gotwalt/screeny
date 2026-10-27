@@ -52,9 +52,7 @@ impl Piece for TestCard {
             }
         }
         // A word, and a dot moving sub-pixel across the bottom row.
-        font::draw("SCREENY 30FPS", 2, 23, |x, y| {
-            out.set(x as usize, y as usize, [150, 200, 255])
-        });
+        font::draw("SCREENY 30FPS", 2, 23, |x, y| out.set(x as usize, y as usize, [150, 200, 255]));
         let px = (ts * 8.0) % W as f32;
         for x in 0..W {
             let d = (x as f32 - px).abs();

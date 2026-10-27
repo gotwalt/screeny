@@ -69,29 +69,20 @@ impl Panel {
     /// `bits` bitplanes, no temporal dithering.
     #[must_use]
     pub const fn new(bits: u32) -> Self {
-        Panel {
-            steps: (1u32 << bits) - 1,
-            quantiser: Quantiser::Rounded,
-        }
+        Panel { steps: (1u32 << bits) - 1, quantiser: Quantiser::Rounded }
     }
 
     /// `bits` bitplanes dithered across `subframes` refreshes.
     #[must_use]
     pub const fn dithered(bits: u32, subframes: u32) -> Self {
-        Panel {
-            steps: ((1u32 << bits) - 1) * subframes,
-            quantiser: Quantiser::Rounded,
-        }
+        Panel { steps: ((1u32 << bits) - 1) * subframes, quantiser: Quantiser::Rounded }
     }
 
     /// A panel counted in *levels* rather than bitplanes: 64 levels is the
     /// same thing as 6 bitplanes.
     #[must_use]
     pub const fn levels(levels: u32) -> Self {
-        Panel {
-            steps: if levels > 1 { levels - 1 } else { 1 },
-            quantiser: Quantiser::Rounded,
-        }
+        Panel { steps: if levels > 1 { levels - 1 } else { 1 }, quantiser: Quantiser::Rounded }
     }
 
     /// Distinct duty steps, counting temporal dithering.
@@ -214,10 +205,7 @@ impl Panel {
 /// level - and the two disagree at 7 codes (card 248): sRGB 21, 56, 123, 151,
 /// 182, 212, 223, all by one level. sRGB 21 is the one anyone would notice:
 /// `Panel::new(6)` says it is black, the firmware lights it.
-pub const NOMINAL: Panel = Panel {
-    quantiser: Quantiser::DeviceUndithered,
-    ..Panel::new(6)
-};
+pub const NOMINAL: Panel = Panel { quantiser: Quantiser::DeviceUndithered, ..Panel::new(6) };
 /// The same panel with the driver dithering across the ~5 refreshes it gets
 /// per received frame. **Codec selection scores against this** (card 002,
 /// `enc/hybrid.rs`), and since card 030 it is also what the device does.
@@ -264,10 +252,7 @@ pub const DITHER_PHASES: u32 = 16;
 /// zone moves numbers, and it moves them by construction: the darkest visible
 /// code was sRGB 2 (one duty step in sixteen refreshes, a 9.6 Hz blip); it is
 /// now sRGB 5, and what it replaced was never light you could call visible.
-pub const DEVICE: Panel = Panel {
-    quantiser: Quantiser::DeviceDithered,
-    ..Panel::dithered(6, DITHER_PHASES)
-};
+pub const DEVICE: Panel = Panel { quantiser: Quantiser::DeviceDithered, ..Panel::dithered(6, DITHER_PHASES) };
 /// What dimming used to cost, before card 020: brightness scaled the pixel
 /// values, so a 30/255 cap left a 6-bit channel using values 0-7. **The device
 /// has not behaved like this since card 020** - it dims the output-enable
@@ -355,11 +340,7 @@ pub fn aligned_levels(max_level: u32) -> Vec<AlignedLevel> {
     for v in 0..=255u8 {
         let duty = duty_16ths(v);
         while want <= max_level && duty >= want * DITHER_PHASES {
-            out.push(AlignedLevel {
-                level: want,
-                code: v,
-                offset_16ths: duty as i32 - (want * DITHER_PHASES) as i32,
-            });
+            out.push(AlignedLevel { level: want, code: v, offset_16ths: duty as i32 - (want * DITHER_PHASES) as i32 });
             want += 1;
         }
         if want > max_level {
@@ -460,11 +441,7 @@ impl Lut {
         for (v, slot) in table.iter_mut().enumerate() {
             *slot = lin_to_srgb8(emit(v));
         }
-        Lut {
-            table,
-            panel,
-            brightness,
-        }
+        Lut { table, panel, brightness }
     }
 
     /// `(distinct codes this lookup can output, how many of the 256 inputs
@@ -544,12 +521,7 @@ mod tests {
     fn thirty_two_levels_is_coarser_than_sixty_four() {
         let a = Lut::new(Panel::levels(32), 255);
         let b = Lut::new(Panel::levels(64), 255);
-        let n = |l: &Lut| {
-            (0..=255u8)
-                .map(|v| l.map(v))
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-        };
+        let n = |l: &Lut| (0..=255u8).map(|v| l.map(v)).collect::<std::collections::BTreeSet<_>>().len();
         assert_eq!(n(&a), 32);
         assert_eq!(n(&b), 64);
     }
@@ -565,11 +537,7 @@ mod tests {
         assert_eq!(levels, 64, "64 duty steps at full brightness");
         for b in [160u8, 128] {
             let dim = Lut::new(NOMINAL, b);
-            assert_eq!(
-                dim.distinct_levels(),
-                full.distinct_levels(),
-                "brightness {b} keeps every duty step"
-            );
+            assert_eq!(dim.distinct_levels(), full.distinct_levels(), "brightness {b} keeps every duty step");
             assert!(dim.map(255) < full.map(255), "brightness {b} is dimmer");
         }
     }
@@ -611,11 +579,7 @@ mod tests {
     fn receivers_brightness_floor_matches_this_crates_oe_slots() {
         let floor = screeny_receiver::BRIGHTNESS_FLOOR;
         assert!(oe_slots(floor) >= 1, "the floor must light at least one slot");
-        assert_eq!(
-            oe_slots(floor - 1),
-            0,
-            "one below the floor must light none, or the floor is not the lowest"
-        );
+        assert_eq!(oe_slots(floor - 1), 0, "one below the floor must light none, or the floor is not the lowest");
     }
 
     #[test]
@@ -720,7 +684,11 @@ mod tests {
         for v in disagree {
             let nominal_level = (NOMINAL.emit1(v) * 63.0).round() as i32;
             let generic_level = (generic.emit1(v) * 63.0).round() as i32;
-            assert_eq!(nominal_level - generic_level, 1, "code {v}: NOMINAL rounds up where the generic model rounds down");
+            assert_eq!(
+                nominal_level - generic_level,
+                1,
+                "code {v}: NOMINAL rounds up where the generic model rounds down"
+            );
         }
         // sRGB 21 is the one anyone would notice by eye: the generic model
         // called it black.
@@ -861,10 +829,7 @@ mod tests {
         let full = Lut::new(DEVICE, 255);
         let dim = Lut::new(DEVICE, 96);
         assert!(dim.map(255) < full.map(255), "brightness 96 is dimmer");
-        assert!(
-            (oe_light(96) - 9.0 / 25.0).abs() < 1e-6,
-            "the firmware's DEFAULT_BRIGHTNESS is 9 of 25 slots"
-        );
+        assert!((oe_light(96) - 9.0 / 25.0).abs() < 1e-6, "the firmware's DEFAULT_BRIGHTNESS is 9 of 25 slots");
         assert_eq!(DEVICE.distinct_levels().0, 229);
         assert_eq!(DIM.distinct_levels().0, 32, "the model card 066 retired");
     }

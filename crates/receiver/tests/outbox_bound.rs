@@ -116,16 +116,8 @@ fn the_firmware_outbox_caps_one_drains_send_loop_at_four() {
     }
     rx.flush_frames(&mut h, 1_000, Some(&solid_frame(1)), &mut frame);
 
-    assert!(
-        !h.kept.is_empty(),
-        "twelve sources and nothing came back; the test is not exercising section 6.2"
-    );
-    assert_eq!(
-        h.kept.len(),
-        FIRMWARE_OUTBOX,
-        "the outbox should be full; it holds {:?}",
-        h.kept
-    );
+    assert!(!h.kept.is_empty(), "twelve sources and nothing came back; the test is not exercising section 6.2");
+    assert_eq!(h.kept.len(), FIRMWARE_OUTBOX, "the outbox should be full; it holds {:?}", h.kept);
     // The surprise this test exists to pin. If `Limiter`'s eviction rule or
     // `LIMIT_SLOTS` ever changed so that this were zero, the four-slot outbox
     // would stop being the thing that bounds the send loop, and
@@ -139,10 +131,7 @@ fn the_firmware_outbox_caps_one_drains_send_loop_at_four() {
     );
 
     for (to, len, opcode) in &h.kept {
-        assert!(
-            *len <= OUT_MAX,
-            "a {len}-byte datagram for source {to}; OUT_MAX is {OUT_MAX}"
-        );
+        assert!(*len <= OUT_MAX, "a {len}-byte datagram for source {to}; OUT_MAX is {OUT_MAX}");
         assert!(
             *opcode == op::BUSY || *opcode == op::TELEMETRY,
             "section 6.2 has two unsolicited packets; this one is {opcode:#04x}"
@@ -152,11 +141,7 @@ fn the_firmware_outbox_caps_one_drains_send_loop_at_four() {
     // `FRAME_TX_BUF` is `8 * OUT_MAX` = 512 bytes for a queue that is four
     // `tx_meta` slots deep. One drain must fit in it with room to spare.
     let bytes: usize = h.kept.iter().map(|(_, n, _)| n).sum();
-    assert!(
-        bytes <= 4 * OUT_MAX,
-        "one drain queued {bytes} bytes; FRAME_TX_BUF assumes at most {}",
-        4 * OUT_MAX
-    );
+    assert!(bytes <= 4 * OUT_MAX, "one drain queued {bytes} bytes; FRAME_TX_BUF assumes at most {}", 4 * OUT_MAX);
 }
 
 /// Sustained: thirty drains of eight refused sources each, and no drain ever
@@ -182,16 +167,10 @@ fn a_sustained_flood_never_bursts_past_the_outbox() {
         total += h.kept.len();
     }
 
-    assert!(
-        worst <= FIRMWARE_OUTBOX,
-        "one drain of a sustained flood handed the send loop {worst} datagrams"
-    );
+    assert!(worst <= FIRMWARE_OUTBOX, "one drain of a sustained flood handed the send loop {worst} datagrams");
     // 30 drains x 8 sources = 240 refused frames over 600 ms of virtual time.
     // Even with the limiter evicting, the firmware never pushes more than four
     // per drain, so the worst the send loop can cost is bounded whatever the
     // flood does.
-    assert!(
-        total <= 30 * FIRMWARE_OUTBOX,
-        "{total} datagrams over 30 drains; four per drain is the ceiling"
-    );
+    assert!(total <= 30 * FIRMWARE_OUTBOX, "{total} datagrams over 30 drains; four per drain is the ceiling");
 }

@@ -41,11 +41,7 @@ impl NnIndex {
     #[must_use]
     pub fn build(pts: &[[f32; 3]]) -> Self {
         let mut idx = NnIndex {
-            pts: pts
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (*p, i as u32))
-                .collect(),
+            pts: pts.iter().enumerate().map(|(i, p)| (*p, i as u32)).collect(),
             nodes: Vec::with_capacity(pts.len() / LEAF * 2 + 2),
         };
         let n = idx.pts.len();
@@ -84,19 +80,10 @@ impl NnIndex {
         }
         let mid = usize::midpoint(lo, hi);
         self.pts[lo..hi].select_nth_unstable_by(mid - lo, |a, b| {
-            a.0[axis]
-                .partial_cmp(&b.0[axis])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.0[axis].partial_cmp(&b.0[axis]).unwrap_or(std::cmp::Ordering::Equal)
         });
         let split = self.pts[mid].0[axis];
-        self.nodes.push(Node {
-            axis: axis as u8,
-            split,
-            lo: 0,
-            hi: 0,
-            left: u32::MAX,
-            right: u32::MAX,
-        });
+        self.nodes.push(Node { axis: axis as u8, split, lo: 0, hi: 0, left: u32::MAX, right: u32::MAX });
         let left = self.build_range(lo, mid);
         let right = self.build_range(mid, hi);
         self.nodes[id as usize].left = left;
@@ -131,11 +118,7 @@ impl NnIndex {
             return;
         }
         let delta = q[n.axis as usize] - n.split;
-        let (near, far) = if delta < 0.0 {
-            (n.left, n.right)
-        } else {
-            (n.right, n.left)
-        };
+        let (near, far) = if delta < 0.0 { (n.left, n.right) } else { (n.right, n.left) };
         self.search(near, q, best);
         // `<=` rather than `<`: an equally distant point on the far side may
         // have a lower index, and that is what keeps this identical to the
@@ -176,13 +159,7 @@ mod tests {
         for k in [1usize, 2, 3, 7, 8, 9, 16, 31, 32, 64, 127, 256] {
             for dup in [false, true] {
                 let pts: Vec<[f32; 3]> = (0..k)
-                    .map(|i| {
-                        if dup && i % 3 == 0 {
-                            [0.25, 0.5, 0.75]
-                        } else {
-                            [rnd(), rnd() - 0.5, rnd() - 0.5]
-                        }
-                    })
+                    .map(|i| if dup && i % 3 == 0 { [0.25, 0.5, 0.75] } else { [rnd(), rnd() - 0.5, rnd() - 0.5] })
                     .collect();
                 let idx = NnIndex::build(&pts);
                 for _ in 0..200 {

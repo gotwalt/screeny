@@ -42,11 +42,7 @@ pub fn indexed_runs(n: usize) -> Indexed {
     let palette: Vec<[u8; 3]> = (0..n)
         .map(|i| {
             let v = i as u32;
-            [
-                ((v * 37) % 256) as u8,
-                ((v * 91 + 13) % 256) as u8,
-                ((v * 157 + 71) % 256) as u8,
-            ]
+            [((v * 37) % 256) as u8, ((v * 91 + 13) % 256) as u8, ((v * 157 + 71) % 256) as u8]
         })
         .collect();
     let indices: Vec<u8> = (0..NPIX)
@@ -144,23 +140,15 @@ pub struct Block {
 pub fn bc1_dual(blocks: &[Block; 128]) -> (Vec<u8>, Vec<u8>) {
     const W4: [u32; 4] = [0, 85, 171, 256];
     const W8: [u32; 8] = [0, 37, 73, 110, 146, 183, 219, 256];
-    let lerp = |a: u8, b: u8, w: u32| -> u8 {
-        (((a as u32) * (256 - w) + (b as u32) * w + 128) >> 8) as u8
-    };
+    let lerp = |a: u8, b: u8, w: u32| -> u8 { (((a as u32) * (256 - w) + (b as u32) * w + 128) >> 8) as u8 };
     // 5-bit and 6-bit truncation, then bit replication back out, which is
     // what an RGB565 endpoint survives.
-    let to565 = |c: [u8; 3]| -> u16 {
-        ((c[0] as u16 >> 3) << 11) | ((c[1] as u16 >> 2) << 5) | (c[2] as u16 >> 3)
-    };
+    let to565 = |c: [u8; 3]| -> u16 { ((c[0] as u16 >> 3) << 11) | ((c[1] as u16 >> 2) << 5) | (c[2] as u16 >> 3) };
     let from565 = |v: u16| -> [u8; 3] {
         let r = (v >> 11) & 31;
         let g = (v >> 5) & 63;
         let b = v & 31;
-        [
-            ((r << 3) | (r >> 2)) as u8,
-            ((g << 2) | (g >> 4)) as u8,
-            ((b << 3) | (b >> 2)) as u8,
-        ]
+        [((r << 3) | (r >> 2)) as u8, ((g << 2) | (g >> 4)) as u8, ((b << 3) | (b >> 2)) as u8]
     };
 
     let mut flags = [0u8; 16];
@@ -300,10 +288,7 @@ pub fn lz_compress(src: &[u8]) -> Vec<u8> {
 
         for k in i..i + taken {
             if k + 3 <= src.len() {
-                index
-                    .entry([src[k], src[k + 1], src[k + 2]])
-                    .or_default()
-                    .insert(0, k);
+                index.entry([src[k], src[k + 1], src[k + 2]]).or_default().insert(0, k);
             }
         }
         i += taken;

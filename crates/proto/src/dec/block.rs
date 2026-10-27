@@ -42,11 +42,7 @@ fn ramp4(a: [u8; 3], b: [u8; 3]) -> [[u8; 3]; 4] {
     let mut t = [[0u8; 3]; 4];
     for k in 0..4 {
         let w = W4[k];
-        t[k] = [
-            lerp8(a[0], b[0], w),
-            lerp8(a[1], b[1], w),
-            lerp8(a[2], b[2], w),
-        ];
+        t[k] = [lerp8(a[0], b[0], w), lerp8(a[1], b[1], w), lerp8(a[2], b[2], w)];
     }
     t
 }
@@ -57,11 +53,7 @@ fn ramp8(a: [u8; 3], b: [u8; 3]) -> [[u8; 3]; 8] {
     let mut t = [[0u8; 3]; 8];
     for k in 0..8 {
         let w = W8[k];
-        t[k] = [
-            lerp8(a[0], b[0], w),
-            lerp8(a[1], b[1], w),
-            lerp8(a[2], b[2], w),
-        ];
+        t[k] = [lerp8(a[0], b[0], w), lerp8(a[1], b[1], w), lerp8(a[2], b[2], w)];
     }
     t
 }
@@ -107,22 +99,12 @@ pub fn decode_bc1_dual(src: &[u8], dst: &mut Rgb888Frame) -> Result<(), DecodeEr
             if e888 {
                 let t = ramp4([b[0], b[1], b[2]], [b[3], b[4], b[5]]);
                 for j in 0..16 {
-                    put(
-                        dst,
-                        bx * 4 + (j & 3),
-                        by * 4 + (j >> 2),
-                        t[idx2(&b[6..], j)],
-                    );
+                    put(dst, bx * 4 + (j & 3), by * 4 + (j >> 2), t[idx2(&b[6..], j)]);
                 }
             } else {
                 let t = ramp8(rgb565(b[0], b[1]), rgb565(b[2], b[3]));
                 for j in 0..16 {
-                    put(
-                        dst,
-                        bx * 4 + (j & 3),
-                        by * 4 + (j >> 2),
-                        t[idx3_planes(&b[4..], 2, j)],
-                    );
+                    put(dst, bx * 4 + (j & 3), by * 4 + (j >> 2), t[idx3_planes(&b[4..], 2, j)]);
                 }
             }
         }

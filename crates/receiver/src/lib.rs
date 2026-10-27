@@ -602,11 +602,7 @@ impl<K: Copy + PartialEq, const N: usize> Limiter<K, N> {
     /// An empty table.
     #[must_use]
     pub fn new() -> Self {
-        Limiter {
-            key: [None; N],
-            at: [0; N],
-            req: [0; N],
-        }
+        Limiter { key: [None; N], at: [0; N], req: [0; N] }
     }
 
     /// True if a packet may go to `k` now, recording it if so.
@@ -616,14 +612,7 @@ impl<K: Copy + PartialEq, const N: usize> Limiter<K, N> {
     /// `retry_id` is section 6.1's retransmission exemption: a repeat of a
     /// `req_id` already answered inside the window is the same request asked
     /// twice, not a second one, so it is answered again. Pass 0 to disable it.
-    pub fn allow(
-        &mut self,
-        k: K,
-        now_us: u64,
-        min_us: u64,
-        retry_id: u16,
-        eq: impl Fn(K, K) -> bool,
-    ) -> bool {
+    pub fn allow(&mut self, k: K, now_us: u64, min_us: u64, retry_id: u16, eq: impl Fn(K, K) -> bool) -> bool {
         let mut free: Option<usize> = None;
         let mut oldest = 0usize;
         for i in 0..N {
@@ -971,13 +960,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
     /// survivor it thereby throws away has already been counted in
     /// `frames_dropped_superseded` here. Nothing is decoded or displayed until
     /// [`Receiver::flush_frames`].
-    pub fn offer_frame<H: Host<Addr = A>>(
-        &mut self,
-        h: &mut H,
-        now_us: u64,
-        from: A,
-        data: &[u8],
-    ) -> Offer {
+    pub fn offer_frame<H: Host<Addr = A>>(&mut self, h: &mut H, now_us: u64, from: A, data: &[u8]) -> Offer {
         // Section 1 (and card 006 item 29): "A sender MUST NOT emit a datagram
         // whose UDP payload exceeds 1472 bytes." One that does is a protocol
         // violation before it is anything else, and a receive buffer that size
@@ -985,10 +968,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         // the bytes that were sent. Discard and count; do not parse the prefix.
         if data.len() > MAX_UDP_PAYLOAD {
             Counters::bump(&mut self.stats.counters.frames_rejected);
-            h.event(Event::Rejected {
-                from,
-                reason: Some(Reject::TooLong),
-            });
+            h.event(Event::Rejected { from, reason: Some(Reject::TooLong) });
             return Offer::Drop;
         }
         let pkt = match FramePacket::parse(data) {
@@ -998,10 +978,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                 // CONTROL that arrived on the frame port. Section 6.7 counts
                 // all of it in frames_rejected, which is frame-port only.
                 Counters::bump(&mut self.stats.counters.frames_rejected);
-                h.event(Event::Rejected {
-                    from,
-                    reason: Some(reason),
-                });
+                h.event(Event::Rejected { from, reason: Some(reason) });
                 return Offer::Drop;
             }
         };
@@ -1013,10 +990,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             Some(s) => {
                 let since = now_us.saturating_sub(self.last_frame_at_us) / 1_000;
                 if since >= self.timing.lock_ms as u64 {
-                    h.event(Event::LockReleased {
-                        source: s,
-                        reason: ReleaseReason::TakenOver,
-                    });
+                    h.event(Event::LockReleased { source: s, reason: ReleaseReason::TakenOver });
                     self.adopt(h, now_us, from);
                 } else {
                     Counters::bump(&mut self.stats.counters.frames_rejected);
@@ -1040,11 +1014,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         let n = if self.have_last_seq {
             if !screeny_proto::newer(pkt.seq, self.last_seq) {
                 Counters::bump(&mut self.stats.counters.frames_dropped_stale);
-                h.event(Event::Dropped {
-                    from,
-                    seq: pkt.seq,
-                    cause: DropCause::Stale,
-                });
+                h.event(Event::Dropped { from, seq: pkt.seq, cause: DropCause::Stale });
                 return Offer::Drop;
             }
             let g = screeny_proto::gap(pkt.seq, self.last_seq);
@@ -1064,11 +1034,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         // --- section 3.3, newest wins -----------------------------------
         if let Some((old_from, old_seq)) = self.pending.take() {
             Counters::bump(&mut self.stats.counters.frames_dropped_superseded);
-            h.event(Event::Dropped {
-                from: old_from,
-                seq: old_seq,
-                cause: DropCause::Superseded,
-            });
+            h.event(Event::Dropped { from: old_from, seq: old_seq, cause: DropCause::Superseded });
         }
         self.pending = Some((from, pkt.seq));
         Offer::Keep
@@ -1095,9 +1061,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                 let t0 = h.micros();
                 let result = dec::decode(pkt.codec, pkt.payload, back);
                 let decode_us = (h.micros() - t0).min(u32::MAX as u64) as u32;
-                self.stats
-                    .timings
-                    .decode(decode_us.saturating_add(self.extra_decode_us));
+                self.stats.timings.decode(decode_us.saturating_add(self.extra_decode_us));
 
                 match result {
                     Ok(()) => {
@@ -1135,11 +1099,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                         // Section 4.7: discard, count it, leave the previous
                         // frame lit.
                         Counters::bump(&mut self.stats.counters.frames_dropped_decode);
-                        h.event(Event::Dropped {
-                            from,
-                            seq: pkt.seq,
-                            cause: DropCause::Decode(e),
-                        });
+                        h.event(Event::Dropped { from, seq: pkt.seq, cause: DropCause::Decode(e) });
                     }
                 }
             }
@@ -1204,9 +1164,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                 let since = now_us.saturating_sub(self.idle_since_us) / 1_000;
                 let fade = self.timing.fade_ms as u64;
                 if fade > 0 && since < fade {
-                    Intent::Fade {
-                        t: ((since * 256) / fade) as u16,
-                    }
+                    Intent::Fade { t: ((since * 256) / fade) as u16 }
                 } else {
                     Intent::Idle
                 }
@@ -1221,10 +1179,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         // counters.
         self.have_last_seq = false;
         self.stats.arrival.on_source_change();
-        h.event(Event::LockTaken {
-            source: from,
-            displaced,
-        });
+        h.event(Event::LockTaken { source: from, displaced });
         self.set_state(h, State::Live, now_us);
     }
 
@@ -1261,14 +1216,9 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
 
     fn send_busy<H: Host<Addr = A>>(&mut self, h: &mut H, now_us: u64, to: A, remaining_ms: u32) {
         let min = self.timing.busy_min_interval_ms as u64 * 1_000;
-        let ok = self
-            .busy_sent_at
-            .allow(to, now_us, min, 0, |a, b| a == b);
+        let ok = self.busy_sent_at.allow(to, now_us, min, 0, |a, b| a == b);
         if ok {
-            let reply = Reply::Busy {
-                reason: busy_reason::LOCKED,
-                lock_holder_ms_remaining: remaining_ms,
-            };
+            let reply = Reply::Busy { reason: busy_reason::LOCKED, lock_holder_ms_remaining: remaining_ms };
             send(h, to, &reply, op::BUSY);
         }
         h.event(Event::Busy { to, sent: ok });
@@ -1276,10 +1226,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
 
     fn send_telemetry<H: Host<Addr = A>>(&mut self, h: &mut H, now_us: u64, to: A) {
         let min = self.timing.telemetry_min_interval_ms as u64 * 1_000;
-        if !self
-            .telemetry_sent_at
-            .allow(to, now_us, min, 0, |a, b| a == b)
-        {
+        if !self.telemetry_sent_at.allow(to, now_us, min, 0, |a, b| a == b) {
             h.event(Event::TelemetryRateLimited { to });
             return;
         }
@@ -1315,10 +1262,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         // and two of them on one LAN would talk to each other indefinitely. A
         // reply arriving at a device is somebody else's packet.
         if pkt.flags & C_REPLY != 0 {
-            h.event(Event::ControlRejected {
-                from,
-                reason: Reject::BadType,
-            });
+            h.event(Event::ControlRejected { from, reason: Reject::BadType });
             return None;
         }
 
@@ -1330,17 +1274,9 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         // ERR_BAD_LENGTH a malformed one still deserves.
         if pkt.op == op::GET_INFO && pkt.body.is_empty() {
             let min = self.timing.info_min_interval_ms as u64 * 1_000;
-            let ok = self.info_sent_at.allow(from, now_us, min, req_id, |a, b| {
-                H::ip_of(a) == H::ip_of(b)
-            });
+            let ok = self.info_sent_at.allow(from, now_us, min, req_id, |a, b| H::ip_of(a) == H::ip_of(b));
             if !ok {
-                h.event(Event::Control {
-                    from,
-                    op: pkt.op,
-                    req_id,
-                    error: None,
-                    replied: false,
-                });
+                h.event(Event::Control { from, op: pkt.op, req_id, error: None, replied: false });
                 return None;
             }
             return emit(h, from, op::GET_INFO, req_id, &Reply::Info(&self.info), out);
@@ -1348,9 +1284,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
 
         let reply = match Request::decode(pkt.op, pkt.body) {
             Ok(req) => self.apply(h, now_us, from, req),
-            Err(code) => Reply::Err {
-                code: code.as_u8(),
-            },
+            Err(code) => Reply::Err { code: code.as_u8() },
         };
         emit(h, from, pkt.op, req_id, &reply, out)
     }
@@ -1387,30 +1321,18 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         if hdr.flags & C_REPLY != 0 {
             return None;
         }
-        let reply = Reply::Err {
-            code: code.as_u8(),
-        };
+        let reply = Reply::Err { code: code.as_u8() };
         emit(h, from, hdr.b2, hdr.id, &reply, out)
     }
 
     /// Carry out a decoded request and say what to reply with.
-    fn apply<H: Host<Addr = A>>(
-        &mut self,
-        h: &mut H,
-        now_us: u64,
-        from: A,
-        req: Request<'_>,
-    ) -> Reply<'static> {
+    fn apply<H: Host<Addr = A>>(&mut self, h: &mut H, now_us: u64, from: A, req: Request<'_>) -> Reply<'static> {
         match req {
-            Request::Ping => Reply::Ping {
-                uptime_ms: (now_us / 1_000) as u32,
-            },
+            Request::Ping => Reply::Ping { uptime_ms: (now_us / 1_000) as u32 },
             // Handled in `control`, where the rate limit lives; a GET_INFO
             // that reaches here has a body, which section 6.5 calls a length
             // error.
-            Request::GetInfo => Reply::Err {
-                code: ErrorCode::BadLength.as_u8(),
-            },
+            Request::GetInfo => Reply::Err { code: ErrorCode::BadLength.as_u8() },
             // A TELEMETRY request on the control port is solicited, so section
             // 6.2's 100 ms limit - which governs the *unsolicited* reply to a
             // STATS_REQ frame - does not apply to it.
@@ -1422,18 +1344,12 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             Request::SetBrightness(level) => {
                 let applied = clamp_brightness(level, self.brightness_cap);
                 self.brightness = applied;
-                h.event(Event::Brightness {
-                    requested: level,
-                    applied,
-                });
+                h.event(Event::Brightness { requested: level, applied });
                 Reply::Brightness { applied }
             }
             Request::Identify { duration_ms } => {
-                self.identify_until_us = if duration_ms == 0 {
-                    None
-                } else {
-                    Some(now_us + duration_ms as u64 * 1_000)
-                };
+                self.identify_until_us =
+                    if duration_ms == 0 { None } else { Some(now_us + duration_ms as u64 * 1_000) };
                 self.redraw = self.redraw.wrapping_add(1);
                 h.event(Event::Identify { duration_ms });
                 Reply::Identify
@@ -1441,12 +1357,8 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             Request::SetIdle(mode) => {
                 self.idle_mode = mode;
                 self.redraw = self.redraw.wrapping_add(1);
-                h.event(Event::IdleMode {
-                    mode: mode.as_u8(),
-                });
-                Reply::Idle {
-                    mode: mode.as_u8(),
-                }
+                h.event(Event::IdleMode { mode: mode.as_u8() });
+                Reply::Idle { mode: mode.as_u8() }
             }
             Request::ResetStats => {
                 self.stats.reset();
@@ -1468,9 +1380,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
                 self.name.clear();
                 if self.name.push_str(name).is_err() {
                     self.name = previous;
-                    return Reply::Err {
-                        code: ErrorCode::BadArg.as_u8(),
-                    };
+                    return Reply::Err { code: ErrorCode::BadArg.as_u8() };
                 }
                 self.rebuild_info();
                 self.info_changed = true;
@@ -1519,29 +1429,12 @@ fn send<H: Host>(h: &mut H, to: H::Addr, reply: &Reply<'_>, opcode: u8) {
 /// Section 6.1: `req_id` 0 means "no reply wanted", and that covers an error
 /// reply too - a sender that did not ask to be told cannot be told. The
 /// request itself has still been carried out.
-fn emit<H: Host>(
-    h: &mut H,
-    from: H::Addr,
-    op: u8,
-    req_id: u16,
-    reply: &Reply<'_>,
-    out: &mut [u8],
-) -> Option<usize> {
+fn emit<H: Host>(h: &mut H, from: H::Addr, op: u8, req_id: u16, reply: &Reply<'_>, out: &mut [u8]) -> Option<usize> {
     let error = match reply {
         Reply::Err { code } => Some(*code),
         _ => None,
     };
-    let written = if req_id == 0 {
-        None
-    } else {
-        reply.write(op, req_id, out).ok()
-    };
-    h.event(Event::Control {
-        from,
-        op,
-        req_id,
-        error,
-        replied: written.is_some(),
-    });
+    let written = if req_id == 0 { None } else { reply.write(op, req_id, out).ok() };
+    h.event(Event::Control { from, op, req_id, error, replied: written.is_some() });
     written
 }

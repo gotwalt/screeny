@@ -103,10 +103,8 @@ impl Bench {
         let body = format!(r#"{{"to":"127.0.0.1:{}","name":"bench","play":false}}"#, ports.frame);
         let added = post(at, "/api/v1/devices/add", &body).await;
         assert_eq!(added.status, 200, "{}", String::from_utf8_lossy(&added.body));
-        until_json(at, PATIENCE, "the first status read", "/api/v1/status", |v| {
-            !v["devices"][0]["facts"].is_null()
-        })
-        .await;
+        until_json(at, PATIENCE, "the first status read", "/api/v1/status", |v| !v["devices"][0]["facts"].is_null())
+            .await;
 
         Bench { dev, studio, at }
     }
@@ -202,12 +200,7 @@ async fn the_stack_has_a_warning_level_and_a_fault_level() {
 async fn a_heap_past_the_line_is_a_fault() {
     let b = Bench::start().await;
 
-    let f = b
-        .health(
-            "a heap at 90%",
-            Health { heap_used: 88_474, heap_size: 98_304, ..Health::default() },
-        )
-        .await;
+    let f = b.health("a heap at 90%", Health { heap_used: 88_474, heap_size: 98_304, ..Health::default() }).await;
     assert_eq!(f["low_heap"], true, "90% of the heap is in use: {f}");
 
     // The worst instant measured is not a fault: 60%.
@@ -231,12 +224,7 @@ async fn a_heap_past_the_line_is_a_fault() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_brownout_stands_out_and_is_not_a_reboot_anybody_counted() {
     let b = Bench::start().await;
-    let f = b
-        .health(
-            "a brownout reset",
-            Health { reset_reason: ResetReason::Brownout, ..Health::default() },
-        )
-        .await;
+    let f = b.health("a brownout reset", Health { reset_reason: ResetReason::Brownout, ..Health::default() }).await;
     assert_eq!(f["reset_reason"], "brownout", "{f}");
     assert_eq!(f["odd_reset"], true, "a brownout is not a quiet reset: {f}");
     assert_eq!(f["reboots"], 0, "the boot id never changed: {f}");
@@ -350,7 +338,9 @@ async fn a_healthy_panel_has_no_unhappy_rows_at_all() {
 
     for (what, h) in [("the simulator's defaults", Health::default()), ("the real panel's readings", REAL_PANEL)] {
         let f = b.health(what, h).await;
-        for quiet in ["stack_warn", "stack_fault", "low_stack", "low_heap", "bad_fw_state", "odd_reset", "wifi_stale_failure"] {
+        for quiet in
+            ["stack_warn", "stack_fault", "low_stack", "low_heap", "bad_fw_state", "odd_reset", "wifi_stale_failure"]
+        {
             assert_eq!(f[quiet], false, "{what}: {quiet} should be false: {f}");
         }
         assert_eq!(f["store_errors"], 0, "{what}: {f}");

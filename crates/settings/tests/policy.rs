@@ -1,8 +1,7 @@
 //! The parts with no flash in them: the value types and the write debounce.
 
 use screeny_settings::{
-    Debounce, Field, IdleMode, Name, Psk, SettingError, Settings, Ssid, Wifi, DEFAULT_BRIGHTNESS,
-    QUIET_MS,
+    Debounce, Field, IdleMode, Name, Psk, SettingError, Settings, Ssid, Wifi, DEFAULT_BRIGHTNESS, QUIET_MS,
 };
 
 /// Test dummies only. Never a real credential, anywhere.
@@ -22,10 +21,7 @@ fn debug_of_a_psk_shows_only_its_length() {
 fn debug_of_a_wifi_does_not_contain_the_psk() {
     let w = Wifi::new(SSID, PSK).unwrap();
     let s = format!("{w:?}");
-    assert!(
-        !s.contains("password9"),
-        "the PSK leaked through Debug: {s}"
-    );
+    assert!(!s.contains("password9"), "the PSK leaked through Debug: {s}");
     // Nor as a byte list: "password9" starts 112, 97, 115.
     assert!(!s.contains("112, 97, 115"), "the PSK leaked as bytes: {s}");
     assert!(s.contains("Example-Wifi1"), "the SSID is not a secret: {s}");
@@ -35,10 +31,7 @@ fn debug_of_a_wifi_does_not_contain_the_psk() {
 #[test]
 fn debug_of_a_non_utf8_ssid_falls_back_to_bytes() {
     let w = Wifi::new(&[0x4e, 0xdf], PSK).unwrap();
-    assert_eq!(
-        format!("{w:?}"),
-        "Wifi { ssid: Ssid([78, 223]), psk: Psk(<9 bytes>) }"
-    );
+    assert_eq!(format!("{w:?}"), "Wifi { ssid: Ssid([78, 223]), psk: Psk(<9 bytes>) }");
 }
 
 #[test]
@@ -87,10 +80,7 @@ fn an_ssid_is_bytes_and_a_name_is_text() {
     // A name goes into a `heapless::String` and an mDNS instance name, so it
     // must be text.
     assert_eq!(Name::from_bytes(latin1), Err(SettingError::NameNotUtf8));
-    assert_eq!(
-        Name::from_bytes("Küche".as_bytes()).unwrap().as_str(),
-        "Küche"
-    );
+    assert_eq!(Name::from_bytes("Küche".as_bytes()).unwrap().as_str(), "Küche");
 }
 
 #[test]
@@ -158,11 +148,7 @@ fn a_change_can_be_cancelled_without_a_write() {
 #[test]
 fn next_due_in_ms_tells_the_task_how_long_to_sleep() {
     let mut d = Debounce::new();
-    assert_eq!(
-        d.next_due_in_ms(0),
-        None,
-        "nothing pending: wait for a change"
-    );
+    assert_eq!(d.next_due_in_ms(0), None, "nothing pending: wait for a change");
 
     d.note_change(Field::Brightness, 1_000);
     assert_eq!(d.next_due_in_ms(1_000), Some(QUIET_MS));
@@ -170,11 +156,7 @@ fn next_due_in_ms_tells_the_task_how_long_to_sleep() {
     assert_eq!(d.next_due_in_ms(10_000), Some(0), "already due");
 
     d.note_change(Field::Name, 9_000);
-    assert_eq!(
-        d.next_due_in_ms(10_000),
-        Some(0),
-        "the soonest of the pending fields"
-    );
+    assert_eq!(d.next_due_in_ms(10_000), Some(0), "the soonest of the pending fields");
 }
 
 #[test]
@@ -192,10 +174,7 @@ fn there_is_no_wifi_field_to_debounce() {
     // adds `Field::Wifi`, this stops compiling and they have to read
     // `Store::save_wifi`'s doc comment about writing before disconnecting.
     assert_eq!(Field::ALL.len(), 3);
-    assert_eq!(
-        Field::ALL,
-        [Field::Name, Field::Brightness, Field::IdleMode]
-    );
+    assert_eq!(Field::ALL, [Field::Name, Field::Brightness, Field::IdleMode]);
 }
 
 #[test]

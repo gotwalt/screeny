@@ -84,9 +84,7 @@ impl SenderOutput {
     /// If the panel cannot be found or does not answer. Use
     /// [`SenderOutput::deferred`] to start without one.
     pub fn open(target: Target) -> io::Result<Self> {
-        Ok(SenderOutput {
-            link: Link::open(target, LinkConfig::default())?,
-        })
+        Ok(SenderOutput { link: Link::open(target, LinkConfig::default())? })
     }
 
     /// Start without a panel and pick one up whenever it appears. What a
@@ -94,9 +92,7 @@ impl SenderOutput {
     /// situation from one that is unplugged an hour later.
     #[must_use]
     pub fn deferred(target: Target) -> Self {
-        SenderOutput {
-            link: Link::open_deferred(target, LinkConfig::default()),
-        }
+        SenderOutput { link: Link::open_deferred(target, LinkConfig::default()) }
     }
 
     /// The rate the panel is keeping up with, for the art system's limiter
@@ -156,10 +152,7 @@ fn render(t: f64) -> WireFrame {
     for &i in &indices {
         rgb.extend_from_slice(&palette[i as usize]);
     }
-    WireFrame {
-        rgb,
-        indexed: Some((palette, indices)),
-    }
+    WireFrame { rgb, indexed: Some((palette, indices)) }
 }
 
 fn main() -> io::Result<()> {

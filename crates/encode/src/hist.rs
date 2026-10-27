@@ -110,10 +110,7 @@ impl Hist {
         for (new, &old) in order.iter().enumerate() {
             new_of[old as usize] = new as u32;
             let (key, count) = tmp[old as usize];
-            self.bins.push(Bin {
-                srgb: unpack(key),
-                count,
-            });
+            self.bins.push(Bin { srgb: unpack(key), count });
         }
         for v in &mut self.bin_of {
             *v = new_of[*v as usize];

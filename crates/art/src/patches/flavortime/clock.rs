@@ -166,8 +166,11 @@ fn stroke(c: char, x0: f32, top: f32, cell: f32, weight: f32, bits: &mut [[bool;
     };
     // The colon is one cell wide: its dots sit in that cell.
     let cols = if c == ':' { 1 } else { 3 };
-    let lit = |cx: i32, cy: i32| (0..cols).contains(&cx) && (0..5).contains(&cy) && rows[cy as usize] >> (if c == ':' { 0 } else { cx }) & 1 == 1;
-    let centre = |cx: i32, cy: i32| (snap(x0 + (cx as f32 + 0.5) * cell, weight), snap(top + (cy as f32 + 0.5) * cell, weight));
+    let lit = |cx: i32, cy: i32| {
+        (0..cols).contains(&cx) && (0..5).contains(&cy) && rows[cy as usize] >> (if c == ':' { 0 } else { cx }) & 1 == 1
+    };
+    let centre =
+        |cx: i32, cy: i32| (snap(x0 + (cx as f32 + 0.5) * cell, weight), snap(top + (cy as f32 + 0.5) * cell, weight));
     let mut segments = Vec::new();
     for cy in 0..5 {
         for cx in 0..cols {
@@ -309,7 +312,13 @@ pub const COLLAPSE: f32 = 3.5;
 /// "the old format probably blows up"): every piece goes at once, flung
 /// out from the time's middle and up, arcing down under gravity and
 /// burning out as it flies, as sparks do.
-fn collapse(pieces: &[(usize, usize, [bool; TILE * TILE])], at: &Bounds, t: f32, salt: u32, burst: bool) -> ([[bool; W]; H], f32) {
+fn collapse(
+    pieces: &[(usize, usize, [bool; TILE * TILE])],
+    at: &Bounds,
+    t: f32,
+    salt: u32,
+    burst: bool,
+) -> ([[bool; W]; H], f32) {
     // LEDs per second squared: slow enough to watch, fast enough to fall.
     const GRAVITY: f32 = 110.0;
     const BURN_THROUGH: f32 = 0.5;
@@ -335,9 +344,17 @@ fn collapse(pieces: &[(usize, usize, [bool; TILE * TILE])], at: &Bounds, t: f32,
             let height = (at.bottom as f32 - (y + c)) / c;
             for b in &mut burns {
                 // A few burn through early; the rest as it comes down.
-                *b = if dice.f32() < 0.12 { dice.range(0.1, BURN_THROUGH + 0.4) } else { dice.range(1.4, COLLAPSE - 0.2) };
+                *b = if dice.f32() < 0.12 {
+                    dice.range(0.1, BURN_THROUGH + 0.4)
+                } else {
+                    dice.range(1.4, COLLAPSE - 0.2)
+                };
             }
-            (BURN_THROUGH + 0.04 * from.abs() + 0.08 * height + dice.range(0.0, 0.25), from.signum() * dice.range(0.5, 5.0) + dice.range(-1.5, 1.5), 0.0)
+            (
+                BURN_THROUGH + 0.04 * from.abs() + 0.08 * height + dice.range(0.0, 0.25),
+                from.signum() * dice.range(0.5, 5.0) + dice.range(-1.5, 1.5),
+                0.0,
+            )
         };
         // Flying freely from `drop`: no step-by-step needed.
         let fall = (t - drop).max(0.0);
@@ -379,7 +396,8 @@ mod tests {
     #[test]
     fn the_mask_is_centred_and_the_digits_are_where_they_should_be() {
         let (m, b) = mask("88:88", 20.0, Font::SHIPPED, &[Shape::WHOLE]);
-        let lit: Vec<(usize, usize)> = (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).filter(|&(x, y)| at(&m, x, y)).collect();
+        let lit: Vec<(usize, usize)> =
+            (0..H).flat_map(|y| (0..W).map(move |x| (x, y))).filter(|&(x, y)| at(&m, x, y)).collect();
         let (xs, ys): (Vec<_>, Vec<_>) = lit.iter().copied().unzip();
         let (l, r) = (*xs.iter().min().unwrap(), *xs.iter().max().unwrap());
         assert!(l.abs_diff(W - 1 - r) <= 1, "centred: {l}..{r}");
@@ -472,7 +490,12 @@ mod tests {
         for weight in [1.0, 2.0, 3.0, 4.0, 5.0] {
             let m = draw(15.0, weight);
             let (l, r) = cols(&m);
-            let runs = (l..=r).map(|x| (0..H).any(|y| at(&m, x, y))).collect::<Vec<_>>().windows(2).filter(|w| w[0] && !w[1]).count();
+            let runs = (l..=r)
+                .map(|x| (0..H).any(|y| at(&m, x, y)))
+                .collect::<Vec<_>>()
+                .windows(2)
+                .filter(|w| w[0] && !w[1])
+                .count();
             assert_eq!(runs, 4, "weight {weight}: four gaps between five characters");
         }
     }

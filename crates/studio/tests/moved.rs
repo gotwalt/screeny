@@ -119,7 +119,8 @@ fn device(status: &serde_json::Value, id: &str) -> serde_json::Value {
 
 /// Add a panel by address and start playing on it, the way the page does.
 async fn add_and_play(at: SocketAddr, port: u16, name: &str) {
-    let added = post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"{name}","play":true}}"#)).await;
+    let added =
+        post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"{name}","play":true}}"#)).await;
     assert_eq!(added.status, 200, "{}", String::from_utf8_lossy(&added.body));
 }
 

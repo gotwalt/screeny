@@ -184,22 +184,14 @@ fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
         z.band_period = a.band;
     }
     let mut tiles = Vec::new();
-    let ages: Vec<f64> = (0..a.frames)
-        .map(|i| z.leg_secs * (i as f64 + 1.0) / a.frames as f64)
-        .collect();
+    let ages: Vec<f64> = (0..a.frames).map(|i| z.leg_secs * (i as f64 + 1.0) / a.frames as f64).collect();
     for t in z.targets.clone() {
         for age in &ages {
             let mut f = Frame::black();
             fractal::render_target(&mut z, t, *age, &mut f);
             let s = stats::frame_stats(&f, &opts.panel);
             tiles.push(Tile {
-                label: format!(
-                    "{} {:.0}S {} COLORS APL {:.0}%",
-                    t.name.to_uppercase(),
-                    age,
-                    s.colors,
-                    s.apl * 100.0
-                ),
+                label: format!("{} {:.0}S {} COLORS APL {:.0}%", t.name.to_uppercase(), age, s.colors, s.apl * 100.0),
                 img: preview::render(&f, opts),
             });
         }
@@ -210,33 +202,17 @@ fn targets_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
 /// The clock's awkward cases on one sheet: the longest phrase, the shortest,
 /// both layouts, noon and midnight.
 fn phrases_sheet(a: &Args, opts: &PreviewOpts) -> preview::Img {
-    const TIMES: &[(u32, u32)] = &[
-        (11, 35),
-        (0, 0),
-        (12, 0),
-        (9, 0),
-        (6, 30),
-        (3, 5),
-        (1, 20),
-        (7, 55),
-        (22, 25),
-        (17, 40),
-    ];
+    const TIMES: &[(u32, u32)] =
+        &[(11, 35), (0, 0), (12, 0), (9, 0), (6, 30), (3, 5), (1, 20), (7, 55), (22, 25), (17, 40)];
     let mut tiles = Vec::new();
     for (h, m) in TIMES {
-        let base = Local::now()
-            .naive_local()
-            .date()
-            .and_time(NaiveTime::from_hms_opt(*h, *m, 0).unwrap());
+        let base = Local::now().naive_local().date().and_time(NaiveTime::from_hms_opt(*h, *m, 0).unwrap());
         let mut c = WordClock::at(base);
         c.panel = Panel::levels(a.levels);
         let mut f = Frame::black();
         render_at(&mut c, Duration::from_secs_f64(120.0), a.indexed, &mut f);
         let s = stats::frame_stats(&f, &opts.panel);
-        tiles.push(Tile {
-            label: format!("{:02}:{:02} {}", h, m, s.label()),
-            img: preview::render(&f, opts),
-        });
+        tiles.push(Tile { label: format!("{:02}:{:02} {}", h, m, s.label()), img: preview::render(&f, opts) });
     }
     preview::sheet("WORD CLOCK PHRASES", tiles, a.cols)
 }
@@ -292,11 +268,7 @@ fn main() {
         probe(&a);
         return;
     }
-    let mut opts = PreviewOpts {
-        panel: Panel::levels(a.levels),
-        scale: a.scale,
-        ..Default::default()
-    };
+    let mut opts = PreviewOpts { panel: Panel::levels(a.levels), scale: a.scale, ..Default::default() };
     if a.bloom >= 0.0 {
         opts.bloom = a.bloom;
     }
@@ -309,12 +281,7 @@ fn main() {
         let mut f = Frame::black();
         let mut times = Vec::new();
         // One warm-up frame, then the measurement.
-        render_at(
-            piece.as_mut(),
-            Duration::from_secs_f64(a.start),
-            a.indexed,
-            &mut f,
-        );
+        render_at(piece.as_mut(), Duration::from_secs_f64(a.start), a.indexed, &mut f);
         for i in 0..a.bench {
             let t = Duration::from_secs_f64(a.start + a.seconds * i as f64 / a.bench.max(1) as f64);
             let t0 = Instant::now();
@@ -336,10 +303,7 @@ fn main() {
         return;
     }
 
-    let out = a
-        .out
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/preview-{}.png", a.piece)));
+    let out = a.out.clone().unwrap_or_else(|| PathBuf::from(format!("/tmp/preview-{}.png", a.piece)));
 
     if a.piece == "phrases" {
         let img = phrases_sheet(&a, &opts);
@@ -361,11 +325,7 @@ fn main() {
     let mut prev: Option<Frame> = None;
     let mut max_delta = 0f32;
     for i in 0..n {
-        let t = Duration::from_secs_f64(if n == 1 {
-            a.start
-        } else {
-            a.start + a.seconds * i as f64 / (n - 1) as f64
-        });
+        let t = Duration::from_secs_f64(if n == 1 { a.start } else { a.start + a.seconds * i as f64 / (n - 1) as f64 });
         let mut f = Frame::black();
         let pal = render_at(piece.as_mut(), t, a.indexed, &mut f);
         let s = stats::frame_stats(&f, &opts.panel);
@@ -377,15 +337,8 @@ fn main() {
             Some(p) => format!(" PAL{}", p),
             None => String::new(),
         };
-        let img = if a.squint {
-            preview::render_squint(&f, &opts)
-        } else {
-            preview::render(&f, &opts)
-        };
-        tiles.push(Tile {
-            label: format!("T+{:.2}S {}{}", t.as_secs_f64(), s.label(), extra),
-            img,
-        });
+        let img = if a.squint { preview::render_squint(&f, &opts) } else { preview::render(&f, &opts) };
+        tiles.push(Tile { label: format!("T+{:.2}S {}{}", t.as_secs_f64(), s.label(), extra), img });
     }
 
     let title = format!(
@@ -395,19 +348,10 @@ fn main() {
         if a.squint { " - SQUINT" } else { "" },
         if a.indexed { " - INDEXED" } else { "" }
     );
-    let img = if a.single && tiles.len() == 1 {
-        tiles.pop().unwrap().img
-    } else {
-        preview::sheet(&title, tiles, a.cols)
-    };
+    let img =
+        if a.single && tiles.len() == 1 { tiles.pop().unwrap().img } else { preview::sheet(&title, tiles, a.cols) };
     img.save(&out).unwrap();
-    println!(
-        "wrote {} ({}x{})  max frame-to-frame luma delta {:.3}",
-        out.display(),
-        img.w,
-        img.h,
-        max_delta
-    );
+    println!("wrote {} ({}x{})  max frame-to-frame luma delta {:.3}", out.display(), img.w, img.h, max_delta);
 
     if a.apng {
         let mut piece = make_piece(&a);

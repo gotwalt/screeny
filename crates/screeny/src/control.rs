@@ -112,9 +112,8 @@ impl ControlClient {
         let op = req.op();
         let req_id = self.next_req_id();
         let mut out = vec![0u8; req.encoded_len()];
-        let n = req
-            .write(req_id, &mut out)
-            .map_err(|e| Error::Metadata(format!("{e:?} while building op {op:#04x}")))?;
+        let n =
+            req.write(req_id, &mut out).map_err(|e| Error::Metadata(format!("{e:?} while building op {op:#04x}")))?;
 
         for _ in 0..self.tries {
             self.sock.send(&out[..n])?;
@@ -128,12 +127,7 @@ impl ControlClient {
                 self.sock.set_read_timeout(Some(left))?;
                 let got = match self.sock.recv(&mut self.buf) {
                     Ok(n) => n,
-                    Err(e)
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                        ) =>
-                    {
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
                         break
                     }
                     Err(e) => return Err(e.into()),
@@ -145,29 +139,15 @@ impl ControlClient {
                 if !pkt.is_reply() || pkt.req_id != req_id || pkt.op != op {
                     continue;
                 }
-                let reply = Reply::decode(pkt.op, pkt.flags, pkt.body).map_err(|e| {
-                    Error::BadReply {
-                        addr: self.addr,
-                        what: format!("{e:?} decoding op {op:#04x}"),
-                    }
-                })?;
+                let reply = Reply::decode(pkt.op, pkt.flags, pkt.body)
+                    .map_err(|e| Error::BadReply { addr: self.addr, what: format!("{e:?} decoding op {op:#04x}") })?;
                 if let Reply::Err { code } = reply {
-                    return Err(Error::Device(
-                        ErrorCode::from_u8(code).unwrap_or(ErrorCode::UnknownOp),
-                    ));
+                    return Err(Error::Device(ErrorCode::from_u8(code).unwrap_or(ErrorCode::UnknownOp)));
                 }
-                return f(&reply).map_err(|what| Error::BadReply {
-                    addr: self.addr,
-                    what,
-                });
+                return f(&reply).map_err(|what| Error::BadReply { addr: self.addr, what });
             }
         }
-        Err(Error::Timeout {
-            addr: self.addr,
-            op,
-            tries: self.tries,
-            timeout_ms: self.timeout.as_millis() as u64,
-        })
+        Err(Error::Timeout { addr: self.addr, op, tries: self.tries, timeout_ms: self.timeout.as_millis() as u64 })
     }
 
     /// `PING`: returns the device's uptime and the measured round trip.

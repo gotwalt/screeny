@@ -145,13 +145,11 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             let (lo, hi) = tune.speed;
             // The camera may push 30% harder to catch up; a bird flies its own
             // band, `pep` wide of the flock's.
-            let (lo, hi) =
-                if i == 0 { (lo * 0.5, hi * 1.3) } else { (lo * sim::PEP.0, hi * sim::PEP.1) };
+            let (lo, hi) = if i == 0 { (lo * 0.5, hi * 1.3) } else { (lo * sim::PEP.0, hi * sim::PEP.1) };
             run.speed_ratio = run.speed_ratio.max(s / hi).max(lo / s.max(1e-3));
             let swing = sim::angle_between(*old, b.heading()) / STEP;
             // Camera: altitude slack. Bird: the dodge allowance.
-            let limit =
-                tune.turn * if i == 0 { sim::CAM_SLACK } else { 1.0 + sim::DODGE_TURN * 1.6 };
+            let limit = tune.turn * if i == 0 { sim::CAM_SLACK } else { 1.0 + sim::DODGE_TURN * 1.6 };
             run.turn_ratio = run.turn_ratio.max(swing / limit);
             let sin_g = (b.vel.y / s.max(1e-3)).clamp(-1.0, 1.0);
             run.steepest = run.steepest.max(sin_g.asin().abs().to_degrees());
@@ -201,8 +199,7 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
             run.spread.push(sim.spread);
             run.alt.push(sim.centre.y);
             let flock = sim.flock();
-            run.climb
-                .push(flock.iter().map(|b| b.vel.y).sum::<f32>() / flock.len().max(1) as f32);
+            run.climb.push(flock.iter().map(|b| b.vel.y).sum::<f32>() / flock.len().max(1) as f32);
         }
         if i % 120 == 0 {
             // Nearest neighbour, every bird, every two seconds. O(n^2) at this
@@ -226,10 +223,7 @@ fn fly(seed: u64, seconds: f32, tune: &Tuning, birds: usize) -> Run {
         }
         if i % 60 == 0 {
             if std::env::var_os("FLOCK_PATH").is_some() {
-                eprintln!(
-                    "PATH {seed} {:.1} {:.2} {:.2} {:.2}",
-                    sim.t, sim.centre.x, sim.centre.y, sim.centre.z
-                );
+                eprintln!("PATH {seed} {:.1} {:.2} {:.2} {:.2}", sim.t, sim.centre.x, sim.centre.y, sim.centre.z);
             }
             let c = sim.centre;
             run.centroid.push([c.x, c.y, c.z]);
@@ -274,10 +268,7 @@ fn correlation(series: &[f32], lag: usize) -> f32 {
 /// Differences of a series: turns a path into a velocity, a bearing into a
 /// turn rate. Bearings wrap, so they are differenced the short way round.
 fn changes(series: &[f32], angles: bool) -> Vec<f32> {
-    series
-        .windows(2)
-        .map(|w| if angles { wrap(w[1] - w[0]) } else { w[1] - w[0] })
-        .collect()
+    series.windows(2).map(|w| if angles { wrap(w[1] - w[0]) } else { w[1] - w[0] }).collect()
 }
 
 fn defaults() -> (Tuning, usize) {
@@ -295,7 +286,17 @@ fn defaults() -> (Tuning, usize) {
 /// defaults have their own test.
 fn reference() -> (Tuning, usize) {
     let mut p = Params::defaults(PARAMS);
-    for (id, v) in [("birds", 55.0), ("calm", 0.90), ("wild", 0.65), ("lift", 0.50), ("near", 6.0), ("lean", 1.0), ("bank", 0.8), ("terrain", 0.55), ("beat", 2.4)] {
+    for (id, v) in [
+        ("birds", 55.0),
+        ("calm", 0.90),
+        ("wild", 0.65),
+        ("lift", 0.50),
+        ("near", 6.0),
+        ("lean", 1.0),
+        ("bank", 0.8),
+        ("terrain", 0.55),
+        ("beat", 2.4),
+    ] {
         p.set(PARAMS, id, v);
     }
     let ctx = Ctx { t: 0.0, dt: 0.0, now: 0.0, params: &p };
@@ -411,7 +412,11 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
 
     assert!(in_min >= 15, "the flock left the frame: only {in_min} birds in shot at worst");
     assert!(in_med >= 35, "median {in_med} birds in frame is not a flock");
-    assert!(percentile(&run.seat, 0.95) <= 22.0, "the camera lost its seat: {:.1} m at p95", percentile(&run.seat, 0.95));
+    assert!(
+        percentile(&run.seat, 0.95) <= 22.0,
+        "the camera lost its seat: {:.1} m at p95",
+        percentile(&run.seat, 0.95)
+    );
     assert!(percentile(&run.nearest, 0.5) >= 4.0, "the camera rides too close: {:.1} m", percentile(&run.nearest, 0.5));
     assert!(run.clearance >= 0.0, "a bird was {:.2} m inside a blob", -run.clearance);
     assert!(run.cam_clearance >= 0.0, "the camera was {:.2} m inside a blob", -run.cam_clearance);
@@ -473,11 +478,7 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
 #[test]
 fn the_smallest_flock_still_flocks() {
     let birds = 3;
-    assert_eq!(
-        param_spec("birds").min,
-        birds as f32,
-        "this test assumes `birds`'s minimum is what it is measuring"
-    );
+    assert_eq!(param_spec("birds").min, birds as f32, "this test assumes `birds`'s minimum is what it is measuring");
     let tune = Tuning::of(0.90, 6.0, 0.8, 2.4); // the shipped default `near`
     for seed in [11u64, 29, 404] {
         let run = fly(seed, 600.0, &tune, birds);
@@ -821,10 +822,7 @@ fn the_far_corner_of_both_controls_still_fits() {
         let frames = 1800;
         let (mut worst, mut lossy, mut apl, mut gain) = (0, 0, 0.0_f32, 1.0_f32);
         for i in 0..frames {
-            let out = pipeline.process(
-                patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
-                dt,
-            );
+            let out = pipeline.process(patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }), dt);
             worst = worst.max(out.stats.encoded_bytes);
             apl = apl.max(out.stats.apl);
             if i > 30 {
@@ -890,10 +888,7 @@ fn every_frame_goes_out_exactly() {
         let dt = 1.0 / 30.0;
         let (mut worst, mut lossy, mut colours, mut apl, mut gain) = (0, 0, 0, 0.0_f32, 1.0_f32);
         for i in 0..300 {
-            let out = pipeline.process(
-                patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
-                dt,
-            );
+            let out = pipeline.process(patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }), dt);
             worst = worst.max(out.stats.encoded_bytes);
             colours = colours.max(out.stats.distinct_colours);
             apl = apl.max(out.stats.apl);
@@ -937,9 +932,7 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
             frame = patch.render(&Ctx { t: i as f64 * dt, dt, now: 0.0, params: &params });
         }
         match frame {
-            Frame::Indexed { palette, indices } => {
-                indices.iter().map(|i| palette[*i as usize]).collect::<Vec<_>>()
-            }
+            Frame::Indexed { palette, indices } => indices.iter().map(|i| palette[*i as usize]).collect::<Vec<_>>(),
             Frame::Linear(px) => px,
         }
     };
@@ -950,5 +943,3 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
     // patterns: the same steps happen, so the same picture comes out.
     assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }
-
-

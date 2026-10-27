@@ -19,21 +19,14 @@ fn cbrt_fast_is_accurate_over_the_range_oklab_uses() {
     while x <= 1.0 {
         let got = f64::from(cbrt_fast(x));
         let want = f64::from(x).cbrt();
-        let rel = if want == 0.0 {
-            got.abs()
-        } else {
-            ((got - want) / want).abs()
-        };
+        let rel = if want == 0.0 { got.abs() } else { ((got - want) / want).abs() };
         if rel > worst {
             worst = rel;
             at = x;
         }
         x += 1.0 / 65_536.0;
     }
-    assert!(
-        worst < 2e-6,
-        "worst relative error {worst:.3e} at x={at}, above the 2e-6 the docs claim"
-    );
+    assert!(worst < 2e-6, "worst relative error {worst:.3e} at x={at}, above the 2e-6 the docs claim");
 }
 
 #[test]

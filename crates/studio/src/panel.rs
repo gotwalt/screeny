@@ -561,8 +561,6 @@ impl Panel {
     }
 }
 
-
-
 /// Build the link for a way of reaching a device.
 fn open_link(reach: &Reach) -> SenderOutput {
     match reach {
@@ -611,7 +609,12 @@ mod tests {
     }
 
     fn channel(id: u32) -> Arc<Channel> {
-        Channel::new(StoredChannel { id, ..StoredChannel::default() }, false, &Arc::new(SocketMeter::default()), &crate::channel::shared_output(Output::default()))
+        Channel::new(
+            StoredChannel { id, ..StoredChannel::default() },
+            false,
+            &Arc::new(SocketMeter::default()),
+            &crate::channel::shared_output(Output::default()),
+        )
     }
 
     /// Mix one frame of `incoming` through the panel's fade, as `present`
@@ -675,7 +678,10 @@ mod tests {
         assert!(red.unused(), "the first channel is not held by a fade from a still");
         let f = mix(&p, &flat(Rgb::new(0.02, 0.2, 0.03))).expect("fading again");
         let w = screeny_art::crossfade::ease((DT / 2.0) as f32);
-        assert!(close(f.pixel(0), shown.pixel(0).lerp(Rgb::new(0.02, 0.2, 0.03), w)), "from the still that was showing");
+        assert!(
+            close(f.pixel(0), shown.pixel(0).lerp(Rgb::new(0.02, 0.2, 0.03), w)),
+            "from the still that was showing"
+        );
     }
 
     /// A new panel fades in from black - frames of its own - onto its channel.

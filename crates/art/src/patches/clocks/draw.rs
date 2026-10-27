@@ -168,7 +168,19 @@ mod tests {
         // One dial, both hands pointing right along the middle of the cell.
         let angles = vec![[90.0, 90.0]];
         let lit = |tip: f32| {
-            let dials = Dials { angles: &angles, cols: 1, rows: 1, cell: 16.0, lens: [7.0; 2], half: 1.0, tip, tints, rest: &[], ring: 0.0, mark: 0.0 };
+            let dials = Dials {
+                angles: &angles,
+                cols: 1,
+                rows: 1,
+                cell: 16.0,
+                lens: [7.0; 2],
+                half: 1.0,
+                tip,
+                tints,
+                rest: &[],
+                ring: 0.0,
+                mark: 0.0,
+            };
             let Frame::Indexed { indices, .. } = dials.draw() else { panic!("not indexed") };
             // How much hand is in each column of the dial: both hands share one
             // tint here, so a ramp index is a measure of ink.
@@ -191,7 +203,19 @@ mod tests {
         for hue in [255.0, 20.0, 140.0, 320.0] {
             let tints = [Tint { hue, chroma: 0.15, light: 0.82 }, Tint { hue: 35.0, chroma: 0.01, light: 0.97 }];
             let angles = vec![[90.0, 270.0]; 8];
-            let dials = Dials { angles: &angles, cols: 4, rows: 2, cell: 16.0, lens: [7.0; 2], half: 0.8, tip: 1.0, tints, rest: &[], ring: 0.0, mark: 1.0 };
+            let dials = Dials {
+                angles: &angles,
+                cols: 4,
+                rows: 2,
+                cell: 16.0,
+                lens: [7.0; 2],
+                half: 0.8,
+                tip: 1.0,
+                tints,
+                rest: &[],
+                ring: 0.0,
+                mark: 1.0,
+            };
             let Frame::Indexed { indices, .. } = dials.draw() else { panic!("not indexed") };
             // The hour hand points right and the mark is above it: everything in
             // the right half of each dial, and its top rows, is the hour ramp

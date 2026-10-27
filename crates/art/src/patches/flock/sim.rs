@@ -258,11 +258,7 @@ impl V3 {
     }
 
     pub fn cross(self, o: V3) -> V3 {
-        v3(
-            self.y * o.z - self.z * o.y,
-            self.z * o.x - self.x * o.z,
-            self.x * o.y - self.y * o.x,
-        )
+        v3(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
     }
 
     pub fn len2(self) -> f32 {
@@ -463,12 +459,7 @@ impl Bird {
             room: rooms[clan] * rng.range(ROOM_JITTER.0, ROOM_JITTER.1),
             pep: rng.range(PEP.0, PEP.1),
             clan: clan as u8,
-            rest: [
-                rng.range(0.055, 0.40),
-                rng.range(0.0, TAU),
-                rng.range(0.055, 0.40),
-                rng.range(0.0, TAU),
-            ],
+            rest: [rng.range(0.055, 0.40), rng.range(0.0, TAU), rng.range(0.055, 0.40), rng.range(0.0, TAU)],
         }
     }
 
@@ -573,11 +564,7 @@ impl World {
                     // Long periods: a blob that drifts faster than about a
                     // metre a second stops being scenery and starts chasing
                     // birds, which no turn rate can answer.
-                    rate: v3(
-                        TAU / rng.range(90.0, 260.0),
-                        TAU / rng.range(90.0, 260.0),
-                        TAU / rng.range(90.0, 260.0),
-                    ),
+                    rate: v3(TAU / rng.range(90.0, 260.0), TAU / rng.range(90.0, 260.0), TAU / rng.range(90.0, 260.0)),
                     phase: v3(rng.range(0.0, TAU), rng.range(0.0, TAU), rng.range(0.0, TAU)),
                     radius: rng.range(10.0, 18.0),
                 }
@@ -620,8 +607,7 @@ impl World {
         }
         // It moves to where it is going over its own handful of seconds, so
         // the flock is drawn rather than yanked.
-        self.interest.at =
-            self.interest.at.lerp(self.interest.to, 1.0 - (-dt / self.interest.over).exp());
+        self.interest.at = self.interest.at.lerp(self.interest.to, 1.0 - (-dt / self.interest.over).exp());
 
         if t >= self.surge.next {
             self.surge.start = t;
@@ -633,8 +619,7 @@ impl World {
             // The quiet afterwards, squared so most gaps are long: these have
             // to stay events. At `wild` 0 they are two or three minutes apart,
             // at 1 about forty seconds.
-            self.surge.next =
-                t + self.surge.over + 18.0 + rng.f32().powi(2) * (190.0 - 150.0 * wild);
+            self.surge.next = t + self.surge.over + 18.0 + rng.f32().powi(2) * (190.0 - 150.0 * wild);
         }
     }
 
@@ -767,13 +752,9 @@ impl Sim {
             self.birds.pop();
         }
         while self.birds.len() < want {
-            let off = v3(
-                self.rng.range(-1.0, 1.0),
-                self.rng.range(-1.0, 1.0),
-                self.rng.range(-1.0, 1.0),
-            )
-            .unit_or(UP)
-            .scale(self.spread);
+            let off = v3(self.rng.range(-1.0, 1.0), self.rng.range(-1.0, 1.0), self.rng.range(-1.0, 1.0))
+                .unit_or(UP)
+                .scale(self.spread);
             let rooms = self.clan_room;
             let bird = Bird::new(self.centre.add(off), self.course.scale(5.0), &rooms, &mut self.rng);
             self.birds.push(bird);
@@ -790,13 +771,9 @@ impl Sim {
         let n = self.birds.len();
         let inv = 1.0 / (n - 1).max(1) as f32;
         self.centre = self.birds[1..].iter().fold(V3::ZERO, |a, b| a.add(b.pos)).scale(inv);
-        self.course = self.birds[1..]
-            .iter()
-            .fold(V3::ZERO, |a, b| a.add(b.vel))
-            .unit_or(self.course);
-        self.spread = (self.birds[1..].iter().map(|b| b.pos.sub(self.centre).len2()).sum::<f32>() * inv)
-            .sqrt()
-            .max(2.0);
+        self.course = self.birds[1..].iter().fold(V3::ZERO, |a, b| a.add(b.vel)).unit_or(self.course);
+        self.spread =
+            (self.birds[1..].iter().map(|b| b.pos.sub(self.centre).len2()).sum::<f32>() * inv).sqrt().max(2.0);
         self.rise = self.birds[1..].iter().map(|b| b.vel.y).sum::<f32>() * inv;
         self.surge = self.world.surge_at(self.t);
         self.clans = [(V3::ZERO, 0.0); CLANS];
@@ -808,8 +785,7 @@ impl Sim {
 
         // Where the blobs are this instant, worked out once for all birds.
         let live = tune.blobs.min(self.world.blobs.len());
-        let blobs: Vec<(V3, f32)> =
-            self.world.blobs[..live].iter().map(|b| (b.at(self.t), b.radius)).collect();
+        let blobs: Vec<(V3, f32)> = self.world.blobs[..live].iter().map(|b| (b.at(self.t), b.radius)).collect();
         let reach = self.world.reach(tune);
 
         let mut acc = std::mem::take(&mut self.acc);
@@ -847,8 +823,7 @@ impl Sim {
         // 1.5 m spans twenty-five LEDs and the panel is one wing; at six it is
         // a bird with a wingbeat and there is a flock behind it. A bird keeps
         // the room *it* likes, which is not what its neighbour likes.
-        let sep_r =
-            if camera { tune.separation.max(tune.near * 1.15) } else { tune.separation * me.room };
+        let sep_r = if camera { tune.separation.max(tune.near * 1.15) } else { tune.separation * me.room };
 
         // The seven nearest, whatever their distance: separation and alignment
         // are topological (see [`NEIGH`]). Cohesion stays metric, because that
@@ -1230,11 +1205,7 @@ impl Sim {
         // of what says "vertical" when there is no sky behind the birds to say
         // it - which is exactly the case with the backdrop turned off.
         let climbing = (me.vel.y / (speed * 0.45)).clamp(0.0, 1.0);
-        let rate = tune.beat
-            * me.trim
-            * (0.7 + 0.55 * speed / 5.5)
-            * (1.0 - 0.5 * me.glide)
-            * (1.0 + 0.55 * climbing);
+        let rate = tune.beat * me.trim * (0.7 + 0.55 * speed / 5.5) * (1.0 - 0.5 * me.glide) * (1.0 + 0.55 * climbing);
         me.phase = (me.phase + TAU * rate * dt).rem_euclid(TAU);
     }
 
@@ -1367,10 +1338,7 @@ impl Sim {
     /// How far the nearest bird is, in metres. For the studio's "now playing".
     pub fn nearest(&self) -> f32 {
         let me = self.birds[0].pos;
-        self.birds[1..]
-            .iter()
-            .map(|b| b.pos.sub(me).len())
-            .fold(f32::INFINITY, f32::min)
+        self.birds[1..].iter().map(|b| b.pos.sub(me).len()).fold(f32::INFINITY, f32::min)
     }
 
     /// Clearance between the nearest bird and the nearest blob's surface,

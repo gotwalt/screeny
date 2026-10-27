@@ -279,7 +279,8 @@ async fn player_set_no_longer_pauses_or_speeds_anything_up() {
     // A port nothing listens on, on loopback.
     let add = post(at, "/api/v1/devices/add", r#"{"to":"127.0.0.1:9"}"#).await.json();
     let device = add["id"].as_str().expect("an id").to_string();
-    let p = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{device}","seed":5,"paused":true,"speed":3.0}}"#)).await;
+    let p =
+        post(at, "/api/v1/player/set", &format!(r#"{{"device":"{device}","seed":5,"paused":true,"speed":3.0}}"#)).await;
     assert_eq!(p.status, 200, "{}", String::from_utf8_lossy(&p.body));
     let p = p.json();
     assert_eq!(p["seed"], 5, "the rest of the body is applied");
@@ -425,7 +426,10 @@ async fn player_set_takes_piece_and_settings_too() {
     assert_eq!(status["patch"], "clocks-dials");
     assert_eq!(status["seed"], 7);
     assert_eq!(status["output"]["dither"], "bayer8");
-    assert!(status.get("piece").is_none() && status.get("settings").is_none(), "the reply is in one vocabulary: {status}");
+    assert!(
+        status.get("piece").is_none() && status.get("settings").is_none(),
+        "the reply is in one vocabulary: {status}"
+    );
 
     let new = format!(r#"{{"device":"{id}","patch":"metaballs","output":{{"dither":"bayer4"}}}}"#);
     let status = post(at, "/api/v1/player/set", &new).await.json();

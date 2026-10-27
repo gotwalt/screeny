@@ -142,7 +142,10 @@ mod tests {
     /// An indexed frame blends through its palette.
     #[test]
     fn an_indexed_frame_blends_through_its_palette() {
-        let indexed = Frame::Indexed { palette: vec![Rgb::BLACK, Rgb::splat(0.5)], indices: (0..N).map(|i| (i % 2) as u8).collect() };
+        let indexed = Frame::Indexed {
+            palette: vec![Rgb::BLACK, Rgb::splat(0.5)],
+            indices: (0..N).map(|i| (i % 2) as u8).collect(),
+        };
         let out = blend(&flat(Rgb::splat(0.1)), &indexed, 0.5);
         assert!(matches!(out, Frame::Linear(_)));
         assert!((out.pixel(0).r - 0.05).abs() < 1e-6);

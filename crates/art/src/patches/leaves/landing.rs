@@ -260,7 +260,8 @@ impl Landing {
         }
 
         let local_points: Vec<Vector> = local.iter().map(|v| to_rapier(v.pos)).collect();
-        let collider = ColliderBuilder::round_convex_hull(&local_points, HULL_ROUNDING).unwrap_or_else(|| fallback_box(&local));
+        let collider =
+            ColliderBuilder::round_convex_hull(&local_points, HULL_ROUNDING).unwrap_or_else(|| fallback_box(&local));
         let body_builder = RigidBodyBuilder::dynamic()
             .translation(to_rapier(origin))
             .linvel(to_rapier(touchdown.vel))
@@ -269,7 +270,16 @@ impl Landing {
             .angular_damping(ANGULAR_DAMPING);
         let (body, _) = world.insert(body_builder, collider.friction(LEAF_FRICTION).restitution(RESTITUTION));
 
-        Landing { world, body, local, faces: touchdown.faces, build: touchdown.build, trigger_orient: touchdown.orient, steps: 0, calm: 0 }
+        Landing {
+            world,
+            body,
+            local,
+            faces: touchdown.faces,
+            build: touchdown.build,
+            trigger_orient: touchdown.orient,
+            steps: 0,
+            calm: 0,
+        }
     }
 
     /// One fixed physics step - kept in lockstep with every other step in
@@ -335,7 +345,14 @@ impl Landing {
     pub(crate) fn bake(&self) -> Litter {
         let verts = self.render_vertices();
         let pos = centroid(&verts);
-        Litter { verts, faces: self.faces.clone(), hue: self.build.hue, pos, orient: self.trigger_orient, build: self.build }
+        Litter {
+            verts,
+            faces: self.faces.clone(),
+            hue: self.build.hue,
+            pos,
+            orient: self.trigger_orient,
+            build: self.build,
+        }
     }
 }
 
@@ -397,7 +414,11 @@ mod tests {
             }
             let litter = landing.bake();
             let worst = litter.verts.iter().map(|v| v.pos.y).fold(f32::INFINITY, f32::min);
-            assert!(worst > super::super::ground_plane_y() - 0.05, "a vertex sank to {worst}, ground is at {}", super::super::ground_plane_y());
+            assert!(
+                worst > super::super::ground_plane_y() - 0.05,
+                "a vertex sank to {worst}, ground is at {}",
+                super::super::ground_plane_y()
+            );
         }
     }
 
@@ -419,7 +440,11 @@ mod tests {
                 landing.step();
                 steps += 1;
             }
-            assert!(steps < MAX_STEPS / 2, "took {steps} steps ({:.1}s) - not well within the cap", steps as f32 * STEP);
+            assert!(
+                steps < MAX_STEPS / 2,
+                "took {steps} steps ({:.1}s) - not well within the cap",
+                steps as f32 * STEP
+            );
         }
     }
 
@@ -499,7 +524,8 @@ mod tests {
             landing.bake()
         }
         let (a, b) = (run(77), run(77));
-        let (pa, pb): (Vec<V3>, Vec<V3>) = (a.verts.iter().map(|v| v.pos).collect(), b.verts.iter().map(|v| v.pos).collect());
+        let (pa, pb): (Vec<V3>, Vec<V3>) =
+            (a.verts.iter().map(|v| v.pos).collect(), b.verts.iter().map(|v| v.pos).collect());
         assert_eq!(pa, pb, "the same touchdown settled to two different final poses");
     }
 }

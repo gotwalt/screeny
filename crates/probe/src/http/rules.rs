@@ -10,21 +10,18 @@ use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply,
-    WifiReply, MAX_NETWORKS,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    MAX_NETWORKS,
 };
 use screeny_device_api::request::MAX_IDENTIFY_MS;
-use screeny_device_api::{
-    route, Accepted, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState,
-};
+use screeny_device_api::{route, Accepted, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState};
 
 // The name the settings rules set, and take back off. **One definition**
 // (card 246, item 4): the next run recognises it by `PROBE_NAME_PREFIX`, and a
 // second spelling here is how that would quietly stop working.
 use super::PROBE_NAME;
 use super::{
-    idle_name, verdict, Ctx, Outcome, Res, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE,
-    KNOWN_223, NEEDS_UDP,
+    idle_name, verdict, Ctx, Outcome, Res, Rule, ALLOW_REBOOT, ALLOW_WIFI_TRIAL, CAP_PROBE, KNOWN_223, NEEDS_UDP,
 };
 
 /// The SSID and PSK every test on this bench uses. Never a real pair: a
@@ -554,10 +551,7 @@ fn panic_breadcrumb(cx: &mut Ctx) -> Result<Outcome, String> {
     match &p.last_panic {
         None => verdict(
             p.panic_count == 0,
-            format!(
-                "no panic on record, {} panic(s) counted, boot {}",
-                p.panic_count, p.boot_count
-            ),
+            format!("no panic on record, {} panic(s) counted, boot {}", p.panic_count, p.boot_count),
         ),
         Some(r) => verdict(
             p.panic_count > 0 && !r.file.is_empty() && r.boot <= p.boot_count,
@@ -582,21 +576,14 @@ fn refusal(res: &super::Res, want: ErrorCode) -> Result<Outcome, String> {
     };
     verdict(
         reply.error == want,
-        format!(
-            "HTTP {} {} {}",
-            res.status,
-            reply.error,
-            reply.detail.as_deref().unwrap_or("(no detail)")
-        ),
+        format!("HTTP {} {} {}", res.status, reply.error, reply.detail.as_deref().unwrap_or("(no detail)")),
     )
 }
 
 /// True when a reply is the API's way of saying "this build cannot do that".
 fn is_unavailable(res: &super::Res) -> bool {
     res.status == ErrorCode::Unavailable.status()
-        && res
-            .parse::<ErrorReply>()
-            .is_ok_and(|r| r.error == ErrorCode::Unavailable)
+        && res.parse::<ErrorReply>().is_ok_and(|r| r.error == ErrorCode::Unavailable)
 }
 
 /// The detail of an `unavailable`, for a SKIP line.
@@ -620,33 +607,18 @@ fn status_parses(cx: &mut Ctx) -> Result<Outcome, String> {
         return verdict(false, format!("content-type {:?}", res.content_type()));
     }
     let s: StatusReply = res.parse()?;
-    verdict(
-        true,
-        format!(
-            "{} bytes, fw {} id {} state {:?}",
-            res.body.len(),
-            s.fw,
-            s.id,
-            s.state
-        ),
-    )
+    verdict(true, format!("{} bytes, fw {} id {} state {:?}", res.body.len(), s.fw, s.id, s.state))
 }
 
 fn status_api(cx: &mut Ctx) -> Result<Outcome, String> {
     let s = cx.status()?;
-    verdict(
-        s.api == route::API_VERSION,
-        format!("api {} (this suite speaks {})", s.api, route::API_VERSION),
-    )
+    verdict(s.api == route::API_VERSION, format!("api {} (this suite speaks {})", s.api, route::API_VERSION))
 }
 
 fn status_boot_id(cx: &mut Ctx) -> Result<Outcome, String> {
     let a = cx.status()?;
     let b = cx.status()?;
-    verdict(
-        a.boot_id == b.boot_id && a.boot_id != 0,
-        format!("{} then {}", a.boot_id, b.boot_id),
-    )
+    verdict(a.boot_id == b.boot_id && a.boot_id != 0, format!("{} then {}", a.boot_id, b.boot_id))
 }
 
 fn status_uptime(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -655,20 +627,14 @@ fn status_uptime(cx: &mut Ctx) -> Result<Outcome, String> {
     let b = cx.status()?;
     // Wrapping, because it is a u32 of milliseconds and wraps at 49.7 days.
     let moved = b.uptime_ms.wrapping_sub(a.uptime_ms);
-    verdict(
-        moved > 0 && moved < 60_000,
-        format!("{} ms -> {} ms (+{moved} ms)", a.uptime_ms, b.uptime_ms),
-    )
+    verdict(moved > 0 && moved < 60_000, format!("{} ms -> {} ms (+{moved} ms)", a.uptime_ms, b.uptime_ms))
 }
 
 fn status_heap(cx: &mut Ctx) -> Result<Outcome, String> {
     let s = cx.status()?;
     verdict(
         s.heap_used <= s.heap_size && s.heap_size > 0,
-        format!(
-            "heap {}/{} bytes, stack_free {}",
-            s.heap_used, s.heap_size, s.stack_free
-        ),
+        format!("heap {}/{} bytes, stack_free {}", s.heap_used, s.heap_size, s.stack_free),
     )
 }
 
@@ -746,25 +712,13 @@ fn telemetry_agrees_with_udp(cx: &mut Ctx) -> Result<Outcome, String> {
     let after = cx.telemetry()?;
 
     let between = |name: &str, lo: u32, mid: u32, hi: u32| {
-        (mid >= lo && mid <= hi).then_some(()).ok_or_else(|| {
-            format!("{name}: UDP {lo} then HTTP {mid} then UDP {hi}")
-        })
+        (mid >= lo && mid <= hi).then_some(()).ok_or_else(|| format!("{name}: UDP {lo} then HTTP {mid} then UDP {hi}"))
     };
     let mut wrong = Vec::new();
     for (name, lo, mid, hi) in [
         ("frames_rx", before.frames_rx, http.frames_rx, after.frames_rx),
-        (
-            "frames_shown",
-            before.frames_shown,
-            http.frames_shown,
-            after.frames_shown,
-        ),
-        (
-            "frames_rejected",
-            before.frames_rejected,
-            http.frames_rejected,
-            after.frames_rejected,
-        ),
+        ("frames_shown", before.frames_shown, http.frames_shown, after.frames_shown),
+        ("frames_rejected", before.frames_rejected, http.frames_rejected, after.frames_rejected),
         ("uptime_ms", before.uptime_ms, http.uptime_ms, after.uptime_ms),
     ] {
         if let Err(e) = between(name, lo, mid, hi) {
@@ -782,10 +736,7 @@ fn telemetry_agrees_with_udp(cx: &mut Ctx) -> Result<Outcome, String> {
         ));
     }
     if http.brightness != before.brightness && http.brightness != after.brightness {
-        wrong.push(format!(
-            "brightness: {} vs {}",
-            before.brightness, http.brightness
-        ));
+        wrong.push(format!("brightness: {} vs {}", before.brightness, http.brightness));
     }
     verdict(
         wrong.is_empty(),
@@ -811,15 +762,10 @@ fn telemetry_agrees_with_udp(cx: &mut Ctx) -> Result<Outcome, String> {
 fn networks_list(cx: &mut Ctx) -> Result<Outcome, String> {
     let res = cx.get(route::NETWORKS)?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build cannot scan: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build cannot scan: {}", unavailable_detail(&res))));
     }
     if res.status == ErrorCode::RateLimited.status() {
-        return Ok(Outcome::Skip(
-            "something scanned inside the window just before this run".into(),
-        ));
+        return Ok(Outcome::Skip("something scanned inside the window just before this run".into()));
     }
     if res.status != 200 {
         return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
@@ -856,17 +802,10 @@ fn networks_list(cx: &mut Ctx) -> Result<Outcome, String> {
 fn networks_rate_limited(cx: &mut Ctx) -> Result<Outcome, String> {
     let first = cx.get(route::NETWORKS)?;
     if is_unavailable(&first) {
-        return Ok(Outcome::Skip(format!(
-            "this build cannot scan: {}",
-            unavailable_detail(&first)
-        )));
+        return Ok(Outcome::Skip(format!("this build cannot scan: {}", unavailable_detail(&first))));
     }
     // Rule 11 has just scanned, so this one is usually already the refusal.
-    let res = if first.status == 200 {
-        cx.get(route::NETWORKS)?
-    } else {
-        first
-    };
+    let res = if first.status == 200 { cx.get(route::NETWORKS)? } else { first };
     if res.status != ErrorCode::RateLimited.status() {
         return verdict(
             false,
@@ -885,14 +824,7 @@ fn networks_rate_limited(cx: &mut Ctx) -> Result<Outcome, String> {
     Ok(match out {
         Outcome::Pass(d) => Outcome::Pass(format!(
             "{d}{}",
-            if res
-                .parse::<ErrorReply>()
-                .is_ok_and(|r| r.detail.is_some())
-            {
-                ""
-            } else {
-                " (no wait in the detail)"
-            }
+            if res.parse::<ErrorReply>().is_ok_and(|r| r.detail.is_some()) { "" } else { " (no wait in the detail)" }
         )),
         other => other,
     })
@@ -910,13 +842,7 @@ fn wifi_parses(cx: &mut Ctx) -> Result<Outcome, String> {
     let w: WifiReply = res.parse()?;
     verdict(
         true,
-        format!(
-            "state {:?} ssid {:?} ip {:?} reason {:?}",
-            w.state,
-            w.ssid.as_deref(),
-            w.ip.as_deref(),
-            w.reason
-        ),
+        format!("state {:?} ssid {:?} ip {:?} reason {:?}", w.state, w.ssid.as_deref(), w.ip.as_deref(), w.reason),
     )
 }
 
@@ -924,10 +850,7 @@ fn wifi_reason(cx: &mut Ctx) -> Result<Outcome, String> {
     let res = cx.get(route::WIFI)?;
     let w: WifiReply = res.parse()?;
     let ok = (w.state == WifiState::Failed) == w.reason.is_some();
-    verdict(
-        ok,
-        format!("state {:?} reason {:?}", w.state, w.reason),
-    )
+    verdict(ok, format!("state {:?} reason {:?}", w.state, w.reason))
 }
 
 fn wifi_form_without_ssid(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -967,17 +890,10 @@ fn settings_empty(cx: &mut Ctx) -> Result<Outcome, String> {
 }
 
 fn settings_round_trip(cx: &mut Ctx) -> Result<Outcome, String> {
-    let other = if cx.found.idle_mode == IdleMode::Dim {
-        IdleMode::Status
-    } else {
-        IdleMode::Dim
-    };
+    let other = if cx.found.idle_mode == IdleMode::Dim { IdleMode::Status } else { IdleMode::Dim };
     // The `pin` is decision 3's parsed-and-ignored field, and it is sent with
     // a credential-shaped value on purpose: rule 38 greps every reply for it.
-    let body = format!(
-        r#"{{"name":"{PROBE_NAME}","idle_mode":"{}","pin":"{DUMMY_PSK}"}}"#,
-        idle_name(other)
-    );
+    let body = format!(r#"{{"name":"{PROBE_NAME}","idle_mode":"{}","pin":"{DUMMY_PSK}"}}"#, idle_name(other));
     let res = cx.post_json(route::SETTINGS, &body)?;
     if res.status != 200 {
         return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
@@ -987,11 +903,8 @@ fn settings_round_trip(cx: &mut Ctx) -> Result<Outcome, String> {
 
     // Put it back before judging, so a failure here still leaves the device
     // as it was found.
-    let restore = format!(
-        r#"{{"name":{},"idle_mode":"{}"}}"#,
-        super::json_string(&cx.found.name),
-        idle_name(cx.found.idle_mode)
-    );
+    let restore =
+        format!(r#"{{"name":{},"idle_mode":"{}"}}"#, super::json_string(&cx.found.name), idle_name(cx.found.idle_mode));
     let back = cx.set_settings(&restore)?;
 
     let mut wrong = Vec::new();
@@ -1079,11 +992,7 @@ fn settings_brightness_cap(cx: &mut Ctx) -> Result<Outcome, String> {
             "asked 255, applied {} and status agrees ({}){}",
             applied.brightness,
             status.brightness,
-            if applied.brightness == 255 {
-                ", so this build caps at 255"
-            } else {
-                ", which is the firmware cap"
-            }
+            if applied.brightness == 255 { ", so this build caps at 255" } else { ", which is the firmware cap" }
         ),
     )
 }
@@ -1129,19 +1038,12 @@ fn identify_overlay(cx: &mut Ctx) -> Result<Outcome, String> {
     }
     verdict(
         wrong.is_empty(),
-        if wrong.is_empty() {
-            format!("{during_http:?} then {after_http:?}")
-        } else {
-            wrong.join("; ")
-        },
+        if wrong.is_empty() { format!("{during_http:?} then {after_http:?}") } else { wrong.join("; ") },
     )
 }
 
 fn identify_out_of_range(cx: &mut Ctx) -> Result<Outcome, String> {
-    let res = cx.post_json(
-        route::IDENTIFY,
-        &format!(r#"{{"duration_ms":{}}}"#, MAX_IDENTIFY_MS + 1),
-    )?;
+    let res = cx.post_json(route::IDENTIFY, &format!(r#"{{"duration_ms":{}}}"#, MAX_IDENTIFY_MS + 1))?;
     refusal(&res, ErrorCode::OutOfRange)
 }
 
@@ -1162,10 +1064,7 @@ fn busy_with_a_trial(res: &Res) -> Option<Outcome> {
     }
     let f: FirmwareReply = res.parse().ok()?;
     (f.error == Some(FirmwareError::Busy)).then(|| {
-        Outcome::Skip(
-            "the device is busy with an upload or an OTA trial; try again in three minutes"
-                .to_owned(),
-        )
+        Outcome::Skip("the device is busy with an upload or an OTA trial; try again in three minutes".to_owned())
     })
 }
 
@@ -1175,10 +1074,7 @@ fn busy_with_a_trial(res: &Res) -> Option<Outcome> {
 fn firmware_refuses(cx: &mut Ctx, body: &[u8], what: &str) -> Result<Outcome, String> {
     let res = cx.post_bytes(route::FIRMWARE, body)?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build does not take uploads: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
     }
     if let Some(s) = busy_with_a_trial(&res) {
         return Ok(s);
@@ -1191,13 +1087,7 @@ fn firmware_refuses(cx: &mut Ctx, body: &[u8], what: &str) -> Result<Outcome, St
         };
     }
     let f: FirmwareReply = res.parse()?;
-    verdict(
-        !f.ok,
-        format!(
-            "{what}: ok {} written {} error {:?}",
-            f.ok, f.written, f.error
-        ),
-    )
+    verdict(!f.ok, format!("{what}: ok {} written {} error {:?}", f.ok, f.written, f.error))
 }
 
 fn firmware_empty(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -1216,41 +1106,24 @@ fn firmware_not_an_image(cx: &mut Ctx) -> Result<Outcome, String> {
 /// firmware served the route at all. The four below know what the answer
 /// should be, and a device that refuses an ESP32-C3 image as `bad_magic` has a
 /// bug worth finding even though it refused it.
-fn firmware_refuses_with(
-    cx: &mut Ctx,
-    body: &[u8],
-    want: FirmwareError,
-    what: &str,
-) -> Result<Outcome, String> {
+fn firmware_refuses_with(cx: &mut Ctx, body: &[u8], want: FirmwareError, what: &str) -> Result<Outcome, String> {
     let res = cx.post_bytes(route::FIRMWARE, body)?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build does not take uploads: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
     }
     if let Some(s) = busy_with_a_trial(&res) {
         return Ok(s);
     }
     if res.status != 200 {
         return match res.error() {
-            Ok(r) => verdict(
-                false,
-                format!(
-                    "HTTP {} {} - this route answers 200 with ok:false",
-                    res.status, r.error
-                ),
-            ),
+            Ok(r) => verdict(false, format!("HTTP {} {} - this route answers 200 with ok:false", res.status, r.error)),
             Err(e) => verdict(false, format!("HTTP {}: {e}", res.status)),
         };
     }
     let f: FirmwareReply = res.parse()?;
     verdict(
         !f.ok && f.error == Some(want),
-        format!(
-            "{what}: ok {} written {} error {:?} (wanted {:?})",
-            f.ok, f.written, f.error, want
-        ),
+        format!("{what}: ok {} written {} error {:?} (wanted {:?})", f.ok, f.written, f.error, want),
     )
 }
 
@@ -1290,19 +1163,14 @@ fn firmware_too_large(cx: &mut Ctx) -> Result<Outcome, String> {
     let image = screeny_fwimage::build::Builder::good().build();
     let res = cx.post_bytes_declaring(route::FIRMWARE, DECLARED, &image[..64])?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build does not take uploads: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
     }
     if res.status != 200 {
         return match res.error() {
             // `payload_too_large` in the generic shape is a defensible answer
             // too - it is what a server that bounds the route before routing
             // would say. Accept it, and say which one it was.
-            Ok(r) if r.error == ErrorCode::PayloadTooLarge => {
-                Ok(Outcome::Pass("HTTP 413 payload_too_large".into()))
-            }
+            Ok(r) if r.error == ErrorCode::PayloadTooLarge => Ok(Outcome::Pass("HTTP 413 payload_too_large".into())),
             Ok(r) => verdict(false, format!("HTTP {} {}", res.status, r.error)),
             Err(e) => verdict(false, format!("HTTP {}: {e}", res.status)),
         };
@@ -1328,12 +1196,7 @@ fn firmware_truncated(cx: &mut Ctx) -> Result<Outcome, String> {
     let image = screeny_fwimage::build::Builder::good().build();
     // Everything but the tail of the appended digest.
     let cut = image.len() - 200;
-    firmware_refuses_with(
-        cx,
-        &image[..cut],
-        FirmwareError::BadSha256,
-        "a good image with 200 bytes missing",
-    )
+    firmware_refuses_with(cx, &image[..cut], FirmwareError::BadSha256, "a good image with 200 bytes missing")
 }
 
 /// Card 241: `?activate=` is parsed, and a value this API does not define is
@@ -1347,10 +1210,7 @@ fn firmware_bad_activate(cx: &mut Ctx) -> Result<Outcome, String> {
     let path = format!("{}?activate=maybe", route::FIRMWARE);
     let res = cx.post_bytes(&path, &[0u8; 64])?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build does not take uploads: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
     }
     refusal(&res, ErrorCode::OutOfRange)
 }
@@ -1365,10 +1225,7 @@ fn firmware_stage_only(cx: &mut Ctx) -> Result<Outcome, String> {
     let path = format!("{}?activate=0", route::FIRMWARE);
     let res = cx.post_bytes(&path, &[0u8; 64])?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "this build does not take uploads: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
     }
     if let Some(s) = busy_with_a_trial(&res) {
         return Ok(s);
@@ -1379,10 +1236,7 @@ fn firmware_stage_only(cx: &mut Ctx) -> Result<Outcome, String> {
     let f: FirmwareReply = res.parse()?;
     verdict(
         !f.ok && !f.activating && f.error == Some(FirmwareError::BadMagic),
-        format!(
-            "ok {} activating {} error {:?}",
-            f.ok, f.activating, f.error
-        ),
+        format!("ok {} activating {} error {:?}", f.ok, f.activating, f.error),
     )
 }
 
@@ -1416,11 +1270,7 @@ fn unknown_path(cx: &mut Ctx) -> Result<Outcome, String> {
     }
     verdict(
         wrong.is_empty(),
-        if wrong.is_empty() {
-            format!("/api/v1/nope and /api/v2/status: {detail}")
-        } else {
-            wrong.join("; ")
-        },
+        if wrong.is_empty() { format!("/api/v1/nope and /api/v2/status: {detail}") } else { wrong.join("; ") },
     )
 }
 
@@ -1440,8 +1290,7 @@ fn oversize_body(cx: &mut Ctx) -> Result<Outcome, String> {
     // The WiFi form's own bound (384 bytes, `max_request_len` of its row) is the
     // one length bound every build has to enforce however it routes. (Card 361
     // made the global `MAX_REQUEST_LEN` the settings body's 400.)
-    let r = route::find(route::WIFI, route::Method::Post)
-        .ok_or("POST /api/v1/wifi is not in ROUTES")?;
+    let r = route::find(route::WIFI, route::Method::Post).ok_or("POST /api/v1/wifi is not in ROUTES")?;
     let (body, ct) = oversize_for(r);
     let res = cx.request("POST", route::WIFI, Some(ct), body.as_bytes())?;
     if res.status != ErrorCode::PayloadTooLarge.status() {
@@ -1458,11 +1307,9 @@ fn oversize_body(cx: &mut Ctx) -> Result<Outcome, String> {
     }
     let out = refusal(&res, ErrorCode::PayloadTooLarge)?;
     Ok(match out {
-        Outcome::Pass(d) => Outcome::Pass(format!(
-            "{} bytes over the {}-byte bound: {d}",
-            body.len(),
-            r.max_request_len
-        )),
+        Outcome::Pass(d) => {
+            Outcome::Pass(format!("{} bytes over the {}-byte bound: {d}", body.len(), r.max_request_len))
+        }
         other => other,
     })
 }
@@ -1494,14 +1341,7 @@ fn oversize_body_per_route(cx: &mut Ctx) -> Result<Outcome, String> {
             wrong.push(format!("{}: {e}", r.path));
         }
     }
-    verdict(
-        wrong.is_empty(),
-        if wrong.is_empty() {
-            format!("413 for {}", sizes.join(", "))
-        } else {
-            wrong.join("; ")
-        },
-    )
+    verdict(wrong.is_empty(), if wrong.is_empty() { format!("413 for {}", sizes.join(", ")) } else { wrong.join("; ") })
 }
 
 // ---------------------------------------------------------------------------
@@ -1524,11 +1364,8 @@ fn index_page(cx: &mut Ctx) -> Result<Outcome, String> {
     // own address and the portal's (`screeny_provision::PORTAL_IP`) are not
     // external.
     let text = res.text();
-    let mine = [
-        format!("http://{}", cx.http.host()),
-        format!("https://{}", cx.http.host()),
-        "http://192.168.4.1".to_string(),
-    ];
+    let mine =
+        [format!("http://{}", cx.http.host()), format!("https://{}", cx.http.host()), "http://192.168.4.1".to_string()];
     let mut external = Vec::new();
     // An absolute URL anywhere on the page...
     for pat in ["http://", "https://"] {
@@ -1559,10 +1396,7 @@ fn index_page(cx: &mut Ctx) -> Result<Outcome, String> {
 
 /// The URL starting at the front of `s`, up to whatever ends it in HTML.
 fn url_at(s: &str) -> String {
-    s.chars()
-        .take(80)
-        .take_while(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | ')' | '<' | '>' | ';'))
-        .collect()
+    s.chars().take(80).take_while(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | ')' | '<' | '>' | ';')).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1590,12 +1424,7 @@ fn timing(cx: &mut Ctx) -> Result<Outcome, String> {
     let median = ms[ms.len() / 2];
     verdict(
         ms[ms.len() - 1] < 5_000.0,
-        format!(
-            "median {median:.1} ms (min {:.1}, max {:.1}, n {})",
-            ms[0],
-            ms[ms.len() - 1],
-            ms.len()
-        ),
+        format!("median {median:.1} ms (min {:.1}, max {:.1}, n {})", ms[0], ms[ms.len() - 1], ms.len()),
     )
 }
 
@@ -1607,15 +1436,9 @@ fn wifi_post_credentials(cx: &mut Ctx) -> Result<Outcome, String> {
     // Spec 8.2: the reply goes out **before** the radio work, so this comes
     // back promptly even though the device is about to leave the network.
     let t0 = Instant::now();
-    let res = cx.post_form(
-        route::WIFI,
-        &format!("ssid={DUMMY_SSID}&psk={DUMMY_PSK}"),
-    )?;
+    let res = cx.post_form(route::WIFI, &format!("ssid={DUMMY_SSID}&psk={DUMMY_PSK}"))?;
     if is_unavailable(&res) {
-        return Ok(Outcome::Skip(format!(
-            "no trial from this state: {}",
-            unavailable_detail(&res)
-        )));
+        return Ok(Outcome::Skip(format!("no trial from this state: {}", unavailable_detail(&res))));
     }
     if res.status != 200 {
         return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
@@ -1623,11 +1446,7 @@ fn wifi_post_credentials(cx: &mut Ctx) -> Result<Outcome, String> {
     let a: AcceptedReply = res.parse()?;
     verdict(
         a.result == Accepted::Trying,
-        format!(
-            "{:?} in {:.0} ms; the device is now off its network",
-            a.result,
-            t0.elapsed().as_secs_f64() * 1000.0
-        ),
+        format!("{:?} in {:.0} ms; the device is now off its network", a.result, t0.elapsed().as_secs_f64() * 1000.0),
     )
 }
 
@@ -1674,13 +1493,7 @@ fn wifi_after_the_trial(cx: &mut Ctx) -> Result<Outcome, String> {
     }
     let away = t0.elapsed();
     let Some(w) = result else {
-        return verdict(
-            false,
-            format!(
-                "the attempt had not resolved after {:.0} s ({last})",
-                away.as_secs_f32()
-            ),
-        );
+        return verdict(false, format!("the attempt had not resolved after {:.0} s ({last})", away.as_secs_f32()));
     };
     let status = cx.status()?;
 
@@ -1745,11 +1558,7 @@ fn reboot_confirmed(cx: &mut Ctx) -> Result<Outcome, String> {
     // Answering again at a LAN address is the whole of the bench rule
     // `device-web.md` states after a wrong-credentials test: it rebooted and
     // it rejoined, because there is no other way this request arrived.
-    let rejoined = if cx.http.addr().ip().is_loopback() {
-        ""
-    } else {
-        ", so it rejoined its network"
-    };
+    let rejoined = if cx.http.addr().ip().is_loopback() { "" } else { ", so it rejoined its network" };
     verdict(
         after.boot_id != before.boot_id,
         format!(
@@ -1788,18 +1597,9 @@ fn every_reply_within_its_bound(cx: &mut Ctx) -> Result<Outcome, String> {
             }
         };
         if s.body.len() > bound {
-            wrong.push(format!(
-                "{} {}: {} bytes, bound {bound}",
-                s.method,
-                s.path,
-                s.body.len()
-            ));
+            wrong.push(format!("{} {}: {} bytes, bound {bound}", s.method, s.path, s.body.len()));
         } else if s.body.len() * 100 / bound.max(1) > worst.0 * 100 / worst.1.max(1) {
-            worst = (
-                s.body.len(),
-                bound,
-                format!("{} {}", s.method, s.path),
-            );
+            worst = (s.body.len(), bound, format!("{} {}", s.method, s.path));
         }
     }
     verdict(
@@ -1860,11 +1660,7 @@ fn every_failure_is_the_error_shape(cx: &mut Ctx) -> Result<Outcome, String> {
     codes.sort();
     verdict(
         wrong.is_empty(),
-        if wrong.is_empty() {
-            format!("{n} refusals, codes: {}", codes.join(", "))
-        } else {
-            wrong.join("; ")
-        },
+        if wrong.is_empty() { format!("{n} refusals, codes: {}", codes.join(", ")) } else { wrong.join("; ") },
     )
 }
 
@@ -1873,10 +1669,7 @@ fn no_reply_carries_a_psk(cx: &mut Ctx) -> Result<Outcome, String> {
     for s in &cx.seen {
         // The value first: whatever it was called, the dummy PSK this suite
         // sent must not come back.
-        if s.body
-            .windows(DUMMY_PSK.len())
-            .any(|w| w == DUMMY_PSK.as_bytes())
-        {
+        if s.body.windows(DUMMY_PSK.len()).any(|w| w == DUMMY_PSK.as_bytes()) {
             wrong.push(format!("{} {} echoed the PSK", s.method, s.path));
         }
         // ...and no JSON reply may have a field for one. Not checked on the
@@ -1896,10 +1689,7 @@ fn no_reply_carries_a_psk(cx: &mut Ctx) -> Result<Outcome, String> {
     verdict(
         wrong.is_empty(),
         if wrong.is_empty() {
-            format!(
-                "{} replies grepped for {DUMMY_PSK:?} and for a psk field",
-                cx.seen.len()
-            )
+            format!("{} replies grepped for {DUMMY_PSK:?} and for a psk field", cx.seen.len())
         } else {
             wrong.join("; ")
         },

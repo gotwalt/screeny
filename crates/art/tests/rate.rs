@@ -64,21 +64,15 @@ fn run(def: &PatchDef, seed: u64, dt: f64, steps: usize) -> Vec<[f32; 3]> {
 /// a thing we are trying to avoid"). So "the picture moved" may be shown either
 /// way; the rate comparison itself still uses the mean.
 fn peak(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
-    a.iter()
-        .zip(b)
-        .map(|(x, y)| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() + (x[2] - y[2]).abs())
-        .fold(0.0, f32::max)
+    a.iter().zip(b).map(|(x, y)| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() + (x[2] - y[2]).abs()).fold(0.0, f32::max)
 }
 
 /// Mean absolute difference per channel, in linear light. 0 is byte-identical.
 fn diff(a: &[[f32; 3]], b: &[[f32; 3]]) -> f32 {
     assert_eq!(a.len(), N, "a frame is a frame");
     assert_eq!(b.len(), N);
-    let total: f32 = a
-        .iter()
-        .zip(b)
-        .map(|(x, y)| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() + (x[2] - y[2]).abs())
-        .sum();
+    let total: f32 =
+        a.iter().zip(b).map(|(x, y)| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() + (x[2] - y[2]).abs()).sum();
     total / (N * 3) as f32
 }
 
