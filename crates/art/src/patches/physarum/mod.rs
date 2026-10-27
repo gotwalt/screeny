@@ -56,11 +56,12 @@
 
 mod gpu;
 
-use crate::color::{oklch, smoothstep, Rgb};
+use crate::color::{oklch, smoothstep, srgb8_to_linear, to_oklab, Rgb};
 use crate::dither::Dither;
 use crate::faces::stroked;
 use crate::frame::{Frame, H, W};
 use crate::gpu::Gpu;
+use crate::panel::{level_code, level_triple};
 use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Sim};
@@ -143,13 +144,19 @@ const HABITS: [Habit; 3] = [
 ];
 
 /// The palette's hues, around the loop of orientations: muted, mineral.
-/// (OKLCH hue in degrees, chroma.)
+/// (OKLCH hue in degrees, chroma.) A vein wears the one nearest its
+/// orientation; `palette` and `drift` turn which orientation is which.
 const ANCHORS: [(f32, f32); 6] = [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
 /// Stone: where the orientation is mixed. A warm grey.
 const STONE: (f32, f32) = (80.0, 0.02);
-/// Hue bins around the loop, and lightness steps per hue.
-const HUES: usize = 12;
-const LIGHTS: usize = 10;
+/// Hues around the loop, and lightness steps per hue.
+const HUES: usize = ANCHORS.len();
+const LIGHTS: usize = 12;
+/// The ramp's lightness, OKLab, darkest step to brightest. The darkest is
+/// down among the panel's first few levels, so a vein falls away through
+/// real steps before black rather than being cut out of it.
+const L_DARK: f32 = 0.2;
+const L_BRIGHT: f32 = 0.86;
 /// Below this much of the first lightness step, black.
 const FLOOR: f32 = 0.6;
 /// How coherent a vein's orientation must be to wear a colour.
@@ -203,6 +210,8 @@ struct Physarum {
     /// The time's food, as morsels.
     morsels: Vec<Node>,
     food: Vec<f32>,
+    /// The palette, and the `mute` it was worked out for.
+    palette: Option<(f32, Vec<Rgb>)>,
     /// The last exposure, for how thick the colony is on each source.
     last_leds: Option<Vec<[f32; 4]>>,
     last: Option<Frame>,
@@ -223,6 +232,7 @@ fn make(seed: u64) -> Box<dyn Patch> {
         time_text: Vec::new(),
         morsels: Vec::new(),
         food: vec![0.0; FOOD_W * FOOD_H],
+        palette: None,
         last_leds: None,
         last: None,
     })
@@ -413,30 +423,46 @@ impl Physarum {
         }
     }
 
-    /// The palette: black, then for each colour (`HUES` around the loop of
-    /// orientations, then stone) `LIGHTS` steps of lightness.
-    fn palette(ctx: &Ctx, turn: f32) -> Vec<Rgb> {
+    /// The palette: black, then for each colour (the `HUES` anchors, then
+    /// stone) `LIGHTS` steps of lightness, every one a panel level triple
+    /// ([`aligned`]). Worked out once per `mute`.
+    fn palette(&mut self, ctx: &Ctx) -> Vec<Rgb> {
         let mute = ctx.get("mute");
-        let mut palette = vec![Rgb::BLACK];
-        let shade = |hue: f32, chroma: f32, i: usize| {
-            let t = (i + 1) as f32 / LIGHTS as f32;
-            let l = 0.36 + 0.5 * t.powf(0.9);
-            // The densest veins pale toward bone.
-            oklch(l, chroma * mute * (1.0 - 0.55 * t.powi(3)), hue)
-        };
-        for h in 0..HUES {
-            let (hue, chroma) = anchor(((h as f32 + 0.5) / HUES as f32 + turn).rem_euclid(1.0));
-            for i in 0..LIGHTS {
-                palette.push(shade(hue, chroma, i));
+        if let Some((m, p)) = &self.palette {
+            if *m == mute {
+                return p.clone();
             }
         }
-        for i in 0..LIGHTS {
-            palette.push(shade(STONE.0, STONE.1 / mute.max(0.5), i));
+        let mut palette = vec![Rgb::BLACK];
+        let ramp = |palette: &mut Vec<Rgb>, hue: f32, chroma: f32| {
+            let mut floor = 0.0;
+            for i in 0..LIGHTS {
+                let t = i as f32 / (LIGHTS - 1) as f32;
+                let l = L_DARK + (L_BRIGHT - L_DARK) * t;
+                // Chroma is let in as the ramp rises (the bottom levels
+                // cannot hold a hue anyway), and the densest veins pale
+                // toward bone.
+                let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
+                let (rgb, l) = aligned(oklch(l, c, hue), floor);
+                floor = l;
+                palette.push(rgb);
+            }
+        };
+        for (hue, chroma) in ANCHORS {
+            ramp(&mut palette, hue, chroma);
         }
+        ramp(&mut palette, STONE.0, STONE.1 / mute.max(0.5));
+        if std::env::var_os("PHYSARUM_PALETTE").is_some() {
+            for (k, c) in palette.iter().enumerate().skip(1) {
+                let [r, g, b] = c.to_srgb8();
+                eprintln!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
+            }
+        }
+        self.palette = Some((mute, palette.clone()));
         palette
     }
 
-    fn paint(&self, ctx: &Ctx, leds: &[[f32; 4]]) -> Frame {
+    fn paint(&mut self, ctx: &Ctx, leds: &[[f32; 4]]) -> Frame {
         let (exposure, contrast) = (ctx.get("exposure"), ctx.get("contrast"));
         let turn = ctx.get("palette") + ctx.get("drift") * (ctx.now / 3600.0).rem_euclid(1.0) as f32;
         let dither = Dither::BlueNoise;
@@ -458,28 +484,62 @@ impl Physarum {
                     return (1 + HUES * LIGHTS + light) as u8;
                 }
                 // Orientation, 0..1 around the loop (a half turn of angle).
-                let around = v[2].atan2(v[1]) / std::f32::consts::TAU + 0.5;
-                let hue = ((around * HUES as f32).round() as usize) % HUES;
+                let around = v[2].atan2(v[1]) / std::f32::consts::TAU + 0.5 + turn;
+                let hue = ((around.rem_euclid(1.0) * HUES as f32).round() as usize) % HUES;
                 (1 + hue * LIGHTS + light) as u8
             })
             .collect();
-        Frame::Indexed { palette: Self::palette(ctx, turn), indices }
+        Frame::Indexed { palette: self.palette(ctx), indices }
     }
 }
 
-/// The palette's hue and chroma at `t` around the loop: the anchors, mixed
-/// in OKLab between neighbours.
-fn anchor(t: f32) -> (f32, f32) {
-    let k = ANCHORS.len();
-    let at = t * k as f32;
-    let (i, f) = (at.floor() as usize % k, at.fract());
-    let lab = |(h, c): (f32, f32)| {
-        let (s, co) = h.to_radians().sin_cos();
-        (c * co, c * s)
+/// The panel level triple nearest `target` in OKLab whose lightness is
+/// above `floor`, and that lightness: a colour the panel shows exactly the
+/// same on every refresh (brief 2.1.1), so nothing in the ramp is made by
+/// the firmware alternating two levels - which near black is a visible
+/// shimmer up close, and drifts a muted hue as each channel rounds its own
+/// way. The search is the levels either side of each channel's value and
+/// one more each way, 64 triples.
+fn aligned(target: Rgb, floor: f32) -> (Rgb, f32) {
+    static LIN: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    let lin = LIN.get_or_init(|| (0..64).map(|l| srgb8_to_linear(level_code(l))).collect());
+    let near = |v: f32| {
+        let at = lin.iter().rposition(|x| *x <= v).unwrap_or(0) as i32;
+        [at - 1, at, at + 1, at + 2].map(|l| l.clamp(0, 63) as u32)
     };
-    let (a, b) = (lab(ANCHORS[i]), lab(ANCHORS[(i + 1) % k]));
-    let (x, y) = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
-    (y.atan2(x).to_degrees(), x.hypot(y))
+    let want = to_oklab(target);
+    let mut best: Option<(f32, Rgb, f32)> = None;
+    for r in near(target.r) {
+        for g in near(target.g) {
+            for b in near(target.b) {
+                if r + g + b == 0 {
+                    continue;
+                }
+                let c = level_triple([r, g, b]);
+                let lab = to_oklab(c);
+                if lab[0] <= floor + 0.004 {
+                    continue;
+                }
+                // Hue and chroma weigh a little more than lightness: a
+                // step that is a shade off is fine, one that changes
+                // colour is not.
+                let e = (lab[0] - want[0]).powi(2) + 1.5 * ((lab[1] - want[1]).powi(2) + (lab[2] - want[2]).powi(2));
+                if best.is_none_or(|(be, _, _)| e < be) {
+                    best = Some((e, c, lab[0]));
+                }
+            }
+        }
+    }
+    match best {
+        Some((_, c, l)) => (c, l),
+        // Nothing lighter in reach: hold the step below's lightness with
+        // the nearest triple a level up on every channel.
+        None => {
+            let [r, g, b] = [target.r, target.g, target.b].map(|v| near(v)[2]);
+            let c = level_triple([r, g, b]);
+            (c, to_oklab(c)[0])
+        }
+    }
 }
 
 impl Patch for Physarum {
