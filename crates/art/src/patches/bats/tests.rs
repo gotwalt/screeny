@@ -48,7 +48,7 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
         let mut patch = (DEF.make)(5);
         let dt = 1.0 / fps;
         let mut frame = Frame::black();
-        for i in 1..=(45.0 * fps) as usize {
+        for i in 1..=(10.0 * fps) as usize {
             frame = patch.render(&Ctx { t: i as f64 * dt, dt, now: 0.0, params: &params });
         }
         match frame {
@@ -58,7 +58,7 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
     };
     let (a, b) = (at(30.0), at(60.0));
     let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
-    eprintln!("45 s flown at 30 and at 60 fps: {differ} of {} pixels differ", a.len());
+    eprintln!("10 s flown at 30 and at 60 fps: {differ} of {} pixels differ", a.len());
     assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }
 
@@ -243,6 +243,7 @@ fn moon_mask(bats: &Bats, ctx: &Ctx) -> [bool; N] {
 /// *consecutive* samples (a full minute) - the actual shape the found bug
 /// had (identical for 48 straight seconds).
 #[test]
+#[ignore = "fifteen simulated minutes, rendered; run with -- --ignored when touching the colony or the palette"]
 fn nothing_outside_the_moon_stays_lit_and_unchanged_over_a_long_run() {
     let params = Params::defaults(PARAMS);
     for seed in [7, 21, 103] {

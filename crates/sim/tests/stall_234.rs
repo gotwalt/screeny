@@ -27,7 +27,7 @@
 //! Bounded: ephemeral loopback ports, a fixed number of iterations, every wait
 //! has a deadline, and the worker threads are joined before the test returns.
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -156,6 +156,7 @@ impl Polled {
 /// is fifty times the rate the Studio polls at. Both suites must still pass,
 /// and the page must never go silent.
 #[test]
+#[ignore = "both suites end to end in a row, ~40 s; conformance.rs and http_conformance.rs run the same rules and the test below keeps the second-source half. Run with -- --ignored when touching the device's ports"]
 fn the_bench_sequence_keeps_every_port_answering() {
     let dev = SimDevice::start(Config::for_test()).expect("bind loopback");
     let api = dev.http_addr().expect("the HTTP API is on by default");

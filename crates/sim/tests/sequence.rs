@@ -8,7 +8,7 @@
 //! `Dropped { cause: Stale }` events, and the injected slow decode that makes
 //! frames supersede each other in the first place.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

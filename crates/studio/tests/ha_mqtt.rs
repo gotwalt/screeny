@@ -6,7 +6,7 @@
 //! ```text
 //! docker run -d --rm --name screeny-mqtt -p 127.0.0.1:18830:1883 \
 //!     eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
-//! SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored
+//! SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test studio ha_mqtt:: -- --ignored
 //! docker stop screeny-mqtt
 //! ```
 //!
@@ -14,7 +14,7 @@
 //! the house broker it cannot put entities in front of a real Home Assistant,
 //! and it removes everything it retained on the way out.
 
-mod common;
+use crate::common;
 
 use common::{post, test_config};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};

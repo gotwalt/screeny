@@ -10,7 +10,7 @@
 //! **No test in this file may touch the bench device.** Loopback only, ports
 //! well above the spec's, mDNS off, and every wait has a deadline.
 
-mod common;
+use crate::common;
 
 use common::{get, post, until, until_json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -55,15 +55,16 @@ fn sim_at(ports: Ports, ssid: &str, http: bool) -> std::io::Result<SimDevice> {
     SimDevice::start_with(cfg, None)
 }
 
-/// The first free set of ports, and a simulator on it.
+/// The first free set of ports, and a simulator on it. A band no other file
+/// in `tests/studio.rs` uses: they all run in one process at once.
 fn start_sim(ssid: &str, http: bool) -> (SimDevice, Ports) {
     for i in 0..60u16 {
-        let ports = Ports { frame: 50_800 + i * 2, http: 51_000 + i };
+        let ports = Ports { frame: 53_200 + i * 2, http: 53_400 + i };
         if let Ok(dev) = sim_at(ports, ssid, http) {
             return (dev, ports);
         }
     }
-    panic!("no free simulator ports in 50800..50920 / 51000..51060");
+    panic!("no free simulator ports in 53200..53320 / 53400..53460");
 }
 
 /// A studio that reads its devices' status API on `http_port`, quickly.

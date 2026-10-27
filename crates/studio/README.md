@@ -625,7 +625,7 @@ automation:
 ```
 
 The same broker runs the end-to-end test, which is ignored by default because it needs one:
-`SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test ha_mqtt -- --ignored`.
+`SCREENY_TEST_MQTT=127.0.0.1:18830 cargo test -p screeny-studio --test studio ha_mqtt:: -- --ignored`.
 It uses the discovery prefix `screeny_test`, so it cannot put entities in front of a real
 HA even when pointed at the house broker. It covers the picture select, the brightness
 slider, the settings routes, reconnecting, and forgetting - and, against two tapped

@@ -4,7 +4,7 @@
 //! No panel is reached: panels here are device ids with nothing at the other
 //! end, which is also what a freshly imported Studio has until it finds them.
 
-mod common;
+use crate::common;
 
 use common::{get, post, studio_in, test_config, until_json, Temp, PATIENCE};
 use screeny_studio::ha::supervisor::Supervisor;

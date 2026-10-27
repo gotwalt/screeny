@@ -5,7 +5,7 @@
 //! `crates/sim/README.md`), and everything it draws is unit-tested in
 //! `src/window.rs` and `src/screens.rs`.
 
-mod common;
+use crate::common;
 
 use std::io::{BufRead, BufReader};
 use std::net::SocketAddr;

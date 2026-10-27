@@ -6,7 +6,7 @@
 //! will not hand out - two senders on *different IPs*, which is the case
 //! section 7.4's "from any port on the same IP" is actually about.
 
-mod common;
+use crate::common;
 
 use std::net::SocketAddr;
 

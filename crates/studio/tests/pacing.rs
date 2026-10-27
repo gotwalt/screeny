@@ -15,7 +15,7 @@
 //! half-second heartbeat and nothing else: frames are card 120's business and
 //! would drown the thing being weighed.
 
-mod common;
+use crate::common;
 
 use common::{get, post, post_as, studio, Msg, Ws};
 use std::net::SocketAddr;

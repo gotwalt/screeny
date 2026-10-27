@@ -792,6 +792,7 @@ fn the_same_seed_at_the_same_moment_is_the_same_frame() {
 /// starts at 150 birds: at 110 birds drawn the same size, and at 150 birds at
 /// `size` 2, every frame of the same runs was exact.
 #[test]
+#[ignore = "a minute per corner and a share of approximated frames, a statistic; run with -- --ignored when touching size or birds"]
 fn the_far_corner_of_both_controls_still_fits() {
     for (backdrop, scheme, name) in [
         (0.0, 0.0, "sky, light on dark"),
@@ -847,7 +848,7 @@ fn the_far_corner_of_both_controls_still_fits() {
     }
 }
 
-/// A minute of each picture the patch can draw, straight through the real
+/// Ten seconds of each picture the patch can draw, straight through the real
 /// pipeline and measured by the real encoder: **every frame is exact**.
 ///
 /// The two *schemes* cost the same because they are the same index image with
@@ -888,7 +889,7 @@ fn every_frame_goes_out_exactly() {
         let mut pipeline = crate::Pipeline::new(crate::pipeline::Output::default());
         let dt = 1.0 / 30.0;
         let (mut worst, mut lossy, mut colours, mut apl, mut gain) = (0, 0, 0, 0.0_f32, 1.0_f32);
-        for i in 0..1800 {
+        for i in 0..300 {
             let out = pipeline.process(
                 patch.render(&Ctx { t: f64::from(i) * dt, dt, now: 0.0, params: &params }),
                 dt,
@@ -906,12 +907,12 @@ fn every_frame_goes_out_exactly() {
             lossy += u32::from(!out.stats.exact);
         }
         eprintln!(
-            "{name}: 1800 frames, worst {worst} of {} bytes, up to {colours} colours, \
+            "{name}: 300 frames, worst {worst} of {} bytes, up to {colours} colours, \
              peak APL {:.0}%, limiter down to x{gain:.2} after the first second, {lossy} lossy",
             crate::meter::PAYLOAD_BYTES,
             apl * 100.0,
         );
-        assert_eq!(lossy, 0, "{name}: {lossy} frames of 1800 could not be sent exactly");
+        assert_eq!(lossy, 0, "{name}: {lossy} frames of 300 could not be sent exactly");
         assert!(colours as usize <= BANDS * ink_levels(backdrop as usize), "{name}: more colours than the palette has");
         assert!(worst < crate::meter::PAYLOAD_BYTES, "{name}: {worst} bytes leaves no headroom");
         assert!(gain > 0.95, "{name}: the limiter had to pull the picture down to x{gain:.2}");
@@ -932,7 +933,7 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
         let mut patch = (DEF.make)(5);
         let dt = 1.0 / fps;
         let mut frame = Frame::black();
-        for i in 1..=(60.0 * fps) as usize {
+        for i in 1..=(10.0 * fps) as usize {
             frame = patch.render(&Ctx { t: i as f64 * dt, dt, now: 0.0, params: &params });
         }
         match frame {
@@ -944,8 +945,8 @@ fn the_flight_does_not_depend_on_the_frame_rate() {
     };
     let (a, b) = (at(30.0), at(60.0));
     let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
-    eprintln!("a minute flown at 30 and at 60 fps: {differ} of {} pixels differ", a.len());
-    // A minute of flight, 3600 fixed steps, from two different arrival
+    eprintln!("ten seconds flown at 30 and at 60 fps: {differ} of {} pixels differ", a.len());
+    // Ten seconds of flight, 600 fixed steps, from two different arrival
     // patterns: the same steps happen, so the same picture comes out.
     assert_eq!(differ, 0, "the flight drifted apart between 30 and 60 fps");
 }

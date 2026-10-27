@@ -10,7 +10,7 @@
 //! loopback with explicit ports well above the spec's, discovery off, no state
 //! file, and every wait on a deadline.
 
-mod common;
+use crate::common;
 
 use common::{get, post, until, until_json};
 use std::net::SocketAddr;
@@ -117,6 +117,7 @@ fn f(v: &serde_json::Value) -> f64 {
 /// being checked is the rate the *server* worked out, on its own tick, from
 /// its own counters.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "a rate with a five-second time constant, settled and then measured: ~20 s of waiting. Run with -- --ignored when touching the traffic counters"]
 async fn the_rate_out_is_the_frames_times_their_size_plus_the_header() {
     let (sim, ports) = start_sim();
     let studio = studio_for(ports, Duration::from_millis(400)).await;
@@ -299,6 +300,7 @@ async fn the_http_and_control_paths_are_counted_separately() {
 /// that divided its own counters would show a different figure in every tab,
 /// and the figure would depend on how often that tab happened to poll.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "two status reads seconds apart against a rate with a five-second time constant; run with -- --ignored when touching the traffic counters"]
 async fn the_totals_only_grow_and_every_browser_reads_the_same_rate() {
     let (sim, ports) = start_sim();
     let studio = studio_for(ports, Duration::from_millis(400)).await;

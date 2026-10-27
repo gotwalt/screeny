@@ -10,7 +10,7 @@
 //! 3. **Low-colour frames come out exact**, because a frame the ladder can
 //!    carry losslessly is one no block codec can beat.
 
-mod common;
+use crate::common;
 
 use common::{adversarial_frames, Rng};
 use screeny::encode::{EncodeConfig, Encoder, Profile};

@@ -869,6 +869,31 @@ mod tests {
         frame
     }
 
+    /// [`run`] at several moments of one run rather than one run each: the
+    /// frame at each of `secs`, in the order given, which must be ascending.
+    /// The same frames `run` draws - the same seed, clock and steps - for a
+    /// fraction of the rendering.
+    fn run_through(when: &str, secs: &[f64], set: &[(&str, f32)]) -> Vec<Frame> {
+        let mut p = params();
+        for (k, v) in set {
+            assert!(p.set(DEF.params, k, *v), "no parameter `{k}`");
+        }
+        let clock = at(when);
+        let mut patch = (DEF.make)(1);
+        let dt = 1.0 / crate::snapshot::FPS;
+        let steps: Vec<usize> = secs.iter().map(|s| (s / dt).round() as usize).collect();
+        assert!(steps.windows(2).all(|w| w[0] <= w[1]), "moments in order: {secs:?}");
+        let mut out = Vec::with_capacity(steps.len());
+        for i in 0..=steps.last().copied().unwrap_or(0) {
+            let t = i as f64 * dt;
+            let frame = patch.render(&Ctx { t, dt, now: clock.now(t), params: &p });
+            for _ in steps.iter().filter(|s| **s == i) {
+                out.push(frame.clone());
+            }
+        }
+        out
+    }
+
     /// Which card each module is showing, read back off the panel by matching
     /// the lit LEDs against every numeral drawn in the same place. A stronger
     /// check than asking the patch: it is the picture that has to be right.
@@ -1323,11 +1348,11 @@ mod tests {
     #[test]
     fn the_palette_is_one_ramp_and_black() {
         let sets: [&[(&str, f32)]; 6] = [&[], &[("fill", 0.5)], &[("size", 0.6)], &[("hue", 40.0)], &[("light", 220.0)], &[("spin", 0.7)]];
-        // Settled, and then right through a rotation - a dozen cards in the
-        // air across the four modules, which is the busiest the picture gets.
-        for at_s in [3.0, 1.03, 1.10, 1.17, 1.23, 1.30, 1.40, 1.55, 1.70, 1.85, 2.00, 2.20] {
-            for set in sets {
-                let frame = run("09:59:59", at_s, set);
+        // Right through a rotation - a dozen cards in the air across the four
+        // modules, which is the busiest the picture gets - and then settled.
+        let moments = [1.03, 1.10, 1.17, 1.23, 1.30, 1.40, 1.55, 1.70, 1.85, 2.00, 2.20, 3.0];
+        for set in sets {
+            for (at_s, frame) in moments.iter().zip(run_through("09:59:59", &moments, set)) {
                 let Frame::Indexed { palette, indices } = &frame else { panic!("not an indexed frame") };
                 assert_eq!(palette.len(), STEPS + 1, "at t={at_s} {set:?}");
                 assert!(palette.len() <= GUARANTEED_PALETTE, "and exact whatever the indices do");
@@ -1369,11 +1394,10 @@ mod tests {
         // card bodies really are black.
         let plain = apl(&[]);
         assert!((0.007..0.012).contains(&plain), "the resting picture is {:.2}% of full", plain * 100.0);
-        let peak = (30..=40)
-            .map(|k| {
-                let f = run("09:59:59", f64::from(k) / crate::snapshot::FPS, &[]);
-                (0..N).map(|i| f.pixel(i).duty()).sum::<f32>() / N as f32
-            })
+        let moments: Vec<f64> = (30..=40).map(|k| f64::from(k) / crate::snapshot::FPS).collect();
+        let peak = run_through("09:59:59", &moments, &[])
+            .iter()
+            .map(|f| (0..N).map(|i| f.pixel(i).duty()).sum::<f32>() / N as f32)
             .fold(0.0_f32, f32::max);
         assert!(peak < 0.02, "four modules mid-flip reach {:.2}%", peak * 100.0);
         assert!(peak > plain, "a flip should put more light on the panel, not less");
@@ -1455,7 +1479,9 @@ mod tests {
             // otherwise exact picture.
             let whole = g.face.index(COLON).is_some();
             for when in ["01:23", "04:56", "07:08", "09:59"] {
-                let frame = run(when, 3.0, set);
+                // The first frame: `vesta` is born reading the time, so it is
+                // already the settled picture three seconds in would be.
+                let frame = run(when, 0.0, set);
                 for y in 0..H {
                     for x in 0..W {
                         let v = y as f32 + 0.5 - g.axle;
@@ -1525,8 +1551,8 @@ mod tests {
         let (mut both_halves, mut lit_edge, mut all_dark) = (0, 0, 0);
         // From the minute turn to a second after it: the minutes' tens cascade
         // 5, 6, 7, 8, 9, 0.
-        for k in 30..=60 {
-            let frame = run("09:59:59", f64::from(k) / crate::snapshot::FPS, &[]);
+        let moments: Vec<f64> = (30..=60).map(|k| f64::from(k) / crate::snapshot::FPS).collect();
+        for frame in run_through("09:59:59", &moments, &[]) {
             let rows = |ys: std::ops::Range<usize>| ys.map(|y| (0..W).filter(|x| inside(*x) && frame.pixel(y * W + x).luma() > 1e-4).count()).sum::<usize>();
             let (above, below) = (rows(2..14), rows(18..30));
             if above > 0 && below > 0 {

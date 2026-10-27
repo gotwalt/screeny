@@ -20,7 +20,7 @@
 //! loopback port, discovery is off (`test_config`), and the one address typed
 //! at a device is an explicit `127.0.0.1` on a port nothing is listening on.
 
-mod common;
+use crate::common;
 
 use common::{get, post, post_as, studio, studio_in, Temp, Ws};
 use std::net::SocketAddr;

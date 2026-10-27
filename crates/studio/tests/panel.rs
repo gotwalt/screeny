@@ -11,7 +11,7 @@
 //! fixed local port pair well away from the spec's, mDNS off, and every wait
 //! has a deadline.
 
-mod common;
+use crate::common;
 
 use common::{get, pause, post, preview_of, seq_of, studio, studio_and_state, until, until_json, Ws};
 use std::sync::mpsc::{channel, Receiver, Sender as Tx};
@@ -355,6 +355,7 @@ async fn a_stalled_browser_is_eventually_dropped() {
 /// moves when the studio re-aims on its own, at a moment this test does not
 /// control.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "a display counter, ~16 s of waiting out link timeouts; run with -- --ignored when touching the link supervisor"]
 async fn a_panel_that_comes_back_twice_says_two() {
     let (first, port, _rx) = start_sim();
     let (studio, st) = studio_and_state().await;

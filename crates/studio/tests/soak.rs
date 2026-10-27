@@ -15,7 +15,7 @@
 //! No LAN. Loopback, a port band well above the spec's, mDNS off, discovery
 //! off.
 
-mod common;
+use crate::common;
 
 use common::{get, post, studio_in, until_json, Temp};
 use std::net::SocketAddr;
@@ -178,7 +178,7 @@ async fn flowing(at: SocketAddr, what: &str) -> u32 {
 }
 
 // The owner, 2026-09-26: a sixty-second soak is not part of an ordinary `cargo test`.
-// Run it on purpose: `cargo test --release -p screeny-studio --test soak -- --ignored`.
+// Run it on purpose: `cargo test --release -p screeny-studio --test studio soak:: -- --ignored`.
 #[ignore = "sixty seconds; run on purpose with -- --ignored"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_server_survives_a_bounded_soak() {

@@ -25,7 +25,7 @@
 //! `settings.html`, and every element `common.js` reaches for is in **all
 //! three** - which is the rule that keeps the shared file shared.
 
-mod common;
+use crate::common;
 
 use common::{get, post, studio};
 use std::path::Path;

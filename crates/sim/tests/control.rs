@@ -9,7 +9,7 @@
 //! left here needs `SimHandle`: the mDNS TXT bytes, the event stream, and the
 //! fact that a `SET_WIFI` event carries no PSK field at all.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

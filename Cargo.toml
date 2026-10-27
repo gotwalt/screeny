@@ -29,3 +29,17 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.screeny-proto]
 opt-level = 2
+
+# Every dependency, too. `ghosts`'s cloth is Rapier, and a debug-built Rapier
+# made each simulated second of it several seconds of `cargo test`; the rest
+# (wgpu, tokio, sequential-storage) are optimised along with it. Dependencies
+# build once, so this is paid on a clean build and not again; the workspace's
+# own crates stay debug unless they are listed here.
+[profile.dev.package."*"]
+opt-level = 2
+
+# The settings store's endurance test writes six thousand items through
+# sequential-storage's map; with this crate debug-built that was seven seconds
+# of every `cargo test`, and 0.5 s without.
+[profile.dev.package.screeny-settings]
+opt-level = 2

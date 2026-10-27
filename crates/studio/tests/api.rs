@@ -4,7 +4,7 @@
 //! Every server here is bound to an ephemeral loopback port and stopped when
 //! the test ends. **Nothing in this file touches the network.**
 
-mod common;
+use crate::common;
 
 use common::{get, post, post_as, preview_of, seq_of, studio, until, Msg, Ws, PATIENCE};
 use std::time::Duration;
