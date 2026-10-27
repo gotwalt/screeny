@@ -1,6 +1,8 @@
 # Aligned palette: a shared helper for hue-true panel colours
 
-Status: **proposed** (card TBD, 2026-10-27). Design only; nothing here is built yet.
+Status: **built** on `exp/aligned-palette` (card TBD, 2026-10-27): `crates/art/src/panel/aligned.rs`,
+with physarum migrated byte-identically. Open questions 1-4 were settled with this
+spec's own proposals (section 9). Question 5 is still open.
 Source of truth for the panel facts: `generative-art-brief.md` section 2.1.1. If this
 document disagrees with the brief, the brief wins.
 
@@ -217,6 +219,10 @@ In `panel/aligned.rs`:
    implementing; on physarum's own ramps no entry with chroma above 0.03 is more than 20°
    off at `mute` 1. This test is the reason the helper exists, so it should fail if
    someone swaps the search for per-channel rounding.
+   **[measured]** when built: on L 0.25-0.85 (7 steps), chroma 0.05, 12 hues, the search's
+   worst is 22° (one entry at L 0.25) and per-channel rounding's is 52°. The bound is
+   30°. Above L 0.4 the two are close (11° and 19° worst, means about 4° and 5°), so
+   the grid has to reach the dark end for the test to tell them apart.
 
 In physarum:
 
@@ -268,6 +274,9 @@ To go after the paragraph on `level_triple` and the clocks example:
   exact shades and a mix for an ordered pattern (`crate::dither`). Out of scope here.
 
 ## 9. Open questions for the owner
+
+As built: 1 widen-then-flag; 2 nearest, documented (no opt-in yet); 3 `Aligned`;
+4 checksum, with the dump on failure. 5 is open.
 
 1. **The ceiling fallback.** The proposal is widen-then-flag (`clipped`). The other
    option is to keep physarum's `at+1` rule as it is. Neither changes physarum's bytes.

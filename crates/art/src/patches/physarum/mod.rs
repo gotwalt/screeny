@@ -56,12 +56,12 @@
 
 mod gpu;
 
-use crate::color::{oklch, smoothstep, srgb8_to_linear, to_oklab, Rgb};
+use crate::color::{oklch, smoothstep, to_oklab, Rgb};
 use crate::dither::Dither;
 use crate::faces::stroked;
 use crate::frame::{Frame, H, W};
 use crate::gpu::Gpu;
-use crate::panel::{level_code, level_triple};
+use crate::panel::aligned_ramp;
 use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Sim};
@@ -507,28 +507,21 @@ impl Physarum {
 
 /// The palette: black, then for each colour (the `HUES` anchors, then
 /// stone) `LIGHTS` steps of lightness, every one a panel level triple
-/// ([`aligned`]).
+/// ([`aligned_ramp`]).
 fn palette_for(mute: f32) -> Vec<Rgb> {
-    let mut palette = vec![Rgb::BLACK];
-    let ramp = |palette: &mut Vec<Rgb>, hue: f32, chroma: f32| {
-        let mut floor = 0.0;
-        for i in 0..LIGHTS {
+    let ramp = |hue: f32, chroma: f32| {
+        aligned_ramp((0..LIGHTS).map(|i| {
             let t = i as f32 / (LIGHTS - 1) as f32;
             let l = L_DARK + (L_BRIGHT - L_DARK) * t;
             // Chroma is let in as the ramp rises (the bottom levels
             // cannot hold a hue anyway), and the densest veins pale
             // toward bone.
             let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
-            let (rgb, l) = aligned(oklch(l, c, hue), floor);
-            floor = l;
-            palette.push(rgb);
-        }
+            oklch(l, c, hue)
+        }))
     };
-    for (hue, chroma) in ANCHORS {
-        ramp(&mut palette, hue, chroma);
-    }
-    ramp(&mut palette, STONE.0, STONE.1 / mute.max(0.5));
-    palette
+    let ramps = ANCHORS.into_iter().chain([(STONE.0, STONE.1 / mute.max(0.5))]);
+    std::iter::once(Rgb::BLACK).chain(ramps.flat_map(|(hue, chroma)| ramp(hue, chroma)).map(|a| a.rgb)).collect()
 }
 
 /// The `PHYSARUM_PALETTE` dump: one line per entry after black.
@@ -539,55 +532,6 @@ fn palette_dump(palette: &[Rgb]) -> String {
         out += &format!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}\n", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
     }
     out
-}
-
-/// The panel level triple nearest `target` in OKLab whose lightness is
-/// above `floor`, and that lightness: a colour the panel shows exactly the
-/// same on every refresh (brief 2.1.1), so nothing in the ramp is made by
-/// the firmware alternating two levels - which near black is a visible
-/// shimmer up close, and drifts a muted hue as each channel rounds its own
-/// way. The search is the levels either side of each channel's value and
-/// one more each way, 64 triples.
-fn aligned(target: Rgb, floor: f32) -> (Rgb, f32) {
-    static LIN: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
-    let lin = LIN.get_or_init(|| (0..64).map(|l| srgb8_to_linear(level_code(l))).collect());
-    let near = |v: f32| {
-        let at = lin.iter().rposition(|x| *x <= v).unwrap_or(0) as i32;
-        [at - 1, at, at + 1, at + 2].map(|l| l.clamp(0, 63) as u32)
-    };
-    let want = to_oklab(target);
-    let mut best: Option<(f32, Rgb, f32)> = None;
-    for r in near(target.r) {
-        for g in near(target.g) {
-            for b in near(target.b) {
-                if r + g + b == 0 {
-                    continue;
-                }
-                let c = level_triple([r, g, b]);
-                let lab = to_oklab(c);
-                if lab[0] <= floor + 0.004 {
-                    continue;
-                }
-                // Hue and chroma weigh a little more than lightness: a
-                // step that is a shade off is fine, one that changes
-                // colour is not.
-                let e = (lab[0] - want[0]).powi(2) + 1.5 * ((lab[1] - want[1]).powi(2) + (lab[2] - want[2]).powi(2));
-                if best.is_none_or(|(be, _, _)| e < be) {
-                    best = Some((e, c, lab[0]));
-                }
-            }
-        }
-    }
-    match best {
-        Some((_, c, l)) => (c, l),
-        // Nothing lighter in reach: hold the step below's lightness with
-        // the nearest triple a level up on every channel.
-        None => {
-            let [r, g, b] = [target.r, target.g, target.b].map(|v| near(v)[2]);
-            let c = level_triple([r, g, b]);
-            (c, to_oklab(c)[0])
-        }
-    }
 }
 
 impl Patch for Physarum {

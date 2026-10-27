@@ -31,6 +31,8 @@ use crate::color::{linear_to_srgb8, srgb8_to_linear, Rgb};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
+mod aligned;
+pub use aligned::{aligned_ramp, nearest_aligned, Aligned, ALIGNED_HUE_WEIGHT, ALIGNED_RISE};
 pub use screeny_panel::model::DITHER_PHASES;
 
 /// Duty levels per channel from the bit planes alone: `firmware::gamma::PLANES`
@@ -214,6 +216,14 @@ pub fn level_triple(levels: [u32; 3]) -> Rgb {
         srgb8_to_linear(level_code(levels[1])),
         srgb8_to_linear(level_code(levels[2])),
     )
+}
+
+/// The linear light of `level`'s [`level_code`], from one table built once.
+#[must_use]
+pub fn level_linear(level: u32) -> f32 {
+    static LUT: OnceLock<[f32; NATIVE_LEVELS as usize]> = OnceLock::new();
+    let lut = LUT.get_or_init(|| std::array::from_fn(|l| srgb8_to_linear(level_code(l as u32))));
+    lut[level.min(NATIVE_LEVELS - 1) as usize]
 }
 
 /// [`Panel::AlignedDark`]'s snap: `v`'s nearest level (plain rounding, the way
