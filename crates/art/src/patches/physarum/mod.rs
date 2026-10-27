@@ -458,9 +458,7 @@ impl Physarum {
         }
     }
 
-    /// The palette: black, then for each colour (the `HUES` anchors, then
-    /// stone) `LIGHTS` steps of lightness, every one a panel level triple
-    /// ([`aligned`]). Worked out once per `mute`.
+    /// [`palette_for`] at this frame's `mute`, worked out once per `mute`.
     fn palette(&mut self, ctx: &Ctx) -> Vec<Rgb> {
         let mute = ctx.get("mute");
         if let Some((m, p)) = &self.palette {
@@ -468,30 +466,9 @@ impl Physarum {
                 return p.clone();
             }
         }
-        let mut palette = vec![Rgb::BLACK];
-        let ramp = |palette: &mut Vec<Rgb>, hue: f32, chroma: f32| {
-            let mut floor = 0.0;
-            for i in 0..LIGHTS {
-                let t = i as f32 / (LIGHTS - 1) as f32;
-                let l = L_DARK + (L_BRIGHT - L_DARK) * t;
-                // Chroma is let in as the ramp rises (the bottom levels
-                // cannot hold a hue anyway), and the densest veins pale
-                // toward bone.
-                let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
-                let (rgb, l) = aligned(oklch(l, c, hue), floor);
-                floor = l;
-                palette.push(rgb);
-            }
-        };
-        for (hue, chroma) in ANCHORS {
-            ramp(&mut palette, hue, chroma);
-        }
-        ramp(&mut palette, STONE.0, STONE.1 / mute.max(0.5));
+        let palette = palette_for(mute);
         if std::env::var_os("PHYSARUM_PALETTE").is_some() {
-            for (k, c) in palette.iter().enumerate().skip(1) {
-                let [r, g, b] = c.to_srgb8();
-                eprintln!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
-            }
+            eprint!("{}", palette_dump(&palette));
         }
         self.palette = Some((mute, palette.clone()));
         palette
@@ -526,6 +503,42 @@ impl Physarum {
             .collect();
         Frame::Indexed { palette: self.palette(ctx), indices }
     }
+}
+
+/// The palette: black, then for each colour (the `HUES` anchors, then
+/// stone) `LIGHTS` steps of lightness, every one a panel level triple
+/// ([`aligned`]).
+fn palette_for(mute: f32) -> Vec<Rgb> {
+    let mut palette = vec![Rgb::BLACK];
+    let ramp = |palette: &mut Vec<Rgb>, hue: f32, chroma: f32| {
+        let mut floor = 0.0;
+        for i in 0..LIGHTS {
+            let t = i as f32 / (LIGHTS - 1) as f32;
+            let l = L_DARK + (L_BRIGHT - L_DARK) * t;
+            // Chroma is let in as the ramp rises (the bottom levels
+            // cannot hold a hue anyway), and the densest veins pale
+            // toward bone.
+            let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
+            let (rgb, l) = aligned(oklch(l, c, hue), floor);
+            floor = l;
+            palette.push(rgb);
+        }
+    };
+    for (hue, chroma) in ANCHORS {
+        ramp(&mut palette, hue, chroma);
+    }
+    ramp(&mut palette, STONE.0, STONE.1 / mute.max(0.5));
+    palette
+}
+
+/// The `PHYSARUM_PALETTE` dump: one line per entry after black.
+fn palette_dump(palette: &[Rgb]) -> String {
+    let mut out = String::new();
+    for (k, c) in palette.iter().enumerate().skip(1) {
+        let [r, g, b] = c.to_srgb8();
+        out += &format!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}\n", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
+    }
+    out
 }
 
 /// The panel level triple nearest `target` in OKLab whose lightness is
@@ -692,5 +705,26 @@ impl Patch for Physarum {
         let title = format!("{} food source{}", self.nodes.len(), if self.nodes.len() == 1 { "" } else { "s" });
         let detail = if self.t - self.time_at < 40.0 { format!("drawing {}", self.time_text.iter().collect::<String>()) } else { "foraging".to_string() };
         Some(Playing { title, detail, actions: Vec::new(), notes: Vec::new() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The palette's sRGB bytes, pinned as a 64-bit FNV-1a per `mute`: what
+    /// physarum looks like must not move when the search behind it does. On
+    /// a mismatch the dump is printed, so the diff is readable.
+    #[test]
+    fn the_palette_is_pinned() {
+        let fnv = |palette: &[Rgb]| {
+            palette.iter().flat_map(|c| c.to_srgb8()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+        };
+        for (mute, want) in [(0.0, 0x8b26_b305_3308_4b88u64), (1.0, 0x98e0_adb5_2e82_f4ee), (2.0, 0x454d_e693_0c5f_d1a1)] {
+            let palette = palette_for(mute);
+            assert_eq!(palette.len(), 1 + (HUES + 1) * LIGHTS);
+            let got = fnv(&palette);
+            assert_eq!(got, want, "mute {mute}: palette hash {got:#018x}\n{}", palette_dump(&palette));
+        }
     }
 }
