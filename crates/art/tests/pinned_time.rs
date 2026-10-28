@@ -65,7 +65,7 @@ fn two_pinned_times_are_two_pictures() {
     }
 }
 
-/// `snapshot clocks-numerals --time 21:12 --out x.png` is the card's
+/// `snapshot clocks-numerals --time 21:12 --set still=60 --out x.png` is the card's
 /// acceptance and the README's one obvious command, and it carries no seed:
 /// once the hands have landed on 21:12 and the time is being held, what is on
 /// the panel is the minute, not the dance that got there.
@@ -81,6 +81,9 @@ fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
     let render = |seed, dance| {
         let mut params = Params::defaults(def.params);
         assert!(params.set(def.params, "dance", dance));
+        // Held for the whole minute: the default (Gold and Blue, 5 s) lets
+        // the dials drift after a few seconds, and the drift is the seed's.
+        assert!(params.set(def.params, "still", 60.0));
         let shot = Shot { seed, at: 20.0, warmup: 20.0, clock: at("21:12"), ..Shot::default() };
         take(def, &params, &shot).preview
     };

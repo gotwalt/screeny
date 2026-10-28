@@ -802,7 +802,7 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
     assert_eq!(rest["switch"], false);
     assert_eq!(
         (rest["min"].as_f64(), rest["max"].as_f64(), rest["default"].as_f64()),
-        (Some(0.0), Some(4.0), Some(2.0))
+        (Some(0.0), Some(4.0), Some(3.0))
     );
 
     // The fourteen choreographies the label could not even try to name.

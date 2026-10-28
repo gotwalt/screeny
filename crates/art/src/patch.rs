@@ -443,7 +443,7 @@ mod tests {
     fn no_patches_ids_ranges_or_defaults_moved() {
         let want: &[(&str, &str, f32, f32, f32, f32)] = &[
             ("clocks-numerals", "dance", 0.0, 13.0, 1.0, 0.0),
-            ("clocks-numerals", "rest", 0.0, 4.0, 1.0, 2.0),
+            ("clocks-numerals", "rest", 0.0, 4.0, 1.0, 3.0), // "hatched, faint", Gold and Blue, 2026-10-28
             ("clocks-numerals", "hours24", 0.0, 1.0, 1.0, 1.0),
             ("clocks-dials", "grid", 0.0, 2.0, 1.0, 0.0), // default 6 x 3 -> 4 x 2, 2026-09-25
             ("clocks-dials", "mood", 0.0, 8.0, 1.0, 0.0),

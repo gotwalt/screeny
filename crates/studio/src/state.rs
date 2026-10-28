@@ -3107,7 +3107,7 @@ mod tests {
                 r#"{{"version":{LAST_WITH_PLAYERS},"focus":"abc",
                      "players":[{{"device":"abc","patch":"plasma","seed":4242,"params":{{"scale":2.5}},"speed":0.5}}],
                      "patches":{{"plasma":{{"seed":4242,"params":{{"scale":2.5}}}},
-                                 "{}":{{"seed":77,"params":{{"rest":3.0}},"speed":0.25}}}}}}"#,
+                                 "{}":{{"seed":77,"params":{{"rest":1.0}},"speed":0.25}}}}}}"#,
                 default_patch()
             ),
         )
@@ -3122,7 +3122,7 @@ mod tests {
         // would have done in v7 - and v8 carries that onto the channel.
         assert_eq!(player(&loaded, 0).seed, 77, "the default patch's own remembered seed");
         assert_eq!(player(&loaded, 0).speed, 1.0, "speed is retired (card 302): 1.00x whatever was remembered");
-        assert_eq!(player(&loaded, 0).params["rest"], 3.0, "and its own parameters");
+        assert_eq!(player(&loaded, 0).params["rest"], 1.0, "and its own parameters");
         assert!(
             !player(&loaded, 0).params.contains_key("scale"),
             "never the missing patch's: {:?}",

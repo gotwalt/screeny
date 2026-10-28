@@ -49,12 +49,13 @@ to the whole run, because a clock has to be watched from its first frame and
 the numerals patch needs about 16 s to dance onto the time it was born on;
 give either yourself to change it.
 
-  numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --out x.png
+  numerals, settled on 21:12:  snapshot clocks-numerals --time 21:12 --set still=60 --out x.png
   numerals, dancing into it:   snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out x.png
   dials, telling 10:10:        snapshot clocks-dials --time 10:09:50 --at 15 --out x.png
 
 The settled one needs no --seed: once the hands have landed, what is on the
-panel is the minute, not the dance that got there. The dancing one does -
+panel is the minute, not the dance that got there (`still=60` keeps it there:
+by default the dials let go of the time after 5 s). The dancing one does -
 `--seed` otherwise comes from the system clock, and the choreography with it.";
 
 fn main() {
