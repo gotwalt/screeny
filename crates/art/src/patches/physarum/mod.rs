@@ -76,11 +76,14 @@ pub const DEF: PatchDef = PatchDef {
     seeded: true,
 };
 
+// The defaults are the owner's worms (2026-10-28), as tuned on the panel:
+// worms, fed fast and drawn strongly, at a finer scale, with deep veins and
+// a time that is spaced out and eaten slowly.
 const PARAMS: &[ParamSpec] = &[
-    choice("habit", "How the colony grows", HABIT_NAMES, 0.0),
+    choice("habit", "How the colony grows", HABIT_NAMES, 2.0),
     param("food", "How many food sources at once", 1.0, 8.0, 1.0, 4.0),
-    param("appetite", "How fast a source is eaten (1: about a minute, well fed)", 0.0, 4.0, 0.05, 0.5),
-    param("scent", "How strongly food draws the colony", 0.0, 4.0, 0.05, 1.0),
+    param("appetite", "How fast a source is eaten (1: about a minute, well fed)", 0.0, 4.0, 0.05, 1.35),
+    param("scent", "How strongly food draws the colony", 0.0, 4.0, 0.05, 1.7),
     toggle("time", "Draw the time once a minute", true),
     toggle("24h", "24-hour time", false),
     param("hold", "How long the time's food lasts at most, seconds", 5.0, 50.0, 1.0, 25.0),
@@ -92,15 +95,16 @@ const PARAMS: &[ParamSpec] = &[
         0.01,
         0.85,
     ),
-    param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.0),
-    param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 1.0),
-    param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
+    param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.5),
+    param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 0.25),
+    param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 4.8),
+    choice("colours", "Which palette", COLOUR_NAMES, 0.0),
     param("palette", "Turns the palette: which orientation wears which colour", 0.0, 1.0, 0.01, 0.0),
     param("drift", "How fast the palette turns by itself, turns per hour", 0.0, 4.0, 0.05, 0.5),
     param("mute", "How much colour (0: stone only; 1: muted; 2: rich)", 0.0, 2.0, 0.01, 1.0),
     param("exposure", "How bright, against the world's mean trail", 0.05, 2.0, 0.01, 0.5),
     param("contrast", "How steeply the veins fall off into black", 0.5, 4.0, 0.05, 1.6),
-    param("cap", "How much trail a vein can hold, times the mean", 1.5, 40.0, 0.5, 8.0),
+    param("cap", "How much trail a vein can hold, times the mean", 1.5, 40.0, 0.5, 20.5),
     param("renewal", "Agents scattered afresh, thousandths per substep", 0.0, 5.0, 0.05, 0.2),
     param("agents", "Agents, millions (rebuilds the colony)", 0.1, 2.0, 0.05, 0.5),
     param("steps", "Substeps per frame: how smooth the motion is", 1.0, 8.0, 1.0, 4.0),
@@ -202,15 +206,62 @@ const HABITS: [Habit; 3] = [
     },
 ];
 
-/// The palette's hues, around the loop of orientations: muted, mineral.
-/// (OKLCH hue in degrees, chroma.) A vein wears the one nearest its
-/// orientation; `palette` and `drift` turn which orientation is which.
-const ANCHORS: [(f32, f32); 6] =
-    [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
-/// Stone: where the orientation is mixed. A warm grey.
-const STONE: (f32, f32) = (80.0, 0.02);
+/// A palette: six hues around the loop of orientations (OKLCH hue in
+/// degrees, chroma), a vein wearing the one nearest its orientation, and
+/// stone, where the orientation is mixed. `palette` and `drift` turn which
+/// orientation is which.
+#[derive(Clone, Copy, Debug)]
+struct Colours {
+    anchors: [(f32, f32); 6],
+    stone: (f32, f32),
+    /// Fitted to the panel rather than to sRGB (the owner, 2026-10-28: the
+    /// first palette's "electric blues and purples and reds ... look a bit
+    /// garish" in a room). Two things the panel does that sRGB does not
+    /// (brief 2.1.1, 2.2). Its darkest steady colours are level-1 and -2
+    /// primaries, and `(1, 1, 2)` on narrow-band LEDs is an electric violet,
+    /// `(2, 1, 1)` a hot red; so the bottom of every ramp is aimed at warm
+    /// stone and its hue comes in as it rises, which lands the faint veins on
+    /// `(2, 2, 1)`-like brass instead. And its white is cool, so the densest
+    /// veins pale toward a warm bone, not toward their own hue's pastel.
+    fitted: bool,
+}
+
+/// The palettes, switchable live (`colours`) to be judged on the panel.
+/// Only the first is the original; the others are fitted.
+const COLOURS: [Colours; 4] = [
+    // Muted, mineral: rust, ochre, moss, verdigris, slate, mauve.
+    Colours {
+        anchors: [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)],
+        stone: (80.0, 0.02),
+        fitted: false,
+    },
+    // The clock's Gold and Blue: brass, bronze and umber against slate, steel
+    // and dusk. The blues are held lower than the brasses: the panel's blue
+    // is the one that turns electric.
+    Colours {
+        anchors: [(74.0, 0.065), (58.0, 0.055), (45.0, 0.045), (240.0, 0.045), (225.0, 0.035), (255.0, 0.03)],
+        stone: (75.0, 0.03),
+        fitted: true,
+    },
+    // A Victorian parlour: oxblood, walnut, brass, bottle green, teal ink,
+    // plum.
+    Colours {
+        anchors: [(22.0, 0.07), (55.0, 0.05), (82.0, 0.065), (150.0, 0.05), (205.0, 0.04), (350.0, 0.04)],
+        stone: (70.0, 0.03),
+        fitted: true,
+    },
+    // Lamplight: only the warm half of the wheel, ember to olive, as if lit
+    // by a tungsten bulb. Nothing on the panel's blue at all.
+    Colours {
+        anchors: [(35.0, 0.07), (50.0, 0.065), (65.0, 0.07), (80.0, 0.065), (95.0, 0.055), (110.0, 0.045)],
+        stone: (70.0, 0.035),
+        fitted: true,
+    },
+];
+const COLOUR_NAMES: &[&str] = &["mineral", "gold and blue", "parlour", "lamplight"];
+
 /// Hues around the loop, and lightness steps per hue.
-const HUES: usize = ANCHORS.len();
+const HUES: usize = 6;
 const LIGHTS: usize = 12;
 /// The ramp's lightness, OKLab, darkest step to brightest. The darkest is
 /// down among the panel's first few levels, so a vein falls away through
@@ -270,8 +321,8 @@ struct Physarum {
     /// The time's food, as morsels.
     morsels: Vec<Node>,
     food: Vec<f32>,
-    /// The palette, and the `mute` it was worked out for.
-    palette: Option<(f32, Vec<Rgb>)>,
+    /// The palette, and the `colours` and `mute` it was worked out for.
+    palette: Option<(usize, f32, Vec<Rgb>)>,
     /// The last exposure, for how thick the colony is on each source.
     last_leds: Option<Vec<[f32; 4]>>,
     /// The exposure as shown, after the afterglow.
@@ -515,19 +566,21 @@ impl Physarum {
         }
     }
 
-    /// [`palette_for`] at this frame's `mute`, worked out once per `mute`.
+    /// [`palette_for`] at this frame's `colours` and `mute`, worked out once
+    /// per change of either.
     fn palette(&mut self, ctx: &Ctx) -> Vec<Rgb> {
+        let key = (ctx.get("colours") as usize).min(COLOURS.len() - 1);
         let mute = ctx.get("mute");
-        if let Some((m, p)) = &self.palette {
-            if *m == mute {
+        if let Some((k, m, p)) = &self.palette {
+            if (*k, *m) == (key, mute) {
                 return p.clone();
             }
         }
-        let palette = palette_for(mute);
+        let palette = palette_for(&COLOURS[key], mute);
         if std::env::var_os("PHYSARUM_PALETTE").is_some() {
             eprint!("{}", palette_dump(&palette));
         }
-        self.palette = Some((mute, palette.clone()));
+        self.palette = Some((key, mute, palette.clone()));
         palette
     }
 
@@ -565,19 +618,32 @@ impl Physarum {
 /// The palette: black, then for each colour (the `HUES` anchors, then
 /// stone) `LIGHTS` steps of lightness, every one a panel level triple
 /// ([`aligned_ramp`]).
-fn palette_for(mute: f32) -> Vec<Rgb> {
+fn palette_for(colours: &Colours, mute: f32) -> Vec<Rgb> {
     let ramp = |hue: f32, chroma: f32| {
         aligned_ramp((0..LIGHTS).map(|i| {
             let t = i as f32 / (LIGHTS - 1) as f32;
             let l = L_DARK + (L_BRIGHT - L_DARK) * t;
-            // Chroma is let in as the ramp rises (the bottom levels
-            // cannot hold a hue anyway), and the densest veins pale
-            // toward bone.
-            let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
-            oklch(l, c, hue)
+            if !colours.fitted {
+                // Chroma is let in as the ramp rises (the bottom levels
+                // cannot hold a hue anyway), and the densest veins pale
+                // toward bone.
+                let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
+                return oklch(l, c, hue);
+            }
+            // Fitted: the same rise, but what the hue gives way to at
+            // either end is warm stone, not grey, mixed in OKLab a/b so the
+            // hue does not swing on its way there.
+            let w = smoothstep(0.0, 0.35, t) * (1.0 - 0.7 * t.powi(3));
+            let (sh, sc) = colours.stone;
+            let (c, h) = (chroma * mute, hue);
+            let ab = |c: f32, h: f32| (c * h.to_radians().cos(), c * h.to_radians().sin());
+            let ((a0, b0), (a1, b1)) = (ab(sc, sh), ab(c, h));
+            let (a, b) = (a0 + (a1 - a0) * w, b0 + (b1 - b0) * w);
+            oklch(l, a.hypot(b), b.atan2(a).to_degrees())
         }))
     };
-    let ramps = ANCHORS.into_iter().chain([(STONE.0, STONE.1 / mute.max(0.5))]);
+    let stone = if colours.fitted { colours.stone } else { (colours.stone.0, colours.stone.1 / mute.max(0.5)) };
+    let ramps = colours.anchors.into_iter().chain([stone]);
     std::iter::once(Rgb::BLACK).chain(ramps.flat_map(|(hue, chroma)| ramp(hue, chroma)).map(|a| a.rgb)).collect()
 }
 
@@ -628,11 +694,15 @@ impl Patch for Physarum {
         self.t += dt;
 
         // The minute turns: the time is laid down. The first frame lays it
-        // too, so a patch just picked says what time it is.
-        let minute = (ctx.now / 60.0).floor() as i64;
+        // too, so a patch just picked says what time it is. Read at the time
+        // the colony has reached, not the frame's: a frame can be up to a
+        // step behind it, and which step lays the time must not depend on
+        // the frame rate - the worms carry a one-step difference far.
+        let now = ctx.now - self.owed;
+        let minute = (now / 60.0).floor() as i64;
         if ctx.get("time") > 0.5 && self.minute != Some(minute) {
             self.time_at = self.t;
-            self.time_text = time_text(ctx.now, ctx.get("24h") > 0.5);
+            self.time_text = time_text(now, ctx.get("24h") > 0.5);
             let mut dice = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
             self.morsels = morsels(&self.time_text, ctx.get("spacing"), &mut dice, self.t);
         }
@@ -736,10 +806,36 @@ mod tests {
         for (mute, want) in
             [(0.0, 0x8b26_b305_3308_4b88u64), (1.0, 0x98e0_adb5_2e82_f4ee), (2.0, 0x454d_e693_0c5f_d1a1)]
         {
-            let palette = palette_for(mute);
+            let palette = palette_for(&COLOURS[0], mute);
             assert_eq!(palette.len(), 1 + (HUES + 1) * LIGHTS);
             let got = fnv(&palette);
             assert_eq!(got, want, "mute {mute}: palette hash {got:#018x}\n{}", palette_dump(&palette));
+        }
+    }
+
+    /// A fitted palette's faint veins never lead with blue: the panel's
+    /// darkest blues (`(1, 1, 2)` and its neighbours) are the electric
+    /// violet these palettes exist to avoid. A blue may come in once a ramp
+    /// is up out of the bottom levels. Up to `mute` 1: past it ("rich") the
+    /// slate is let down into the dark on purpose.
+    #[test]
+    fn fitted_palettes_keep_blue_out_of_the_dark() {
+        for (k, colours) in COLOURS.iter().enumerate().filter(|(_, c)| c.fitted) {
+            for mute in [0.0, 0.5, 1.0] {
+                let palette = palette_for(colours, mute);
+                assert_eq!(palette.len(), 1 + (HUES + 1) * LIGHTS);
+                for c in &palette[1..] {
+                    let [r, g, b] = c.to_srgb8();
+                    if to_oklab(*c)[0] < 0.34 {
+                        assert!(
+                            b <= r.max(g),
+                            "`{}` mute {mute}: sRGB {r} {g} {b} leads with blue\n{}",
+                            COLOUR_NAMES[k],
+                            palette_dump(&palette)
+                        );
+                    }
+                }
+            }
         }
     }
 }

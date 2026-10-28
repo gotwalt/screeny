@@ -1,4 +1,4 @@
-// Physarum: agents on a wrapped trail field, after Jones (2010) and Sage
+// Physarum: agents on a walled trail field, after Jones (2010) and Sage
 // Jenson's density-dependent extension. One `step` moves every agent once,
 // `diffuse` spreads and fades the trail, banks the deposits and lets the
 // food breathe its scent into it, `picture` adds what the panel sees into
@@ -43,27 +43,40 @@ const ONE: f32 = 256.0;
 @group(0) @binding(5) var<storage, read_write> leds: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> food: array<f32>;
 
-fn wrap(q: vec2<f32>) -> vec2<f32> {
-    let s = vec2(f32(p.w), f32(p.h));
-    return q - s * floor(q / s);
+// The world has walls, not a wrap. On a torus a vein can wrap the world
+// and tighten into the shortest loop that cannot shrink away - the world's
+// height, a straight vertical line across the whole panel (the owner: "the
+// organisms seem to often draw vertical or close to vertical lines"). With
+// walls every vein has ends to pull taut between. Outside smells of
+// nothing and the trail leaks into it, so the colony thins toward the walls
+// and turns back before it reaches them; the walls are in the margin, off
+// the panel.
+fn inside(q: vec2<f32>) -> bool {
+    return all(q >= vec2(0.0)) && all(q < vec2(f32(p.w), f32(p.h)));
 }
 
 fn cell(q: vec2<f32>) -> u32 {
-    let c = vec2<u32>(wrap(q)) % vec2(p.w, p.h);
+    let c = min(vec2<u32>(max(q, vec2(0.0))), vec2(p.w - 1u, p.h - 1u));
     return c.y * p.w + c.x;
 }
 
 // What an agent smells: trail and scent.
 fn at(q: vec2<f32>) -> f32 {
+    if (!inside(q)) {
+        return 0.0;
+    }
     let v = trail[cell(q)];
     return v.x + v.w;
 }
 
 fn at4(q: vec2<f32>) -> vec4<f32> {
+    if (!inside(q)) {
+        return vec4(0.0);
+    }
     return trail[cell(q)];
 }
 
-// Bilinear, wrapped, all four channels.
+// Bilinear, all four channels.
 fn smooth_at(q: vec2<f32>) -> vec4<f32> {
     let b = floor(q - 0.5);
     let f = q - 0.5 - b;
@@ -123,7 +136,16 @@ fn step(@builtin(global_invocation_id) g: vec3<u32>) {
         }
     }
     th += p.wobble * (f32((k >> 16u) & 0xffffu) / 65535.0 - 0.5);
-    var next = wrap(pos + md * dir(th));
+    // At a wall, bounce: hold that axis and mirror the heading across it.
+    var next = pos + md * dir(th);
+    if (next.x < 0.0 || next.x >= f32(p.w)) {
+        next.x = pos.x;
+        th = 3.14159265 - th;
+    }
+    if (next.y < 0.0 || next.y >= f32(p.h)) {
+        next.y = pos.y;
+        th = -th;
+    }
     let k2 = hash(k ^ 0x68e31da4u);
     if (f32(k2 & 0xffffu) / 65535.0 < p.respawn) {
         let k3 = hash(k2);

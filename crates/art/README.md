@@ -23,7 +23,7 @@ cargo run -p screeny-studio                      # the designer
 cargo run -p screeny-art -- list                 # patches and their parameters
 cargo run -p screeny-art -- pipe metaballs | ... # raw 6144-byte sRGB frames on stdout, 30 fps
 cargo run -p screeny-art -- snapshot metaballs --seed 7 --at 6 --out metaballs.png
-cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --out clock.png
+cargo run -p screeny-art -- snapshot clocks-numerals --time 21:12 --set still=60 --out clock.png
 cargo test -p screeny-art                        # includes the end-to-end wire tests
 
 # to a panel (use --release, the encoder is ~10x slower in a debug build)
@@ -129,7 +129,7 @@ since card 162 it can also be *aimed*, with `--time HH:MM[:SS]` on `snapshot`,
 ```bash
 # from the repo root, with --release: 30 fps of the full pipeline per second of run
 cargo run --release -p screeny-art -- \
-  snapshot clocks-numerals --time 21:12 --out settled.png
+  snapshot clocks-numerals --time 21:12 --set still=60 --out settled.png
 cargo run --release -p screeny-art -- \
   snapshot clocks-numerals --time 21:11:20 --at 38 --seed 7 --out dancing.png
 cargo run --release -p screeny-art -- \

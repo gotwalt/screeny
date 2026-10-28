@@ -38,23 +38,26 @@ pub const DEF: PatchDef = PatchDef {
     seeded: false,
 };
 
+// The defaults are the owner's "Gold and Blue" (2026-10-28), the setting that
+// lived on the panel when the studio ran on Home Assistant: a brass hour hand
+// and a slate minute hand, muted, quick to settle, thin hands, faint rests.
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
-    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 15.0),
+    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 5.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
     param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
-    param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 2.0),
-    param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.45),
+    param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 1.55),
+    param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.2),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
-    param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 80.0),
-    param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.05),
-    param("hue2", "Minute hand hue", 0.0, 360.0, 1.0, 80.0),
-    param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.05),
-    param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.93),
+    param("hue", "Hour hand hue", 0.0, 360.0, 1.0, 74.0),
+    param("chroma", "Hour hand colour", 0.0, 0.2, 0.005, 0.065),
+    param("hue2", "Minute hand hue", 0.0, 360.0, 1.0, 240.0),
+    param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.065),
+    param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.67),
 ];
 
 pub(crate) const COLS: usize = 8;
@@ -109,7 +112,8 @@ const HATCH: f32 = 45.0;
 
 /// The treatments, switchable live (the `rest` parameter) so they can be
 /// judged on the panel rather than in a preview. `0` is what the patch did
-/// before card 160; `DEFAULT_REST` is the recommendation.
+/// before card 160; `DEFAULT_REST` is the default: card 160 recommended
+/// `"hatched, quiet"`, and the owner chose `"hatched, faint"` on the panel.
 pub(crate) const RESTS: &[Rest] = &[
     rest("as it was", [REST, REST], false, 1.0, 1.0),
     rest("quiet", [REST, REST], false, 0.20, 1.0),
@@ -117,7 +121,7 @@ pub(crate) const RESTS: &[Rest] = &[
     rest("hatched, faint", [REST, HATCH], false, 0.10, 0.9),
     rest("zigzag, quiet", [REST, REST], true, 0.20, 1.0),
 ];
-pub(crate) const DEFAULT_REST: usize = 2;
+pub(crate) const DEFAULT_REST: usize = 3;
 
 /// Card 163: the `rest` parameter's stops, in the treatments' own words.
 /// Taken from `RESTS` itself, so the page and the patch cannot disagree about
